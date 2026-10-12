@@ -258,7 +258,7 @@ internal sealed class PlayerbotFollower
 
         if (_route is null || _route.Complete || Vector3.Distance(_routeGoal, goal) > ReplanYards)
         {
-            Plan(player, goal, leaderAt);
+            if (HoldForTiles(player, Plan(player, goal, leaderAt))) return;
             judge = true;
         }
 
@@ -270,7 +270,7 @@ internal sealed class PlayerbotFollower
             PlayerbotMotion.Forgive(player, leaderAt);
             PlayerbotMovementControl.Stop(_session, player);
             Replans++;
-            Plan(player, goal, leaderAt);
+            if (HoldForTiles(player, Plan(player, goal, leaderAt))) return;
             judge = true;
         }
 
@@ -303,18 +303,34 @@ internal sealed class PlayerbotFollower
         if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, interval, _session.World.NowMs)) _route = null;
     }
 
-    /// <summary>Plan to the point beside the leader, else to the leader itself; FightThrough and Auto also take a partial way towards it.</summary>
-    private void Plan(Player player, Vector3 goal, Vector3 leaderAt)
+    /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of the follower's plans.</summary>
+    private TileWait _tileWait;
+
+    /// <summary>
+    /// Plan to the point beside the leader, else to the leader itself; FightThrough and Auto also take a partial way towards it. True when
+    /// a tile on the way is still being read: the way is not judged (a refusal would read as no route and teleport the follower to its
+    /// leader), the caller holds and plans again (for <see cref="TileWait.MaxMs"/>, then the refusal stands).
+    /// </summary>
+    private bool Plan(Player player, Vector3 goal, Vector3 leaderAt)
     {
         _routeGoal = goal;
-        if (PlayerbotNavigation.TryPlan(player, goal, _options, out PlayerbotRoute? route)
-            || PlayerbotNavigation.TryPlan(player, leaderAt, _options, out route))
-        {
-            _route = route;
-            return;
-        }
-
         _route = null;
+        PlanOutcome beside = PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? route);
+        if (beside == PlanOutcome.Pending) return true;
+        PlanOutcome onLeader = beside == PlanOutcome.Route ? beside
+            : PlayerbotNavigation.PlanExact(player, leaderAt, _options, ref _tileWait, _session.World.NowMs, out route);
+        if (onLeader == PlanOutcome.Pending) return true;
+        if (onLeader == PlanOutcome.Route) _route = route;
+        return false;
+    }
+
+    /// <summary>Stand and plan again after <see cref="JudgeAgainMs"/> when <paramref name="pending"/> (<see cref="Plan"/>).</summary>
+    private bool HoldForTiles(Player player, bool pending)
+    {
+        if (!pending) return false;
+        _judgeAgainAtMs = Now + JudgeAgainMs;
+        PlayerbotMovementControl.Stop(_session, player);
+        return true;
     }
 
     private (PlayerbotFollowStep, PlayerbotCatchUpReason) Judge(Player player, Player leader, in PlayerbotFollowFacts facts)
@@ -346,7 +362,7 @@ internal sealed class PlayerbotFollower
 
         // In FightThrough or Auto, a follower with no route at all still closes on the leader by a partial way when there is one.
         if (step == PlayerbotFollowStep.Wait && follow.CatchUpMode != PlayerbotCatchUpMode.Teleport
-            && PlayerbotNavigation.TryPlanToward(player, leaderAt, _options, out PlayerbotRoute? toward))
+            && PlayerbotNavigation.PlanToward(player, leaderAt, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? toward) == PlanOutcome.Route)
         {
             _route = toward;
             step = PlayerbotFollowStep.Walk;
@@ -545,7 +561,8 @@ internal sealed class PlayerbotFollower
         if (_route is null || _route.Complete || Vector3.Distance(_routeGoal, goal) > ReplanYards)
         {
             _routeGoal = goal;
-            _route = PlayerbotNavigation.TryPlanToward(player, goal, _options, out PlayerbotRoute? route) ? route : null;
+            // Pending or refused alike: no route, planned again next think (nothing is set aside here).
+            _route = PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? route) == PlanOutcome.Route ? route : null;
         }
 
         if (_route is null || !PlayerbotNavigation.TryAdvance(_session, _route, _options, interval, _session.World.NowMs)) _route = null;

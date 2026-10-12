@@ -16,6 +16,7 @@ public static class PathSearchCounters
     [ThreadStatic] private static long t_tileLoads;
     [ThreadStatic] private static long t_tileLoadTicks;
     [ThreadStatic] private static long t_capped;
+    [ThreadStatic] private static long t_tilesPending;
     [ThreadStatic] private static bool t_captureTiles;
     [ThreadStatic] private static TileLoadDetail t_slowestTile;
 
@@ -37,7 +38,17 @@ public static class PathSearchCounters
     public static long NodesCreated => t_nodes;
 
     /// <summary>This thread's totals so far.</summary>
-    public static PathSearchTotals Current => new(t_searches, t_nodes, t_expansions, t_tileLoads, t_tileLoadTicks, t_capped);
+    public static PathSearchTotals Current => new(t_searches, t_nodes, t_expansions, t_tileLoads, t_tileLoadTicks, t_capped, t_tilesPending);
+
+    /// <summary>
+    /// Times a search on this thread needed a navigation tile that was not resident and answered "pending" instead of reading it
+    /// (<see cref="PathOptions.NonBlockingTiles"/>). A caller takes it before a piece of planning and compares afterwards: a change
+    /// means the planning's failure was for want of a tile still being read, not a verdict on the destination.
+    /// </summary>
+    public static long TilesPending => t_tilesPending;
+
+    /// <summary>A search needed a tile whose background read had not finished (or had to be started).</summary>
+    internal static void RecordTilePending() => t_tilesPending++;
 
     /// <summary>One A* search ended: <paramref name="nodes"/> created, <paramref name="expansions"/> expanded, whether the node cap was hit.</summary>
     internal static void RecordSearch(int nodes, int expansions, bool capped)
@@ -62,11 +73,11 @@ public static class PathSearchCounters
 public readonly record struct TileLoadDetail(uint MapId, int X, int Y, long Ticks, bool PrefetchHit);
 
 /// <summary>A snapshot of <see cref="PathSearchCounters"/>; the difference of two is the work between them.</summary>
-public readonly record struct PathSearchTotals(long Searches, long Nodes, long Expansions, long TileLoads, long TileLoadTicks, long Capped)
+public readonly record struct PathSearchTotals(long Searches, long Nodes, long Expansions, long TileLoads, long TileLoadTicks, long Capped, long TilesPending = 0)
 {
     public static PathSearchTotals operator -(PathSearchTotals a, PathSearchTotals b)
         => new(a.Searches - b.Searches, a.Nodes - b.Nodes, a.Expansions - b.Expansions, a.TileLoads - b.TileLoads,
-            a.TileLoadTicks - b.TileLoadTicks, a.Capped - b.Capped);
+            a.TileLoadTicks - b.TileLoadTicks, a.Capped - b.Capped, a.TilesPending - b.TilesPending);
 
     /// <summary>The tile reads' time in milliseconds.</summary>
     public double TileLoadMs => TileLoadTicks * 1000.0 / Stopwatch.Frequency;

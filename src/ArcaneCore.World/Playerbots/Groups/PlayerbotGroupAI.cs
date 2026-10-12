@@ -582,7 +582,9 @@ internal sealed class PlayerbotGroupAI
         if (_runRoute is null || now - _runRouteAtMs > 3_000)
         {
             _runRouteAtMs = now;
-            _runRoute = PlayerbotNavigation.TryPlanToward(player, bossPosition, _options, out PlayerbotRoute? planned) ? planned : null;
+            // Pending or refused alike: no points yet, planned again in a few seconds (nothing is set aside on this plan).
+            _runRoute = PlayerbotNavigation.PlanToward(player, bossPosition, _options, ref _tileWait, _session.World.NowMs,
+                out PlayerbotRoute? planned) == PlanOutcome.Route ? planned : null;
         }
 
         return _runRoute?.Points ?? [];
@@ -906,6 +908,9 @@ internal sealed class PlayerbotGroupAI
 
     // --- helpers --------------------------------------------------------------------------------------------------------
 
+    /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this bot's plans.</summary>
+    private TileWait _tileWait;
+
     private void Hold(Player player)
     {
         _route = null;
@@ -924,13 +929,15 @@ internal sealed class PlayerbotGroupAI
 
         if (_route is null || _route.Complete || Vector3.Distance(_routeGoal, goal) > 2f)
         {
-            bool planned = toward ? PlayerbotNavigation.TryPlanToward(player, goal, _options, out _route)
-                : PlayerbotNavigation.TryPlan(player, goal, _options, out _route);
-            if (!planned || _route is null)
+            PlanOutcome planned = toward
+                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route)
+                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route);
+            if (planned != PlanOutcome.Route || _route is null)
             {
                 _route = null;
                 PlayerbotMovementControl.Stop(_session, player);
-                return false;
+                // A tile of the way is still being read: the goal is kept and planned to again next think, not reported unreachable.
+                return planned == PlanOutcome.Pending;
             }
 
             _routeGoal = goal;

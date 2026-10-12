@@ -778,6 +778,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                     QuestId = _destinations.QuestId;
                     return;
                 }
+                if (_destinations.WaitingForTiles) return; // the route's tiles are being read: keep the goal, plan again next think
             }
             if (_modelChoice == "explore") { _target = null; PlayerbotThinkProbe.Phase("explore"); Explore(player, interval); return; }
         }
@@ -807,6 +808,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                     if (_destinations.QuestId != 0) QuestId = _destinations.QuestId;
                     return;
                 }
+                if (_destinations.WaitingForTiles) return; // the route's tiles are being read: keep the goal, plan again next think
                 PlayerbotThinkProbe.Phase("explore");
                 Explore(player, interval);
                 return;
@@ -856,8 +858,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (position is PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee)
             {
                 PlayerbotThinkProbe.Phase("chase");
-                if (_route is null && !PlayerbotNavigation.TryPlan(player,
-                        new System.Numerics.Vector3(target.X, target.Y, target.Z), _options, out _route))
+                PlanOutcome chase = PlanOutcome.Route;
+                if (_route is null)
+                    chase = PlayerbotNavigation.PlanExact(player, new System.Numerics.Vector3(target.X, target.Y, target.Z), _options,
+                        ref _tileWait, _session.World.NowMs, out _route);
+                if (chase == PlanOutcome.Pending) return; // keep the target, ask again next think
+                if (chase == PlanOutcome.Refused)
                 {
                     MarkUnreachable(target);
                     _target = null;
@@ -1798,7 +1804,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 || area.ZoneClipped && !area.InZone(destination.X, destination.Y, destination.Z)))
             destination = InwardLeg(area, player, _exploreRefusals);
         PlayerbotThinkProbe.Phase("explore wander plan");
-        if (PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
+        if (PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
+        {
+            _route = null;
+            _roamDirection--; // the same leg again once the tile is in
+            return;
+        }
+        if (_route is not null)
         {
             _exploreRefusals = 0;
             PlayerbotThinkProbe.Phase("explore advance");
@@ -1930,7 +1942,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         PlayerbotThinkProbe.Phase("explore plan");
         if (ExploreMovementPaused(player, elapsedMs)) return true;
         var destination = new System.Numerics.Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z);
-        if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
+        PlanOutcome atlasPlan = PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out _route);
+        if (atlasPlan == PlanOutcome.Pending) return true;
+        if (atlasPlan == PlanOutcome.Refused)
         {
             BlockExploreCell(chosen);
             PlayerbotMovementControl.Stop(_session, player);
@@ -1946,6 +1960,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         return true;
     }
+
+    /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>), shared by the plans this brain makes.</summary>
+    private TileWait _tileWait;
 
     private bool ExploreBlocked(int x, int y)
         => _exploreBlockedCells.ContainsKey((_exploreSearchMap, x, y));

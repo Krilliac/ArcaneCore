@@ -10229,6 +10229,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Collision:NavTileReadConcurrency",
+      "section": "World:Collision",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "2",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The most navigation tile files (`NNNXXYY.mmtile`) read at the same time by bots' path searches, in the background. Reads share the data disk with the map, so a low number keeps a cold start from starving it; a tile a search waits for is then ready a little later. At least 1.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldcollision",
+      "isCollection": false
+    },
+    {
       "path": "World:Collision:VMapDirectory",
       "section": "World:Collision",
       "type": "string",

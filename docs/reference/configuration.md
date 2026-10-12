@@ -1013,6 +1013,7 @@ How to read the tables:
 | `World:Collision:EnableLineOfSight` | `bool` | `true` | - | Use vmaps for line of sight (vmangos `vmap.enableLOS`, default on). |
 | `World:Collision:EnablePathfinding` | `bool` | `true` | - | Use navmeshes for paths (vmangos `mmap.enabled`, default on). |
 | `World:Collision:MMapDirectory` | `string` | `""` | - | Directory of the generated navmeshes (`NNN.mmap`, `NNNXXYY.mmtile`). Empty: `mmaps/` under `World:Maps:DataDirectory` (vmangos `DataDir/mmaps`). |
+| `World:Collision:NavTileReadConcurrency` | `int` | `2` | - | The most navigation tile files (`NNNXXYY.mmtile`) read at the same time by bots' path searches, in the background. Reads share the data disk with the map, so a low number keeps a cold start from starving it; a tile a search waits for is then ready a little later. At least 1. |
 | `World:Collision:VMapDirectory` | `string` | `""` | - | Directory of the extracted vmaps (`NNN.vmtree`, `NNN_YY_XX.vmtile`, `*.vmo`). Empty: `vmaps/` under `World:Maps:DataDirectory` (vmangos `DataDir/vmaps`). |
 
 ## `World:Console`

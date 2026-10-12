@@ -144,9 +144,19 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         return false;
     }
 
+    /// <summary>
+    /// The last <see cref="Update"/> found no route only because a navigation tile on the way was still being read in the background
+    /// (<see cref="PathOptions.NonBlockingTiles"/>): the destination was not judged, nothing was blacklisted or backed off, and the
+    /// brain keeps its goal and asks again on a later think (see <see cref="TileWait.MaxMs"/>).
+    /// </summary>
+    internal bool WaitingForTiles { get; private set; }
+
+    private TileWait _tileWait;
+
     /// <summary>Returns true only when a normal movement action was attempted.</summary>
     internal bool Update(Player player, uint preferredCreatureEntry, uint elapsedMs, uint returnQuestId = 0)
     {
+        WaitingForTiles = false;
         if (!_options.Enabled || !player.IsInWorld || !player.IsAlive || player.Map is not { } map || elapsedMs == 0)
             return false;
         uint now = _session.World.NowMs;
@@ -248,8 +258,17 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
 
             PlayerbotRoute? route = walk;
-            if (route is null && !PlayerbotNavigation.TryPlanToward(player, destination, _options, out route,
-                completedQuestReturn: returnQuestId != 0 && returnQuestId == questId))
+            PlanOutcome planned = PlanOutcome.Route;
+            if (route is null)
+                planned = PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out route,
+                    completedQuestReturn: returnQuestId != 0 && returnQuestId == questId);
+            if (planned == PlanOutcome.Pending)
+            {
+                // A tile on the way is still being read: not a verdict on this spawn. Keep the goal, try again next think.
+                WaitingForTiles = true;
+                return false;
+            }
+            if (planned == PlanOutcome.Refused)
             {
                 // A far failed search is expensive. Defer the next far spawn until the backoff expires instead of
                 // running another capped search on the very next think; nearby alternatives still rotate promptly.
@@ -267,6 +286,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                     ConfirmUnclimbable(player, destination, questId, entry.Entry, now);
                 return false; // Nearby alternatives rotate next think; far failures wait for backoff.
             }
+            _tileWait.Reset();
             if (questId == _failQuest) _failCount = 0;
             _route = route;
             _routeTarget = entry.Entry;
