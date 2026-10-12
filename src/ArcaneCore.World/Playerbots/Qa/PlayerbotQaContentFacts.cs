@@ -1,4 +1,4 @@
-
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Creatures;
@@ -43,7 +43,12 @@ internal interface IQaContentFacts
 
     bool HasWaypointPath(uint entry, uint pathId);
 
-    bool HasScript(uint entry, string scriptName);
+    /// <summary>
+    /// Whether the ScriptName of the creature <paramref name="entry"/> is implemented for <paramref name="map"/>, or cannot be judged without a
+    /// live map: any layer of the script catalogue (named AI, entry script, <c>DungeonBossAis</c>) answers yes, and so does a map whose instance
+    /// script may register the AI itself. A template without a ScriptName is true.
+    /// </summary>
+    bool HasScript(uint entry, uint map);
 }
 
 /// <summary>No content: nothing is claimed.</summary>
@@ -71,7 +76,7 @@ internal sealed class NoQaContentFacts : IQaContentFacts
 
     public bool HasWaypointPath(uint entry, uint pathId) => false;
 
-    public bool HasScript(uint entry, string scriptName) => false;
+    public bool HasScript(uint entry, uint map) => false;
 }
 
 /// <summary>
@@ -142,6 +147,18 @@ internal sealed class PlayerbotQaContentFacts(IServiceProvider services) : IQaCo
             || (pathId == 0 && content.ResolveWaypointPath(0, entry).Points.Count > 0);
     }
 
-    public bool HasScript(uint entry, string scriptName)
-        => Creatures?.AiServices.Factory is { } factory && factory.HasScript(entry, scriptName);
+    public bool HasScript(uint entry, uint map)
+        => Creatures is { } creatures && QaScriptFacts.Has(creatures.AiServices.Factory, creatures.Content, entry, map);
+}
+
+/// <summary>The script question of the classifier, answered by the script catalogue (every layer, for the signal's map).</summary>
+internal static class QaScriptFacts
+{
+    /// <summary>
+    /// False only when the creature's template names a ScriptName that no layer implements for <paramref name="map"/> and the map's instance
+    /// script cannot register it either (<see cref="ScriptResolution.ScriptNameMissing"/>). The older <c>CreatureAiFactory.HasScript</c> saw the
+    /// world-wide registries only and called every per-map script missing.
+    /// </summary>
+    internal static bool Has(CreatureAiFactory factory, CreatureContent content, uint entry, uint map)
+        => !new ScriptCatalog(factory, content).Resolve(entry, map).ScriptNameMissing;
 }

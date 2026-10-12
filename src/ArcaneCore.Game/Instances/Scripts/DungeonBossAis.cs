@@ -13,21 +13,31 @@ namespace ArcaneCore.Game.Instances.Scripts;
 /// </summary>
 public static class DungeonBossAis
 {
-    public static CreatureAI? Create(Creature creature, uint mapId) => (mapId, creature.Template.Entry) switch
+    private readonly record struct Boss(Func<Creature, CreatureAI> Create, string Name);
+
+    private static Boss B<T>(Func<Creature, T> factory) where T : CreatureAI => new(c => factory(c), typeof(T).Name);
+
+    private static readonly Dictionary<(uint MapId, uint Entry), Boss> Table = new()
     {
-        (229, 10339) => new GythAI(creature),
-        (229, 9816) => new PyroguardEmberseerAI(creature),
-        (229, 9568) => new OverlordWyrmthalakAI(creature),
-        (289, 1853) => new DarkmasterGandlingAI(creature),
-        (289, 10503) => new JandiceBarovAI(creature),
-        (289, 10498) => new SpectralTutorAI(creature),
-        (329, 10384) or (329, 10385) => new SpectralGhostlyCitizenAI(creature),
-        (329, 10436) => new BaronessAnastariAI(creature),
-        (329, 10438) => new MalekiThePallidAI(creature),
-        (329, 10997) => new CannonMasterWilleyAI(creature),
-        (329, 10812) => new DathrohanBalnazzarAI(creature),
-        _ => null,
+        [(229, 10339)] = B(c => new GythAI(c)),
+        [(229, 9816)] = B(c => new PyroguardEmberseerAI(c)),
+        [(229, 9568)] = B(c => new OverlordWyrmthalakAI(c)),
+        [(289, 1853)] = B(c => new DarkmasterGandlingAI(c)),
+        [(289, 10503)] = B(c => new JandiceBarovAI(c)),
+        [(289, 10498)] = B(c => new SpectralTutorAI(c)),
+        [(329, 10384)] = B(c => new SpectralGhostlyCitizenAI(c)),
+        [(329, 10385)] = B(c => new SpectralGhostlyCitizenAI(c)),
+        [(329, 10436)] = B(c => new BaronessAnastariAI(c)),
+        [(329, 10438)] = B(c => new MalekiThePallidAI(c)),
+        [(329, 10997)] = B(c => new CannonMasterWilleyAI(c)),
+        [(329, 10812)] = B(c => new DathrohanBalnazzarAI(c)),
     };
+
+    public static CreatureAI? Create(Creature creature, uint mapId)
+        => Table.TryGetValue((mapId, creature.Template.Entry), out Boss boss) ? boss.Create(creature) : null;
+
+    /// <summary>The implementing type name of the boss AI of <paramref name="entry"/> on <paramref name="mapId"/>, or null when this table has none.</summary>
+    public static string? Describe(uint mapId, uint entry) => Table.TryGetValue((mapId, entry), out Boss boss) ? boss.Name : null;
 }
 
 /// <summary>Common SD2 timer rule: count while fighting and retry a failed cast on the next tick.</summary>

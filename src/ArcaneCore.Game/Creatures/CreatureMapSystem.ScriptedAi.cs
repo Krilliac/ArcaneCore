@@ -85,7 +85,7 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>Whether this map gives creatures of <paramref name="entry"/> a script AI (<see cref="RegisterEntryAi"/>).</summary>
-    internal bool HasEntryAi(uint entry) => _entryAis.ContainsKey(entry);
+    public bool HasEntryAi(uint entry) => _entryAis.ContainsKey(entry);
 
     private void RebuildAi(uint entry)
     {

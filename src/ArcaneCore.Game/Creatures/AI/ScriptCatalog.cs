@@ -1,0 +1,194 @@
+using ArcaneCore.Game.Instances.Scripts;
+using ArcaneCore.Kernel.WorldData.Creatures;
+
+namespace ArcaneCore.Game.Creatures;
+
+/// <summary>Which layer of the AI selection gives a creature its AI (the order <see cref="ScriptCatalog.Resolve"/> tries them in).</summary>
+public enum ScriptKind
+{
+    /// <summary>A script AI that an instance script registered for this map and entry (<c>CreatureMapSystem.RegisterEntryAi</c>); needs a live map.</summary>
+    MapEntryAi,
+
+    /// <summary>A boss AI of <see cref="DungeonBossAis"/> (map and entry).</summary>
+    DungeonBossAi,
+
+    /// <summary>A named AI registered with <see cref="CreatureAiFactory.Register"/> under the template's ScriptName.</summary>
+    ScriptName,
+
+    /// <summary>A world-wide entry script (<see cref="CreatureAiFactory.RegisterEntryScript"/>).</summary>
+    EntryScript,
+
+    /// <summary>EventAI: the AIName is EventAI/GuardEventAI, or (with the implicit option) <c>creature_ai_scripts</c> rows exist.</summary>
+    EventAI,
+
+    /// <summary>SmartAI (<c>smart_scripts</c> rows).</summary>
+    SmartAI,
+
+    /// <summary>A built-in AI named by the AIName (NullAI, ReactorAI, GuardAI ...).</summary>
+    BuiltInAi,
+
+    /// <summary>The AIName names no registered AI; the creature gets the default AI.</summary>
+    UnknownAiName,
+
+    /// <summary>No script and no AIName: GuardAI, CritterAI, ReactorAI or AggressorAI.</summary>
+    Default,
+}
+
+/// <summary>
+/// The answer of <see cref="ScriptCatalog.Resolve"/>. <see cref="ScriptNameResolved"/> is false only when the template has a ScriptName that
+/// no layer implements (the creature then runs the AI of <see cref="Kind"/> instead). <see cref="MayBeInstanceRegistered"/> is true when such a
+/// ScriptName is unresolved statically but the map has an instance script, which may register the AI at run time with
+/// <c>RegisterEntryAi</c> (invisible without a live map).
+/// </summary>
+public readonly record struct ScriptResolution(
+    ScriptKind Kind, string Implementation, string ScriptName, bool ScriptNameResolved, bool MayBeInstanceRegistered)
+{
+    /// <summary>The ScriptName is neither implemented nor possibly registered by the map's instance script.</summary>
+    public bool ScriptNameMissing => !ScriptNameResolved && !MayBeInstanceRegistered;
+
+    public override string ToString() => $"{Kind} {Implementation}"
+        + (ScriptName.Length == 0 ? string.Empty
+            : ScriptNameResolved ? $" (ScriptName {ScriptName})"
+            : MayBeInstanceRegistered ? $" (ScriptName {ScriptName}: not in the static registries; the map's instance script may register it)"
+            : $" (ScriptName {ScriptName}: NO IMPLEMENTATION)");
+}
+
+/// <summary>
+/// One runtime answer to "which AI does creature entry X get on map M". It mirrors the selection order of
+/// <c>CreatureMapSystem.CreateAi</c>: the map's own script AI (live registrations, then <see cref="DungeonBossAis"/>), the template's ScriptName
+/// (named AI, then entry script), then the AIName, then the defaults. Raid boss AIs (<c>RaidBossAI.Create</c>, selected by instance-data type)
+/// are not introspectable and are not reported. Read-only; the registries are filled at start-up, so any thread may call it
+/// (a live <see cref="CreatureMapSystem"/> only from its map's thread).
+/// </summary>
+public sealed class ScriptCatalog(CreatureAiFactory factory, CreatureContent content, bool implicitEventAi = false)
+{
+    public ScriptResolution Resolve(uint entry, uint mapId, CreatureMapSystem? liveMap = null)
+        => content.FindTemplate(entry) is { } template
+            ? Resolve(template, mapId, liveMap)
+            : new ScriptResolution(ScriptKind.Default, "(no creature_template)", string.Empty, true, false);
+
+    public ScriptResolution Resolve(CreatureTemplate template, uint mapId, CreatureMapSystem? liveMap = null)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        string scriptName = template.ScriptName ?? string.Empty;
+        uint entry = template.Entry;
+
+        if (liveMap is not null && liveMap.HasEntryAi(entry))
+        {
+            string live = liveMap.Creatures.FirstOrDefault(c => c.Template.Entry == entry)?.AI?.GetType().Name ?? "(registered by an instance script)";
+            return new ScriptResolution(ScriptKind.MapEntryAi, live, scriptName, true, false);
+        }
+
+        if (DungeonBossAis.Describe(mapId, entry) is { } boss)
+        {
+            return new ScriptResolution(ScriptKind.DungeonBossAi, boss, scriptName, true, false);
+        }
+
+        if (scriptName.Length > 0 && factory.IsNamedAi(scriptName))
+        {
+            return new ScriptResolution(ScriptKind.ScriptName, scriptName, scriptName, true, false);
+        }
+
+        if (factory.EntryScriptName(entry) is { } entryScript)
+        {
+            return new ScriptResolution(ScriptKind.EntryScript, entryScript, scriptName, true, false);
+        }
+
+        bool resolved = scriptName.Length == 0;
+        bool maybe = !resolved && InstanceScriptRegistry.Default.HasScript(mapId);
+        (ScriptKind kind, string implementation) = Fallback(template);
+        return new ScriptResolution(kind, implementation, scriptName, resolved, maybe);
+    }
+
+    private (ScriptKind Kind, string Implementation) Fallback(CreatureTemplate template)
+    {
+        string aiName = template.AIName ?? string.Empty;
+        if (aiName.Length > 0)
+        {
+            if (!factory.IsNamedAi(aiName))
+            {
+                return (ScriptKind.UnknownAiName, aiName);
+            }
+
+            if (string.Equals(aiName, CreatureAiFactory.EventAIName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(aiName, CreatureAiFactory.GuardEventAIName, StringComparison.OrdinalIgnoreCase))
+            {
+                return (ScriptKind.EventAI, aiName);
+            }
+
+            return string.Equals(aiName, CreatureAiFactory.SmartAIName, StringComparison.OrdinalIgnoreCase)
+                ? (ScriptKind.SmartAI, aiName)
+                : (ScriptKind.BuiltInAi, aiName);
+        }
+
+        if ((template.Behaviour & CreatureBehaviourFlags.Guard) != 0)
+        {
+            return (ScriptKind.Default, "GuardAI");
+        }
+
+        if (implicitEventAi && content.Ai.GetEvents(template.Entry).Count > 0)
+        {
+            return (ScriptKind.EventAI, CreatureAiFactory.EventAIName);
+        }
+
+        if (template.CreatureType == CreatureAiFactory.CritterType)
+        {
+            return (ScriptKind.Default, "CritterAI");
+        }
+
+        return (ScriptKind.Default, template.Civilian ? "ReactorAI" : "AggressorAI");
+    }
+
+    /// <summary>
+    /// The creatures spawned on <paramref name="mapId"/> (distinct entries, ordered by entry) whose template names a ScriptName or an AIName,
+    /// each with what <see cref="Resolve(CreatureTemplate, uint, CreatureMapSystem?)"/> answers for it.
+    /// </summary>
+    public IReadOnlyList<ScriptCoverageRow> Coverage(uint mapId, CreatureMapSystem? liveMap = null)
+    {
+        var rows = new List<ScriptCoverageRow>();
+        foreach (IGrouping<uint, CreatureSpawn> group in content.GetSpawns(mapId).GroupBy(s => s.Entry).OrderBy(g => g.Key))
+        {
+            if (content.FindTemplate(group.Key) is not { } template
+                || (string.IsNullOrEmpty(template.ScriptName) && string.IsNullOrEmpty(template.AIName)))
+            {
+                continue;
+            }
+
+            rows.Add(new ScriptCoverageRow(mapId, template.Entry, template.Name, template.ScriptName ?? string.Empty,
+                template.AIName ?? string.Empty, Resolve(template, mapId, liveMap), group.Count()));
+        }
+
+        return rows;
+    }
+}
+
+/// <summary>One scripted-or-named creature entry of a map and how it resolves.</summary>
+public sealed record ScriptCoverageRow(uint MapId, uint Entry, string Name, string ScriptName, string AIName, ScriptResolution Resolution, int Spawns);
+
+/// <summary>Counts over <see cref="ScriptCoverageRow"/>s (entries, not spawns).</summary>
+public readonly record struct ScriptCoverageSummary(
+    int ScriptNames, int ScriptNamesResolved, int ScriptNamesMaybeInstanceRegistered, int ScriptNamesMissing, int AiNames, int AiNamesUnknown)
+{
+    public static ScriptCoverageSummary Of(IEnumerable<ScriptCoverageRow> rows)
+    {
+        int names = 0, resolved = 0, maybe = 0, missing = 0, ai = 0, unknown = 0;
+        foreach (ScriptCoverageRow row in rows)
+        {
+            if (row.ScriptName.Length > 0)
+            {
+                names++;
+                if (row.Resolution.ScriptNameResolved) resolved++;
+                else if (row.Resolution.MayBeInstanceRegistered) maybe++;
+                else missing++;
+            }
+
+            if (row.AIName.Length > 0)
+            {
+                ai++;
+                if (row.Resolution.Kind == ScriptKind.UnknownAiName) unknown++;
+            }
+        }
+
+        return new ScriptCoverageSummary(names, resolved, maybe, missing, ai, unknown);
+    }
+}
