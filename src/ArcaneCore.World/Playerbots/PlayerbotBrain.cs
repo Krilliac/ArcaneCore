@@ -308,6 +308,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (!_options.Enabled || _stopped != 0 || _session.Player is not { } player)
             return;
         _destinations.SkipQuest ??= _quests.IsRefused;
+        _destinations.GiverHasCandidate ??= _quests.HasCandidate;
+        _destinations.SetQuestAside ??= _quests.SetAside;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
