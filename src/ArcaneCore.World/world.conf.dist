@@ -11468,16 +11468,17 @@ World.Playerbots.Qa.ExportIntervalSeconds = 300
 #    World.Playerbots.Qa.GitHub.CloseAbsorbedDuplicates
 #        Description: When findings are merged into one (the same problem met in several places) and
 #                     each had its own issue, comment on the absorbed issue with a link to the
-#                     surviving one and close it as not planned (a duplicate). Off keeps the
-#                     absorbed issue open and untouched; the merge is recorded in the store either
-#                     way.
+#                     surviving one and close it as not planned (a duplicate). Off (the default, so
+#                     the first start after an upgrade can be checked: the start-up log lists every
+#                     issue it would close as issue #a -&gt; duplicate of #b) keeps the absorbed
+#                     issue open and untouched; the merge is recorded in the store either way.
 #        Type: bool
-#        Default: true
+#        Default: false
 #        Allowed: true | false
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#worldplayerbotsqa
 #
-World.Playerbots.Qa.GitHub.CloseAbsorbedDuplicates = true
+World.Playerbots.Qa.GitHub.CloseAbsorbedDuplicates = false
 
 #
 #    World.Playerbots.Qa.GitHub.CommentIntervalHours

@@ -103,9 +103,15 @@ first, then lowest severity, then the oldest), and a finding that has an issue i
 **Merging never loses an issue.** The survivor of a merge is the finding with an open issue (then one a person closed), the lowest issue number first, else the busiest; it keeps its id and
 publication state. Every absorbed id is recorded in the store (`Absorbed`: the id, its survivor, and its issue number if it had one that the survivor's does not replace) and is never reused
 for another problem. A publish that was in flight when its finding was absorbed reports its outcome to the survivor (it becomes the survivor's issue when the survivor had none; otherwise it is
-recorded as another absorbed issue). The issue of an absorbed published finding is then commented ("Duplicate of #N", numbers only, no name or id of any bot) and closed as not planned, once,
-under the hourly comment cap; `World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates` (default on) turns that off, and the mapping is recorded either way. Each merge of two issues is logged as
-`issue #a ... absorbed into #b`; the start-up line counts the merges and the issues left to close.
+recorded as another absorbed issue). The issue of an absorbed published finding can then be closed as a duplicate: a comment ("Duplicate of #N", numbers only, no name or id of any bot), then the close as not planned.
+This is `World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates`, **off by default** so the first start after an upgrade can be checked: the start-up log lists every pending close as
+`issue #a -> duplicate of #b` (numbers only) and says whether it will happen. Turned on, an issue is only touched when it is in the labelled issue list and open, and the
+surviving issue is in the list and open too (an open issue is never closed in favour of a closed or unknown one; otherwise the entry stays pending and is logged). The comment is recorded
+before the close is tried, so a close that fails is retried without commenting again; a comment that itself fails is retried. The closes run after the normal publishing of the pass and
+share the hourly comment budget (`MaxCommentsPerHour`) with it, so the comments of findings that are still happening come first and a long list of closes spreads over several hours.
+An issue handed over to the survivor (the publish was in flight when the merge happened) is found by its number, not only by marker, so it is commented and never opened again.
+The survivor of such an in-flight publish is protected from age-out and eviction like the finding itself; an entry whose survivor no longer exists is dropped (the issue stays open as it was).
+Each merge of two issues is logged as `issue #a ... absorbed into #b`; the start-up line counts the merges and the issues left to close.
 
 ## Classifier: why it probably happens
 
