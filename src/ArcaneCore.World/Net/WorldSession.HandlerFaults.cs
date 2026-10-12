@@ -107,24 +107,25 @@ public sealed partial class WorldSession
     /// </para>
     /// </summary>
     internal static bool IsContainableWorldOpcode(WorldOpcode opcode) => opcode is
-        // Queries.
-        WorldOpcode.CmsgNameQuery or WorldOpcode.CmsgItemQuerySingle or WorldOpcode.CmsgItemQueryMultiple
-        or WorldOpcode.CmsgItemNameQuery or WorldOpcode.CmsgCreatureQuery or WorldOpcode.CmsgGameobjectQuery
-        or WorldOpcode.CmsgQuestQuery or WorldOpcode.CmsgPageTextQuery or WorldOpcode.CmsgGuildQuery
-        or WorldOpcode.CmsgGuildInfo or WorldOpcode.CmsgGuildRoster or WorldOpcode.CmsgPetNameQuery
-        or WorldOpcode.CmsgPetitionQuery or WorldOpcode.CmsgQuestgiverStatusQuery or WorldOpcode.CmsgWho
-        or WorldOpcode.CmsgInspect or WorldOpcode.CmsgQueryTime or WorldOpcode.CmsgPlayedTime
-        // Chat, emotes and channels.
-        or WorldOpcode.CmsgMessagechat or WorldOpcode.CmsgEmote or WorldOpcode.CmsgTextEmote
+        // Queries handled on the world thread. The name, item, creature, gameobject, quest, page-text and time queries
+        // run on the session task (OnSession), where only character-screen faults are contained, so they are not listed.
+        WorldOpcode.CmsgGuildQuery or WorldOpcode.CmsgGuildInfo or WorldOpcode.CmsgGuildRoster
+        or WorldOpcode.CmsgPetNameQuery or WorldOpcode.CmsgPetitionQuery or WorldOpcode.CmsgQuestgiverStatusQuery
+        or WorldOpcode.CmsgWho or WorldOpcode.CmsgInspect or WorldOpcode.CmsgPlayedTime
+        // Chat and channels. Chat commands catch their own faults (TryRunCommand); player chat script hooks and
+        // IChatMessageHandler features run inside this contained path. Channel state is in memory only.
+        // CMSG_EMOTE / CMSG_TEXT_EMOTE are NOT here: they cancel animation auras and a text emote runs creature
+        // receive-emote scripts (quest events, casts, summons).
+        or WorldOpcode.CmsgMessagechat
         or WorldOpcode.CmsgJoinChannel or WorldOpcode.CmsgLeaveChannel or WorldOpcode.CmsgChannelList
         or WorldOpcode.CmsgChannelPassword or WorldOpcode.CmsgChannelSetOwner or WorldOpcode.CmsgChannelOwner
         or WorldOpcode.CmsgChannelModerator or WorldOpcode.CmsgChannelUnmoderator or WorldOpcode.CmsgChannelMute
         or WorldOpcode.CmsgChannelUnmute or WorldOpcode.CmsgChannelInvite or WorldOpcode.CmsgChannelKick
         or WorldOpcode.CmsgChannelBan or WorldOpcode.CmsgChannelUnban or WorldOpcode.CmsgChannelAnnouncements
         or WorldOpcode.CmsgChannelModerate
-        // Friend list read, selection and cosmetic UI state.
-        or WorldOpcode.CmsgFriendList or WorldOpcode.CmsgSetSelection or WorldOpcode.CmsgStandstatechange
-        or WorldOpcode.CmsgSetsheathed;
+        // Friend list read and sheathe state. CMSG_STANDSTATECHANGE (removes food/drink auras) and CMSG_SET_SELECTION
+        // (retargets auto-repeat spells) are NOT here.
+        or WorldOpcode.CmsgFriendList or WorldOpcode.CmsgSetsheathed;
 
     /// <summary>The character-screen opcodes whose client waits for a result code.</summary>
     internal static ClientErrorContext? ContextForSessionPacket(WorldOpcode opcode) => opcode switch

@@ -80,13 +80,16 @@ nothing is sent. Answers the client is waiting for (character screen, mail) are 
 - World handlers (world thread): containment is an **allowlist** (`WorldSession.IsContainableWorldOpcode`). Every
   fault sends the context error for the opcode (CMSG_CAST_SPELL -> spell, the item move/equip/use opcodes -> item, the
   mail opcodes -> mail result, anything else -> notification), logs and records the fault. Then:
-  - an opcode on the allowlist (queries, who, inspect, chat and emotes, channel operations, friend list read,
-    selection, stand state and sheathe) is contained: the session's next packet is handled. The
+  - an opcode on the allowlist (the world-thread queries: guild, pet name, petition, quest-giver status, who,
+    inspect, played time; chat; channel operations; friend list read; sheathe) is contained: the session's next packet is handled. The
     `WorldSession.HandlerFaultStorm`-th (5th) contained fault inside `WorldSession.HandlerFaultStormWindowMs` (60 s)
     disconnects;
   - every other opcode, including all economy, inventory, loot, mail, trade, spell and quest-reward handlers, sends
     the error and then disconnects, as every handler fault did before. New handlers default to this. Movement is
-    deliberately not on the allowlist either.
+    deliberately not on the allowlist either, nor are emotes (they cancel auras and run creature emote scripts),
+    stand state (removes food/drink auras) and selection (retargets auto-repeat spells). The name, item, creature,
+    gameobject, quest, page-text and time queries run on the session task, not the world thread: in game a fault
+    there disconnects (only character-screen faults are contained on the session task).
   A session already being dropped sends nothing and only records the fault. `InvariantViolationException` (the Debug
   stop signal) is never absorbed.
 - Session handlers (session task): CMSG_CHAR_CREATE, CMSG_CHAR_DELETE and CMSG_PLAYER_LOGIN faults at the character

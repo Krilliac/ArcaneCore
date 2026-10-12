@@ -41,8 +41,8 @@ public sealed class HandlerFaultDispatchTests
         }
     }
 
-    /// <summary>A query opcode on the containment allowlist (WorldSession.IsContainableWorldOpcode).</summary>
-    private const WorldOpcode ContainedOpcode = WorldOpcode.CmsgNameQuery;
+    /// <summary>A world-thread query on the containment allowlist (WorldSession.IsContainableWorldOpcode), registered OnWorld in production.</summary>
+    private const WorldOpcode ContainedOpcode = WorldOpcode.CmsgPlayedTime;
 
     private static readonly byte[] InternalErrorNotification = [.. Encoding.ASCII.GetBytes("Internal error"), 0];
 
@@ -118,14 +118,15 @@ public sealed class HandlerFaultDispatchTests
     [Fact]
     public void TheAllowlist_ExcludesEconomyMovementAndMail_AndIncludesQueries()
     {
-        Assert.True(WorldSession.IsContainableWorldOpcode(WorldOpcode.CmsgNameQuery));
+        Assert.True(WorldSession.IsContainableWorldOpcode(WorldOpcode.CmsgPlayedTime));
         Assert.True(WorldSession.IsContainableWorldOpcode(WorldOpcode.CmsgMessagechat));
-        Assert.True(WorldSession.IsContainableWorldOpcode(WorldOpcode.CmsgSetSelection));
+        Assert.True(WorldSession.IsContainableWorldOpcode(WorldOpcode.CmsgWho));
         foreach (WorldOpcode opcode in new[]
         {
             WorldOpcode.CmsgLootMoney, WorldOpcode.CmsgSplitItem, WorldOpcode.CmsgSendMail, WorldOpcode.CmsgMailTakeItem,
             WorldOpcode.CmsgMailTakeMoney, WorldOpcode.CmsgCastSpell, WorldOpcode.CmsgBuyItem, WorldOpcode.CmsgSellItem,
-            WorldOpcode.MsgMoveHeartbeat, WorldOpcode.MsgMoveStartForward,
+            WorldOpcode.MsgMoveHeartbeat, WorldOpcode.MsgMoveStartForward, WorldOpcode.CmsgEmote, WorldOpcode.CmsgTextEmote,
+            WorldOpcode.CmsgStandstatechange, WorldOpcode.CmsgSetSelection, WorldOpcode.CmsgNameQuery,
         })
         {
             Assert.False(WorldSession.IsContainableWorldOpcode(opcode), $"{opcode} must not be contained");
