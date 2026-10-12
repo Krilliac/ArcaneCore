@@ -91,11 +91,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (status.Status != QuestStatus.Complete || status.Rewarded
                 || services.Quests.Get(id) is not { IsActive: true } || !services.IsRewardable(id)) continue;
-            // A set-aside suppresses attempts to reach an ender, but cannot strand an unhomed bot's infeasible
-            // completed quest in its log. Keep the existing set-aside behavior for home-bound bots.
-            if (Home is not null && IsRefused(id)) continue;
+            // A refused abandon packet must not be sent on every think, regardless of home.
+            if (IsRefused(id)) continue;
             if (!_trip.IsInfeasible(player.MapId, player.X, player.Y, services.Quests, content, id,
-                Home is null ? _options.MaxDeliveryYards : 0, player))
+                Home is null ? _options.MaxDeliveryYards : 0, player, completed: true))
             {
                 if (Home is not { } home) continue;
                 bool reasonable = services.Quests.CreatureEndersOf(id)
@@ -104,7 +103,11 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     .Any(spawn => ReasonableReturnTrip(home, player.MapId, player.X, player.Y, spawn));
                 if (reasonable) continue;
             }
-            if (TryAbandonCompletedQuest(_session, player, id, out bool attempted)) return true;
+            if (TryAbandonCompletedQuest(_session, player, id, out bool attempted))
+            {
+                Suspensions?.MarkUnreachableQuest(id);
+                return true;
+            }
             if (attempted) Refuse(id, _session.World.NowMs);
             return false;
         }

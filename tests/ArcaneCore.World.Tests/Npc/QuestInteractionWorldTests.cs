@@ -367,6 +367,8 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
         [new CreatureTemplate { Entry = Entry, Name = "Synthetic questgiver", Faction = 900011, NpcFlags = 2, DisplayIds = [49] },
          new CreatureTemplate { Entry = RemoteEnder, Name = "Remote ender", Faction = 900011, NpcFlags = 2, DisplayIds = [49] }],
         [new CreatureSpawn { Guid = 900020, Entry = Entry, MapId = 0, X = -8948.95f, Y = -132.49f, Z = 83.53f },
-         new CreatureSpawn { Guid = 900021, Entry = RemoteEnder, MapId = EnderOnOtherMap ? 1u : 0u,
-             X = DistantEnder ? -6948.95f : -8948.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
+         .. (EnderOnOtherMap || DistantEnder
+             ? new[] { new CreatureSpawn { Guid = 900021, Entry = RemoteEnder, MapId = EnderOnOtherMap ? 1u : 0u,
+                 X = DistantEnder ? -6948.95f : -8948.95f, Y = -132.49f, Z = 83.53f } }
+             : Array.Empty<CreatureSpawn>())], [], [], []));
 }

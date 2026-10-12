@@ -56,7 +56,7 @@ public sealed class PlayerbotQuestTravelPriorityTests
                 var destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
                 Assert.False(destinations.HasQuestCandidate(player));
                 player.SetPosition(-7500f, player.Y, player.Z, player.Orientation);
-                Assert.True(destinations.HasQuestCandidate(player)); // moving into range invalidates the rejected shortlist
+                Assert.False(destinations.HasQuestCandidate(player)); // giver-to-ender distance is static as the bot moves
                 return true;
             });
         }

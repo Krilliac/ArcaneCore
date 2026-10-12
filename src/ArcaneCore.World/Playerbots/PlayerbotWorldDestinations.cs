@@ -37,7 +37,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private uint[] _rewardQuestIds = [];
     private uint _level;
     private float _cachedMaxDeliveryYards;
-    private readonly List<uint> _rejectedTrips = [];
     private PlayerbotHomeArea? _cachedHome;
     private uint _preferredEntry = uint.MaxValue;
     private uint _returnQuestId;
@@ -354,7 +353,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             && ReferenceEquals(_cachedHome, Home)
             && _returnQuestId == returnQuestId && _rewardMode == mode && _level == level
             && _cachedMaxDeliveryYards == maxDeliveryYards
-            && RejectedTripsStillInfeasible(player, mapId, quests, content, maxDeliveryYards)
             && _rewardQuestIds.SequenceEqual(allowed)) return;
         bool contentChanged = _mapId != mapId || !ReferenceEquals(_content, content) || _contentVersion != content.DefinitionsVersion;
         ClearRoute();
@@ -367,7 +365,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _rewardMode = mode;
         _level = level;
         _cachedMaxDeliveryYards = maxDeliveryYards;
-        _rejectedTrips.Clear();
         _cachedHome = Home;
         _rewardQuestIds = [.. allowed];
         _entries.Clear();
@@ -401,7 +398,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (_trip.IsInfeasible(mapId, player.X, player.Y, quests, content, questId,
                 maxDeliveryYards, player))
             {
-                _rejectedTrips.Add(questId);
                 continue;
             }
             if (area is not null && !area.QuestInside(quests, content, candidate)) continue;
@@ -415,16 +411,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             .OrderBy(entry => DistanceSquared(player, entry.Spawn)).ThenBy(entry => entry.Spawn.Guid)
             .Take(MaxEntryScan))
             _entries.Add(entry);
-    }
-
-    private bool RejectedTripsStillInfeasible(Player player, uint mapId, QuestStore quests, CreatureContent content,
-        float maxDeliveryYards)
-    {
-        // Static enders stay cached. Recheck live spawn gates and position before retaining a shortlist that omitted a quest.
-        foreach (uint questId in _rejectedTrips)
-            if (!_trip.IsInfeasible(mapId, player.X, player.Y, quests, content, questId, maxDeliveryYards, player))
-                return false;
-        return true;
     }
 
     /// <summary>

@@ -69,7 +69,7 @@ public sealed class PlayerbotOptions
     /// <summary>The longest bot route in yards (above 0, at most 100000).</summary>
     public float MaxRouteYards { get; set; } = 2000f;
 
-    /// <summary>Maximum straight-line trip from an unhomed bot to a quest's nearest present ender in yards (0 disables the distance limit; 0..100000).</summary>
+    /// <summary>Maximum same-map straight-line trip from a quest giver to its nearest present ender for an unhomed bot (0 disables the distance limit; 0..100000).</summary>
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 100000 ('.' is the decimal point); 0 disables the distance limit")]
     public float MaxDeliveryYards { get; set; } = 1200f;
 
