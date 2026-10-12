@@ -3,10 +3,12 @@ using System.Reflection;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
@@ -353,6 +355,99 @@ public sealed class PlayerbotExploreTests
             });
         }
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    // Bot QA #286/#290/#293/#295/#309/#282/#310: an unhomed level 7-8 bot among level 10-14 creatures, the nearest fit over 1000 yards away.
+    private const float StrandX = -8949.95f, StrandY = -132.49f, StrandZ = 83.53f;
+    private static readonly Vector3 StrandBind = new(-11500f, -132.49f, 83.53f);
+
+    private static CreatureContent StrandedContent(bool fitting, bool strandedBind = false)
+    {
+        var templates = new List<CreatureTemplate>
+        {
+            new() { Entry = 99201, Name = "strong", MinLevel = 12, MaxLevel = 12, Faction = 14 },
+            new() { Entry = 99202, Name = "fit", MinLevel = 8, MaxLevel = 8, Faction = 14 },
+        };
+        var spawns = new List<CreatureSpawn>();
+        uint guid = 1;
+        foreach ((float dx, float dy) in new[] { (300f, 0f), (-350f, 120f), (0f, 400f), (0f, -440f), (450f, 450f) })
+            spawns.Add(new CreatureSpawn { Guid = guid++, Entry = 99201, MapId = 0, X = StrandX + dx, Y = StrandY + dy, Z = StrandZ });
+        if (strandedBind)
+            foreach ((float dx, float dy) in new[] { (60f, 0f), (-80f, 50f), (0f, 90f) })
+                spawns.Add(new CreatureSpawn { Guid = guid++, Entry = 99201, MapId = 0, X = StrandBind.X + dx, Y = StrandBind.Y + dy, Z = StrandZ });
+        spawns.Add(new CreatureSpawn { Guid = guid++, Entry = 99202, MapId = 0, X = StrandX + (fitting ? 200 : 2000), Y = StrandY, Z = StrandZ });
+        return new CreatureContent(templates, spawns, [], [], []);
+    }
+
+    /// <summary>Gives a stalled Explore goal up for a level 8 bot and reports whether it ended at its bind point.</summary>
+    private static async Task<bool> StallExploringAsync(CreatureContent content, bool homed, byte level = 8, bool bindAtBot = false)
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new TestContent(content));
+            services.AddSingleton(new FactionTemplateCatalog([
+                new FactionTemplateRecord(1, 1, 0, 1, 0, 0),
+                new FactionTemplateRecord(14, 0, 0, 8, 0, 1)]));
+            services.AddSingleton<IWorldFeature, ManualStrandClock>();
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new AlwaysRoute());
+                Player player = session.Player!;
+                player.Level = level;
+                player.SetPosition(StrandX, StrandY, StrandZ, 0);
+                Vector3 bind = bindAtBot ? new(StrandX + 20, StrandY, StrandZ) : StrandBind;
+                player.Home = new HomeBind(0, 12, bind.X, bind.Y, bind.Z);
+                if (homed) brain.Home = new PlayerbotHomeArea(0, new Vector3(StrandX, StrandY, StrandZ), 750f, "Test");
+                brain.HoldGoalForTests(PlayerbotGoalKind.Explore, 0, 0);
+                brain.GiveUpStalledGoal(player, shareable: false);
+            });
+            for (int tick = 0; tick < 100; tick++)
+            {
+                bool arrived = await host.OnWorldAsync(() =>
+                {
+                    PlayerbotMovementControl.Update(session, session.Player!);
+                    return session.Player!.IsInWorld && Vector2.Distance(new(session.Player.X, session.Player.Y), new(StrandBind.X, StrandBind.Y)) < 5f;
+                });
+                if (arrived) return true;
+                await host.World.AdvanceClockAsync(50);
+            }
+            return await host.OnWorldAsync(() => brain.BindTeleported); // a no-op teleport onto the same spot counts
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task StalledExplore_UnhomedBotWithNothingFittingWithinThreeRings_TeleportsToItsBindPoint()
+        => Assert.True(await StallExploringAsync(StrandedContent(fitting: false), homed: false));
+
+    [Fact]
+    public async Task StalledExplore_UnhomedBotWithAFittingSpawn200YardsAway_StaysPut()
+        => Assert.False(await StallExploringAsync(StrandedContent(fitting: true), homed: false));
+
+    [Fact]
+    public async Task StalledExplore_BotAlreadyAtItsBindPoint_IsNotTeleported()
+        => Assert.False(await StallExploringAsync(StrandedContent(fitting: false), homed: false, bindAtBot: true));
+
+    [Fact]
+    public async Task StalledExplore_BindPointStrandedForItsLevelToo_IsNotTeleported()
+        => Assert.False(await StallExploringAsync(StrandedContent(fitting: false, strandedBind: true), homed: false));
+
+    [Fact]
+    public async Task StalledExplore_OverLevelledBotWithNothingToFight_IsNotTeleported()
+        => Assert.False(await StallExploringAsync(StrandedContent(fitting: false), homed: false, level: 30));
+
+    [Fact]
+    public async Task StalledExplore_HomedBotAmongStrongCreatures_IsNotTeleported()
+        => Assert.False(await StallExploringAsync(StrandedContent(fitting: false), homed: true));
+
+    private sealed class ManualStrandClock : IWorldFeature
+    {
+        public void Attach(ArcaneCore.Game.Maps.WorldRuntime world) => world.UseManualClock();
     }
 
     private sealed class TestContent(CreatureContent content) : ICreatureDataStore

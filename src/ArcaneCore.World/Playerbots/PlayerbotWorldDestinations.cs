@@ -318,11 +318,26 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal static bool IsFiniteDestination(CreatureSpawn spawn)
         => float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z);
 
+    /// <summary>How near its ender (yards, same map) the bot's bind point must be for a completed quest it cannot walk to to be reached by teleporting there.</summary>
+    internal const float BindNearEnderYards = 250f;
+
+    /// <summary>The brain's bind-point teleport (not urgent, on its cooldown): true when the bot was sent. Null: none.</summary>
+    internal Func<Player, string, bool>? TeleportToBind { get; set; }
+
     /// <summary>Failed plans of one completed quest from one spot (within <see cref="SpotYards"/>) before the route refusal is diagnosed.</summary>
     internal const int ConfirmFailures = 3;
 
-    /// <summary>The quest's set-asides for this bot after which it is abandoned instead of set aside again.</summary>
+    /// <summary>The set-asides of a quest for this bot after which a quest that cannot be held (an unfinished one, or a steep-ground refusal) is abandoned instead of set aside again.</summary>
     internal const int AbandonAfterSetAsides = 3;
+
+    /// <summary>
+    /// The set-asides (ten minutes each, so about two hours) after which a completed quest held against a strong hazard is abandoned
+    /// all the same when the bot has gained no level since the first of them. In memory only: a restart starts the count again.
+    /// </summary>
+    internal const int MaxHeldSetAsides = 12;
+
+    /// <summary>A bot this near its bind point (yards) is taken to be at it: teleporting there would change nothing.</summary>
+    internal const float BindArrivedYards = 50f;
 
     private const float SpotYards = 3f;
 
@@ -331,6 +346,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private int _failCount;
     private bool _failDiagnosed;
     private readonly Dictionary<uint, int> _setAsides = [];
+    private readonly Dictionary<uint, uint> _heldAtLevel = [];
 
     /// <summary>
     /// One more failed plan of the completed quest <paramref name="questId"/> (a single ender). A single failure proves nothing
@@ -338,7 +354,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// <see cref="ConfirmFailures"/>th from the same spot is diagnosed for a steep ascent or a hazard on a connected route,
     /// once per quest and spot; a bot that moved starts the count again. A confirmed refusal sets the quest and its
     /// ender aside for this bot; the <see cref="AbandonAfterSetAsides"/>th set-aside of a quest abandons it through the client's
-    /// abandon packet instead (the ender cannot be reached from where this bot keeps ending up).
+    /// abandon packet instead (the ender cannot be reached from where this bot keeps ending up). A completed quest refused for a hazard
+    /// is held instead (<see cref="TeleportToBind"/> when the bind point is beside the ender), until <see cref="MaxHeldSetAsides"/>
+    /// set-asides pass with no level gained.
     /// <para>
     /// With the brain's distant-quest abandon (<c>PlayerbotQuestGoals.AbandonDistantCompletedQuest</c>, which runs first and
     /// drops a completed quest with no ender in the home or within 600 yards), this only meets quests whose ender is near on the map
@@ -370,9 +388,48 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         TargetEntry = entry;
         QuestId = questId;
         ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
+        bool finished = _session.Services.GetService<QuestNpcFeature>()?.Services.StateOf(player)?.Quests.Get(questId)
+            is { Status: QuestStatus.Complete, Rewarded: false };
+        bool hold = finished && !steep;
+        if (hold)
+        {
+            // A level gained since the first hold restarts the count (the pack that blocked the bot may be crossable now); with none, the
+            // hold ends at MaxHeldSetAsides and the quest is abandoned below, so a permanent hazard cannot cost path queries forever.
+            if (_heldAtLevel.TryGetValue(questId, out uint heldLevel) && player.Level > heldLevel)
+            {
+                times = 1;
+                _setAsides[questId] = 1;
+            }
+            _heldAtLevel[questId] = Math.Max(player.Level, _heldAtLevel.GetValueOrDefault(questId));
+            hold = times < MaxHeldSetAsides;
+        }
+
+        if (hold && times >= AbandonAfterSetAsides)
+        {
+            // Finished work is not thrown away for a strong hazard on the way: live 2026-10-12 (bot QA #283) 47 completed quests were
+            // abandoned in one 4-hour window. A bind point beside the ender is a way round (unless the bot already stands at it: the
+            // teleport would change nothing); either way the quest is held and set
+            // aside for the ordinary window (the count keeps growing, so every later diagnosis comes back here).
+            HomeBind bind = player.Home;
+            float bx = bind.X - destination.X, by = bind.Y - destination.Y;
+            float px = bind.X - player.X, py = bind.Y - player.Y;
+            bool teleported = bind != default && bind.MapId == player.MapId
+                && bx * bx + by * by <= BindNearEnderYards * BindNearEnderYards
+                && px * px + py * py > BindArrivedYards * BindArrivedYards
+                && TeleportToBind?.Invoke(player, $"cannot reach the ender of completed quest {questId}: {reason}") == true;
+            suspensions.SuspendQuest(questId, now);
+            suspensions.SuspendEntry(entry, now);
+            log?.LogWarning(
+                "Playerbot {Bot} keeps completed quest {Quest} (ender {Entry}) after {Times} set-asides{Teleport}: no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; {Reason}",
+                player.Name, questId, entry, times, teleported ? " and teleports to its bind point beside the ender" : " and sets it aside again",
+                player.X, player.Y, player.Z, player.MapId, reason);
+            return;
+        }
+
         if (times >= AbandonAfterSetAsides && PlayerbotQuestGoals.TryAbandonCompletedQuest(_session, player, questId, out _))
         {
             _setAsides.Remove(questId);
+            _heldAtLevel.Remove(questId);
             suspensions.MarkUnreachableQuest(questId);
             log?.LogWarning(
                 "Playerbot {Bot} abandons completed quest {Quest} (ender {Entry}) after {Times} set-asides: no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; {Reason}",
