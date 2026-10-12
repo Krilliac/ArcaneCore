@@ -4,6 +4,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Teleport;
@@ -32,6 +33,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private PlayerbotRoute? _route;
+    private PlayerbotRoute? _waterRoute;
+    private uint _waterRetryAt;
+    private uint _dryMs;
     private Creature? _target;
     private uint _thinkElapsed;
     private bool _attacking;
@@ -291,6 +295,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal void ResumeAfterGroup()
     {
         DropIntent();
+        _waterRoute = null; // planned where the group took over, not here
+        _waterRetryAt = 0;
+        _dryMs = 0;
         _lootActions.Clear();
         _lootResponseReceived = false;
         _restUntilMs = 0;
@@ -311,6 +318,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (!_options.Enabled || _stopped != 0 || _session.Player is not { } player)
             return;
         _destinations.SkipQuest ??= _quests.IsRefused;
+        _destinations.GiverHasCandidate ??= _quests.HasCandidate;
+        _destinations.SetQuestAside ??= _quests.SetAside;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         _destinations.ValidatePlanning(player);
@@ -326,6 +335,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (dead)
         {
             _destinations.Stop();
+            _waterRoute = null;
+            _waterRetryAt = 0;
             _stall.Reset();
             // The walk home planned from where the bot fell: after the resurrection (maybe far away) it plans afresh.
             _homeReturn.Reset();
@@ -385,6 +396,30 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         _deathIntentRetired = false;
         _recovery.Reset();
+
+        // The water escape owns a bot that would otherwise stand still under water: a rest or a loot wait, or an escape already
+        // under way. A sick bot still walks its quest returns and errands, so sickness alone is not a reason: StandDownWhileSick stops
+        // it on an earlier think than the idle check after the trips and the retreat, and that check then takes the standing bot out.
+        // A bot that is walking a route or riding a trip is never diverted by this block. Movement itself continues on world ticks;
+        // a route is planned only on entry or after it ends.
+        bool submerged = PlayerbotWater.Submerged(player);
+        if (!submerged)
+        {
+            _waterRoute = null;
+            // The retry bound is cleared only after the bot has stayed dry for a while, so a ford edge does not re-search every second.
+            if (_dryMs < 10_000) _dryMs += elapsedMs;
+            if (_dryMs >= 10_000) _waterRetryAt = 0;
+        }
+        else
+        {
+            _dryMs = 0;
+            if (!player.Combat.IsInCombat
+                && (_waterRoute is not null || _restUntilMs != 0 || _lootActions.Count > 0))
+            {
+                EscapeWater(player, elapsedMs);
+                return;
+            }
+        }
 
         if (_restUntilMs != 0)
         {
@@ -501,6 +536,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             DropIntent();
             _goal = PlayerbotGoalKind.Retreat;
+            return;
+        }
+
+        // Still under water and standing still (no trip, no retreat, no walk under way): a finished retreat, a risk wait or any
+        // other pause. A brief dip while walking is no breath risk, so a moving bot is left alone.
+        if (submerged && !player.Combat.IsInCombat && (player.Movement.Flags & MovementFlags.MaskMoving) == 0)
+        {
+            EscapeWater(player, interval);
             return;
         }
 
@@ -1113,6 +1156,35 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         TargetEntry = 0;
     }
 
+    private void EscapeWater(Player player, uint elapsedMs)
+    {
+        _goal = PlayerbotGoalKind.Escape;
+        _stall.Reset();
+        _restUntilMs = 0;
+        if (player.StandState != StandState.Stand)
+        {
+            _session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand));
+            return;
+        }
+        if (_waterRoute is null)
+        {
+            uint now = _session.World.NowMs;
+            if (unchecked((int)(_waterRetryAt - now)) > 0) return;
+            if (_lootOpened && _target is { } loot)
+                _session.TryManagedAction(WorldOpcode.CmsgLootRelease, PlayerbotNavigation.GuidPayload(loot.Guid.Value));
+            DropIntent();
+            _lootActions.Clear();
+            _lootResponseReceived = false;
+            _waterRoute = PlayerbotWater.FindExit(player, _options);
+            if (_waterRoute is null) _waterRetryAt = unchecked(now + 2_000);
+        }
+        if (_waterRoute is { } route && !PlayerbotNavigation.TryAdvance(_session, route, _options, elapsedMs, _session.World.NowMs))
+        {
+            _waterRoute = null;
+            _waterRetryAt = unchecked(_session.World.NowMs + 2_000);
+        }
+    }
+
     /// <summary>
     /// While the bot carries resurrection sickness (<see cref="PlayerbotSickness"/>), it pulls nothing and
     /// travels nowhere for a fight: it stands with goal Rest until the sickness runs out (at most ten minutes), and that wait is no
@@ -1445,6 +1517,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _killingBlowSource = "Unobserved";
         (bool loop, IReadOnlyList<uint> setAside) = _stall.RecordDeath(now, player.MapId,
             new System.Numerics.Vector3(player.X, player.Y, player.Z), _attackerEntries);
+        int killerLevel = 0;
+        foreach (uint entry in _attackerEntries)
+            if (_attackerFacts.TryGetValue(entry, out QaAttackerFact? fact)) killerLevel = Math.Max(killerLevel, fact.Level);
+        _recovery.LastKillerMaxLevel = killerLevel;
+        if (loop && _stall.NewDeathLoop && _options.Risk.Enabled)
+        {
+            (System.Numerics.Vector3 centre, uint[] killers) = _stall.LoopZone(player.MapId,
+                new System.Numerics.Vector3(player.X, player.Y, player.Z), now);
+            bool repeatedZone = Risk.Hazards.RememberDeathLoop(player.MapId, centre, now,
+                _options.Risk.DeathLoopMemorySeconds, killers);
+            if (repeatedZone) _suspensions.SuspendQuest(QuestId, now);
+        }
         _attackerEntries.Clear();
         Risk.OnDeath(player, _attackers);
         _attackers.Clear();
@@ -1495,6 +1579,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private (PlayerbotUnsafeBody Reason, string? Detail) JudgeBody(Player player, Corpse corpse)
     {
         var body = new System.Numerics.Vector3(corpse.X, corpse.Y, corpse.Z);
+        bool bodySubmerged = player.Map is { } map && PlayerbotWater.Submerged(map, body, player.Locomotion.CollisionHeight);
+        if (bodySubmerged)
+            return (PlayerbotRecovery.JudgeBody(false, false, false, false, bodySubmerged: true),
+                "liquid surface above the body's collision height");
         int deaths = _stall.DeathsNear(corpse.MapId, body, _session.World.NowMs);
         bool diedHere = deaths >= 2 && PlayerbotRecovery.Threats(player).Concat(Risk.HazardThreats(player))
             .Any(threat => threat.Reaches(body, PlayerbotRecovery.CampMarginYards));
@@ -1515,12 +1603,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
         }
 
-        PlayerbotUnsafeBody reason = PlayerbotRecovery.JudgeBody(diedHere, strong is not null, outside, nearer);
+        PlayerbotUnsafeBody reason = PlayerbotRecovery.JudgeBody(diedHere, strong is not null, outside, nearer, bodySubmerged);
         string? detail = reason switch
         {
             PlayerbotUnsafeBody.DiedHere => string.Create(CultureInfo.InvariantCulture,
                 $"{deaths} deaths within {PlayerbotStallWatch.DeathLoopYards:F0} yd in {PlayerbotStallWatch.DeathLoopWindowMs / 1000}s"),
             PlayerbotUnsafeBody.TooStrong => strong.ToString(),
+            PlayerbotUnsafeBody.Hazard => "liquid surface above the body's collision height",
             PlayerbotUnsafeBody.OutsideHome => string.Create(CultureInfo.InvariantCulture,
                 $"body {bodyFromHome:F0} yd from the home's centre, healer {healerFromHome:F0} yd"),
             _ => null,

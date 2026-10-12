@@ -43,6 +43,26 @@ public sealed class PlayerbotQuestTravelPriorityTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task DistantSameMapEnder_IsIneligibleForOffscreenTravel()
+    {
+        await using WorldTestHost host = Start(new QuestTravelFixture(-8648.95f, distantEnder: true));
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                var destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+                Assert.False(destinations.HasQuestCandidate(player));
+                player.SetPosition(-7500f, player.Y, player.Z, player.Orientation);
+                Assert.False(destinations.HasQuestCandidate(player)); // giver-to-ender distance is static as the bot moves
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -277,7 +297,7 @@ public sealed class PlayerbotQuestTravelPriorityTests
     }
 }
 
-internal sealed class QuestTravelFixture(float spawnX, uint enderMapId = 0) : IQuestContentStore, ICreatureDataStore
+internal sealed class QuestTravelFixture(float spawnX, uint enderMapId = 0, bool distantEnder = false) : IQuestContentStore, ICreatureDataStore
 {
     internal const uint QuestId = 910001;
     internal const uint Entry = 910010;
@@ -287,11 +307,12 @@ internal sealed class QuestTravelFixture(float spawnX, uint enderMapId = 0) : IQ
     public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new QuestContent(
         [new QuestTemplate { Entry = QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, Title = "Travel quest" }],
         [new CreatureQuestRelation { Id = Entry, Quest = QuestId }],
-        [new CreatureQuestRelation { Id = enderMapId == 0 ? Entry : OtherEnder, Quest = QuestId }]));
+        [new CreatureQuestRelation { Id = enderMapId == 0 && !distantEnder ? Entry : OtherEnder, Quest = QuestId }]));
 
     Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
         [new CreatureTemplate { Entry = Entry, Name = "Travel questgiver", NpcFlags = 2, DisplayIds = [49] },
          new CreatureTemplate { Entry = OtherEnder, Name = "Distant ender", NpcFlags = 2, DisplayIds = [49] }],
         [new CreatureSpawn { Guid = 910020, Entry = Entry, MapId = 0, X = spawnX, Y = -132.49f, Z = 83.53f },
-         new CreatureSpawn { Guid = 910021, Entry = OtherEnder, MapId = enderMapId, X = -8948.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
+         new CreatureSpawn { Guid = 910021, Entry = OtherEnder, MapId = enderMapId,
+             X = distantEnder ? -6500f : -8948.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
 }

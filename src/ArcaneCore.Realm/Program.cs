@@ -4,13 +4,10 @@ using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Ops;
-using ArcaneCore.Kernel.Ops.ServerConsole;
-using ArcaneCore.Realm.Net;
+using ArcaneCore.Realm;
 using ArcaneCore.Realm.Ops.Cli;
-using ArcaneCore.Realm.Ops.ServerConsole;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 // The command line is read before anything is built: --help, a mistyped command and a mistyped option are answered here (exit 64) instead of
@@ -50,23 +47,8 @@ ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TrySet("realmserver", bui
 
 ArcaneCore.Kernel.Diagnostics.DiagnosticsHostingExtensions.UseArcaneDiagnostics(builder); // crash hooks and invariants (docs/ops/invariants.md), installed before anything else can fail
 
-builder.Services.AddArcaneCoreLogging(builder.Configuration);
-builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
-builder.Services.Configure<AutoPatchOptions>(builder.Configuration.GetSection(AutoPatchOptions.SectionName)); // logon auto-patcher, off by default
-builder.Services.Configure<RealmSeedOptions>(builder.Configuration.GetSection(RealmSeedOptions.SectionName));
-builder.Services.AddNetProtection(builder.Configuration);
-builder.Services.AddAuthDatabase(builder.Configuration);
-builder.Services.AddRealmResilience(builder.Configuration); // after AddAuthDatabase: guards the auth stores (docs/ops/resilience.md)
-builder.Services.AddSingleton<LogonServer>(); // one instance: the hosted service and the console (its session count) share it
-builder.Services.AddHostedService(sp => sp.GetRequiredService<LogonServer>());
-builder.Services.Configure<RealmConsoleOptions>(builder.Configuration.GetSection(RealmConsoleOptions.SectionName));
-builder.Services.TryAddSingleton(_ => ConsoleInputSource.Default());
-builder.Services.TryAddSingleton(TimeProvider.System);
-builder.Services.AddHostedService<RealmConsole>(); // typed commands at the console window, off when stdin is redirected (docs/areas/server-console.md)
-builder.Services.AddRealmWatchdog(builder.Configuration);
-// Ops:Metrics, off by default (docs/ops/metrics.md). The Realm role binds Ops:Metrics:RealmPrometheusPrefix (default port 9465),
-// so a profile shared with the World (which keeps 9464) runs both endpoints.
-ArcaneCore.Kernel.Ops.Metrics.MetricsServiceCollectionExtensions.AddOpsMetrics(builder.Services, builder.Configuration, "arcanecore-realm", MetricsRole.Realm);
+// Every registration the realm runs with, in one place the CI guard also builds with scope and build validation on.
+builder.Services.AddRealmProductionServices(builder.Configuration);
 
 IHost host = builder.Build();
 conf.Reporter.Attach(host.Services.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>().CreateLogger("ArcaneCore.Config"));

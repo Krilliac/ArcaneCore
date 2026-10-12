@@ -378,14 +378,14 @@ public sealed class ConfDistTests : IDisposable
             }
         }
 
-        // The other direction: an options class the Realm's Program.cs binds directly must be marked for the Realm, and so must each of its catalog keys.
-        string program = File.ReadAllText(Path.Combine(root, "src", "ArcaneCore.Realm", "Program.cs"));
+        // The other direction: an options class the Realm's RealmProductionServices.cs (called by Program.cs) binds directly must be marked for the Realm, and so must each of its catalog keys.
+        string program = File.ReadAllText(Path.Combine(root, "src", "ArcaneCore.Realm", "RealmProductionServices.cs"));
         string[] bound = [.. Regex.Matches(program, @"Configure<(\w+)>\(").Select(m => m.Groups[1].Value).Where(n => n != "HostOptions").Distinct()];
         Assert.True(bound.Length >= 3, "expected the Realm to bind several options classes; found " + bound.Length);
         foreach (string typeName in bound)
         {
             ConfigSection section = ConfigExceptionTable.Sections().Single(s => s.Type.Name == typeName);
-            Assert.True((DaemonsOf(section.Type) & ConfigDaemon.Realm) != 0, $"{typeName} is bound by the Realm's Program.cs but is not marked [ConfigDaemons] for the Realm");
+            Assert.True((DaemonsOf(section.Type) & ConfigDaemon.Realm) != 0, $"{typeName} is bound by the Realm's RealmProductionServices.cs but is not marked [ConfigDaemons] for the Realm");
             foreach (ConfigEntry entry in ConfigProduction.Catalog.Entries.Where(e => e.Path == section.Path || e.Path.StartsWith(section.Path + ":", StringComparison.Ordinal)))
             {
                 Assert.True((entry.Daemons & ConfigDaemon.Realm) != 0, $"{entry.Path} is read by the Realm ({typeName}) but the catalog does not list it for the Realm");

@@ -28,7 +28,7 @@
 #
 #   AUTH                        15 keys
 #   DATABASE                    11 keys
-#   DIAGNOSTICS                 6 keys
+#   DIAGNOSTICS                 8 keys
 #   LOGGING                     16 keys
 #   NET                         16 keys
 #   OPS                         39 keys
@@ -433,6 +433,35 @@ Database.Upgrade.Policy = Always
 #        Docs: docs/reference/configuration.md#diagnostics
 #
 Diagnostics.BreakOnInvariant = false
+
+#
+#    Diagnostics.FaultLogLimit
+#        Description: How many occurrences of one fault (an exception type thrown from one place,
+#                     caught at one of the server's catch-and-log sites) are logged in full. After
+#                     that the site logs that fault at most once a minute, with "(N more since)";
+#                     every occurrence is still counted in the fault ledger (.server faults, the
+#                     arcanecore_faults_total metric). 0 logs the first occurrence and then once a
+#                     minute. Default 10.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.FaultLogLimit = 10
+
+#
+#    Diagnostics.FaultMaxSignatures
+#        Description: How many distinct faults the fault ledger keeps. A fault beyond the cap is
+#                     counted into one overflow entry, never dropped. Default 512; a lower value
+#                     bounds memory on a server that throws a new exception signature per request.
+#        Type: int
+#        Default: 512
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.FaultMaxSignatures = 512
 
 #
 #    Diagnostics.FirstChanceExceptions

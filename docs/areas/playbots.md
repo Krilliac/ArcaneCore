@@ -84,6 +84,30 @@ its game time about 30 times faster, so a replay in December would have turned W
 step's quest reward writes (on the fast clock a bot's 15-second exchange deadline ran out while the write was on its way, and the reward
 counted as refused) and prints each bot's quests taken, rewarded and still open.
 
+For an unhomed bot, `World:Playerbots:MaxDeliveryYards` (1200 by default, 0 disables the distance limit) compares
+the quest giver with the nearest same-map ender. A proven longer trip is skipped at visible pickup and offscreen travel.
+A completed quest follows exactly this rule (L is `MaxDeliveryYards` for an unhomed bot and 0 for a homed one; the bot's
+continent C is map 0 or 1, and on any other map the quest is kept). 1. Reachable now: if any ender spawn of the quest
+(present or not) is on C and either L is 0 or the bot is within L yards of one, the quest is kept. 2. Otherwise it is
+statically infeasible only if it has a creature giver on map 0 or 1 and, for every giver map G, there is no ender spawn on
+G, or L is above 0 and every giver-to-ender distance on G exceeds L; a quest with no creature giver on map 0 or 1 is never
+infeasible. The quest is abandoned only when it is not reachable now and statically infeasible, so a bot on the ender's
+continent, or one that merely wandered far from a local hand-in while finishing objectives, keeps it. Successful
+abandonment uses `CMSG_QUESTLOG_REMOVE_QUEST` and frees the slot. An unhomed bot durably refuses an abandoned quest; a
+homed bot and a server-refused packet record no durable refusal. Durable refusals outlive later
+config changes: raising `MaxDeliveryYards` does not lift refusals already recorded; they age out through the 64-entry
+per-bot FIFO. A refused abandon packet is retried only after the normal refusal interval. A quest whose enders are all on
+the other continent from its giver is still abandoned when the distance limit is disabled; unknown or scripted enders
+remain eligible. Homed bots keep their home-area and short-return rules. Giver-to-ender facts (per-map giver presence and
+ender spawns with their nearest-giver distance) are shared and cached by quest store, creature content, definition
+version and quest; pickup still honours ender spawn gates, while the completed-quest rule reads the bot's position and the
+live option on each decision and ignores spawn gates.
+In the read-only schema-53 world snapshot, 484 of 3,221 quests with creature givers and enders on the same map
+(15.03%) have a nearest pair beyond 1200 yards. All six reported delivery stalls (120, 118, 1420, 6384, 164, 165)
+fall beyond it; the shortest is quest 165 at 1312.7 yards. The default retains those six exclusions while allowing
+local hand-ins after long objective travel. It can exclude other legitimate long deliveries, and 0 opts out of the
+same-map distance limit. Terrain, hostile pockets and autonomous taxi travel have separate limits.
+
 A far goal (a quest giver or ender, a corpse) is approached a leg at a time (`PlayerbotNavigation.TryPlanToward`). Beyond
 `MaxPathPoints - 2` yards the map's region graph leads (`NavRegionGraph`, [collision-pathing](collision-pathing.md); built off the world
 thread on the first far goal of a map, seconds for a continent): its search finds the way across the map coarsely, round mountains and out
@@ -134,7 +158,8 @@ minutes only if the steep-allowed path gains at least `SteepAscentYards` (15) on
 and logs the bot's name and the measured climb. A gentle uphill to a turn-in, a transient failure, and a quest with a second
 ender are never set aside. The third set-aside of the same quest abandons it with the client's abandon packet instead of
 cycling every ten minutes. The brain's `AbandonDistantCompletedQuest` (codex/w6-setaside-persist; it runs before
-`CompletedReturnQuest` and drops a completed quest with no ender in the home or within 600 yards) acts first on far enders;
+`CompletedReturnQuest` and, for a homed bot, drops a completed quest with no ender in the home or within 600 yards)
+acts first on far enders;
 this set-aside covers the enders that are near on the map but behind steep ground. Real-terrain tests:
 `Quest6562_FromAshenvaleRidge_TheClimbToTheEnderIsMeasuredOnSteepLegs` and
 `AtTheAshenvaleStall_TheRidgeIsNoMeshIsland_AndTheBrainWalksTheBotOff`; the decision itself is tested through the brain in

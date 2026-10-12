@@ -72,6 +72,12 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// </summary>
     public const uint DungeonItemQuest = 990706;
 
+    /// <summary>An elite quest for two (Type 1, level 13) whose ogre, <see cref="EntranceOgreEntry"/>, stands 60 yards from the Deadmines entrance (dungeon worlds only).</summary>
+    public const uint EntranceEliteQuest = 990707;
+
+    public const uint EntranceOgreEntry = 990722;
+    public const uint EntranceOgreSpawn = 990722;
+
     public const uint BossTrophy = 990750;
     public const uint BossLootReference = 990760;
 
@@ -102,9 +108,11 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// <param name="quests">The quests the giver offers.</param>
     /// <param name="dungeon">The Deadmines content (map 36, its triggers), the giver at <see cref="EntranceArea"/>.</param>
     /// <param name="rfc">RFC map, trigger, encounter, creature and graveyard content for an end-to-end run.</param>
+    /// <param name="openWorldTrophyDrop">The open-world ogre drops <see cref="BossTrophy"/> too: the item then has a dropper outside the instance.</param>
     /// <param name="extraCreatures">More creature templates and their spawns (the bosses of the dungeon and raid run tests).</param>
     public static async Task<GroupTestWorld> StartAsync(uint[] quests, Action<PlayerbotOptions>? configure = null, bool dungeon = false,
-        Action<IServiceCollection>? services = null, (CreatureTemplate Template, CreatureSpawn Spawn)[]? extraCreatures = null, bool rfc = false)
+        Action<IServiceCollection>? services = null, (CreatureTemplate Template, CreatureSpawn Spawn)[]? extraCreatures = null, bool rfc = false,
+        bool openWorldTrophyDrop = false)
     {
         var options = new PlayerbotOptions
         {
@@ -112,7 +120,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             Groups = { FormationTimeoutSeconds = 600 },
         };
         configure?.Invoke(options);
-        var content = new GroupContent(quests, dungeon, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])]);
+        var content = new GroupContent(quests, dungeon, openWorldTrophyDrop, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])]);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(collection =>
         {
             if (dungeon) DeadminesTestContent.Register(collection);
@@ -237,14 +245,15 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     }
 
     /// <summary>The giver, the creatures and the quests (a later registration replaces the scenario content's stores).</summary>
-    private sealed class GroupContent(uint[] quests, bool dungeon, (CreatureTemplate Template, CreatureSpawn Spawn)[] extra) : ICreatureDataStore, IQuestContentStore, ILootDataStore
+    private sealed class GroupContent(uint[] quests, bool dungeon, bool openWorldTrophyDrop, (CreatureTemplate Template, CreatureSpawn Spawn)[] extra) : ICreatureDataStore, IQuestContentStore, ILootDataStore
     {
         Task<LootContent> ILootDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new LootContent(
             [
                 (LootTableKind.Creature, new LootStoreRow(BossEntry, 0, 100f, 0, -(int)BossLootReference, 1)),
                 (LootTableKind.Reference, new LootStoreRow(BossLootReference, BossTrophy, -100f, 0, 1, 1)),
+                .. openWorldTrophyDrop ? [(LootTableKind.Creature, new LootStoreRow(OgreEntry, BossTrophy, -100f, 0, 1, 1))] : Array.Empty<(LootTableKind, LootStoreRow)>(),
             ],
-            [new CreatureLootInfo(BossEntry, BossEntry, 0, 0, 0)]));
+            [new CreatureLootInfo(BossEntry, BossEntry, 0, 0, 0), .. openWorldTrophyDrop ? [new CreatureLootInfo(OgreEntry, OgreEntry, 0, 0, 0)] : Array.Empty<CreatureLootInfo>()]));
 
         private Vector3 Home => dungeon ? EntranceArea : new Vector3(StartX, StartY, StartZ);
 
@@ -259,6 +268,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 Hostile(WarlordEntry, "Group Warlord", level: 10, health: 1500, minDamage: 6, maxDamage: 9, rank: 1),
                 Hostile(BruteEntry, "Group Brute", level: 1, health: 150, minDamage: 1, maxDamage: 1, rank: 0),
                 Hostile(BossEntry, "Deadmines Boss", level: 12, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
+                Hostile(EntranceOgreEntry, "Entrance Ogre", level: 10, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
                 .. extra.Select(e => e.Template).DistinctBy(t => t.Entry),
             ],
             [
@@ -267,6 +277,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 new CreatureSpawn { Guid = WarlordSpawn, Entry = WarlordEntry, MapId = 0, X = StartX - 70f, Y = StartY, Z = StartZ, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 },
                 new CreatureSpawn { Guid = BruteSpawn, Entry = BruteEntry, MapId = 0, X = StartX, Y = StartY + 70f, Z = StartZ, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 },
                 new CreatureSpawn { Guid = BossSpawn, Entry = BossEntry, MapId = 36, X = -16.4f, Y = -343.07f, Z = DeadminesTestContent.InsideFloor, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 },
+                .. dungeon && quests.Contains(EntranceEliteQuest) ? [new CreatureSpawn { Guid = EntranceOgreSpawn, Entry = EntranceOgreEntry, MapId = 0, X = EntranceArea.X, Y = EntranceArea.Y + 60f, Z = EntranceArea.Z, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600 }] : Array.Empty<CreatureSpawn>(),
                 .. extra.Select(e => e.Spawn),
             ], [], [], []));
 
@@ -280,6 +291,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 Quest(RaidQuest, "Raid: the warlord", type: 62, suggested: 6, WarlordEntry),
                 Quest(DuoQuest, "Group: the ogre for two", type: 1, suggested: 2, OgreEntry),
                 Quest(DungeonItemQuest, "Dungeon: the boss's trophy", type: 81, suggested: 3, 0, minLevel: 10, item: BossTrophy),
+                Quest(EntranceEliteQuest, "Group: the entrance ogre", type: 1, suggested: 2, EntranceOgreEntry, minLevel: 13),
             ];
             QuestTemplate[] offered = [.. all.Where(q => quests.Contains(q.Entry))];
             return Task.FromResult(new QuestContent(offered,

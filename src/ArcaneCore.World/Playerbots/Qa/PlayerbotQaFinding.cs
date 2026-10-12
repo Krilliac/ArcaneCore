@@ -25,6 +25,9 @@ public enum QaCause
 
     /// <summary>The server does not implement what the bots used: a spell effect, aura type, script or implicit target with no handler.</summary>
     NotImplemented,
+
+    /// <summary>An exception the server caught and survived at one of its catch-and-log sites (a server bug, not a bot behaviour).</summary>
+    ServerFault,
 }
 
 /// <summary>Where a finding stands with GitHub.</summary>

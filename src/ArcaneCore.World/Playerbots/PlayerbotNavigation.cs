@@ -936,7 +936,7 @@ internal static class PlayerbotNavigation
     private static bool Finite(Vector3 value)
         => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
 
-    private static bool InvalidHeight(float height)
+    internal static bool InvalidHeight(float height)
         => !float.IsFinite(height) || height == TerrainTile.InvalidHeight
             || height == TerrainTile.InvalidHeightValue;
 }

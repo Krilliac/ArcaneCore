@@ -163,6 +163,8 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Risk:RecoverHealthPct", o => o.Risk.RecoverHealthPct, (o, v) => o.Risk.RecoverHealthPct = v, v => PlayerbotRiskOptions.Check(v, 10, 100)),
         LivePlayerbotsValue("Risk:DangerMemorySeconds", o => o.Risk.DangerMemorySeconds, (o, v) => o.Risk.DangerMemorySeconds = v,
             v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
+        LivePlayerbotsValue("Risk:DeathLoopMemorySeconds", o => o.Risk.DeathLoopMemorySeconds, (o, v) => o.Risk.DeathLoopMemorySeconds = v,
+            v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
         LivePlayerbots("Risk:PartyRetreatOnWipe", o => o.Risk.PartyRetreatOnWipe, (o, v) => o.Risk.PartyRetreatOnWipe = v),
 
         // Not vmangos keys: bot chat (docs/areas/playbots.md, Bot chat). PlayerbotChat reads the shared PlayerbotOptions.Chat at every

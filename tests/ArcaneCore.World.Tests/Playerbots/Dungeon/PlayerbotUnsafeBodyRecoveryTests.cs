@@ -602,12 +602,11 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
     }
 
     /// <summary>
-    /// The camp of the live case covers the healer's landing and the body, but not all of the body's reclaim radius: a spot inside it
-    /// lies out of every skeleton's reach. The body is then the safer of the two, though it was judged too strong: the bot keeps its
-    /// corpse run, revives on that spot (no sickness, no durability loss, out of combat) and goes home as after any death.
+    /// The camp of the live case covers the healer's landing and the body. The old five-yard revive margin found a spot just beyond
+    /// aggro, but no spot has the required ten-yard clearance. Recovery takes the healer and escapes its unsafe landing.
     /// </summary>
     [Fact]
-    public async Task AnUnsafeBody_WithAClearSpotInReach_AndAnUnsafeLanding_IsReclaimedOnTheClearSpot()
+    public async Task AnUnsafeBody_WithNoTenYardClearance_AndAnUnsafeLanding_TakesTheHealer()
     {
         var clock = new TestDeathClock(1_000);
         await using DungeonBotHost host = await StartAsync(clock, at: CampedBody, configure: services =>
@@ -625,9 +624,9 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         }, thinks: 400);
 
         Assert.True(run.Fault is null, "the recovery faulted: " + run.Trail);
-        Assert.True(kept, "the body was not kept over the unsafe landing: " + run.Trail);
-        Assert.False(run.Healer, "the spirit healer was taken: " + run.Trail);
-        Assert.True(run.Reclaimed, "the body was not reclaimed: " + run.Trail);
+        Assert.False(kept, "the body was kept without ten-yard clearance: " + run.Trail);
+        Assert.True(run.Healer, "the spirit healer was not taken: " + run.Trail);
+        Assert.False(run.Reclaimed, run.Trail);
         Assert.True(run.Done, "the bot did not end at home, alive: " + run.Trail);
         Assert.Equal(1, run.Revivals);
         await host.OnWorldAsync(brain.Stop);
@@ -635,7 +634,7 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
 
     /// <summary>
     /// A death loop's request for the healer is never overridden by the landing (review of PR #167): the camp of the live case covers
-    /// the landing, and a clear spot near the body would make an unsafe body worth keeping, but the bot has died there three times, and
+    /// the landing, and even if a clear spot near the body made an unsafe body worth keeping, the bot has died there three times, and
     /// the healer is the way out of a body death loop. It takes the healer, and leaves the unsafe landing at once (home, alive).
     /// </summary>
     [Fact]
@@ -917,6 +916,90 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         Assert.Equal(PlayerbotUnsafeBody.DiedHere, kept);
         Assert.False(run.Healer, "the spirit healer was taken: " + run.Trail);
         Assert.True(run.Reclaimed, "the body was not reclaimed: " + run.Trail);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    [Fact]
+    public async Task ARepeatDeathCausedByAKillerThreeLevelsAbove_DoesNotKeepTheBodyOverSickness()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await DieAndComeBackAsync(host, brain);
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.Player;
+            uint now = host.Host.World.NowMs;
+            var killer = new Creature(995201, new CreatureTemplate
+            {
+                Entry = 995201, Name = "higher level killer", CreatureType = 6, Faction = 14,
+                MinLevel = 17, MaxLevel = 17, MinLevelHealth = 40, MaxLevelHealth = 40,
+                MinMeleeDamage = 2, MaxMeleeDamage = 3, MeleeBaseAttackTime = 2000,
+            }, null, CreatureContent.Empty, new Random(995201));
+            killer.Relocate(player.X + 8, player.Y, player.Z, 0, now);
+            player.Map!.AddObject(killer);
+            brain.ObserveKillingBlows(player);
+            player.Health = 1;
+            player.Map.Combat.DealDamage(killer, player, 2);
+            Assert.False(player.IsAlive);
+            host.Session.ManagedBudget = new ManagedActionBudget(4);
+            brain.Update(1);
+            player.Map.RemoveObject(killer);
+        });
+        Creature[] camp = await CampAsync(host, strong: false, round: Body + new Vector3(12f, 0f, 0f));
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 200);
+        Assert.True(run.Done, run.Trail);
+        Assert.True(run.Healer, run.Trail);
+        Assert.Equal(PlayerbotUnsafeBody.DiedHere, run.Reason);
+        Assert.Equal(PlayerbotUnsafeBody.None, brain.Recovery.BodyKeptOverSickness);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    [Fact]
+    public async Task ARepeatDeathWhileAlreadySick_DoesNotKeepTheBodyOverSickness()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await DieAndComeBackAsync(host, brain);
+        await host.OnWorldAsync(() => PlayerbotSicknessTestKit.Apply(host.Host.WorldServices, host.Player));
+        await KillAsync(host, brain);
+        Creature[] camp = await CampAsync(host, strong: false, round: Body + new Vector3(12f, 0f, 0f));
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+        Assert.True(await host.OnWorldAsync(() => PlayerbotSickness.IsSick(host.Session, host.Player)));
+
+        Run run = await RunAsync(host, brain, clock, p => p.IsAlive, thinks: 200);
+        Assert.True(run.Done, run.Trail);
+        Assert.True(run.Healer, run.Trail);
+        Assert.Equal(PlayerbotUnsafeBody.DiedHere, run.Reason);
+        Assert.Equal(PlayerbotUnsafeBody.None, brain.Recovery.BodyKeptOverSickness);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
+    [Fact]
+    public async Task AThirdDeathAtTheSameBody_TakesTheHealerInsteadOfKeepingItOverSickness()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, sicknessLevel: SicknessFrom11);
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        await DieAndComeBackAsync(host, brain);
+        await DieAndComeBackAsync(host, brain);
+        await KillAsync(host, brain);
+        Assert.True(await host.OnWorldAsync(() => brain.Recovery.SpiritHealerRequested));
+        Creature[] camp = await CampAsync(host, strong: false, round: Body + new Vector3(12f, 0f, 0f));
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
+        PlayerbotUnsafeBody kept = PlayerbotUnsafeBody.None;
+
+        Run run = await RunAsync(host, brain, clock, p =>
+        {
+            if (brain.Recovery.BodyKeptOverSickness != PlayerbotUnsafeBody.None) kept = brain.Recovery.BodyKeptOverSickness;
+            return p.IsAlive;
+        }, thinks: 200);
+        Assert.True(run.Done, run.Trail);
+        Assert.True(run.Healer, run.Trail);
+        Assert.Equal(PlayerbotUnsafeBody.None, kept);
         await host.OnWorldAsync(brain.Stop);
     }
 

@@ -40,8 +40,10 @@ public static class DiagnosticsHostingExtensions
         }
 
         Invariant.Configure(options, logger: null);
+        FaultLedger.Shared.Configure(options);
         CrashHandler.Install(options, StandardErrorCrashSink.Instance);
 
+        builder.Services.AddSingleton(FaultLedger.Shared);
         builder.Services.Configure<DiagnosticsOptions>(section);
         builder.Services.AddHostedService<DiagnosticsHostedService>();
         return builder;

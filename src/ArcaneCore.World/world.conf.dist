@@ -40,7 +40,7 @@
 #   CRAFTING                    1 keys
 #   CREATURES                   64 keys
 #   DATABASE                    17 keys
-#   DIAGNOSTICS                 9 keys
+#   DIAGNOSTICS                 11 keys
 #   ECONOMY                     29 keys
 #   ENCHANTING                  3 keys
 #   FORMS                       1 keys
@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       341 keys
+#   WORLD                       343 keys
 #
 ###############################################################################
 
@@ -3014,6 +3014,35 @@ Database.World.Provider = MariaDb
 #        Docs: docs/reference/configuration.md#diagnostics
 #
 Diagnostics.BreakOnInvariant = false
+
+#
+#    Diagnostics.FaultLogLimit
+#        Description: How many occurrences of one fault (an exception type thrown from one place,
+#                     caught at one of the server's catch-and-log sites) are logged in full. After
+#                     that the site logs that fault at most once a minute, with "(N more since)";
+#                     every occurrence is still counted in the fault ledger (.server faults, the
+#                     arcanecore_faults_total metric). 0 logs the first occurrence and then once a
+#                     minute. Default 10.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.FaultLogLimit = 10
+
+#
+#    Diagnostics.FaultMaxSignatures
+#        Description: How many distinct faults the fault ledger keeps. A fault beyond the cap is
+#                     counted into one overflow entry, never dropped. Default 512; a lower value
+#                     bounds memory on a server that throws a new exception signature per request.
+#        Type: int
+#        Default: 512
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.FaultMaxSignatures = 512
 
 #
 #    Diagnostics.FirstChanceExceptions
@@ -10463,6 +10492,19 @@ World.Playerbots.MaxBots = 8
 World.Playerbots.MaxBulkCommand = 50
 
 #
+#    World.Playerbots.MaxDeliveryYards
+#        Description: Maximum same-map straight-line trip from a quest giver to its nearest present
+#                     ender for an unhomed bot (0 disables the distance limit; 0..100000).
+#        Type: float
+#        Default: 1200
+#        Allowed: a number from 0 to 100000 ('.' is the decimal point); 0 disables the distance
+#                 limit
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.MaxDeliveryYards = 1200
+
+#
 #    World.Playerbots.MaxFaults
 #        Description: The faults within FaultWindowSeconds that disable a bot for good
 #                     (DesiredEnabled off; 1..100).
@@ -11013,6 +11055,20 @@ World.Playerbots.RestoreOnStartup = false
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Risk.DangerMemorySeconds = 300
+
+#
+#    World.Playerbots.Risk.DeathLoopMemorySeconds
+#        Description: Seconds a reported death-loop zone is avoided (0..86400). The 2700-second
+#                     default outlives the 600-second loop window by 4.5 times, giving the bot time
+#                     to finish a different errand before reconsidering the place. A second loop
+#                     there doubles this duration, capped at one day.
+#        Type: int
+#        Default: 2700
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Risk.DeathLoopMemorySeconds = 2700
 
 #
 #    World.Playerbots.Risk.Enabled
