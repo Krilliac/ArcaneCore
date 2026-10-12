@@ -9,11 +9,11 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Net;
-using ArcaneCore.Protocol;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -365,8 +365,11 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>
-    /// A completed run asks the server to reset while its leader still owns the group. The ordinary
-    /// disband follows even if an offline member or an occupied map makes the reset fail.
+    /// Observability only. A completed run's leader asks for the reset the way a client would (CMSG_RESET_INSTANCES through the
+    /// ordinary handler) and notes and logs the answer: the reset, or the refusal with its reason (an offline member or an
+    /// occupied map). It does not make the next run fresh: the disband that follows resets the group's instances itself
+    /// (InstanceManager.OnGroupDisbanding, vmangos Group::Disband), and a refusal here means that reset skips the same save.
+    /// Skipped when any member of the server group is not a managed bot, because ResetSave unbinds every player on the save.
     /// vmangos WorldSession::HandleResetInstancesOpcode and Group::ResetInstances(INSTANCE_RESET_ALL).
     /// </summary>
     private void ResetCompletedRun(BotGroup group)
@@ -374,6 +377,13 @@ public sealed partial class PlayerbotGroupCoordinator
         if (!group.Succeeded || group.Run is not { Step: PlayerbotRunStep.Leave or PlayerbotRunStep.Complete }
             || !_bots.TryGetValue(group.LeaderBotId, out PlayerbotGroupBot bot)
             || bot.Session.Player is not { } leader || leader.Guid != group.LeaderGuid) return;
+
+        if (group.Members.Any(m => m.Real) || GroupManagerOrNull()?.GetGroup(leader.Guid) is { } server
+            && server.Members.Any(m => !group.Members.Any(b => !b.Real && b.Guid == m.Guid)))
+        {
+            Note($"group {group.Id} reset request skipped: a member is not a managed bot");
+            return;
+        }
 
         WorldSession session = bot.Session;
         session.DrainManagedPackets(WorldOpcode.SmsgInstanceReset, WorldOpcode.SmsgInstanceResetFailed);

@@ -282,9 +282,11 @@ the run goes on. A given-up run walks out of the instance first, then disbands; 
 `completed` and `given-up` in the runs line.
 
 After a completed run has left the instance, its leader sends `CMSG_RESET_INSTANCES` while the group still exists, then every bot
-disbands. The coordinator records each `SMSG_INSTANCE_RESET` or `SMSG_INSTANCE_RESET_FAILED` reply, including the map and failure
-reason (offline member or occupied instance); a refusal does not hold the group together. This is the group-leader reset path in
-vmangos `WorldSession::HandleResetInstancesOpcode` (`Handlers/MiscHandler.cpp`) and `Group::ResetInstances` (`Group/Group.cpp`).
+disbands. This is observability: the leader asks the way a client would and the coordinator records each `SMSG_INSTANCE_RESET` or
+`SMSG_INSTANCE_RESET_FAILED` reply, with the map and the failure reason (offline member or occupied instance), so a refusal is visible.
+A refusal does not hold the group together, and the request is skipped when any member of the group is not a managed bot, because a
+reset unbinds every player on the save. The fresh instance for the next run comes from the disband itself, which resets the group's
+instances (`InstanceManager.OnGroupDisbanding`, vmangos `Group::Disband`); a refused request means that reset skips the same save.
 The Deadmines scenario test runs the same bots twice and checks a new instance with living boss and trash; it uses synthetic content,
 not an imported-world or client replay.
 

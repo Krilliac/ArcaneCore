@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Groups;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -59,7 +60,7 @@ public sealed class PlayerbotRunWorldTests
     // --- the dungeon -------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task CompletedRun_ResetsBeforeDisband_AndTheSameBotsEnterAFreshInstance()
+    public async Task CompletedRun_LeaderRequestsAndLogsTheReset_AndTheSameBotsEnterAFreshInstance()
     {
         await using GroupTestWorld world = await StartAsync(withLifecycleTrash: true);
         (Guid Id, string Name)[] bots = await AddPartyAsync(world, "Rerun");
@@ -79,7 +80,9 @@ public sealed class PlayerbotRunWorldTests
         Assert.Equal(1, world.Coordinator.RunTotals.Completed);
         int resetEvent = world.Coordinator.Events.FindIndex(e => e.EndsWith("reset instance 36", StringComparison.Ordinal));
         int disbandEvent = world.Coordinator.Events.FindIndex(e => e.Contains("disbanded (completed)", StringComparison.Ordinal));
+        // This change: the leader made the request through the handler and noted the outcome before the disband.
         Assert.True(resetEvent >= 0 && disbandEvent > resetEvent, world.Trace());
+        // The fresh instance below is not from that request: the disband itself resets the group's instances (InstanceManager.OnGroupDisbanding).
         Assert.All(bots, b => Assert.Null(world.Instances().GetPlayerBind(world.Player(b.Id).Guid, DungeonEntry.Deadmines)));
 
         world.Coordinator.RunRoll = () => 0d;
@@ -93,6 +96,35 @@ public sealed class PlayerbotRunWorldTests
         Assert.Equal(BossEntry, second.Run!.CurrentBoss!.Entry);
         Assert.True(VisibleCreature(world, bots[0].Id, BossEntry).IsAlive);
         Assert.True(VisibleCreature(world, bots[0].Id, LifecycleTrash).IsAlive);
+    }
+
+    [Fact]
+    public async Task CompletedRun_WithARealPlayerInTheGroup_LeaderDoesNotSendTheReset()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        (Guid Id, string Name)[] bots = await AddPartyAsync(world, "Human");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
+
+        // ResetSave unbinds every player on the save, so a bot must never reset while a human is in the group.
+        await world.OnWorldAsync(() =>
+        {
+            group.Members.Add(new PlayerbotGroupCoordinator.Member(Guid.NewGuid(), default, "Realone", PlayerbotGroupRole.Damage, PlayerbotRole.MeleeDps, 0, real: true));
+            group.Run!.Apply(PlayerbotRunSignal.Arrived);
+            group.Run.Apply(PlayerbotRunSignal.AllInside);
+            group.Run.Apply(PlayerbotRunSignal.BossDead(BossEntry));
+            group.Run.Apply(PlayerbotRunSignal.Left);
+            Assert.True(group.Run.Complete);
+            group.Succeeded = true;
+            group.State = PlayerbotGroupState.Disbanding;
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(2_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.Contains(world.Coordinator.Events, e => e.EndsWith("reset request skipped: a member is not a managed bot", StringComparison.Ordinal));
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("reset instance", StringComparison.Ordinal));
     }
 
     [Fact]
