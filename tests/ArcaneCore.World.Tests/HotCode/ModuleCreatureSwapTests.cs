@@ -73,7 +73,7 @@ public sealed class ModuleCreatureSwapTests : IDisposable
         }
     }
 
-    private ModuleHost NewHost()
+    private ModuleHost NewHost(Func<Task>? waitBetweenAttempts = null)
         => new(
             new HotModuleOptions { Enabled = true, Directory = _root },
             _threads, _opcodes, _commands,
@@ -81,7 +81,7 @@ public sealed class ModuleCreatureSwapTests : IDisposable
             NullLogger.Instance,
             TimeSpan.FromSeconds(10),
             reporter: new RecordingReporter(),
-            seams: new ModuleGameSeams(() => _factory, () => _hooks, () => _runtime.Maps, _threads.Post, NullLogger.Instance, TimeSpan.FromMilliseconds(50)));
+            seams: new ModuleGameSeams(() => _factory, () => _hooks, () => _runtime.Maps, _threads.Post, NullLogger.Instance, TimeSpan.FromMilliseconds(50), waitBetweenAttempts));
 
     private void Install()
     {
@@ -215,7 +215,8 @@ public sealed class ModuleCreatureSwapTests : IDisposable
     {
         Install();
         Creature creature = Spawn(1);
-        ModuleHost host = NewHost();
+        using var retryGate = new SemaphoreSlim(0);
+        ModuleHost host = NewHost(() => retryGate.WaitAsync());
         Assert.True((await host.LoadAsync("HotCreatures")).Ok);
         _map.Combat.SetInCombatState(creature, 0);
 
@@ -223,9 +224,20 @@ public sealed class ModuleCreatureSwapTests : IDisposable
 
         Assert.True(unload.Ok, unload.Detail);
         Assert.Equal("ModuleCreatureAI", AiName(creature));
-        Assert.False(await WaitForRetiredCount(host, 0));
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        Assert.Equal(1, host.RetiredStillReferenced);
 
-        MapCombat.ClearInCombat(creature);
+        // The combat state is world-thread data: clear it there, then let the (gated) retry run exactly once more.
+        var cleared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _threads.Post(() =>
+        {
+            MapCombat.ClearInCombat(creature);
+            cleared.SetResult();
+        });
+        await cleared.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        retryGate.Release(int.MaxValue / 2);
 
         Assert.True(await WaitFor(() => AiName(creature) != "ModuleCreatureAI"));
         Assert.True(await WaitForRetiredCount(host, 0));

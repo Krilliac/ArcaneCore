@@ -95,6 +95,7 @@ public sealed class ModuleGameSeams
     private readonly Action<Action> _post;
     private readonly ILogger _logger;
     private readonly TimeSpan _sweepInterval;
+    private readonly Func<Task>? _waitBetweenAttempts;
 
     public ModuleGameSeams(
         Func<CreatureAiFactory?> creatureAi,
@@ -102,7 +103,8 @@ public sealed class ModuleGameSeams
         Func<IEnumerable<Map>> maps,
         Action<Action> post,
         ILogger logger,
-        TimeSpan? sweepInterval = null)
+        TimeSpan? sweepInterval = null,
+        Func<Task>? waitBetweenAttempts = null)
     {
         _creatureAi = creatureAi ?? throw new ArgumentNullException(nameof(creatureAi));
         _hooks = hooks ?? throw new ArgumentNullException(nameof(hooks));
@@ -110,6 +112,7 @@ public sealed class ModuleGameSeams
         _post = post ?? throw new ArgumentNullException(nameof(post));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _sweepInterval = sweepInterval ?? SweepInterval;
+        _waitBetweenAttempts = waitBetweenAttempts;
     }
 
     internal string? Validate(ModuleGameParts? old, ModuleGameParts? added)
@@ -234,7 +237,7 @@ public sealed class ModuleGameSeams
         {
             for (int attempt = 0; attempt < SweepAttempts; attempt++)
             {
-                await Task.Delay(_sweepInterval).ConfigureAwait(false);
+                await (_waitBetweenAttempts is { } wait ? wait() : Task.Delay(_sweepInterval)).ConfigureAwait(false);
                 var done = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
                 int phase = 0; // 0 queued, 1 running, 2 abandoned
                 HashSet<ObjectGuid> current = pending;
