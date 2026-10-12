@@ -514,8 +514,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// The one rule for "may this bot take this quest here", shared by the travel planner (<see cref="Eligible"/>) and the quest-giver
     /// controller (<c>PlayerbotQuestGoals.FindCandidate</c>) so the two cannot disagree: the home (<paramref name="giverInHome"/>, and
     /// <see cref="PlayerbotHomeArea.QuestInside"/>: its enders and kill targets have spawns inside; without creature content nothing is),
-    /// not an item-only repeatable the bot
-    /// cannot supply (<see cref="CanPursueStarter"/>), and the journal and prerequisites
+    /// not an item-only repeatable the bot cannot supply (<see cref="CanPursueStarter"/>), and the journal and prerequisites
     /// (<see cref="QuestNpcServices.CanTakeQuest(Player, uint)"/>, no running or complete status), and last the trip's feasibility
     /// (<see cref="PlayerbotQuestTripFeasibility.IsInfeasible"/>, by the caller's own <paramref name="trip"/>).
     /// </summary>
