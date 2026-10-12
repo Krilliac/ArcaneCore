@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 
@@ -12,35 +13,48 @@ namespace ArcaneCore.Data.Resilience;
 /// it with <c>BEGIN IMMEDIATE</c>) makes every other writer wait and, past the busy timeout, fail with "database is locked"; the log of
 /// such an incident showed the victims but never the holder. When a transaction EF started ends (commit, rollback or failure) after more than
 /// the threshold (<c>Database:SlowTransactionWarnMs</c>, default <see cref="DefaultWarnMs"/>, 0 disables) this logs one WARN naming the
-/// <see cref="Microsoft.EntityFrameworkCore.DbContext"/> type, the outcome, the time it was open, and a caller hint.
+/// <see cref="DbContext"/> type, the outcome, the time it was open, and a caller hint.
 /// <para>
-/// The open time is measured here, from <c>TransactionStarted</c> to the end event (EF's own <see cref="TransactionEndEventData.Duration"/> is only the
-/// commit call). A transaction costs one small allocation and a weak-table entry while the threshold is on; only an over-threshold one captures a stack
+/// The open time is measured here, from <c>TransactionStarted</c> to the end event; EF's own <see cref="TransactionEndEventData.Duration"/> is only the
+/// commit (or rollback) call, so the warning reports the two parts separately: the time the application held the transaction before ending it, and the time
+/// spent inside the end call (the WAL fsync of a commit under <c>synchronous=FULL</c>, i.e. disk I/O rather than application code). A transaction costs one
+/// small allocation and a weak-table entry while the threshold is on; only an over-threshold one captures a stack
 /// trace. The hint is the first frame outside the framework and this type, which is the method that committed or rolled the transaction back when the
 /// provider completes synchronously (SQLite always does), and may be "(no application frame)" on a provider that resumes on another thread. A transaction
-/// is reported at most once. One is reported when it ends, not while it is held; one disposed without a commit or rollback is not seen (EF has no
-/// interceptor hook for disposal: <c>TransactionDisposed</c> is a logger event only); one adopted with <c>UseTransaction</c> was not started by EF and is not timed.
+/// is reported at most once. One is reported when it ends, not while it is held; one adopted with <c>UseTransaction</c> was not started by EF and is not timed.
+/// A transaction disposed without a commit or rollback is reported as such: EF has no interceptor hook for disposal (<c>RelationalEventId.TransactionDisposed</c>
+/// is a logger and diagnostic-source event only, and the logger level is the host's to filter), so while the threshold is on this subscribes to EF's
+/// <see cref="DiagnosticListener"/> for that one event name (a predicate keeps every other EF event from allocating event data) and ignores the event for any
+/// transaction it did not stamp.
 /// </para>
-/// Immutable threshold and logger plus a weak table of open transactions; thread-safe; one instance per host (registered as a singleton so EF's internal
-/// service provider cache is keyed on the same interceptor across option builds). Applies to every provider.
+/// Immutable threshold and logger plus a weak table of open transactions and a diagnostic subscription (released by <see cref="Dispose"/>); thread-safe; one
+/// instance per host (registered as a singleton so EF's internal service provider cache is keyed on the same interceptor across option builds). Applies to every provider.
 /// </summary>
-public sealed class SlowTransactionInterceptor : DbTransactionInterceptor
+public sealed class SlowTransactionInterceptor : DbTransactionInterceptor, IDisposable
 {
     /// <summary>The shipped threshold (<c>Database:SlowTransactionWarnMs</c>).</summary>
     public const int DefaultWarnMs = 2000;
 
     private readonly ConditionalWeakTable<DbTransaction, Stamp> _open = new();
     private readonly ILogger _logger;
+    private readonly DisposalObserver? _disposals;
 
     public SlowTransactionInterceptor(int thresholdMs, ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ThresholdMs = Math.Max(0, thresholdMs);
         _logger = logger;
+        if (ThresholdMs > 0)
+        {
+            _disposals = new DisposalObserver(this);
+        }
     }
 
     /// <summary>The configured threshold in milliseconds; 0 means never warn.</summary>
     public int ThresholdMs { get; }
+
+    /// <summary>Releases the diagnostic subscription. Idempotent.</summary>
+    public void Dispose() => _disposals?.Dispose();
 
     public override DbTransaction TransactionStarted(DbConnection connection, TransactionEndEventData eventData, DbTransaction result)
     {
@@ -56,29 +70,29 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor
     }
 
     public override void TransactionCommitted(DbTransaction transaction, TransactionEndEventData eventData)
-        => End(transaction, eventData.Context, "committed");
+        => End(transaction, eventData.Context, "committed", eventData.Duration);
 
     public override Task TransactionCommittedAsync(DbTransaction transaction, TransactionEndEventData eventData, CancellationToken cancellationToken = default)
     {
-        End(transaction, eventData.Context, "committed");
+        End(transaction, eventData.Context, "committed", eventData.Duration);
         return Task.CompletedTask;
     }
 
     public override void TransactionRolledBack(DbTransaction transaction, TransactionEndEventData eventData)
-        => End(transaction, eventData.Context, "rolled back");
+        => End(transaction, eventData.Context, "rolled back", eventData.Duration);
 
     public override Task TransactionRolledBackAsync(DbTransaction transaction, TransactionEndEventData eventData, CancellationToken cancellationToken = default)
     {
-        End(transaction, eventData.Context, "rolled back");
+        End(transaction, eventData.Context, "rolled back", eventData.Duration);
         return Task.CompletedTask;
     }
 
     public override void TransactionFailed(DbTransaction transaction, TransactionErrorEventData eventData)
-        => End(transaction, eventData.Context, "failed");
+        => End(transaction, eventData.Context, "failed", eventData.Duration);
 
     public override Task TransactionFailedAsync(DbTransaction transaction, TransactionErrorEventData eventData, CancellationToken cancellationToken = default)
     {
-        End(transaction, eventData.Context, "failed");
+        End(transaction, eventData.Context, "failed", eventData.Duration);
         return Task.CompletedTask;
     }
 
@@ -90,7 +104,7 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor
         }
     }
 
-    private void End(DbTransaction transaction, Microsoft.EntityFrameworkCore.DbContext? context, string outcome)
+    private void End(DbTransaction transaction, DbContext? context, string outcome, TimeSpan endCall)
     {
         if (ThresholdMs <= 0 || !_open.TryGetValue(transaction, out Stamp? stamp))
         {
@@ -104,9 +118,31 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor
             return;
         }
 
+        long openMs = (long)open.TotalMilliseconds;
+        long endMs = Math.Clamp((long)endCall.TotalMilliseconds, 0, openMs);
         _logger.LogWarning(
-            "database transaction on {Context} was open {DurationMs} ms ({Outcome}; warns at {ThresholdMs} ms): it held the database for that long, so other writers may have failed as locked. Closed by {Caller}",
-            context?.GetType().Name ?? "(unknown context)", (long)open.TotalMilliseconds, outcome, ThresholdMs, CallerHint());
+            "database transaction on {Context} was open {DurationMs} ms ({Outcome}; warns at {ThresholdMs} ms): {HeldMs} ms held by the application before the end call and {EndMs} ms inside the end call (commit: the WAL fsync, i.e. disk I/O), so other writers may have failed as locked. Closed by {Caller}",
+            context?.GetType().Name ?? "(unknown context)", openMs, outcome, ThresholdMs, openMs - endMs, endMs, CallerHint());
+    }
+
+    /// <summary>EF logged <c>TransactionDisposed</c> for <paramref name="transaction"/>: if this interceptor still holds its stamp, it was never committed, rolled back or failed.</summary>
+    private void Disposed(DbTransaction? transaction, DbContext? context)
+    {
+        if (ThresholdMs <= 0 || transaction is null || !_open.TryGetValue(transaction, out Stamp? stamp))
+        {
+            return;
+        }
+
+        _open.Remove(transaction);
+        TimeSpan open = Stopwatch.GetElapsedTime(stamp.Ticks);
+        if (open.TotalMilliseconds < ThresholdMs)
+        {
+            return;
+        }
+
+        _logger.LogWarning(
+            "database transaction on {Context} was open {DurationMs} ms and was disposed without a commit or rollback (warns at {ThresholdMs} ms): it held the database for that long and was then abandoned, so other writers may have failed as locked. Disposed by {Caller}",
+            context?.GetType().Name ?? "(unknown context)", (long)open.TotalMilliseconds, ThresholdMs, CallerHint());
     }
 
     private sealed class Stamp(long ticks)
@@ -114,14 +150,82 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor
         public long Ticks { get; } = ticks;
     }
 
-    /// <summary>The first frame that is application code: not this type, not EF, the BCL or the SQLite/ADO.NET providers.</summary>
+    /// <summary>
+    /// Feeds EF's <c>TransactionDisposed</c> diagnostic event to <see cref="Disposed"/>. Subscribes to every EF listener (EF creates one per internal
+    /// service provider), with a predicate that enables only that event. Thread-safe; the callback runs synchronously on the disposing thread.
+    /// </summary>
+    private sealed class DisposalObserver : IObserver<DiagnosticListener>, IObserver<KeyValuePair<string, object?>>, IDisposable
+    {
+        private static readonly string EventName = RelationalEventId.TransactionDisposed.Name!;
+        private readonly Lock _gate = new();
+        private readonly SlowTransactionInterceptor _owner;
+        private readonly List<IDisposable> _subscriptions = [];
+        private readonly IDisposable _all;
+        private bool _disposed;
+
+        public DisposalObserver(SlowTransactionInterceptor owner)
+        {
+            _owner = owner;
+            _all = DiagnosticListener.AllListeners.Subscribe(this);
+        }
+
+        public void OnNext(DiagnosticListener listener)
+        {
+            if (listener.Name != DbLoggerCategory.Name)
+            {
+                return;
+            }
+
+            lock (_gate)
+            {
+                if (!_disposed)
+                {
+                    _subscriptions.Add(listener.Subscribe(this, static name => name == EventName));
+                }
+            }
+        }
+
+        public void OnNext(KeyValuePair<string, object?> value)
+        {
+            if (value.Key == EventName && value.Value is TransactionEventData data)
+            {
+                _owner.Disposed(data.Transaction, data.Context);
+            }
+        }
+
+        public void OnCompleted()
+        {
+        }
+
+        public void OnError(Exception error)
+        {
+        }
+
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                _disposed = true;
+                foreach (IDisposable subscription in _subscriptions)
+                {
+                    subscription.Dispose();
+                }
+
+                _subscriptions.Clear();
+            }
+
+            _all.Dispose();
+        }
+    }
+
+    /// <summary>The first frame that is application code: not these interceptors, not EF, the BCL or the SQLite/ADO.NET providers.</summary>
     internal static string CallerHint()
     {
         foreach (StackFrame frame in new StackTrace(1, fNeedFileInfo: false).GetFrames())
         {
             MethodBase? method = frame.GetMethod();
             Type? type = method?.DeclaringType;
-            if (method is null || type is null || type == typeof(SlowTransactionInterceptor) || IsFramework(type.Namespace))
+            if (method is null || type is null || IsSelf(type) || IsFramework(type.Namespace))
             {
                 continue;
             }
@@ -130,6 +234,17 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor
         }
 
         return "(no application frame)";
+    }
+
+    /// <summary>One of the interceptors, or a type nested in one (the observer, a lambda closure).</summary>
+    private static bool IsSelf(Type type)
+    {
+        while (type.DeclaringType is { } outer)
+        {
+            type = outer;
+        }
+
+        return type == typeof(SlowTransactionInterceptor) || type == typeof(SlowCommandInterceptor);
     }
 
     private static bool IsFramework(string? ns)

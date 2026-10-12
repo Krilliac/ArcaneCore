@@ -79,6 +79,14 @@ public sealed class DatabaseOptions
     /// </summary>
     public int SlowTransactionWarnMs { get; set; } = ArcaneCore.Data.Resilience.SlowTransactionInterceptor.DefaultWarnMs;
 
+    /// <summary>
+    /// How long (milliseconds, default 2000; 0 disables) a single database command may take to execute before it is logged at WARN with the DbContext, whether
+    /// it ran inside a transaction or autocommitted, whether it was a write, the first 80 characters of its SQL (parameter values are never logged) and the code
+    /// that issued it, on every provider. It sees what the transaction warning cannot: writes that autocommit and wait in "database is locked". Identical
+    /// warnings are limited to one per 10 s (docs/areas/persistence.md).
+    /// </summary>
+    public int SlowCommandWarnMs { get; set; } = ArcaneCore.Data.Resilience.SlowCommandInterceptor.DefaultWarnMs;
+
     public DatabaseConnectionOptions? Auth { get; set; }
 
     [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World)]

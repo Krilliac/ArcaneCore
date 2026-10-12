@@ -26,8 +26,8 @@ namespace ArcaneCore.Data;
 public static class DataServiceCollectionExtensions
 {
     /// <summary>
-    /// The registrations every database shares: the bound <see cref="DatabaseOptions"/> and the one <see cref="SlowTransactionInterceptor"/>
-    /// (a singleton, so EF reuses one internal service provider across the contexts' option builds).
+    /// The registrations every database shares: the bound <see cref="DatabaseOptions"/> and the one <see cref="SlowTransactionInterceptor"/> and the one <see cref="SlowCommandInterceptor"/>
+    /// (singletons, so EF reuses one internal service provider across the contexts' option builds).
     /// </summary>
     private static void AddDatabaseCommon(IServiceCollection services, IConfiguration configuration)
     {
@@ -35,6 +35,9 @@ public static class DataServiceCollectionExtensions
         services.TryAddSingleton(static provider => new SlowTransactionInterceptor(
             provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SlowTransactionWarnMs,
             (provider.GetService<ILoggerFactory>()?.CreateLogger<SlowTransactionInterceptor>() as ILogger) ?? NullLogger.Instance));
+        services.TryAddSingleton(static provider => new SlowCommandInterceptor(
+            provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SlowCommandWarnMs,
+            (provider.GetService<ILoggerFactory>()?.CreateLogger<SlowCommandInterceptor>() as ILogger) ?? NullLogger.Instance));
     }
 
     /// <summary>Accounts and realm list (realm daemon, world daemon, account tool).</summary>
@@ -42,7 +45,8 @@ public static class DataServiceCollectionExtensions
     {
         AddDatabaseCommon(services, configuration);
         services.AddDbContext<AuthDbContext>((provider, builder) =>
-            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Auth), provider.GetRequiredService<SlowTransactionInterceptor>()));
+            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Auth), provider.GetRequiredService<SlowTransactionInterceptor>(),
+                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>()));
 
         services.AddScoped<IAccountStore, EfAccountStore>();
         services.AddScoped<IRealmStore, EfRealmStore>();
@@ -57,7 +61,8 @@ public static class DataServiceCollectionExtensions
         AddDatabaseCommon(services, configuration);
         services.AddDbContext<CharacterDbContext>((provider, builder) =>
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters), provider.GetRequiredService<SlowTransactionInterceptor>(),
-                provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SqliteWriteTimeoutMs));
+                provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SqliteWriteTimeoutMs,
+                provider.GetRequiredService<SlowCommandInterceptor>()));
 
         services.AddScoped<ICharacterStore, EfCharacterStore>();
         services.AddScoped<IAccountDataStore, EfAccountDataStore>();
@@ -71,7 +76,8 @@ public static class DataServiceCollectionExtensions
     {
         AddDatabaseCommon(services, configuration);
         services.AddDbContextFactory<WorldDbContext>((provider, builder) =>
-            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.World), provider.GetRequiredService<SlowTransactionInterceptor>()));
+            ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.World), provider.GetRequiredService<SlowTransactionInterceptor>(),
+                slowCommands: provider.GetRequiredService<SlowCommandInterceptor>()));
 
         services.AddScoped<IWorldDataStore, EfWorldDataStore>();
         services.AddSingleton<WorldDbInitializer>();
@@ -102,8 +108,8 @@ public static class DataServiceCollectionExtensions
         return resolved;
     }
 
-    /// <summary>Point a context at its configured engine; <paramref name="slowTransactions"/> (when given) is attached on every provider; <paramref name="sqliteWriteTimeoutMs"/> bounds a SQLite connection's lock waits (0: none).</summary>
-    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null, int sqliteWriteTimeoutMs = 0)
+    /// <summary>Point a context at its configured engine; <paramref name="slowTransactions"/> and <paramref name="slowCommands"/> (when given) are attached on every provider; <paramref name="sqliteWriteTimeoutMs"/> bounds a SQLite connection's lock waits (0: none).</summary>
+    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options, SlowTransactionInterceptor? slowTransactions = null, int sqliteWriteTimeoutMs = 0, SlowCommandInterceptor? slowCommands = null)
     {
         if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
@@ -114,6 +120,11 @@ public static class DataServiceCollectionExtensions
         if (slowTransactions is not null)
         {
             builder.AddInterceptors(slowTransactions);
+        }
+
+        if (slowCommands is not null)
+        {
+            builder.AddInterceptors(slowCommands);
         }
 
         switch (options.Provider)
