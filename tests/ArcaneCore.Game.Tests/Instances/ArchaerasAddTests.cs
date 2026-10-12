@@ -265,12 +265,13 @@ public sealed class ArchaerasAddTests
         Assert.InRange(at[1] - at[0], 12900, 22600);
     }
 
-    /// <summary>Runs <paramref name="ms"/> with Archaedas pinned at <paramref name="health"/>: the 5 s out-of-combat regeneration would otherwise heal him past the threshold mid-run.</summary>
+    /// <summary>Runs <paramref name="ms"/> with Archaedas pinned at <paramref name="health"/> and the player kept alive: the 5 s out-of-combat regeneration would otherwise heal him past the threshold mid-run.</summary>
     private static void HoldHealth(DungeonNpcRig rig, Creature archaedas, uint health, uint ms)
     {
         for (uint done = 0; done < ms; done += 50)
         {
             archaedas.Health = health;
+            rig.Player.Health = rig.Player.MaxHealth; // the custodian melees the player; a random death would end the fight and re-stone the custodian
             rig.Tick();
         }
     }
