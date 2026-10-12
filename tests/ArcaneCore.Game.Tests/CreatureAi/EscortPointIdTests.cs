@@ -34,6 +34,8 @@ public sealed class EscortPointIdTests
 
         public Action<JumpEscort, uint>? OnReached { get; set; }
 
+        public void Respawn() => JustRespawned();
+
         protected override void WaypointReached(uint pointId)
         {
             Reached.Add(pointId);
@@ -148,6 +150,43 @@ public sealed class EscortPointIdTests
         Assert.Equal(20u, ai.Reached[0]);
         RunUntil(world, () => ai.Reached.Count >= 3); // and it carries on along the path
         Assert.Equal([20u, 30u, 40u], ai.Reached.Take(3));
+    }
+
+    private static bool RedirectPending(JumpEscort ai)
+        => (bool)typeof(EscortAI).GetField("_redirectPending", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(ai)!;
+
+    [Fact]
+    public void AStaleRedirect_DoesNotSurviveStopAndANewStart()
+    {
+        // A redirect chosen outside the callback is pending until the escort arrives. Ending the escort and starting it again must not carry it
+        // over: an arrival at a point that is not the destination ("Waypoint out of order") must then leave the walk alone instead of re-arming it.
+        (WorldRuntime world, JumpEscort ai) = Setup();
+        using WorldRuntime _ = world;
+        Assert.True(ai.Start());
+        Assert.True(ai.SetNextWaypointByPointId(20));
+        Assert.True(RedirectPending(ai));
+        ai.Stop();
+
+        Assert.True(ai.Start());
+
+        Assert.False(RedirectPending(ai));
+        ai.OnMovementInform(MovementGeneratorType.Point, 20); // within tolerance of point 10, but not the destination
+        world.RunTick(100);
+        Assert.Empty(ai.Started); // still inside the first-waypoint delay: a stale redirect would have cut it to 1 ms
+    }
+
+    [Fact]
+    public void AStaleRedirect_DoesNotSurviveARespawn()
+    {
+        (WorldRuntime world, JumpEscort ai) = Setup();
+        using WorldRuntime _ = world;
+        Assert.True(ai.Start());
+        Assert.True(ai.SetNextWaypointByPointId(20));
+        Assert.True(RedirectPending(ai));
+
+        ai.Respawn();
+
+        Assert.False(RedirectPending(ai));
     }
 
     private static void RunUntil(WorldRuntime world, Func<bool> done)

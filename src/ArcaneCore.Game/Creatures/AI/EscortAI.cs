@@ -214,6 +214,7 @@ public abstract class EscortAI : CreatureAI
 
         Me.NpcFlags = 0;
         CurrentWaypointIndex = 0;
+        _redirectPending = false; // a redirect chosen in an earlier escort is not this one's
         System?.SetScriptRun(Me, _running);
         AddEscortState(EscortState.Escorting);
         JustStartedEscort();
@@ -290,6 +291,7 @@ public abstract class EscortAI : CreatureAI
         _escortQuestId = 0;
         _playerCheckMs = 1000;
         CombatMovement = true;
+        _redirectPending = false;
         _waypointWaitMs = DelayBeforeFirstWaypointMs;
         if (Me.FactionTemplate != Me.Template.Faction)
         {
