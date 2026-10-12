@@ -1,4 +1,8 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Ownership;
+using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
@@ -45,7 +49,7 @@ public sealed class CharacterSaveQueueTests
         await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => barrier.WaitAsync(TimeSpan.FromSeconds(5)));
         await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync());
 
-        // A transient failure is attempted MaxAttempts (3) times inline; a rejection is final on the first.
+        // A transient failure is attempted MaxAttempts (3) times inline (6 once the stop drain retries it too); a rejection is final on the first.
         Assert.Single(kit.Store.Attempts); // Attempts.Count == 1: a transient failure would be attempted 3 times
         Assert.Equal(FencedToken, Assert.Single(kit.Store.Attempts).Ownership);
         Assert.Empty(kit.Store.Saved);
@@ -151,7 +155,7 @@ public sealed class CharacterSaveQueueTests
         var relogSession = new CharacterOwnershipToken("world", 8, Guid.Parse("e8b2c6a9-7d15-4f03-9a4e-0b3c5d7f9e12"));
 
         kit.Queue.Enqueue(State(1, 11) with { Ownership = firstSession, Home = new HomeBind(1, 2, 3, 4, 5) });
-        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1)); // retained, not terminal
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(10))); // retained, not terminal
         Assert.Equal(3, kit.Store.Attempts.Count);
 
         kit.Queue.Enqueue(State(1, 22) with { Ownership = relogSession });
@@ -163,6 +167,84 @@ public sealed class CharacterSaveQueueTests
         Assert.Null(saved.Home); // the other session's sections are not carried across tokens
         Assert.Equal(new[] { firstSession, firstSession, firstSession, relogSession }, kit.Store.Attempts.Select(a => a.Ownership));
         await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task StaleTokenAgainstTheRealEfStoreOnSqliteIsTerminalAndLeavesTheRowUntouched()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "arcanecore-fencequeue-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            DbContextOptions<CharacterDbContext> options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(directory, "characters.sqlite"), Pooling = false, DefaultTimeout = 5,
+            }.ToString()).Options;
+
+            CharacterRecord character;
+            CharacterOwnershipToken current;
+            await using (var setup = new CharacterDbContext(options))
+            {
+                await SchemaBootstrapper.EnsureAsync(setup, CharacterDbContext.Schema, cancellationToken: default);
+                character = await new EfCharacterStore(setup).CreateAsync(new CharacterRecord
+                {
+                    AccountId = 1, Name = "FencedQueue", Race = 1, Class = 1, Level = 1, MapId = 0, ZoneId = 12, Z = 83.5f, Money = 100,
+                });
+                await using var claimDb = new CharacterDbContext(options);
+                current = (await new EfCharacterOwnershipStore(claimDb).TryAcquireAsync("world", "owner", Guid.NewGuid()))!;
+            }
+
+            var counter = new SaveCounter();
+            var registrations = new ServiceCollection();
+            registrations.AddScoped(_ => new CharacterDbContext(options));
+            registrations.AddScoped<ICharacterStore>(sp => new AttemptCountingStore(new EfCharacterStore(sp.GetRequiredService<CharacterDbContext>()), counter));
+            await using ServiceProvider provider = registrations.BuildServiceProvider();
+            var queue = new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance);
+
+            CharacterOwnershipToken stale = current with { Epoch = current.Epoch - 1 };
+            queue.Enqueue(new CharacterState(character.Id, 5, 99, 0, 0, 1f, 0, 9, 0, Money: 999) { Ownership = stale });
+            var rejection = await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => queue.FlushCharacterAsync(character.Id).WaitAsync(TimeSpan.FromSeconds(20)));
+            Assert.Equal("world", rejection.Scope);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(20)));
+
+            Assert.Equal(1, counter.Attempts); // terminal: neither the inline retry nor the stop drain called the store again
+            await using var verify = new CharacterDbContext(options);
+            CharacterRecord row = (await new EfCharacterStore(verify).GetByIdAsync(character.Id))!;
+            Assert.Equal(0u, row.MapId);
+            Assert.Equal(12u, row.ZoneId);
+            Assert.Equal(100u, row.Money);
+            Assert.Equal(1, row.Level);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    private sealed class SaveCounter
+    {
+        private int _attempts;
+        public int Attempts => Volatile.Read(ref _attempts);
+        public void Hit() => Interlocked.Increment(ref _attempts);
+    }
+
+    private sealed class AttemptCountingStore(ICharacterStore inner, SaveCounter counter) : ICharacterStore
+    {
+        public Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
+        {
+            counter.Hit();
+            return inner.SaveStateAsync(state, cancellationToken);
+        }
+
+        public Task<IReadOnlyList<CharacterRecord>> GetByAccountAsync(int accountId, CancellationToken cancellationToken = default) => inner.GetByAccountAsync(accountId, cancellationToken);
+        public Task<CharacterRecord?> GetByIdAsync(int id, CancellationToken cancellationToken = default) => inner.GetByIdAsync(id, cancellationToken);
+        public Task<bool> IsNameTakenAsync(string name, CancellationToken cancellationToken = default) => inner.IsNameTakenAsync(name, cancellationToken);
+        public Task<int> CountByAccountAsync(int accountId, CancellationToken cancellationToken = default) => inner.CountByAccountAsync(accountId, cancellationToken);
+        public Task<CharacterRecord> CreateAsync(CharacterRecord character, CancellationToken cancellationToken = default) => inner.CreateAsync(character, cancellationToken);
+        public Task<bool> DeleteAsync(int id, int accountId, CancellationToken cancellationToken = default) => inner.DeleteAsync(id, accountId, cancellationToken);
+        public Task<IReadOnlyList<ActionButton>> GetActionButtonsAsync(int characterId, CancellationToken cancellationToken = default) => inner.GetActionButtonsAsync(characterId, cancellationToken);
+        public Task<IReadOnlyList<CharacterIdentity>> GetAllIdentitiesAsync(CancellationToken cancellationToken = default) => inner.GetAllIdentitiesAsync(cancellationToken);
     }
 
     [Fact]
