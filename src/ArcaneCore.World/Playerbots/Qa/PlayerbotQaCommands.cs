@@ -53,7 +53,7 @@ public sealed class PlayerbotQaCommands : ICommandExtension
         if (FeatureOf(context) is not { } feature) return true;
         QaStatus status = feature.Status();
         context.Reply(string.Create(CultureInfo.InvariantCulture,
-            $"Bot QA: {status.Findings} findings, {status.Received} warnings seen, {status.Dropped} dropped. GitHub: {status.GitHubMode}{(status.GitHubMode == "off" || status.TokenVariable.Length == 0 ? string.Empty : $", {status.TokenVariable} {(status.TokenSet ? "set" : "not set")}")}."));
+            $"Bot QA: {status.Findings} findings, {status.Received} warnings seen, {status.Dropped} dropped. GitHub: {status.GitHubMode}{(status.GitHubMode == "off" || status.TokenVariable.Length == 0 ? string.Empty : $", {status.TokenVariable} {(status.TokenSet ? "set" : "not set")}")}. {PlayerbotRetreatStats.Shared.Describe()}"));
         if (status.PersistenceDisabled is { } reason) context.Reply("Persistence is off: " + reason);
         foreach (string line in PlayerbotQaReport.ChatTop(feature.Aggregator!.Snapshot(), DefaultTop, feature.Redactor)) context.Reply(line);
         return true;
