@@ -32,6 +32,139 @@ public sealed class CharacterSaveQueueTests
         Assert.Empty(kit.Store.Saved);
     }
 
+    private static readonly CharacterOwnershipToken FencedToken = new("world", 7, Guid.Parse("5b0f6f3e-62a4-4c1e-9d2a-1f0a7c3b8e11"));
+
+    [Fact]
+    public async Task FencedOwnershipRejectionIsNotRetriedAndTheStoreIsCalledExactlyOnce()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => Task.FromException(new CharacterOwnershipRejectedException("world", 7));
+
+        kit.Queue.Enqueue(State(1, 11) with { Ownership = FencedToken });
+        Task barrier = kit.Queue.FlushCharacterAsync(1);
+        await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => barrier.WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync());
+
+        // A transient failure is attempted MaxAttempts (3) times inline; a rejection is final on the first.
+        Assert.Single(kit.Store.Attempts); // Attempts.Count == 1: a transient failure would be attempted 3 times
+        Assert.Equal(FencedToken, Assert.Single(kit.Store.Attempts).Ownership);
+        Assert.Empty(kit.Store.Saved);
+    }
+
+    [Fact]
+    public async Task FencedOwnershipRejectionFaultsAPendingFlushWaiterWithTheRejection()
+    {
+        await using var kit = new Kit();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.OnSave = async (_, token) =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+            throw new CharacterOwnershipRejectedException("world", 7);
+        };
+
+        kit.Queue.Enqueue(State(1, 11) with { Ownership = FencedToken });
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Attached while the write is in flight, so it is a pending waiter of the slot, not of the failing write.
+        Task waiter = kit.Queue.FlushCharacterAsync(1);
+        Assert.False(waiter.IsCompleted);
+        release.TrySetResult();
+
+        var rejection = await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => waiter.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal("world", rejection.Scope);
+        Assert.True(waiter.IsFaulted);
+        Assert.Single(kit.Store.Attempts);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync());
+    }
+
+    [Fact]
+    public async Task FencedOwnershipRejectionIsNeverReplayedByLaterEnqueueFlushOrStop()
+    {
+        await using var kit = new Kit();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Queue.FatalFailure += ex => fatal.TrySetResult(ex);
+        kit.Store.OnSave = async (_, token) =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+            throw new CharacterOwnershipRejectedException("world", 7);
+        };
+
+        kit.Queue.Enqueue(State(1, 11) with { Ownership = FencedToken });
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // A different character's snapshot is waiting behind the failing write: it must not be written under an unknown owner.
+        kit.Queue.Enqueue(State(2, 22) with { Ownership = FencedToken });
+        release.TrySetResult();
+        Assert.IsType<CharacterOwnershipRejectedException>(await fatal.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Throws<InvalidOperationException>(() => kit.Queue.Enqueue(State(1, 11) with { Ownership = FencedToken }));
+        Assert.Throws<InvalidOperationException>(() => kit.Queue.Enqueue(State(3, 33) with { Ownership = FencedToken }));
+        Assert.Throws<InvalidOperationException>(() => { _ = kit.Queue.FlushCharacterAsync(1); });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync()); // a second stop does not retry either
+
+        CharacterState only = Assert.Single(kit.Store.Attempts);
+        Assert.Equal(1, only.Id);
+        Assert.Empty(kit.Store.Saved);
+    }
+
+    [Fact]
+    public async Task CoalescedSnapshotsKeepTheOriginalOwnershipTokenAcrossCopies()
+    {
+        await using var kit = new Kit();
+        var (entered, release) = BlockOn(kit, id: 99);
+        kit.Queue.Enqueue(State(99, 1));
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var token = new CharacterOwnershipToken("world", 7, Guid.Parse("0c9a3d52-1b7e-4f43-8a6d-2e5b9c1d7f60"));
+        kit.Queue.Enqueue(State(1, 10) with
+        {
+            Ownership = token,
+            Home = new HomeBind(1, 2, 3, 4, 5),
+        });
+        kit.Queue.Enqueue(State(1, 20) with { Ownership = token });
+        kit.Queue.Enqueue(State(1, 30) with { Ownership = token });
+        release.TrySetResult();
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+
+        CharacterState saved = Assert.Single(kit.Store.Saved, s => s.Id == 1);
+        Assert.Equal(30u, saved.Money);
+        Assert.Equal(token, saved.Ownership);
+        Assert.Equal(new HomeBind(1, 2, 3, 4, 5), saved.Home); // coalesced through Merge, not replaced
+        Assert.Single(kit.Store.Attempts, s => s.Id == 1);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task RelogAfterAnUnrelatedRetainedFailureWritesTheNewSessionsTokenNotTheRetainedOne()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => kit.Store.Attempts.Count <= 3
+            ? Task.FromException(new IOException("unrelated outage")) : Task.CompletedTask;
+        var firstSession = new CharacterOwnershipToken("world", 7, Guid.Parse("a1f4d7c0-3e2b-4d68-b5a9-6c0e8f1b2d34"));
+        var relogSession = new CharacterOwnershipToken("world", 8, Guid.Parse("e8b2c6a9-7d15-4f03-9a4e-0b3c5d7f9e12"));
+
+        kit.Queue.Enqueue(State(1, 11) with { Ownership = firstSession, Home = new HomeBind(1, 2, 3, 4, 5) });
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1)); // retained, not terminal
+        Assert.Equal(3, kit.Store.Attempts.Count);
+
+        kit.Queue.Enqueue(State(1, 22) with { Ownership = relogSession });
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+
+        CharacterState saved = Assert.Single(kit.Store.Saved);
+        Assert.Equal(22u, saved.Money);
+        Assert.Equal(relogSession, saved.Ownership);
+        Assert.Null(saved.Home); // the other session's sections are not carried across tokens
+        Assert.Equal(new[] { firstSession, firstSession, firstSession, relogSession }, kit.Store.Attempts.Select(a => a.Ownership));
+        await kit.Queue.StopAsync();
+    }
+
     [Fact]
     public async Task BarrierWaitsForEarlierSnapshotsAndRetainsTheirOrder()
     {
