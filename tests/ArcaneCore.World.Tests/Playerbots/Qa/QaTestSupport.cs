@@ -103,6 +103,8 @@ internal sealed class FakeFacts : IQaContentFacts
 
     public Dictionary<(uint Map, uint Entry), int> Spawns { get; } = [];
 
+    public Dictionary<uint, List<QaEnderFact>> Enders { get; } = [];
+
     public Dictionary<uint, QaTemplateFacts> Templates { get; } = [];
 
     public HashSet<(uint Entry, uint Path)> Paths { get; } = [];
@@ -114,6 +116,8 @@ internal sealed class FakeFacts : IQaContentFacts
     public int? QuestLevel(uint quest) => Levels.TryGetValue(quest, out int level) ? level : null;
 
     public IReadOnlyList<uint> QuestObjectiveCreatures(uint quest) => Objectives.GetValueOrDefault(quest) ?? [];
+
+    public IReadOnlyList<QaEnderFact> QuestEnders(uint quest) => Enders.GetValueOrDefault(quest) ?? [];
 
     public int SpawnCount(uint map, uint entry) => Spawns.GetValueOrDefault((map, entry));
 

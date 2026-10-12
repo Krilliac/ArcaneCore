@@ -521,6 +521,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
         uint completedReturn = _quests.CompletedReturnQuest(player);
+        // Entering the walk to a completed quest's ender drops the target of whatever came before (a mob the bot was fighting, a quest NPC
+        // it had been serving): until the destinations name the ender, the stall watch and GiveUpStalledGoal would report and set aside that.
+        if (_quests.ReturnQuest != completedReturn)
+        {
+            _quests.ReturnQuest = completedReturn;
+            if (completedReturn != 0) TargetEntry = 0;
+        }
         if (completedReturn != 0)
         {
             _goal = PlayerbotGoalKind.Quest;

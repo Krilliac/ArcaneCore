@@ -145,9 +145,49 @@ internal static class PlayerbotQaClassifier
             }
         }
 
+        if (questGoal && s.Quest != 0 && target != 0 && EnderTrip(s, facts, target, title) is { } trip) return trip;
+
         string subject = questGoal && s.Quest != 0 ? string.Create(CultureInfo.InvariantCulture, $"quest {s.Quest}{(title is null ? string.Empty : " (" + title + ")")}") : $"goal {s.Goal}";
         return new QaClassification(QaCause.Unknown, "no missing content found for " + subject
             + (target != 0 ? string.Create(CultureInfo.InvariantCulture, $", target {target}") : string.Empty), title);
+    }
+
+    /// <summary>
+    /// A stall whose target is an ender of its quest is a completed quest's trip home (the brain's target then is the ender, never an earlier
+    /// goal's). Nothing is missing for it: the cause names the ender, how far it is from the bot and whether it is on another map, so the finding
+    /// says where the bot was going instead of "no missing content found". Null when the target is not one of the quest's enders.
+    /// </summary>
+    private static QaClassification? EnderTrip(QaSignal s, IQaContentFacts facts, uint target, string? title)
+    {
+        IReadOnlyList<QaEnderFact> spawns = [.. facts.QuestEnders(s.Quest).Where(e => e.Entry == target)];
+        if (spawns.Count == 0) return null;
+
+        string who = string.Create(CultureInfo.InvariantCulture, $"ender {target}{(spawns[0].Name.Length == 0 ? string.Empty : " (" + spawns[0].Name + ")")}");
+        string subject = string.Create(CultureInfo.InvariantCulture, $"quest {s.Quest}{(title is null ? string.Empty : " (" + title + ")")}");
+        string where;
+        if (!s.HasPosition)
+        {
+            where = "its distance from the bot is unknown (the stall has no position)";
+        }
+        else
+        {
+            QaEnderFact? best = null;
+            float bestSquared = float.MaxValue;
+            foreach (QaEnderFact e in spawns)
+            {
+                if (e.Map != s.Map) continue;
+                float dx = e.X - s.X, dy = e.Y - s.Y;
+                float squared = (dx * dx) + (dy * dy);
+                if (squared < bestSquared) { bestSquared = squared; best = e; }
+            }
+
+            where = best is { } near
+                ? string.Create(CultureInfo.InvariantCulture, $"nearest spawn {MathF.Sqrt(bestSquared):F0} yd from the bot on map {s.Map} at {near.X:F0},{near.Y:F0},{near.Z:F0}")
+                : string.Create(CultureInfo.InvariantCulture, $"on another map ({string.Join('/', spawns.Select(e => e.Map).Distinct())}; the bot is on map {s.Map}), where the bot cannot walk");
+        }
+
+        return new QaClassification(QaCause.Unknown, string.Create(CultureInfo.InvariantCulture,
+            $"no missing content found for {subject}: the bot was walking to its {who}, {where}"), title);
     }
 
     private static int Spawns(QaSignal s, IQaContentFacts facts, uint entry)

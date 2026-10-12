@@ -63,6 +63,46 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
         Assert.DoesNotContain("found for quest", draft.Body, StringComparison.Ordinal);
     }
 
+    private static FakeFacts GryanTrip(params QaEnderFact[] spawns)
+    {
+        FakeFacts facts = Gryan();
+        facts.Titles[11] = "Report to Gryan";
+        facts.Spawns[(0, 963)] = 1;
+        facts.Templates[963] = new QaTemplateFacts(0, 1, 1, string.Empty);
+        facts.Enders[11] = [.. spawns];
+        return facts;
+    }
+
+    [Fact]
+    public void EnderTripStall_NamesTheEnderItsDistanceAndMap()
+    {
+        // The ender stands 100 yd east of the stall (-9928.2,47.6): 3-4-5 scaled by 20.
+        FakeFacts facts = GryanTrip(new QaEnderFact(963, "Gryan Stoutmantle", 0, -9928.2f + 60f, 47.6f + 80f, 30f));
+        QaFindingView f = IngestOne(QuestLine, facts);
+
+        Assert.Contains("the bot was walking to its ender 963 (Gryan Stoutmantle)", f.CauseDetail, StringComparison.Ordinal);
+        Assert.Contains("nearest spawn 100 yd from the bot on map 0", f.CauseDetail, StringComparison.Ordinal);
+        Assert.StartsWith("no missing content found for quest 11 (Report to Gryan)", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnderTripStall_WithTheEnderOnAnotherMap_SaysSo()
+    {
+        FakeFacts facts = GryanTrip(new QaEnderFact(963, "Gryan Stoutmantle", 1, 1634f, -4439f, 30f));
+        QaFindingView f = IngestOne(QuestLine, facts);
+
+        Assert.Contains("ender 963 (Gryan Stoutmantle), on another map (1; the bot is on map 0)", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void QuestStall_OnANonEnderTarget_KeepsTheGenericVerdict()
+    {
+        FakeFacts facts = GryanTrip(new QaEnderFact(964, "Someone Else", 0, 0f, 0f, 0f));
+        QaFindingView f = IngestOne(QuestLine, facts);
+
+        Assert.Equal("no missing content found for quest 11 (Report to Gryan), target 963", f.CauseDetail);
+    }
+
     [Fact]
     public void QuestStall_StillNamesTheQuest_AfterTheGoal()
     {
