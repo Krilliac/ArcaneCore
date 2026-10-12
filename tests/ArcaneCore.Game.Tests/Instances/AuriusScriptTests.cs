@@ -50,7 +50,7 @@ public sealed class AuriusScriptTests
         t.MinLevelHealth = t.MaxLevelHealth = 50_000;
     }) with { ScriptName = AuriusScript.ScriptName, GossipMenuId = 3043 };
 
-    private static DungeonNpcRig Rig(bool withBaron = true)
+    private static DungeonNpcRig Rig(bool withBaron = true, bool realFactions = false)
     {
         List<CreatureTemplate> templates = [AuriusTemplate()];
         List<CreatureSpawn> spawns = [Spawn(1, Aurius, DungeonNpcRig.EntranceX + 3, DungeonNpcRig.EntranceY, DungeonNpcRig.EntranceZ, InstanceFixture.Dungeon)];
@@ -60,7 +60,8 @@ public sealed class AuriusScriptTests
             spawns.Add(Spawn(2, Baron, DungeonNpcRig.EntranceX + 25, DungeonNpcRig.EntranceY, DungeonNpcRig.EntranceZ, InstanceFixture.Dungeon));
         }
 
-        return new DungeonNpcRig(map => new StratholmeInstance(map), templates, spawns, new CreatureAiContent(Rows(), Texts()), hostility: new AuriusFriendlyToPlayers());
+        return new DungeonNpcRig(map => new StratholmeInstance(map), templates, spawns, new CreatureAiContent(Rows(), Texts()),
+            hostility: realFactions ? null : new AuriusFriendlyToPlayers(), factions: realFactions ? RealFactionDbc.Catalog : null);
     }
 
     private static NpcInfo Npc(Creature c) => new(c.Guid, c.Entry, c.Spawn?.Guid ?? 0, (NpcFlags)c.NpcFlags, 329, c.X, c.Y, c.Z, 0.5f, c.IsAlive, false, c.Combat.IsInCombat, false, 3043);
@@ -170,6 +171,99 @@ public sealed class AuriusScriptTests
         Assert.Equal(0u, aurius.NpcFlags & (uint)(NpcFlags.QuestGiver | NpcFlags.Gossip));
         Assert.Contains(JoinText, Said(rig));
         Assert.Same(baron, aurius.Combat.Victim);
+    }
+
+    [RealFactionDbcFact]
+    public void Faction42_ReactsToTheBaronOneWayOnly_AndIsFriendlyToPlayers_PerTheRealDbc()
+    {
+        var catalog = RealFactionDbc.Catalog;
+        var t42 = catalog.Find(42)!;
+        var t21 = catalog.Find(21)!;
+        Assert.Equal((36u, 1u, 1u, 0u), (t42.Faction, t42.OwnMask, t42.FriendlyMask, t42.HostileMask));
+        Assert.Equal((20u, 8u, 1u), (t21.Faction, t21.OwnMask, t21.HostileMask));
+        Assert.False(t42.IsHostileTo(t21)); // 42 does not call the Baron an enemy ...
+        Assert.True(t21.IsHostileTo(t42));  // ... the Baron's template does call 42 one
+
+        using DungeonNpcRig rig = Rig(realFactions: true);
+        Creature aurius = rig.Creature(Aurius), baron = rig.Creature(Baron);
+        var hostility = new FactionCreatureHostility(catalog);
+        CombatHooks hooks = rig.Map.Combat.Hooks;
+        aurius.FactionTemplate = StratholmeInstance.FactionAuriusVictim;
+        Assert.True(hostility.IsHostile(baron, aurius));
+        Assert.False(hostility.IsHostile(aurius, baron)); // so he never re-acquires the Baron by sight: the script attacks him explicitly
+        Assert.True(hooks.CanAttack(aurius, baron));      // attack validity is either direction for creature pairs
+        Assert.True(hooks.CanAttack(baron, aurius));
+        Assert.False(hostility.IsHostile(aurius, rig.Player));
+        Assert.True(hooks.IsFriendly(aurius, rig.Player));
+        Assert.False(hooks.CanAttack(rig.Player, aurius));
+        Assert.False(hooks.CanAttack(aurius, rig.Player));
+    }
+
+    [RealFactionDbcFact]
+    public void RealFactions_AuriusJoinsAndKeepsFightingTheBaron_ThenFakesDeathAtOneHealthAndStaysThere()
+    {
+        using DungeonNpcRig rig = Rig(realFactions: true);
+        Creature aurius = rig.Creature(Aurius), baron = rig.Creature(Baron);
+        rig.Data.SetData(StratholmeInstance.TypeAurius, EncounterState.Done);
+        Assert.True(rig.Creatures.AttackStart(baron, rig.Player));
+        rig.Run(5200);
+        Assert.Equal(42u, aurius.FactionTemplate);
+        Assert.Same(baron, aurius.Combat.Victim);
+        Assert.InRange(Distance(aurius, baron), 0f, 4.5f);
+        rig.Run(20_000); // no sight-based retarget exists (42 is not hostile to 21), yet he stays on the Baron
+        Assert.Same(baron, aurius.Combat.Victim);
+        Assert.True(aurius.Combat.IsInCombat);
+
+        rig.Map.Combat.Kill(rig.Player, baron);
+        rig.Run(100);
+        Assert.True(aurius.IsAlive);
+        Assert.Equal(1u, aurius.Health);
+        Assert.Equal(StandState.Dead, aurius.StandState);
+        rig.Run(30_000); // regeneration must not heal the "corpse"
+        Assert.Equal(1u, aurius.Health);
+        Assert.Equal(3757u, HelloText(rig, aurius));
+    }
+
+    [RealFactionDbcFact]
+    public void RealFactions_WithTheQuestNotDone_AuriusStaysKneeling()
+    {
+        using DungeonNpcRig rig = Rig(realFactions: true);
+        Creature aurius = rig.Creature(Aurius), baron = rig.Creature(Baron);
+        (float x, float y) = (aurius.X, aurius.Y);
+        Assert.True(rig.Creatures.AttackStart(baron, rig.Player));
+        rig.Run(8000);
+        Assert.Equal((x, y), (aurius.X, aurius.Y));
+        Assert.Equal(StandState.Kneel, aurius.StandState);
+        Assert.Null(aurius.Combat.Victim);
+    }
+
+    [Fact]
+    public void CrusaderStrikeIsCastOnlyInMeleeRange()
+    {
+        // Spec 329 check 8: the range event (0-5 yd). Start him 25 yd from his victim: no cast while he closes in, a cast once he arrives.
+        using DungeonNpcRig rig = Rig(withBaron: false);
+        Creature aurius = rig.Creature(Aurius);
+        rig.Run(100);
+        rig.Creatures.NearTeleport(aurius, rig.Player.X + 25f, rig.Player.Y, rig.Player.Z, 0f);
+        Assert.True(aurius.AI!.AttackStart(rig.Player));
+        int seen = 0;
+        bool castWhileFar = false;
+        for (int i = 0; i < 400; i++)
+        {
+            float before = Distance(aurius, rig.Player);
+            rig.Tick();
+            int casts = rig.Spells.Of(aurius, 14517).Count();
+            if (casts > seen && before > 6f && Distance(aurius, rig.Player) > 6f)
+            {
+                castWhileFar = true;
+            }
+
+            seen = casts;
+        }
+
+        Assert.False(castWhileFar);
+        Assert.True(seen > 0, "Crusader Strike was never cast, even in melee range");
+        Assert.True(Distance(aurius, rig.Player) < 8f);
     }
 
     [Fact]

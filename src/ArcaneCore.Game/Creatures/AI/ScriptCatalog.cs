@@ -68,7 +68,7 @@ public readonly record struct ScriptResolution(ScriptKind Kind, string Implement
 /// One runtime answer to "which AI does creature entry X get on map M". It mirrors the selection order of
 /// <c>CreatureMapSystem.CreateAi</c>: the map's own script AI (live registrations, then <see cref="DungeonBossAis"/>, then <see cref="InstanceScriptedAis"/>, then <c>WorldBossScripts</c>), the template's ScriptName
 /// (named AI, then entry script, then a gossip/quest-only script), then the AIName, then the defaults. What an instance script (or a raid boss selection) gives an entry at run
-/// time is read from <see cref="InstanceScriptedAis"/>. Read-only; the registries are filled at start-up, so any thread may call it
+/// time is read from <see cref="InstanceScriptedAis"/>. Read-only itself, but the factory registries it reads are not immutable: a hot-loaded script swap (CommitSwap) replaces entries on the world thread, so call it from the world thread
 /// (a live <see cref="CreatureMapSystem"/> only from its map's thread).
 /// </summary>
 public sealed class ScriptCatalog(CreatureAiFactory factory, CreatureContent content, bool implicitEventAi = false)

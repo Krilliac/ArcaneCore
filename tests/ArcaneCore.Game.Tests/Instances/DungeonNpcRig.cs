@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -75,8 +76,13 @@ internal sealed class DungeonNpcRig : IDisposable
 
     public DungeonNpcRig(Func<Map, InstanceData> script, IEnumerable<CreatureTemplate> templates, IEnumerable<CreatureSpawn> spawns,
         CreatureAiContent? ai = null, ScriptSpellCaster? spells = null, bool alwaysHostile = true, IEnumerable<CreatureAiText>? texts = null,
-        ICreatureHostility? hostility = null)
+        ICreatureHostility? hostility = null, ArcaneCore.Kernel.Npc.FactionTemplateCatalog? factions = null)
     {
+        if (factions is not null)
+        {
+            hostility ??= new FactionCreatureHostility(factions); // the real faction answers: no AlwaysHostile shortcut
+        }
+
         Spells = spells ?? new ScriptSpellCaster();
         _fixture.Manager.Scripts = new InstanceScriptRegistry().Register(Dungeon, script);
         CreatureAiContent content = ai ?? new CreatureAiContent([], texts ?? []);
@@ -103,6 +109,11 @@ internal sealed class DungeonNpcRig : IDisposable
 
         Player = _fixture.AddPlayer(1);
         Assert.True(_fixture.EnterDungeon(Player));
+        if (factions is not null)
+        {
+            Map.Combat.Hooks = new ArcaneCore.Game.Combat.FactionCombatHooks(factions); // the production combat hooks, fed the same templates
+        }
+
         Tick();
     }
 

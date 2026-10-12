@@ -528,7 +528,13 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
     /// <summary>Aurius' yell on joining the fight and his line on dying (spec section 6).</summary>
     public const int SayAuriusJoin = -1329021, SayAuriusDeath = -1329022;
 
-    /// <summary>The faction Aurius takes for the fight: hostile to the Baron's, friendly to players (spec 8.2).</summary>
+    /// <summary>
+    /// The faction Aurius takes for the fight (spec 8.2). FactionTemplate.dbc 5875: template 42 is faction 36, own mask 1, friendly mask 1, hostile
+    /// mask 0, so it is friendly to players and NOT hostile to the Baron's template 21 (faction 20, own mask 8, hostile mask 1). The reaction is
+    /// one-directional: 21 is hostile to 42, 42 is not hostile to 21. Attack validity (<c>CombatHooks.CanAttack</c>) holds either way for creature
+    /// pairs, but <c>ICreatureHostility.IsHostile(Aurius, Baron)</c> is false, so Aurius would never pick the Baron by sight; the script therefore
+    /// attacks him explicitly (<c>AttackStart</c>, which puts him on the threat list) and the fight does not depend on sight acquisition.
+    /// </summary>
     public const uint FactionAuriusVictim = 42;
 
     private void PrepareAurius(Creature aurius)
@@ -574,6 +580,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         system.InterruptCast(aurius);
         aurius.NpcFlags |= (uint)(ArcaneCore.Game.Npc.NpcFlags.QuestGiver | ArcaneCore.Game.Npc.NpcFlags.Gossip);
         aurius.Health = 1;
+        aurius.RegeneratesHealth = false; // else the 5 s regeneration heals the "corpse" (restored by his respawn)
         system.MoveIdle(aurius);
         system.RemoveAllAuras(aurius);
         aurius.StandState = StandState.Dead;
