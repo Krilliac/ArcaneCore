@@ -94,6 +94,12 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         else if (unit is Creature creature && !creature.IsMoving)
         {
             creature.ApplyMovement(movement, session.World.NowMs);
+
+            // vmangos HandleMovementOpcodes (MovementHandler.cpp:1163): a creature mover runs HandleInterruptsOnMovement with MOVEFLAG_MASK_MOVING.
+            if ((creature.Movement.Flags & MovementFlags.MaskMoving) != 0)
+            {
+                creature.ClearEmoteState();
+            }
         }
         else
         {
@@ -238,6 +244,12 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             }
 
             creature.ApplyMovement(movement, session.World.NowMs);
+
+            // vmangos HandleMovementOpcodes (MovementHandler.cpp:1163): a creature mover runs HandleInterruptsOnMovement with MOVEFLAG_MASK_MOVING.
+            if ((creature.Movement.Flags & MovementFlags.MaskMoving) != 0)
+            {
+                creature.ClearEmoteState();
+            }
         }
 
         if (!relay)
@@ -273,6 +285,17 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         MovementObservers.Before(context, in previous, ref movement, session.Logger);
         player.ApplyClientMovement(movement, session.World.NowMs);
         MovementObservers.After(context, in previous, session.Logger);
+
+        // vmangos Player::SetPosition (Player.cpp:5949-5958) -> Unit::HandleInterruptsOnMovement (Unit.cpp:10131-10140), reached from
+        // HandleMovementOpcodes -> HandleMoverRelocation (MovementHandler.cpp:1113): a changed position, or MOVEFLAG_MASK_XZ on the
+        // block (forward, backward, strafe; not pitch, jump or turning), ends a text-emote state (/dance). Players and managed bots
+        // both land here.
+        MovementInfo stored = player.Movement;
+        bool positionChanged = stored.X != previous.X || stored.Y != previous.Y || stored.Z != previous.Z;
+        if (positionChanged || (stored.Flags & MovementFlags.MaskXz) != 0)
+        {
+            player.ClearEmoteState();
+        }
     }
 
     /// <summary>

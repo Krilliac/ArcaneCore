@@ -158,6 +158,18 @@ public abstract partial class Unit : WorldObject
     }
 
     /// <summary>
+    /// End a state emote (vmangos Unit::HandleEmoteState(0), Unit.cpp:1856-1859: UNIT_NPC_EMOTESTATE = 0). The field write is a
+    /// no-op, and sends no update, when no state is set.
+    /// </summary>
+    public void ClearEmoteState()
+    {
+        if (GetUInt32(UpdateFields.UnitNpcEmotestate) != 0)
+        {
+            SetUInt32(UpdateFields.UnitNpcEmotestate, 0);
+        }
+    }
+
+    /// <summary>
     /// Set movement flags the server decided (vmangos Unit::AddUnitMovementFlag). Locomotion uses it to apply an
     /// acknowledged root, water walk, hover or feather fall (src/ArcaneCore.Game/Locomotion).
     /// </summary>
