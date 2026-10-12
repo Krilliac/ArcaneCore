@@ -323,6 +323,32 @@ public sealed class PlayerbotQuestGoalsTests
     }
 
     [Fact]
+    public async Task UnhomedBot_OnAnotherContinentWithACompletedQuestWhoseEnderIsBesideItsGiver_KeepsItAndNeverRefusesIt()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            var suspensions = new PlayerbotSuspensions();
+            goals.Suspensions = suspensions;
+            player.MapId = 1; // a GM summon or fleet move: the giver and ender stay together on map 0
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.False(goals.AbandonDistantCompletedQuest(player));
+            Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId,
+                quest.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1));
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task UnhomedBot_CrossContinentAbandon_IsDurableEvenWhenTheDistanceLimitIsDisabled()
     {
         await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });
