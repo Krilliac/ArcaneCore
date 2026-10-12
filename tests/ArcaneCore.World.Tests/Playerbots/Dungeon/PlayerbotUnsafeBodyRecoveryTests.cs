@@ -1117,6 +1117,75 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
         }).ToArray();
     });
 
+    private const uint AmbusherEntry = 994430;
+    private const uint WideDetectorEntry = 994431;
+
+    /// <summary>
+    /// A body ringed by creatures that hide: eight level-37 ambushers 22 yards out (Ridge Stalker 2731, Sneak 22766) and, on the body, one
+    /// level-14 creature with a detection range of 30 yards (Starving Buzzard 2829). Real spawns of the creature system, as the live camp.
+    /// </summary>
+    private sealed class HiddenRing : ICreatureDataStore
+    {
+        public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            CreatureTemplate ambusher = new()
+            {
+                Entry = AmbusherEntry, Name = "Ridge Stalker", CreatureType = 1, Faction = 14, DisplayIds = [200],
+                MinLevel = 37, MaxLevel = 37, MinLevelHealth = 1500, MaxLevelHealth = 1500,
+                MinMeleeDamage = 40f, MaxMeleeDamage = 60f, MeleeBaseAttackTime = 2000,
+            };
+            CreatureTemplate buzzard = ambusher with { Entry = WideDetectorEntry, Name = "Starving Buzzard", MinLevel = 14, MaxLevel = 14, Detection = 30f };
+            List<CreatureSpawn> spawns = [new CreatureSpawn { Guid = 994430, Entry = WideDetectorEntry, MapId = 0, X = CampedBody.X, Y = CampedBody.Y, Z = CampedBody.Z }];
+            spawns.AddRange(Enumerable.Range(0, 8).Select(i => new CreatureSpawn
+            {
+                Guid = 994440u + (uint)i, Entry = AmbusherEntry, MapId = 0,
+                X = CampedBody.X + (22f * MathF.Cos(i * MathF.PI / 4f)), Y = CampedBody.Y + (22f * MathF.Sin(i * MathF.PI / 4f)), Z = CampedBody.Z,
+            }));
+            return Task.FromResult(new CreatureContent([ambusher, buzzard], [.. spawns], [], [], []));
+        }
+    }
+
+    /// <summary>
+    /// The stealthed ring of <see cref="HiddenRing"/> round a level-14 bot's body keeps the body from being held over resurrection
+    /// sickness: no spot of the reclaim radius is clear of the creatures it cannot see (they count with the reach of their own
+    /// detection range, <see cref="PlayerbotRecovery.ThreatsAround"/>). With no creature at all the same body is kept.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task AStealthedRingRoundTheBody_IsNotAClearSpot_ToKeepTheBodyOverSickness(bool ring, bool expectedKeep)
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await StartAsync(clock, at: CampedBody, sicknessLevel: SicknessFrom11, configure: services =>
+        {
+            if (ring) services.AddSingleton<ICreatureDataStore>(new HiddenRing());
+        });
+        PlayerbotBrain brain = await BrainAsync(host, HomeAroundBodyAndHealer());
+        if (ring)
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Map map = host.Player.Map!;
+                var stealth = ArcaneCore.Game.Stealth.StealthServices.Find(map)!;
+                Creature[] hidden = [.. map.FindUpdater<CreatureMapSystem>()!.Creatures.Where(c => c.Entry is AmbusherEntry or WideDetectorEntry)];
+                Assert.Equal(9, hidden.Length);
+                foreach (Creature creature in hidden) stealth.Registry.SetVisibility(creature, ArcaneCore.Game.Stealth.StealthVisibility.Stealth);
+            });
+            // Out of the grid's sight and back: the creatures are evaluated afresh and stay hidden, as they do for a bot walking up to an ambush.
+            await host.TeleportAsync(0, CampedBody.X, CampedBody.Y + 2000f, CampedBody.Z);
+            await host.TeleportAsync(0, CampedBody.X, CampedBody.Y, CampedBody.Z);
+        }
+
+        await host.KillAndReleaseAsync();
+        if (ring)
+            await host.OnWorldAsync(() => Assert.DoesNotContain(host.Player.VisibleObjects,
+                guid => host.Player.Map!.FindObject(guid) is Creature c && c.Entry is AmbusherEntry or WideDetectorEntry)); // the premise
+
+        bool kept = await host.OnWorldAsync(() => brain.Recovery.KeepBodyOverSickness(host.Player, host.Player.Combat.Corpse!, PlayerbotUnsafeBody.TooStrong));
+        Assert.Equal(expectedKeep, kept);
+        await host.OnWorldAsync(brain.Stop);
+    }
+
     /// <summary>A home round the body and the healer (radius 300): neither is outside it.</summary>
     private static PlayerbotHomeArea HomeAroundBodyAndHealer() => new(0, (Body + Healer) / 2f, 300f, "Westfallhome");
 
