@@ -70,7 +70,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             }
             else
             {
-                finding.Count++;
+                finding.Count += Math.Max(1, signal.Occurrences);
                 if (signal.AtUtc > finding.LastSeenUtc) finding.LastSeenUtc = signal.AtUtc;
                 if (finding.FirstSeenUtc > signal.AtUtc) finding.FirstSeenUtc = signal.AtUtc;
                 if (bot is { } hash)
@@ -225,7 +225,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         if (signal.EffectName.Length != 0) finding.EffectName = signal.EffectName;
         if (signal.Aura != 0) finding.Aura = signal.Aura;
         if (signal.Reason.Length != 0) finding.Reason = signal.Reason;
-        if (QaKinds.Of(signal.Kind).SpellKind && signal.Detail.Length != 0) finding.ReasonDetail = signal.Detail;
+        if ((QaKinds.Of(signal.Kind).SpellKind || signal.Kind == QaSignalKind.ServerFault) && signal.Detail.Length != 0) finding.ReasonDetail = signal.Detail;
         if (signal.Item != 0) finding.Item = signal.Item;
         if (signal.Npc != 0) finding.Npc = signal.Npc;
         if (signal.GameObject != 0) finding.GameObject = signal.GameObject;
@@ -291,6 +291,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 + QaSpellGaps.Describe(s.Reason, s.Detail),
             QaSignalKind.SpellRefused => SpellOf(s) + " refused: " + (s.Reason.Length != 0 ? s.Reason : "unknown result"),
             QaSignalKind.SpellNoEffect => SpellOf(s) + " lands with no damage, healing or aura",
+            QaSignalKind.ServerFault => (s.Goal.Length != 0 ? s.Goal : "server") + ": " + (s.ExceptionType.Length != 0 ? s.ExceptionType : "exception"),
             _ => s.Kind.ToString(),
         };
     }

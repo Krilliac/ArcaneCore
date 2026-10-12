@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Net;
 using ArcaneCore.World.Handlers;
 using Microsoft.Extensions.DependencyInjection;
@@ -128,7 +129,7 @@ public sealed class WorldServer(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "[{Endpoint}] session error", endpoint);
+            logger.LogFault("session", ex, "[{Endpoint}] session error", endpoint);
         }
         finally
         {

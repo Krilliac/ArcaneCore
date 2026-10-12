@@ -88,6 +88,8 @@ internal static partial class PlayerbotQaFingerprint
             QaSignalKind.SpellUnsupported => string.Create(CultureInfo.InvariantCulture, $"spellgap|{SpellKey(s)}|effect={s.EffectIndex}|{Token(s.Reason)}"),
             QaSignalKind.SpellRefused => $"spellrefused|{SpellKey(s)}|result={Token(s.Reason)}",
             QaSignalKind.SpellNoEffect => $"spellnoeffect|{SpellKey(s)}",
+            // The ledger signature id (FaultLedger.Record): one finding per signature; the fingerprint is derived from it, so a restored file still verifies.
+            QaSignalKind.ServerFault => $"serverfault|{Token(s.FaultId)}",
             _ => throw new ArgumentOutOfRangeException(nameof(s)),
         });
     }

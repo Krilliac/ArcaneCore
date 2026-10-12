@@ -39,6 +39,12 @@ internal enum QaSignalKind
 
     /// <summary>A bot's completed casts of a spell that should deal damage, heal or apply an aura repeatedly did none of it on any target hit.</summary>
     SpellNoEffect,
+
+    /// <summary>
+    /// An exception the server caught and survived at one of its catch-and-log sites (<see cref="ArcaneCore.Kernel.Diagnostics.FaultLedger"/>), one finding per ledger signature.
+    /// Bot-independent: counted in occurrences only, so a fault no bot caused is still reported.
+    /// </summary>
+    ServerFault,
 }
 
 /// <summary>
@@ -156,4 +162,10 @@ internal sealed record QaSignal
     /// sample and no bot, so a gap no bot has met yet is listed and never counted as seen.
     /// </summary>
     public bool FromCoverage { get; init; }
+
+    /// <summary>For a server fault: the fault ledger's signature id (16 hex), the identity of the finding.</summary>
+    public string FaultId { get; init; } = string.Empty;
+
+    /// <summary>How many occurrences this signal stands for (a polled server fault carries its delta; every other signal is one).</summary>
+    public long Occurrences { get; init; } = 1;
 }
