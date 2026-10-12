@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
 | `GameMaster` | 3 | 195 |
-| `Administrator` | 6 | 296 |
+| `Administrator` | 6 | 298 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -52,6 +52,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug vis kit` | 3 | GameMaster | declared retail level | Syntax: .debug vis kit #kitid Play a SpellVisualKit.dbc visual on yourself, seen only by you (the id is not checked). |
 | `.debug vis list` | 3 | GameMaster | declared retail level | Syntax: .debug vis list List your drawings with their marker counts and the seconds they have left. |
 | `.debug vis clear` | 3 | GameMaster | declared retail level | Syntax: .debug vis clear Remove all your markers now. |
+| `.debug script` | 3 | GameMaster | declared retail level | Syntax: .debug script $entry [$map] Say which AI the creature entry gets on the map (default: your map): the layer (map entry AI, dungeon boss AI, ScriptName, entry script, EventAI, SmartAI, built-in or default), the implementing type, and whether its ScriptName is implemented. From the console the map is required. |
+| `.debug scriptcoverage` | 3 | GameMaster | declared retail level | Syntax: .debug scriptcoverage [$map] Count the creatures spawned on the map (default: every dungeon) whose template names a ScriptName or an AIName, and how many ScriptNames have no implementation; the unresolved ones are listed. |
 | `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. |
 | `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
 | `.debug alloc` ... | 6 | Administrator | declared retail level | Syntax: .debug alloc $subcommand Sample what the server allocates, by type, for a while: start, report, stop. |
