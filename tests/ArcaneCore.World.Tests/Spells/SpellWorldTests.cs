@@ -132,6 +132,29 @@ public sealed class SpellWorldTests
     }
 
     [Fact]
+    public async Task ACooldownOnEventAura_CancelledByTheClient_SendsCooldownEvent_AndRefusesARecastUntilItEnds()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("SNEAKER", "Sneaker", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        await gm.SendChatAsync(ChatType.Say, Language.Common, $".learn {StealthLike}");
+        await gm.ReadUntilAsync(WorldOpcode.SmsgLearnedSpell);
+        await gm.CollectAsync();
+
+        await gm.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(StealthLike));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Sneaker")!.GetUInt32(UpdateFields.UnitFieldAura) == StealthLike, "stealth aura");
+        Assert.DoesNotContain((await gm.CollectAsync()).Select(p => p.Opcode), op => op == WorldOpcode.SmsgCooldownEvent);
+
+        await gm.SendAsync(WorldOpcode.CmsgCancelAura, BitConverter.GetBytes(StealthLike));
+
+        Assert.Equal(StealthLike, BinaryPrimitives.ReadUInt32LittleEndian(await gm.ReadUntilAsync(WorldOpcode.SmsgCooldownEvent)));
+        await gm.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(StealthLike));
+        byte[] refused = await gm.ReadUntilAsync(WorldOpcode.SmsgCastResult);
+        Assert.Equal((byte)SpellCastResult.NotReady, refused[5]);
+        Assert.Equal(0u, host.World.FindOnlinePlayer("Sneaker")!.GetUInt32(UpdateFields.UnitFieldAura));
+    }
+
+    [Fact]
     public async Task SpellbookCache_GrantsDefaultsOnce_AndWritesThroughInOrder()
     {
         var store = new InMemoryCharacterSpellStore();

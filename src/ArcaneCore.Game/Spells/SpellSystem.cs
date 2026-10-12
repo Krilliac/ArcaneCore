@@ -1540,7 +1540,7 @@ public sealed partial class SpellSystem
     /// cooldowns unless the spell is passive. The client starts its own timers from SMSG_SPELL_GO
     /// for casts it requested (vmangos sends nothing then); for server-initiated (triggered) casts
     /// SMSG_SPELL_COOLDOWN tells the client — decision recorded in docs/areas/spells.md.
-    /// COOLDOWN_ON_EVENT spells are not started here (the event that starts them is not modelled yet).
+    /// COOLDOWN_ON_EVENT spells are not started here: their event (the aura fading, StartCooldownOnAuraEnd; a created object going, RemoveSpellObject) calls this with onEvent.
     /// </summary>
     private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered, int? itemCooldownMs = null,
         int? itemCategoryCooldownMs = null, uint? itemCategory = null, uint itemId = 0, bool onEvent = false, Item? castItem = null)

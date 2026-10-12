@@ -46,7 +46,7 @@ Conflict note: gm-commands (GM invisibility) edits the same method; they should 
   A unit gets the stealth auras and flags but is not in form 30, so stance-gated openers cannot be checked yet.
 - Ordinary invisibility and detection (auras18/19) use active aura type masks and maximum detection levels. Apply/remove and restored auras refresh map visibility; player glow, shared types, world-boss detectors, group/mark exemptions and stealth precedence are modeled. Player alcohol-based type6 detection and original-client visual acceptance remain pending.
 - No GM-invisibility guard (VISIBILITY_OFF), no Silithus flag drop, no cancel-removes-Vanish,
-  no COOLDOWN_ON_EVENT start (RG-04 needs spell-breadth S1/S2 hooks), no Vanish 1 s "cannot be detected" window (RG-08).
+  (the COOLDOWN_ON_EVENT start is done: `StartCooldownOnAuraEnd`), no Vanish 1 s "cannot be detected" window (RG-08).
 - The mangos-classic detection model is not implemented; vmangos (sniff-verified) is the only model.
 - A creature that stealths is not re-evaluated for viewers until the next regular update (creatures have no stealth source yet).
 - `Cell::VisitAllObjects`-granular scanning is approximated by evaluating every stealthed unit of the map; the formula's 30 yd cap applies.

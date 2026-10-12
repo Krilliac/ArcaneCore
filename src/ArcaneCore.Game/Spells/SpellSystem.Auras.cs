@@ -619,6 +619,7 @@ public sealed partial class SpellSystem
         }
 
         RaiseHolderRemoved(holder);
+        StartCooldownOnAuraEnd(holder, mode);
 
         if (holder.AreaParent is { } parent && parent.AreaChildren.TryGetValue(holder.Target.Guid, out SpellAuraHolder? child)
             && ReferenceEquals(child, holder))
@@ -638,6 +639,33 @@ public sealed partial class SpellSystem
         // Held children still reference this removed parent. Their first update after the
         // settlement ends removes them through UpdateAuras without mutating the held player.
         holder.AreaChildren.Clear();
+    }
+
+    /// <summary>
+    /// SPELL_ATTR_COOLDOWN_ON_EVENT (Spell.dbc Attributes 0x02000000; Stealth, Shadowmeld, Prowl and the other "cooldown starts when the aura
+    /// fades" spells): the cast started no cooldown (<see cref="AddCooldown"/>) and the client keeps the button disabled while the aura lives,
+    /// so the removal of the aura is the event. The caster's normal recovery starts now and SMSG_COOLDOWN_EVENT lets the client start its own
+    /// timer (vmangos Player::AddCooldown "haveToSendEvent"). Every removal cause counts (cancel, damage or movement break, dispel, expiry,
+    /// death) except a replacement by the same spell, whose own removal is the event; an area child follows its parent's holder.
+    /// </summary>
+    private void StartCooldownOnAuraEnd(SpellAuraHolder holder, AuraRemoveMode mode)
+    {
+        if (mode == AuraRemoveMode.Stack || holder.AreaParent is not null || !holder.Spell.HasAttribute(SpellAttributes.CooldownOnEvent))
+        {
+            return;
+        }
+
+        Unit? owner = holder.CasterGuid == holder.Target.Guid ? holder.Target : ResolveAuraCaster(holder);
+        if (owner is not { IsInWorld: true })
+        {
+            return;
+        }
+
+        AddCooldown(GetOrCreateState(owner), holder.Spell, triggered: false, onEvent: true);
+        if (owner is Player player)
+        {
+            player.Session.Send(WorldOpcode.SmsgCooldownEvent, SpellPackets.BuildCooldownEvent(holder.Spell.Id, player.Guid));
+        }
     }
 
     // --- update fields (vmangos SpellAuraHolder::SetAura / SetAuraFlag / SetAuraLevel / UpdateAuraApplication)
