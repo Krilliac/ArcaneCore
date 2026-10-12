@@ -280,7 +280,10 @@ public enum MailAction : uint
     MadePermanent = 5,
 }
 
-/// <summary>vmangos MailResponseResult.</summary>
+/// <summary>
+/// vmangos MailResponseResult. The 1.12.1 client (binary, docs/areas/client-errors.md) has arms for 0-5, 14 and 15 only;
+/// every other value, including 16-19 below, shows ERR_MAIL_DATABASE_ERROR "Internal mail database error.".
+/// </summary>
 public enum MailResult : uint
 {
     Ok = 0,
@@ -289,6 +292,7 @@ public enum MailResult : uint
     NotEnoughMoney = 3,
     RecipientNotFound = 4,
     NotYourTeam = 5,
+    /// <summary>ERR_MAIL_DATABASE_ERROR "Internal mail database error.": the mail code for a server-side failure.</summary>
     InternalError = 6,
     DisabledForTrialAccount = 14,
     RecipientCapReached = 15,
