@@ -12,6 +12,7 @@ using Xunit;
 namespace ArcaneCore.Kernel.Tests.Ops;
 
 /// <summary>Ops:Metrics (docs/ops/metrics.md): aggregation, the Prometheus and OTLP formats, validation and the scrape endpoint.</summary>
+[Collection(MetricsStoreCollection.Name)]
 public sealed class MetricsTests
 {
     private static string UniqueMeter() => "ArcaneCore.Test." + Guid.NewGuid().ToString("N");

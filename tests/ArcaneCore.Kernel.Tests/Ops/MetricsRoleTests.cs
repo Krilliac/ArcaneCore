@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.Kernel.Configuration;
@@ -15,9 +16,10 @@ namespace ArcaneCore.Kernel.Tests.Ops;
 /// daemons read the same <c>Ops:Metrics</c> section. Each must resolve its own Prometheus endpoint from it
 /// (docs/ops/metrics.md): the World <c>Ops:Metrics:PrometheusPrefix</c>, the Realm <c>Ops:Metrics:RealmPrometheusPrefix</c>.
 /// </summary>
+[Collection(MetricsStoreCollection.Name)]
 public sealed class MetricsRoleTests
 {
-    private static MetricsHost HostFor(Dictionary<string, string?> settings, MetricsRole role, ILogger<MetricsHost>? logger = null)
+    private static MetricsHost HostFor(Dictionary<string, string?> settings, MetricsRole role, out ServiceProvider provider, ILogger<MetricsHost>? logger = null)
     {
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var services = new ServiceCollection();
@@ -28,7 +30,17 @@ public sealed class MetricsRoleTests
         }
 
         services.AddOpsMetrics(configuration, role == MetricsRole.Realm ? "arcanecore-realm" : "arcanecore-world", role);
-        return services.BuildServiceProvider().GetRequiredService<MetricsHost>();
+        provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<MetricsHost>();
+    }
+
+    private static string PrefixFor(Dictionary<string, string?> settings, MetricsRole role)
+    {
+        MetricsHost host = HostFor(settings, role, out ServiceProvider provider);
+        using (provider)
+        {
+            return host.ConfiguredPrometheusPrefix;
+        }
     }
 
     private static int FreePort()
@@ -43,8 +55,8 @@ public sealed class MetricsRoleTests
     {
         var shared = new Dictionary<string, string?> { ["Ops:Metrics:Enabled"] = "true" };
 
-        string world = HostFor(shared, MetricsRole.World).ConfiguredPrometheusPrefix;
-        string realm = HostFor(shared, MetricsRole.Realm).ConfiguredPrometheusPrefix;
+        string world = PrefixFor(shared, MetricsRole.World);
+        string realm = PrefixFor(shared, MetricsRole.Realm);
 
         Assert.Equal("http://localhost:9464/metrics/", world);
         Assert.Equal("http://localhost:9465/metrics/", realm);
@@ -59,8 +71,8 @@ public sealed class MetricsRoleTests
             ["Ops:Metrics:PrometheusPrefix"] = "http://+:9500/metrics/",
         };
 
-        Assert.Equal("http://+:9500/metrics/", HostFor(shared, MetricsRole.World).ConfiguredPrometheusPrefix);
-        Assert.Equal("http://localhost:9465/metrics/", HostFor(shared, MetricsRole.Realm).ConfiguredPrometheusPrefix);
+        Assert.Equal("http://+:9500/metrics/", PrefixFor(shared, MetricsRole.World));
+        Assert.Equal("http://localhost:9465/metrics/", PrefixFor(shared, MetricsRole.Realm));
     }
 
     [Fact]
@@ -72,8 +84,8 @@ public sealed class MetricsRoleTests
             ["Ops:Metrics:RealmPrometheusPrefix"] = "http://+:9501/metrics/",
         };
 
-        Assert.Equal("http://localhost:9464/metrics/", HostFor(shared, MetricsRole.World).ConfiguredPrometheusPrefix);
-        Assert.Equal("http://+:9501/metrics/", HostFor(shared, MetricsRole.Realm).ConfiguredPrometheusPrefix);
+        Assert.Equal("http://localhost:9464/metrics/", PrefixFor(shared, MetricsRole.World));
+        Assert.Equal("http://+:9501/metrics/", PrefixFor(shared, MetricsRole.Realm));
     }
 
     [Fact]
@@ -101,9 +113,9 @@ public sealed class MetricsRoleTests
             ["Ops:Metrics:RealmPrometheusPrefix"] = prefix,
         };
 
-        MetricsHost realm = HostFor(shared, MetricsRole.Realm);
+        MetricsHost realm = HostFor(shared, MetricsRole.Realm, out ServiceProvider realmProvider);
         var log = new Capturing();
-        MetricsHost world = HostFor(shared, MetricsRole.World, log);
+        MetricsHost world = HostFor(shared, MetricsRole.World, out ServiceProvider worldProvider, log);
         await realm.StartAsync(CancellationToken.None);
         try
         {
@@ -120,9 +132,36 @@ public sealed class MetricsRoleTests
         finally
         {
             await realm.StopAsync(CancellationToken.None);
-            realm.Dispose();
-            world.Dispose();
+            realmProvider.Dispose();
+            worldProvider.Dispose();
         }
+    }
+
+    [Fact]
+    public async Task StartedHosts_OnceTheirProvidersAreDisposed_LeaveNoMeterListenerBehind()
+    {
+        string prefix = $"http://127.0.0.1:{FreePort()}/metrics/";
+        var shared = new Dictionary<string, string?>
+        {
+            ["Ops:Metrics:Enabled"] = "true",
+            ["Ops:Metrics:PrometheusPrefix"] = prefix,
+            ["Ops:Metrics:RealmPrometheusPrefix"] = prefix,
+        };
+
+        MetricsHost realm = HostFor(shared, MetricsRole.Realm, out ServiceProvider realmProvider);
+        MetricsHost world = HostFor(shared, MetricsRole.World, out ServiceProvider worldProvider);
+        await realm.StartAsync(CancellationToken.None);
+        await world.StartAsync(CancellationToken.None);
+        using var probeMeter = new Meter("ArcaneCore.Test." + Guid.NewGuid().ToString("N"));
+        Counter<long> counter = probeMeter.CreateCounter<long>("probe");
+        Assert.True(counter.Enabled, "precondition: a started MetricsStore enables ArcaneCore* instruments");
+
+        await realm.StopAsync(CancellationToken.None);
+        await world.StopAsync(CancellationToken.None);
+        realmProvider.Dispose();
+        worldProvider.Dispose();
+
+        Assert.False(counter.Enabled, "the providers own the MetricsStore; disposing them must detach its MeterListener");
     }
 
     private sealed class Capturing : ILogger<MetricsHost>

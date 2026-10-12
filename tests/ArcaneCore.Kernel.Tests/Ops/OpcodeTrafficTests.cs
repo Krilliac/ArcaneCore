@@ -5,6 +5,7 @@ using Xunit;
 namespace ArcaneCore.Kernel.Tests.Ops;
 
 /// <summary>Per-opcode traffic accounting (docs/ops/metrics.md, "Per-opcode traffic"): labels, the unknown bucket, validation and export.</summary>
+[Collection(MetricsStoreCollection.Name)]
 public sealed class OpcodeTrafficTests
 {
     private static string UniqueMeter() => "ArcaneCore.Test." + Guid.NewGuid().ToString("N");
