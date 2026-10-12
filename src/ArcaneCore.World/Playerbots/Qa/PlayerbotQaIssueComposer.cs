@@ -75,7 +75,7 @@ internal static class PlayerbotQaIssueComposer
                         $"  - {attacker.Entry}: level {attacker.Level} (template {attacker.MinLevel}-{attacker.MaxLevel}), rank {rank}, guard {(attacker.Guard ? "yes" : "no")}, hostile {(attacker.Hostile ? "yes" : "no")}\n");
                 }
             }
-            sb.Append("  `").Append(Code(f.Kind == QaSignalKind.ServerFault ? redactor.RedactFault(s.Message) : redactor.Redact(s.Message))).Append("`\n");
+            if (f.Kind != QaSignalKind.ServerFault) sb.Append("  `").Append(Code(redactor.Redact(s.Message))).Append("`\n"); // a server fault never publishes its message: it may name a player
         }
 
         sb.Append("\n## Reproduction\n\n");

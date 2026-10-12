@@ -119,7 +119,8 @@ public static class BuiltinCommands
         context.Reply(GmStrings.Uptime(GmDuration.SecsToTimeString((long)context.World.Uptime.TotalSeconds)));
         foreach (string line in ServerInfoDiagnostics.Format(ServerInfoDiagnostics.Capture(context.World, context.Session.Services)))
             context.Reply("Server diagnostics: " + line);
-        context.Reply("Server diagnostics: " + ServerFaultCommands.InfoLine(FaultLedger.Shared, DateTimeOffset.UtcNow));
+        if (context.Security >= AccountSecurity.GameMaster) // counts only, but players see no server internals
+            context.Reply("Server diagnostics: " + ServerFaultCommands.InfoLine(FaultLedger.Shared, DateTimeOffset.UtcNow));
         return true;
     }
 

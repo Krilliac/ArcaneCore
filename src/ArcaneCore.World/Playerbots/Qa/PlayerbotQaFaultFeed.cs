@@ -73,7 +73,7 @@ internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
         ExceptionType = fault.ExceptionType,
         Reason = fault.ExceptionType,
         Detail = string.Join(" > ", fault.Frames),
-        Message = fault.SampleMessage,
+        Message = string.Empty, // the exception message stays in the ledger (.server faults show); it can name a player and never enters a finding
         Occurrences = occurrences,
     };
 }

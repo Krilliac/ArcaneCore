@@ -216,6 +216,23 @@ public sealed class M6LogoutAndCommandTests
     }
 
     [Fact]
+    public async Task ServerInfo_ShowsTheFaultsLine_ToGameMastersOnly()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("FAULTGM", "Faultgm", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".server info");
+        var lines = new List<string>();
+        for (int i = 0; i < 14; i++) lines.Add((await gm.ReadChatAsync()).Text);
+        Assert.Contains(lines, l => l.StartsWith("Server diagnostics: faults: ", StringComparison.Ordinal));
+
+        await using WorldTestClient player = await host.EnterWorldAsync("FAULTPL", "Faultpl");
+        await player.CollectAsync();
+        await player.SendChatAsync(ChatType.Say, Language.Common, ".server info");
+        for (int i = 0; i < 13; i++) Assert.DoesNotContain("faults:", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ServerInfo_Motd_AndAbbreviations()
     {
         await using var host = WorldTestHost.Start(configure: o => o.Motd = "Be excellent@to each other");
@@ -229,7 +246,6 @@ public sealed class M6LogoutAndCommandTests
         foreach (string prefix in new[] { "Tick target:", "Tick frames:", "Tick work:", "Commands: pending=", "Managed bots:",
             "Tick schedule: late=", "Tick phases mean/max: commands=", "Slowest features: ", "Tick allocation mean: ", "GC: " })
             Assert.StartsWith("Server diagnostics: " + prefix, (await client.ReadChatAsync()).Text);
-        Assert.StartsWith("Server diagnostics: faults: ", (await client.ReadChatAsync()).Text);
 
         // vmangos prints the message as one text (LANG_MOTD_CURRENT); '@' only splits the login greeting.
         await client.SendChatAsync(ChatType.Say, Language.Common, ".server motd");

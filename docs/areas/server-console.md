@@ -16,7 +16,7 @@ Both need a restart to change. Neither starts a reader when standard input is re
 Each line is read on a background thread, queued to the world thread and run through the same GM command dispatcher as in-game commands. The invoker is the console: Administrator authority, account 0, no character. The leading `.` or `!` is optional.
 
 - `quit`, `exit` and `shutdown [n|cancel]` are shortcuts for `.server shutdown`.
-- `.server faults [top N | show ID | reset]` lists the exceptions the server caught (count, site, type, age), shows one with its frames and message, or clears the list (administrator; the console is one). `.server info` carries a `faults:` summary line ([fault ledger](../ops/invariants.md#the-fault-ledger)).
+- `.server faults [top N | show ID | reset]` lists the exceptions the server caught (count, site, type, age), shows one with its frames and message, or clears the list (administrator; the console is one). `.server info` carries a `faults:` summary line for GameMaster and above ([fault ledger](../ops/invariants.md#the-fault-ledger)).
 - Commands that need the invoker's own character or selection answer that they need a player, and do nothing.
 - Replies are printed prefixed `[console] ` and are not written to the log, so a one-time secret in a reply never reaches a log file.
 - Every line is logged under the category `ArcaneCore.Console` as `Console command:` with passwords redacted.
