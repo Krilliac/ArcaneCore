@@ -1,4 +1,5 @@
 using System.Runtime.Loader;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -86,6 +87,7 @@ public sealed class ModuleGameSeams
 {
     private const int SweepAttempts = 120;
     private static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SweepStepTimeout = TimeSpan.FromSeconds(30);
 
     private readonly Func<CreatureAiFactory?> _creatureAi;
     private readonly Func<ScriptHookRegistry?> _hooks;
@@ -109,9 +111,6 @@ public sealed class ModuleGameSeams
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _sweepInterval = sweepInterval ?? SweepInterval;
     }
-
-    /// <summary>Whether the creature AI factory exists yet (the creature feature attached).</summary>
-    internal bool HasCreatureAi => _creatureAi() is not null;
 
     internal string? Validate(ModuleGameParts? old, ModuleGameParts? added)
     {
@@ -178,7 +177,7 @@ public sealed class ModuleGameSeams
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogError(ex, "applying a module's creature AI / script hooks failed after validation");
-            return default;
+            return new ModuleGameCommit(0, 0, 0, $"applying creature AI / script hooks failed: {ex.GetType().Name}: {ex.Message}");
         }
 
         HashSet<uint> entries = [.. old.AiEntries.Keys, .. added.AiEntries.Keys];
@@ -189,16 +188,23 @@ public sealed class ModuleGameSeams
             return new ModuleGameCommit(0, 0, old.Hooks.Count + added.Hooks.Count);
         }
 
-        (int changed, int deferred) = Refresh(entries, names, retired);
+        HashSet<ObjectGuid> pending = [];
+        (int changed, int deferred) = Refresh(entries, names, retired, null, pending);
         if (deferred > 0)
         {
-            _ = SweepAsync(entries, names, retired);
+            _ = SweepAsync(entries, names, retired, pending);
         }
 
         return new ModuleGameCommit(changed, deferred, old.Hooks.Count + added.Hooks.Count);
     }
 
-    private (int Changed, int Deferred) Refresh(HashSet<uint> entries, HashSet<string> names, WeakReference<AssemblyLoadContext>? retired)
+    /// <summary>One pass over the maps (world thread). <paramref name="only"/> limits it to creatures an earlier pass deferred; <paramref name="stillDeferred"/> collects the ones still in combat.</summary>
+    private (int Changed, int Deferred) Refresh(
+        HashSet<uint> entries,
+        HashSet<string> names,
+        WeakReference<AssemblyLoadContext>? retired,
+        IReadOnlySet<ObjectGuid>? only,
+        ISet<ObjectGuid> stillDeferred)
     {
         int changed = 0;
         int deferred = 0;
@@ -210,7 +216,7 @@ public sealed class ModuleGameSeams
         {
             if (map.FindUpdater<CreatureMapSystem>() is { } system)
             {
-                changed += system.RefreshScriptedAi(entries, names, IsRetired, out int mapDeferred);
+                changed += system.RefreshScriptedAi(entries, names, IsRetired, out int mapDeferred, only, stillDeferred);
                 deferred += mapDeferred;
             }
         }
@@ -218,32 +224,62 @@ public sealed class ModuleGameSeams
         return (changed, deferred);
     }
 
-    /// <summary>Retry the creatures that were in combat. Holds the retired context only weakly, so waiting never keeps a module alive.</summary>
-    private async Task SweepAsync(HashSet<uint> entries, HashSet<string> names, WeakReference<AssemblyLoadContext>? retired)
+    /// <summary>
+    /// Retry only the creatures the first pass deferred (a creature that already switched is never rebuilt: that would wipe its AI state).
+    /// Holds the retired context only weakly, so waiting never keeps a module alive. Gives up when the world thread stops answering.
+    /// </summary>
+    private async Task SweepAsync(HashSet<uint> entries, HashSet<string> names, WeakReference<AssemblyLoadContext>? retired, HashSet<ObjectGuid> pending)
     {
-        for (int attempt = 0; attempt < SweepAttempts; attempt++)
+        try
         {
-            await Task.Delay(_sweepInterval).ConfigureAwait(false);
-            var done = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _post(() =>
+            for (int attempt = 0; attempt < SweepAttempts; attempt++)
             {
-                try
+                await Task.Delay(_sweepInterval).ConfigureAwait(false);
+                var done = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+                int phase = 0; // 0 queued, 1 running, 2 abandoned
+                HashSet<ObjectGuid> current = pending;
+                _post(() =>
                 {
-                    done.SetResult(Refresh(entries, names, retired).Deferred);
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    _logger.LogError(ex, "retrying the creature AI swap failed");
-                    done.SetResult(0);
-                }
-            });
-            if (await done.Task.ConfigureAwait(false) == 0)
-            {
-                return;
-            }
-        }
+                    if (Interlocked.CompareExchange(ref phase, 1, 0) != 0)
+                    {
+                        return;
+                    }
 
-        _logger.LogWarning("Some creatures kept their previous module AI: still in combat after {Minutes} minutes", SweepAttempts * _sweepInterval.TotalMinutes);
+                    try
+                    {
+                        HashSet<ObjectGuid> next = [];
+                        int left = Refresh(entries, names, retired, current, next).Deferred;
+                        pending = next;
+                        done.SetResult(left);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        _logger.LogError(ex, "retrying the creature AI swap failed");
+                        done.SetResult(0);
+                    }
+                });
+
+                using var cancelTimer = new CancellationTokenSource();
+                Task finished = await Task.WhenAny(done.Task, Task.Delay(SweepStepTimeout, cancelTimer.Token)).ConfigureAwait(false);
+                if (finished != done.Task && Interlocked.CompareExchange(ref phase, 2, 0) == 0)
+                {
+                    _logger.LogWarning("The world thread did not run the creature AI retry within {Seconds}s (world stopped?); giving up on the creatures still in combat", SweepStepTimeout.TotalSeconds);
+                    return;
+                }
+
+                await cancelTimer.CancelAsync().ConfigureAwait(false);
+                if (await done.Task.ConfigureAwait(false) == 0)
+                {
+                    return;
+                }
+            }
+
+            _logger.LogWarning("Some creatures kept their previous module AI: still in combat after {Minutes} minutes", SweepAttempts * _sweepInterval.TotalMinutes);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "the creature AI retry sweep stopped");
+        }
     }
 }
 
@@ -251,4 +287,5 @@ public sealed class ModuleGameSeams
 /// <param name="CreaturesSwitched">Creatures that got a new AI object now.</param>
 /// <param name="CreaturesDeferred">Creatures in combat that keep the old AI for now.</param>
 /// <param name="HookObjects">Script hook objects removed plus added.</param>
-internal readonly record struct ModuleGameCommit(int CreaturesSwitched, int CreaturesDeferred, int HookObjects);
+/// <param name="Error">Set when applying the creature AI or script hook changes failed (the opcode and command tables had already changed).</param>
+internal readonly record struct ModuleGameCommit(int CreaturesSwitched, int CreaturesDeferred, int HookObjects, string? Error = null);

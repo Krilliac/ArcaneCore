@@ -350,7 +350,7 @@ public sealed class CreatureAiFactory
             return $"creature entry {entry} already has a script AI";
         }
 
-        foreach (string name in addNames.Where(n => _factories.ContainsKey(n) && !removeNames.Contains(n)))
+        foreach (string name in addNames.Where(n => _factories.ContainsKey(n) && !removeNames.Contains(n, StringComparer.OrdinalIgnoreCase)))
         {
             return $"creature AI '{name}' is already registered";
         }

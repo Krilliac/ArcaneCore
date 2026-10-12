@@ -217,9 +217,13 @@ public sealed class HotCodeRefresh
                 fields.Add(new("added", $"{result.NewOpcodes} opcodes, {result.NewCommandRoots} roots, {result.NewMapUpdaters} updaters"));
             }
 
+            // A metadata-update edit is live whatever the registry refresh did; a plain refresh that found nothing to do changed nothing.
+            HotSwapResult swapResult = result.Status == RefreshStatus.Rejected ? HotSwapResult.Failed
+                : result.Status == RefreshStatus.Applied || action == "metadata-update" ? HotSwapResult.Applied
+                : HotSwapResult.Unchanged;
             _reporter.Report(new HotSwapEvent(
                 HotSwapLane.Code, action, area,
-                result.Status == RefreshStatus.Rejected ? HotSwapResult.Failed : HotSwapResult.Applied,
+                swapResult,
                 origin, duration, detail, fields));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)

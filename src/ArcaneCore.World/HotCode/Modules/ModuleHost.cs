@@ -18,7 +18,7 @@ namespace ArcaneCore.World.HotCode.Modules;
 public sealed record ModuleInfo(string Name, int Opcodes, IReadOnlyList<string> CommandRoots, DateTimeOffset LoadedUtc, string Sha256, int CreatureAi = 0, int ScriptHooks = 0);
 
 /// <summary>What a load, reload or unload did.</summary>
-public sealed record ModuleResult(bool Ok, string Detail, IReadOnlyList<AnnounceField>? Fields = null);
+public sealed record ModuleResult(bool Ok, string Detail, IReadOnlyList<AnnounceField>? Fields = null, bool Failed = false);
 
 /// <summary>
 /// Loads, replaces and unloads code in the running server: a module is an assembly in
@@ -254,6 +254,12 @@ public sealed class ModuleHost
             };
         }
 
+        if (swap.Game.Error is { } gameFailure)
+        {
+            // The opcode and command tables are already swapped, so the module's bookkeeping above stands; the result must not claim success.
+            final = new ModuleResult(false, $"{operation.ToString().ToLowerInvariant()} of '{name}' only partly applied: the opcode and command tables changed, but {gameFailure}", final.Fields, Failed: true);
+        }
+
         return final;
     }
 
@@ -286,7 +292,7 @@ public sealed class ModuleHost
                 HotSwapLane.Module,
                 verb == "reload" ? "replace" : verb,
                 name,
-                result.Ok ? HotSwapResult.Applied : HotSwapResult.Rejected,
+                result.Ok ? HotSwapResult.Applied : result.Failed ? HotSwapResult.Failed : HotSwapResult.Rejected,
                 origin,
                 duration,
                 result.Ok ? string.Empty : result.Detail,
@@ -359,12 +365,12 @@ public sealed class ModuleHost
         }
         else
         {
-            _logger.LogError("Hot module {Verb} '{Name}' REJECTED: {Detail}", verb, name, result.Detail);
+            _logger.LogError("Hot module {Verb} '{Name}' {Outcome}: {Detail}", verb, name, result.Failed ? "FAILED" : "REJECTED", result.Detail);
         }
 
         try
         {
-            _audit.Record(result.Ok ? "module-" + verb : "module-rejected", $"{verb} {name}: {result.Detail}");
+            _audit.Record(result.Ok ? "module-" + verb : result.Failed ? "module-failed" : "module-rejected", $"{verb} {name}: {result.Detail}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

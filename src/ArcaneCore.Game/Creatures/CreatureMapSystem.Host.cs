@@ -176,10 +176,18 @@ public sealed partial class CreatureMapSystem
     /// current AI satisfies <paramref name="isRetired"/> (it is code of a module being replaced or unloaded). Only the AI object is rebuilt
     /// (<see cref="CreateAi"/>): position, health, threat and motion are untouched. A creature in combat is left alone, since a new AI would not have
     /// seen its fight start; it is counted in <paramref name="deferred"/> and the caller tries again later. Dead creatures are changed now: their AI is
-    /// told <c>OnRespawn</c> when they come back. Pets and charmed creatures are never touched.
+    /// told <c>OnRespawn</c> when they come back. Pets and charmed creatures are never touched. With <paramref name="only"/> set (a retry), just those
+    /// creatures are looked at, so one that already switched is never rebuilt (that would wipe its AI state); <paramref name="stillDeferred"/> receives
+    /// the GUID of every creature left in combat.
     /// </summary>
     /// <returns>How many creatures got a new AI.</returns>
-    public int RefreshScriptedAi(IReadOnlySet<uint> entries, IReadOnlySet<string> names, Func<CreatureAI, bool> isRetired, out int deferred)
+    public int RefreshScriptedAi(
+        IReadOnlySet<uint> entries,
+        IReadOnlySet<string> names,
+        Func<CreatureAI, bool> isRetired,
+        out int deferred,
+        IReadOnlySet<ObjectGuid>? only = null,
+        ISet<ObjectGuid>? stillDeferred = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(names);
@@ -188,7 +196,7 @@ public sealed partial class CreatureMapSystem
         deferred = 0;
         foreach (Creature creature in _creatures.Values.ToArray())
         {
-            if (creature.Summon is { Kind: SummonKind.Pet } || !creature.CharmerGuid.IsEmpty)
+            if ((only is not null && !only.Contains(creature.Guid)) || creature.Summon is { Kind: SummonKind.Pet } || !creature.CharmerGuid.IsEmpty)
             {
                 continue;
             }
@@ -206,6 +214,7 @@ public sealed partial class CreatureMapSystem
             if (creature.Combat.IsInCombat)
             {
                 deferred++;
+                stillDeferred?.Add(creature.Guid);
                 continue;
             }
 

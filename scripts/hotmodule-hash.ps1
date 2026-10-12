@@ -42,7 +42,11 @@ if (-not $Dll) {
 }
 if (-not (Test-Path -LiteralPath $Dll -PathType Leaf)) { Fail "no such file: $Dll" 2 }
 
-$sha = (Get-FileHash -LiteralPath $Dll -Algorithm SHA256).Hash
+$hasher = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Dll).ProviderPath)
+    try { $sha = [System.BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '') } finally { $stream.Dispose() }
+} finally { $hasher.Dispose() }
 Write-Host "$sha  $Name  ($Dll)"
 
 if ($Allowlist) {

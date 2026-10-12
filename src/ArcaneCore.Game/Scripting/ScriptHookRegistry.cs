@@ -129,6 +129,11 @@ public sealed class ScriptHookRegistry
             {
                 return $"{hooks.GetType().FullName} overrides no script hook";
             }
+
+            if (hooks is IWorldHooks && Overrides(hooks.GetType(), typeof(IWorldHooks)).Contains(nameof(IWorldHooks.OnStartup)))
+            {
+                return $"{hooks.GetType().FullName} overrides IWorldHooks.OnStartup, which only runs once while the world starts and so can never run for a hot module";
+            }
         }
 
         return null;
@@ -160,19 +165,45 @@ public sealed class ScriptHookRegistry
         ArgumentNullException.ThrowIfNull(remove);
         ArgumentNullException.ThrowIfNull(add);
         List<IScriptHooks> keep = [.. _registered.Where(h => !remove.Any(r => ReferenceEquals(r, h))), .. add];
-        foreach (object dispatch in new object[] { Player, World, Unit, Item, Spell, Group, Guild, Battleground })
+
+        // Build the complete new state on scratch dispatches first: anything that throws does so before the live arrays are touched.
+        var scratch = new ScriptHookRegistry();
+        foreach (IScriptHooks hooks in keep)
         {
-            foreach (FieldInfo field in dispatch.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic).Where(f => f.FieldType.IsArray))
+            _ = scratch.AddToDispatch(hooks);
+        }
+
+        (object Live, object Fresh)[] pairs =
+            [(Player, scratch.Player), (World, scratch.World), (Unit, scratch.Unit), (Item, scratch.Item), (Spell, scratch.Spell), (Group, scratch.Group), (Guild, scratch.Guild), (Battleground, scratch.Battleground)];
+        foreach ((object live, object fresh) in pairs)
+        {
+            foreach (FieldInfo field in live.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic).Where(f => f.FieldType.IsArray))
             {
-                field.SetValue(dispatch, Array.CreateInstance(field.FieldType.GetElementType()!, 0));
+                field.SetValue(live, field.GetValue(fresh)); // publishes a finished array: never an emptied one
             }
         }
 
         _registered.Clear();
-        foreach (IScriptHooks hooks in keep)
+        _registered.AddRange(keep);
+        RaiseHooksChanged();
+    }
+
+    /// <summary>
+    /// Raised at the end of <see cref="CommitSwap"/> (world thread, tick boundary) so a bridge that subscribes to game events only while some hook
+    /// needs it can subscribe now. A handler that throws is logged and does not undo the swap.
+    /// </summary>
+    public event Action? HooksChanged;
+
+    private void RaiseHooksChanged()
+    {
+        if (HooksChanged is not { } handlers)
         {
-            _ = AddToDispatch(hooks);
-            _registered.Add(hooks);
+            return;
+        }
+
+        foreach (Action handler in handlers.GetInvocationList().Cast<Action>())
+        {
+            try { handler(); } catch (Exception ex) { Logger.LogError(ex, "script hook change handler failed"); }
         }
     }
 

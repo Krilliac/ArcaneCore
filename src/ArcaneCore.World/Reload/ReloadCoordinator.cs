@@ -167,7 +167,7 @@ public sealed class ReloadCoordinator
             return;
         }
 
-        _reporter.Report(new HotSwapEvent(
+        SafeReport(new HotSwapEvent(
             HotSwapLane.Data, "reload", result.Name, ToSwapResult(result.Status), origin, result.Elapsed, result.Message));
     }
 
@@ -186,7 +186,20 @@ public sealed class ReloadCoordinator
             : ran.Any(r => r.Status == ReloadStatus.Failed) ? HotSwapResult.Failed : HotSwapResult.Rejected;
         string detail = $"{applied} applied, {kept} kept, {bad.Length} not reloaded"
             + (bad.Length == 0 ? string.Empty : $" ({string.Join(", ", bad)})");
-        _reporter.Report(new HotSwapEvent(HotSwapLane.Data, "reload", "all", overall, origin, elapsed, detail));
+        SafeReport(new HotSwapEvent(HotSwapLane.Data, "reload", "all", overall, origin, elapsed, detail));
+    }
+
+    /// <summary>A failing reporter must never turn a finished reload into an exception.</summary>
+    private void SafeReport(HotSwapEvent swap)
+    {
+        try
+        {
+            _reporter.Report(swap);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "could not report the {Area} reload", swap.Area);
+        }
     }
 
     private static HotSwapResult ToSwapResult(ReloadStatus status) => status switch

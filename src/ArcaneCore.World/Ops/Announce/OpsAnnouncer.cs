@@ -303,7 +303,7 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         return sb.Length > MaxDetail ? sb.ToString(0, MaxDetail) : sb.ToString();
     }
 
-    /// <summary>One line, no control characters, no client escape codes (a pipe would let typed text inject colours or links), at most <paramref name="max"/> characters.</summary>
+    /// <summary>One line, no control or bidi format characters, whole surrogate pairs only, no client escape codes (a pipe would let typed text inject colours or links), at most <paramref name="max"/> characters.</summary>
     public static string Clean(string? text, int max)
     {
         if (string.IsNullOrEmpty(text))
@@ -312,18 +312,49 @@ public sealed class OpsAnnouncer : IOpsAnnouncer
         }
 
         var sb = new StringBuilder(Math.Min(text.Length, max));
-        foreach (char c in text.Trim())
+        string trimmed = text.Trim();
+        for (int i = 0; i < trimmed.Length; i++)
         {
+            char c = trimmed[i];
+            if (char.IsHighSurrogate(c) && i + 1 < trimmed.Length && char.IsLowSurrogate(trimmed[i + 1]))
+            {
+                if (sb.Length + 2 > max)
+                {
+                    break; // never cut a surrogate pair in half
+                }
+
+                sb.Append(c).Append(trimmed[i + 1]);
+                i++;
+                continue;
+            }
+
             if (sb.Length >= max)
             {
                 break;
             }
 
-            sb.Append(char.IsControl(c) ? ' ' : c == '|' ? '/' : c);
+            if (char.IsSurrogate(c))
+            {
+                sb.Append('?'); // a lone surrogate is not valid text
+            }
+            else if (IsBidiFormat(c))
+            {
+                // dropped: direction overrides could make an announcement read differently from what it says
+            }
+            else if (char.IsControl(c))
+            {
+                sb.Append(' ');
+            }
+            else
+            {
+                sb.Append(c == '|' ? '/' : c);
+            }
         }
 
         return sb.ToString();
     }
+
+    private static bool IsBidiFormat(char c) => c is '\u200E' or '\u200F' || (c >= '\u202A' && c <= '\u202E') || (c >= '\u2066' && c <= '\u2069');
 
     private sealed class CategoryState(int burst, long nowMs)
     {
