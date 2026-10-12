@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -6,7 +7,9 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Effects;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.World.Tests.ClientData;
 using ArcaneCore.World.Playerbots.Qa;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -233,17 +236,42 @@ public sealed class PlayerbotQaSpellMonitorTests
         Assert.DoesNotContain(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
     }
 
-    // Issue #240: 10946 Mind Blast (Rank 8), the Spell.dbc row (SCHOOL_DAMAGE 424+d25, +2.4/level, levels 52-57) deals damage like every other rank; a
-    // hit on a unit with an invincibility threshold (Spirit of Redemption, a death-prevention boss) takes nothing by design (vmangos Unit.cpp:825-850).
-    [Fact]
-    public void MindBlastRank8_DealsDamage_AndAHitOnAThresholdTargetThatCannotLoseHealthIsNotNoEffect()
+    // A Suicide that does not kill (a Spirit of Redemption threshold that leaked and never ended) is a real bug and must be reported, with or without a
+    // shield on the target: an INSTAKILL has no absorb step, so the absorb exemption does not apply to it.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnInstakillThatLeavesTheTargetAlive_IsStillReported_EvenWithAnAbsorbShield(bool shielded)
+    {
+        const uint kill = 990100;
+        using var kit = new QaSpellKit(extra: [QaSpellKit.Spell(kill, QaSpellKit.Effect(SpellEffectName.Instakill, 0))]);
+        kit.System.Damage = new MapCombatDamageSink();
+        kit.World.GetMap(0).Combat.SpellMitigation = kit.System;
+        new DirectCombatEffects().Register(kit.System);
+        if (shielded) kit.Cast(kit.Bot, QaSpellKit.SelfAbsorb);
+        kit.Bot.InvincibilityHpThreshold = kit.Bot.MaxHealth; // the leaked threshold: the kill cannot take health
+
+        for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats; i++) kit.Cast(kit.Bot, kill);
+
+        Assert.True(kit.Bot.IsAlive);
+        QaSignal signal = Assert.Single(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
+        Assert.Equal(kill, signal.Spell);
+        Assert.Contains($"invincibility threshold {kit.Bot.MaxHealth}", signal.Message, StringComparison.Ordinal);
+    }
+
+    // Issue #240: 10946 Mind Blast (Rank 8). Its Spell.dbc row is SCHOOL_DAMAGE like every other rank and the server deals it; the bot QA saw hits that took no
+    // health. A hit on a unit at its invincibility threshold takes none (vmangos Unit.cpp:825-850), which can be by design (Spirit of Redemption) or a
+    // leaked/never-ending death prevention: the report must not guess, it names the target so the next report can be diagnosed.
+    [RealClientDbcFact]
+    public void MindBlastRank8_FromTheDbc_DealsDamage_AndANoEffectReportNamesTheThresholdTarget()
     {
         const uint mindBlast = 10946;
-        SpellInfo rank8 = QaSpellKit.Spell(mindBlast, new SpellEffectInfo
-        {
-            Effect = SpellEffectName.SchoolDamage, BasePoints = 424, BaseDice = 1, DieSides = 25, RealPointsPerLevel = 2.4f,
-            TargetA = SpellImplicitTarget.UnitEnemy,
-        }) with { School = SpellSchool.Shadow, MaxLevel = 57, BaseLevel = 52, SpellLevel = 52, RangeIndex = 4, Range = new SpellRange(0, 30), DamageClass = SpellDamageClass.Magic };
+        DbcFile dbc = DbcFile.Load(Path.Combine(RealClientDbcFactAttribute.DbcDirectory, "Spell.dbc"));
+        int row = Enumerable.Range(0, dbc.RecordCount).First(r => dbc.GetUInt32(r, 0) == mindBlast);
+        SpellInfo rank8 = SpellStoreFactory.ToSpellInfo(SpellDbcImporter.ReadSpell(dbc, row), new Dictionary<uint, SpellCastTimeRow>(),
+            new Dictionary<uint, SpellDurationRow>(), new Dictionary<uint, SpellRangeRow>(), new Dictionary<uint, SpellRadiusRow>());
+        Assert.Equal((SpellEffectName.SchoolDamage, 424, 25), (rank8.Effects[0].Effect, rank8.Effects[0].BasePoints, rank8.Effects[0].DieSides));
+
         using var kit = new QaSpellKit(extra: [rank8]);
         kit.System.Damage = new MapCombatDamageSink();
         kit.World.GetMap(0).Combat.SpellMitigation = kit.System;
@@ -255,14 +283,18 @@ public sealed class PlayerbotQaSpellMonitorTests
 
         kit.Human.Combat.DeathState = DeathState.Alive; // the 100 health of the test player did not survive the hit
         kit.Human.Health = kit.Human.MaxHealth;
-        kit.Human.InvincibilityHpThreshold = kit.Human.MaxHealth; // a Spirit of Redemption: health cannot fall
-        for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats * 2; i++)
+        kit.Human.InvincibilityHpThreshold = kit.Human.MaxHealth; // health cannot fall
+        for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats; i++)
         {
             Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(kit.Bot, mindBlast, SpellCastTargets.ForUnit(kit.Human.Guid), triggered: true));
         }
 
         Assert.Equal(kit.Human.MaxHealth, kit.Human.Health);
-        Assert.DoesNotContain(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
+        QaSignal signal = Assert.Single(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
+        Assert.Equal(mindBlast, signal.Spell);
+        Assert.Equal("expected damage", signal.Detail); // the finding's key and detail do not change with the target
+        Assert.Contains($"player, health {kit.Human.MaxHealth}/{kit.Human.MaxHealth}, invincibility threshold {kit.Human.MaxHealth}, absorb aura no", signal.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
