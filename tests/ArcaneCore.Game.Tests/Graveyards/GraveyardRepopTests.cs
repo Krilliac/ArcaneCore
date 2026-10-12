@@ -93,11 +93,14 @@ public sealed class GraveyardRepopTests
     {
         using var rig = new Rig(Elwynn(Loc(1, 0, 500, 600, 90, 2.5f)));
         rig.DieAndRelease();
+        Assert.False(rig.Player.RepopDestinationResolved);
 
         rig.World.RunTick(100);
         Assert.False(rig.Teleports.IsBeingTeleported(rig.Player)); // deferred: the order is still pending
 
         rig.AnswerMovementOrders();
+        Assert.True(rig.Player.RepopDestinationResolved);
+        Assert.Equal(1u, rig.Player.LastReleasedGraveyard?.Id);
         Assert.True(rig.Teleports.IsBeingTeleportedNear(rig.Player));
         Assert.Equal(TeleportStage.Near, rig.Teleports.StageOf(rig.Player));
         Assert.Equal(new TeleportDestination(0, 500, 600, 90, 2.5f), rig.Teleports.DestinationOf(rig.Player));
@@ -129,6 +132,8 @@ public sealed class GraveyardRepopTests
         rig.DieAndRelease();
 
         rig.AnswerMovementOrders();
+        Assert.True(rig.Player.RepopDestinationResolved);
+        Assert.Null(rig.Player.LastReleasedGraveyard);
         rig.World.RunTick(100);
 
         Assert.False(rig.Teleports.IsBeingTeleported(rig.Player));

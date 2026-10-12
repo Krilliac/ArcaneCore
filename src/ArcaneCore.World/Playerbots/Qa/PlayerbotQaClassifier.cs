@@ -15,7 +15,7 @@ internal sealed record QaClassification(QaCause Cause, string Detail, string? Qu
 /// </summary>
 internal static class PlayerbotQaClassifier
 {
-    /// <summary>Attackers this many levels above a quest's level make a death loop a content-difficulty finding.</summary>
+    /// <summary>Attackers this many levels above a bot (or a quest in an old warning with no bot level) make a death loop a content-difficulty finding.</summary>
     internal const int LevelMargin = 3;
 
     /// <summary>Different attacker entries that make a death loop a content-difficulty finding.</summary>
@@ -168,24 +168,55 @@ internal static class PlayerbotQaClassifier
     {
         if (s.Attackers.Count == 0)
         {
-            return new QaClassification(QaCause.BehaviourBug, "died repeatedly with no attacker: an environmental death or a bot that walks into it again", title);
+            IReadOnlyList<string> sources = s.Bot?.DeathSources is { Count: > 0 } all ? all
+                : [s.Bot?.Source ?? "Unobserved"];
+            bool knownBehaviour = sources.All(source => source is "Fall" or "FallToVoid" or "Drowning" or "Exhausted"
+                or "Lava" or "Slime" or "Fire" or "Self");
+            QaCause cause = s.Bot is null || knownBehaviour ? QaCause.BehaviourBug : QaCause.Unknown;
+            string deathDetail = sources.Count == 1 ? DescribeDeathSource(sources[0])
+                : "death sources in this loop: " + string.Join("; ", sources.Select(DescribeDeathSource));
+            return new QaClassification(cause, "died repeatedly with no attacker entry: " + deathDetail, title);
         }
 
         var notes = new List<string>();
+        var descriptions = new List<string>();
         bool difficult = false;
         int? questLevel = s.Quest != 0 ? facts.QuestLevel(s.Quest) : null;
+        int? referenceLevel = s.Bot is { Level: > 0 } bot ? bot.Level : questLevel;
         foreach (uint entry in s.Attackers)
         {
-            if (facts.Template(entry) is not { } t) continue;
-            if (t.Rank is >= 1 and <= 3)
+            QaAttackerFact? observed = s.Bot?.AttackerFacts.FirstOrDefault(a => a.Entry == entry);
+            QaTemplateFacts? template = facts.Template(entry);
+            if (observed is null && template is null)
             {
-                difficult = true;
-                notes.Add(string.Create(CultureInfo.InvariantCulture, $"{entry} is {(t.Rank == 1 ? "an elite" : t.Rank == 2 ? "a rare elite" : "a world boss")} (level {t.MinLevel}-{t.MaxLevel})"));
+                descriptions.Add(string.Create(CultureInfo.InvariantCulture, $"{entry}: template unavailable, hostility unknown"));
+                continue;
             }
-            else if (questLevel is { } level && t.MaxLevel >= level + LevelMargin)
+
+            uint rank = observed?.Rank ?? template!.Value.Rank;
+            byte minLevel = observed?.MinLevel ?? template!.Value.MinLevel;
+            byte maxLevel = observed?.MaxLevel ?? template!.Value.MaxLevel;
+            byte attackerLevel = observed?.Level ?? maxLevel;
+            bool guard = observed?.Guard ?? template!.Value.Guard;
+            bool? hostile = observed?.Hostile;
+            string rankName = rank switch { 0 => "normal", 1 => "elite", 2 => "rare elite", 3 => "world boss", 4 => "rare", _ => rank.ToString(CultureInfo.InvariantCulture) };
+            descriptions.Add(string.Create(CultureInfo.InvariantCulture,
+                $"{entry}: level {attackerLevel} (template {minLevel}-{maxLevel}), rank {rankName}, guard {(guard ? "yes" : "no")}, hostile {(hostile is null ? "unknown" : hostile.Value ? "yes" : "no")}"));
+            if (guard && hostile == true)
             {
                 difficult = true;
-                notes.Add(string.Create(CultureInfo.InvariantCulture, $"{entry} is level {t.MinLevel}-{t.MaxLevel} against quest level {level}"));
+                notes.Add(string.Create(CultureInfo.InvariantCulture, $"{entry} is a hostile guard"));
+            }
+            if (rank is >= 1 and <= 3)
+            {
+                difficult = true;
+                notes.Add(string.Create(CultureInfo.InvariantCulture, $"{entry} is {(rank == 1 ? "an elite" : rank == 2 ? "a rare elite" : "a world boss")} (level {minLevel}-{maxLevel})"));
+            }
+            if (referenceLevel is { } level && attackerLevel >= level + LevelMargin)
+            {
+                difficult = true;
+                notes.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{entry} is level {attackerLevel} against {(s.Bot is null ? "quest" : "bot")} level {level}"));
             }
         }
 
@@ -195,10 +226,27 @@ internal static class PlayerbotQaClassifier
             notes.Add(string.Create(CultureInfo.InvariantCulture, $"{s.Attackers.Count} different attackers ({string.Join('/', s.Attackers)})"));
         }
 
-        return difficult
-            ? new QaClassification(QaCause.ContentDifficulty, string.Join("; ", notes), title)
-            : new QaClassification(QaCause.Unknown, string.Create(CultureInfo.InvariantCulture, $"died repeatedly to attackers {string.Join('/', s.Attackers)}; none is an elite or far above the quest level"), title);
+        string detail = difficult ? string.Join("; ", notes)
+            : string.Create(CultureInfo.InvariantCulture, $"died repeatedly to attackers {string.Join('/', s.Attackers)}; no observed elite, hostile guard or confirmed level gap");
+        if (descriptions.Count > 0) detail += "; attacker facts: " + string.Join("; ", descriptions);
+        return new QaClassification(difficult ? QaCause.ContentDifficulty : QaCause.Unknown, detail, title);
     }
+
+    private static string DescribeDeathSource(string source) => source switch
+    {
+        "Fall" or "FallToVoid" => "fall damage",
+        "Drowning" => "drowning environmental damage",
+        "Exhausted" => "fatigue environmental damage",
+        "Lava" => "lava environmental damage",
+        "Slime" => "slime environmental damage",
+        "Fire" => "fire environmental damage",
+        "Player" => "a player killing blow (no creature entry)",
+        "PlayerPet" => "a player-controlled pet killing blow (no content creature entry)",
+        "Self" => "a self-inflicted killing blow",
+        "PeriodicCasterMissing" => "a damage-over-time killing tick whose original caster despawned or became unavailable",
+        "Unknown" => "a null killing-blow source; an expired damage-over-time caster or other unresolved damage is possible",
+        _ => "no killing-blow source was recorded; environmental damage, a despawned caster or a missed observer are possible",
+    };
 
     /// <summary>
     /// The ranking score: a weight per kind, plus a logarithm of the count, plus the distinct bots (at most 20 count), plus 10 for a finding seen in

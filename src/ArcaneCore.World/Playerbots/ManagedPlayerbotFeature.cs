@@ -786,6 +786,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
     {
         var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
+        if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
         if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
         return brain;
@@ -956,7 +957,11 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             // A group that stalled (PlayerbotGroupCoordinator.WatchStall) is reported like a brain's stall, on its leader: the brains do not
             // think while a group drives them, so this is the only stall line such a group gets (bot QA parses it).
             foreach ((Guid botId, string name, string report) in groups.TakeStalls())
-                LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null);
+            {
+                ActiveBot? leader = bots.FirstOrDefault(bot => bot.Record.BotId == botId);
+                string? context = leader?.Session.Player is { } player ? leader.Brain.QaReportContext(player, report) : null;
+                LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null, context);
+            }
         }
         // Battlegrounds (PlayerbotBattlegroundCoordinator): the queue machines, the demand and the free bots' choices, after the groups
         // so a bot a group took this tick is not free here.
@@ -1029,6 +1034,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             active.LastUpdateMs = _world.NowMs;
             try
             {
+                if (active.Session.Player is { IsInWorld: true } observed) active.Brain.ObserveKillingBlows(observed);
                 if (active.Controller is { } controller)
                 {
                     // Scripted mode: the brain is suppressed and the shared action budget does not apply.
@@ -1126,8 +1132,14 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         else
         {
             active.Brain.Update(sinceLast);
+            string? report = active.Brain.StallReport;
+            bool awaitRelease = report?.StartsWith("death loop:", StringComparison.Ordinal) == true && !driven.IsAlive
+                && !driven.RepopDestinationResolved;
             (active.StallsLogged, bool sharedLogged) = LogStall(logger, active.Record.BotId, active.Name, active.Brain.StallCount,
-                active.StallsLogged, active.Brain.StallReport, active.Brain.StallOutsideHome, active.Brain.SharedSetAside);
+                active.StallsLogged, report, active.Brain.StallOutsideHome, active.Brain.SharedSetAside,
+                report is not null && !awaitRelease && active.Brain.StallCount != active.StallsLogged
+                    ? active.Brain.QaReportContext(driven, report) : null,
+                awaitRelease);
             if (sharedLogged) active.Brain.SharedSetAside = null;
             return "brain";
         }
@@ -1143,15 +1155,15 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     /// <paramref name="everyone"/> was logged (the caller clears it then). A death loop's report is never marked outside the home.
     /// </summary>
     internal static (int StallsLogged, bool SharedLogged) LogStall(ILogger logger, Guid botId, string name, int stallCount, int stallsLogged,
-        string? stall, bool outsideHome, PlayerbotSharedSetAside? everyone)
+        string? stall, bool outsideHome, PlayerbotSharedSetAside? everyone, string? qaContext = null, bool awaitRelease = false)
     {
-        if (stallCount != stallsLogged && stall is not null)
+        if (stallCount != stallsLogged && stall is not null && !awaitRelease)
         {
             stallsLogged = stallCount;
             // The mark belongs to a living stall: a death loop counts as a stall too and its report comes first, while the flag still
             // holds the last give-up (PlayerbotStallWatch.Report).
-            if (outsideHome && stall.StartsWith("stalled ", StringComparison.Ordinal)) logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal outside its home", botId, name, stall);
-            else logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal", botId, name, stall);
+            if (outsideHome && stall.StartsWith("stalled ", StringComparison.Ordinal)) logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal outside its home", botId, name, stall + qaContext);
+            else logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal", botId, name, stall + qaContext);
         }
 
         if (everyone is not { } shared) return (stallsLogged, false);

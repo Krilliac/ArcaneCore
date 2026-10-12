@@ -80,6 +80,9 @@ internal sealed record QaSignal
 
     public IReadOnlyList<uint> Attackers { get; init; } = [];
 
+    /// <summary>Facts captured on the world thread when a bot stalled or died; absent in historical warning lines.</summary>
+    public QaBotObservation? Bot { get; init; }
+
     public string ExceptionType { get; init; } = string.Empty;
 
     /// <summary>The <c>playerbot-...</c> error code found in a fault message, if any.</summary>

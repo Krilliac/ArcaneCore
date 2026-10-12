@@ -38,11 +38,12 @@ internal static class PlayerbotQaIssueComposer
         Row(sb, "First seen (UTC)", f.FirstSeenUtc.ToString("u", CultureInfo.InvariantCulture));
         Row(sb, "Last seen (UTC)", f.LastSeenUtc.ToString("u", CultureInfo.InvariantCulture));
         Row(sb, "Build", PlayerbotQaRedactor.RedactSecrets(build));
-        if (f.Kind == QaSignalKind.Stall && f.Goal.Length != 0) Row(sb, "Goal", f.Goal);
+        if (f.Kind is QaSignalKind.Stall or QaSignalKind.DeathLoop && f.Goal.Length != 0) Row(sb, "Goal", f.Goal);
         // A stall's quest is the subject only for a Quest goal; for any other goal it is the last quest the bot remembers (GitHub #154).
-        if (f.QuestTitle is not null)
+        if (f.Quest != 0)
         {
-            Row(sb, f.QuestIsGoal ? "Quest" : "Last quest (not the goal)", string.Create(CultureInfo.InvariantCulture, $"{f.Quest} {redactor.Redact(f.QuestTitle)}"));
+            Row(sb, f.QuestIsGoal ? "Quest" : "Last quest (not the goal)", string.Create(CultureInfo.InvariantCulture,
+                $"{f.Quest}{(f.QuestTitle is null ? string.Empty : " " + redactor.Redact(f.QuestTitle))}"));
         }
         sb.Append("\n## Likely cause\n\n").Append(Cell(redactor.Redact(f.CauseDetail))).Append("\n\n");
         if (QaKinds.Of(f.Kind).SpellKind) AppendSpell(sb, f, redactor);
@@ -52,7 +53,28 @@ internal static class PlayerbotQaIssueComposer
         {
             string where = s.HasPosition ? string.Create(CultureInfo.InvariantCulture, $"map {s.Map} at {s.X:F1}, {s.Y:F1}, {s.Z:F1}") : "no position";
             string attackers = s.Attackers.Length > 0 ? ", attackers " + string.Join('/', s.Attackers) : string.Empty;
-            sb.Append(CultureInfo.InvariantCulture, $"- {s.AtUtc:u} {where}{attackers}\n  `{Code(redactor.Redact(s.Message))}`\n");
+            sb.Append(CultureInfo.InvariantCulture, $"- {s.AtUtc:u} {where}{attackers}\n");
+            if (s.Bot is { } bot)
+            {
+                sb.Append(CultureInfo.InvariantCulture,
+                    $"  - level {bot.Level} {bot.Race} {bot.Team} {bot.Class}; goal {bot.Goal}, quest {bot.Quest}; ");
+                sb.Append(bot.Graveyard == 0 ? "graveyard unknown" : string.Create(CultureInfo.InvariantCulture,
+                    $"graveyard {bot.Graveyard}, {(bot.GraveyardDistance is { } distance ? distance.ToString("F1", CultureInfo.InvariantCulture) + " yd" : "distance unknown")}"));
+                if (f.Kind == QaSignalKind.DeathLoop)
+                {
+                    sb.Append(bot.DeathSources is { Count: > 0 } sources
+                        ? "; death sources " + string.Join('/', sources)
+                        : "; last death source " + bot.Source);
+                }
+                sb.Append('\n');
+                foreach (QaAttackerFact attacker in bot.AttackerFacts)
+                {
+                    string rank = attacker.Rank switch { 0 => "normal", 1 => "elite", 2 => "rare elite", 3 => "world boss", 4 => "rare", _ => attacker.Rank.ToString(CultureInfo.InvariantCulture) };
+                    sb.Append(CultureInfo.InvariantCulture,
+                        $"  - {attacker.Entry}: level {attacker.Level} (template {attacker.MinLevel}-{attacker.MaxLevel}), rank {rank}, guard {(attacker.Guard ? "yes" : "no")}, hostile {(attacker.Hostile ? "yes" : "no")}\n");
+                }
+            }
+            sb.Append("  `").Append(Code(redactor.Redact(s.Message))).Append("`\n");
         }
 
         sb.Append("\n## Reproduction\n\n");
