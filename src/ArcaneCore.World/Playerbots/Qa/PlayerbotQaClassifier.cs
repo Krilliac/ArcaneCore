@@ -145,7 +145,7 @@ internal static class PlayerbotQaClassifier
             if (creature && template is { ScriptName.Length: > 0 } scripted && !facts.HasScript(target, s.Map))
             {
                 return new QaClassification(QaCause.MissingData, string.Create(CultureInfo.InvariantCulture,
-                    $"creature entry {target} has ScriptName {scripted.ScriptName}, which is not in the server's SD2 script list for map {s.Map} (no named AI, entry script or map boss AI, and the map has no instance script)"), title);
+                    $"creature entry {target} has ScriptName {scripted.ScriptName}, which is not in the server's SD2 script list for map {s.Map} (no named AI, entry script, map boss AI or instance-script AI)"), title);
             }
         }
 

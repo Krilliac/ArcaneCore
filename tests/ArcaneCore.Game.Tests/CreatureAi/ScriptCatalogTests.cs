@@ -64,15 +64,41 @@ public sealed class ScriptCatalogTests
     }
 
     [Fact]
-    public void UnresolvedScriptName_IsMissingUnlessTheMapHasAnInstanceScript()
+    public void UnresolvedScriptName_IsMissing_EvenOnAnInstanceMap()
     {
         ScriptResolution plain = Resolve(T(8, "boss_nothing", "EventAI"), 0);
         Assert.Equal(ScriptKind.EventAI, plain.Kind);
         Assert.True(plain.ScriptNameMissing);
-        ScriptResolution dungeon = Resolve(T(8, "boss_nothing"), 36);
-        Assert.False(dungeon.ScriptNameResolved);
-        Assert.True(dungeon.MayBeInstanceRegistered);
-        Assert.False(dungeon.ScriptNameMissing);
+        Assert.True(Resolve(T(8, "boss_nothing"), 36).ScriptNameMissing);
+    }
+
+    [Fact]
+    public void InstanceScriptedEntry_IsResolvedFromTheTable()
+    {
+        ScriptResolution r = Resolve(T(646, "boss_mr_smite"), 36);
+        Assert.Equal(ScriptKind.InstanceScriptAi, r.Kind);
+        Assert.True(r.ScriptNameResolved);
+        Assert.True(Resolve(T(646, "boss_mr_smite"), 0).ScriptNameMissing); // another map: not the Deadmines
+    }
+
+    [Theory]
+    [InlineData(229u, 10339u, "GythAI")]
+    [InlineData(229u, 9816u, "PyroguardEmberseerAI")]
+    [InlineData(229u, 9568u, "OverlordWyrmthalakAI")]
+    [InlineData(289u, 1853u, "DarkmasterGandlingAI")]
+    [InlineData(289u, 10503u, "JandiceBarovAI")]
+    [InlineData(289u, 10498u, "SpectralTutorAI")]
+    [InlineData(329u, 10384u, "SpectralGhostlyCitizenAI")]
+    [InlineData(329u, 10385u, "SpectralGhostlyCitizenAI")]
+    [InlineData(329u, 10436u, "BaronessAnastariAI")]
+    [InlineData(329u, 10438u, "MalekiThePallidAI")]
+    [InlineData(329u, 10997u, "CannonMasterWilleyAI")]
+    [InlineData(329u, 10812u, "DathrohanBalnazzarAI")]
+    public void DungeonBossAis_PinsEveryMapEntryPair(uint map, uint entry, string type)
+    {
+        Assert.Equal(type, ArcaneCore.Game.Instances.Scripts.DungeonBossAis.Describe(map, entry));
+        Assert.Equal(type, Resolve(T(entry, "boss_x"), map).Implementation);
+        Assert.Null(ArcaneCore.Game.Instances.Scripts.DungeonBossAis.Describe(map == 289 ? 329u : 289u, entry));
     }
 
     [Fact]

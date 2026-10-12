@@ -12,6 +12,9 @@ public enum ScriptKind
     /// <summary>A boss AI of <see cref="DungeonBossAis"/> (map and entry).</summary>
     DungeonBossAi,
 
+    /// <summary>A script AI the map's instance script gives the entry when it runs (<see cref="InstanceScriptedAis"/>: a <c>RegisterEntryAi</c> or a raid boss selection).</summary>
+    InstanceScriptAi,
+
     /// <summary>A named AI registered with <see cref="CreatureAiFactory.Register"/> under the template's ScriptName.</summary>
     ScriptName,
 
@@ -35,29 +38,25 @@ public enum ScriptKind
 }
 
 /// <summary>
-/// The answer of <see cref="ScriptCatalog.Resolve"/>. <see cref="ScriptNameResolved"/> is false only when the template has a ScriptName that
-/// no layer implements (the creature then runs the AI of <see cref="Kind"/> instead). <see cref="MayBeInstanceRegistered"/> is true when such a
-/// ScriptName is unresolved statically but the map has an instance script, which may register the AI at run time with
-/// <c>RegisterEntryAi</c> (invisible without a live map).
+/// The answer of <see cref="ScriptCatalog.Resolve(CreatureTemplate, uint, CreatureMapSystem?)"/>. <see cref="ScriptNameResolved"/> is false only when
+/// the template has a ScriptName that no layer implements for the map (the creature then runs the AI of <see cref="Kind"/> instead).
 /// </summary>
-public readonly record struct ScriptResolution(
-    ScriptKind Kind, string Implementation, string ScriptName, bool ScriptNameResolved, bool MayBeInstanceRegistered)
+public readonly record struct ScriptResolution(ScriptKind Kind, string Implementation, string ScriptName, bool ScriptNameResolved)
 {
-    /// <summary>The ScriptName is neither implemented nor possibly registered by the map's instance script.</summary>
-    public bool ScriptNameMissing => !ScriptNameResolved && !MayBeInstanceRegistered;
+    /// <summary>The template names a ScriptName that nothing implements on the map.</summary>
+    public bool ScriptNameMissing => !ScriptNameResolved;
 
     public override string ToString() => $"{Kind} {Implementation}"
         + (ScriptName.Length == 0 ? string.Empty
             : ScriptNameResolved ? $" (ScriptName {ScriptName})"
-            : MayBeInstanceRegistered ? $" (ScriptName {ScriptName}: not in the static registries; the map's instance script may register it)"
             : $" (ScriptName {ScriptName}: NO IMPLEMENTATION)");
 }
 
 /// <summary>
 /// One runtime answer to "which AI does creature entry X get on map M". It mirrors the selection order of
-/// <c>CreatureMapSystem.CreateAi</c>: the map's own script AI (live registrations, then <see cref="DungeonBossAis"/>), the template's ScriptName
-/// (named AI, then entry script), then the AIName, then the defaults. Raid boss AIs (<c>RaidBossAI.Create</c>, selected by instance-data type)
-/// are not introspectable and are not reported. Read-only; the registries are filled at start-up, so any thread may call it
+/// <c>CreatureMapSystem.CreateAi</c>: the map's own script AI (live registrations, then <see cref="DungeonBossAis"/>, then <see cref="InstanceScriptedAis"/>), the template's ScriptName
+/// (named AI, then entry script), then the AIName, then the defaults. What an instance script (or a raid boss selection) gives an entry at run
+/// time is read from <see cref="InstanceScriptedAis"/>. Read-only; the registries are filled at start-up, so any thread may call it
 /// (a live <see cref="CreatureMapSystem"/> only from its map's thread).
 /// </summary>
 public sealed class ScriptCatalog(CreatureAiFactory factory, CreatureContent content, bool implicitEventAi = false)
@@ -65,7 +64,7 @@ public sealed class ScriptCatalog(CreatureAiFactory factory, CreatureContent con
     public ScriptResolution Resolve(uint entry, uint mapId, CreatureMapSystem? liveMap = null)
         => content.FindTemplate(entry) is { } template
             ? Resolve(template, mapId, liveMap)
-            : new ScriptResolution(ScriptKind.Default, "(no creature_template)", string.Empty, true, false);
+            : new ScriptResolution(ScriptKind.Default, "(no creature_template)", string.Empty, true);
 
     public ScriptResolution Resolve(CreatureTemplate template, uint mapId, CreatureMapSystem? liveMap = null)
     {
@@ -76,28 +75,32 @@ public sealed class ScriptCatalog(CreatureAiFactory factory, CreatureContent con
         if (liveMap is not null && liveMap.HasEntryAi(entry))
         {
             string live = liveMap.Creatures.FirstOrDefault(c => c.Template.Entry == entry)?.AI?.GetType().Name ?? "(registered by an instance script)";
-            return new ScriptResolution(ScriptKind.MapEntryAi, live, scriptName, true, false);
+            return new ScriptResolution(ScriptKind.MapEntryAi, live, scriptName, true);
         }
 
         if (DungeonBossAis.Describe(mapId, entry) is { } boss)
         {
-            return new ScriptResolution(ScriptKind.DungeonBossAi, boss, scriptName, true, false);
+            return new ScriptResolution(ScriptKind.DungeonBossAi, boss, scriptName, true);
+        }
+
+        if (InstanceScriptedAis.Contains(mapId, entry))
+        {
+            return new ScriptResolution(ScriptKind.InstanceScriptAi, $"(instance script of map {mapId})", scriptName, true);
         }
 
         if (scriptName.Length > 0 && factory.IsNamedAi(scriptName))
         {
-            return new ScriptResolution(ScriptKind.ScriptName, scriptName, scriptName, true, false);
+            return new ScriptResolution(ScriptKind.ScriptName, scriptName, scriptName, true);
         }
 
         if (factory.EntryScriptName(entry) is { } entryScript)
         {
-            return new ScriptResolution(ScriptKind.EntryScript, entryScript, scriptName, true, false);
+            return new ScriptResolution(ScriptKind.EntryScript, entryScript, scriptName, true);
         }
 
         bool resolved = scriptName.Length == 0;
-        bool maybe = !resolved && InstanceScriptRegistry.Default.HasScript(mapId);
         (ScriptKind kind, string implementation) = Fallback(template);
-        return new ScriptResolution(kind, implementation, scriptName, resolved, maybe);
+        return new ScriptResolution(kind, implementation, scriptName, resolved);
     }
 
     private (ScriptKind Kind, string Implementation) Fallback(CreatureTemplate template)
@@ -167,18 +170,17 @@ public sealed record ScriptCoverageRow(uint MapId, uint Entry, string Name, stri
 
 /// <summary>Counts over <see cref="ScriptCoverageRow"/>s (entries, not spawns).</summary>
 public readonly record struct ScriptCoverageSummary(
-    int ScriptNames, int ScriptNamesResolved, int ScriptNamesMaybeInstanceRegistered, int ScriptNamesMissing, int AiNames, int AiNamesUnknown)
+    int ScriptNames, int ScriptNamesResolved, int ScriptNamesMissing, int AiNames, int AiNamesUnknown)
 {
     public static ScriptCoverageSummary Of(IEnumerable<ScriptCoverageRow> rows)
     {
-        int names = 0, resolved = 0, maybe = 0, missing = 0, ai = 0, unknown = 0;
+        int names = 0, resolved = 0, missing = 0, ai = 0, unknown = 0;
         foreach (ScriptCoverageRow row in rows)
         {
             if (row.ScriptName.Length > 0)
             {
                 names++;
                 if (row.Resolution.ScriptNameResolved) resolved++;
-                else if (row.Resolution.MayBeInstanceRegistered) maybe++;
                 else missing++;
             }
 
@@ -189,6 +191,6 @@ public readonly record struct ScriptCoverageSummary(
             }
         }
 
-        return new ScriptCoverageSummary(names, resolved, maybe, missing, ai, unknown);
+        return new ScriptCoverageSummary(names, resolved, missing, ai, unknown);
     }
 }

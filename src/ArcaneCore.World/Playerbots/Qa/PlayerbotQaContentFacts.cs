@@ -45,8 +45,8 @@ internal interface IQaContentFacts
 
     /// <summary>
     /// Whether the ScriptName of the creature <paramref name="entry"/> is implemented for <paramref name="map"/>, or cannot be judged without a
-    /// live map: any layer of the script catalogue (named AI, entry script, <c>DungeonBossAis</c>) answers yes, and so does a map whose instance
-    /// script may register the AI itself. A template without a ScriptName is true.
+    /// live map: any layer of the script catalogue (named AI, entry script, <c>DungeonBossAis</c>, <c>InstanceScriptedAis</c>) answers yes.
+    /// A template without a ScriptName is true.
     /// </summary>
     bool HasScript(uint entry, uint map);
 }
@@ -155,8 +155,8 @@ internal sealed class PlayerbotQaContentFacts(IServiceProvider services) : IQaCo
 internal static class QaScriptFacts
 {
     /// <summary>
-    /// False only when the creature's template names a ScriptName that no layer implements for <paramref name="map"/> and the map's instance
-    /// script cannot register it either (<see cref="ScriptResolution.ScriptNameMissing"/>). The older <c>CreatureAiFactory.HasScript</c> saw the
+    /// False only when the creature's template names a ScriptName that no layer implements for <paramref name="map"/>
+    /// (<see cref="ScriptResolution.ScriptNameMissing"/>). The older <c>CreatureAiFactory.HasScript</c> saw the
     /// world-wide registries only and called every per-map script missing.
     /// </summary>
     internal static bool Has(CreatureAiFactory factory, CreatureContent content, uint entry, uint map)

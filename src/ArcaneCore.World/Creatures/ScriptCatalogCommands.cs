@@ -130,7 +130,6 @@ public sealed class ScriptCatalogCommands : ICommandExtension
     {
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture, $"{s.ScriptNames} ScriptNames: {s.ScriptNamesResolved} implemented, ")
-            .Append(CultureInfo.InvariantCulture, $"{s.ScriptNamesMaybeInstanceRegistered} possibly registered by the instance script, ")
             .Append(CultureInfo.InvariantCulture, $"{s.ScriptNamesMissing} with no implementation; {s.AiNames} AINames ({s.AiNamesUnknown} unknown).");
         return text.ToString();
     }

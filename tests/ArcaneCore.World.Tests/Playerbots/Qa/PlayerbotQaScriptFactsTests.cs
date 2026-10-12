@@ -58,11 +58,23 @@ public sealed class PlayerbotQaScriptFactsTests
     }
 
     [Fact]
-    public void AnUnknownScriptOnAnInstanceMap_IsNotClaimedMissing_SinceTheInstanceScriptMayRegisterIt()
+    public void AnInstanceScriptedEntry_IsNotCalledMissing_ButAnUnlistedOneOnTheSameMapIs()
     {
-        CatalogFacts facts = Facts(99_999_001, "boss_registered_by_the_instance", Scholomance);
+        // 646 is given its AI by the Deadmines instance script (InstanceScriptedAis); 99_999_001 is not.
+        CatalogFacts scripted = Facts(646, "boss_mr_smite", 36);
+        Assert.True(scripted.HasScript(646, 36));
+        Assert.NotEqual(QaCause.MissingData, PlayerbotQaClassifier.Classify(Stall(646, 36), scripted).Cause);
 
-        Assert.True(facts.HasScript(99_999_001, Scholomance));
-        Assert.NotEqual(QaCause.MissingData, PlayerbotQaClassifier.Classify(Stall(99_999_001, Scholomance), facts).Cause);
+        CatalogFacts unknown = Facts(99_999_001, "boss_nobody", 36);
+        Assert.False(unknown.HasScript(99_999_001, 36));
+        Assert.Equal(QaCause.MissingData, PlayerbotQaClassifier.Classify(Stall(99_999_001, 36), unknown).Cause);
+    }
+
+    [Fact]
+    public void AKnownMissingEntry_IsStillReportedMissing()
+    {
+        CatalogFacts facts = Facts(9503, "npc_rocknot", 230); // Blackrock Depths: no AI for Private Rocknot
+        Assert.False(facts.HasScript(9503, 230));
+        Assert.Equal(QaCause.MissingData, PlayerbotQaClassifier.Classify(Stall(9503, 230), facts).Cause);
     }
 }
