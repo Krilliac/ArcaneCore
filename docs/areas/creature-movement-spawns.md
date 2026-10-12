@@ -237,6 +237,38 @@ exclusion belongs in `CreatureRespawnQueue.Save`); creature pools/linking that s
 path outside `EfInstanceStore.DeleteInstanceAsync` (an in-memory-only reset) is the instances area's; a crash between a death and its queued write
 loses that one write (same window as vmangos' asynchronous character-database queue).
 
+### 8. Population-scaled respawn (`World:Respawn:Dynamic`)
+
+Why: a start zone with hundreds of players (Valley of Trials: about 258 bots against 64 boar spawns on a 120 s respawn) caps kill-quest
+throughput at the respawn timer. Off by default (`Enabled = false`), which is retail 1.12.1. ArcaneCore's own design; the idea (not the
+formula or the count) is TrinityCore's/AzerothCore's dynamic respawn rate. `Creatures:Respawn:DynamicRate` (TrinityCore zone-rate scaling,
+`CreatureMapSystem.ScaleRespawnDelay`) stays as it was while this is off; with `Enabled` on, this replaces it so they never compound.
+
+- **Formula:** `delay = base / (1 + ScalePerPlayer * max(0, players - PlayerThreshold))`, rounded up to a whole second, never below
+  `base * (1 - MaxReduction)` or `MinimumSeconds`, never above `base`. A base at or under `MinimumSeconds` is left alone.
+  Pure code: `DynamicRespawnOptions.ScaleDelay`.
+- **Who counts:** players (not in GM mode: ArcaneCore has no GM invisibility state, so GM mode is the exclusion; ghosts do count) of the same map within `Radius` yards (2D) of the spawn's home position, counted once at death
+  (`Map.CountPlayersWithin`: one grid query over the few 33-yard cells the circle touches plus an exact distance test, a reused scratch list,
+  no allocation in steady state, no per-tick work). `CountBots = false` skips playerbots (`IPlayerSession.IsPlayerbot`). A radius was chosen
+  over a zone count because contention is local to the camp, and a zone count needs either a walk over every player of the map per death
+  (what `ScaleRespawnDelay` does) or counters kept on every zone change.
+- **Creatures** (`CreatureMapSystem.OnCreatureDied`, `ScheduledRespawnDelay`): database spawns on open-world maps. Normal rank only, plus
+  elite, rare-elite and rare with `IncludeElitesAndRares`; world bosses never. Never scaled: dungeons, raids, battlegrounds and every
+  instance copy; summons; spawn-group, pool and script-only members; creatures with a `creature_linking` master/slave event; a delay a
+  script (`RespawnDelayOnceSeconds`) or a battleground (`RespawnDelayOverrideSeconds`) chose.
+- **Game objects** (`GameObjectMapSystem.Despawn`, `ScaleRespawnDelayMs`), with `IncludeGameObjects`: herb and mineral nodes (a chest whose
+  lock has a herbalism or mining skill case) and quest objects (a chest with a quest or quest loot, a goober with a quest). The delay is scaled both when the object despawns and when a pool brings a member in (`IPoolHost.SpawnMember`), counting the players around the member that will spawn. This is deliberately asymmetric with creatures: creature pools hold rare spots and stay unscaled, game object pools are the rotating herb and ore nodes whose contention this solves. Never: other
+  objects, spawn-group members, durable instance chests. Object respawn times are not stored in the database (only in memory while the grid
+  is unloaded, and for durable chests, which are excluded).
+- **Persistence:** `RespawnAtMs` is set to the scaled time before `SaveRespawnOnDeath`, so `creature_respawn` stores the scaled time and a
+  restart does not reset it. No schema change.
+- **Live:** every key is in `WorldConfigKeys` (`.reload config`, validated: out-of-range values are refused; a bad start-up value turns the
+  scaling off and logs a warning). A death uses the values in force at that moment.
+- **Corpses:** a corpse is removed when its respawn time is reached. The code has no separate corpse-decay minimum, so `MinimumSeconds` (default 30) is the floor: a scaled respawn is never earlier than 30 s after death by default. Lowering it below the time players need to loot cuts loot short.
+  short. 30 or more is safer on a real server.
+- **GM:** `.spawninfo dynamic` (GameMaster) prints whether it is on, the players counted at your position, the multiplier, and example delays.
+- **Not done:** a respawn already scheduled is not re-evaluated when more players arrive later (the count is taken once, at death).
+
 ## Not done in this lane (recorded, not stubbed)
 
 * **Spawn flags** (`RANDOM_RESPAWN_TIME` x urand(90,110)/100, `DYNAMIC_RESPAWN_TIME`, `DEAD`, `DISABLED`, `ACTIVE`, `EVADE_OUT_HOME_AREA`, ...; `ObjectDefines.h:127-134`) and

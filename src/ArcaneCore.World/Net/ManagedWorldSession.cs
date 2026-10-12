@@ -35,6 +35,8 @@ public sealed partial class WorldSession
 
     /// <summary>A managed session of a playerbot: managed and not the server console's (account 0, WorldSession.Console.cs). Bot QA reports only these.</summary>
     internal bool IsPlayerbot => _managed && AccountId != 0;
+
+    bool IPlayerSession.IsPlayerbot => IsPlayerbot;
     internal ManagedActionBudget? ManagedBudget { get; set; }
 
     /// <summary>

@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 197 |
-| `Administrator` | 6 | 300 |
+| `GameMaster` | 3 | 198 |
+| `Administrator` | 6 | 301 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -305,6 +305,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
+| `.spawninfo dynamic` | 2 | GameMaster | declared retail level | Syntax: .spawninfo dynamic Show the population-scaled respawn (World:Respawn:Dynamic) at your position: whether it is on, the players counted within its radius, the multiplier and example respawn delays. Read-only. |
 | `.spawninfo summary` | 2 | GameMaster | declared retail level | Syntax: .spawninfo summary Count the creatures and game objects of this map by state, including the respawn times kept for unloaded grids. |
 | `.spawngroup` ... | 3 | GameMaster | declared retail level | Syntax: .spawngroup $subcommand Type .spawngroup to see the list of possible subcommands or .help spawngroup $subcommand to see info on subcommands. |
 | `.spawngroup list` | 3 | GameMaster | declared retail level | Syntax: .spawngroup list [creature\|gameobject] List the spawn groups of your map: id, type, members in the world / maximum, name. |

@@ -125,7 +125,7 @@ public sealed class GmObjectNpcCommandTests
     public void Levels_FollowTheLaneDocument()
     {
         CommandTable table = ChatCommands.CreateTable();
-        string[] readOnly = ["gobject", "gobject near", "gobject info", "npc", "npc info", "npc near", "spawninfo", "spawninfo creature", "spawninfo gameobject", "spawninfo summary"];
+        string[] readOnly = ["gobject", "gobject near", "gobject info", "npc", "npc info", "npc near", "spawninfo", "spawninfo creature", "spawninfo gameobject", "spawninfo summary", "spawninfo dynamic"];
         string[] mutating =
         [
             "gobject add", "gobject delete", "gobject move", "gobject turn", "gobject activate",
@@ -146,6 +146,34 @@ public sealed class GmObjectNpcCommandTests
         {
             Assert.Equal(3, table.Resolve(path, AccountSecurity.GameMaster)!.RequiredLevel(table.Gm));
         }
+    }
+
+    [Fact]
+    public async Task SpawnInfoDynamic_ReportsTheScalingAtTheGmsPosition_AndChangesNothing()
+    {
+        Scene scene = Start();
+        await using WorldTestHost host = scene.Host;
+        await using WorldTestClient gm = await GmAsync(scene, "SPDYN", "Spdyn");
+        await using WorldTestClient moderator = await GmAsync(scene, "SPDYNM", "Spdynm", AccountSecurity.Moderator);
+        Assert.Equal("This command is not available to you.", (await SendAsync(moderator, ".spawninfo dynamic")).Single);
+
+        Run off = await SendAsync(gm, ".spawninfo dynamic");
+        Assert.Equal(3, off.Replies.Count);
+        Assert.StartsWith("Dynamic respawn: off; this map scales.", off.Replies[0], StringComparison.Ordinal);
+        Assert.Matches(@"^Players within 100 yards \(bots counted\): \d+; threshold 5, 0\.1 per player above it: multiplier x1\.", off.Replies[1]);
+        Assert.StartsWith("Respawn delays here: 60 s -> 60 s, 120 s -> 120 s,", off.Replies[2], StringComparison.Ordinal);
+
+        await host.OnWorldAsync(() =>
+        {
+            ArcaneCore.Game.Maps.DynamicRespawnOptions options = host.World.Options.Respawn.Dynamic;
+            options.Enabled = true;
+            options.PlayerThreshold = 0; // the GM alone is over the threshold
+            options.ScalePerPlayer = 10f;
+        });
+        Run on = await SendAsync(gm, ".spawninfo dynamic");
+        Assert.StartsWith("Dynamic respawn: on; this map scales.", on.Replies[0], StringComparison.Ordinal);
+        Assert.Contains("(minimum 30 s,", on.Replies[2], StringComparison.Ordinal);
+        Assert.Equal(CreatureDeathState.Alive, await host.OnWorldAsync(() => CreatureSystem(scene).Creatures.Single(c => c.Spawn?.Guid == WolfSpawn).DeathState));
     }
 
     [Fact]

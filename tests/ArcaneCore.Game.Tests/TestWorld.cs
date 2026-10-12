@@ -23,6 +23,8 @@ internal sealed class FakeSession(int accountId = 1, AccountSecurity security = 
 
     public bool WantsUpdateObjects { get; set; } = true;
 
+    public bool IsPlayerbot { get; set; }
+
     public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload) => Sent.Enqueue((opcode, payload.ToArray()));
 
     public void ProcessWorldPackets(Player player)

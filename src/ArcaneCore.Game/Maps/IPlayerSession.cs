@@ -22,6 +22,12 @@ public interface IPlayerSession
     /// </summary>
     bool WantsUpdateObjects => true;
 
+    /// <summary>
+    /// True for the session of a server-owned playerbot (no client behind it). Population-scaled respawn can leave bots out of its count
+    /// (<c>World:Respawn:Dynamic:CountBots</c>). Real clients and test sessions return false. World thread.
+    /// </summary>
+    bool IsPlayerbot => false;
+
     /// <summary>Queue a packet for this client. Thread-safe; never blocks on the socket.</summary>
     void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload);
 
