@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -278,6 +279,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
                 {
                     var watch = System.Diagnostics.Stopwatch.StartNew();
                     NavRegionGraph graph = builder(directory, mapId, include, exclude);
+                    ReportSkippedTiles(logger, mapId, graph);
                     logger.LogInformation("MMaps: map {MapId} region graph built from {Tiles} tiles in {Ms} ms: {Regions} regions, {Links} portal links",
                         mapId, graph.TileCount, watch.ElapsedMilliseconds, graph.RegionCount, graph.LinkCount);
                     return graph;
@@ -294,6 +296,29 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             });
             _regionGraphs[key] = build;
             return build;
+        }
+    }
+
+    /// <summary>Most skipped tiles written as their own line per graph; the rest are counted in a summary line (every one is recorded in the ledger).</summary>
+    private const int MaxSkippedTileLines = 20;
+
+    /// <summary>Log each tile the graph build left out as a Warning (file and tile coordinates) and count it in <see cref="FaultLedger.Shared"/>; once per graph, as a graph is built once per map and filter.</summary>
+    internal static void ReportSkippedTiles(ILogger logger, uint mapId, NavRegionGraph graph)
+    {
+        int logged = 0;
+        foreach (SkippedNavTile skipped in graph.SkippedTiles)
+        {
+            FaultLedger.Shared.Record("mmaps.regiongraph", skipped.Error);
+            if (logged++ < MaxSkippedTileLines)
+            {
+                logger.LogWarning(skipped.Error, "MMaps: map {MapId} tile ({X}, {Y}) was skipped by the region graph build: {File} is unreadable or corrupt; routes across that tile plan without it",
+                    mapId, skipped.TileX, skipped.TileY, skipped.File);
+            }
+        }
+
+        if (logged > MaxSkippedTileLines)
+        {
+            logger.LogWarning("MMaps: map {MapId} region graph skipped {Count} unreadable tiles in all ({Shown} listed above)", mapId, logged, MaxSkippedTileLines);
         }
     }
 
