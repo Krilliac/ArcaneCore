@@ -3,6 +3,7 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Instances;
+using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Social;
 using ArcaneCore.Data.Stores;
@@ -341,7 +342,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
                 if (scope is { } s) await s.DisposeAsync();
             }
 
-            return [.. log.Texts.Select(NormalizeSql)];
+            return [.. log.Texts];
         }
         finally
         {
@@ -350,8 +351,113 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         }
     }
 
-    // Parameter names and values do not appear in the text, but generated ids differ between runs only in parameters; the text is stable.
-    private static string NormalizeSql(string sql) => sql;
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ARefusedTransaction_IsRolledBack_SoTheSameContextAndOtherConnectionsCanWriteAfterwards(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using ServiceProvider services = await BuildAsync(connection, fence: true);
+        int id = await CreateCharacterAsync(connection, "Refused");
+        CharacterOwnershipToken first = await AcquireAsync(services);
+        CharacterOwnershipToken second = await TakeoverAsync(services, first);
+        var context = services.GetRequiredService<CharacterOwnershipContext>();
+        context.Current = first; // stale
+
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        // An open connection stays open across the refusal (EF only closes the ones it opened), so closing the connection cannot
+        // hide a transaction the fence failed to roll back.
+        await db.Database.OpenConnectionAsync();
+        await AssertRejectedAsync(() => new EfSocialStore(db).SetSocialAsync(id, 1, SocialFlags.Friend));
+        Assert.Null(db.Database.CurrentTransaction);
+
+        // A refused transaction that stayed open would still hold the connection's transaction (and SQLite's write lock): another
+        // connection could not write, and this context could not begin the next transaction.
+        await using (CharacterDbContext other = TestContexts.Create<CharacterDbContext>(connection))
+            Assert.Equal(1, await other.Characters.Where(c => c.Id == id).ExecuteUpdateAsync(s => s.SetProperty(c => c.Level, (byte)5)));
+
+        context.Current = second;
+        await new EfSocialStore(db).SetSocialAsync(id, 2, SocialFlags.Friend);
+        Assert.Contains(await ReadSocialAsync(connection, id), e => e.OtherId == 2 && e.Flags == SocialFlags.Friend);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task WithTheFenceOn_TheStoresDoNotVerifyASecondTime_AndWithItOff_TheyStillDo(DatabaseProvider provider)
+    {
+        var onLog = new CommandLog();
+        var offLog = new CommandLog();
+        int on = await OwnershipStatementsAsync(provider, fence: true, onLog);
+        int off = await OwnershipStatementsAsync(provider, fence: false, offLog);
+
+        // On: the transaction interceptor verifies with raw commands that EF's command log never sees, so the stores add none of their own.
+        Assert.Equal(0, on);
+        Assert.True(off > 0, "with the fence off the stores' own verification is the only fence and must still run");
+
+        // Zero statements also holds if the interceptor verified nothing, so prove it did: a snapshot carrying a stale explicit token is
+        // refused although the process's ambient token is valid.
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using ServiceProvider services = await BuildAsync(connection, fence: true);
+        int id = await CreateCharacterAsync(connection, "Stale");
+        CharacterOwnershipToken first = await AcquireAsync(services);
+        CharacterOwnershipToken second = await TakeoverAsync(services, first);
+        services.GetRequiredService<CharacterOwnershipContext>().Current = second;
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        uint before = await ReadMapAsync(connection, id);
+        await AssertRejectedAsync(() => new EfCharacterStore(db).SaveStateAsync(State(id, 9, first)));
+        Assert.Equal(before, await ReadMapAsync(connection, id));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task WithTheFenceOn_AnUntokenedSnapshotIsRefused_EvenUnderAValidAmbientToken(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using ServiceProvider services = await BuildAsync(connection, fence: true);
+        int id = await CreateCharacterAsync(connection, "Untokened");
+        CharacterOwnershipToken token = await AcquireAsync(services);
+        services.GetRequiredService<CharacterOwnershipContext>().Current = token;
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+
+        // The interceptor would pass this transaction on the ambient token; only the store's own check of the snapshot's (null) token refuses it.
+        uint before = await ReadMapAsync(connection, id);
+        await AssertRejectedAsync(() => new EfCharacterStore(db).SaveStateAsync(State(id, 9, null)));
+        Assert.Equal(before, await ReadMapAsync(connection, id));
+
+        // The same write with the claim it was taken under is accepted, so the refusal above is about the missing token.
+        await new EfCharacterStore(db).SaveStateAsync(State(id, 9, token));
+        Assert.Equal(9u, await ReadMapAsync(connection, id));
+    }
+
+    private static async Task<uint> ReadMapAsync(DatabaseConnectionOptions connection, int id)
+    {
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
+        return (uint)await db.Characters.AsNoTracking().Where(c => c.Id == id).Select(c => c.MapId).SingleAsync();
+    }
+
+    private async Task<int> OwnershipStatementsAsync(DatabaseProvider provider, bool fence, CommandLog log)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using ServiceProvider services = await BuildAsync(connection, fence, log);
+        int id = await CreateCharacterAsync(connection, "Once");
+        CharacterOwnershipToken? token = null;
+        if (fence)
+        {
+            token = await AcquireAsync(services);
+            services.GetRequiredService<CharacterOwnershipContext>().Current = token;
+        }
+
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        Assert.Equal(fence, CharacterOwnershipGuard.IsFenceActive(db));
+        log.Clear();
+        await new EfCharacterStore(db).SaveStateAsync(State(id, 4, token));
+        await new EfCharacterQuestStore(db).SaveQuestsAsync(id, [], ownership: token);
+        await new EfCharacterQuestStore(db).SaveTaxiMaskAsync(id, [1u], ownership: token);
+        return log.Texts.Count(t => t.Contains(CharacterOwnershipDataModule.Table, StringComparison.Ordinal));
+    }
 
     private static async Task<IReadOnlyList<SocialEntry>> ReadSocialAsync(DatabaseConnectionOptions connection, int id)
     {

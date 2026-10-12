@@ -36,7 +36,7 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
             : null;
         try
         {
-            await CharacterOwnershipGuard.VerifyAsync(db, ownership, cancellationToken).ConfigureAwait(false);
+            await CharacterOwnershipGuard.VerifyUnlessFencedAsync(db, ownership, own, cancellationToken).ConfigureAwait(false);
             if (!await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
             {
                 return; // deleted while the save was queued (as EfCharacterStore.SaveStateAsync)
@@ -101,7 +101,7 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
             : null;
         try
         {
-            await CharacterOwnershipGuard.VerifyAsync(db, ownership, cancellationToken).ConfigureAwait(false);
+            await CharacterOwnershipGuard.VerifyUnlessFencedAsync(db, ownership, own, cancellationToken).ConfigureAwait(false);
             if (!await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
             {
                 return;

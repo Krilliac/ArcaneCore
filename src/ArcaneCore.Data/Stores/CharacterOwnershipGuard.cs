@@ -2,7 +2,9 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Kernel.Characters;
 using System.Data.Common;
+using System.Runtime.CompilerServices;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -11,6 +13,47 @@ namespace ArcaneCore.Data.Stores;
 /// <summary>Shared staged-save fence used by core, economy and quest transactions.</summary>
 internal static class CharacterOwnershipGuard
 {
+    private static readonly ConditionalWeakTable<IDbContextOptions, object> FenceActive = new();
+    private static readonly object Yes = new();
+    private static readonly object No = new();
+
+    /// <summary>
+    /// True when the write fence's transaction interceptor is attached to this context, i.e. a transaction EF begins on it has already
+    /// been verified. Cached per options instance (one per service provider), so the save path pays a lookup, not a scan.
+    /// </summary>
+    internal static bool IsFenceActive(DbContext db)
+    {
+        IDbContextOptions options = db.GetService<IDbContextOptions>();
+        return ReferenceEquals(FenceActive.GetValue(options, static o => Scan(o) ? Yes : No), Yes);
+    }
+
+    private static bool Scan(IDbContextOptions options)
+    {
+        foreach (IDbContextOptionsExtension extension in options.Extensions)
+        {
+            if (extension is CoreOptionsExtension { Interceptors: { } interceptors })
+            {
+                foreach (IInterceptor interceptor in interceptors)
+                {
+                    if (interceptor is CharacterWriteFenceInterceptor)
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The explicit check for a transaction the caller began with <see cref="CharacterWriteFence.BeginTransactionAsync(DbContext, CharacterOwnershipToken?, CancellationToken)"/>:
+    /// skipped only when the interceptor already verified that very transaction against that very token: the store began it, the snapshot
+    /// carries a token (a null token makes the interceptor verify the ambient one, which is not the snapshot's claim) and the fence is on.
+    /// Run otherwise (fence off, an untokened snapshot, or a transaction the caller joined). The token test comes first so the fence-off
+    /// path, which carries no token, never touches <see cref="IsFenceActive"/>.
+    /// </summary>
+    internal static Task VerifyUnlessFencedAsync(CharacterDbContext db, CharacterOwnershipToken? token, bool beganFenced, CancellationToken cancellationToken)
+        => beganFenced && token is not null && IsFenceActive(db) ? Task.CompletedTask : VerifyAsync(db, token, cancellationToken);
+
     public static async Task VerifyAsync(CharacterDbContext db, CharacterOwnershipToken? token, CancellationToken cancellationToken)
     {
         // The schema row doubles as a serialized inactive gate. A local-mode save locks it for

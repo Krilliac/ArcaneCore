@@ -20,7 +20,7 @@ namespace ArcaneCore.Data.Stores;
 /// <c>SaveChanges</c>, so a one-row save would otherwise autocommit unverified; <c>SavingChanges</c> sets
 /// <see cref="AutoTransactionBehavior.Always"/> on the context so every save begins (and verifies) a transaction. A transaction that EF adopts with
 /// <c>UseTransaction</c> is not verified here (only the read-only snapshots do that). Stateless apart from the immutable holder, so one instance serves
-/// every context; thread-safe. Registered only when <c>Cluster:Fencing:Enabled</c> is true, so fence-off contexts run exactly as before.
+/// every context; thread-safe. Registered only when <c>Cluster:Fencing:Enabled</c> is true, so a fence-off context has no interceptor and issues the same SQL as before; a store save that carries a snapshot token still pays one scope object per transaction, whether or not the fence is on.
 /// </para>
 /// </summary>
 public sealed class CharacterWriteFenceInterceptor(ICharacterOwnershipContext ownership) : DbTransactionInterceptor, ISaveChangesInterceptor

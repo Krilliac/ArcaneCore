@@ -28,7 +28,7 @@ internal static class CharacterWriteFence
     public static IDisposable Exempt()
     {
         ExemptDepth.Value++;
-        return new Scope(static () => ExemptDepth.Value--);
+        return new Scope(null, static _ => ExemptDepth.Value--);
     }
 
     /// <summary>Verify the transactions begun inside this scope against <paramref name="token"/> instead of the ambient one; a null token changes nothing.</summary>
@@ -37,27 +37,37 @@ internal static class CharacterWriteFence
         CharacterOwnershipToken? previous = ExplicitToken.Value;
         if (token is not null)
             ExplicitToken.Value = token;
-        return new Scope(() => ExplicitToken.Value = previous);
+        return new Scope(previous, static restoreTo => ExplicitToken.Value = restoreTo);
     }
 
     /// <summary>Begin a transaction whose start-of-transaction verification uses the snapshot's own token when it has one.</summary>
-    public static async Task<IDbContextTransaction> BeginTransactionAsync(DbContext db, CharacterOwnershipToken? token, CancellationToken cancellationToken)
+    public static Task<IDbContextTransaction> BeginTransactionAsync(DbContext db, CharacterOwnershipToken? token, CancellationToken cancellationToken)
+        => token is null
+            ? db.Database.BeginTransactionAsync(cancellationToken) // nothing to scope: no scope, closure or async state machine on the fence-off path
+            : BeginScopedAsync(db, token, cancellationToken);
+
+    /// <inheritdoc cref="BeginTransactionAsync(DbContext, CharacterOwnershipToken?, CancellationToken)"/>
+    public static Task<IDbContextTransaction> BeginTransactionAsync(DbContext db, CharacterOwnershipToken? token, IsolationLevel isolation, CancellationToken cancellationToken)
+        => token is null
+            ? db.Database.BeginTransactionAsync(isolation, cancellationToken)
+            : BeginScopedAsync(db, token, isolation, cancellationToken);
+
+    private static async Task<IDbContextTransaction> BeginScopedAsync(DbContext db, CharacterOwnershipToken token, CancellationToken cancellationToken)
     {
         using (UseExplicit(token))
             return await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <inheritdoc cref="BeginTransactionAsync(DbContext, CharacterOwnershipToken?, CancellationToken)"/>
-    public static async Task<IDbContextTransaction> BeginTransactionAsync(DbContext db, CharacterOwnershipToken? token, IsolationLevel isolation, CancellationToken cancellationToken)
+    private static async Task<IDbContextTransaction> BeginScopedAsync(DbContext db, CharacterOwnershipToken token, IsolationLevel isolation, CancellationToken cancellationToken)
     {
         using (UseExplicit(token))
             return await db.Database.BeginTransactionAsync(isolation, cancellationToken).ConfigureAwait(false);
     }
 
-    private sealed class Scope(Action restore) : IDisposable
+    private sealed class Scope(CharacterOwnershipToken? previous, Action<CharacterOwnershipToken?> restore) : IDisposable
     {
-        private Action? _restore = restore;
+        private Action<CharacterOwnershipToken?>? _restore = restore;
 
-        public void Dispose() => Interlocked.Exchange(ref _restore, null)?.Invoke();
+        public void Dispose() => Interlocked.Exchange(ref _restore, null)?.Invoke(previous);
     }
 }
