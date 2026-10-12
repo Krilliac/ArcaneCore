@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       340 keys
+#   WORLD                       341 keys
 #
 ###############################################################################
 
@@ -10374,6 +10374,19 @@ World.Playerbots.MaxBots = 8
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.MaxBulkCommand = 50
+
+#
+#    World.Playerbots.MaxDeliveryYards
+#        Description: Maximum straight-line trip from an unhomed bot to a quest's nearest present
+#                     ender in yards (0 disables the distance limit; 0..100000).
+#        Type: float
+#        Default: 1200
+#        Allowed: a number from 0 to 100000 ('.' is the decimal point); 0 disables the distance
+#                 limit
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.MaxDeliveryYards = 1200
 
 #
 #    World.Playerbots.MaxFaults

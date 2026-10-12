@@ -24,6 +24,28 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class PlayerbotWorldDestinationsTests
 {
     [Fact]
+    public void TripScan_IsCachedPerQuestAndMap_AndInvalidatedByContentReplacement()
+    {
+        var quest = new QuestTemplate { Entry = 6030, Method = 2, MinLevel = 1, QuestLevel = 1 };
+        var quests = new QuestStore(new QuestContent([quest], [], [new CreatureQuestRelation { Id = 11039, Quest = 6030 }]));
+        var distant = new CreatureContent([], [new CreatureSpawn { Guid = 1, Entry = 11039, MapId = 1,
+            X = 2000, Y = 0, Z = 3 }], [], [], []);
+        var nearby = new CreatureContent([], [new CreatureSpawn { Guid = 2, Entry = 11039, MapId = 1,
+            X = 200, Y = 0, Z = 3 }], [], [], []);
+        var trip = new PlayerbotQuestTripFeasibility();
+
+        Assert.True(trip.IsInfeasible(1, 0, 0, quests, distant, 6030, 1200));
+        for (int think = 0; think < 10; think++)
+            Assert.True(trip.IsInfeasible(1, 0, 0, quests, distant, 6030, 1200));
+        Assert.Equal(1, trip.Evaluations);
+        Assert.False(trip.IsInfeasible(1, 1000, 0, quests, distant, 6030, 1200));
+        Assert.Equal(1, trip.Evaluations); // movement rechecks distance without rescanning content
+        Assert.False(trip.IsInfeasible(1, 0, 0, quests, distant, 6030, 0));
+        Assert.Equal(1, trip.Evaluations); // option change also needs no rescan
+        Assert.False(trip.IsInfeasible(1, 0, 0, quests, nearby, 6030, 1200));
+        Assert.Equal(2, trip.Evaluations);
+    }
+    [Fact]
     public void AnotherContinentOnly_IsIneligible_ButALocalAlternativeRemainsEligible()
     {
         var quest = new QuestTemplate { Entry = 6030, Method = 2, MinLevel = 1, QuestLevel = 1 };
@@ -37,10 +59,11 @@ public sealed class PlayerbotWorldDestinationsTests
         var unknown = new QuestStore(new QuestContent([quest], [], [remote,
             new CreatureQuestRelation { Id = 11041, Quest = 6030 }]));
 
-        Assert.True(PlayerbotWorldDestinations.RequiresIntercontinentTravel(1, remoteOnly, content, 6030));
-        Assert.False(PlayerbotWorldDestinations.RequiresIntercontinentTravel(1, alternatives, content, 6030));
-        Assert.False(PlayerbotWorldDestinations.RequiresIntercontinentTravel(1, unknown, content, 6030));
-        Assert.False(PlayerbotWorldDestinations.RequiresIntercontinentTravel(0, remoteOnly, content, 6030));
+        var trip = new PlayerbotQuestTripFeasibility();
+        Assert.True(trip.IsInfeasible(1, 0, 0, remoteOnly, content, 6030, 0));
+        Assert.False(trip.IsInfeasible(1, 0, 0, alternatives, content, 6030, 0));
+        Assert.False(trip.IsInfeasible(1, 0, 0, unknown, content, 6030, 0));
+        Assert.False(trip.IsInfeasible(0, 0, 0, remoteOnly, content, 6030, 0));
     }
 
     [Theory]

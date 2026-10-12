@@ -20,6 +20,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 {
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
+    private readonly PlayerbotQuestTripFeasibility _trip = new();
+
+    internal int TripEvaluations => _trip.Evaluations;
     private PlayerbotRoute? _route;
     private ObjectGuid _stageNpc;
     private uint _stageQuest;
@@ -75,7 +78,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     /// <summary>
     /// A home-bound bot keeps a completed quest if its ender is in its home or within a short local trip. A bot without a
-    /// home also abandons a proven handoff to the other continent, which its travel planner cannot make.
+    /// home also abandons a proven infeasible ender trip.
     /// Use the ordinary client abandon packet so the journal, source items and persistence follow the same path as a player.
     /// </summary>
     internal bool AbandonDistantCompletedQuest(Player player)
@@ -86,9 +89,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (services?.StateOf(player) is not { Loaded: true } state || content is null) return false;
         foreach ((uint id, QuestStatusData status) in state.Quests.Statuses.OrderBy(row => row.Key))
         {
-            if (status.Status != QuestStatus.Complete || status.Rewarded || IsRefused(id)
+            if (status.Status != QuestStatus.Complete || status.Rewarded
                 || services.Quests.Get(id) is not { IsActive: true } || !services.IsRewardable(id)) continue;
-            if (!PlayerbotWorldDestinations.RequiresIntercontinentTravel(player.MapId, services.Quests, content, id))
+            // A set-aside suppresses attempts to reach an ender, but cannot strand an unhomed bot's infeasible
+            // completed quest in its log. Keep the existing set-aside behavior for home-bound bots.
+            if (Home is not null && IsRefused(id)) continue;
+            if (!_trip.IsInfeasible(player.MapId, player.X, player.Y, services.Quests, content, id,
+                Home is null ? _options.MaxDeliveryYards : 0, player))
             {
                 if (Home is not { } home) continue;
                 bool reasonable = services.Quests.CreatureEndersOf(id)
@@ -298,7 +305,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     || (_stage != Stage.Accept && services.CanTakeQuest(player, id) != true))
                     continue;
                 if (_stage == Stage.None && (content is not null
-                    && PlayerbotWorldDestinations.RequiresIntercontinentTravel(player.MapId, services.Quests, content, id)
+                    && _trip.IsInfeasible(player.MapId, player.X, player.Y, services.Quests, content, id,
+                        Home is null ? _options.MaxDeliveryYards : 0, player)
                     || !PlayerbotWorldDestinations.CanPursueStarter(player, quest, loot, services.Npcs))) continue;
                 if (_stage == Stage.None && Home is { } home && !HomeAllows(home, player, services, npc, quest)) continue;
                 if (_stage != Stage.Accept && state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })

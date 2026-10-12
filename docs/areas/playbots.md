@@ -84,6 +84,18 @@ its game time about 30 times faster, so a replay in December would have turned W
 step's quest reward writes (on the fast clock a bot's 15-second exchange deadline ran out while the write was on its way, and the reward
 counted as refused) and prints each bot's quests taken, rewarded and still open.
 
+For an unhomed bot, `World:Playerbots:MaxDeliveryYards` (1200 by default, 0 disables the distance limit) keeps a quest
+with a known, present ender beyond that straight-line distance out of both visible pickup and offscreen quest travel. A
+completed quest already in the log is abandoned through `CMSG_QUESTLOG_REMOVE_QUEST`, freeing its slot even if the
+quest was previously set aside. A known
+cross-continent ender is still refused even when the distance limit is disabled; unknown or scripted enders remain
+eligible. A homed bot keeps its existing home-area and short-return rules. Static ender spawns are cached per quest and
+map, and invalidated when the quest store, creature content or content definition version changes; position, spawn gates
+and the live option are checked on each decision. In the 2026-10-11 w29 character snapshot, 56 of 64 same-map
+completed bot entries across quests 120, 118, 1420, 6384, 164, 165, 5601 and 6030 were more than 1200 yards from
+their enders. The limit does not solve
+nearby enders blocked by terrain or hostiles, nor provide autonomous taxi travel.
+
 A far goal (a quest giver or ender, a corpse) is approached a leg at a time (`PlayerbotNavigation.TryPlanToward`). Beyond
 `MaxPathPoints - 2` yards the map's region graph leads (`NavRegionGraph`, [collision-pathing](collision-pathing.md); built off the world
 thread on the first far goal of a map, seconds for a continent): its search finds the way across the map coarsely, round mountains and out

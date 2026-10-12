@@ -71,6 +71,97 @@ public sealed class PlayerbotQuestGoalsTests
     }
 
     [Fact]
+    public async Task UnhomedBot_RejectsVisibleStarterWithDistantSameMapEnder()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { DistantEnder = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            Assert.True(quest.Feature.Services.CanTakeQuest(player, QuestInteractionFixture.QuestId));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            for (int think = 0; think < 10; think++) Assert.False(goals.HasCandidate(player));
+            Assert.Equal(1, goals.TripEvaluations);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task UnhomedBot_AbandonsCompletedDistantSameMapDeliveryAndFreesSlot()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { DistantEnder = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            var state = quest.Feature.Services.StateOf(player)!;
+            int slot = state.Quests.FindSlot(QuestInteractionFixture.QuestId);
+            Assert.InRange(slot, 0, QuestConstants.MaxQuestLogSize - 1);
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            Assert.Equal(QuestStatus.Complete, state.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(goals.AbandonDistantCompletedQuest(player));
+            Assert.Equal(QuestStatus.None, state.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            Assert.Equal(QuestConstants.MaxQuestLogSize, state.Quests.FindSlot(QuestInteractionFixture.QuestId));
+            Assert.False(goals.HasCandidate(player));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task UnhomedBot_AbandonsDistantCompletedQuestEvenWhenItWasSetAside()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { DistantEnder = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            var suspensions = new PlayerbotSuspensions();
+            suspensions.SuspendQuest(QuestInteractionFixture.QuestId, quest.Host.World.NowMs);
+            goals.Suspensions = suspensions;
+            Assert.True(goals.IsRefused(QuestInteractionFixture.QuestId));
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(goals.AbandonDistantCompletedQuest(player));
+            Assert.Equal(QuestConstants.MaxQuestLogSize,
+                quest.Feature.Services.StateOf(player)!.Quests.FindSlot(QuestInteractionFixture.QuestId));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task HomedBot_KeepsCompletedQuestWhoseEnderIsInsideHome()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { DistantEnder = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            var goals = new PlayerbotQuestGoals(quest.Session,
+                new PlayerbotOptions { Enabled = true, MaxDeliveryYards = 1 });
+            goals.Home = new PlayerbotHomeArea(0, new System.Numerics.Vector3(-6948.95f, -132.49f, 83.53f), 100, null);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.False(goals.AbandonDistantCompletedQuest(player));
+            Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task PreviouslyCompletedCrossContinentDelivery_IsAbandonedByAnUnhomedBot()
     {
         await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });

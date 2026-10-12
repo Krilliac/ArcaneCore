@@ -69,6 +69,10 @@ public sealed class PlayerbotOptions
     /// <summary>The longest bot route in yards (above 0, at most 100000).</summary>
     public float MaxRouteYards { get; set; } = 2000f;
 
+    /// <summary>Maximum straight-line trip from an unhomed bot to a quest's nearest present ender in yards (0 disables the distance limit; 0..100000).</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 100000 ('.' is the decimal point); 0 disables the distance limit")]
+    public float MaxDeliveryYards { get; set; } = 1200f;
+
     /// <summary>The bots' movement speed in yards per second, never above the player's run speed (above 0, at most 100).</summary>
     public float MoveSpeed { get; set; } = 7f;
 
@@ -183,6 +187,8 @@ public sealed class PlayerbotOptions
         if (MaxPathPoints is < 1 or > 4096) throw new InvalidOperationException($"{SectionName}: MaxPathPoints must be 1..4096.");
         if (!float.IsFinite(MaxRouteYards) || MaxRouteYards <= 0 || MaxRouteYards > 100_000)
             throw new InvalidOperationException($"{SectionName}: MaxRouteYards must be finite and > 0..100000.");
+        if (!float.IsFinite(MaxDeliveryYards) || MaxDeliveryYards < 0 || MaxDeliveryYards > 100_000)
+            throw new InvalidOperationException($"{SectionName}: MaxDeliveryYards must be finite and 0..100000.");
         if (!float.IsFinite(MoveSpeed) || MoveSpeed <= 0 || MoveSpeed > 100)
             throw new InvalidOperationException($"{SectionName}: MoveSpeed must be finite and > 0..100.");
         if (StallSeconds is < 10 or > 86_400) throw new InvalidOperationException($"{SectionName}: StallSeconds must be 10..86400.");

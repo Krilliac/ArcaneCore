@@ -25,6 +25,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private const uint FarSpawnBlockMs = 30_000;
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
+    private readonly PlayerbotQuestTripFeasibility _trip = new();
     private readonly List<DestinationEntry> _entries = [];
     private readonly HashSet<uint> _blockedSpawns = [];
     private readonly Dictionary<uint, uint> _farBlockedUntil = [];
@@ -35,6 +36,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private QuestRewardMode _rewardMode;
     private uint[] _rewardQuestIds = [];
     private uint _level;
+    private float _cachedMaxDeliveryYards;
+    private readonly List<uint> _rejectedTrips = [];
     private PlayerbotHomeArea? _cachedHome;
     private uint _preferredEntry = uint.MaxValue;
     private uint _returnQuestId;
@@ -339,10 +342,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         QuestRewardMode mode = services.Options.RewardMode;
         uint[] allowed = services.Options.OrdinaryRewardQuestIds;
         uint level = player.Level;
+        float maxDeliveryYards = Home is null ? _options.MaxDeliveryYards : 0;
         if (_mapId == mapId && ReferenceEquals(_content, content) && _contentVersion == content.DefinitionsVersion
             && ReferenceEquals(_quests, quests) && _preferredEntry == preferredCreatureEntry
             && ReferenceEquals(_cachedHome, Home)
             && _returnQuestId == returnQuestId && _rewardMode == mode && _level == level
+            && _cachedMaxDeliveryYards == maxDeliveryYards
+            && RejectedTripsStillInfeasible(player, mapId, quests, content, maxDeliveryYards)
             && _rewardQuestIds.SequenceEqual(allowed)) return;
         bool contentChanged = _mapId != mapId || !ReferenceEquals(_content, content) || _contentVersion != content.DefinitionsVersion;
         ClearRoute();
@@ -354,6 +360,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _returnQuestId = returnQuestId;
         _rewardMode = mode;
         _level = level;
+        _cachedMaxDeliveryYards = maxDeliveryYards;
+        _rejectedTrips.Clear();
         _cachedHome = Home;
         _rewardQuestIds = [.. allowed];
         _entries.Clear();
@@ -383,9 +391,14 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         PlayerbotHomeArea? area = Home;
         foreach (uint questId in CandidateQuests(services, level))
         {
-            if (services.Quests.Get(questId) is not { } candidate
-                || RequiresIntercontinentTravel(mapId, quests, content, questId)
-                || area is not null && !area.QuestInside(quests, content, candidate)) continue;
+            if (services.Quests.Get(questId) is not { } candidate) continue;
+            if (_trip.IsInfeasible(mapId, player.X, player.Y, quests, content, questId,
+                maxDeliveryYards, player))
+            {
+                _rejectedTrips.Add(questId);
+                continue;
+            }
+            if (area is not null && !area.QuestInside(quests, content, candidate)) continue;
             givers.UnionWith(quests.CreatureStartersOf(questId));
             givers.UnionWith(quests.CreatureEndersOf(questId));
         }
@@ -396,6 +409,16 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             .OrderBy(entry => DistanceSquared(player, entry.Spawn)).ThenBy(entry => entry.Spawn.Guid)
             .Take(MaxEntryScan))
             _entries.Add(entry);
+    }
+
+    private bool RejectedTripsStillInfeasible(Player player, uint mapId, QuestStore quests, CreatureContent content,
+        float maxDeliveryYards)
+    {
+        // Static enders stay cached. Recheck live spawn gates and position before retaining a shortlist that omitted a quest.
+        foreach (uint questId in _rejectedTrips)
+            if (!_trip.IsInfeasible(mapId, player.X, player.Y, quests, content, questId, maxDeliveryYards, player))
+                return false;
+        return true;
     }
 
     /// <summary>
@@ -412,33 +435,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             .Where(quest => quest.MinLevel <= level && (quest.QuestLevel <= 0 || quest.QuestLevel > gray))
             .Select(quest => quest.Id).Order()
             .Where(services.IsRewardable);
-    }
-
-    /// <summary>
-    /// A bot has no route between the two continents: its tram and elevator trips stay on one continent. A quest whose
-    /// static creature enders are exclusively on the other continent cannot be finished by this bot. Unknown or scripted
-    /// enders, and instance enders, retain their existing eligibility; this only rejects a proven map-0/map-1 handoff.
-    /// </summary>
-    internal static bool RequiresIntercontinentTravel(uint mapId, QuestStore quests, CreatureContent content, uint questId)
-    {
-        if (mapId is not (0 or 1)) return false;
-        IReadOnlyList<uint> enders = quests.CreatureEndersOf(questId);
-        if (enders.Count == 0) return false;
-        bool otherContinent = false;
-        foreach (uint entry in enders)
-        {
-            bool knownSpawn = false;
-            foreach (uint spawnMap in content.MapsWithSpawns)
-            {
-                if (!content.GetSpawns(spawnMap, entry).Any(IsFiniteDestination)) continue;
-                knownSpawn = true;
-                if (spawnMap == mapId) return false;
-                if (spawnMap is not (0 or 1)) return false;
-                otherContinent = true;
-            }
-            if (!knownSpawn) return false;
-        }
-        return otherContinent;
     }
 
     /// <summary>
@@ -465,7 +461,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         return !missing;
     }
 
-    private static bool Eligible(uint entry, uint preferred, Player player, QuestNpcServices? services,
+    private bool Eligible(uint entry, uint preferred, Player player, QuestNpcServices? services,
         PlayerNpcState? state, uint returnQuestId, Func<uint, bool>? skipQuest, LootContent? loot, out uint questId)
     {
         questId = 0;
@@ -490,6 +486,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         {
             if (services.IsRewardable(id) && skipQuest?.Invoke(id) != true
                 && services.Quests.Get(id) is { } quest && CanPursueStarter(player, quest, loot, services.Npcs)
+                && (_content is null || !_trip.IsInfeasible(player.MapId, player.X, player.Y, services.Quests,
+                    _content, id, Home is null ? _options.MaxDeliveryYards : 0, player))
                 && services.CanTakeQuest(player, id) == true && state.Quests.Get(id) is null) { questId = id; return true; }
         }
         return false;
