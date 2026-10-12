@@ -360,18 +360,18 @@ public sealed class WorldRuntimeTickTests
         Func<GcSnapshot> source = world.GcSource;
         GcSnapshot warm = source();
         _ = source().Since(warm); // JIT both paths first
-        long before = GC.GetAllocatedBytesForCurrentThread();
         long pause = 0;
-        for (int i = 0; i < 10_000; i++)
+        AllocationProbe.AssertEveryCleanWindowAtMost(() =>
         {
-            GcSnapshot a = source();
-            GcSnapshot b = source();
-            pause += b.Since(a).PauseTicks;
-        }
+            for (int i = 0; i < 10_000; i++)
+            {
+                GcSnapshot a = source();
+                GcSnapshot b = source();
+                pause += b.Since(a).PauseTicks;
+            }
+        }, 0, "10000 GC counter reads");
 
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.True(pause >= 0);
-        Assert.Equal(0, allocated);
     }
 
     private sealed class SleepingUpdater(int ms) : IMapUpdater

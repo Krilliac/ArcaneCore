@@ -16,12 +16,9 @@ public sealed class VisibilityAllocationTests
         world.AddPlayer(player);
         world.RunTick(50);
         for (int i = 0; i < 20; i++) map.RefreshVisibility(player);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 100; i++) map.RefreshVisibility(player);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // No packet changes: permit small fixed bookkeeping, never lists proportional to the visible population. Every GC-free window must pass.
+        AllocationProbe.AssertEveryCleanWindowAtMost(() => { for (int i = 0; i < 100; i++) map.RefreshVisibility(player); }, 8191, "100 stable refreshes");
         Assert.Equal(1000, player.VisibleObjects.Count);
-        // No packet changes: permit small fixed bookkeeping, never lists proportional to the visible population.
-        Assert.True(allocated < 8192, $"100 stable refreshes allocated {allocated} bytes");
     }
 
     [Fact]

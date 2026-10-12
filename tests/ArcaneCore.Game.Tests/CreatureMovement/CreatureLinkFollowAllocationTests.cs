@@ -56,19 +56,13 @@ public sealed class CreatureLinkFollowAllocationTests
 
             for (int i = 0; i < 10; i++) system.UpdateLinkedFollowers(); // warm-up: JIT, delegate caches
 
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < 50; i++) system.UpdateLinkedFollowers();
-            long steady = GC.GetAllocatedBytesForCurrentThread() - before;
+            Action window = () => { for (int i = 0; i < 50; i++) system.UpdateLinkedFollowers(); };
+            AllocationProbe.AssertEveryCleanWindowAtMost(window, 4_096, $"50 follower updates with {system.Creatures.Count} creatures");
 
             // The template slave's master is gone: every update searches the map for another (the allocation-free candidate scan).
             system.KillCreature(BySpawn(system, Master));
-            system.UpdateLinkedFollowers();
-            before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < 50; i++) system.UpdateLinkedFollowers();
-            long searching = GC.GetAllocatedBytesForCurrentThread() - before;
-
-            Assert.True(steady <= 4_096, $"50 follower updates allocated {steady} bytes with {system.Creatures.Count} creatures");
-            Assert.True(searching <= 4_096, $"50 searching follower updates allocated {searching} bytes with {system.Creatures.Count} creatures");
+            for (int i = 0; i < 10; i++) system.UpdateLinkedFollowers(); // warm-up of the searching path
+            AllocationProbe.AssertEveryCleanWindowAtMost(window, 4_096, $"50 searching follower updates with {system.Creatures.Count} creatures");
         }
     }
 
