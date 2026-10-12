@@ -1,4 +1,7 @@
 using System.Numerics;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 
@@ -8,16 +11,20 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// The places where the live stress test's bots stalled (2026-10-08, 200 managed bots in every starting zone; 74 stalled,
 /// D:/ArcaneCore-lanes/_plan/stress-bot-failures-20261008.txt), on the real terrain: a bot is put where a stalled one stood and
 /// follows <see cref="PlayerbotNavigation.PlanToward"/> routes, as its quest travel does, to the creature its goal named
-/// (positions from the stall reports and the world database's spawns).
+/// (positions from the stall reports and the world database's spawns). Not every pairing is a recorded stall: the Quest 3087 camp
+/// spot to Jen'shan pairing comes from the old probe cases, and the Quest 2161 Grosk and Ukor targets were chosen by the author
+/// (the recorded 2161 stalls were Explore goals, which name no creature). Each walk waits for the region graph first, so the
+/// planning path does not depend on the timing of its background build. The on-demand navigation tile mechanism is guarded by
+/// <c>NavMeshOnDemandTileTests</c> (LoadTiles), not here.
 /// </summary>
 public sealed partial class PlayerbotRealTerrainNavigationTests
 {
     private static readonly PlayerbotOptions LiveOptions = new() { MaxPathPoints = 128, MaxRouteYards = 2000 };
 
     /// <summary>
-    /// Quest 1656 (A Task Unfinished) to Innkeeper Kauth in Bloodhoof Village, from the edge of the Red Cloud Mesa: 99 stall reports.
-    /// The mesa's way down runs south through a navigation tile no grid held; the search ended on the cliff edge (the point nearest
-    /// the innkeeper on the loaded tiles), and the straight-line steps ended there too.
+    /// Quest 1656 (A Task Unfinished) to Innkeeper Kauth in Bloodhoof Village, from the edge of the Red Cloud Mesa: 102 stall reports.
+    /// The mesa's way down runs south; the search ended on the cliff edge (the point nearest the innkeeper on the loaded tiles),
+    /// and the straight-line steps ended there too.
     /// </summary>
     [RealTerrainBotFact]
     public Task Quest1656_FromTheMesaEdge_TheBotWalksDownToInnkeeperKauth()
@@ -38,7 +45,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
 
     /// <summary>
     /// Quest 2159 (Dolanaar Delivery) to Innkeeper Keldamyr, from the hillside west of Shadowglen the straight-line steps led bots up
-    /// (30 stall reports for the quest).
+    /// (35 stall reports for the quest).
     /// </summary>
     [RealTerrainBotFact]
     public Task Quest2159_FromTheHillWestOfShadowglen_TheBotWalksToInnkeeperKeldamyr()
@@ -52,19 +59,19 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
     public Task Quest2159_FromAFragmentOfMeshInShadowglen_TheBotStepsOffItAndWalksToDolanaar()
         => WalksAsync(new(10429.6f, 729.9f, 1318.4f), InnkeeperKeldamyr);
 
-    /// <summary>Quest 459 (The Woodland Protector) to Tarindrella, from a fragment of mesh at Dolanaar (15 stall reports for the quest).</summary>
+    /// <summary>Quest 459 (The Woodland Protector) to Tarindrella, from a fragment of mesh at Dolanaar (16 stall reports for the quest).</summary>
     [RealTerrainBotFact]
     public Task Quest459_FromAFragmentOfMeshAtDolanaar_TheBotWalksToTarindrella()
         => WalksAsync(new(9740.8f, 835.7f, 1299.2f), new(10296.9f, 870.2f, 1335.9f));
 
-    /// <summary>Quest 4495 (A Good Friend) to Iverron, from a fragment of mesh in Shadowglen (24 stall reports for the quest).</summary>
+    /// <summary>Quest 4495 (A Good Friend) to Iverron, from a fragment of mesh in Shadowglen (25 stall reports for the quest).</summary>
     [RealTerrainBotFact]
     public Task Quest4495_FromAFragmentOfMeshInShadowglen_TheBotWalksToIverron()
         => WalksAsync(new(10486.4f, 744.3f, 1313.9f), new(10711.6f, 1034.9f, 1347.3f));
 
     /// <summary>
     /// Quest 2161 (A Peon's Burden) north of Razor Hill: the bot stood on a fragment of mesh with an exploration goal, every way out
-    /// refused (10 stall reports). It walks to Innkeeper Grosk.
+    /// refused (18 stall reports). The target, Innkeeper Grosk, is the author's choice: the recorded stalls were Explore goals.
     /// </summary>
     [RealTerrainBotFact]
     public Task Quest2161_FromAFragmentOfMeshNorthOfRazorHill_TheBotWalksToInnkeeperGrosk()
@@ -103,7 +110,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
     public Task Quest3087_FromTheCampSpot_TheBotWalksToGalgar()
         => WalksAsync(new(-585.1f, -4223.8f, 38.5f), new(-561.6f, -4221.8f, 41.7f));
 
-    /// <summary>Quest 3087 from the same spot to Jenshan, 50 yards the other way.</summary>
+    /// <summary>Quest 3087 from the same spot to Jenshan, 50 yards the other way (a pairing from the old probe, not a recorded stall).</summary>
     [RealTerrainBotFact]
     public Task Quest3087_FromTheCampSpot_TheBotWalksToJenshan()
         => WalksAsync(new(-585.1f, -4223.8f, 38.5f), new(-635.5f, -4227.5f, 38.4f));
@@ -113,10 +120,15 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
     public Task Quest3361_FromTheHeights_TheBotWalksToFelix()
         => WalksAsync(new(-6135.3f, 386.1f, 395.6f), new(-6098.1f, 396.1f, 395.5f), map: 0);
 
-    /// <summary>Quest 2161 from the mesh fragment north of Razor Hill to Ukor, 880 yards west.</summary>
+    /// <summary>Quest 2161 from the mesh fragment north of Razor Hill to Ukor, 880 yards west (the target is the author's choice).</summary>
     [RealTerrainBotFact]
     public Task Quest2161_FromAFragmentOfMeshNorthOfRazorHill_TheBotWalksToUkor()
         => WalksAsync(new(207.5f, -4458.7f, 27.7f), new(-599.4f, -4715.3f, 35.2f));
+
+    /// <summary>Quest 2161 to Ukor from the neighbouring start the old probe used, a few yards from the fragment above.</summary>
+    [RealTerrainBotFact]
+    public Task Quest2161_FromTheProbesStartNorthOfRazorHill_TheBotWalksToUkor()
+        => WalksAsync(new(200.53f, -4458.667f, 30.16f), new(-599.4f, -4715.3f, 35.2f));
 
     // Innkeeper Kauth (creature 6747), Bloodhoof Village; Innkeeper Keldamyr (6736), Dolanaar.
     private static readonly Vector3 InnkeeperKauth = new(-2365.4f, -347.3f, -8.9f);
@@ -126,6 +138,13 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
     {
         await using Terrain terrain = await Terrain.StartAsync();
         await terrain.PlaceAsync(from, map);
+
+        // The region leg of a plan answers nothing until the map's graph is built (in the background): wait for it, so every walk
+        // takes the same planning path whatever the timing.
+        Task<NavRegionGraph?> build = await terrain.Host.OnWorldAsync(() =>
+            ((NavMeshPathfinder)terrain.Player.Map!.Collision.Pathfinder).RegionGraphTask(map, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!);
+        Assert.NotNull(await build);
+
         float left = await terrain.WalkTowardAsync(to, 5f, 300_000, output, LiveOptions); // a refused route fails inside
         Assert.True(left <= 5f, $"stopped {left:F1} yards from the destination");
     }

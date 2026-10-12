@@ -89,7 +89,7 @@ public sealed class NavMeshOnDemandTileTests(ITestOutputHelper output)
         nav.FindPath(Kalimdor, MesaEdge, MesaEdge + new Vector3(5, 0, 0), Options(loadTiles: true));
         int before = nav.OnDemandTileCount;
         ((ICollisionTileLifecycle)nav).OnTileLoaded(Kalimdor, x, y);
-        Assert.True(nav.OnDemandTileCount <= before);
+        Assert.True(nav.OnDemandTileCount < before);
         Assert.True(nav.GetNavMesh(Kalimdor)!.IsTerrainTileLoaded(x, y));
         ((ICollisionTileLifecycle)nav).OnTileUnloaded(Kalimdor, x, y);
         Assert.False(nav.GetNavMesh(Kalimdor)!.IsTerrainTileLoaded(x, y));
