@@ -140,6 +140,13 @@ this set-aside covers the enders that are near on the map but behind steep groun
 `AtTheAshenvaleStall_TheRidgeIsNoMeshIsland_AndTheBrainWalksTheBotOff`; the decision itself is tested through the brain in
 `PlayerbotQuestSteepReturnTests`. None of this establishes a walkable approach from the ridge or completes the quest.
 
+Bot QA #218 exposed a second stop near Je'neu: from three Ashenvale approach points the region route reached
+the last walkable point about 5.6 yards from his centre and found no further mesh route. The bot had required
+5 yards between centres, while the quest server accepts strict 3D distance below 5 yards plus both bounding
+radii (vmangos `src/game/Objects/Object.cpp`, `WorldObject::IsWithinDist`; Je'neu model 12953 radius 0.306 and
+player radius 0.389). `PlayerbotQuestGoals` now uses that same reach before planning another step; the
+packet-level `QuestGiverWithinServerRadiusAdjustedReach_IsQueriedWithoutAnotherPath` confirms the exchange.
+
 Some walkable ground is a navigation-mesh **island**: polygons the mesh joins to nothing round them, so every route from there ends at the
 island's edge nearest the goal and the next plan is refused, whatever the goal. Inside the round wall of the Molsen Farm in Westfall
 (x -10305..-10274, y 1355..1385) the collision data closes it too: the wall stands 1.7 to 3 yards above the ground inside, and no floor
@@ -155,6 +162,16 @@ brain), a duel, on a battleground, in the air, during another teleport (an unsaf
 not allowed; not urgent, at most one every 5 minutes, so a bind point that is itself an island cannot loop (`PlayerbotMeshIslandTests`,
 `AGroupedUnhomedBot_RevivedAmongStrongHostiles_IsNotTeleportedToItsBindPoint`). An island beside water or a void, where a probe point
 has no polygon near it (a NoPath answer), is never detected: its bots still stall and give their goals up one by one.
+
+**Intercontinent quest handoffs.** The bot's tram and elevators stay on one continent, and its ordinary
+quest travel has no ship or zeppelin route between maps 0 and 1. Before acceptance, visible and offscreen
+starters are skipped when all known static creature enders stand on the other continent; a local alternative,
+unknown scripted ender or instance ender is left eligible. This excludes the Winterspring to Eastern
+Plaguelands deliveries 6030 (#236) and 5601 (#235) from autonomous pickup. Previously completed copies
+held by unhomed bots are abandoned through the normal quest-log packet. The existing home-area rule still
+limits long local turn-ins. `DukeAndPamelaStyleCrossContinentEnder_IsIneligibleForOffscreenTravel`,
+`CrossContinentEnder_DoesNotBecomeAVisibleStarterGoal` and
+`PreviouslyCompletedCrossContinentDelivery_IsAbandonedByAnUnhomedBot` cover these decisions.
 
 #### Travel by the Deeprun Tram
 
@@ -505,7 +522,9 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   `no zone clip`.
 * **Provisioning.** `tools/ops/provision-bots.ps1 -Home` sets each bot's home to the place it is teleported to ([bot provisioning](../ops/bot-provisioning.md)).
 * **Stalls outside the home.** A goal on which `PlayerbotSharedSetAsides.BotsToShare` (3) different bots stalled within 30 minutes is set aside for
-  every bot (30 min, doubling to at most 2 h). Only the stalls of bots **inside their home area** (or with none) count
+  every bot (30 min, doubling to at most 2 h). After a full day without a stall on that goal, its next
+  shared set-aside starts at 30 minutes again (`QuietGoal_LosesItsRepeatPenaltyBeforeTheNextSharedStall`).
+  Only the stalls of bots **inside their home area** (or with none) count
   (`PlayerbotBrain.GiveUpStalledGoal`, `StallOutsideHome`): a homed bot outside it (on another map, on its way back, on a turn-in or capital
   errand) stalls where its home does not keep it, which says nothing about the goal for the bots whose home it is. It still sets the goal aside
   for itself (10 min), and its stall line ends `it gives up that goal outside its home` (bot QA: cause `OutsideHome`, never published). The

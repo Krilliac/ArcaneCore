@@ -23,6 +23,26 @@ namespace ArcaneCore.World.Tests.Playerbots;
 
 public sealed class PlayerbotWorldDestinationsTests
 {
+    [Fact]
+    public void AnotherContinentOnly_IsIneligible_ButALocalAlternativeRemainsEligible()
+    {
+        var quest = new QuestTemplate { Entry = 6030, Method = 2, MinLevel = 1, QuestLevel = 1 };
+        var remote = new CreatureQuestRelation { Id = 11039, Quest = 6030 };
+        var local = new CreatureQuestRelation { Id = 11040, Quest = 6030 };
+        var remoteSpawn = new CreatureSpawn { Guid = 1, Entry = 11039, MapId = 0, X = 1, Y = 2, Z = 3 };
+        var localSpawn = new CreatureSpawn { Guid = 2, Entry = 11040, MapId = 1, X = 4, Y = 5, Z = 6 };
+        var content = new CreatureContent([], [remoteSpawn, localSpawn], [], [], []);
+        var remoteOnly = new QuestStore(new QuestContent([quest], [], [remote]));
+        var alternatives = new QuestStore(new QuestContent([quest], [], [remote, local]));
+        var unknown = new QuestStore(new QuestContent([quest], [], [remote,
+            new CreatureQuestRelation { Id = 11041, Quest = 6030 }]));
+
+        Assert.True(PlayerbotWorldDestinations.RequiresIntercontinentTravel(1, remoteOnly, content, 6030));
+        Assert.False(PlayerbotWorldDestinations.RequiresIntercontinentTravel(1, alternatives, content, 6030));
+        Assert.False(PlayerbotWorldDestinations.RequiresIntercontinentTravel(1, unknown, content, 6030));
+        Assert.False(PlayerbotWorldDestinations.RequiresIntercontinentTravel(0, remoteOnly, content, 6030));
+    }
+
     [Theory]
     [InlineData(308u, 2686u)] // Distracting Jarven: Thunder Ale
     [InlineData(3861u, 11109u)] // CLUCK!: Special Chicken Feed

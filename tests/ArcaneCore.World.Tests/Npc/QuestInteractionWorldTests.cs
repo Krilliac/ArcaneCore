@@ -340,6 +340,7 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
     public const uint QuestId = 900001;
     public const uint UnrelatedId = 900002;
     public const uint Entry = 900010;
+    public const uint RemoteEnder = 900011;
     public static readonly ObjectGuid Guid = ObjectGuid.WithEntry(HighGuid.Unit, Entry, 900020);
     public MemoryQuestStore Characters { get; } = new();
     public ManualQuestClock Clock { get; } = new();
@@ -350,6 +351,7 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
     /// <summary>An item-only repeatable starter, when set (the normal fixture remains a kill quest).</summary>
     public uint RepeatableItem { get; init; }
     public uint RepeatableItemCount { get; init; }
+    public bool EnderOnOtherMap { get; init; }
 
     public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new QuestContent(
         [new QuestTemplate { Entry = QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, LimitTime = 30, SrcItemId = SourceItem, SrcItemCount = (byte)(SourceItem == 0 ? 0 : 1),
@@ -357,9 +359,12 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
             SpecialFlags = (byte)(RepeatableItem == 0 ? 0 : 1), ReqItemId1 = RepeatableItem, ReqItemCount1 = RepeatableItemCount,
             ReqCreatureOrGOId1 = RepeatableItem == 0 ? 90 : 0, ReqCreatureOrGOCount1 = RepeatableItem == 0 ? 1u : 0u },
         new QuestTemplate { Entry = UnrelatedId, Method = 2, Title = "Unrelated quest" }],
-        [new CreatureQuestRelation { Id = Entry, Quest = QuestId }], [new CreatureQuestRelation { Id = Entry, Quest = QuestId }]));
+        [new CreatureQuestRelation { Id = Entry, Quest = QuestId }],
+        [new CreatureQuestRelation { Id = EnderOnOtherMap ? RemoteEnder : Entry, Quest = QuestId }]));
 
     Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
-        [new CreatureTemplate { Entry = Entry, Name = "Synthetic questgiver", Faction = 900011, NpcFlags = 2, DisplayIds = [49] }],
-        [new CreatureSpawn { Guid = 900020, Entry = Entry, MapId = 0, X = -8948.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
+        [new CreatureTemplate { Entry = Entry, Name = "Synthetic questgiver", Faction = 900011, NpcFlags = 2, DisplayIds = [49] },
+         new CreatureTemplate { Entry = RemoteEnder, Name = "Remote ender", Faction = 900011, NpcFlags = 2, DisplayIds = [49] }],
+        [new CreatureSpawn { Guid = 900020, Entry = Entry, MapId = 0, X = -8948.95f, Y = -132.49f, Z = 83.53f },
+         new CreatureSpawn { Guid = 900021, Entry = RemoteEnder, MapId = 1, X = -8948.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
 }

@@ -24,6 +24,25 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// <summary>Contract tests for the advisory seam used to select offscreen quest travel.</summary>
 public sealed class PlayerbotQuestTravelPriorityTests
 {
+    [Fact]
+    public async Task DukeAndPamelaStyleCrossContinentEnder_IsIneligibleForOffscreenTravel()
+    {
+        // ClassicDB 6030 and 5601 start on map 1 in Winterspring and end on map 0 in the Eastern Plaguelands.
+        // This fixture reverses the maps to use the test player's map 0, preserving the unsupported crossing.
+        await using WorldTestHost host = Start(new QuestTravelFixture(-8648.95f, enderMapId: 1));
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                Assert.False(new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true }).HasQuestCandidate(player));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -258,18 +277,21 @@ public sealed class PlayerbotQuestTravelPriorityTests
     }
 }
 
-internal sealed class QuestTravelFixture(float spawnX) : IQuestContentStore, ICreatureDataStore
+internal sealed class QuestTravelFixture(float spawnX, uint enderMapId = 0) : IQuestContentStore, ICreatureDataStore
 {
     internal const uint QuestId = 910001;
     internal const uint Entry = 910010;
+    internal const uint OtherEnder = 910011;
     internal static readonly ObjectGuid Guid = ObjectGuid.WithEntry(HighGuid.Unit, Entry, 910020);
 
     public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new QuestContent(
         [new QuestTemplate { Entry = QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, Title = "Travel quest" }],
         [new CreatureQuestRelation { Id = Entry, Quest = QuestId }],
-        [new CreatureQuestRelation { Id = Entry, Quest = QuestId }]));
+        [new CreatureQuestRelation { Id = enderMapId == 0 ? Entry : OtherEnder, Quest = QuestId }]));
 
     Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
-        [new CreatureTemplate { Entry = Entry, Name = "Travel questgiver", NpcFlags = 2, DisplayIds = [49] }],
-        [new CreatureSpawn { Guid = 910020, Entry = Entry, MapId = 0, X = spawnX, Y = -132.49f, Z = 83.53f }], [], [], []));
+        [new CreatureTemplate { Entry = Entry, Name = "Travel questgiver", NpcFlags = 2, DisplayIds = [49] },
+         new CreatureTemplate { Entry = OtherEnder, Name = "Distant ender", NpcFlags = 2, DisplayIds = [49] }],
+        [new CreatureSpawn { Guid = 910020, Entry = Entry, MapId = 0, X = spawnX, Y = -132.49f, Z = 83.53f },
+         new CreatureSpawn { Guid = 910021, Entry = OtherEnder, MapId = enderMapId, X = -8948.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
 }
