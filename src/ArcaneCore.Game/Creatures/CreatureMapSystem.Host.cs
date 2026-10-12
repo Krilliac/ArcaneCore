@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Stealth;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -167,6 +168,69 @@ public sealed partial class CreatureMapSystem
         creature.Motion.Initialize(creature.Motion.Default, this, start: creature.IsAlive);
         CreateAi(creature);
         return true;
+    }
+
+    /// <summary>
+    /// Hot module swap (world thread, tick boundary, before any map update): give a fresh AI to every creature of this map whose AI selection
+    /// changed. A creature qualifies when its entry is in <paramref name="entries"/>, its ScriptName or AIName is in <paramref name="names"/>, or its
+    /// current AI satisfies <paramref name="isRetired"/> (it is code of a module being replaced or unloaded). Only the AI object is rebuilt
+    /// (<see cref="CreateAi"/>): position, health, threat and motion are untouched. A creature in combat is left alone, since a new AI would not have
+    /// seen its fight start; it is counted in <paramref name="deferred"/> and the caller tries again later. Dead creatures are changed now: their AI is
+    /// told <c>OnRespawn</c> when they come back. Pets and charmed creatures are never touched. With <paramref name="only"/> set (a retry), just those
+    /// creatures are looked at, so one that already switched is never rebuilt (that would wipe its AI state); <paramref name="stillDeferred"/> receives
+    /// the GUID of every creature left in combat.
+    /// </summary>
+    /// <returns>How many creatures got a new AI.</returns>
+    public int RefreshScriptedAi(
+        IReadOnlySet<uint> entries,
+        IReadOnlySet<string> names,
+        Func<CreatureAI, bool> isRetired,
+        out int deferred,
+        IReadOnlySet<ObjectGuid>? only = null,
+        ISet<ObjectGuid>? stillDeferred = null)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(names);
+        ArgumentNullException.ThrowIfNull(isRetired);
+        int changed = 0;
+        deferred = 0;
+        foreach (Creature creature in _creatures.Values.ToArray())
+        {
+            if ((only is not null && !only.Contains(creature.Guid)) || creature.Summon is { Kind: SummonKind.Pet } || !creature.CharmerGuid.IsEmpty)
+            {
+                continue;
+            }
+
+            CreatureTemplate template = creature.Template;
+            bool affected = entries.Contains(template.Entry)
+                || (!string.IsNullOrEmpty(template.ScriptName) && names.Contains(template.ScriptName))
+                || (!string.IsNullOrEmpty(template.AIName) && names.Contains(template.AIName))
+                || (creature.AI is { } current && isRetired(current));
+            if (!affected)
+            {
+                continue;
+            }
+
+            if (creature.Combat.IsInCombat)
+            {
+                deferred++;
+                stillDeferred?.Add(creature.Guid);
+                continue;
+            }
+
+            try
+            {
+                CreateAi(creature);
+                changed++;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // A script factory that throws leaves the creature with the AI it has; the other creatures still switch.
+                _logger.LogError(ex, "building the new AI of creature {Entry} failed; it keeps its previous AI", creature.Template.Entry);
+            }
+        }
+
+        return changed;
     }
 
     private void CreateAi(Creature creature)

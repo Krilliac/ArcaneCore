@@ -8,6 +8,7 @@ using ArcaneCore.World.Handlers;
 using ArcaneCore.World.HotCode;
 using ArcaneCore.World.HotCode.Modules;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.Configuration;
@@ -75,6 +76,8 @@ public static class WorldServiceCollectionExtensions
         // Order matters: the world starts before the listener and stops after it.
         services.AddHostedService<WorldHost>();
         services.AddHostedService<WorldServer>();
+
+        services.AddOpsAnnouncer(configuration); // staff notices / world messages (World:Announce); the hot swap lanes report through it
 
         // Off by default: with World:HotCode:Enabled unset no hot-code object is registered at all.
         if (configuration.IsHotCodeEnabled())

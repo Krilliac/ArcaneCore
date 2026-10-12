@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Version 2 of HotGame: the same source with the V2 symbol (one more creature entry). -->
+  <PropertyGroup>
+    <AssemblyName>HotGame</AssemblyName>
+    <RootNamespace>HotGame</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);V2</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\HotGameV1\*.cs" Link="%(Filename)%(Extension)" />
+    <ProjectReference Include="..\..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+  </ItemGroup>
+
+</Project>

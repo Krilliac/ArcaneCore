@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Compiles tools/hotmodule-template/GmCommands (the documented template module) against the current ArcaneCore.World, so a template that
+       stops building or stops loading fails a test. Assembly name GmCommands. Not in ArcaneCore.slnx; built through the test project's reference. -->
+  <PropertyGroup>
+    <AssemblyName>GmCommands</AssemblyName>
+    <RootNamespace>GmCommands</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\..\tools\hotmodule-template\GmCommands\GmCommands.cs" Link="GmCommands.cs" />
+    <ProjectReference Include="..\..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+  </ItemGroup>
+
+</Project>

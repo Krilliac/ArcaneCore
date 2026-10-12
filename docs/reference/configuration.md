@@ -70,6 +70,7 @@ How to read the tables:
 - [`Totems`](#totems)
 - [`Warden`](#warden)
 - [`World`](#world)
+- [`World:Announce`](#worldannounce)
 - [`World:Chat`](#worldchat)
 - [`World:Collision`](#worldcollision)
 - [`World:Console`](#worldconsole)
@@ -965,6 +966,23 @@ How to read the tables:
 | `World:UpdateCompressionThreshold` | `int` | `128` | live | Update packets larger than this many bytes are zlib-compressed into SMSG_COMPRESSED_UPDATE_OBJECT (vmangos Compression.Update.Size default 128). 0 disables. |
 | `World:WriterDrainGrace` | `TimeSpan` | `00:00:00` | - | How long a closing session lets the writer flush queued frames (for example a refusal reply) before the stream is torn down so a client that stopped reading cannot hold the connection, its DI scope and its queued frames forever. `TimeSpan.Zero`, the default, means the built-in 5 s bound; the wait is never unbounded. vmangos does not wait at all: its CloseSocket shuts the socket down at once (AsyncSocket_windows.cpp:318-329). Bound from World:WriterDrainGrace (for example "00:00:02"). |
 
+## `World:Announce`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Announce:Enabled` | `bool` | `true` | - | Master switch for delivery to players and staff. When false announcements are still logged and counted. |
+| `World:Announce:HotSwap:AllowNamesInWorldMessage` | `bool` | `false` | - | Let the world message carry character names when the announcing code supplies a text for it. Off by default. |
+| `World:Announce:HotSwap:DedupSeconds` | `int` | `0` | - | An announcement identical to one delivered this many seconds ago is suppressed. 0 disables the window. |
+| `World:Announce:HotSwap:GmNotify` | `bool` | `true` | - | Send the announcement to every online account above Player (an on-screen notification and a chat line). Staff only. |
+| `World:Announce:HotSwap:IncludeDetails` | `bool` | `true` | - | Add the staff-only detail (who, how long, counts, hashes) to the staff chat line. Players never see it. |
+| `World:Announce:HotSwap:Lanes` | `List<string>` | `[]` | - | Lanes to announce: any of Data, Module, Code. Empty (the default) announces all of them. A lane that is not turned on never reports anything. |
+| `World:Announce:HotSwap:MinimumSeverity` | `AnnounceSeverity` | `Info` | - | Announcements below this severity are logged and counted but not delivered. Values: `Info`, `Warning`, `Error`, `Critical`. |
+| `World:Announce:HotSwap:RateBurst` | `int` | `10` | - | Rate limit: how many announcements of this category may go out back to back before the limit applies. 0 disables the limit. |
+| `World:Announce:HotSwap:RatePerMinute` | `int` | `20` | - | Rate limit: announcements of this category refilled per minute once the burst is used. Suppressed ones are counted and reported on the next delivered announcement. |
+| `World:Announce:HotSwap:WorldMessage` | `bool` | `false` | - | Send a short system chat line to every online player. Never carries account names; never carries character names unless `AllowNamesInWorldMessage`. |
+| `World:Announce:HotSwap:WorldMessageIncludeReason` | `bool` | `true` | - | Put the free-text reason the staff member gave (`.reload creature_template fixed drop rates`) into the world message. The reason is shown to players as typed. |
+| `World:Announce:HotSwap:WorldMessageOnFailure` | `bool` | `false` | - | Also send the world message for a swap that was rejected or failed. Default false: players only hear about changes that happened. |
+
 ## `World:Chat`
 
 | Key | Type | Default | Reload | Meaning |
@@ -1185,6 +1203,7 @@ How to read the tables:
 | `World:Playerbots:Chat:Safety:StripPersonalData` | `bool` | `true` | live | Replace emails, phone numbers and street addresses in what is sent to a model provider with a placeholder (on). |
 | `World:Playerbots:Chat:Safety:TermsFile` | `string` | `""` | live | An operator's term file (the shipped file's JSON format), relative to the working directory or absolute. Empty: only the shipped list. Its entries are added to the shipped ones unless `ReplaceDefaultTerms`; it is read again when it changes. |
 | `World:Playerbots:Chat:TimeoutSeconds` | `int` | `10` | live | Seconds one model request may take before the next provider is tried (1..60). |
+| `World:Playerbots:ClientFidelity` | `PlayerbotClientFidelity` | `Lean` | - | How much real-client packet work a bot's session does (`PlayerbotClientFidelity.Lean` by default). Lean: a bot has no client, so the map builds no SMSG_UPDATE_OBJECT blocks for it (its visible set is still maintained) and its session keeps only the received packets a bot reads back (`PlayerbotPacketIntake`). Full: bots are treated like real clients, every packet is built, compressed and copied into the bot's receive ring, which is the stress-test mode for load testing. A session with an observer attached (scenario, packet capture) always receives everything. Read at start; a restart applies a change. Values: `Lean`, `Full`. |
 | `World:Playerbots:Economy:BuyUpgradeBudgetFraction` | `float` | `0.25` | live | The share of the money a bot holds at the start of a visit that the visit may spend in all (0..1): listing deposits and the buyout of an upgrade count against it. 0 spends nothing. |
 | `World:Playerbots:Economy:Enabled` | `bool` | `true` | live | Let bots list, buy and collect at the auction house (on by default). Off: no visit starts; a running one is dropped. |
 | `World:Playerbots:Economy:ListChancePerVisit` | `int` | `50` | live | The chance in percent (0..100) that a visit lists anything: one roll per visit, then the bot lists up to its free listing slots. 0 lists nothing (a bot may still buy and collect); 100 always lists. |

@@ -24,6 +24,20 @@ it refuses new starts until enough bots are stopped. Until 2026-10-08 `MaxBots` 
 bots too; the ceiling of 1000 and its measurement are in `docs/integration/perf-limits-20261008.md` (a ceiling, not a
 recommendation: watch `.server info` on a real world).
 
+**Client fidelity (`World:Playerbots:ClientFidelity`, `Lean` by default, read at start).** A bot has no client, so by default the
+server does no real-client packet work for it. *Lean* skips exactly this: (1) the map builds no `SMSG_UPDATE_OBJECT` blocks for a bot
+viewer (create on entering range, values, out-of-range; `IPlayerSession.WantsUpdateObjects` false), so no per-viewer block, zlib output
+or copy exists for it; the bot's visible set, `VisibilityVersion` and the map's observer index are maintained exactly as for a player,
+and that set (`player.VisibleObjects` plus `map.FindObject`) is all bot code reads of the world; (2) the session's 128-packet receive
+ring copies only the opcodes a bot reads back, the one declared set `PlayerbotPacketIntake.RingOpcodes` (mail and auction replies, loot
+response, instance reset, spell cast and spellbook packets, quest dialogue, trainer list, and the party and social intake opcodes;
+`PlayerbotPacketIntakeTests` scans the source and fails when a reader's opcode is missing). The bot's own login create block, its item
+create blocks (they set `SentToClient`) and every non-update packet other than the ring copy are unchanged. A bot with an observer
+attached (a scenario tap, an outbound packet observer, or `PacketCapture` on its session) receives everything, as in Full. *Full*
+treats bots like real clients (every block built and compressed, every packet copied into the ring): **use it as the load-test switch**,
+to measure what N real clients would cost the world thread. What Lean did not do is counted: metric `arcanecore.playerbots.packets_skipped`
+(tag `kind` = `update_block`, `ring_packet`, `ring_byte`) and a `lean packets skipped` suffix on the `Managed bots` line of `.server info`.
+
 GM commands: `.playerbot create|start|stop` (Administrator), `.playerbot status|list|inspect`
 (GameMaster), `.playerbot scenario list|run` (Administrator, below). The autonomous brain's
 behaviour is described in `docs/integration/playerbot-*.md`.

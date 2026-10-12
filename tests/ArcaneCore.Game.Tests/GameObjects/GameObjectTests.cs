@@ -501,6 +501,51 @@ public sealed class GameObjectTests
     }
 
     [Fact]
+    public void QuestChest_NeedAddedAfterTheViewersCreateBlockButBeforeTheFirstRefresh_StillReachesTheViewer()
+    {
+        Rig rig = CreateRig([GoSpawn(1, QuestChestEntry, 3, 0)]);
+        (Player first, _) = Player(2);
+        (Player viewer, FakeSession session) = Player(1);
+        rig.World.AddPlayer(first);
+        rig.World.RunTick(50); // the chest loads and the first refresh runs, with only another player watching it
+        GameObject chest = rig.Single(QuestChestEntry);
+
+        rig.World.AddPlayer(viewer);
+        rig.World.RunTick(50); // the viewer's create block is built (no need yet); the next refresh is a second away
+        ParsedBlock create = Assert.Single(DrainBlocks(session), b => b.Type is ObjectUpdateType.CreateObject or ObjectUpdateType.CreateObject2 && b.Guids.Contains(chest.Guid.Value));
+        Assert.Equal(0u, create.Values.GetValueOrDefault(UpdateFields.GameobjectDynFlags));
+
+        rig.Quests.Needs.Add((viewer.Guid, QuestItem)); // the quest is accepted before any refresh saw this viewer
+        rig.World.RunTick(1000);
+
+        ParsedBlock update = Assert.Single(DrainBlocks(session), b => b.Type == ObjectUpdateType.Values && b.Guids.Contains(chest.Guid.Value));
+        Assert.Equal((uint)(GameObjectDynFlags.Activate | GameObjectDynFlags.Sparkle), update.Values[UpdateFields.GameobjectDynFlags]);
+    }
+
+    [Fact]
+    public void QuestChest_LeanViewerThatNeedsItsLoot_CausesNoForcedUpdateToARealViewer()
+    {
+        Rig rig = CreateRig([GoSpawn(1, QuestChestEntry, 3, 0)]);
+        (Player lean, FakeSession leanSession) = Player(1);
+        (Player real, FakeSession realSession) = Player(2, 1, 0);
+        leanSession.WantsUpdateObjects = false;
+        rig.World.AddPlayer(lean);
+        rig.World.AddPlayer(real);
+        rig.World.RunTick(50);
+        GameObject chest = rig.Single(QuestChestEntry);
+        rig.World.RunTick(1000); // a refresh has seen both viewers with no need
+        DrainBlocks(realSession);
+        Assert.Empty(Packets(leanSession, WorldOpcode.SmsgUpdateObject));
+
+        rig.Quests.Needs.Add((lean.Guid, QuestItem)); // only the viewer that reads no update blocks needs the chest
+        rig.World.RunTick(1000);
+        rig.World.RunTick(1000);
+
+        Assert.DoesNotContain(DrainBlocks(realSession), b => b.Type == ObjectUpdateType.Values && b.Guids.Contains(chest.Guid.Value));
+        Assert.Empty(Packets(leanSession, WorldOpcode.SmsgUpdateObject));
+    }
+
+    [Fact]
     public void QuestChest_WithQuestItemOnlyForOthers_ShowsNothingToANonNeedingOpener()
     {
         Rig rig = CreateRig([GoSpawn(1, QuestChestEntry, 3, 0)]);

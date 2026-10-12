@@ -77,6 +77,17 @@ public sealed class ScriptHookRegistry
             throw new InvalidOperationException($"{hooks.GetType().FullName} is already registered");
         }
 
+        int added = AddToDispatch(hooks);
+        if (added == 0)
+        {
+            throw new ArgumentException($"{hooks.GetType().FullName} overrides no script hook", nameof(hooks));
+        }
+
+        _registered.Add(hooks);
+    }
+
+    private int AddToDispatch(IScriptHooks hooks)
+    {
         Type type = hooks.GetType();
         int added = 0;
         if (hooks is IPlayerHooks p) added += Player.Add(p, Overrides(type, typeof(IPlayerHooks)));
@@ -87,12 +98,113 @@ public sealed class ScriptHookRegistry
         if (hooks is IGroupHooks g) added += Group.Add(g, Overrides(type, typeof(IGroupHooks)));
         if (hooks is IGuildHooks gu) added += Guild.Add(gu, Overrides(type, typeof(IGuildHooks)));
         if (hooks is IBattlegroundHooks b) added += Battleground.Add(b, Overrides(type, typeof(IBattlegroundHooks)));
-        if (added == 0)
+        return added;
+    }
+
+    /// <summary>
+    /// Whether <see cref="CommitSwap"/> would work, checked without changing anything: every hook object to remove is registered, every one to add
+    /// overrides at least one hook, is not registered yet (unless it is also being removed) and is not listed twice. Null when it would; else why not.
+    /// </summary>
+    public string? ValidateSwap(IReadOnlyCollection<IScriptHooks> remove, IReadOnlyCollection<IScriptHooks> add)
+    {
+        ArgumentNullException.ThrowIfNull(remove);
+        ArgumentNullException.ThrowIfNull(add);
+        foreach (IScriptHooks hooks in remove)
         {
-            throw new ArgumentException($"{type.FullName} overrides no script hook", nameof(hooks));
+            if (!_registered.Any(h => ReferenceEquals(h, hooks)))
+            {
+                return $"script hook object {hooks.GetType().FullName} to remove is not registered";
+            }
         }
 
-        _registered.Add(hooks);
+        var seen = new HashSet<IScriptHooks>(ReferenceEqualityComparer.Instance);
+        foreach (IScriptHooks hooks in add)
+        {
+            if (!seen.Add(hooks) || _registered.Any(h => ReferenceEquals(h, hooks)))
+            {
+                return $"{hooks.GetType().FullName} is already registered";
+            }
+
+            if (OverriddenHookCount(hooks) == 0)
+            {
+                return $"{hooks.GetType().FullName} overrides no script hook";
+            }
+
+            if (hooks is IWorldHooks && Overrides(hooks.GetType(), typeof(IWorldHooks)).Contains(nameof(IWorldHooks.OnStartup)))
+            {
+                return $"{hooks.GetType().FullName} overrides IWorldHooks.OnStartup, which only runs once while the world starts and so can never run for a hot module";
+            }
+        }
+
+        return null;
+    }
+
+    private static int OverriddenHookCount(IScriptHooks hooks)
+    {
+        Type type = hooks.GetType();
+        int count = 0;
+        foreach (Type iface in HookInterfaces.Where(i => i.IsAssignableFrom(type)))
+        {
+            count += Overrides(type, iface).Count;
+        }
+
+        return count;
+    }
+
+    private static readonly Type[] HookInterfaces =
+        [typeof(IPlayerHooks), typeof(IWorldHooks), typeof(IUnitHooks), typeof(IItemHooks), typeof(ISpellHooks), typeof(IGroupHooks), typeof(IGuildHooks), typeof(IBattlegroundHooks)];
+
+    /// <summary>
+    /// Remove <paramref name="remove"/> and add <paramref name="add"/> in one step, even after <see cref="Freeze"/> (the hot module lane; world thread
+    /// at a tick boundary, so no dispatch is running). Every dispatch array is rebuilt from the hook objects that stay, in their registration order,
+    /// followed by the new ones; after it the removed objects are referenced by nothing here. Call <see cref="ValidateSwap"/> first: this does not throw
+    /// for a bad argument.
+    /// </summary>
+    public void CommitSwap(IReadOnlyCollection<IScriptHooks> remove, IReadOnlyCollection<IScriptHooks> add)
+    {
+        ArgumentNullException.ThrowIfNull(remove);
+        ArgumentNullException.ThrowIfNull(add);
+        List<IScriptHooks> keep = [.. _registered.Where(h => !remove.Any(r => ReferenceEquals(r, h))), .. add];
+
+        // Build the complete new state on scratch dispatches first: anything that throws does so before the live arrays are touched.
+        var scratch = new ScriptHookRegistry();
+        foreach (IScriptHooks hooks in keep)
+        {
+            _ = scratch.AddToDispatch(hooks);
+        }
+
+        (object Live, object Fresh)[] pairs =
+            [(Player, scratch.Player), (World, scratch.World), (Unit, scratch.Unit), (Item, scratch.Item), (Spell, scratch.Spell), (Group, scratch.Group), (Guild, scratch.Guild), (Battleground, scratch.Battleground)];
+        foreach ((object live, object fresh) in pairs)
+        {
+            foreach (FieldInfo field in live.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic).Where(f => f.FieldType.IsArray))
+            {
+                field.SetValue(live, field.GetValue(fresh)); // publishes a finished array: never an emptied one
+            }
+        }
+
+        _registered.Clear();
+        _registered.AddRange(keep);
+        RaiseHooksChanged();
+    }
+
+    /// <summary>
+    /// Raised at the end of <see cref="CommitSwap"/> (world thread, tick boundary) so a bridge that subscribes to game events only while some hook
+    /// needs it can subscribe now. A handler that throws is logged and does not undo the swap.
+    /// </summary>
+    public event Action? HooksChanged;
+
+    private void RaiseHooksChanged()
+    {
+        if (HooksChanged is not { } handlers)
+        {
+            return;
+        }
+
+        foreach (Action handler in handlers.GetInvocationList().Cast<Action>())
+        {
+            try { handler(); } catch (Exception ex) { Logger.LogError(ex, "script hook change handler failed"); }
+        }
     }
 
     /// <summary>Close registration (the world thread is starting).</summary>

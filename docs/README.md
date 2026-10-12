@@ -31,6 +31,7 @@ unfinished parts documented as limits).
 | [Server console](areas/server-console.md) | Typed commands at the World and Realm console windows and the `World:Console:Enabled` and `Realm:Console:Enabled` options. |
 | [Live reload](areas/hot-reload.md) | The `.reload` command tree and which configuration is applied live. |
 | [Code hot reload](areas/code-hot-reload.md) | The development runner and the `.hotcode` / `.hotmodule` commands. |
+| [Hot swap announcements](areas/hot-swap-announcements.md) | Staff notices and world messages when a reload, module or code edit goes live (`World:Announce`). |
 
 ## Acceptance procedures (real client or mock client)
 

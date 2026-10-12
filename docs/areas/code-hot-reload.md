@@ -292,9 +292,10 @@ Independent of the development runner (`World:HotCode:Enabled` may stay false).
 
 A folder `<Directory>/<name>/` holding `<name>.dll` (the assembly must be named `<name>`) and any
 private dependencies. It may contain public, non-abstract classes with a public parameterless
-constructor implementing `IOpcodeHandlerGroup` and/or `ICommandGroup`: the same two interfaces the
-server's own features use, so a module is written like a built-in feature. Nothing else in the assembly
-is looked at. Build it against the server's `ArcaneCore.World` (and `ArcaneCore.Protocol`,
+constructor implementing `IOpcodeHandlerGroup` and/or `ICommandGroup` (the interfaces the server's own
+features use), `ICreatureAiGroup` (creature AI by entry or by `AIName` / `ScriptName`, see "Creature AI and script hooks")
+and/or any global script hook interface (`IPlayerHooks`, `IWorldHooks`, ...), so a module is written like a built-in
+feature. Nothing else in the assembly is looked at. Build it against the server's `ArcaneCore.World` (and `ArcaneCore.Protocol`,
 `ArcaneCore.Kernel`, ...); those, the framework and anything the server already has loaded are always
 resolved to the server's copy, so the interfaces are the same types on both sides. A module and the
 server must be built from compatible versions: a module compiled against a different `ArcaneCore.World`
@@ -382,6 +383,63 @@ can write to the allowlist file or to the server's process can run code as the s
    released. Every decision is audited (`module-load`, `module-reload`, `module-unload`,
    `module-rejected`) with the dll's SHA-256, and logged (a rejection at error level).
 
+### Creature AI and script hooks in a module
+
+A module can also contribute creature AI and global script hooks. Both are validated before anything live changes and
+swapped at the same tick boundary as the opcode and command tables; a clash (an entry or name the server or another
+module already registered, a hook class that overrides nothing) rejects the whole module and leaves everything as it was.
+
+* `ICreatureAiGroup.Register(ICreatureAiRegistry)`: `ForEntry(entry, creature => new MyAi(creature))` or `Named("MyAI", ...)`
+  (selected by a template's `AIName` / `ScriptName`). Same slots as the server's own entry scripts and named AIs.
+* Script hooks: a public class with a public parameterless constructor implementing e.g. `IPlayerHooks` and overriding only the
+  methods it needs. On a swap every dispatch array is rebuilt from the hook objects that stay (registration order) plus the new
+  ones, so an unloaded module's hooks are referenced by nothing. The new arrays are built completely before they replace the old
+  ones, so a failure while building leaves the live hooks untouched. The bridges to game events (equipment, group, guild and
+  spell hooks) are subscribed the first time any hook of that kind exists, so a module may add `IItemHooks.OnEquip` /
+  `OnUnequip`, `IGroupHooks`, `IGuildHooks` or `ISpellHooks` even when no built-in module did (players already online are bound at
+  that moment). **`IWorldHooks.OnStartup` is rejected for a module**: it runs once while the world starts, which has already happened.
+* **Creatures that already exist.** A creature whose entry, `ScriptName` or `AIName` the module registers, or whose current AI is
+  code of the module being replaced or unloaded, gets a new AI object **at once** unless it is in combat (a new AI would not have
+  seen the fight begin). Only the AI object is rebuilt: position, health, threat and motion are untouched. Dead creatures are
+  switched too (the new AI hears `OnRespawn`). Creatures in combat keep the old AI, are counted in the reply
+  (`N in combat keep the old AI for now`) and retried every 5 seconds for up to 10 minutes (only those creatures: one that already switched is never rebuilt, which would
+  wipe its AI state); one still in combat after that keeps
+  the retired module alive (`Unloaded modules not yet freed` stays above 0) until it gets another AI. Pets and charmed creatures
+  are never touched.
+* A module's AI state does not carry over a replace; the new AI starts from nothing.
+* Known limits: swapping rebuilds only the AI object. It does not run the creature's `ForgetAi` cleanup (summons, scripted despawns and
+  arrival relays the old AI had queued stay queued) and does not call `OnRespawn` on the new AI of a living creature (a dead one hears it
+  when it respawns). A map-specific entry AI (and the built-in dungeon boss scripts) is consulted before the module's registration, so
+  a module cannot shadow those entries.
+* If applying the creature AI or script hooks fails after validation (not expected), the reply is a failure ("only partly applied": the
+  opcode and command tables had already changed), the announcement is `Failed` and the audit log gets `module-failed`.
+  **A module whose commit Failed stays recorded as loaded** (its opcode handlers and commands are live and `.hotmodule list`
+  shows it), even though its creature AI and script hooks may not be. There is no automatic clean-up: restart the server to clear
+  it.
+* Not available to modules yet: spell scripts (their registry and effect chain are built once with the spell system),
+  map-specific entry AI, `IWorldFeature`s and tables.
+
+### Announcements and the reason argument
+
+Every load, replace, unload and rejection is reported to the hot swap announcer (`World:Announce:HotSwap`, see
+[Hot swap announcements](hot-swap-announcements.md)). `.hotmodule load|reload|unload <name> [reason]`: the text after the name is the reason.
+
+### Deploying a module to a Production server
+
+Production needs `World:HotCode:Modules:Enabled=true`, `Directory`, `AllowAnyEnvironment=true` and an `Allowlist` file. Build the module against
+the Release build the server runs (`dotnet build -c Release -p:ArcaneCoreBin=<server bin folder>/ -o <staging>`; the template csproj takes its
+references from `ArcaneCoreBin`), copy `<name>.dll` to `<Directory>\<name>\`, then approve and load:
+
+```powershell
+powershell -File scripts\hotmodule-hash.ps1 -Name GmCommands -ModuleDirectory D:\arcane\modules -Allowlist D:\arcane\modules-allowlist.txt
+# in game / console:  .hotmodule load GmCommands first deploy
+```
+
+`scripts/hotmodule-hash.ps1` prints the SHA-256 of the exact file and appends it to the allowlist; it never loads anything.
+
+The allowlist covers `<name>.dll` only. A private dependency dll copied into the module folder is **not** hashed (and is loaded
+with the module), so keep the module directory writable only by the operator, or ship the module as one self-contained dll.
+
 ### Unload: what is proven and what is not
 
 Proven by a committed test (`ModuleHostTests`): after `unload` or a replacing `reload`, with nothing
@@ -449,8 +507,8 @@ Be precise about what this page does not offer:
   assemblies*; the server assembly itself (a built-in handler, formula or feature) changes live only
   through the development runner (Debug, SDK), otherwise by restart. A module cannot replace a
   built-in handler or command (it is rejected), by design.
-* **Module contributions beyond opcode handler groups and chat command groups.** Map updaters,
-  `IWorldFeature`s, `IDataModule`s (tables), DI services and spell or aura registrations are not
+* **Module contributions beyond opcode handler groups, chat command groups, creature AI and script hooks.** Map updaters,
+  `IWorldFeature`s, `IDataModule`s (tables), DI services, spell scripts and aura registrations are not
   module extension points yet. A module that needs one needs a new, reviewed seam in the server first.
 * **Automatic reload on file change** (a `FileSystemWatcher`). A reload is an explicit, audited
   Administrator command.

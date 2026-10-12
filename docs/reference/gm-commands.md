@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 193 |
-| `Administrator` | 6 | 292 |
+| `GameMaster` | 3 | 195 |
+| `Administrator` | 6 | 296 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -163,8 +163,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.quest complete` | 6 | Administrator | declared retail level | Syntax: .quest complete #quest_id\|[$quest_title]\|#shift-click-quest-link Mark every objective of the quest done for the selected player (or yourself): the required items, kills, reputation and money are given. |
 | `.quest remove` | 6 | Administrator | declared retail level | Syntax: .quest remove #quest_id\|[$quest_title]\|#shift-click-quest-link Take the quest out of the log of the selected player (or yourself), source item included, and forget that it was rewarded. |
 | `.quest status` | 3 | GameMaster | declared retail level | Syntax: .quest status [#quest_id\|[$quest_title]\|#shift-click-quest-link] Show the quest log of the selected player (or yourself), or the progress of one quest. |
-| `.reload` ... (development only) | 6 | Administrator | stored level through the map | Syntax: .reload #name \| all \| status — reload configuration or content without a restart (config, spell_template, …). |
-| `.reload all` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload all — reload every content table (not the config). |
+| `.reload` ... (development only) | 6 | Administrator | stored level through the map | Syntax: .reload #name [reason] \| all [reason] \| status — reload configuration or content without a restart (config, spell_template, …). The optional free-text reason is announced to staff with the result (World:Announce:HotSwap). |
+| `.reload all` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload all [reason] — reload every content table (not the config). |
 | `.reload status` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload status — what can be reloaded and how each reload last ended. |
 | `.reset` ... | 3 | GameMaster | declared retail level | Syntax: .reset $subcommand Type .reset to see the list of possible subcommands or .help reset $subcommand to see info on subcommands. |
 | `.reset talents` | 3 | GameMaster | declared retail level | Syntax: .reset talents [$playername] Remove all talents of the selected player or the named one (online now, or at the next login when offline), for free. |
@@ -347,6 +347,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot qa show` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa show $id Show one finding's cause, counts, evidence samples and a .go xyz command to the place (the id is at least 4 characters of the short id). |
 | `.playerbot qa spells` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa spells [#n] The spell coverage of the bots (how many of the spells they can cast are fully handled, the gaps shared by the most spells) and the n (default 10, at most 25) highest-ranked spell findings bots met. |
 | `.playerbot qa reset` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa reset [$id] Forget one finding, or all of them. Local only: GitHub issues are not touched. |
+| `.rates` ... | 3 | GameMaster | stored level through the map | Live server rates. Syntax: .rates [show\|set\|reset] |
+| `.rates show` | 3 | GameMaster | stored level through the map | Syntax: .rates [show] [$filter] Show the live-tunable server rates: the value in force, the configured value and whether it is overridden. $filter: part of a name (xp, drop, creature...). |
+| `.rates set` | 6 | Administrator | stored level through the map | Syntax: .rates set $name $value [$reason] Change a server rate for everyone until .rates reset, .reload config or restart (not saved to any file). $name: a vmangos name such as Rate.XP.Kill or a short form (xp, xp.quest, drop.money, money, drop.epic...), any case. $value: 0 to 100 (1 is retail), some rates have their own bounds; .rates show lists them. $reason is logged with the change. |
+| `.rates reset` | 6 | Administrator | stored level through the map | Syntax: .rates reset [$name\|all] Put one rate (or all of them, the default) back to its configured value. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |
@@ -354,6 +358,6 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.hotcode thaw` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode thaw — resume registry refreshes. |
 | `.hotmodule` ... (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Hot-loaded code modules (opt-in). |
 | `.hotmodule list` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule list — the loaded modules. |
-| `.hotmodule load` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule load &lt;name&gt; — load &lt;directory&gt;/&lt;name&gt;/&lt;name&gt;.dll. |
-| `.hotmodule reload` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule reload &lt;name&gt; — build the new version, then swap it for the loaded one (the old one stays if the new one is bad). |
-| `.hotmodule unload` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule unload &lt;name&gt; — remove the module's handlers and commands and release it. |
+| `.hotmodule load` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule load &lt;name&gt; [reason] — load &lt;directory&gt;/&lt;name&gt;/&lt;name&gt;.dll. |
+| `.hotmodule reload` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule reload &lt;name&gt; [reason] — build the new version, then swap it for the loaded one, i.e. replace (the old one stays if the new one is bad). |
+| `.hotmodule unload` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotmodule unload &lt;name&gt; [reason] — remove the module's handlers and commands and release it. |

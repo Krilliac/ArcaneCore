@@ -64,6 +64,22 @@ public static class CreatureDamageStats
         creature.SetFloat(UpdateFields.UnitFieldMaxdamage, Math.Max(0f, ((max * basePct) + totalPhysical) * totalPct));
     }
 
+    /// <summary>
+    /// Recompute the ranged damage fields of <paramref name="creature"/>: the template range times <c>Rate.Creature.*.Damage</c>, as
+    /// <c>Creature.InitializeFields</c> sets them (no aura moves a creature's ranged damage here). Summoned creatures are left alone.
+    /// </summary>
+    public static void UpdateRanged(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (creature.Summon is not null)
+        {
+            return;
+        }
+
+        creature.SetFloat(UpdateFields.UnitFieldMinrangeddamage, creature.Template.MinRangedDamage * creature.DamageRate);
+        creature.SetFloat(UpdateFields.UnitFieldMaxrangeddamage, creature.Template.MaxRangedDamage * creature.DamageRate);
+    }
+
     /// <summary>vmangos Creature::HasWeapon: the main-hand virtual item is of class weapon.</summary>
     public static bool HasWeapon(Unit creature)
     {

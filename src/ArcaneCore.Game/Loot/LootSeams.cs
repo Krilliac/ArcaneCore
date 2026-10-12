@@ -16,7 +16,7 @@ public interface ILootQuestJournal
     /// <summary>The quest is in the log and incomplete (goober/chest quest gates).</summary>
     bool IsQuestIncomplete(Player player, uint questId);
 
-    /// <summary>Items entered the inventory from loot (vmangos ItemAddedQuestCheck).</summary>
+    /// <summary>Items entered the inventory from loot. The quest journal already hears the add through the inventory's item-count event, so an implementation must not count it again; it only saves the character.</summary>
     void ItemLooted(Player player, uint itemId, uint count);
 
     /// <summary>Money changed through loot (vmangos ModifyMoney → quest money check; save the character).</summary>

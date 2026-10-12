@@ -198,6 +198,12 @@ public sealed class UnitSpellState
     /// <summary>Spell.dbc Category → absolute expiry.</summary>
     internal Dictionary<uint, uint> CategoryCooldowns { get; } = [];
 
+    /// <summary>
+    /// Category -> the spell that started the running category cooldown (vmangos CooldownMap m_categoryMap: "we must keep original category cd
+    /// owner for sake of client sync"). Not saved; only meaningful while the category cooldown runs.
+    /// </summary>
+    internal Dictionary<uint, uint> CategoryOwners { get; } = [];
+
     /// <summary>StartRecoveryCategory → absolute expiry of the global cooldown.</summary>
     internal Dictionary<uint, uint> GlobalCooldowns { get; } = [];
 

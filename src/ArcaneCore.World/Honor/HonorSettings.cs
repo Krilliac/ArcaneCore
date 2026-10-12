@@ -4,7 +4,7 @@ namespace ArcaneCore.World.Honor;
 
 /// <summary>
 /// The configuration section <c>World:Honor</c> as the binder sees it (mutable properties); <see cref="ToOptions"/> builds
-/// the immutable <see cref="HonorOptions"/> the game code reads. Every default is the retail 1.12 value
+/// the <see cref="HonorOptions"/> the game code reads (init-only, except <c>Rate</c>, which <c>.rates set</c> changes live). Every default is the retail 1.12 value
 /// (docs/areas/honor.md lists the keys).
 /// </summary>
 public sealed class HonorSettings

@@ -31,7 +31,7 @@ public sealed class ReloadFeature : IWorldFeature
             ?? new HotReloadOptions();
         if (Options.Commands)
         {
-            _coordinator = new ReloadCoordinator(logger, Options);
+            _coordinator = new ReloadCoordinator(logger, Options, _services.GetService<ArcaneCore.World.HotCode.IHotSwapReporter>());
         }
     }
 

@@ -4,6 +4,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Reload;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Reload;
+using ArcaneCore.World.HotCode;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Reload;
@@ -29,10 +30,12 @@ public sealed class ReloadCoordinator
     private readonly ConcurrentDictionary<string, ReloadResult> _last = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _running = new(1, 1);
     private readonly object _registrationLock = new();
+    private readonly IHotSwapReporter _reporter;
     private WorldRuntime? _world;
 
-    public ReloadCoordinator(ILogger logger, HotReloadOptions? options = null)
+    public ReloadCoordinator(ILogger logger, HotReloadOptions? options = null, IHotSwapReporter? reporter = null)
     {
+        _reporter = reporter ?? NullHotSwapReporter.Instance;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _options = options ?? new HotReloadOptions();
     }
@@ -71,8 +74,15 @@ public sealed class ReloadCoordinator
         }
     }
 
-    /// <summary>Reload one reloadable by exact (case-insensitive) name. Never throws: every outcome is a <see cref="ReloadResult"/>.</summary>
-    public async Task<ReloadResult> ReloadAsync(string name, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Reload one reloadable by exact (case-insensitive) name. Never throws: every outcome is a <see cref="ReloadResult"/>.
+    /// A reload that ran (applied, kept, rejected or failed) is reported to the hot swap reporter with <paramref name="origin"/>;
+    /// an unknown name or a busy coordinator did not swap anything and is not.
+    /// </summary>
+    public Task<ReloadResult> ReloadAsync(string name, CancellationToken cancellationToken = default, HotSwapOrigin? origin = null)
+        => ReloadCoreAsync(name, cancellationToken, origin ?? HotSwapOrigin.Console, report: true);
+
+    private async Task<ReloadResult> ReloadCoreAsync(string name, CancellationToken cancellationToken, HotSwapOrigin origin, bool report)
     {
         ArgumentNullException.ThrowIfNull(name);
         IContentReloadable? reloadable;
@@ -93,7 +103,13 @@ public sealed class ReloadCoordinator
 
         try
         {
-            return await RunAsync(reloadable, cancellationToken).ConfigureAwait(false);
+            ReloadResult result = await RunAsync(reloadable, cancellationToken).ConfigureAwait(false);
+            if (report)
+            {
+                Report(result, origin);
+            }
+
+            return result;
         }
         finally
         {
@@ -106,8 +122,10 @@ public sealed class ReloadCoordinator
     /// other in dependency order, with names breaking ties (vmangos <c>reload all</c>,
     /// ServerCommands.cpp:885-905, which leaves the config out).
     /// </summary>
-    public async Task<IReadOnlyList<ReloadResult>> ReloadAllAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ReloadResult>> ReloadAllAsync(CancellationToken cancellationToken = default, HotSwapOrigin? origin = null)
     {
+        origin ??= HotSwapOrigin.Console;
+        long allStarted = Stopwatch.GetTimestamp();
         IContentReloadable[] included;
         lock (_registrationLock)
         {
@@ -134,11 +152,63 @@ public sealed class ReloadCoordinator
 
         foreach (IContentReloadable reloadable in ordered)
         {
-            results.Add(await ReloadAsync(reloadable.Name, cancellationToken).ConfigureAwait(false));
+            // One summary for the whole run instead of one announcement per table.
+            results.Add(await ReloadCoreAsync(reloadable.Name, cancellationToken, origin, report: false).ConfigureAwait(false));
         }
 
+        ReportAll(results, origin, Stopwatch.GetElapsedTime(allStarted));
         return results;
     }
+
+    private void Report(ReloadResult result, HotSwapOrigin origin)
+    {
+        if (result.Status == ReloadStatus.Busy)
+        {
+            return;
+        }
+
+        SafeReport(new HotSwapEvent(
+            HotSwapLane.Data, "reload", result.Name, ToSwapResult(result.Status), origin, result.Elapsed, result.Message));
+    }
+
+    private void ReportAll(List<ReloadResult> results, HotSwapOrigin origin, TimeSpan elapsed)
+    {
+        ReloadResult[] ran = [.. results.Where(r => r.Status != ReloadStatus.Busy)];
+        if (ran.Length == 0)
+        {
+            return;
+        }
+
+        int applied = ran.Count(r => r.Status == ReloadStatus.Applied);
+        int kept = ran.Count(r => r.Status == ReloadStatus.KeptCurrent);
+        string[] bad = [.. ran.Where(r => r.Status is ReloadStatus.Rejected or ReloadStatus.Failed).Select(r => r.Name)];
+        HotSwapResult overall = bad.Length == 0 ? (applied > 0 ? HotSwapResult.Applied : HotSwapResult.Unchanged)
+            : ran.Any(r => r.Status == ReloadStatus.Failed) ? HotSwapResult.Failed : HotSwapResult.Rejected;
+        string detail = $"{applied} applied, {kept} kept, {bad.Length} not reloaded"
+            + (bad.Length == 0 ? string.Empty : $" ({string.Join(", ", bad)})");
+        SafeReport(new HotSwapEvent(HotSwapLane.Data, "reload", "all", overall, origin, elapsed, detail));
+    }
+
+    /// <summary>A failing reporter must never turn a finished reload into an exception.</summary>
+    private void SafeReport(HotSwapEvent swap)
+    {
+        try
+        {
+            _reporter.Report(swap);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "could not report the {Area} reload", swap.Area);
+        }
+    }
+
+    private static HotSwapResult ToSwapResult(ReloadStatus status) => status switch
+    {
+        ReloadStatus.Applied => HotSwapResult.Applied,
+        ReloadStatus.KeptCurrent => HotSwapResult.Unchanged,
+        ReloadStatus.Rejected => HotSwapResult.Rejected,
+        _ => HotSwapResult.Failed,
+    };
 
     private async Task<ReloadResult> RunAsync(IContentReloadable reloadable, CancellationToken cancellationToken)
     {

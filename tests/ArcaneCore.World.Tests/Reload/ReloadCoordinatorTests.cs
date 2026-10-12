@@ -72,6 +72,57 @@ public sealed class ReloadCoordinatorTests : IDisposable
         Assert.Equal(1, consumer.Commits);
     }
 
+    [Fact]
+    public async Task EveryReloadThatRan_IsReportedOnce_WithWhoAskedAndWhy_ButUnknownNamesAndBusyAreNot()
+    {
+        var reporter = new ArcaneCore.World.Tests.HotCode.RecordingReporter();
+        var coordinator = new ReloadCoordinator(NullLogger.Instance, null, reporter);
+        coordinator.Attach(_world);
+        _world.Start();
+        coordinator.Register(new FakeReloadable("good"));
+        coordinator.Register(new FakeReloadable("bad") { Problems = ["row 3 is wrong"] });
+        coordinator.Register(new FakeReloadable("same") { KeepCurrentReason = "table empty" });
+        var gm = new ArcaneCore.World.HotCode.HotSwapOrigin("acct (Char)", "why not");
+
+        await coordinator.ReloadAsync("good", origin: gm);
+        await coordinator.ReloadAsync("bad", origin: gm);
+        await coordinator.ReloadAsync("same");
+        await coordinator.ReloadAsync("nothing_like_this", origin: gm);
+
+        var events = reporter.Events;
+        Assert.Equal(3, events.Count);
+        Assert.All(events, e => Assert.Equal(ArcaneCore.World.HotCode.HotSwapLane.Data, e.Lane));
+        Assert.Equal(["good", "bad", "same"], events.Select(e => e.Area));
+        Assert.Equal(
+            [ArcaneCore.World.HotCode.HotSwapResult.Applied, ArcaneCore.World.HotCode.HotSwapResult.Rejected, ArcaneCore.World.HotCode.HotSwapResult.Unchanged],
+            events.Select(e => e.Result));
+        Assert.Equal("acct (Char)", events[0].Origin.Actor);
+        Assert.Equal("why not", events[1].Origin.Reason);
+        Assert.Equal("console", events[2].Origin.Actor);
+        Assert.Contains("fake summary", events[0].Detail);
+    }
+
+    [Fact]
+    public async Task ReloadAll_ReportsOneSummary_NotOnePerTable()
+    {
+        var reporter = new ArcaneCore.World.Tests.HotCode.RecordingReporter();
+        var coordinator = new ReloadCoordinator(NullLogger.Instance, null, reporter);
+        coordinator.Attach(_world);
+        _world.Start();
+        coordinator.Register(new FakeReloadable("a"));
+        coordinator.Register(new FakeReloadable("b"));
+        coordinator.Register(new FakeReloadable("c") { Problems = ["broken"] });
+
+        await coordinator.ReloadAllAsync(origin: new ArcaneCore.World.HotCode.HotSwapOrigin("acct (Char)", "everything"));
+
+        var swap = Assert.Single(reporter.Events);
+        Assert.Equal("all", swap.Area);
+        Assert.Equal(ArcaneCore.World.HotCode.HotSwapResult.Rejected, swap.Result);
+        Assert.Contains("2 applied", swap.Detail);
+        Assert.Contains("c", swap.Detail);
+        Assert.Equal("everything", swap.Origin.Reason);
+    }
+
     private ReloadCoordinator Attached(HotReloadOptions? options = null, bool startWorld = true)
     {
         var coordinator = new ReloadCoordinator(NullLogger.Instance, options);

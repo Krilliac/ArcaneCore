@@ -1240,11 +1240,19 @@ public sealed class Map
         if (inVisibleList && (!inRange || !allowed))
         {
             RemoveVisible(viewer, target.Guid);
-            viewer.PendingUpdates.AddOutOfRange(target.Guid);
+            if (viewer.Session.WantsUpdateObjects) viewer.PendingUpdates.AddOutOfRange(target.Guid);
+            else BotLeanStats.SkippedUpdateBlock();
         }
         else if (!inVisibleList && inRange && allowed)
         {
             AddVisible(viewer, target.Guid);
+            if (!viewer.Session.WantsUpdateObjects)
+            {
+                // The visible set above is the bot's whole view of the world; only the packet nobody reads is not built.
+                BotLeanStats.SkippedUpdateBlock();
+                return;
+            }
+
             PacketWriter block = viewer.PendingUpdates.BeginBlock();
             UpdateBlockWriter.WriteCreateBlock(block, target, viewer, _newObjects.Contains(target.Guid), _world.NowMs);
             viewer.PendingUpdates.EndBlock();
@@ -1411,6 +1419,12 @@ public sealed class Map
 
     private static void AppendValues(WorldObject obj, Player viewer)
     {
+        if (!viewer.Session.WantsUpdateObjects)
+        {
+            BotLeanStats.SkippedUpdateBlock();
+            return;
+        }
+
         PacketWriter block = viewer.PendingUpdates.BeginBlock();
         int before = block.Length;
         if (UpdateBlockWriter.TryWriteValuesBlock(block, obj, viewer))

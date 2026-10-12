@@ -21,9 +21,9 @@ public static class HotModuleCommands
                     context.Reply(Format(host));
                     return true;
                 }),
-            Verb("load", "Syntax: .hotmodule load <name> — load <directory>/<name>/<name>.dll.", host, audit, host.LoadAsync),
-            Verb("reload", "Syntax: .hotmodule reload <name> — build the new version, then swap it for the loaded one (the old one stays if the new one is bad).", host, audit, host.ReloadAsync),
-            Verb("unload", "Syntax: .hotmodule unload <name> — remove the module's handlers and commands and release it.", host, audit, host.UnloadAsync),
+            Verb("load", "Syntax: .hotmodule load <name> [reason] — load <directory>/<name>/<name>.dll.", host, audit, host.LoadAsync),
+            Verb("reload", "Syntax: .hotmodule reload <name> [reason] — build the new version, then swap it for the loaded one, i.e. replace (the old one stays if the new one is bad).", host, audit, host.ReloadAsync),
+            Verb("unload", "Syntax: .hotmodule unload <name> [reason] — remove the module's handlers and commands and release it.", host, audit, host.UnloadAsync),
         ]);
 
     public static string Format(ModuleHost host)
@@ -35,18 +35,18 @@ public static class HotModuleCommands
         return $"{lines}\nUnloaded modules not yet freed by the runtime: {host.RetiredStillReferenced}";
     }
 
-    private static ChatCommand Verb(string verb, string help, ModuleHost host, HotCodeAudit audit, Func<string, Task<ModuleResult>> run)
+    private static ChatCommand Verb(string verb, string help, ModuleHost host, HotCodeAudit audit, Func<string, HotSwapOrigin?, Task<ModuleResult>> run)
         => new(verb, AccountSecurity.Administrator, help, (context, args) =>
         {
-            string name = args.Trim();
-            if (name.Length == 0 || name.Contains(' '))
+            (string name, string reason) = AnnounceTexts.SplitReason(args);
+            if (name.Length == 0)
             {
                 return false;
             }
 
             string who = context.InvokerName;
-            audit.Record("hotmodule-command", $"{who} {verb} {name}");
-            Task<ModuleResult> task = run(name);
+            audit.Record("hotmodule-command", reason.Length == 0 ? $"{who} {verb} {name}" : $"{who} {verb} {name}; reason: {reason}");
+            Task<ModuleResult> task = run(name, HotSwapOrigin.FromCommand(context, reason));
 
             // The commit is posted to this very (world) thread: never block on it. Answer from the next tick.
             _ = task.ContinueWith(

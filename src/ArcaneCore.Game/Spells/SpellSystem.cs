@@ -1540,7 +1540,7 @@ public sealed partial class SpellSystem
     /// cooldowns unless the spell is passive. The client starts its own timers from SMSG_SPELL_GO
     /// for casts it requested (vmangos sends nothing then); for server-initiated (triggered) casts
     /// SMSG_SPELL_COOLDOWN tells the client — decision recorded in docs/areas/spells.md.
-    /// COOLDOWN_ON_EVENT spells are not started here (the event that starts them is not modelled yet).
+    /// COOLDOWN_ON_EVENT spells are not started here: their event (the aura fading, StartCooldownOnAuraEnd; a created object going, RemoveSpellObject) calls this with onEvent.
     /// </summary>
     private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered, int? itemCooldownMs = null,
         int? itemCategoryCooldownMs = null, uint? itemCategory = null, uint itemId = 0, bool onEvent = false, Item? castItem = null)
@@ -1585,6 +1585,12 @@ public sealed partial class SpellSystem
 
         if (category != 0 && categoryRecovery > 0)
         {
+            // vmangos CooldownMap::AddCooldown: a running category cooldown keeps its original owner and is only extended.
+            if (!state.CategoryOwners.ContainsKey(category) || !state.CategoryCooldowns.TryGetValue(category, out uint running) || running <= now)
+            {
+                state.CategoryOwners[category] = spell.Id;
+            }
+
             state.CategoryCooldowns[category] = now + categoryRecovery;
         }
 
@@ -1617,7 +1623,9 @@ public sealed partial class SpellSystem
         if (Store.Get(spellId) is { } spell)
         {
             uint category = state.CooldownOwners.GetValueOrDefault(spellId).Category;
-            removed |= state.CategoryCooldowns.Remove(category != 0 ? category : spell.Category);
+            uint cleared = category != 0 ? category : spell.Category;
+            removed |= state.CategoryCooldowns.Remove(cleared);
+            state.CategoryOwners.Remove(cleared);
             state.CooldownOwners.Remove(spellId);
         }
 
@@ -1659,7 +1667,48 @@ public sealed partial class SpellSystem
             result.Add(new InitialSpellCooldown(spellId, owner.ItemId, owner.Category, 0, until - now));
         }
 
+        // A category cooldown nothing above lists (COOLDOWN_ON_EVENT spells such as Stealth, Prowl, Shadowmeld, Presence of Mind have no
+        // cooldown of their own, only the category; a relog restores just the category row): the client keeps it under a spell of the
+        // category (vmangos "client keeps track of category cd by original spellId"), so name the recorded owner or else a known spell.
+        foreach ((uint categoryId, uint categoryUntil) in state.CategoryCooldowns.OrderBy(c => c.Key))
+        {
+            if (categoryUntil <= now || result.Any(c => c.Category == categoryId))
+            {
+                continue;
+            }
+
+            uint spellId = state.CategoryOwners.TryGetValue(categoryId, out uint recordedOwner) && Store.Get(recordedOwner) is not null
+                ? recordedOwner : FindCategorySpell(unit, categoryId);
+            if (spellId != 0)
+            {
+                result.Add(new InitialSpellCooldown(spellId, 0, categoryId, 0, categoryUntil - now));
+            }
+        }
+
         return result;
+    }
+
+    /// <summary>The lowest-id spell of a category the unit may use (a player's spellbook), COOLDOWN_ON_EVENT spells first; 0 when none.</summary>
+    private uint FindCategorySpell(Unit unit, uint category)
+    {
+        uint best = 0;
+        bool bestOnEvent = false;
+        foreach (SpellInfo candidate in Store.All)
+        {
+            if (candidate.Category != category || (unit is Player player && Spellbook is { } book && !book.HasSpell(player, candidate.Id)))
+            {
+                continue;
+            }
+
+            bool onEvent = candidate.HasAttribute(SpellAttributes.CooldownOnEvent);
+            if (best == 0 || (onEvent && !bestOnEvent) || (onEvent == bestOnEvent && candidate.Id < best))
+            {
+                best = candidate.Id;
+                bestOnEvent = onEvent;
+            }
+        }
+
+        return best;
     }
 
     private static void ExpireCooldowns(UnitSpellState state, uint now)
