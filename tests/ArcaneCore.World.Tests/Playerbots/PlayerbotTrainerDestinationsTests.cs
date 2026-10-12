@@ -381,9 +381,12 @@ internal sealed class FarTrainerFixture : ICreatureDataStore, INpcContentStore, 
     public const uint Entry = 944;
     public static readonly ObjectGuid Guid = ObjectGuid.WithEntry(HighGuid.Unit, Entry, 94401);
     public bool TwoSpawns { get; init; }
-    Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(NpcContent.Empty with { TrainerSpells = [new TrainerSpell { Entry = Entry, Spell = 944010, SpellCost = 1 }] });
-    Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent([new CreatureTemplate { Entry = Entry, Name = "far trainer", Faction = 900011, NpcFlags = (uint)NpcFlags.Trainer, DisplayIds = [49], TrainerType = 0, TrainerClass = 1 }], TwoSpawns ? [new CreatureSpawn { Guid = 94401, Entry = Entry, MapId = 0, X = -8649.95f, Y = -132.49f, Z = 83.53f }, new CreatureSpawn { Guid = 94402, Entry = Entry, MapId = 0, X = -9249.95f, Y = -132.49f, Z = 83.53f }] : [new CreatureSpawn { Guid = 94401, Entry = Entry, MapId = 0, X = -8649.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
-    Task<SpellContent> ISpellContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new SpellContent([new SpellTemplateRow { Id = 944010, SpellName = "teach", SpellLevel = 1, Effect1 = (uint)SpellEffectName.LearnSpell, EffectTriggerSpell1 = 944011, EffectImplicitTargetA1 = (uint)SpellImplicitTarget.UnitCaster }, new SpellTemplateRow { Id = 944011, SpellName = "learned", SpellLevel = 1 }], [], [], [], [], [], []));
+    public uint SpawnMapId { get; init; }
+    /// <summary>Replaces the one-copper trainer row (the budget tests give the trainer several priced rows).</summary>
+    public IReadOnlyList<TrainerSpell>? Rows { get; init; }
+    Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(NpcContent.Empty with { TrainerSpells = Rows ?? [new TrainerSpell { Entry = Entry, Spell = 944010, SpellCost = 1 }] });
+    Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent([new CreatureTemplate { Entry = Entry, Name = "far trainer", Faction = 900011, NpcFlags = (uint)NpcFlags.Trainer, DisplayIds = [49], TrainerType = 0, TrainerClass = 1 }], TwoSpawns ? [new CreatureSpawn { Guid = 94401, Entry = Entry, MapId = SpawnMapId, X = -8649.95f, Y = -132.49f, Z = 83.53f }, new CreatureSpawn { Guid = 94402, Entry = Entry, MapId = SpawnMapId, X = -9249.95f, Y = -132.49f, Z = 83.53f }] : [new CreatureSpawn { Guid = 94401, Entry = Entry, MapId = SpawnMapId, X = -8649.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
+    Task<SpellContent> ISpellContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new SpellContent([new SpellTemplateRow { Id = 944010, SpellName = "teach", SpellLevel = 1, Effect1 = (uint)SpellEffectName.LearnSpell, EffectTriggerSpell1 = 944011, EffectImplicitTargetA1 = (uint)SpellImplicitTarget.UnitCaster }, new SpellTemplateRow { Id = 944011, SpellName = "learned", SpellLevel = 1 }, new SpellTemplateRow { Id = 944020, SpellName = "teach944020", SpellLevel = 1, Effect1 = (uint)SpellEffectName.LearnSpell, EffectTriggerSpell1 = 944021, EffectImplicitTargetA1 = (uint)SpellImplicitTarget.UnitCaster }, new SpellTemplateRow { Id = 944021, SpellName = "learned944020", SpellLevel = 1 },new SpellTemplateRow { Id = 944030, SpellName = "teach944030", SpellLevel = 1, Effect1 = (uint)SpellEffectName.LearnSpell, EffectTriggerSpell1 = 944031, EffectImplicitTargetA1 = (uint)SpellImplicitTarget.UnitCaster }, new SpellTemplateRow { Id = 944031, SpellName = "learned944030", SpellLevel = 1 },new SpellTemplateRow { Id = 944040, SpellName = "teach944040", SpellLevel = 1, Effect1 = (uint)SpellEffectName.LearnSpell, EffectTriggerSpell1 = 944041, EffectImplicitTargetA1 = (uint)SpellImplicitTarget.UnitCaster }, new SpellTemplateRow { Id = 944041, SpellName = "learned944040", SpellLevel = 1 }], [], [], [], [], [], []));
     Task ISpellContentStore.ReplaceDbcTablesAsync(SpellDbcContent content, CancellationToken cancellationToken) => throw new NotSupportedException();
 }
 
@@ -413,7 +416,8 @@ internal sealed class TrainerReactions : IPlayerReputation, INpcReactionSource
     public ReputationRank Rank { get; set; } = ReputationRank.Friendly;
     public int GetReputation(Player player, uint factionId) => 0;
     public byte GetReputationRank(Player player, uint factionId) => (byte)Rank;
-    public float GetPriceDiscount(Player player, NpcInfo npc) => 1;
+    public float Discount { get; set; } = 1;
+    public float GetPriceDiscount(Player player, NpcInfo npc) => Discount;
     public bool TryGetNpcReaction(Player player, FactionTemplateRecord npc, FactionTemplateRecord self, out ReputationRank reaction)
     { reaction = Rank; return true; }
 }

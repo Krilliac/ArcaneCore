@@ -632,6 +632,16 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Economy)}:{property.Name}");
         }
 
+        // The bot budget and mounts sections are live key by key (docs/areas/playbots-economy.md).
+        foreach (PropertyInfo property in typeof(PlayerbotBudgetOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Budget)}:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(PlayerbotMountOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Mounts)}:{property.Name}");
+        }
+
         // The chat safety section is live key by key (docs/areas/playbots.md, Safety and provider policies).
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

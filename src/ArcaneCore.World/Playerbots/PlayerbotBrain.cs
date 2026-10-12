@@ -74,6 +74,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotQuestGoals _quests = new(session, options);
     private readonly PlayerbotTownGoals _town = new(session, options);
     private readonly PlayerbotEconomy _economy = new(session, options);
+    private readonly PlayerbotBudget _budget = new(session, options);
+    private readonly PlayerbotRidingTrips _riding = new(session, options);
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
     private readonly PlayerbotWorldDestinations _destinations = new(session, options);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
@@ -137,6 +139,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     /// <summary>The risk line BOTINSPECT and <c>.playerbot status</c> show (<see cref="PlayerbotRisk.Report"/>).</summary>
     internal string RiskReport => _options.Risk.Enabled ? Risk.Report : "decision=off";
+
+    /// <summary>What the bot saves for (<see cref="PlayerbotBudget"/>; inspection and tests).</summary>
+    internal PlayerbotBudget Budget => _budget;
+
+    /// <summary>The budget line BOTINSPECT shows (<see cref="PlayerbotBudget.Report"/>).</summary>
+    internal string BudgetReport(Player player) => _budget.Report(player);
 
     /// <summary>The ghost recovery (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
@@ -319,6 +327,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _destinations.SetQuestAside ??= _quests.SetAside;
         _destinations.TeleportToBind ??= TeleportToBindPointForQuest;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
+        _town.Budget = _trainers.Budget = _riding.Budget = _budget; _economy.SpendBudget = _budget;
+        _riding.Suspensions = _suspensions;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
         PlayerbotThinkProbe.Phase("brain");
@@ -758,6 +768,22 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (_trainers.Update(player, interval))
                 { _goal = PlayerbotGoalKind.Train; TargetEntry = _trainers.TargetEntry; return; }
             }
+            PlayerbotThinkProbe.Phase("riding");
+            if (_quests.PreferredCreatureEntry == 0 && _riding.HasCandidate(player))
+            {
+                // Saved for riding training or a mount and the money is there: the same priority as a class trainer trip.
+                if (_attacking || player.Combat.Victim is not null)
+                {
+                    if (_session.TryManagedAction(WorldOpcode.CmsgAttackstop, []))
+                    { _attacking = false; _target = null; _route = null; }
+                    _goal = PlayerbotGoalKind.Mount;
+                    return;
+                }
+                _target = null;
+                _route = null;
+                if (_riding.Update(player, interval))
+                { _goal = PlayerbotGoalKind.Mount; TargetEntry = _riding.TargetEntry; return; }
+            }
             PlayerbotThinkProbe.Phase("quest destinations");
             if (_quests.PreferredCreatureEntry == 0 && player.Combat.Victim is null
                 && _destinations.HasQuestCandidate(player))
@@ -939,7 +965,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
 
         if (_quests.Busy || _town.HasCandidate(player)
-            || _quests.PreferredCreatureEntry == 0 && _trainers.HasCandidate(player)) return false;
+            || _quests.PreferredCreatureEntry == 0 && (_trainers.HasCandidate(player) || _riding.HasCandidate(player))) return false;
         PlayerbotHomeTeleportReason teleport = _homeReturn.Judge(player, home, homeOptions);
         if (teleport != PlayerbotHomeTeleportReason.None)
         {
@@ -990,7 +1016,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 _suspensions.SuspendQuest(QuestId, now);
                 _suspensions.SuspendEntry(TargetEntry, now);
                 break;
-            case PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train:
+            case PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount:
                 _suspensions.SuspendEntry(TargetEntry, now);
                 break;
             case PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat or PlayerbotGoalKind.Loot:
@@ -1146,7 +1172,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>Keep the errand the bot is on (each think; tests call it directly).</summary>
     internal void NoteErrand(PlayerbotGoalKind goal, uint entry, uint quest)
     {
-        if (goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor && (entry != 0 || quest != 0))
+        if (goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Mount && (entry != 0 || quest != 0))
             _errand = (goal, entry, quest, _session.World.NowMs);
     }
 

@@ -389,7 +389,7 @@ internal sealed class PlayerbotSharedSetAsides
         (bool Quest, uint Id) key = goal switch
         {
             PlayerbotGoalKind.Quest when quest != 0 => (true, quest),
-            PlayerbotGoalKind.Quest or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train when entry != 0 => (false, entry),
+            PlayerbotGoalKind.Quest or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount when entry != 0 => (false, entry),
             _ => default,
         };
         if (key.Id == 0) return null;

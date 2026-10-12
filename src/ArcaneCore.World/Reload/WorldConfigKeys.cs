@@ -314,6 +314,22 @@ public static class WorldConfigKeys
             v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
         LivePlayerbotsValue("Economy:VisitIntervalMinutes", o => o.Economy.VisitIntervalMinutes, (o, v) => o.Economy.VisitIntervalMinutes = v,
             v => v is >= 1 and <= PlayerbotEconomyOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotEconomyOptions.MaxVisitIntervalMinutes}"),
+        // Not vmangos keys: how bots plan their money and ride (docs/areas/playbots-economy.md). PlayerbotBudget and PlayerbotMount read the
+        // shared PlayerbotOptions.Budget / Mounts at every decision.
+        LivePlayerbots("Budget:Enabled", o => o.Budget.Enabled, (o, v) => o.Budget.Enabled = v),
+        LivePlayerbotsValue("Budget:ClassLevelsAhead", o => o.Budget.ClassLevelsAhead, (o, v) => o.Budget.ClassLevelsAhead = v,
+            v => v is >= 0 and <= PlayerbotBudgetOptions.MaxClassLevelsAhead ? null : $"must be 0..{PlayerbotBudgetOptions.MaxClassLevelsAhead}"),
+        LivePlayerbotsValue("Budget:EssentialsAllowanceCopper", o => o.Budget.EssentialsAllowanceCopper, (o, v) => o.Budget.EssentialsAllowanceCopper = v,
+            v => v <= 100_000_000u ? null : "must be 0..100000000"),
+        LivePlayerbotsValue("Budget:RefreshSeconds", o => o.Budget.RefreshSeconds, (o, v) => o.Budget.RefreshSeconds = v,
+            v => v is >= 1 and <= 3600 ? null : "must be 1..3600"),
+        LivePlayerbotsValue("Budget:DiscretionaryFloorFraction", o => o.Budget.DiscretionaryFloorFraction, (o, v) => o.Budget.DiscretionaryFloorFraction = v,
+            v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
+        LivePlayerbots("Mounts:Enabled", o => o.Mounts.Enabled, (o, v) => o.Mounts.Enabled = v),
+        LivePlayerbotsValue("Mounts:SaveLevelsAhead", o => o.Mounts.SaveLevelsAhead, (o, v) => o.Mounts.SaveLevelsAhead = v,
+            v => v is >= 0 and <= PlayerbotMountOptions.MaxSaveLevelsAhead ? null : $"must be 0..{PlayerbotMountOptions.MaxSaveLevelsAhead}"),
+        LivePlayerbotsValue("Mounts:MountMinTravelYards", o => o.Mounts.MountMinTravelYards, (o, v) => o.Mounts.MountMinTravelYards = v,
+            v => float.IsFinite(v) && v is >= 1f and <= 100000f ? null : "must be 1..100000"),
         // Not vmangos keys: autonomous bots in battlegrounds (docs/areas/playbots-battlegrounds.md). PlayerbotBattlegroundCoordinator
         // reads the shared PlayerbotOptions.Battlegrounds at every decision.
         LivePlayerbots("Battlegrounds:Enabled", o => o.Battlegrounds.Enabled, (o, v) => o.Battlegrounds.Enabled = v),

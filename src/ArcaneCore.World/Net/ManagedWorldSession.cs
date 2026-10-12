@@ -99,6 +99,7 @@ public sealed partial class WorldSession
             || !handler.AllowsState(_state)
             || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck)) return false;
         if (ManagedBudget is { } budget && !budget.TryTake()) return false;
+        ArcaneCore.World.Playerbots.PlayerbotMount.DismountForAction(this, player, opcode);
         CapturePacket(true, opcode, payload);
         ManagedDispatchObserver?.Invoke(opcode);
         _currentPacketReceivedMs = (uint)Kernel.Logging.Clock.Milliseconds();

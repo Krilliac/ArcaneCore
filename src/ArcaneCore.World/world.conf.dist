@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       362 keys
+#   WORLD                       370 keys
 #
 ###############################################################################
 
@@ -9841,6 +9841,73 @@ World.Playerbots.Battlegrounds.PreferFillingRealPlayerQueues = true
 World.Playerbots.Battlegrounds.QueueChancePerMinute = 0.05
 
 #
+#    World.Playerbots.Budget.ClassLevelsAhead
+#        Description: How many levels ahead of its own the bot saves for class spells (0..10): the
+#                     spells its class trainer teaches at levels up to this many above the bot's,
+#                     plus the ones it can learn now, are reserved at the trainer's prices, so
+#                     lower-priority spending (riding, the auction house) cannot eat the money they
+#                     cost. 0 reserves only what can be learned now.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.ClassLevelsAhead = 2
+
+#
+#    World.Playerbots.Budget.DiscretionaryFloorFraction
+#        Description: The share of its current money (0..1) a bot may always spend on discretionary
+#                     purchases (auction upgrades), even when the reserves leave nothing over: a
+#                     reserve the bot may never reach (a tier far above its means) does not stop its
+#                     optional buying for good. 0 lets the reserves take everything. Auction listing
+#                     deposits are never limited by the reserves.
+#        Type: float
+#        Default: 0.1
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.DiscretionaryFloorFraction = 0.1
+
+#
+#    World.Playerbots.Budget.Enabled
+#        Description: Let bots save for what they will need (on by default). Off: nothing is
+#                     reserved and every spend site may spend all the bot's money.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.Enabled = true
+
+#
+#    World.Playerbots.Budget.EssentialsAllowanceCopper
+#        Description: Copper a bot may always spend on food, drink and ammunition (0..100000000),
+#                     whatever it saves for: the part of a purchase that the reserves would
+#                     otherwise forbid is allowed up to this price, so a saving bot never starves.
+#        Type: uint
+#        Default: 10000
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.EssentialsAllowanceCopper = 10000
+
+#
+#    World.Playerbots.Budget.RefreshSeconds
+#        Description: Seconds between two recomputations of a bot's reserves (1..3600); a level, a
+#                     learned spell or a new map recompute them at once.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.RefreshSeconds = 30
+
+#
 #    World.Playerbots.Chat.Channels
 #        Description: The lines a bot answers: Whisper, Party and Say (comma-separated; all three by
 #                     default). Values: None, Whisper, Party, Say.
@@ -10914,6 +10981,43 @@ World.Playerbots.MaxRouteYards = 2000
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.MaxThinkSearchNodes = 98304
+
+#
+#    World.Playerbots.Mounts.Enabled
+#        Description: Let bots save for, train, buy and ride mounts (on by default). Off: no riding
+#                     reserve, no trips, and a mounted bot is left as it is.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Mounts.Enabled = true
+
+#
+#    World.Playerbots.Mounts.MountMinTravelYards
+#        Description: A bot rides on a walk of at least this many yards (1..100000); shorter legs
+#                     are walked.
+#        Type: float
+#        Default: 80
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Mounts.MountMinTravelYards = 80
+
+#
+#    World.Playerbots.Mounts.SaveLevelsAhead
+#        Description: Within this many levels of the level a riding tier needs (the trainer's
+#                     required level, read from the world data), a bot starts to reserve that tier's
+#                     riding training and the cheapest mount it can use (0..20).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Mounts.SaveLevelsAhead = 4
 
 #
 #    World.Playerbots.MoveSpeed

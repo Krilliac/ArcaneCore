@@ -159,6 +159,12 @@ public sealed class PlayerbotOptions
 
     /// <summary>Bots use the faction auction house and mailbox (<c>World:Playerbots:Economy</c>; live; docs/areas/playbots-economy.md).</summary>
     public PlayerbotEconomyOptions Economy { get; set; } = new();
+
+    /// <summary>How bots save money for what they will need: class spells, riding, a mount (<c>World:Playerbots:Budget</c>; live; docs/areas/playbots-economy.md).</summary>
+    public PlayerbotBudgetOptions Budget { get; set; } = new();
+
+    /// <summary>Bots save for riding training and a mount, train, buy and ride it (<c>World:Playerbots:Mounts</c>; live; docs/areas/playbots-economy.md).</summary>
+    public PlayerbotMountOptions Mounts { get; set; } = new();
     /// <summary>Bots queue for, play and leave battlegrounds (<c>World:Playerbots:Battlegrounds</c>; live).</summary>
     public Battlegrounds.PlayerbotBattlegroundOptions Battlegrounds { get; set; } = new();
 
@@ -229,6 +235,10 @@ public sealed class PlayerbotOptions
         Social.Validate();
         if (Economy is null) throw new InvalidOperationException($"{SectionName}:Economy is missing.");
         Economy.Validate();
+        if (Budget is null) throw new InvalidOperationException($"{SectionName}:Budget is missing.");
+        Budget.Validate();
+        if (Mounts is null) throw new InvalidOperationException($"{SectionName}:Mounts is missing.");
+        Mounts.Validate();
         if (Battlegrounds is null) throw new InvalidOperationException($"{SectionName}:Battlegrounds is missing.");
         Battlegrounds.Validate();
     }

@@ -100,6 +100,39 @@ public sealed class PlayerbotEconomyWorldTests
         });
     }
 
+    [Fact]
+    public async Task Visit_ListsLootWhileTheBotSavesForSomethingBeyondItsMoney_ButBuysNothing()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-listing-saving", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            AuctionHouseEntry house = HouseOf(economy);
+            ScenarioBot bot = await c.LoginAsync("Econsaver");
+            await c.GiveMoneyAsync(bot, 5000);
+            await c.GiveItemAsync(bot, BoltA, 3);
+            uint moneyBefore = await bot.ReadAsync(p => p.Money);
+
+            // The bot saves a million copper it does not have, and no floor lets it spend any of its money on purchases.
+            PlayerbotOptions options = Options(listChance: 100, maxListings: 3, budget: 0.25f);
+            options.Budget.DiscretionaryFloorFraction = 0f;
+            Driver driver = await AttachAsync(c, bot, options);
+            var budget = new PlayerbotBudget(bot.Session!, options);
+            budget.Pin(new PlayerbotBudgetLine(PlayerbotSpendKind.Riding, 1_000_000));
+            await c.ReadAsync(() => { driver.Economy.SpendBudget = budget; return true; });
+            ScenarioContext.ExpectEqual(0u, await c.ReadAsync(() => budget.Spendable(PlayerbotSpendKind.Discretionary, bot.RequirePlayer())), "discretionary money while saving");
+
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+            ItemTemplate a = Template(economy, BoltA);
+            uint depositA = AuctionHouseRules.Deposit(house, a.SellPrice, 3, PlayerbotAuctionPricing.DurationMinutes, economy.Options.AuctionDepositMin, economy.Options.AuctionRateDeposit);
+            ScenarioContext.Expect(depositA > 0, "the test item must be worth listing");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ListingsPlaced), "listings placed by a saving bot");
+            ScenarioContext.ExpectEqual(moneyBefore - depositA, await bot.ReadAsync(p => p.Money), "money after the visit: the deposit, nothing else");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
     // --- the visit buys ----------------------------------------------------------------------------------------------
 
     [Fact]

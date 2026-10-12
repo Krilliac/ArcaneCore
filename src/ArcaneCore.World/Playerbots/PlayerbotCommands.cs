@@ -437,6 +437,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         context.Reply($"BOTINSPECT {value.Risk ?? "decision=none"}");
         context.Reply($"BOTINSPECT {value.Group ?? "group=none"}");
         context.Reply($"BOTINSPECT home={value.Home ?? "none"}");
+        context.Reply($"BOTINSPECT budget={value.Budget ?? "none"}");
         context.Reply(value.Master is null ? "BOTINSPECT party=none"
             : $"BOTINSPECT party=master:{value.Master} mode:{value.PartyMode?.ToString().ToLowerInvariant()}");
         if (value.Corpse is { } corpse)
