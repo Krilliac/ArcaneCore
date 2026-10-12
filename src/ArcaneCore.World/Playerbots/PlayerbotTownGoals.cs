@@ -306,6 +306,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private int _repairEmptyRounds;
     private Vector3 _repairRestFrom;
+    private uint _repairRestMap;
 
     /// <summary>At most this many repair NPC spawns of the map are kept as trip goals (the nearest first).</summary>
     private const int MaxRepairSpawns = 64;
@@ -390,22 +391,27 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// </summary>
     private bool RepairTripWanted(Player player)
     {
-        if (!player.IsAlive || player.Money == 0) return false;
+        if (!player.IsAlive) return false;
         if (!NeedsRepairTrip(player))
         {
-            _repairEmptyRounds = 0; // the gear is fine: the next trip starts with the short rest again
+            _repairEmptyRounds = 0; // the gear is fine (whatever the bot's money): the next trip starts with the short rest again
             return false;
         }
 
+        if (player.Money == 0) return false;
         uint now = session.World.NowMs;
         if (_repairBackoffUntil != 0 && unchecked(now - _repairBackoffUntil) > int.MaxValue) return false;
-        if (_repairTripBackoffUntil != 0 && unchecked(now - _repairTripBackoffUntil) > int.MaxValue)
+        if (_repairEmptyRounds > 0)
         {
-            if (Vector3.DistanceSquared(_repairRestFrom, new Vector3(player.X, player.Y, player.Z)) < RepairBackoffResetYards * RepairBackoffResetYards)
-                return false;
-            // Far from where the last round found nothing: the rests start over and the trip is looked at again.
-            _repairTripBackoffUntil = 0;
-            _repairEmptyRounds = 0;
+            // Another map, or far from where the last round found nothing (also once the rest is over): the way from here may be open,
+            // so the rests start over.
+            if (player.MapId != _repairRestMap
+                || Vector3.DistanceSquared(_repairRestFrom, new Vector3(player.X, player.Y, player.Z)) >= RepairBackoffResetYards * RepairBackoffResetYards)
+            {
+                _repairTripBackoffUntil = 0;
+                _repairEmptyRounds = 0;
+            }
+            else if (_repairTripBackoffUntil != 0 && unchecked(now - _repairTripBackoffUntil) > int.MaxValue) return false;
         }
 
         return session.Services.GetService<QuestNpcFeature>()?.Services is { } services
@@ -540,6 +546,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         uint rest = (uint)Math.Min((ulong)RepairTripBackoffMs << Math.Min(_repairEmptyRounds, 8), RepairTripBackoffMaxMs);
         if (_repairEmptyRounds < 8) _repairEmptyRounds++;
         _repairRestFrom = here;
+        _repairRestMap = map.MapId;
         _repairTripBackoffUntil = Math.Max(1u, unchecked(now + rest));
         return false;
     }
