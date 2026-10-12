@@ -157,8 +157,9 @@ escape (`PlayerbotRisk.Refused`, ring-escape spec of 2026-10-11):
 * **Walk.** The route is pinned (`EscapeRoute`, goal `Escape`), walked by the brain before any goal, for at most 20 seconds
   (`EscapeLifeMs`); `TryAdvance` exempts that one route from strong hazards only. Combat or a death ends it, and a death resets
   the clock.
-* **Invariants.** Death, retreat, lethal and fled hazards always block, the escape route included. An ordinary route never has
-  strong hazards relaxed. One look at 64 strong creatures costs about 32 us and
+* **Invariants.** Death, retreat, lethal and fled hazards always block, the escape route included. A completed quest return
+  can cross a pack-only strong hazard if each mob is individually manageable and within the brain's three-level non-objective
+  range; other ordinary routes still guard all strong hazards. One look at 64 strong creatures costs about 32 us and
 allocates nothing (`PlayerbotStrongHazardCostTests`; 272-300 us and 47 KB before). Live w23 2026-10-11:
 five level 1-3 bots without a home, revived at the Goldshire spirit healer, gave 58 bodies up in 38 minutes among level 5-6 Defias
 Cutpurses and Mangy Wolves that the pull estimate rightly avoided (`reason=too-strong`), attacked on sight on their walks past them.
