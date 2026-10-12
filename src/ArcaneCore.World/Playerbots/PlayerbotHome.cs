@@ -46,6 +46,8 @@ internal sealed class PlayerbotHomeArea
     internal const float ExploreFraction = 0.8f;
 
     private readonly Dictionary<uint, bool> _quests = [];
+    private readonly Dictionary<uint, bool> _leaving = [];
+    private readonly Dictionary<uint, bool> _valley = [];
     private readonly Dictionary<uint, bool> _entries = [];
     private readonly PlayerbotZoneLookup? _zones;
     private CreatureContent? _cachedContent;
@@ -95,6 +97,21 @@ internal sealed class PlayerbotHomeArea
     /// or null: no level is known and no way home counts as dangerous (the distance and the other rules still apply).
     /// </summary>
     internal PlayerbotAreaLevelLookup? AreaLevels { get; init; }
+
+    /// <summary>
+    /// A graduated start home (<see cref="Population.PopulationStartAreas"/>, the <c>zone:</c> stage): quests whose turn-in lies outside
+    /// the area may be taken (<see cref="QuestAllowed"/>). False for an operator's home and for a start home still in its valley.
+    /// </summary>
+    internal bool AllowsLeaveQuests { get; init; }
+
+    /// <summary>
+    /// A start-stage home (<see cref="Population.PopulationStartAreas.ValleyRadiusOf"/>): a quest that is not for a class and whose turn-in or
+    /// kill targets lie beyond this many yards of the centre (the next town: the level 5 breadcrumbs; a quest with a prerequisite gets <see cref="Population.PopulationStartAreas.ChainSlackYards"/> more) is not taken in the valley. 0: no gate.
+    /// </summary>
+    internal float ValleyRadius { get; init; }
+
+    /// <summary>The live population options (<see cref="Population.PlayerbotPopulationOptions.LeaveHomeLevelMargin"/>); null reads a margin of 0.</summary>
+    internal Population.PlayerbotPopulationOptions? LeavePolicy { get; init; }
 
     /// <summary>The AreaTable zone of the centre for a clipped home; 0 when unclipped or not known. World thread.</summary>
     internal uint ZoneId
@@ -195,6 +212,87 @@ internal sealed class PlayerbotHomeArea
         return _quests[quest.Id] = inside;
     }
 
+    /// <summary>
+    /// Whether <paramref name="quest"/> is a leave-home quest: it has creature enders and none of them has a spawn inside, while every
+    /// creature it asks the bot to kill does (so only the turn-in lies outside; a quest that sends the bot out to hunt is not one).
+    /// Cached per quest like <see cref="QuestInside"/>. Item and object objectives (drops, nodes) are not checked, as in <see cref="QuestInside"/>.
+    /// </summary>
+    internal bool QuestLeavesHome(QuestStore quests, CreatureContent content, Quest quest)
+    {
+        Sync(content, quests);
+        if (_leaving.TryGetValue(quest.Id, out bool known)) return known;
+        bool leaves = false;
+        IReadOnlyList<uint> enders = quests.CreatureEndersOf(quest.Id);
+        if (enders.Count > 0)
+        {
+            leaves = true;
+            foreach (uint ender in enders)
+            {
+                if (!HasSpawnInside(content, ender)) continue;
+                leaves = false;
+                break;
+            }
+        }
+
+        for (int index = 0; leaves && index < quest.ReqCreatureOrGOId.Count; index++)
+        {
+            int objective = quest.ReqCreatureOrGOId[index];
+            if (objective > 0 && !HasSpawnInside(content, (uint)objective)) leaves = false;
+        }
+
+        return _leaving[quest.Id] = leaves;
+    }
+
+    /// <summary>
+    /// The lowest level a bot may take a leave-home quest at: the quest's MinLevel, and its QuestLevel less
+    /// <see cref="Population.PlayerbotPopulationOptions.LeaveHomeLevelMargin"/> (a QuestLevel of 0 or less follows the player and adds nothing).
+    /// </summary>
+    internal uint LeaveLevelOf(Quest quest)
+    {
+        int margin = LeavePolicy?.LeaveHomeLevelMargin ?? 0;
+        return (uint)Math.Max(quest.MinLevel, quest.QuestLevel > 0 ? quest.QuestLevel - margin : 0);
+    }
+
+    /// <summary>
+    /// Whether a bot of <paramref name="playerLevel"/> may take <paramref name="quest"/> under this home: it is inside
+    /// (<see cref="QuestInside"/>), or the home has graduated (<see cref="AllowsLeaveQuests"/>), the quest only leaves it for the
+    /// turn-in (<see cref="QuestLeavesHome"/>) and the bot is old enough for it (<see cref="LeaveLevelOf"/>). The one rule of the
+    /// travel planner and the quest-giver controller (<see cref="PlayerbotWorldDestinations.MayTakeQuest"/>).
+    /// </summary>
+    internal bool QuestAllowed(QuestStore quests, CreatureContent content, Quest quest, uint playerLevel)
+        => QuestInside(quests, content, quest) && QuestInValley(quests, content, quest)
+            || (AllowsLeaveQuests && playerLevel >= LeaveLevelOf(quest) && QuestLeavesHome(quests, content, quest));
+
+    /// <summary>
+    /// Whether <paramref name="quest"/> stays in the start valley (<see cref="ValleyRadius"/>): always without a valley gate and for a quest
+    /// restricted to classes; otherwise every creature that ends it, and every creature it asks the bot to kill, has a spawn within the valley
+    /// radius. Item and object objectives are not checked (their drops and nodes are not indexed by quest here). Cached per quest.
+    /// </summary>
+    internal bool QuestInValley(QuestStore quests, CreatureContent content, Quest quest)
+    {
+        if (ValleyRadius <= 0f || quest.Template.RequiredClasses != 0) return true;
+        Sync(content, quests);
+        if (_valley.TryGetValue(quest.Id, out bool known)) return known;
+        bool inValley = true;
+        float radius = ValleyRadius + (quest.Template.PrevQuestId != 0 ? Population.PopulationStartAreas.ChainSlackYards : 0f);
+        foreach (uint ender in quests.CreatureEndersOf(quest.Id))
+            if (inValley && !HasSpawnWithin(this, content, ender, radius)) inValley = false;
+        for (int index = 0; inValley && index < quest.ReqCreatureOrGOId.Count; index++)
+        {
+            int objective = quest.ReqCreatureOrGOId[index];
+            if (objective > 0 && !HasSpawnWithin(this, content, (uint)objective, radius)) inValley = false;
+        }
+
+        return _valley[quest.Id] = inValley;
+    }
+
+    private static bool HasSpawnWithin(PlayerbotHomeArea area, CreatureContent content, uint entry, float radius)
+    {
+        foreach (CreatureSpawn spawn in content.GetSpawns(area.MapId, entry))
+            if (area.DistanceTo(spawn.X, spawn.Y) <= radius) return true;
+        return false;
+    }
+
     /// <summary>Drop the caches when the creature content or the quest store changed since they were filled.</summary>
     private void Sync(CreatureContent content, QuestStore? quests)
     {
@@ -202,6 +300,8 @@ internal sealed class PlayerbotHomeArea
             && (quests is null || ReferenceEquals(_cachedQuests, quests))) return;
         _entries.Clear();
         _quests.Clear();
+        _leaving.Clear();
+        _valley.Clear();
         _cachedContent = content;
         _cachedVersion = content.DefinitionsVersion;
         if (quests is not null) _cachedQuests = quests;

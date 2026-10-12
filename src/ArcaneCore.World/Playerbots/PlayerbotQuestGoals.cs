@@ -111,6 +111,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 Home is null ? _options.MaxDeliveryYards : 0, player, completed: true))
             {
                 if (Home is not { } home) continue;
+                // A leave-home quest a graduated home allowed is meant to be turned in outside the home, however far.
+                // Bounded: after MaxReturnSetAsides stalled trips for it the quest falls through to the abandon below.
+                if (services.Quests.Get(id) is { } held && home.AllowsLeaveQuests && home.QuestLeavesHome(services.Quests, content, held)
+                    && (Suspensions?.QuestSetAsideCount(id) ?? 0) < PlayerbotSuspensions.MaxReturnSetAsides) continue;
                 bool reasonable = services.Quests.CreatureEndersOf(id)
                     .SelectMany(entry => content.GetSpawns(player.MapId, entry))
                     .Where(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn))

@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Playerbots.Population;
 /// little or nothing right now, which is the first one to park.
 /// </summary>
 internal sealed record PopulationBotFacts(Guid BotId, byte Level, Team Team, uint ZoneId, bool Autonomous, bool Busy, bool PlayerInZone, bool Vetoed,
-    bool Dead = false, bool Sick = false, bool Stalled = false);
+    bool Dead = false, bool Sick = false, bool Stalled = false, byte Race = 0, byte Class = 0, uint MapId = 0, float X = 0, float Y = 0);
 
 /// <summary>A bot chosen to be parked and why: <c>dead</c>, <c>sick</c>, <c>stalled</c>, <c>surplus</c> (its band holds more than its share) or <c>rotation</c>.</summary>
 internal sealed record PopulationParkPick(PopulationBotFacts Bot, string Reason);

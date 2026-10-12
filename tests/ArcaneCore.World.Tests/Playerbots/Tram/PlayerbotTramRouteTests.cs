@@ -28,7 +28,7 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
 {
     private static readonly Vector3 IronforgeGoal = new(-4918.9f, -982.5f, 501.5f); // the Commons, by the Ironforge exit
 
-    private static PlayerbotOptions Options() => new() { Enabled = true, ThinkIntervalMs = 100 };
+    private static PlayerbotOptions Options() => new() { Enabled = true, ThinkIntervalMs = 100, Population = { TramMinLevel = 0 } };
 
     /// <summary>The trip from the Stormwind tram exit to Ironforge, through the bot's brain, with the anticheat judging the bot as a client.</summary>
     [Fact]

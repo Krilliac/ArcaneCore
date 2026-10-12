@@ -235,8 +235,10 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             attempted = true;
             Vector3 destination = new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z);
             // Across the Deeprun Tram (Stormwind and Ironforge sides of the continent): the brain drives the trip from the next think,
-            // and the destination plans again from the other platform's exit (PlayerbotTram).
-            if (PlayerbotTram.TryBegin(_session, player, destination, TramZoneAt))
+            // and the destination plans again from the other platform's exit (PlayerbotTram). A low-level bot with no home takes no
+            // tram or lift trip (TransitAllowed): the live fresh launch sent about 76 level 1 bots to Stormwind quests by the tram.
+            bool transit = TransitAllowed(Home, player.Level, _options.Population);
+            if (transit && PlayerbotTram.TryBegin(_session, player, destination, TramZoneAt))
             {
                 ClearRoute();
                 TargetEntry = entry.Entry;
@@ -248,7 +250,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // On the other level of a lift (the Great Lift between Thousand Needles and The Barrens, the Thunder Bluff lifts): the brain
             // drives the ride from the next think, and the destination plans again from the other landing (PlayerbotElevator). When the
             // lift's own mesh check found the way on foot, that route is walked: still one path query this think.
-            if (PlayerbotElevator.TryBegin(_session, player, destination, _options, out PlayerbotRoute? walk))
+            PlayerbotRoute? walk = null;
+            if (transit && PlayerbotElevator.TryBegin(_session, player, destination, _options, out walk))
             {
                 ClearRoute();
                 TargetEntry = entry.Entry;
@@ -305,6 +308,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     }
 
     private bool GiverInHome(CreatureSpawn spawn) => Home is not { } home || home.Contains(spawn);
+
+    /// <summary>
+    /// Whether a bot may begin a Deeprun Tram or lift trip: a bot with a home always (its home already confines its goals), one without
+    /// only from <see cref="Population.PlayerbotPopulationOptions.TramMinLevel"/> (0 = always).
+    /// </summary>
+    internal static bool TransitAllowed(PlayerbotHomeArea? home, uint level, Population.PlayerbotPopulationOptions population)
+        => home is not null || population.TramMinLevel == 0 || level >= population.TramMinLevel;
 
     /// <summary>
     /// The backstop for a disagreement between the travel rule and the quest-giver controller. Called when a trip's NPC is in sight:
@@ -398,7 +408,12 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _failDiagnosed = true;
         bool steep = PlayerbotNavigation.RequiresSteepAscent(player, destination, _options, out float ascent);
         PlayerbotHazard hazard = default;
-        if (!steep && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard)) return;
+        if (!steep && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard))
+        {
+            // No steep ground or hazard: for a bot that may not take the tram or a lift the ender across it is the reason.
+            if (!TransitAllowed(Home, player.Level, _options.Population)) ConfirmTransitBlocked(player, questId, entry, now);
+            return;
+        }
         string reason = steep ? $"the mesh route climbs {ascent:F1} yards of steep ground"
             : $"the route crosses a {hazard.Kind} hazard";
         _failCount = 0;
@@ -462,6 +477,33 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         log?.LogWarning(
             "Playerbot {Bot} sets aside quest {Quest} target {Entry} (set-aside {Times}): no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; {Reason}",
             player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, reason);
+    }
+
+    /// <summary>
+    /// A completed quest whose ender the bot cannot reach because it may not take the tram or a lift yet (<see cref="TransitAllowed"/>):
+    /// set aside like any unreachable ender, and after <see cref="PlayerbotSuspensions.MaxReturnSetAsides"/> set-asides abandoned
+    /// through the client's abandon packet and never taken again, so the far plan is not retried forever. Returns true when abandoned.
+    /// </summary>
+    internal bool ConfirmTransitBlocked(Player player, uint questId, uint entry, uint now)
+    {
+        if (Suspensions is not { } suspensions) return false;
+        _failCount = 0;
+        _failDiagnosed = false;
+        ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
+        suspensions.SuspendQuest(questId, now);
+        suspensions.SuspendEntry(entry, now);
+        int times = suspensions.QuestSetAsideCount(questId);
+        if (times >= PlayerbotSuspensions.MaxReturnSetAsides && PlayerbotQuestGoals.TryAbandonCompletedQuest(_session, player, questId, out _))
+        {
+            suspensions.MarkUnreachableQuest(questId);
+            log?.LogWarning("Playerbot {Bot} abandons completed quest {Quest} (ender {Entry}) after {Times} set-asides: level {Level} is below the tram level and the ender lies across it",
+                player.Name, questId, entry, times, player.Level);
+            return true;
+        }
+
+        log?.LogWarning("Playerbot {Bot} sets aside completed quest {Quest} (ender {Entry}, set-aside {Times}): level {Level} is below the tram level and the ender lies across it",
+            player.Name, questId, entry, times, player.Level);
+        return false;
     }
 
     internal static bool IsDestinationEntry(CreatureContent content, QuestStore quests, CreatureSpawn spawn, uint preferredEntry)
@@ -534,7 +576,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             {
                 continue;
             }
-            if (area is not null && !area.QuestInside(quests, content, candidate)) continue;
+            if (area is not null && !area.QuestAllowed(quests, content, candidate, level)) continue;
             givers.UnionWith(quests.CreatureStartersOf(questId));
             givers.UnionWith(quests.CreatureEndersOf(questId));
         }
@@ -590,7 +632,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// <summary>
     /// The one rule for "may this bot take this quest here", shared by the travel planner (<see cref="Eligible"/>) and the quest-giver
     /// controller (<c>PlayerbotQuestGoals.FindCandidate</c>) so the two cannot disagree: the home (<paramref name="giverInHome"/>, and
-    /// <see cref="PlayerbotHomeArea.QuestInside"/>: its enders and kill targets have spawns inside; without creature content nothing is),
+    /// <see cref="PlayerbotHomeArea.QuestAllowed"/>: its enders and kill targets have spawns inside, or a graduated home's leave-home quest
+    /// the bot is old enough for; without creature content nothing is),
     /// not an item-only repeatable the bot cannot supply (<see cref="CanPursueStarter"/>), and the journal and prerequisites
     /// (<see cref="QuestNpcServices.CanTakeQuest(Player, uint)"/>, no running or complete status), and last the trip's feasibility
     /// (<see cref="PlayerbotQuestTripFeasibility.IsInfeasible"/>, by the caller's own <paramref name="trip"/>).
@@ -598,7 +641,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal static bool MayTakeQuest(Player player, QuestNpcServices services, PlayerNpcState state, CreatureContent? content,
         LootContent? loot, PlayerbotHomeArea? home, bool giverInHome, Quest quest, PlayerbotQuestTripFeasibility trip, float maxDeliveryYards)
     {
-        if (home is not null && !(giverInHome && content is not null && home.QuestInside(services.Quests, content, quest))) return false;
+        if (home is not null && !(giverInHome && content is not null && home.QuestAllowed(services.Quests, content, quest, player.Level))) return false;
         // Cheapest first: this runs per quest of each candidate NPC every think; the trip check walks spawns and paths.
         if (services.CanTakeQuest(player, quest.Id) != true
             || state.Quests.Get(quest.Id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }) return false;

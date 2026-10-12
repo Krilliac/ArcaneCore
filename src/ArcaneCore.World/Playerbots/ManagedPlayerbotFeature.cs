@@ -581,7 +581,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// radius is out of bounds. <paramref name="zoneClipped"/> clips each home to the zone of its centre (the command's default).
     /// </summary>
     internal async Task<HomeOutcome> SetHomesAsync(IReadOnlyList<HomeTarget> targets, float radius, string? place,
-        CancellationToken cancellationToken = default, bool zoneClipped = true)
+        CancellationToken cancellationToken = default, bool zoneClipped = true, bool logFailures = true)
     {
         ArgumentNullException.ThrowIfNull(targets);
         if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
@@ -608,7 +608,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
             {
                 failed++;
-                logger.LogWarning(ex, "Playerbot home of {BotId} was not stored ({Type}: {Message})", target.BotId, ex.GetType().Name, ex.Message);
+                if (logFailures) logger.LogWarning(ex, "Playerbot home of {BotId} was not stored ({Type}: {Message})", target.BotId, ex.GetType().Name, ex.Message);
             }
         }
 
@@ -627,10 +627,22 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return new(saved.Count, failed);
     }
 
-    /// <summary>Remove the homes of these bots (store and running brains); returns how many bots had one.</summary>
-    internal async Task<int> ClearHomesAsync(IReadOnlyList<Guid> botIds, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Raised before an operator's <see cref="ClearHomesAsync"/> removes homes, with the bots whose home is a population start home
+    /// (<see cref="Population.PopulationStartAreas"/>): the population must not give those bots one again.
+    /// </summary>
+    internal event Action<IReadOnlyList<Guid>>? HomesClearedByOperator;
+
+    /// <summary>Remove the homes of these bots (store and running brains); returns how many bots had one. <paramref name="byOperator"/>: the command, as opposed to the population's own graduation.</summary>
+    internal async Task<int> ClearHomesAsync(IReadOnlyList<Guid> botIds, CancellationToken cancellationToken = default, bool byOperator = true)
     {
         ArgumentNullException.ThrowIfNull(botIds);
+        if (byOperator && HomesClearedByOperator is { } handler)
+        {
+            Guid[] start = [.. botIds.Where(id => _homes.TryGetValue(id, out PlayerbotHome? h) && Population.PopulationStartAreas.TryParse(h.Place, out _, out _))];
+            if (start.Length != 0) handler(start);
+        }
+
         if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
         await using AsyncServiceScope scope = scopes.CreateAsyncScope();
         IManagedPlayerbotHomeStore store = scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>()
@@ -962,6 +974,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     botId, area.MapId, area.Centre.X, area.Centre.Y))
             {
                 AreaLevels = AreaLevelLookupOf(home.MapId),
+                AllowsLeaveQuests = Population.PopulationStartAreas.StageOfPlace(home.Place) == Population.StartHomeStage.Zone,
+                ValleyRadius = Population.PopulationStartAreas.ValleyRadiusOfPlace(home.Place),
+                LeavePolicy = _options.Population,
             }
             : null;
 
