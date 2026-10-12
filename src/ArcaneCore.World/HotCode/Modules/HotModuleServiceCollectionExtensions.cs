@@ -44,7 +44,7 @@ internal sealed class HotModuleHost(
         {
             _ = Task.Run(async () =>
             {
-                ModuleResult result = await modules.LoadAsync(name).ConfigureAwait(false);
+                ModuleResult result = await modules.LoadAsync(name, HotSwapOrigin.Startup.WithReason("World:HotCode:Modules:LoadOnStart")).ConfigureAwait(false);
                 if (!result.Ok)
                 {
                     logger.LogError("Module '{Name}' (LoadOnStart) was not loaded: {Detail}", name, result.Detail);
@@ -74,7 +74,14 @@ public static class HotModuleServiceCollectionExtensions
             sp.GetRequiredService<OpcodeTable>(),
             sp.GetRequiredService<CommandTableSource>(),
             sp.GetRequiredService<HotCodeAudit>(),
-            sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotModules")));
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotModules"),
+            reporter: sp.GetRequiredService<IHotSwapReporter>(),
+            seams: new ModuleGameSeams(
+                () => sp.GetServices<ArcaneCore.World.Features.IWorldFeature>().OfType<ArcaneCore.World.Creatures.CreatureWorldFeature>().FirstOrDefault()?.AiServices.Factory,
+                () => sp.GetRequiredService<WorldRuntime>().Scripts,
+                () => sp.GetRequiredService<WorldRuntime>().Maps,
+                sp.GetRequiredService<WorldRuntime>().Post,
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotModules"))));
         services.AddHostedService<HotModuleHost>();
         return services;
     }

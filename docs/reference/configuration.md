@@ -70,6 +70,7 @@ How to read the tables:
 - [`Totems`](#totems)
 - [`Warden`](#warden)
 - [`World`](#world)
+- [`World:Announce`](#worldannounce)
 - [`World:Chat`](#worldchat)
 - [`World:Collision`](#worldcollision)
 - [`World:Console`](#worldconsole)
@@ -964,6 +965,23 @@ How to read the tables:
 | `World:TickTimer` | `WorldTickTimer` | `Precise` | restart | How the world thread waits for its next tick (`WorldTickTimer.Precise` by default). Precise wakes within a fraction of a millisecond of the due time; Legacy is the plain event wait, which on Windows wakes on the ~15.6 ms system timer (frame p50 46 / p90 61 ms on a 50 ms tick; docs/integration/perf-limits-20261008.md). Read once at world start. Values: `Precise`, `Legacy`. |
 | `World:UpdateCompressionThreshold` | `int` | `128` | live | Update packets larger than this many bytes are zlib-compressed into SMSG_COMPRESSED_UPDATE_OBJECT (vmangos Compression.Update.Size default 128). 0 disables. |
 | `World:WriterDrainGrace` | `TimeSpan` | `00:00:00` | - | How long a closing session lets the writer flush queued frames (for example a refusal reply) before the stream is torn down so a client that stopped reading cannot hold the connection, its DI scope and its queued frames forever. `TimeSpan.Zero`, the default, means the built-in 5 s bound; the wait is never unbounded. vmangos does not wait at all: its CloseSocket shuts the socket down at once (AsyncSocket_windows.cpp:318-329). Bound from World:WriterDrainGrace (for example "00:00:02"). |
+
+## `World:Announce`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Announce:Enabled` | `bool` | `true` | - | Master switch for delivery to players and staff. When false announcements are still logged and counted. |
+| `World:Announce:HotSwap:AllowNamesInWorldMessage` | `bool` | `false` | - | Let the world message carry character names when the announcing code supplies a text for it. Off by default. |
+| `World:Announce:HotSwap:DedupSeconds` | `int` | `0` | - | An announcement identical to one delivered this many seconds ago is suppressed. 0 disables the window. |
+| `World:Announce:HotSwap:GmNotify` | `bool` | `true` | - | Send the announcement to every online account above Player (an on-screen notification and a chat line). Staff only. |
+| `World:Announce:HotSwap:IncludeDetails` | `bool` | `true` | - | Add the staff-only detail (who, how long, counts, hashes) to the staff chat line. Players never see it. |
+| `World:Announce:HotSwap:Lanes` | `List<string>` | `[]` | - | Lanes to announce: any of Data, Module, Code. Empty (the default) announces all of them. A lane that is not turned on never reports anything. |
+| `World:Announce:HotSwap:MinimumSeverity` | `AnnounceSeverity` | `Info` | - | Announcements below this severity are logged and counted but not delivered. Values: `Info`, `Warning`, `Error`, `Critical`. |
+| `World:Announce:HotSwap:RateBurst` | `int` | `10` | - | Rate limit: how many announcements of this category may go out back to back before the limit applies. 0 disables the limit. |
+| `World:Announce:HotSwap:RatePerMinute` | `int` | `20` | - | Rate limit: announcements of this category refilled per minute once the burst is used. Suppressed ones are counted and reported on the next delivered announcement. |
+| `World:Announce:HotSwap:WorldMessage` | `bool` | `false` | - | Send a short system chat line to every online player. Never carries account names; never carries character names unless `AllowNamesInWorldMessage`. |
+| `World:Announce:HotSwap:WorldMessageIncludeReason` | `bool` | `true` | - | Put the free-text reason the staff member gave (`.reload creature_template fixed drop rates`) into the world message. The reason is shown to players as typed. |
+| `World:Announce:HotSwap:WorldMessageOnFailure` | `bool` | `false` | - | Also send the world message for a swap that was rejected or failed. Default false: players only hear about changes that happened. |
 
 ## `World:Chat`
 

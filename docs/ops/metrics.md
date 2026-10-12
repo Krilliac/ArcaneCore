@@ -58,6 +58,8 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_playerbots_packets_skipped_total{kind}` | counter | what lean bot fidelity did not do (`World:Playerbots:ClientFidelity`, docs/areas/playbots.md): `kind` = `update_block` (SMSG_UPDATE_OBJECT blocks not built for a bot viewer), `ring_packet` / `ring_byte` (received packets, and their payload bytes, not copied into a bot session ring); also on `.server info` |
 | `arcanecore_playerbot_chat_screening_timeouts_total{kind}` | counter | bot chat safety patterns that ran out of time (`kind`: `input` screening a player's line, `output` screening a model reply, `strip` removing personal data before sending or from a flag excerpt; docs/areas/playbots.md) |
 | `arcanecore_faults_total{site,type}` | counter | exceptions caught by the server's catch-and-log sites and the crash hooks (the fault ledger, `.server faults`, [invariants](invariants.md#the-fault-ledger)) |
+| `arcanecore_hotswap_total{kind,result}` | counter | live changes: `kind` data / module / code, `result` applied / rejected / failed / unchanged ([announcements](../areas/hot-swap-announcements.md)) |
+| `arcanecore_announce_total{category,severity,outcome}` | counter | operational announcements and what became of each (`sent`, `disabled`, `below_minimum`, `off`, `rate_limited`, `duplicate`) |
 | `arcanecore_faults_distinct` | gauge | distinct fault signatures in the ledger (reset by `.server faults reset`) |
 | `arcanecore_invariant_failures_total` | counter | failed `Invariant.Assert`/`Check` calls since start |
 | `arcanecore_gc_collections_total{generation}` | counter | `GC.CollectionCount` |

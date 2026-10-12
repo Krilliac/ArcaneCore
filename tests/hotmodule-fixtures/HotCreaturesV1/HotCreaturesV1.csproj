@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A module whose creature AI factory builds a real AI, for the creature swap tests. Assembly name HotCreatures.
+       Built only through the test project's reference (not in ArcaneCore.slnx). -->
+  <PropertyGroup>
+    <AssemblyName>HotCreatures</AssemblyName>
+    <RootNamespace>HotCreatures</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+  </ItemGroup>
+
+</Project>

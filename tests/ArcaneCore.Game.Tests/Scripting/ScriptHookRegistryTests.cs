@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Scripting;
 using ArcaneCore.Game.Tests.Duel;
 using Xunit;
@@ -193,5 +194,56 @@ public sealed class ScriptHookRegistryTests
 
         Assert.Equal(1, counting.Updates);
         Assert.Equal(1, counting.Logins);
+    }
+
+    private sealed class EquipHook : IItemHooks
+    {
+        public void OnEquip(Player player, Item item, byte slot)
+        {
+        }
+    }
+
+    private sealed class StartupHook : IWorldHooks
+    {
+        public void OnStartup()
+        {
+        }
+    }
+
+    [Fact]
+    public void CommitSwap_KeepsTheHooksThatStay_AddsTheNewOnesLast_AndTellsSubscribersTheKindsChanged()
+    {
+        var registry = new ScriptHookRegistry();
+        var builtIn = new Counting();
+        registry.Register(builtIn);
+        var added = new EquipHook();
+        int changed = 0;
+        registry.HooksChanged += () => changed++;
+        Assert.False(registry.Item.HasEquipHooks);
+
+        Assert.Null(registry.ValidateSwap([], [added]));
+        registry.CommitSwap([], [added]);
+
+        Assert.True(registry.Item.HasEquipHooks);
+        Assert.True(registry.Player.HasLogin); // the built-in hook is still wired
+        Assert.Equal(new IScriptHooks[] { builtIn, added }, registry.Registered);
+        Assert.Equal(1, changed);
+
+        registry.CommitSwap([added], []);
+
+        Assert.False(registry.Item.HasEquipHooks);
+        Assert.True(registry.Player.HasLogin);
+        Assert.Equal(2, changed);
+    }
+
+    [Fact]
+    public void ValidateSwap_RefusesAHotHookThatOverridesOnStartup_BecauseItCouldNeverRun()
+    {
+        var registry = new ScriptHookRegistry();
+
+        string? error = registry.ValidateSwap([], [new StartupHook()]);
+
+        Assert.NotNull(error);
+        Assert.Contains("OnStartup", error);
     }
 }
