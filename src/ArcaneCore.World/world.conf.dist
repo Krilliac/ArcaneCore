@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       362 keys
+#   WORLD                       363 keys
 #
 ###############################################################################
 
@@ -9841,6 +9841,22 @@ World.Playerbots.Battlegrounds.PreferFillingRealPlayerQueues = true
 World.Playerbots.Battlegrounds.QueueChancePerMinute = 0.05
 
 #
+#    World.Playerbots.ChaseReplanYards
+#        Description: How far (flat yards, 0.5..100) the target of a chase may move from the place
+#                     the chase route was planned to before the route is planned again, in the same
+#                     think that sees it. A route cut short of its target by the route bounds
+#                     (MaxRouteYards, MaxPathPoints) is planned again only once the bot has walked
+#                     75% of it. A chase route walked to its end is planned again at once, whatever
+#                     this says.
+#        Type: float
+#        Default: 5
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ChaseReplanYards = 5
+
+#
 #    World.Playerbots.Chat.Channels
 #        Description: The lines a bot answers: Whisper, Party and Say (comma-separated; all three by
 #                     default). Values: None, Whisper, Party, Say.
@@ -10799,13 +10815,17 @@ World.Playerbots.LocalLlmTimeoutMs = 5000
 #
 #    World.Playerbots.MaxActionsPerTick
 #        Description: The most managed client actions all bots may send in one world tick (1..64).
+#                     The tick's think time is bounded separately, by the 8 ms
+#                     PlayerbotThinkRotation.TickBudgetMs: with about 1000 bots the action budget
+#                     must not be the first limit a tick meets, or each bot waits more ticks for its
+#                     share of actions and its movement lease runs out between thinks.
 #        Type: int
-#        Default: 4
+#        Default: 48
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.MaxActionsPerTick = 4
+World.Playerbots.MaxActionsPerTick = 48
 
 #
 #    World.Playerbots.MaxBots
