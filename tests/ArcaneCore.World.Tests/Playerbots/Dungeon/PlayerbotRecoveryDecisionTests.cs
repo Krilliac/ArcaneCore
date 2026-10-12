@@ -192,6 +192,16 @@ public sealed class PlayerbotRecoveryDecisionTests
         Assert.Equal(spot, asked[0]); // nearest first: the first clear candidate the search asked about was reachable
     }
 
+    [Fact]
+    public void FindReviveSpot_KeepsTenYardsBeyondEveryThreatsAggro()
+    {
+        Vector3 body = Vector3.Zero;
+        PlayerbotThreat threat = Threat(0, 0, radius: 1f);
+        Vector3? spot = PlayerbotRecovery.FindReviveSpot(body, body, [threat], candidate => candidate);
+        Assert.NotNull(spot);
+        Assert.False(threat.Reaches(spot.Value, 10f), $"the revive spot {spot} is inside aggro + 10 yd");
+    }
+
     /// <summary>A body whose whole reclaim disc is inside the camp's reach has no spot: the ghost goes on waiting, as before.</summary>
     [Fact]
     public void FindReviveSpot_FindsNothing_WhenTheCampCoversTheReclaimDisc()

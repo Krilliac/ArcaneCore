@@ -8,7 +8,7 @@ internal readonly record struct PlayerbotGap(int Direction, Vector3 Exit, float 
 
 /// <summary>One place a living bot keeps out of: a remembered death or retreat, or a creature that kills outright (or one it fled from).</summary>
 internal readonly record struct PlayerbotHazard(uint MapId, Vector3 At, float Radius, uint UntilMs, ObjectGuid Creature, string Kind,
-    bool ReturnPassable = false)
+    bool ReturnPassable = false, uint[]? KillerEntries = null)
 {
     /// <summary>Whether <paramref name="point"/> lies inside (flat distance, a few yards of height either way do not matter).</summary>
     internal bool Covers(Vector3 point) => Vector2.Distance(new(At.X, At.Y), new(point.X, point.Y)) < Radius && MathF.Abs(At.Z - point.Z) < Radius;
@@ -19,10 +19,11 @@ internal readonly record struct PlayerbotHazard(uint MapId, Vector3 At, float Ra
 /// route): the spot of a death (<see cref="DeathYards"/>), the spot where a fight turned and the bot fled (<see cref="RetreatYards"/>),
 /// each creature with a spell that kills the bot outright (its aggro radius plus <see cref="LethalMarginYards"/>, following the
 /// creature while the bot sees it) and each creature it fled from or died to (its aggro radius plus <see cref="FledMarginYards"/>).
-/// Every entry lasts <see cref="PlayerbotRiskOptions.DangerMemorySeconds"/>. A route through one is walked round when a detour
+/// Ordinary entries last <see cref="PlayerbotRiskOptions.DangerMemorySeconds"/>; a death loop lasts
+/// <see cref="PlayerbotRiskOptions.DeathLoopMemorySeconds"/> or twice that after another loop there. A route through one is walked round when a detour
 /// clears it (<see cref="PlayerbotNavigation"/>), else refused: the goal then picks another destination (another trainer, vendor or
 /// quest giver) or sets the errand aside. The same places count as camped for the ghost's revive spot (<see cref="PlayerbotRecovery"/>).
-/// Bounded; the oldest goes first. World thread.
+/// Bounded; ordinary hazards are evicted before death-loop zones. World thread.
 /// <para>
 /// The creatures beyond the bot's strength (kind <see cref="StrongKind"/>, <see cref="PlayerbotRisk.ScanHazards"/>) are kept apart:
 /// their own cap (<see cref="MaxStrong"/>), so the dozens a low-level bot sees in a higher zone never push a death or retreat place out;
@@ -43,6 +44,9 @@ internal sealed class PlayerbotHazards
     /// <summary>The kind of a creature beyond the bot's strength.</summary>
     internal const string StrongKind = "strong";
 
+    /// <summary>A repeated-death zone, longer lived than one death's place hazard.</summary>
+    internal const string DeathLoopKind = "death-loop";
+
     /// <summary>The most strong creatures kept (a look past it skips the rest).</summary>
     internal const int MaxStrong = 64;
 
@@ -62,8 +66,31 @@ internal sealed class PlayerbotHazards
             for (int i = _hazards.Count - 1; i >= 0; i--)
                 if (_hazards[i].Creature == creature) _hazards.RemoveAt(i);
         Expire(nowMs);
-        if (_hazards.Count >= Max) _hazards.RemoveAt(0);
+        if (_hazards.Count >= Max) EvictOldest();
         _hazards.Add(new PlayerbotHazard(mapId, at, radius, until, creature, kind));
+    }
+
+    /// <summary>Remember one newly reported loop. A later loop in the same zone gets twice the configured life.</summary>
+    internal bool RememberDeathLoop(uint mapId, Vector3 centre, uint nowMs, int seconds, IReadOnlyList<uint> killers)
+    {
+        if (seconds <= 0 || !Finite(centre)) return false;
+        Expire(nowMs);
+        int prior = _hazards.FindIndex(h => h.Kind == DeathLoopKind && h.MapId == mapId && h.Covers(centre));
+        bool repeated = prior >= 0;
+        uint[] entries = [.. (repeated ? _hazards[prior].KillerEntries ?? [] : [])
+            .Concat(killers).Where(entry => entry != 0).Distinct().Order()];
+        if (repeated) _hazards.RemoveAt(prior);
+        if (_hazards.Count >= Max) EvictOldest();
+        int lifeSeconds = Math.Min(Math.Min(seconds, 86_400) * (repeated ? 2 : 1), 86_400);
+        _hazards.Add(new PlayerbotHazard(mapId, centre, PlayerbotStallWatch.DeathLoopYards,
+            unchecked(nowMs + (uint)lifeSeconds * 1000u), default, DeathLoopKind, KillerEntries: entries));
+        return repeated;
+    }
+
+    internal bool CoversDeathLoop(uint mapId, Vector3 point, uint nowMs)
+    {
+        Expire(nowMs);
+        return _hazards.Any(h => h.Kind == DeathLoopKind && h.MapId == mapId && h.Covers(point));
     }
 
     /// <summary>Start a look over the visible creatures (<see cref="SetStrong"/> for each strong one, then <see cref="EndStrongScan"/>).</summary>
@@ -103,7 +130,8 @@ internal sealed class PlayerbotHazards
 
     /// <summary>
     /// The first hazard <paramref name="points"/> pass through, sampled every 2 yards, or null. A hazard the walk starts in is not
-    /// held against it (the bot may always walk out of one). Without <paramref name="strong"/> the strong creatures are not held
+    /// held against it (the bot may always walk out of one), except a death-loop zone the walk also ends in: a route that stays in
+    /// the zone is refused. Without <paramref name="strong"/> the strong creatures are not held
     /// against it either (the escape route's own walk, <see cref="PlayerbotRisk.EscapeRoute"/>). A completed return keeps
     /// individually strong and over-level creatures but may cross pack-only hazards marked <see cref="PlayerbotHazard.ReturnPassable"/>.
     /// Copies nothing.
@@ -116,6 +144,10 @@ internal sealed class PlayerbotHazards
         strong &= _strong.Count > 0;
         if (_hazards.Count == 0 && !strong) return null;
         Vector3 start = points[0];
+        // A bot revived inside the zone may leave it, but an errand ending inside the zone is not an escape.
+        foreach (PlayerbotHazard hazard in _hazards)
+            if (hazard.Kind == DeathLoopKind && hazard.MapId == mapId
+                && hazard.Covers(start) && hazard.Covers(points[^1])) return hazard;
         for (int index = 1; index < points.Count; index++)
         {
             Vector3 a = points[index - 1], b = points[index];
@@ -298,6 +330,12 @@ internal sealed class PlayerbotHazards
     private static bool Live(in PlayerbotHazard hazard, uint nowMs) => unchecked((int)(hazard.UntilMs - nowMs)) > 0;
 
     private static bool Finite(Vector3 at) => float.IsFinite(at.X) && float.IsFinite(at.Y) && float.IsFinite(at.Z);
+
+    private void EvictOldest()
+    {
+        int ordinary = _hazards.FindIndex(h => h.Kind != DeathLoopKind);
+        _hazards.RemoveAt(ordinary >= 0 ? ordinary : 0);
+    }
 
     private void Expire(uint nowMs)
     {

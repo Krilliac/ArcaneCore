@@ -1435,6 +1435,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _killingBlowSource = "Unobserved";
         (bool loop, IReadOnlyList<uint> setAside) = _stall.RecordDeath(now, player.MapId,
             new System.Numerics.Vector3(player.X, player.Y, player.Z), _attackerEntries);
+        int killerLevel = 0;
+        foreach (uint entry in _attackerEntries)
+            if (_attackerFacts.TryGetValue(entry, out QaAttackerFact? fact)) killerLevel = Math.Max(killerLevel, fact.Level);
+        _recovery.LastKillerMaxLevel = killerLevel;
+        if (loop && _stall.NewDeathLoop && _options.Risk.Enabled)
+        {
+            (System.Numerics.Vector3 centre, uint[] killers) = _stall.LoopZone(player.MapId,
+                new System.Numerics.Vector3(player.X, player.Y, player.Z), now);
+            bool repeatedZone = Risk.Hazards.RememberDeathLoop(player.MapId, centre, now,
+                _options.Risk.DeathLoopMemorySeconds, killers);
+            if (repeatedZone) _suspensions.SuspendQuest(QuestId, now);
+        }
         _attackerEntries.Clear();
         Risk.OnDeath(player, _attackers);
         _attackers.Clear();

@@ -37,6 +37,13 @@ public sealed class PlayerbotRiskOptions
     public int DangerMemorySeconds { get; set; } = 300;
 
     /// <summary>
+    /// Seconds a reported death-loop zone is avoided (0..86400). The 2700-second default outlives the 600-second loop window by
+    /// 4.5 times, giving the bot time to finish a different errand before reconsidering the place. A second loop there doubles
+    /// this duration, capped at one day.
+    /// </summary>
+    public int DeathLoopMemorySeconds { get; set; } = 2700;
+
+    /// <summary>
     /// A bot in a real player's group follows its master's lead and never retreats on its own judgement; with this on (default)
     /// it does retreat when the group is wiping (the master dead, or half the group or more).
     /// </summary>
@@ -50,6 +57,7 @@ public sealed class PlayerbotRiskOptions
         if (Check(NearlyWonHealthPct, 0, 60) is { } won) throw new InvalidOperationException($"{section}: NearlyWonHealthPct {won}");
         if (Check(RecoverHealthPct, 10, 100) is { } recover) throw new InvalidOperationException($"{section}: RecoverHealthPct {recover}");
         if (DangerMemorySeconds is < 0 or > 86_400) throw new InvalidOperationException($"{section}: DangerMemorySeconds must be 0..86400.");
+        if (DeathLoopMemorySeconds is < 0 or > 86_400) throw new InvalidOperationException($"{section}: DeathLoopMemorySeconds must be 0..86400.");
     }
 
     /// <summary>A reload's range check for a percentage key (null when valid).</summary>
