@@ -231,11 +231,11 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
     {
         bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
         await using IDbContextTransaction? transaction = own
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            ? await CharacterWriteFence.BeginTransactionAsync(db, state.Ownership, cancellationToken).ConfigureAwait(false)
             : null;
         try
         {
-            if (await StageStateAsync(state, cancellationToken).ConfigureAwait(false))
+            if (await StageStateAsync(state, cancellationToken, beganFenced: own).ConfigureAwait(false))
                 await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             if (transaction is not null)
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -246,10 +246,13 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
         }
     }
 
-    /// <summary>Stage state and inventory on this context, leaving the commit to the caller.</summary>
-    internal async Task<bool> StageStateAsync(CharacterState state, CancellationToken cancellationToken)
+    /// <summary>
+    /// Stage state and inventory on this context, leaving the commit to the caller. <paramref name="beganFenced"/> is true only when the caller
+    /// began the transaction itself through <see cref="CharacterWriteFence"/> with this state's token, so the interceptor has already verified it.
+    /// </summary>
+    internal async Task<bool> StageStateAsync(CharacterState state, CancellationToken cancellationToken, bool beganFenced = false)
     {
-        await CharacterOwnershipGuard.VerifyAsync(db, state.Ownership, cancellationToken).ConfigureAwait(false);
+        await CharacterOwnershipGuard.VerifyUnlessFencedAsync(db, state.Ownership, beganFenced, cancellationToken).ConfigureAwait(false);
         CharacterRecord? character = await db.Characters
             .FirstOrDefaultAsync(c => c.Id == state.Id, cancellationToken)
             .ConfigureAwait(false);

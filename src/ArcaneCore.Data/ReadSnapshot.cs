@@ -27,6 +27,7 @@ internal sealed class ReadSnapshot : IAsyncDisposable
 
     public static async Task<ReadSnapshot> BeginAsync(DbContext db, CancellationToken cancellationToken)
     {
+        using IDisposable exempt = Stores.CharacterWriteFence.Exempt(); // read-only: verifying would take a write lock on SQLite
         if (!db.Database.IsSqlite())
             return new ReadSnapshot(db, await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
                 .ConfigureAwait(false), closeConnection: false);

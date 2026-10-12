@@ -32,11 +32,11 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
     {
         bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
         await using IDbContextTransaction? transaction = own
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            ? await CharacterWriteFence.BeginTransactionAsync(db, ownership, cancellationToken).ConfigureAwait(false)
             : null;
         try
         {
-            await CharacterOwnershipGuard.VerifyAsync(db, ownership, cancellationToken).ConfigureAwait(false);
+            await CharacterOwnershipGuard.VerifyUnlessFencedAsync(db, ownership, own, cancellationToken).ConfigureAwait(false);
             if (!await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
             {
                 return; // deleted while the save was queued (as EfCharacterStore.SaveStateAsync)
@@ -97,11 +97,11 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
     {
         bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
         await using IDbContextTransaction? transaction = own
-            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            ? await CharacterWriteFence.BeginTransactionAsync(db, ownership, cancellationToken).ConfigureAwait(false)
             : null;
         try
         {
-            await CharacterOwnershipGuard.VerifyAsync(db, ownership, cancellationToken).ConfigureAwait(false);
+            await CharacterOwnershipGuard.VerifyUnlessFencedAsync(db, ownership, own, cancellationToken).ConfigureAwait(false);
             if (!await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
             {
                 return;

@@ -1,5 +1,6 @@
 using System.Data;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -74,6 +75,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
     {
         RequireWorld(scope);
         Validate(scope, ownerNode, incarnation);
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // the ownership store is the fence itself
         await using var tx = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         int changed = await db.Set<CharacterOwnershipRow>()
             .Where(r => r.Scope == scope && !r.Active && r.Epoch < long.MaxValue && r.WriteSequence < long.MaxValue)
@@ -107,6 +109,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         ValidateToken(observed);
         Validate(observed.Scope, ownerNode, newIncarnation);
         string incarnation = newIncarnation.ToString("D");
+        using IDisposable exempt = CharacterWriteFence.Exempt();
         await using var tx = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         int changed = await db.Set<CharacterOwnershipRow>()
             .Where(r => r.Scope == observed.Scope && r.Active && r.Epoch == observed.Epoch && r.Epoch < long.MaxValue
@@ -133,6 +136,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         ArgumentNullException.ThrowIfNull(token);
         RequireWorld(token.Scope);
         ValidateToken(token);
+        using IDisposable exempt = CharacterWriteFence.Exempt();
         await db.Set<CharacterOwnershipRow>()
             .Where(r => r.Scope == token.Scope && r.Active && r.Epoch == token.Epoch && r.WriteSequence < long.MaxValue
                 && r.OwnerIncarnation == token.Incarnation.ToString("D"))

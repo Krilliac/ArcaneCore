@@ -26,6 +26,43 @@ public sealed class WorldHostCharacterFencingTests
     }
 
     [Fact]
+    public async Task PublishesTheClaimAsTheAmbientTokenBeforeFeaturesAttach_AndClearsItOnRelease()
+    {
+        await using TestKit kit = TestKit.Create(enabled: true);
+        Assert.Null(kit.Context.Current);
+
+        await kit.Host.StartAsync(CancellationToken.None);
+        Assert.NotNull(kit.Context.Current);
+        Assert.Equal(kit.Feature.TokenAtAttach, kit.Context.Current);
+        Assert.Equal("world", kit.Context.Current!.Scope);
+
+        await kit.Host.StopAsync(CancellationToken.None);
+        Assert.Null(kit.Context.Current);
+    }
+
+    [Fact]
+    public async Task DisabledFencingLeavesTheAmbientTokenEmpty()
+    {
+        await using TestKit kit = TestKit.Create(enabled: false);
+        await kit.Host.StartAsync(CancellationToken.None);
+
+        Assert.Null(kit.Context.Current);
+        Assert.Null(kit.Feature.TokenAtAttach);
+    }
+
+    [Fact]
+    public async Task FailedDrainKeepsTheAmbientTokenSoLaterWritesStayFenced()
+    {
+        await using TestKit kit = TestKit.Create(enabled: true);
+        kit.Store.SaveOverride = _ => Task.FromException(new CharacterOwnershipRejectedException("world", 1));
+        await kit.Host.StartAsync(CancellationToken.None);
+        kit.SaveQueue.Enqueue(new CharacterState(1, 0, 12, 0, 0, 83.5f, 0, 1, 0));
+
+        await Assert.ThrowsAsync<AggregateException>(() => kit.Host.StopAsync(CancellationToken.None));
+        Assert.NotNull(kit.Context.Current);
+    }
+
+    [Fact]
     public async Task ExistingOwnerBlocksStartupBeforeFeaturesAttachEvenWhenFencingIsDisabled()
     {
         await using TestKit kit = TestKit.Create(enabled: false);
@@ -55,7 +92,7 @@ public sealed class WorldHostCharacterFencingTests
 
         private TestKit(ServiceProvider provider, WorldRuntime world, CharacterSaveQueue saveQueue,
             WorldHost host, RecordingOwnership ownership, RecordingFeature feature,
-            InMemoryCharacterStore store)
+            InMemoryCharacterStore store, CharacterOwnershipContext context)
         {
             _provider = provider;
             _world = world;
@@ -64,6 +101,7 @@ public sealed class WorldHostCharacterFencingTests
             Ownership = ownership;
             Feature = feature;
             Store = store;
+            Context = context;
         }
 
         public WorldHost Host { get; }
@@ -71,12 +109,14 @@ public sealed class WorldHostCharacterFencingTests
         public RecordingOwnership Ownership { get; }
         public RecordingFeature Feature { get; }
         public InMemoryCharacterStore Store { get; }
+        public CharacterOwnershipContext Context { get; }
 
         public static TestKit Create(bool enabled)
         {
             var store = new InMemoryCharacterStore();
             var ownership = new RecordingOwnership();
-            var feature = new RecordingFeature();
+            var context = new CharacterOwnershipContext();
+            var feature = new RecordingFeature(context);
             var services = new ServiceCollection();
             services.AddSingleton<ICharacterStore>(store);
             services.AddSingleton<ICharacterOwnershipStore>(ownership);
@@ -88,8 +128,8 @@ public sealed class WorldHostCharacterFencingTests
                 NullLogger<WorldRuntime>.Instance);
             var options = Options.Create(new CharacterFencingOptions { Enabled = enabled, OwnerNode = "test" });
             var host = new WorldHost(world, saveQueue, new CharacterDirectory(), scopes,
-                NullLogger<WorldHost>.Instance, options);
-            return new TestKit(provider, world, saveQueue, host, ownership, feature, store);
+                NullLogger<WorldHost>.Instance, options, ownershipContext: context);
+            return new TestKit(provider, world, saveQueue, host, ownership, feature, store, context);
         }
 
         public async ValueTask DisposeAsync()
@@ -101,10 +141,16 @@ public sealed class WorldHostCharacterFencingTests
         }
     }
 
-    private sealed class RecordingFeature : IWorldFeature
+    private sealed class RecordingFeature(CharacterOwnershipContext context) : IWorldFeature
     {
         public bool AttachedWithToken { get; private set; }
-        public void Attach(WorldRuntime world) => AttachedWithToken = world.CharacterOwnership is not null;
+        public CharacterOwnershipToken? TokenAtAttach { get; private set; }
+
+        public void Attach(WorldRuntime world)
+        {
+            AttachedWithToken = world.CharacterOwnership is not null;
+            TokenAtAttach = context.Current;
+        }
     }
 
     private sealed class RecordingOwnership : ICharacterOwnershipStore

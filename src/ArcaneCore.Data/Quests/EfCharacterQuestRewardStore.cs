@@ -55,8 +55,8 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
         cancellationToken.ThrowIfCancellationRequested();
         await using SqliteRewardWriterCoordinator.Lease writer =
             await SqliteRewardWriterCoordinator.AcquireAsync(db, cancellationToken).ConfigureAwait(false);
-        await using var transaction = await db.Database.BeginTransactionAsync(
-            IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await using var transaction = await CharacterWriteFence.BeginTransactionAsync(
+            db, request.After.Ownership, IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         try
         {
             int id = request.Before.Id;

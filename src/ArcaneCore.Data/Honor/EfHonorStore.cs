@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Honor;
 using Microsoft.EntityFrameworkCore;
 
@@ -117,6 +118,7 @@ public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, 
 
     public async Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // the deletion lifetime fence is token-independent
         await db.Set<HonorCpRow>()
             .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
