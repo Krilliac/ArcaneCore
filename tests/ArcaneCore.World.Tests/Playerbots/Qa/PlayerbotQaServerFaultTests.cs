@@ -83,6 +83,23 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
     }
 
     [Fact]
+    public void TheFeed_SkipsEnvironmentSites_ButKeepsThemInTheLedger()
+    {
+        var ledger = new FaultLedger();
+        foreach (string site in PlayerbotQaFaultFeed.EnvironmentSites)
+        {
+            ledger.Record(site, One(site));
+        }
+
+        ledger.Record("worldtick", Two("real"));
+        Assert.Equal(PlayerbotQaFaultFeed.EnvironmentSites.Count + 1, ledger.Distinct);
+
+        IReadOnlyList<QaSignal> signals = new PlayerbotQaFaultFeed(ledger).Pull();
+
+        Assert.Equal("worldtick", Assert.Single(signals).Goal);
+    }
+
+    [Fact]
     public async Task TheFeature_FoldsTheLedgerIntoAServerFaultFinding_OnAPass()
     {
         var ledger = new FaultLedger();

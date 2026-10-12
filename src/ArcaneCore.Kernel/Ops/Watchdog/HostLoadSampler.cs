@@ -288,14 +288,7 @@ public sealed class HostLoadSampler : IWatchdogMonitor
     /// What the host did over the last <paramref name="windowMicros"/> (measured from the newest stored reading at least that old, or the
     /// oldest one stored), or null when disabled or nothing is stored yet.
     /// </summary>
-    public HostLoadReport? Report(long windowMicros) => Report(windowMicros, useStoredEnd: false);
-
-    /// <summary>
-    /// <see cref="Report(long)"/>, ending at the newest stored reading instead of a fresh one when <paramref name="useStoredEnd"/> is set
-    /// (no system call: for the world thread, which must not pay the probe's GetSystemTimes on a slow-update line; the window then ends at
-    /// the latest watchdog check, at most one check interval ago).
-    /// </summary>
-    public HostLoadReport? Report(long windowMicros, bool useStoredEnd)
+    public HostLoadReport? Report(long windowMicros)
     {
         if (!_options.Enabled)
         {
@@ -306,8 +299,6 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         long wanted = now - Math.Max(0, windowMicros);
         long baseMicros = 0;
         HostLoadReading baseline = default;
-        long endMicros = 0;
-        HostLoadReading newest = default;
         bool found = false;
         lock (_gate)
         {
@@ -316,12 +307,6 @@ public sealed class HostLoadSampler : IWatchdogMonitor
                 // Newest first: _next - 1 is the latest write.
                 int index = ((_next - 1 - i) % _ring.Length + _ring.Length) % _ring.Length;
                 (long micros, HostLoadReading reading) = _ring[index];
-                if (!found)
-                {
-                    endMicros = micros;
-                    newest = reading;
-                }
-
                 baseMicros = micros;
                 baseline = reading;
                 found = true;
@@ -337,13 +322,13 @@ public sealed class HostLoadSampler : IWatchdogMonitor
             return null;
         }
 
-        return useStoredEnd ? Compute(baseMicros, baseline, endMicros, newest) : Compute(baseMicros, baseline, now, _probe.Read());
+        return Compute(baseMicros, baseline, now, _probe.Read());
     }
 
-    /// <summary>The report as text (empty when disabled), for appending to a log line. <paramref name="useStoredEnd"/>: see <see cref="Report(long, bool)"/>.</summary>
-    public string Describe(long windowMicros, bool useStoredEnd = false)
+    /// <summary>The report as text (empty when disabled), for appending to a log line.</summary>
+    public string Describe(long windowMicros)
     {
-        HostLoadReport? report = Report(windowMicros, useStoredEnd);
+        HostLoadReport? report = Report(windowMicros);
         return report is { } r ? r.Format() : _options.Enabled ? "host: no baseline sample yet" : string.Empty;
     }
 

@@ -702,7 +702,8 @@ public sealed class WorldRuntime : IDisposable
 
         try
         {
-            string text = sampler.Describe(windowMicros, useStoredEnd: true); // world thread: the newest stored sample, no GetSystemTimes call
+            string text = sampler.Describe(windowMicros); // a fresh probe read (~0.5 ms GetSystemTimes): slow-map lines are rare, and a stored sample
+            // usually ends before the slow update, which would report a zero-length window as "0%"
             return text.Length == 0 ? string.Empty : "; " + text;
         }
         catch (Exception ex)
