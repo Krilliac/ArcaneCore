@@ -370,10 +370,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     /// <summary>Whether a running autonomous bot is driven by its party AI (it is in a real player's group) instead of the brain.</summary>
     public bool IsPartyDriven(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && active.PartyDriven;
 
-    /// <summary>The brain of a running bot (inspection and the scenario harness; null when not running).</summary>
     /// <summary>Whether the bot is in the active set (test seam; <see cref="FindBrain"/> also hides a paused one).</summary>
     internal bool IsActive(Guid botId) => _active.ContainsKey(botId);
 
+    /// <summary>The brain of a running bot (inspection and the scenario harness; null when not running).</summary>
     internal PlayerbotBrain? FindBrain(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Brain : null;
 
     /// <summary>The party AI of a running bot while it drives the bot (inspection and the scenario harness), otherwise null.</summary>
