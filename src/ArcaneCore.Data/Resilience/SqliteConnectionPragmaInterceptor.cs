@@ -79,7 +79,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
             return currentSeconds;
         }
 
-        int bound = (int)Math.Min(int.MaxValue, (writeTimeoutMs + 999L) / 1000);
+        int bound = (int)((writeTimeoutMs + 999L) / 1000); // fits an int for any int input
         return currentSeconds == 0 || bound < currentSeconds ? bound : currentSeconds;
     }
 
