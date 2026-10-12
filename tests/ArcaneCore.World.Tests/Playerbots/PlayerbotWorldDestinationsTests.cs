@@ -45,47 +45,66 @@ public sealed class PlayerbotWorldDestinationsTests
         Assert.True(anotherBot.IsInfeasible(1, 1000, 0, quests, distant, 6030, 1200));
         Assert.Equal(0, anotherBot.Evaluations); // the second caller shares the static facts
         Assert.False(trip.IsInfeasible(1, 1000, 0, quests, distant, 6030, 1200, completed: true));
-        Assert.Equal(2, trip.Evaluations); // a completed quest also scans the other continent once, for the giver's map
-        Assert.False(trip.IsInfeasible(1, 2000, 0, quests, distant, 6030, 1200, completed: true));
-        Assert.Equal(2, trip.Evaluations); // moving the bot does not rescan content
+        Assert.Equal(1, trip.Evaluations); // moving the bot does not rescan content
         Assert.False(trip.IsInfeasible(1, 0, 0, quests, distant, 6030, 0));
-        Assert.Equal(2, trip.Evaluations); // option change also needs no rescan
+        Assert.Equal(1, trip.Evaluations); // option change also needs no rescan
         Assert.False(trip.IsInfeasible(1, 0, 0, quests, nearby, 6030, 1200));
-        Assert.Equal(3, trip.Evaluations);
+        Assert.Equal(2, trip.Evaluations);
     }
     [Fact]
-    public void StaticTripRule_FollowsTheGiversContinent_NotTheBotsMapOrWhichEndersAreSpawned()
+    public void CompletedTripRule_ReachableNowThenStatic()
     {
         var quest = new QuestTemplate { Entry = 6030, Method = 2, MinLevel = 1, QuestLevel = 1 };
         var quests = new QuestStore(new QuestContent([quest],
             [new CreatureQuestRelation { Id = 11038, Quest = 6030 }],
             [new CreatureQuestRelation { Id = 11039, Quest = 6030 }]));
-        var giver = new CreatureSpawn { Guid = 3, Entry = 11038, MapId = 0, X = 0, Y = 0, Z = 3 };
-        var beside = new CreatureContent([], [giver, new CreatureSpawn { Guid = 1, Entry = 11039, MapId = 0,
-            X = 10, Y = 0, Z = 3 }], [], [], []);
-        var otherContinent = new CreatureContent([], [giver, new CreatureSpawn { Guid = 1, Entry = 11039, MapId = 1,
-            X = 10, Y = 0, Z = 3 }], [], [], []);
-        // The near ender may be gated off at the moment; the static rule still sees both, so it must not refuse.
-        var nearAndFar = new CreatureContent([], [giver,
-            new CreatureSpawn { Guid = 1, Entry = 11039, MapId = 0, X = 10, Y = 0, Z = 3 },
-            new CreatureSpawn { Guid = 2, Entry = 11039, MapId = 0, X = 5000, Y = 0, Z = 3 }], [], [], []);
+        CreatureSpawn Giver(uint map) => new() { Guid = 3, Entry = 11038, MapId = map, X = 0, Y = 0, Z = 3 };
+        CreatureSpawn Ender(uint guid, uint map, float x) => new() { Guid = guid, Entry = 11039, MapId = map, X = x, Y = 0, Z = 3 };
+        CreatureContent Content(params CreatureSpawn[] spawns) => new([], spawns, [], [], []);
+        var beside = Content(Giver(0), Ender(1, 0, 10));
+        var crossContinent = Content(Giver(0), Ender(1, 1, 10));
+        var far = Content(Giver(0), Ender(1, 0, 2000));
+        var nearAndFar = Content(Giver(0), Ender(1, 0, 10), Ender(2, 0, 5000));
+        var noGiver = Content(Ender(1, 1, 0));
+        var bothGivers = Content(Giver(0), new CreatureSpawn { Guid = 4, Entry = 11038, MapId = 1, X = 0, Y = 0, Z = 3 },
+            Ender(1, 0, 10));
         var trip = new PlayerbotQuestTripFeasibility();
+        bool Completed(uint map, float x, CreatureContent content, float limit)
+            => trip.IsInfeasible(map, x, 0, quests, content, 6030, limit, completed: true);
 
-        // A bot standing on map 1 with a map-0 quest whose ender is beside its giver: feasible, in every rule.
-        Assert.False(trip.IsInfeasible(1, 0, 0, quests, beside, 6030, 1200, completed: true));
+        // Rule 1: a bot on the ender's continent next to the ender is never judged infeasible, with or without a limit.
+        Assert.False(Completed(1, 0, crossContinent, 1200));
+        Assert.False(Completed(1, 0, crossContinent, 0));
+        // ... and on the giver's continent the same quest is statically infeasible.
+        Assert.True(Completed(0, 0, crossContinent, 1200));
+        Assert.True(Completed(0, 0, crossContinent, 0));
+        Assert.True(trip.IsStaticallyInfeasible(quests, crossContinent, 6030, 1200));
+        Assert.True(trip.IsStaticallyInfeasible(quests, crossContinent, 6030, 0));
+        // Rule 1 with a limit: on the ender's continent but beyond it, the static rule still says cross-continent.
+        Assert.True(Completed(1, 5000, crossContinent, 1200));
+        // Adjacent giver and ender: kept wherever the bot is, including another continent or an instance map.
+        Assert.False(Completed(1, 0, beside, 1200));
+        Assert.False(Completed(0, 9000, beside, 1200));
+        Assert.False(Completed(0, 9000, beside, 0));
+        Assert.False(Completed(30, 0, crossContinent, 1200));
         Assert.False(trip.IsStaticallyInfeasible(quests, beside, 6030, 1200));
         Assert.False(trip.IsStaticallyInfeasible(quests, beside, 6030, 0));
-        // Giver on map 0, only ender on map 1: genuinely cross-continent, with or without the distance limit.
-        Assert.True(trip.IsInfeasible(0, 0, 0, quests, otherContinent, 6030, 1200, completed: true));
-        Assert.True(trip.IsInfeasible(1, 0, 0, quests, otherContinent, 6030, 1200, completed: true));
-        Assert.True(trip.IsStaticallyInfeasible(quests, otherContinent, 6030, 1200));
-        Assert.True(trip.IsStaticallyInfeasible(quests, otherContinent, 6030, 0));
-        // A near ender plus a far one: the near one makes the trip feasible whether or not it is spawned right now.
+        // Rule 2 distance: giver to ender 2000 yd. Beyond the limit from the ender: infeasible; within it: kept; L=0: kept.
+        Assert.True(Completed(0, 0, far, 1200));
+        Assert.False(Completed(0, 1500, far, 1200));
+        Assert.False(Completed(0, 0, far, 0));
+        Assert.True(trip.IsStaticallyInfeasible(quests, far, 6030, 1200));
+        Assert.False(trip.IsStaticallyInfeasible(quests, far, 6030, 0));
+        // A near ender plus a far one: statically feasible whether or not the near one is spawned right now.
         Assert.False(trip.IsStaticallyInfeasible(quests, nearAndFar, 6030, 1200));
-        // No creature giver at all: nothing static to prove.
-        var noGiver = new CreatureContent([], [new CreatureSpawn { Guid = 1, Entry = 11039, MapId = 1, X = 0, Y = 0, Z = 3 }],
-            [], [], []);
+        // No creature giver on map 0 or 1: nothing to prove.
         Assert.False(trip.IsStaticallyInfeasible(quests, noGiver, 6030, 1200));
+        Assert.False(Completed(0, 0, noGiver, 1200));
+        // Every giver map must be infeasible: a giver on map 1 with no ender there, and one on map 0 beside its ender.
+        Assert.False(trip.IsStaticallyInfeasible(quests, bothGivers, 6030, 1200));
+        var bothInfeasible = Content(Giver(0), new CreatureSpawn { Guid = 4, Entry = 11038, MapId = 1, X = 0, Y = 0, Z = 3 },
+            Ender(1, 0, 2000), Ender(2, 1, 2000));
+        Assert.True(trip.IsStaticallyInfeasible(quests, bothInfeasible, 6030, 1200));
     }
 
     [Fact]

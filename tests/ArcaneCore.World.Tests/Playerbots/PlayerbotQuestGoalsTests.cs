@@ -349,6 +349,111 @@ public sealed class PlayerbotQuestGoalsTests
     }
 
     [Fact]
+    public async Task UnhomedBot_OnTheEndersContinentNextToTheEnder_KeepsACrossContinentQuest()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            var suspensions = new PlayerbotSuspensions();
+            goals.Suspensions = suspensions;
+            player.MapId = 1; // the ender stands beside the bot on map 1
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.False(goals.AbandonDistantCompletedQuest(player));
+            Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId,
+                quest.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task UnhomedBot_WithinTheLimitOfASameMapFarEnder_KeepsTheQuest()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { DistantEnder = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            var suspensions = new PlayerbotSuspensions();
+            goals.Suspensions = suspensions;
+            player.SetPosition(-7500f, player.Y, player.Z, 0); // 551 yd from the ender, 1449 yd from the giver
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.False(goals.AbandonDistantCompletedQuest(player));
+            Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId,
+                quest.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task HomedBot_OnTheEndersContinent_KeepsACrossContinentQuest()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            var suspensions = new PlayerbotSuspensions();
+            goals.Suspensions = suspensions;
+            goals.Home = new PlayerbotHomeArea(1, new System.Numerics.Vector3(-8948.95f, -132.49f, 83.53f), 100, null);
+            player.MapId = 1;
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.False(goals.AbandonDistantCompletedQuest(player));
+            Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId,
+                quest.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task HomedBot_OnTheGiversContinent_AbandonsACrossContinentQuestWithoutADurableRefusal()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            var suspensions = new PlayerbotSuspensions();
+            goals.Suspensions = suspensions;
+            goals.Home = new PlayerbotHomeArea(0, new System.Numerics.Vector3(-8948.95f, -132.49f, 83.53f), 100, null);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(goals.AbandonDistantCompletedQuest(player));
+            Assert.NotEqual(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId,
+                quest.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1));
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task UnhomedBot_CrossContinentAbandon_IsDurableEvenWhenTheDistanceLimitIsDisabled()
     {
         await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });

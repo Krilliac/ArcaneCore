@@ -86,16 +86,22 @@ counted as refused) and prints each bot's quests taken, rewarded and still open.
 
 For an unhomed bot, `World:Playerbots:MaxDeliveryYards` (1200 by default, 0 disables the distance limit) compares
 the quest giver with the nearest same-map ender. A proven longer trip is skipped at visible pickup and offscreen travel.
-A completed quest is abandoned only when that static trip is too long **and** the bot is still beyond the limit from
-every present ender; completing a kill or collection objective far from a local hand-in keeps the quest. Successful
-abandonment uses `CMSG_QUESTLOG_REMOVE_QUEST` and frees the slot. An unhomed bot durably refuses the quest only when the
-static rule justified it (giver-to-ender beyond the limit using every ender spawn in content, or every ender on a different continent from the giver; the bot's own map never counts);
-a homed bot's position-based abandon and a server-refused packet record no durable refusal. Durable refusals outlive later
+A completed quest follows exactly this rule (L is `MaxDeliveryYards` for an unhomed bot and 0 for a homed one; the bot's
+continent C is map 0 or 1, and on any other map the quest is kept). 1. Reachable now: if any ender spawn of the quest
+(present or not) is on C and either L is 0 or the bot is within L yards of one, the quest is kept. 2. Otherwise it is
+statically infeasible only if it has a creature giver on map 0 or 1 and, for every giver map G, there is no ender spawn on
+G, or L is above 0 and every giver-to-ender distance on G exceeds L; a quest with no creature giver on map 0 or 1 is never
+infeasible. The quest is abandoned only when it is not reachable now and statically infeasible, so a bot on the ender's
+continent, or one that merely wandered far from a local hand-in while finishing objectives, keeps it. Successful
+abandonment uses `CMSG_QUESTLOG_REMOVE_QUEST` and frees the slot. An unhomed bot durably refuses an abandoned quest; a
+homed bot and a server-refused packet record no durable refusal. Durable refusals outlive later
 config changes: raising `MaxDeliveryYards` does not lift refusals already recorded; they age out through the 64-entry
-per-bot FIFO. A refused abandon packet is retried only after the normal refusal interval. A known ender only on a different continent from the quest giver (never the bot's current map) is still refused
-when the distance limit is disabled; unknown or scripted enders remain eligible. Homed bots keep their home-area and
-short-return rules. Giver-to-ender facts are shared and cached by quest store, creature content, definition version,
-map and quest; ender spawn gates, bot position at abandonment and the live option are checked on each decision.
+per-bot FIFO. A refused abandon packet is retried only after the normal refusal interval. A quest whose enders are all on
+the other continent from its giver is still abandoned when the distance limit is disabled; unknown or scripted enders
+remain eligible. Homed bots keep their home-area and short-return rules. Giver-to-ender facts (per-map giver presence and
+ender spawns with their nearest-giver distance) are shared and cached by quest store, creature content, definition
+version and quest; pickup still honours ender spawn gates, while the completed-quest rule reads the bot's position and the
+live option on each decision and ignores spawn gates.
 In the read-only schema-53 world snapshot, 484 of 3,221 quests with creature givers and enders on the same map
 (15.03%) have a nearest pair beyond 1200 yards. All six reported delivery stalls (120, 118, 1420, 6384, 164, 165)
 fall beyond it; the shortest is quest 165 at 1312.7 yards. The default retains those six exclusions while allowing

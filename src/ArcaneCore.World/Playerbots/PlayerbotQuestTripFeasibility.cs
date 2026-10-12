@@ -14,74 +14,81 @@ internal sealed class PlayerbotQuestTripFeasibility
     internal int Evaluations { get; private set; }
 
     /// <summary>
-    /// Reject only a proven unsupported trip. Giver-to-ender distances are static; ender spawn gates and, for a
-    /// completed quest, the bot's position are checked on every call. Zero disables the distance limit, while
-    /// preserving the other-continent check.
-    /// <paramref name="mapId"/> is the bot's map. For a pickup (<paramref name="completed"/> false) it is also the giver's
-    /// map. For a completed quest the giver's map(s) come from content, so where the bot stands never decides
-    /// "other continent": a quest whose giver and ender share a continent stays feasible after a summon or teleport.
+    /// Reject only a proven unsupported trip. <paramref name="completed"/> false is a pickup: <paramref name="mapId"/> is the
+    /// giver's map, ender spawn gates are honoured, and the bot's position is ignored. A completed quest uses the rule
+    /// below; zero <paramref name="maxDeliveryYards"/> disables the distance limit.
+    /// 1. Reachable now: the bot is on map 0 or 1 (on any other map the quest is feasible), some ender spawn of the quest
+    ///    (present or not) is on that continent, and either the limit is zero or the bot is within it of such an ender.
+    ///    Feasible.
+    /// 2. Otherwise <see cref="IsStaticallyInfeasible"/> decides, ignoring the bot.
     /// </summary>
     internal bool IsInfeasible(uint mapId, float x, float y, QuestStore quests, CreatureContent content,
         uint questId, float maxDeliveryYards, Player? player = null, bool completed = false)
     {
         if (mapId is not (0 or 1)) return false;
-        if (!completed)
-            return Evaluate(FactsOf(mapId, quests, content, questId), maxDeliveryYards, x, y, player, false);
-        bool anyGiverMap = false;
-        for (uint giverMap = 0; giverMap <= 1; giverMap++)
-        {
-            TripFacts facts = FactsOf(giverMap, quests, content, questId);
-            if (!facts.HasLocalGiver) continue;
-            anyGiverMap = true;
-            // Spawn presence and the bot's position only mean something on the map the bot is standing on.
-            bool here = giverMap == mapId;
-            if (!Evaluate(facts, maxDeliveryYards, x, y, here ? player : null, here)) return false;
-        }
-        return anyGiverMap;
-    }
-
-    /// <summary>
-    /// Whether the trip is unsupported by static content alone: measured from the quest giver's map(s), every ender spawn
-    /// in content (present or not) is beyond the limit from the nearest giver, or the enders are all on a different
-    /// continent from the giver. Independent of the bot's map and position and of which enders are currently spawned, so it
-    /// is the only rule that may justify a durable refusal. Zero disables the distance limit but keeps the
-    /// ender-on-another-continent-from-the-giver rule. A quest with no creature giver is never statically infeasible.
-    /// </summary>
-    internal bool IsStaticallyInfeasible(QuestStore quests, CreatureContent content, uint questId, float maxDeliveryYards)
-    {
-        bool anyGiverMap = false;
-        for (uint giverMap = 0; giverMap <= 1; giverMap++)
-        {
-            TripFacts facts = FactsOf(giverMap, quests, content, questId);
-            if (!facts.HasLocalGiver) continue;
-            anyGiverMap = true;
-            if (!Evaluate(facts, maxDeliveryYards, 0, 0, null, false)) return false;
-        }
-        return anyGiverMap;
-    }
-
-    private static bool Evaluate(TripFacts facts, float maxDeliveryYards, float x, float y, Player? player, bool completed)
-    {
+        TripFacts facts = FactsOf(quests, content, questId);
         if (!facts.Certain) return false;
-        if (facts.Local.Length == 0) return facts.OtherContinent;
-        if (maxDeliveryYards == 0 || !facts.HasLocalGiver) return false;
-        float limitSquared = maxDeliveryYards * maxDeliveryYards;
-        bool present = false;
-        foreach (Ender ender in facts.Local)
+        if (!completed) return EvaluatePickup(facts, mapId, maxDeliveryYards, player);
+        MapFacts here = facts.On(mapId);
+        if (here.Enders.Length != 0)
         {
-            if (player is not null && !PlayerbotWorldDestinations.IsPresent(player, ender.Spawn)) continue;
-            present = true;
-            if (ender.GiverDistanceSquared <= limitSquared) return false;
-            if (completed)
+            if (maxDeliveryYards == 0) return false;
+            float limitSquared = maxDeliveryYards * maxDeliveryYards;
+            foreach (Ender ender in here.Enders)
             {
                 float dx = ender.Spawn.X - x, dy = ender.Spawn.Y - y;
                 if (dx * dx + dy * dy <= limitSquared) return false;
             }
         }
+        return Static(facts, maxDeliveryYards);
+    }
+
+    /// <summary>
+    /// Whether static content alone proves the trip unsupported, ignoring the bot, spawn gates and which map the bot is
+    /// on. It needs at least one creature giver on map 0 or 1, and for every such giver map G: no ender spawn on G, or
+    /// (limit above zero) every giver-to-ender distance on G beyond the limit. A quest with no creature giver on map 0
+    /// or 1 is never infeasible.
+    /// </summary>
+    internal bool IsStaticallyInfeasible(QuestStore quests, CreatureContent content, uint questId, float maxDeliveryYards)
+    {
+        TripFacts facts = FactsOf(quests, content, questId);
+        return facts.Certain && Static(facts, maxDeliveryYards);
+    }
+
+    private static bool Static(TripFacts facts, float maxDeliveryYards)
+    {
+        bool anyGiverMap = false;
+        float limitSquared = maxDeliveryYards * maxDeliveryYards;
+        for (uint map = 0; map <= 1; map++)
+        {
+            MapFacts g = facts.On(map);
+            if (!g.HasGiver) continue;
+            anyGiverMap = true;
+            if (g.Enders.Length == 0) continue;
+            if (maxDeliveryYards == 0) return false;
+            foreach (Ender ender in g.Enders)
+                if (ender.GiverDistanceSquared <= limitSquared) return false;
+        }
+        return anyGiverMap;
+    }
+
+    private static bool EvaluatePickup(TripFacts facts, uint mapId, float maxDeliveryYards, Player? player)
+    {
+        MapFacts map = facts.On(mapId);
+        if (map.Enders.Length == 0) return facts.On(1 - mapId).Enders.Length != 0;
+        if (maxDeliveryYards == 0 || !map.HasGiver) return false;
+        float limitSquared = maxDeliveryYards * maxDeliveryYards;
+        bool present = false;
+        foreach (Ender ender in map.Enders)
+        {
+            if (player is not null && !PlayerbotWorldDestinations.IsPresent(player, ender.Spawn)) continue;
+            present = true;
+            if (ender.GiverDistanceSquared <= limitSquared) return false;
+        }
         return present;
     }
 
-    private TripFacts FactsOf(uint mapId, QuestStore quests, CreatureContent content, uint questId)
+    private TripFacts FactsOf(QuestStore quests, CreatureContent content, uint questId)
     {
         ContentCache cache = Caches.GetValue(quests, static _ => new QuestCache()).Contents
             .GetValue(content, static _ => new ContentCache());
@@ -92,25 +99,25 @@ internal sealed class PlayerbotQuestTripFeasibility
                 cache.Facts.Clear();
                 cache.Version = content.DefinitionsVersion;
             }
-            if (!cache.Facts.TryGetValue((mapId, questId), out TripFacts? facts))
+            if (!cache.Facts.TryGetValue(questId, out TripFacts? facts))
             {
-                facts = Scan(mapId, quests, content, questId);
-                cache.Facts.Add((mapId, questId), facts);
+                facts = Scan(quests, content, questId);
+                cache.Facts.Add(questId, facts);
                 Evaluations++;
             }
             return facts;
         }
     }
 
-    private static TripFacts Scan(uint mapId, QuestStore quests, CreatureContent content, uint questId)
+    private static TripFacts Scan(QuestStore quests, CreatureContent content, uint questId)
     {
         IReadOnlyList<uint> entries = quests.CreatureEndersOf(questId);
-        if (entries.Count == 0) return new TripFacts(false, false, false, []);
-        List<CreatureSpawn> givers = [];
+        if (entries.Count == 0) return TripFacts.Unknown;
+        List<CreatureSpawn>[] givers = [[], []];
         foreach (uint entry in quests.CreatureStartersOf(questId))
-            givers.AddRange(content.GetSpawns(mapId, entry).Where(PlayerbotWorldDestinations.IsFiniteDestination));
-        List<Ender> local = [];
-        bool other = false;
+            for (uint map = 0; map <= 1; map++)
+                givers[map].AddRange(content.GetSpawns(map, entry).Where(PlayerbotWorldDestinations.IsFiniteDestination));
+        List<Ender>[] enders = [[], []];
         foreach (uint entry in entries)
         {
             bool known = false;
@@ -120,23 +127,20 @@ internal sealed class PlayerbotQuestTripFeasibility
                 {
                     if (!PlayerbotWorldDestinations.IsFiniteDestination(spawn)) continue;
                     known = true;
-                    if (spawnMap == mapId)
+                    if (spawnMap is not (0 or 1)) return TripFacts.Unknown;
+                    float nearest = float.PositiveInfinity;
+                    foreach (CreatureSpawn giver in givers[spawnMap])
                     {
-                        float nearest = float.PositiveInfinity;
-                        foreach (CreatureSpawn giver in givers)
-                        {
-                            float dx = spawn.X - giver.X, dy = spawn.Y - giver.Y;
-                            nearest = Math.Min(nearest, dx * dx + dy * dy);
-                        }
-                        local.Add(new Ender(spawn, nearest));
+                        float dx = spawn.X - giver.X, dy = spawn.Y - giver.Y;
+                        nearest = Math.Min(nearest, dx * dx + dy * dy);
                     }
-                    else if (spawnMap is 0 or 1) other = true;
-                    else return new TripFacts(false, false, false, []);
+                    enders[spawnMap].Add(new Ender(spawn, nearest));
                 }
             }
-            if (!known) return new TripFacts(false, false, false, []);
+            if (!known) return TripFacts.Unknown;
         }
-        return new TripFacts(true, other, givers.Count != 0, [.. local]);
+        return new TripFacts(true, new MapFacts(givers[0].Count != 0, [.. enders[0]]),
+            new MapFacts(givers[1].Count != 0, [.. enders[1]]));
     }
 
     private sealed class QuestCache
@@ -147,10 +151,20 @@ internal sealed class PlayerbotQuestTripFeasibility
     private sealed class ContentCache
     {
         internal readonly object Sync = new();
-        internal readonly Dictionary<(uint MapId, uint QuestId), TripFacts> Facts = [];
+        internal readonly Dictionary<uint, TripFacts> Facts = [];
         internal int Version = -1;
     }
 
     private sealed record Ender(CreatureSpawn Spawn, float GiverDistanceSquared);
-    private sealed record TripFacts(bool Certain, bool OtherContinent, bool HasLocalGiver, Ender[] Local);
+
+    private sealed record MapFacts(bool HasGiver, Ender[] Enders)
+    {
+        internal static readonly MapFacts Empty = new(false, []);
+    }
+
+    private sealed record TripFacts(bool Certain, MapFacts Map0, MapFacts Map1)
+    {
+        internal static readonly TripFacts Unknown = new(false, MapFacts.Empty, MapFacts.Empty);
+        internal MapFacts On(uint map) => map == 0 ? Map0 : Map1;
+    }
 }
