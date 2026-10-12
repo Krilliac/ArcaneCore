@@ -105,7 +105,11 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             }
             if (TryAbandonCompletedQuest(_session, player, id, out bool attempted))
             {
-                Suspensions?.MarkUnreachableQuest(id);
+                // Only the static giver-to-ender rule is durable. A homed bot abandons on its own position (the
+                // ender is outside its home and beyond 600 yards), which a later walk can undo.
+                if (Home is null && _trip.IsStaticallyInfeasible(player.MapId, services.Quests, content, id,
+                    _options.MaxDeliveryYards))
+                    Suspensions?.MarkUnreachableQuest(id);
                 return true;
             }
             if (attempted) Refuse(id, _session.World.NowMs);

@@ -88,8 +88,11 @@ For an unhomed bot, `World:Playerbots:MaxDeliveryYards` (1200 by default, 0 disa
 the quest giver with the nearest same-map ender. A proven longer trip is skipped at visible pickup and offscreen travel.
 A completed quest is abandoned only when that static trip is too long **and** the bot is still beyond the limit from
 every present ender; completing a kill or collection objective far from a local hand-in keeps the quest. Successful
-abandonment uses `CMSG_QUESTLOG_REMOVE_QUEST`, frees the slot and durably refuses that quest for this bot. A refused
-abandon packet is retried only after the normal refusal interval. A known other-continent-only ender is still refused
+abandonment uses `CMSG_QUESTLOG_REMOVE_QUEST` and frees the slot. An unhomed bot durably refuses the quest only when the
+static rule justified it (giver-to-ender beyond the limit using every ender spawn in content, or other continent only);
+a homed bot's position-based abandon and a server-refused packet record no durable refusal. Durable refusals outlive later
+config changes: raising `MaxDeliveryYards` does not lift refusals already recorded; they age out through the 64-entry
+per-bot FIFO. A refused abandon packet is retried only after the normal refusal interval. A known other-continent-only ender is still refused
 when the distance limit is disabled; unknown or scripted enders remain eligible. Homed bots keep their home-area and
 short-return rules. Giver-to-ender facts are shared and cached by quest store, creature content, definition version,
 map and quest; ender spawn gates, bot position at abandonment and the live option are checked on each decision.

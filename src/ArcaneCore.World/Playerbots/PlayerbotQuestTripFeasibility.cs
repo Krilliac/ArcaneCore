@@ -22,23 +22,7 @@ internal sealed class PlayerbotQuestTripFeasibility
         uint questId, float maxDeliveryYards, Player? player = null, bool completed = false)
     {
         if (mapId is not (0 or 1)) return false;
-        ContentCache cache = Caches.GetValue(quests, static _ => new QuestCache()).Contents
-            .GetValue(content, static _ => new ContentCache());
-        TripFacts facts;
-        lock (cache.Sync)
-        {
-            if (cache.Version != content.DefinitionsVersion)
-            {
-                cache.Facts.Clear();
-                cache.Version = content.DefinitionsVersion;
-            }
-            if (!cache.Facts.TryGetValue((mapId, questId), out facts!))
-            {
-                facts = Scan(mapId, quests, content, questId);
-                cache.Facts.Add((mapId, questId), facts);
-                Evaluations++;
-            }
-        }
+        TripFacts facts = FactsOf(mapId, quests, content, questId);
         if (!facts.Certain) return false;
         if (facts.Local.Length == 0) return facts.OtherContinent;
         if (maxDeliveryYards == 0 || !facts.HasLocalGiver) return false;
@@ -56,6 +40,47 @@ internal sealed class PlayerbotQuestTripFeasibility
             }
         }
         return present;
+    }
+
+    /// <summary>
+    /// Whether the trip is unsupported by static content alone: every ender spawn in content (present or not) is beyond
+    /// the limit from the nearest giver, or the only enders are on the other continent. Independent of the bot's position
+    /// and of which enders are currently spawned, so it is the only rule that may justify a durable refusal. Zero disables
+    /// the distance limit but keeps the other-continent rule.
+    /// </summary>
+    internal bool IsStaticallyInfeasible(uint mapId, QuestStore quests, CreatureContent content, uint questId,
+        float maxDeliveryYards)
+    {
+        if (mapId is not (0 or 1)) return false;
+        TripFacts facts = FactsOf(mapId, quests, content, questId);
+        if (!facts.Certain) return false;
+        if (facts.Local.Length == 0) return facts.OtherContinent;
+        if (maxDeliveryYards == 0 || !facts.HasLocalGiver) return false;
+        float limitSquared = maxDeliveryYards * maxDeliveryYards;
+        foreach (Ender ender in facts.Local)
+            if (ender.GiverDistanceSquared <= limitSquared) return false;
+        return true;
+    }
+
+    private TripFacts FactsOf(uint mapId, QuestStore quests, CreatureContent content, uint questId)
+    {
+        ContentCache cache = Caches.GetValue(quests, static _ => new QuestCache()).Contents
+            .GetValue(content, static _ => new ContentCache());
+        lock (cache.Sync)
+        {
+            if (cache.Version != content.DefinitionsVersion)
+            {
+                cache.Facts.Clear();
+                cache.Version = content.DefinitionsVersion;
+            }
+            if (!cache.Facts.TryGetValue((mapId, questId), out TripFacts? facts))
+            {
+                facts = Scan(mapId, quests, content, questId);
+                cache.Facts.Add((mapId, questId), facts);
+                Evaluations++;
+            }
+            return facts;
+        }
     }
 
     private static TripFacts Scan(uint mapId, QuestStore quests, CreatureContent content, uint questId)

@@ -230,6 +230,8 @@ public sealed class PlayerbotQuestGoalsTests
                 if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) attempts++;
             };
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            var suspensions = new PlayerbotSuspensions();
+            goals.Suspensions = suspensions;
             for (int i = 0; i < 3; i++)
             {
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
@@ -238,6 +240,37 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
             Assert.True(goals.IsRefused(QuestInteractionFixture.QuestId));
             Assert.Equal(1, attempts);
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs),
+                "a server-refused abandon must not set the durable refusal");
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task HomedBot_PositionBasedAbandon_DoesNotSetTheDurableRefusal()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { DistantEnder = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            var suspensions = new PlayerbotSuspensions();
+            goals.Suspensions = suspensions;
+            // A home far from the ender, and the bot beyond 600 yards of it: the abandon rests on the bot's position.
+            goals.Home = new PlayerbotHomeArea(0, new System.Numerics.Vector3(-6948.95f + 8_000f, -132.49f, 83.53f), 100, null);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(goals.AbandonDistantCompletedQuest(player));
+            Assert.Equal(QuestStatus.None, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs),
+                "a homed bot's position-based abandon must not be durable");
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId,
+                quest.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1));
             return true;
         });
     }
@@ -285,6 +318,30 @@ public sealed class PlayerbotQuestGoalsTests
             quest.Session.ManagedBudget = new ManagedActionBudget(1);
             Assert.True(goals.AbandonDistantCompletedQuest(player));
             Assert.NotEqual(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task UnhomedBot_CrossContinentAbandon_IsDurableEvenWhenTheDistanceLimitIsDisabled()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(QuestInteractionFixture.QuestId);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, MaxDeliveryYards = 0 });
+            var suspensions = new PlayerbotSuspensions();
+            goals.Suspensions = suspensions;
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(goals.AbandonDistantCompletedQuest(player));
+            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId,
+                quest.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1));
             return true;
         });
     }
