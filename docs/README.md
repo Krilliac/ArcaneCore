@@ -16,6 +16,7 @@ unfinished parts documented as limits).
 | [Exit codes](reference/exit-codes.md) | The process exit codes of the daemons and the content importer (supervisors must not restart on 78). **Generated.** |
 | [Database schema reference](reference/schema.md) | Every schema version of the auth, characters and world databases, which module owns it, and which modules clean up on character delete. **Generated.** |
 | [Logging](ops/logging.md) | The `Logging:ArcaneCore` provider: colour or plain console, rolling text file, JSON lines, what reloads live, and the fail-closed checks. |
+| [Observability](ops/observability.md) | The client-rejection log, the duplicate outbound packet detector and slow-tick host/GC/subsystem attribution, with their `Ops:Observability` and `Ops:Watchdog:HostLoad` keys. |
 | [Database upgrade tooling](ops/database-upgrade.md) | The `arcane-db` runbook: status, plan, upgrade, backups, exit codes and the `Database:Upgrade` policy. |
 | [Invariants and crash handling](ops/invariants.md) | The `Diagnostics` section: invariant policy and counters, what ends the process on an unhandled exception (exit 70 or abort), the crash report, and every invariant the code asserts. |
 | [Resilience](ops/resilience.md) | Circuit breakers, retries, bulkheads and timeouts: what the daemons do when a database is slow or gone, the `Resilience` options, exit code 6, and how a write queue adopts the primitives. |

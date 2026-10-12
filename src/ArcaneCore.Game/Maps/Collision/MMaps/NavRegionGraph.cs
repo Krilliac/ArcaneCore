@@ -232,6 +232,7 @@ public sealed class NavRegionGraph
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             {
+                // an unreadable or corrupt tile is left out of the graph; this static builder has no logger and the live mesh load reports the same file
                 continue;
             }
 

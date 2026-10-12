@@ -461,6 +461,7 @@ public sealed class PlayerDumpReader(CharacterDbContext db)
             }
             catch (JsonException)
             {
+                // a row that does not parse makes the dump invalid; the caller returns the failure to the operator
                 return false;
             }
 

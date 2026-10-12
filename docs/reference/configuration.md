@@ -46,6 +46,7 @@ How to read the tables:
 - [`NpcServices`](#npcservices)
 - [`Ops:Diagnostics`](#opsdiagnostics)
 - [`Ops:Metrics`](#opsmetrics)
+- [`Ops:Observability`](#opsobservability)
 - [`Ops:Watchdog`](#opswatchdog)
 - [`PageText`](#pagetext)
 - [`PerformanceLog`](#performancelog)
@@ -641,6 +642,22 @@ How to read the tables:
 | `Ops:Metrics:Realm` | `string` | `""` | - | A `realm` label added to every series (TrinityCore tags its metrics with the realm name). Empty: no label. Default empty. |
 | `Ops:Metrics:RealmPrometheusPrefix` | `string` | `"http://localhost:9465/metrics/"` | - | The Realm daemon's Prometheus scrape listener prefix, so a Realm and a World started from one shared appsettings.json do not both bind the same port. It never falls back to `PrometheusPrefix`; setting both to the same prefix makes the second daemon to start log an error and serve no metrics. Default `http://localhost:9465/metrics/`. |
 
+## `Ops:Observability`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Ops:Observability:ClientRejections:BurstPerSession` | `int` | `20` | - | Lines a session may log in a burst before the refill rate applies. 1-1000. Default 20. |
+| `Ops:Observability:ClientRejections:Enabled` | `bool` | `true` | - | `false`: no refusal is decoded or logged and the send path does no extra work. Default true. |
+| `Ops:Observability:ClientRejections:LogSilentDrops` | `bool` | `true` | - | `true`: handlers that return without answering the client log the reason (at Debug for a bot, Information for a player). Default true. |
+| `Ops:Observability:ClientRejections:RefillPerMinute` | `int` | `60` | - | Lines a session earns back per minute once its burst is spent; a refusal over the limit is counted and summarised in the next line that is written. 1-6000. Default 60. |
+| `Ops:Observability:DuplicatePackets:CaptureStacks` | `bool` | `true` | - | `true`: the warning carries a compact call stack of the second send, and of the first as well once the opcode has duplicated before in this process. Default true. |
+| `Ops:Observability:DuplicatePackets:Enabled` | `bool` | `true` | - | `false`: nothing is hashed and the send path does no extra work. Default true. |
+| `Ops:Observability:DuplicatePackets:IncludeBots` | `bool` | `false` | - | `true`: playerbot sessions are checked as well. Default false (bots are excluded). |
+| `Ops:Observability:DuplicatePackets:RingSize` | `int` | `16` | - | Recent packets remembered per session; older ones are overwritten. 4-256. Default 16. |
+| `Ops:Observability:DuplicatePackets:WarnBurstPerSession` | `int` | `3` | - | Warnings a session may log in a burst. 1-100. Default 3. |
+| `Ops:Observability:DuplicatePackets:WarnPerMinute` | `int` | `6` | - | Warnings a session earns back per minute after its burst. 1-600. Default 6. |
+| `Ops:Observability:DuplicatePackets:WindowMs` | `int` | `100` | - | Two identical packets closer together than this many milliseconds are a duplicate (a world tick is 50 ms). 1-5000. Default 100. |
+
 ## `Ops:Watchdog`
 
 | Key | Type | Default | Reload | Meaning |
@@ -653,6 +670,8 @@ How to read the tables:
 | `Ops:Watchdog:Heartbeat:IntervalSeconds` | `int` | `0` | - | Seconds between beats. 0 = half of systemd's `WATCHDOG_USEC` when it is set, otherwise 10. Default 0. |
 | `Ops:Watchdog:Heartbeat:Mode` | `HeartbeatMode` | `Auto` | - | Where the heartbeat goes. Default Auto. Values: `Auto`, `None`, `Systemd`, `File`, `Stdout`. |
 | `Ops:Watchdog:Heartbeat:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two "heartbeat withheld" warnings. Default 30. |
+| `Ops:Watchdog:HostLoad:Enabled` | `bool` | `true` | - | `false`: nothing is sampled and the hang, overrun and slow-map lines carry no host-load text. Default true. |
+| `Ops:Watchdog:HostLoad:HistorySeconds` | `int` | `120` | - | How many seconds of samples (one per watchdog check) are kept to difference against; a slow window longer than this is measured from the oldest sample. 10-3600. Default 120. |
 | `Ops:Watchdog:Memory:Action` | `MemoryPressureAction` | `None` | - | What happens when the managed heap reaches `ActionHeapBytes`. Default None (log only; `Collect` pauses the world thread for a blocking compacting gen2 collection, `Stop` ends the process with exit code 1). Values: `None`, `Log`, `Collect`, `Stop`. |
 | `Ops:Watchdog:Memory:ActionCooldownSeconds` | `int` | `300` | - | Least seconds between two actions (a Stop fires once). Default 300. |
 | `Ops:Watchdog:Memory:ActionHeapBytes` | `long` | `0` | - | The heap size in bytes at which `Action` fires. 0 disables the action whatever `Action` says. Default 0. |

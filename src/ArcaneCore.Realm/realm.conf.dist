@@ -31,7 +31,7 @@
 #   DIAGNOSTICS                 8 keys
 #   LOGGING                     16 keys
 #   NET                         16 keys
-#   OPS                         39 keys
+#   OPS                         41 keys
 #   REALM                       1 keys
 #   REALMS                      1 keys
 #   RESILIENCE                  14 keys
@@ -1205,6 +1205,31 @@ Ops.Watchdog.Heartbeat.Mode = Auto
 #        Docs: docs/reference/configuration.md#opswatchdog
 #
 Ops.Watchdog.Heartbeat.WarnIntervalSeconds = 30
+
+#
+#    Ops.Watchdog.HostLoad.Enabled
+#        Description: false: nothing is sampled and the hang, overrun and slow-map lines carry no
+#                     host-load text. Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.HostLoad.Enabled = true
+
+#
+#    Ops.Watchdog.HostLoad.HistorySeconds
+#        Description: How many seconds of samples (one per watchdog check) are kept to difference
+#                     against; a slow window longer than this is measured from the oldest sample.
+#                     10-3600. Default 120.
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.HostLoad.HistorySeconds = 120
 
 #
 #    Ops.Watchdog.Memory.Action

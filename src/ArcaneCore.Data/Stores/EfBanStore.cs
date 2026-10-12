@@ -118,6 +118,7 @@ public sealed class EfBanStore(AuthDbContext db, TimeProvider? clock = null, Acc
         }
         catch (Exception ex) when (ex is DbException or InvalidOperationException)
         {
+            // the ban is already committed; a failed re-read only picks the request's own kind for the published status, and the store has no logger
             return requestIsPermanent;
         }
     }

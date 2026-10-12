@@ -35,6 +35,7 @@ public static class AcceptLoop
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
+                // shutdown
                 return;
             }
             catch (Exception ex) when (ex is SocketException or IOException or ObjectDisposedException or InvalidOperationException)
@@ -58,6 +59,7 @@ public static class AcceptLoop
                 }
                 catch (OperationCanceledException)
                 {
+                    // shutdown during the retry delay
                     return;
                 }
 
