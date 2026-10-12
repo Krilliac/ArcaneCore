@@ -157,7 +157,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         {
             if (_route.Complete)
             {
-                ClearRoute();
+                ClearRoute(keepTrip: true);
             }
             else
             {
@@ -229,8 +229,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 ClearRoute();
                 TargetEntry = entry.Entry;
                 QuestId = questId;
-                _travelEntry = entry.Entry;
-                _travelQuest = questId;
+                ArmTrip(entry.Entry, questId, returnQuestId, preferredCreatureEntry);
                 return true;
             }
 
@@ -242,8 +241,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 ClearRoute();
                 TargetEntry = entry.Entry;
                 QuestId = questId;
-                _travelEntry = entry.Entry;
-                _travelQuest = questId;
+                ArmTrip(entry.Entry, questId, returnQuestId, preferredCreatureEntry);
                 return true;
             }
 
@@ -273,8 +271,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             _routeSpawnGuid = entry.Spawn.Guid;
             TargetEntry = entry.Entry;
             QuestId = questId;
-            _travelEntry = entry.Entry;
-            _travelQuest = questId;
+            ArmTrip(entry.Entry, questId, returnQuestId, preferredCreatureEntry);
             _failedPlans = 0;
             _lastPosition = new(player.X, player.Y, player.Z);
             _stuckMs = 0;
@@ -299,6 +296,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         uint quest = _travelQuest;
         _travelEntry = 0;
         _travelQuest = 0;
+        // A quest the bot has since taken (or finished) is not a disagreement: the trip did its job and the journal says so.
+        if (_session.Services.GetService<QuestNpcFeature>()?.Services.StateOf(player)?.Quests.Get(quest) is not null) return;
         if (GiverHasCandidate is null || SetQuestAside is null || GiverHasCandidate(player)) return;
         SetQuestAside(quest);
         ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
@@ -541,10 +540,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         LootContent? loot, PlayerbotHomeArea? home, bool giverInHome, Quest quest)
     {
         if (home is not null && !(giverInHome && content is not null && home.QuestInside(services.Quests, content, quest))) return false;
-        if (content is not null && RequiresIntercontinentTravel(player.MapId, services.Quests, content, quest.Id)) return false;
+        // Cheapest first: this runs per quest of each candidate NPC every think; the continent check walks the spawn maps.
+        if (services.CanTakeQuest(player, quest.Id) != true
+            || state.Quests.Get(quest.Id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }) return false;
         if (!CanPursueStarter(player, quest, loot, services.Npcs)) return false;
-        return services.CanTakeQuest(player, quest.Id) == true
-            && state.Quests.Get(quest.Id) is not { Status: QuestStatus.Incomplete or QuestStatus.Complete };
+        return content is null || !RequiresIntercontinentTravel(player.MapId, services.Quests, content, quest.Id);
     }
 
     private static bool Eligible(uint entry, uint preferred, Player player, QuestNpcServices? services,
@@ -573,6 +573,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         {
             if (services.IsRewardable(id) && skipQuest?.Invoke(id) != true
                 && services.Quests.Get(id) is { } quest
+                // Travel is stricter than the giver: a quest the journal has ever held (rewarded repeatable, abandoned, removed by a GM)
+                // is not worth a trip, whatever its status now.
+                && state.Quests.Get(id) is null
                 && MayTakeQuest(player, services, state, content, loot, home, giverInHome, quest)) { questId = id; return true; }
         }
         return false;
@@ -584,8 +587,18 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             && (returnQuestId == 0 || Vector3.Distance(new(player.X, player.Y, player.Z),
                 new(creature.X, creature.Y, creature.Z)) <= 4f));
 
-    private void ClearRoute()
+    /// <summary>Remember the ordinary quest trip just committed to; return and objective trips are not ours to settle.</summary>
+    private void ArmTrip(uint entry, uint questId, uint returnQuestId, uint preferredCreatureEntry)
     {
+        if (returnQuestId != 0 || preferredCreatureEntry != 0) return;
+        _travelEntry = entry;
+        _travelQuest = questId;
+    }
+
+    /// <summary>Drops the route and, unless <paramref name="keepTrip"/> (the route completed: the arrival is still to be settled), the trip.</summary>
+    private void ClearRoute(bool keepTrip = false)
+    {
+        if (!keepTrip) { _travelEntry = 0; _travelQuest = 0; }
         _route = null;
         _routeTarget = default;
         _routeSpawnGuid = 0;
@@ -593,6 +606,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     private void Backoff(uint now)
     {
+        _travelEntry = 0;
+        _travelQuest = 0;
         if (++_failedPlans >= 3) { _failedPlans = 0; TargetEntry = 0; QuestId = 0; }
         _backoffUntil = unchecked(now + BackoffMs);
     }

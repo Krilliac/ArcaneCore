@@ -112,6 +112,74 @@ public sealed class PlayerbotQuestTravelHomeTests
         }, waitForGryan: true);
     }
 
+    [Theory]
+    [InlineData(false)] // abandoned, or removed with .quest remove: a journal row with status None
+    [InlineData(true)]  // a repeatable already rewarded once: status None, Rewarded
+    public async Task NoHome_ATouchedQuestIsNotATravelCandidate(bool rewarded)
+    {
+        await RunAsync(GryanFixture.Plain(StartX + 300f), (host, session, player, feature) =>
+        {
+            var destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+            Assert.True(destinations.HasQuestCandidate(player)); // control: untouched, quest 13 is a trip
+            QuestStatusData row = feature.Services.StateOf(player)!.Quests.GetOrAdd(GryanFixture.OutsideQuest);
+            row.Rewarded = rewarded;
+            Assert.False(new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true }).HasQuestCandidate(player));
+        });
+    }
+
+    [Fact]
+    public async Task StaleTrip_AfterANormalPickup_DoesNotSetTheTakenQuestAside()
+    {
+        await RunAsync(GryanFixture.WithInHomeQuest(StartX + 300f), (host, session, player, feature) =>
+        {
+            var options = new PlayerbotOptions { Enabled = true };
+            var destinations = new PlayerbotWorldDestinations(session, options);
+            // The quest-giver side refuses everything here (its home is elsewhere), so a later disagreement is forced.
+            var quests = new PlayerbotQuestGoals(session, options)
+            { Home = new PlayerbotHomeArea(player.Map!.MapId, new Vector3(player.X - 2000f, player.Y, player.Z), 50f, "Elsewhere") };
+            destinations.SkipQuest = quests.IsRefused;
+            destinations.GiverHasCandidate = quests.HasCandidate;
+            destinations.SetQuestAside = quests.SetAside;
+            Creature gryan = (Creature)player.Map!.FindObject(GryanFixture.GryanGuid)!;
+
+            Assert.True(destinations.HasQuestCandidate(player));
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(destinations.Update(player, 0, 500));
+            Assert.Equal(GryanFixture.OutsideQuest, destinations.QuestId);
+
+            // The normal arrival: the quest giver takes the quest (travel never sees the arrival).
+            feature.Services.StateOf(player)!.Quests.GetOrAdd(GryanFixture.OutsideQuest).Status = QuestStatus.Incomplete;
+
+            // Later, Gryan is in sight again and the two disagree about his other quest: the taken quest is not set aside.
+            player.VisibleObjects.Add(gryan.Guid);
+            Assert.False(destinations.HasQuestCandidate(player)); // in sight: ordinary handling
+            Assert.False(quests.IsRefused(GryanFixture.OutsideQuest));
+        }, waitForGryan: true);
+    }
+
+    [Fact]
+    public async Task Brain_ForcedDisagreement_SetsTheQuestAsideThroughTheBrainsWiring()
+    {
+        await RunAsync(GryanFixture.Plain(StartX + 300f), (host, session, player, feature) =>
+        {
+            Creature gryan = (Creature)player.Map!.FindObject(GryanFixture.GryanGuid)!;
+            // Gryan cannot be selected: travel still counts him (he is alive and in sight), the quest giver sees nothing to take.
+            gryan.UnitFlags |= UnitFlags.NotSelectable;
+            var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+            session.ManagedBudget = new ManagedActionBudget(2);
+            brain.Update(1_000);
+            Assert.Equal(PlayerbotGoalKind.Quest, brain.Goal);
+            Assert.Equal(GryanFixture.Gryan, brain.TargetEntry);
+            Assert.False(brain.QuestGoals.IsRefused(GryanFixture.OutsideQuest));
+
+            player.VisibleObjects.Add(gryan.Guid);
+            session.ManagedBudget = new ManagedActionBudget(2);
+            brain.Update(1_000);
+            Assert.True(brain.QuestGoals.IsRefused(GryanFixture.OutsideQuest));
+            brain.Stop();
+        }, waitForGryan: true);
+    }
+
     private static PlayerbotHomeArea Home(Player player)
         => new(player.Map!.MapId, new Vector3(player.X, player.Y, player.Z), HomeRadius, "Sentinel Hill");
 
