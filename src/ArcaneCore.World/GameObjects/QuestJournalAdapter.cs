@@ -58,9 +58,9 @@ internal sealed class QuestJournalAdapter(IServiceProvider services, WorldRuntim
 
     public void ItemLooted(Player player, uint itemId, uint count)
     {
-        // The inventory's ItemCountChanged is not routed to quests yet; loot reports its own
-        // additions (vmangos StoreNewItem → ItemAddedQuestCheck).
-        Quests?.ItemAdded(player, itemId, count);
+        // The quest feature already hears every add through PlayerInventory.ItemCountChanged (vmangos StoreNewItem ->
+        // ItemAddedQuestCheck), which AddItem raised for this loot. Reporting it again here counted each looted quest
+        // item twice, so quest 789's counter hit 10 after 5 tails and the drop stopped.
         world.SavePlayer(player);
     }
 
