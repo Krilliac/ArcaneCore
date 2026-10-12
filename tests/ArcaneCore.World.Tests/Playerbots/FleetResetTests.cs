@@ -527,6 +527,37 @@ public sealed class FleetResetTests
         Assert.Equal(old.AccountName, (await world.Owners.LoadAllAsync()).Single().AccountName);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AReusedAccount_ThatAPlayerTookMidCreation_KeepsItsCharacter_AndIsRetiredNotRequeued(bool registryRowAppears)
+    {
+        await using PopulationTestHost world = await StartAsync();
+        await CreateBotsAsync(world, 1, started: 0);
+        ManagedPlayerbot old = (await world.Owners.LoadAllAsync()).Single();
+        Assert.True((await world.Bots.ResetFleetAsync(new FleetResetPromise(1, 1), _ => { })).Success);
+
+        Account stored = (await world.Host.Accounts.FindByUsernameAsync(old.AccountName))!;
+        Guid planted = Guid.NewGuid();
+        world.Owners.OnCreate = bot =>
+        {
+            if (registryRowAppears) world.Owners.AddOutOfBand(bot with { BotId = planted }); // a row names the account after all
+            else stored.SessionKey = new byte[40]; // a human logs in
+        };
+        world.Owners.NextCreateException = new InvalidOperationException("fixture registry failure");
+        Assert.False((await world.Bots.CreateAsync("Sparetaken", 1, 1)).Success);
+        world.Owners.OnCreate = null;
+
+        CharacterRecord survivor = Assert.Single(await world.Host.Characters.GetByAccountAsync(old.AccountId)); // not deleted: it is not ours to delete
+        if (registryRowAppears) world.Owners.DropOutOfBand(planted);
+        else stored.SessionKey = null;
+        Assert.True(await world.Host.Characters.DeleteAsync(survivor.Id, old.AccountId));
+
+        PlayerbotOperationResult next = await world.Bots.CreateAsync("Sparenext", 1, 1);
+        Assert.True(next.Success, next.Code);
+        Assert.NotEqual(old.AccountName, (await world.Owners.LoadAllAsync()).Single().AccountName); // retired, not offered again
+    }
+
     private sealed class FakeClock : TimeProvider
     {
         private long _ticks = DateTimeOffset.UtcNow.UtcTicks;

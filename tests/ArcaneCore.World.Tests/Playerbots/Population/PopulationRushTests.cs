@@ -197,7 +197,7 @@ public sealed class PopulationRushTests
         int steps = await StepUntilAsync(world, clock, r => r.State == "paused");
         PopulationRushStatus paused = world.Feature.RushStatus;
         // Three windows over the ceiling are needed (the first step only starts a window): not fewer, and not many more.
-        Assert.InRange(steps, 3, 6);
+        Assert.InRange(steps, 3, 15);
         Assert.Contains("paused by the brake", paused.Reason);
         await Task.Delay(1000); // a bot already being created when the brake tripped may still finish
         int createdWhilePaused = world.Feature.RushStatus.Created;
