@@ -135,6 +135,13 @@ public enum PathType
     /// Kept clear of vmangos' bits (<c>PathFinder.h:45-57</c>) so numeric comparisons match.
     /// </summary>
     Short = 0x200,
+
+    /// <summary>
+    /// ArcaneCore extension (not a vmangos value): the search needed a navigation tile whose background read has not finished
+    /// (<see cref="PathOptions.NonBlockingTiles"/>). No path was decided: the result holds only the start and is neither a path nor
+    /// a refusal; the caller asks again on a later think.
+    /// </summary>
+    TilesPending = 0x400,
 }
 
 /// <summary>Navigation mesh polygon flags written by the vmangos/cmangos mmap generator (<c>NavTerrain</c>).</summary>
@@ -202,6 +209,15 @@ public sealed record PathOptions
     /// movement keeps vmangos' answers (a straight line to an unloaded tile).
     /// </summary>
     public bool LoadTiles { get; init; }
+
+    /// <summary>
+    /// With <see cref="LoadTiles"/>: never read a tile file on the calling thread. A tile that is not resident is read on the thread
+    /// pool (one read per tile however often it is asked for, a few at a time) and installed by a later query on the calling thread, which
+    /// owns the navmesh; meanwhile a query that cannot be decided without it answers <see cref="PathType.TilesPending"/>. A query that
+    /// finds a whole path without the tile is answered as usual. Off by default; the bots' planning turns it on (a tile read under
+    /// disk contention took 5.6 s of one world tick, live 2026-10-12).
+    /// </summary>
+    public bool NonBlockingTiles { get; init; }
 }
 
 /// <summary>A path answer: its classification and its corner points (world coordinates).</summary>

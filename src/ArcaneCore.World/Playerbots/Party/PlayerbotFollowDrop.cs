@@ -114,7 +114,7 @@ internal static class PlayerbotFollowDrop
     {
         PathResult path = PlayerbotThinkProbe.Find(collision, landing, leader, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
             Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = false,
-            MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true });
+            MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true, NonBlockingTiles = true });
         if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.Incomplete | PathType.NoPath)) != 0) return false;
         return path.Length <= (Vector3.Distance(landing, leader) * 2f) + 10f;
     }

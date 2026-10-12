@@ -267,6 +267,8 @@ internal sealed class PlayerbotThinkProbe
 
         if (Clamped > 0 || Refused > 0)
             text.Append(CultureInfo.InvariantCulture, $"; node budget {NodeBudget}: {Clamped} fallback queries cut short, {Refused} refused");
+        if (Search.TilesPending > 0)
+            text.Append(CultureInfo.InvariantCulture, $"; tiles pending {Search.TilesPending} (read in the background, the plan waits)");
         if (Search.TileLoads > 0)
         {
             text.Append(CultureInfo.InvariantCulture, $"; tiles read {Search.TileLoads} ({Search.TileLoadMs:F1} ms)");

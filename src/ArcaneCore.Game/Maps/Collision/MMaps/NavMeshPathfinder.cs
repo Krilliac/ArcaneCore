@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -144,6 +145,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     {
         _gridTiles.Add((mapId, tileX, tileY));
         RemoveOnDemand((mapId, tileX, tileY)); // the grid holds it now
+        _async.Remove((mapId, tileX, tileY));
         LoadTile(mapId, tileX, tileY);
     }
 
@@ -315,7 +317,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         {
             _queryStamp++;
             _queryLoads = 0;
-            EnsureTile(graph.MapId, at);
+            EnsureTile(graph.MapId, at, options.NonBlockingTiles);
         }
 
         Vector3 recast = NavMeshFormat.ToRecast(at);
@@ -341,18 +343,32 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             return FindPath(mesh, mapId, start, end, options);
         }
 
+        bool nonBlocking = options.NonBlockingTiles;
+        long pendingBefore = PathSearchCounters.TilesPending;
         _queryStamp++;
         _queryLoads = 0;
-        EnsureTile(mapId, start);
-        EnsureTile(mapId, end);
+        EnsureTile(mapId, start, nonBlocking);
+        EnsureTile(mapId, end, nonBlocking);
+        if (nonBlocking && PathSearchCounters.TilesPending != pendingBefore)
+        {
+            // An endpoint's tile is still being read: the search cannot even locate it (an endpoint on an unloaded tile would answer a
+            // straight line, which is not what this query will answer once the tile is in).
+            return TilesPendingResult(start);
+        }
+
         mesh.TileLoader = (x, y) =>
         {
             Vector3 center = NavMeshFormat.ToWorld(mesh.TileCenter(x, y));
-            return EnsureTile(mapId, center) ? mesh.GetTile(x, y) : null;
+            return EnsureTile(mapId, center, nonBlocking) ? mesh.GetTile(x, y) : null;
         };
         try
         {
-            return FindPath(mesh, mapId, start, end, options);
+            PathResult result = FindPath(mesh, mapId, start, end, options);
+            // A tile the search wanted was not in yet. A whole path found without it stands (the tile could only have offered another
+            // way); any other answer (a partial path, no path, a shortcut) might be only for want of that tile.
+            return nonBlocking && PathSearchCounters.TilesPending != pendingBefore
+                && (result.Type & (PathType.Incomplete | PathType.NoPath | PathType.NotUsingPath)) != 0
+                ? TilesPendingResult(start) : result;
         }
         finally
         {
@@ -360,11 +376,16 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         }
     }
 
+    private static PathResult TilesPendingResult(Vector3 start) => new(PathType.TilesPending, [start]);
+
     /// <summary>
     /// Make sure the navigation tile under world position <paramref name="at"/> is loaded for this query (<see cref="PathOptions.LoadTiles"/>),
     /// within <see cref="MaxTilesPerQuery"/> and <see cref="MaxOnDemandTiles"/>. False when it is not (no such tile, or over a bound).
+    /// With <paramref name="nonBlocking"/> (<see cref="PathOptions.NonBlockingTiles"/>) the file is never read here: the tile is read on
+    /// the pool (<see cref="PollTileRead"/>), a tile whose read has not finished counts as pending
+    /// (<see cref="PathSearchCounters.TilesPending"/>) and is false, and one whose read has finished is installed.
     /// </summary>
-    private bool EnsureTile(uint mapId, Vector3 at)
+    private bool EnsureTile(uint mapId, Vector3 at, bool nonBlocking)
     {
         if (Terrain.TerrainTile.TileOf(at.X, at.Y) is not { } terrain || GetNavMesh(mapId) is not { } mesh)
         {
@@ -385,6 +406,24 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         if (_noTile.Contains(key) || _queryLoads >= MaxTilesPerQuery)
         {
             return false;
+        }
+
+        NavMeshTile? readTile = null;
+        if (nonBlocking)
+        {
+            switch (PollTileRead(mapId, terrain.X, terrain.Y, out readTile))
+            {
+                case TileReadState.Pending:
+                    PathSearchCounters.RecordTilePending();
+                    return false;
+                case TileReadState.Unavailable:
+                    if (_noTile.Count < 16_384)
+                    {
+                        _noTile.Add(key);
+                    }
+
+                    return false;
+            }
         }
 
         if (_onDemandPerMap.GetValueOrDefault(mapId) >= MaxOnDemandTiles)
@@ -412,7 +451,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
         _queryLoads++;
         long loadStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        bool loaded = LoadTile(mapId, terrain.X, terrain.Y, out bool prefetchHit);
+        bool prefetchHit = readTile is not null;
+        bool loaded = readTile is not null ? InstallReadTile(mapId, terrain.X, terrain.Y, readTile) : LoadTile(mapId, terrain.X, terrain.Y, out prefetchHit);
         PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted,
             mapId, terrain.X, terrain.Y, prefetchHit);
         if (!loaded)
@@ -427,6 +467,158 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
         SetOnDemand(key, _queryStamp);
         return true;
+    }
+
+    /// <summary>What <see cref="PollTileRead"/> found.</summary>
+    private enum TileReadState
+    {
+        /// <summary>The tile was read; it is returned.</summary>
+        Ready,
+
+        /// <summary>A read of it is under way (or was just requested, or waits for a free read slot).</summary>
+        Pending,
+
+        /// <summary>It does not exist or could not be read (reported once); the tile is treated as absent.</summary>
+        Unavailable,
+    }
+
+    /// <summary>One background tile read: the parsed tile, null when the file does not exist, or why it failed.</summary>
+    private readonly record struct TileRead(NavMeshTile? Tile, Exception? Error);
+
+    /// <summary>
+    /// The most tile reads in flight or finished and waiting at once (<see cref="_async"/>). A request over it is pending without starting a
+    /// read; finished reads nobody collected are dropped oldest first to make room.
+    /// </summary>
+    public const int MaxPendingTileReads = 16;
+
+    /// <summary>The most tile files read at the same time; further reads wait for a slot without holding a thread.</summary>
+    public const int MaxConcurrentTileReads = 3;
+
+    private readonly Dictionary<(uint Map, int X, int Y), (Task<TileRead> Read, long Sequence)> _async = [];
+    private readonly SemaphoreSlim _tileReadSlots = new(MaxConcurrentTileReads, MaxConcurrentTileReads);
+    private long _asyncSequence;
+
+    /// <summary>Background tile reads started (diagnostics and tests).</summary>
+    internal int TileReadsStarted { get; private set; }
+
+    /// <summary>Tile reads that can still start before the concurrency bound is reached (<see cref="MaxConcurrentTileReads"/>; tests).</summary>
+    internal int FreeTileReadSlots => _tileReadSlots.CurrentCount;
+
+    /// <summary>The background read of a tile, or null when none is held (tests await it).</summary>
+    internal Task? PendingTileRead(uint mapId, int tileX, int tileY)
+        => _async.TryGetValue((mapId, tileX, tileY), out (Task<TileRead> Read, long Sequence) entry) ? entry.Read : null;
+
+    /// <summary>
+    /// Where the background read of a terrain tile stands, starting it when none exists (World thread; the only writer of
+    /// <see cref="_async"/>). A tile the grid prefetch (<see cref="Prefetch"/>) is already reading is waited for, not read twice. The read
+    /// itself runs on the pool and touches nothing but the file and its own result; the tile is added to the navmesh, which the world
+    /// thread owns, by <see cref="InstallReadTile"/> on a later query. A failed read is logged once (the caller then remembers the
+    /// tile as missing, so nothing asks again).
+    /// </summary>
+    private TileReadState PollTileRead(uint mapId, int tileX, int tileY, out NavMeshTile? tile)
+    {
+        tile = null;
+        (uint, int, int) key = (mapId, tileX, tileY);
+        if (_async.TryGetValue(key, out (Task<TileRead> Read, long Sequence) entry))
+        {
+            if (!entry.Read.IsCompleted)
+            {
+                return TileReadState.Pending;
+            }
+
+            TileRead done = entry.Read.IsCompletedSuccessfully ? entry.Read.Result : new TileRead(null, entry.Read.Exception);
+            if (done.Tile is { } ready)
+            {
+                tile = ready;
+                return TileReadState.Ready; // stays held until installed (InstallReadTile), in case the install must wait for a slot
+            }
+
+            _async.Remove(key);
+            if (done.Error is { } error)
+            {
+                string path = Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY));
+                FaultLedger.Shared.Record("navtile-read", error);
+                _logger.LogError(error, "MMaps: {Path} could not be read or is not a usable navmesh tile; ignored", path);
+            }
+
+            return TileReadState.Unavailable;
+        }
+
+        if (_prefetch.IsRunning(mapId, tileX, tileY))
+        {
+            return TileReadState.Pending;
+        }
+
+        if (_prefetch.TryTake(mapId, tileX, tileY, out NavMeshTile prefetched))
+        {
+            _async[key] = (Task.FromResult(new TileRead(prefetched, null)), ++_asyncSequence);
+            tile = prefetched;
+            return TileReadState.Ready;
+        }
+
+        if (_async.Count >= MaxPendingTileReads && !DropOldestFinishedRead())
+        {
+            return TileReadState.Pending;
+        }
+
+        string file = Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY));
+        _async[key] = (StartTileRead(file), ++_asyncSequence);
+        TileReadsStarted++;
+        return TileReadState.Pending;
+    }
+
+    private bool DropOldestFinishedRead()
+    {
+        (uint, int, int)? oldest = null;
+        long oldestSequence = long.MaxValue;
+        foreach (((uint, int, int) key, (Task<TileRead> read, long sequence)) in _async)
+        {
+            if (read.IsCompleted && sequence < oldestSequence)
+            {
+                oldest = key;
+                oldestSequence = sequence;
+            }
+        }
+
+        return oldest is { } drop && _async.Remove(drop);
+    }
+
+    /// <summary>Read and parse one tile file on the pool, at most <see cref="MaxConcurrentTileReads"/> at a time. Never faults: a failure is the result.</summary>
+    private Task<TileRead> StartTileRead(string path)
+    {
+        Func<string, byte[]?> reader = FileReader;
+        SemaphoreSlim slots = _tileReadSlots;
+        return Task.Run(async () =>
+        {
+            await slots.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                byte[]? bytes = reader(path);
+                return new TileRead(bytes is null ? null : NavMeshTile.ParseFile(bytes), null);
+            }
+            catch (Exception ex)
+            {
+                return new TileRead(null, ex);
+            }
+            finally
+            {
+                slots.Release();
+            }
+        });
+    }
+
+    /// <summary>Add a tile read in the background to the navmesh (world thread), dropping its held read. False when its Detour slot is taken.</summary>
+    private bool InstallReadTile(uint mapId, int tileX, int tileY, NavMeshTile tile)
+    {
+        _async.Remove((mapId, tileX, tileY));
+        if (GetNavMesh(mapId) is { } mesh && mesh.AddTile(tileX, tileY, tile))
+        {
+            return true;
+        }
+
+        _logger.LogError("MMaps: {Path} claims Detour tile ({X}, {Y}), which is already loaded; ignored",
+            Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY)), tile.X, tile.Y);
+        return false;
     }
 
     private PathResult FindPath(NavMesh mesh, uint mapId, Vector3 start, Vector3 end, PathOptions options)
@@ -527,11 +719,14 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         return mesh.TryFindNearestPoly(position, FarExtents, options, out poly, out onMesh);
     }
 
+    /// <summary>Reads a navmesh file's bytes (null when it does not exist); the disk unless a test substitutes it. Runs on the world thread or, for background tile reads, on the pool.</summary>
+    internal Func<string, byte[]?> FileReader { get; set; } = static path => File.Exists(path) ? File.ReadAllBytes(path) : null;
+
     private byte[]? ReadFile(string path)
     {
         try
         {
-            return File.Exists(path) ? File.ReadAllBytes(path) : null;
+            return FileReader(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

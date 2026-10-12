@@ -551,11 +551,13 @@ internal sealed class PlayerbotHomeReturn
         _lastPosition = position;
         if (_route is null or { Complete: true })
         {
+            long pendingMark = PlayerbotNavigation.PendingMark;
             if (!PlayerbotNavigation.TryPlanToward(player, area.Centre, options, out _route))
             {
                 _route = null;
                 PlayerbotMovementControl.Stop(session, player);
-                Fail(nowMs);
+                // A tile still being read is no failure of the walk home: plan again next think (the read ends either way).
+                if (!PlayerbotNavigation.PendingSince(pendingMark)) Fail(nowMs);
                 return false;
             }
 

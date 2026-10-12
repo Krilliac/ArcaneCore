@@ -144,11 +144,43 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         return false;
     }
 
+    /// <summary>
+    /// The last <see cref="Update"/> found no route only because a navigation tile on the way was still being read in the background
+    /// (<see cref="PathOptions.NonBlockingTiles"/>): the destination was not judged, nothing was blacklisted or backed off, and the
+    /// brain keeps its goal and asks again on a later think (see <see cref="MaxTileWaitMs"/>).
+    /// </summary>
+    internal bool WaitingForTiles { get; private set; }
+
+    /// <summary>How long a bot waits for the tiles of one plan before the refusal counts as any other.</summary>
+    internal const uint MaxTileWaitMs = 15_000;
+
+    /// <summary>Holds further apart than this are separate waits.</summary>
+    internal const uint TileWaitGapMs = 5_000;
+
+    private uint _tilesWaitSince;
+    private uint _tilesLastHold;
+
+    /// <summary>Whether to keep waiting for tiles at <paramref name="now"/>; false once the wait passed <see cref="MaxTileWaitMs"/> (the refusal then stands).</summary>
+    private bool HoldForTiles(uint now)
+    {
+        if (_tilesWaitSince == 0 || unchecked(now - _tilesLastHold) > TileWaitGapMs) _tilesWaitSince = now == 0 ? 1 : now;
+        _tilesLastHold = now;
+        if (unchecked(now - _tilesWaitSince) > MaxTileWaitMs)
+        {
+            _tilesWaitSince = 0;
+            return false;
+        }
+
+        WaitingForTiles = true;
+        return true;
+    }
+
     /// <summary>Returns true only when a normal movement action was attempted.</summary>
     internal bool Update(Player player, uint preferredCreatureEntry, uint elapsedMs, uint returnQuestId = 0)
     {
         if (!_options.Enabled || !player.IsInWorld || !player.IsAlive || player.Map is not { } map || elapsedMs == 0)
             return false;
+        WaitingForTiles = false;
         uint now = _session.World.NowMs;
         if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue) return false;
         if (_backoffUntil != 0) _backoffUntil = 0;
@@ -248,9 +280,12 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
 
             PlayerbotRoute? route = walk;
+            long pendingMark = PlayerbotNavigation.PendingMark;
             if (route is null && !PlayerbotNavigation.TryPlanToward(player, destination, _options, out route,
                 completedQuestReturn: returnQuestId != 0 && returnQuestId == questId))
             {
+                // Refused for want of a tile still being read: not a verdict on this spawn. Keep the goal, try again next think.
+                if (PlayerbotNavigation.PendingSince(pendingMark) && HoldForTiles(now)) return false;
                 // A far failed search is expensive. Defer the next far spawn until the backoff expires instead of
                 // running another capped search on the very next think; nearby alternatives still rotate promptly.
                 float longRoute = _options.MaxRouteYards * 0.5f;
@@ -267,6 +302,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                     ConfirmUnclimbable(player, destination, questId, entry.Entry, now);
                 return false; // Nearby alternatives rotate next think; far failures wait for backoff.
             }
+            _tilesWaitSince = 0;
             if (questId == _failQuest) _failCount = 0;
             _route = route;
             _routeTarget = entry.Entry;
