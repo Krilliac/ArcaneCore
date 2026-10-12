@@ -137,7 +137,8 @@ internal static class PlayerbotEscapes
         FrostNova or PsychicScream or HowlOfTerror or IntimidatingShout or DivineShield => EscapeKind.HoldsAll,
         EntanglingRoots or Fear or Gouge or HammerOfJustice or DeathCoil => EscapeKind.HoldsVictim,
         Vanish or FeignDeath => EscapeKind.BreaksContact,
-        Sprint or AspectOfTheCheetah or TravelForm or Dash => EscapeKind.SelfSpeed,
+        // Travel Form (783) carries no speed aura of its own: the 40% is on a separate passive spell (5419), so it buys nothing here.
+        Sprint or AspectOfTheCheetah or Dash => EscapeKind.SelfSpeed,
         Hamstring or WingClip or ConcussiveShot or FrostShock => EscapeKind.VictimSnare,
         _ => EscapeKind.None,
     };

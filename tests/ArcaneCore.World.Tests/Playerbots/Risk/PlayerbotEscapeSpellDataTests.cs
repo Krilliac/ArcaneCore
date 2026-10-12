@@ -90,4 +90,71 @@ public sealed class PlayerbotEscapeSpellDataTests
         // Not vacuous: the data gave real effects for the kinds (a derivation that always returned nothing would pass every case above).
         Assert.True(checkedWithEffect >= 20, $"only {checkedWithEffect} escape spells had data to derive from");
     }
+
+    /// <summary>
+    /// Literal values, so a mistake shared by the derivation and the raw-row oracle above cannot pass. Each was read from the 5875
+    /// Spell.dbc / SpellDuration.dbc by a separate reader during review (2026-10-12): the speed auras' base points plus dice, the
+    /// duration row's base milliseconds.
+    /// </summary>
+    [RealClientDbcTheory]
+    [InlineData("Sprint", 2983u, 1.5f, 0f, 1f)]
+    [InlineData("Sprint", 11305u, 1.7f, 0f, 1f)]
+    [InlineData("Dash", 1850u, 1.5f, 0f, 1f)]
+    [InlineData("Aspect of the Cheetah", 5118u, 1.3f, 0f, 1f)]
+    [InlineData("Frost Nova", 122u, 1f, 8f, 1f)]
+    [InlineData("Divine Shield", 642u, 1f, 10f, 1f)]
+    [InlineData("Divine Shield", 1020u, 1f, 12f, 1f)]
+    [InlineData("Howl of Terror", 5484u, 1f, 10f, 1f)]
+    [InlineData("Howl of Terror", 17928u, 1f, 15f, 1f)]
+    [InlineData("Hammer of Justice", 853u, 1f, 3f, 1f)]
+    [InlineData("Hamstring", 1715u, 1f, 0f, 0.6f)]
+    [InlineData("Hamstring", 7373u, 1f, 0f, 0.5f)]
+    [InlineData("Concussive Shot", 5116u, 1f, 0f, 0.5f)]
+    public void KnownEscapeSpells_DeriveTheirPublishedValues(string name, uint spellId, float selfSpeed, float freeSeconds, float victimSpeed)
+    {
+        PlayerbotEscapes.EscapeEffect effect = PlayerbotEscapes.EffectOf(name, Resolve(spellId, name));
+        Assert.Equal(selfSpeed, effect.SelfSpeed, 3);
+        Assert.Equal(freeSeconds, effect.FreeSeconds, 3);
+        Assert.Equal(victimSpeed, effect.VictimSpeed, 3);
+    }
+
+    /// <summary>Feign Death's row carries a 360000 ms duration, but it breaks contact for good: the kind wins over the number.</summary>
+    [RealClientDbcFact]
+    public void FeignDeath_BreaksContactForGood() =>
+        Assert.True(float.IsPositiveInfinity(PlayerbotEscapes.EffectOf("Feign Death", Resolve(5384u, "Feign Death")).FreeSeconds));
+
+    /// <summary>
+    /// Travel Form (783) has no speed aura of its own (its 40% is on the passive 5419), so it must not be classed as a speed escape:
+    /// a speed escape that can never derive a speed would turn every druid retreat that leans on it into a silent refusal.
+    /// </summary>
+    [RealClientDbcFact]
+    public void EverySpeedEscape_DerivesASpeedForSomeRank_AndTravelFormIsNotOne()
+    {
+        Assert.Equal(PlayerbotEscapes.EscapeKind.None, PlayerbotEscapes.KindOf("Travel Form"));
+        Assert.Equal(PlayerbotEscapes.EscapeEffect.None, PlayerbotEscapes.EffectOf("Travel Form", Resolve(783u, "Travel Form")));
+        SpellDbcContent content = Content.Value;
+        foreach (string name in PlayerbotEscapes.All.Where(n => PlayerbotEscapes.KindOf(n) is PlayerbotEscapes.EscapeKind.SelfSpeed or PlayerbotEscapes.EscapeKind.VictimSnare))
+        {
+            bool any = content.Spells.Where(r => string.Equals(r.SpellName, name, StringComparison.Ordinal))
+                .Select(r => PlayerbotEscapes.EffectOf(name, ToInfo(r)))
+                .Any(e => e.SelfSpeed > 1f || e.VictimSpeed < 1f);
+            Assert.True(any, $"{name} is a speed escape but no rank derives a speed");
+        }
+    }
+
+    private static readonly Lazy<SpellDbcContent> Content = new(() => SpellDbcImporter.ReadDirectory(RealClientDbcFactAttribute.DbcDirectory));
+
+    private static SpellInfo ToInfo(SpellTemplateRow row)
+    {
+        SpellDbcContent c = Content.Value;
+        return SpellStoreFactory.ToSpellInfo(row, c.CastTimes.ToDictionary(r => r.Id), c.Durations.ToDictionary(r => r.Id),
+            c.Ranges.ToDictionary(r => r.Id), c.Radii.ToDictionary(r => r.Id));
+    }
+
+    private static SpellInfo Resolve(uint spellId, string name)
+    {
+        SpellTemplateRow row = Assert.Single(Content.Value.Spells, r => r.Id == spellId);
+        Assert.Equal(name, row.SpellName);
+        return ToInfo(row);
+    }
 }
