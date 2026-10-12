@@ -13620,6 +13620,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Risk:DeathLoopMemorySeconds",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "2700",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Seconds a reported death-loop zone is avoided (0..86400). The 2700-second default outlives the 600-second loop window by 4.5 times, giving the bot time to finish a different errand before reconsidering the place. A second loop there doubles this duration, capped at one day.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Risk:Enabled",
       "section": "World:Playerbots",
       "type": "bool",

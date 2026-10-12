@@ -16,7 +16,7 @@ that part is ArcaneCore's own.
 
 | File (`src/ArcaneCore.World/Playerbots/Risk/`) | What it does |
 |---|---|
-| `PlayerbotRiskOptions.cs` | `World:Playerbots:Risk`: `Enabled`, `Tolerance`, `RetreatHealthPct`, `NearlyWonHealthPct`, `RecoverHealthPct`, `DangerMemorySeconds`, `PartyRetreatOnWipe`. |
+| `PlayerbotRiskOptions.cs` | `World:Playerbots:Risk`: `Enabled`, `Tolerance`, `RetreatHealthPct`, `NearlyWonHealthPct`, `RecoverHealthPct`, `DangerMemorySeconds`, `DeathLoopMemorySeconds`, `PartyRetreatOnWipe`. |
 | `PlayerbotRiskModel.cs` | The pure arithmetic: the pre-engagement verdict (`Assess`) and the in-combat verdict (`Judge`). Unit tested on snapshots. |
 | `PlayerbotRisk.cs` | The world side, one per bot: gathers the facts of each candidate, chooses the target, watches the fight, starts and runs the retreat, the recovery wait. |
 | `PlayerbotFightTracker.cs` | The observed damage rates of the current fight over a rolling 8 seconds of world time, where each enemy joined, and the bot's damage per second across fights. |
@@ -199,9 +199,16 @@ danger memory alike, and the errand it keeps is the one both set aside, the risk
 errand), the loop breaker at the third. Target choice skips both the set-aside entries and the remembered creatures. With the
 estimate and the hazards, the live replay of the 2026-10-08 rehearsal no longer reaches the loop breaker (0 death loops in 5 runs, against 27 reports in 5 runs without them).
 
+Each newly recorded loop also leaves a 60-yard zone centred on its deaths, with their creature entries, for
+`World:Playerbots:Risk:DeathLoopMemorySeconds` (2700 seconds by default). Target choice skips creatures in the zone and the navigation guard
+refuses routes into it; a bot revived inside may route out. Another three-death loop in the same zone refreshes the zone for
+twice the configured duration (capped at one day) and suspends the current quest through the existing bounded quest suspension.
+The 45-minute default is 4.5 times the 10-minute death window: the w29 G3 triage found repeat loops at one spot across a
+4.75-hour run, while ordinary danger memory lasted only five minutes. This is an ArcaneCore bot policy, not a vmangos rule.
+
 ## Resurrection sickness and corpse recovery
 
-A spirit healer is a fallback when a bot cannot safely reclaim its body. For a bot at or above `Death.SicknessLevel`, recovery keeps a reachable corpse run after a repeat death or an out-of-home death. It also keeps a body judged too strong when there is a clear revival spot within reclaim range. A death loop still requests the healer to escape the loop. This follows vmangos `WorldSession::SendSpiritResurrect` (`src/game/Handlers/NPCHandler.cpp`) and `Player::ResurrectPlayer` (`src/game/Objects/Player.cpp`): the healer applies sickness and a 25% durability loss; corpse reclaim does not.
+A spirit healer is a fallback when a bot cannot safely reclaim its body. For a bot at or above `Death.SicknessLevel`, recovery keeps a reachable corpse run after a repeat death or an out-of-home death. It does not keep a repeated-death body when a recorded killer was at least three levels above the bot or the bot is already sick. It also keeps a body judged too strong when there is a clear revival spot within reclaim range; a chosen revive spot is at least the threat's own aggro radius plus 10 yards away. A death loop still requests the healer to escape the loop. This follows vmangos `WorldSession::SendSpiritResurrect` (`src/game/Handlers/NPCHandler.cpp`), `Player::ResurrectPlayer` (`src/game/Objects/Player.cpp`) and `Creature::GetAttackDistance` (`src/game/Objects/Creature.cpp`): the healer applies sickness and a 25% durability loss; corpse reclaim does not. The extra revive clearance is an ArcaneCore bot safety margin.
 
 While spell 15007 is active, the autonomous brain drops a pending pull and starts no new fight, even when risk scoring is disabled. Quest exchanges, town errands, repair trips and home travel can continue. A creature that attacks the bot is still defended against. Body strength is judged using the bot's health without the temporary sickness; sick fight damage does not lower its learned healthy damage estimate. Broken worn gear or aggregate durability below 20% makes an affordable repair vendor elsewhere on the map a town destination. The vendor interaction still uses `CMSG_REPAIR_ITEM` and the normal server pricing.
 

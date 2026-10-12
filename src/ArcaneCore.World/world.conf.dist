@@ -10958,6 +10958,20 @@ World.Playerbots.RestoreOnStartup = false
 World.Playerbots.Risk.DangerMemorySeconds = 300
 
 #
+#    World.Playerbots.Risk.DeathLoopMemorySeconds
+#        Description: Seconds a reported death-loop zone is avoided (0..86400). The 2700-second
+#                     default outlives the 600-second loop window by 4.5 times, giving the bot time
+#                     to finish a different errand before reconsidering the place. A second loop
+#                     there doubles this duration, capped at one day.
+#        Type: int
+#        Default: 2700
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Risk.DeathLoopMemorySeconds = 2700
+
+#
 #    World.Playerbots.Risk.Enabled
 #        Description: Weigh fights and retreat from lost ones (on by default). Off: the bot takes
 #                     the nearest target and fights to the end.

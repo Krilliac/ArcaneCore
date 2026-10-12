@@ -48,6 +48,8 @@ internal sealed class PlayerbotStallWatch
 
     private const int MaxDeaths = 16;
     private readonly List<Death> _deaths = [];
+    private uint _deathSequence;
+    private uint _lastLoopSequence;
     private string? _stallReport;
     private string? _deathLoopReport;
     private uint _aliveSinceMs;
@@ -67,6 +69,9 @@ internal sealed class PlayerbotStallWatch
 
     /// <summary>Stalls reported so far.</summary>
     internal int Count { get; private set; }
+
+    /// <summary>Whether this record completed a new set of three deaths, rather than extending the same loop report.</summary>
+    internal bool NewDeathLoop { get; private set; }
 
     /// <summary>
     /// Times <see cref="Observe"/> told the caller to give its goal up: when a stall begins, and again after each further stall bound
@@ -92,9 +97,10 @@ internal sealed class PlayerbotStallWatch
     internal (bool Loop, IReadOnlyList<uint> SetAside) RecordDeath(uint nowMs, uint map, Vector3 position,
         IReadOnlyCollection<uint> attackers)
     {
+        NewDeathLoop = false;
         _deaths.RemoveAll(death => unchecked(nowMs - death.AtMs) > DeathLoopWindowMs);
         if (_deaths.Count >= MaxDeaths) _deaths.RemoveAt(0);
-        _deaths.Add(new Death(nowMs, map, position, [.. attackers.Distinct()]));
+        _deaths.Add(new Death(nowMs, map, position, [.. attackers.Distinct()], ++_deathSequence));
 
         uint[] setAside = [.. attackers.Distinct().Where(entry => entry != 0
             && _deaths.Count(death => death.Attackers.Contains(entry)) >= KillerDeaths)];
@@ -104,9 +110,13 @@ internal sealed class PlayerbotStallWatch
         uint span = unchecked(nowMs - here[0].AtMs);
         uint[] killers = [.. here.SelectMany(death => death.Attackers).Distinct().Order()];
         bool fresh = _deathLoopReport is null;
+        NewDeathLoop = here.Count(death => death.Sequence > _lastLoopSequence) >= DeathLoopDeaths;
+        if (NewDeathLoop) _lastLoopSequence = _deathSequence;
         _deathLoopReport = string.Create(CultureInfo.InvariantCulture,
             $"death loop: died {here.Length} times in {span / 1000}s within {DeathLoopYards:F0} yd of {position.X:F1},{position.Y:F1},{position.Z:F1} map {map} attackers={(killers.Length == 0 ? "none" : string.Join('/', killers))}");
         LastReport = _deathLoopReport;
+        // The stall count keeps its old meaning (one per loop report) so logged death-loop counts stay comparable across runs;
+        // NewDeathLoop only gates the loop-zone hazard.
         if (fresh) Count++;
         return (true, setAside);
     }
@@ -119,6 +129,16 @@ internal sealed class PlayerbotStallWatch
     internal int DeathsNear(uint map, Vector3 position, uint nowMs)
         => _deaths.Count(death => unchecked(nowMs - death.AtMs) <= DeathLoopWindowMs && death.Map == map
             && Vector3.Distance(death.Position, position) <= DeathLoopYards);
+
+    /// <summary>The centre and creature entries of the deaths that made the latest loop.</summary>
+    internal (Vector3 Centre, uint[] Killers) LoopZone(uint map, Vector3 position, uint nowMs)
+    {
+        Death[] here = [.. _deaths.Where(death => unchecked(nowMs - death.AtMs) <= DeathLoopWindowMs && death.Map == map
+            && Vector3.Distance(death.Position, position) <= DeathLoopYards)];
+        return (new Vector3(here.Average(death => death.Position.X), here.Average(death => death.Position.Y),
+            here.Average(death => death.Position.Z)),
+            [.. here.SelectMany(death => death.Attackers).Where(entry => entry != 0).Distinct().Order()]);
+    }
 
     /// <summary>
     /// Look at the bot once per think. True when a new stall begins, and again after every further stall bound without progress
@@ -175,7 +195,7 @@ internal sealed class PlayerbotStallWatch
         _started = false;
     }
 
-    private readonly record struct Death(uint AtMs, uint Map, Vector3 Position, uint[] Attackers);
+    private readonly record struct Death(uint AtMs, uint Map, Vector3 Position, uint[] Attackers, uint Sequence);
 
     /// <summary>
     /// What counts as progress besides moving. <paramref name="RestMark"/>: the most health and mana seen while the bot rests (0

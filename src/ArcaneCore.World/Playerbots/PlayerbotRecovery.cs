@@ -162,6 +162,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// </summary>
     internal Func<Player, Corpse, (PlayerbotUnsafeBody Reason, string? Detail)>? UnsafeBody { get; set; }
 
+    /// <summary>Highest level among the creatures recorded as attackers at this death, including a killing blow between bot thinks.</summary>
+    internal int LastKillerMaxLevel { get; set; }
+
     /// <summary>Why this death's body was given up for the spirit healer (<see cref="UnsafeBody"/>), or None (inspection and tests).</summary>
     internal PlayerbotUnsafeBody UnsafeReason { get; private set; }
 
@@ -241,6 +244,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// plus this (the creature may step a little before the revived bot gets up).
     /// </summary>
     internal const float CampMarginYards = 2.5f;
+
+    /// <summary>Space a chosen corpse-reclaim point keeps beyond every threat's own aggro radius.</summary>
+    internal const float ReviveSpotMarginYards = 10f;
 
     /// <summary>
     /// A revive spot keeps this much more room than <see cref="CampMarginYards"/>, so a bot that stops a yard or two short of it
@@ -782,6 +788,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     private bool KeepBodyOverSickness(Player player, Corpse corpse, PlayerbotUnsafeBody reason)
     {
         if (!PlayerbotSickness.HealerSickens(session, player)) return false;
+        if (reason == PlayerbotUnsafeBody.DiedHere
+            && (PlayerbotSickness.IsSick(session, player) || LastKillerMaxLevel >= (int)player.Level + 3)) return false;
         bool keep = reason switch
         {
             PlayerbotUnsafeBody.DiedHere or PlayerbotUnsafeBody.OutsideHome => true,
@@ -1061,7 +1069,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         if (Vector3.Distance(spot, body) > ReviveSpotMaxYards) return false;
         foreach (PlayerbotThreat hostile in hostiles)
-            if (hostile.Reaches(spot, CampMarginYards + ReviveSpotSlackYards)) return false;
+            if (hostile.Reaches(spot, ReviveSpotMarginYards + ReviveSpotSlackYards)) return false;
         return true;
     }
 

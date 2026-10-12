@@ -246,7 +246,9 @@ internal sealed class PlayerbotRisk
     {
         PlayerbotEngagement? first = null, rest = null;
         foreach (Creature candidate in PlayerbotBrain.FindTargets(player, preferredEntry,
-                     creature => skip(creature) || IsRemembered(creature), MaxLevelsAbove).Take(MaxCandidates))
+                     creature => skip(creature) || IsRemembered(creature)
+                         || Enabled && Hazards.CoversDeathLoop(creature.MapId,
+                             new Vector3(creature.X, creature.Y, creature.Z), _session.World.NowMs), MaxLevelsAbove).Take(MaxCandidates))
         {
             PlayerbotEngagement verdict = Assess(player, candidate, questObjective && candidate.Entry == preferredEntry, out PlayerbotRoute? detour);
             first ??= verdict;
