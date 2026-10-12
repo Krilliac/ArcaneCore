@@ -18,8 +18,8 @@ namespace ArcaneCore.Data.Tests.Resilience;
 /// </summary>
 public sealed class SqliteFirstCommandTimeoutTests : IDisposable
 {
-    private static readonly TimeSpan Guard = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan Guard = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5); // the bound is 1 s; the unbounded base waits 30 s
 
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "arcanecore-first-command-" + Guid.NewGuid().ToString("N"));
 
@@ -40,14 +40,22 @@ public sealed class SqliteFirstCommandTimeoutTests : IDisposable
     public static TheoryData<string> Scenarios => new()
     {
         "SaveChanges", "SaveChangesAsync", "ExecuteDelete", "ExecuteDeleteAsync",
-        "ExecuteSqlRaw", "ExecuteSqlRawAsync", "WriteQuery", "WriteQueryAsync", "BeginTransaction", "BeginTransactionAsync",
+        "ExecuteSqlRaw", "ExecuteSqlRawAsync", "ExecuteScalar", "ExecuteScalarAsync", "WriteQuery", "WriteQueryAsync", "BeginTransaction", "BeginTransactionAsync",
     };
 
     [Theory]
     [MemberData(nameof(Scenarios))]
-    public async Task TheFirstCommandOnAFreshContext_FailsLockedWithinTheWriteBound(string scenario)
+    public Task TheFirstCommandOnAFreshContext_FailsLockedWithinTheWriteBound(string scenario) => FailsWithinBound(scenario, 30);
+
+    [Theory]
+    [InlineData("ExecuteSqlRawAsync")]
+    [InlineData("ExecuteDelete")]
+    [InlineData("SaveChangesAsync")]
+    public Task AnUnlimitedDefaultTimeoutInTheConnectionString_IsReplacedByTheWriteBound(string scenario) => FailsWithinBound(scenario, 0);
+
+    private async Task FailsWithinBound(string scenario, int stringTimeoutSeconds)
     {
-        string connection = new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, "characters.db"), Pooling = false, DefaultTimeout = 30 }.ToString();
+        string connection = new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, "characters.db"), Pooling = false, DefaultTimeout = stringTimeoutSeconds }.ToString();
         await using ServiceProvider provider = Build(connection);
         await provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
 
@@ -93,6 +101,10 @@ public sealed class SqliteFirstCommandTimeoutTests : IDisposable
         Assert.Equal(2, new SqliteConnectionStringBuilder(Resolve("Data Source=a.db", 1001)).DefaultTimeout);
         Assert.Equal(2, new SqliteConnectionStringBuilder(Resolve("Data Source=a.db;Default Timeout=2", 5000)).DefaultTimeout);
         Assert.Equal(30, new SqliteConnectionStringBuilder(Resolve("Data Source=a.db", 0)).DefaultTimeout);
+        Assert.Equal(1, new SqliteConnectionStringBuilder(Resolve("Data Source=a.db;Default Timeout=0", 1000)).DefaultTimeout);
+        Assert.Equal(0, new SqliteConnectionStringBuilder(Resolve("Data Source=a.db;Default Timeout=0", 0)).DefaultTimeout);
+        Assert.Equal(1, SqliteConnectionPragmaInterceptor.ApplyWriteBound(0, 1));
+        Assert.Equal(2, SqliteConnectionPragmaInterceptor.ApplyWriteBound(30, 1500));
     }
 
     private static async Task<Exception?> RunFreshAsync(ServiceProvider provider, string scenario)
@@ -123,6 +135,24 @@ public sealed class SqliteFirstCommandTimeoutTests : IDisposable
                 case "ExecuteSqlRawAsync":
                     await db.Database.ExecuteSqlRawAsync("DELETE FROM characters WHERE id < 0");
                     break;
+                case "ExecuteScalar":
+                    {
+                        using System.Data.Common.DbCommand command = db.Database.GetDbConnection().CreateCommand();
+                        command.CommandText = "DELETE FROM characters WHERE id < 0 RETURNING id";
+                        db.Database.OpenConnection(); // the command above copied the string's timeout before EF's open, as EF's own commands do
+                        command.ExecuteScalar();
+                        break;
+                    }
+
+                case "ExecuteScalarAsync":
+                    {
+                        await using System.Data.Common.DbCommand command = db.Database.GetDbConnection().CreateCommand();
+                        command.CommandText = "DELETE FROM characters WHERE id < 0 RETURNING id";
+                        await db.Database.OpenConnectionAsync();
+                        await command.ExecuteScalarAsync();
+                        break;
+                    }
+
                 case "WriteQuery":
                     _ = db.Database.SqlQueryRaw<int>("DELETE FROM characters WHERE id < 0 RETURNING id AS Value").ToList();
                     break;

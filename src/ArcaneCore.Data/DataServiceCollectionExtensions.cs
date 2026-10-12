@@ -104,9 +104,9 @@ public static class DataServiceCollectionExtensions
     }
 
     /// <summary>
-    /// The SQLite connection string with <c>Default Timeout</c> lowered to the write bound (whole seconds, rounded up; never raised; 0 leaves it).
+    /// The SQLite connection string with <c>Default Timeout</c> lowered to the write bound (whole seconds, rounded up; never raised; a Default Timeout of 0, unlimited, is replaced; a bound of 0 leaves it).
     /// It must be in the string, not only set when the connection opens: <c>SqliteConnection.CreateCommand</c> copies DefaultTimeout into the command
-    /// when it is created, and EF creates a non-query command (ExecuteUpdate/Delete, raw SQL) before it opens the connection, so a value lowered at
+    /// when it is created, and EF creates a non-query command (ExecuteUpdate/Delete, ExecuteScalar, raw SQL) before it opens the connection, so a value lowered at
     /// open would leave that first command on the string's 30 s.
     /// </summary>
     private static string WithWriteBound(string connectionString, int writeTimeoutMs)
@@ -117,8 +117,8 @@ public static class DataServiceCollectionExtensions
         }
 
         var builder = new SqliteConnectionStringBuilder(connectionString);
-        int seconds = (int)Math.Min(int.MaxValue, (writeTimeoutMs + 999L) / 1000);
-        if (seconds >= builder.DefaultTimeout)
+        int seconds = SqliteConnectionPragmaInterceptor.ApplyWriteBound(builder.DefaultTimeout, writeTimeoutMs);
+        if (seconds == builder.DefaultTimeout)
         {
             return connectionString;
         }
