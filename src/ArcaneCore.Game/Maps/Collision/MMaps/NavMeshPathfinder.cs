@@ -148,7 +148,16 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         _gridTiles.Add((mapId, tileX, tileY));
         RemoveOnDemand((mapId, tileX, tileY)); // the grid holds it now
         _async.Remove((mapId, tileX, tileY));
-        LoadTile(mapId, tileX, tileY);
+        if (GetNavMesh(mapId) is not { } mesh || mesh.IsTerrainTileLoaded(tileX, tileY))
+        {
+            LoadTile(mapId, tileX, tileY);
+            return;
+        }
+
+        // The grid's tile is installed on the world thread: a prefetch hit only adds the parsed tile, a miss reads the file here.
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        LoadTile(mapId, tileX, tileY, out bool prefetchHit);
+        PathSearchCounters.RecordGridTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - started, mapId, tileX, tileY, prefetchHit);
     }
 
     void ICollisionTileLifecycle.OnTileUnloaded(uint mapId, int tileX, int tileY)

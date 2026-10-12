@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Metrics;
 using ArcaneCore.World.Features;
@@ -54,6 +56,10 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
         _mapsPhase = _meter.CreateHistogram<double>("arcanecore.world.map_update.duration", "ms", "Time spent updating every map in one tick.");
         _allocated = _meter.CreateCounter<long>("arcanecore.world.tick.allocated", "By", "Bytes the world thread allocated during ticks.");
         _ticks = _meter.CreateCounter<long>("arcanecore.world.ticks", "{tick}", "World ticks run.");
+        _meter.CreateObservableCounter("arcanecore.nav.tile_installs", () => PathSearchCounters.ProcessTileReads.Reads, "{tile}",
+            "Navigation mesh tiles installed on the thread that needed them (on-demand path-query reads and grid tile loads; the world thread makes nearly all).");
+        _meter.CreateObservableCounter("arcanecore.nav.tile_install_time", () => PathSearchCounters.ProcessTileReads.Ticks * 1000.0 / Stopwatch.Frequency, "ms",
+            "Time those installations took.");
         _meter.CreateObservableGauge("arcanecore.world.sessions", () => sessions?.Count ?? 0, "{session}", "Authenticated world sessions.");
         _meter.CreateObservableGauge("arcanecore.world.players_online", () => world.OnlinePlayerCount, "{player}", "Characters in the world.");
         _meter.CreateObservableGauge("arcanecore.db.save_queue_depth", () => saves?.Pending ?? 0, "{snapshot}", "Character snapshots queued or being written.");
