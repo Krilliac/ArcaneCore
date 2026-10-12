@@ -410,8 +410,10 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         PlayerbotHazard hazard = default;
         if (!steep && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard))
         {
-            // No steep ground or hazard: for a bot that may not take the tram or a lift the ender across it is the reason.
-            if (!TransitAllowed(Home, player.Level, _options.Population)) ConfirmTransitBlocked(player, questId, entry, now);
+            // No steep ground or hazard: for a bot that may not take the tram or a lift the ender across it is the reason, but only
+            // when the tram or a lift really is the way there (any other failed plan is not a transit block, and is never set aside here).
+            if (!TransitAllowed(Home, player.Level, _options.Population) && TransitIsTheWay(player, destination))
+                ConfirmTransitBlocked(player, questId, entry, now);
             return;
         }
         string reason = steep ? $"the mesh route climbs {ascent:F1} yards of steep ground"
@@ -478,6 +480,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             "Playerbot {Bot} sets aside quest {Quest} target {Entry} (set-aside {Times}): no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; {Reason}",
             player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, reason);
     }
+
+    private bool TransitIsTheWay(Player player, Vector3 destination)
+        => PlayerbotTram.IsWayTo(_session, player, destination, TramZoneAt) || PlayerbotElevator.IsWayTo(_session, player, destination);
 
     /// <summary>
     /// A completed quest whose ender the bot cannot reach because it may not take the tram or a lift yet (<see cref="TransitAllowed"/>):

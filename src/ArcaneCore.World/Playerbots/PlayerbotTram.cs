@@ -309,6 +309,23 @@ internal static class PlayerbotTram
         return true;
     }
 
+    /// <summary>
+    /// Whether the tram is the way to <paramref name="goal"/> from where the bot stands (the checks of <see cref="TryBegin"/> short of the
+    /// retry delay), without beginning a trip. World thread, no side effects.
+    /// </summary>
+    internal static bool IsWayTo(WorldSession session, Player player, Vector3 goal, Func<Vector3, uint>? zoneAt = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.Team != Team.Alliance || !player.IsAlive || player.Map is not { } map || map.MapId == TramNetwork.TramMapId) return false;
+        if (TramNetwork.Of(WorldMaps.Of(session.World)) is not { } network) return false;
+        Vector3 at = new(player.X, player.Y, player.Z);
+        if (!network.CanConsider(map.MapId, at, goal)) return false;
+        uint sourceZone = zoneAt is null ? map.GetZoneAndAreaId(at.X, at.Y, at.Z).ZoneId : zoneAt(at);
+        uint goalZone = zoneAt is null ? map.GetZoneAndAreaId(goal.X, goal.Y, goal.Z).ZoneId : zoneAt(goal);
+        return network.Choose(map.MapId, at, goal, sourceZone, goalZone) is not null;
+    }
+
     /// <summary>Drop the trip without a packet (death, a controller taking the bot over); the entrance consent goes with it.</summary>
     internal static void Cancel(Player player)
     {

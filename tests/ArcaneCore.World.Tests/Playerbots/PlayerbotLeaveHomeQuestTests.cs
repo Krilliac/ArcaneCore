@@ -108,6 +108,23 @@ public sealed class PlayerbotLeaveHomeQuestTests
         => session.Services.GetRequiredService<QuestNpcFeature>().Services.StateOf(player)!.Quests.Get(questId)?.Status;
 
     [Fact]
+    public async Task ACompletedQuestsReturn_IsNeverSkippedByTheHomeRule_ForAStartHomeOrAGraduatedOne()
+    {
+        await RunAsync((session, player, options, _) =>
+        {
+            Complete(player, session, Breadcrumb);
+            player.Level = 1;
+            foreach (bool graduated in new[] { false, true })
+            {
+                var destinations = new PlayerbotWorldDestinations(session, options) { Home = Home(player, graduated, options) };
+                destinations.Update(player, 0, 100, returnQuestId: Breadcrumb);
+                // The ender lies 3000 yards outside the home, yet the return trip to it is planned: a bot always turns a completed quest in.
+                Assert.Equal(Ender, destinations.TargetEntry);
+            }
+        });
+    }
+
+    [Fact]
     public async Task ACompletedLeaveHomeQuest_IsKept_ThenAbandonedAfterTheBoundedStalledTrips()
     {
         await RunAsync((session, player, options, _) =>
