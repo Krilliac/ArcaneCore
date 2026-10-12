@@ -14,17 +14,25 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed partial class PlayerbotQuestReturnTests
 {
     /// <summary>Bind point placement for the stranded-quest cases.</summary>
-    private enum BindAt { None, BesideEnder, FarFromEnder }
+    public enum BindAt { None, BesideEnder, FarFromEnder, BesideBot }
+
+    private sealed record StrandedRun(int Teleports, List<(bool SetAside, QuestStatus Status)> Rounds)
+    {
+        internal QuestStatus Status => Rounds[^1].Status;
+        internal bool SetAside => Rounds[^1].SetAside;
+    }
 
     /// <summary>
-    /// Runs <see cref="PlayerbotWorldDestinations.AbandonAfterSetAsides"/> rounds of "every route refused for a strong hazard" for the
-    /// quest and reports how many bind-point teleports the destinations asked for and whether the last round set the quest aside.
+    /// Runs <paramref name="rounds"/> rounds of "every route refused for a strong hazard" for the quest, a set-aside (or the abandon)
+    /// each, counting the bind-point teleports the destinations asked for. The strong pack is verified to be a hazard the return
+    /// walk may not cross in every round.
     /// </summary>
-    private static async Task<(int Teleports, bool SetAside, QuestStatus Status)> StrandedRoundsAsync(BindAt bindAt, bool complete = true)
+    private static async Task<StrandedRun> StrandedRoundsAsync(BindAt bindAt, bool complete = true, int rounds = 3,
+        int levelUpAfterRound = 0, bool refuseTeleport = false, byte mobLevel = 10)
     {
         await using var fixture = await ReturnFixture.CreateAsync(farGiver: true, manualClock: true);
         await fixture.AcceptAndCompleteAsync(complete);
-        await AddPocketAsync(fixture, 10);
+        await AddPocketAsync(fixture, mobLevel);
         var options = new PlayerbotOptions { Enabled = true };
         var brain = new PlayerbotBrain(fixture.Session, options);
         brain.QuestGoals.Suspensions = brain.Suspensions;
@@ -35,29 +43,32 @@ public sealed partial class PlayerbotQuestReturnTests
             SkipQuest = brain.QuestGoals.IsRefused,
             TeleportToBind = (bot, why) =>
             {
-                bool sent = brain.TeleportToBindPointForQuest(bot, why);
+                bool sent = !refuseTeleport && brain.TeleportToBindPointForQuest(bot, why);
                 if (sent) teleports++;
                 return sent;
             },
         };
+        var log = new List<(bool SetAside, QuestStatus Status)>();
         try
         {
             await fixture.Host.World.InvokeAsync(() =>
             {
                 var player = fixture.Session.Player!;
                 var ender = (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
-                if (bindAt == BindAt.None) player.Home = default;
-                else
+                float botX = player.X;
+                float bindX = bindAt switch
                 {
-                    float x = ender.X + (bindAt == BindAt.BesideEnder ? 40f : 3_000f);
-                    player.Home = new HomeBind(player.MapId, 12, x, ender.Y, ender.Z);
-                }
+                    BindAt.BesideEnder => ender.X + 40f,
+                    BindAt.FarFromEnder => ender.X + 3_000f,
+                    BindAt.BesideBot => botX + 30f,
+                    _ => ender.X + 40f,
+                };
+                player.Home = bindAt == BindAt.None ? default : new HomeBind(player.MapId, 12, bindX, ender.Y, ender.Z);
                 return true;
             });
-            bool setAside = false;
-            for (int round = 1; round <= PlayerbotWorldDestinations.AbandonAfterSetAsides; round++)
+            for (int round = 1; round <= rounds; round++)
             {
-                setAside = false;
+                bool setAside = false;
                 for (int attempt = 0; attempt < 25; attempt++)
                 {
                     bool settled = await fixture.Host.World.InvokeAsync(() =>
@@ -65,19 +76,24 @@ public sealed partial class PlayerbotQuestReturnTests
                         var player = fixture.Session.Player!;
                         brain.Risk.ScanHazards(player);
                         PlayerbotNavigation.Guard(player, brain.Risk);
+                        Assert.True(brain.Risk.Hazards.Active(player.MapId, fixture.Host.World.NowMs)
+                            .Any(hazard => hazard.Kind == PlayerbotHazards.StrongKind && !hazard.ReturnPassable),
+                            $"round {round} attempt {attempt}: no unpassable strong hazard; x={player.X:F0} visible={player.VisibleObjects.Count} level={player.Level}");
                         fixture.Session.ManagedBudget = new ManagedActionBudget(4);
                         destinations.Update(player, 0, 500, QuestId);
                         setAside = brain.Suspensions.IsQuestSuspended(QuestId, fixture.Host.World.NowMs);
-                        return setAside || teleports > 0
-                            || fixture.Feature.Services.StateOf(player)!.Quests.Get(QuestId)?.Status is not QuestStatus.Complete;
+                        return setAside || fixture.Feature.Services.StateOf(player)!.Quests.Get(QuestId)?.Status is not QuestStatus.Complete;
                     });
                     if (settled) break;
                     await fixture.Host.World.AdvanceClockAsync(2_100);
                 }
-                if (round < PlayerbotWorldDestinations.AbandonAfterSetAsides)
+                log.Add((setAside, await StatusAsync(fixture)));
+                if (round == levelUpAfterRound)
+                    await fixture.Host.World.InvokeAsync(() => { fixture.Session.Player!.Level++; return true; });
+                if (round < rounds)
                     await fixture.Host.World.AdvanceClockAsync(PlayerbotSuspensions.SuspendMs + 100);
             }
-            return (teleports, setAside, await StatusAsync(fixture));
+            return new StrandedRun(teleports, log);
         }
         finally
         {
@@ -86,38 +102,62 @@ public sealed partial class PlayerbotQuestReturnTests
         }
     }
 
-    [Fact]
-    public async Task CompletedQuest_StrongHazardOnEveryRoute_BindPointFarFromEnder_IsKeptAndSetAsideAgain()
+    [Theory]
+    [InlineData(BindAt.FarFromEnder)]
+    [InlineData(BindAt.None)]
+    public async Task CompletedQuest_StrongHazardOnEveryRoute_NoBindPointBesideTheEnder_IsKeptAndSetAsideEveryRound(BindAt bindAt)
     {
-        (int teleports, bool setAside, QuestStatus status) = await StrandedRoundsAsync(BindAt.FarFromEnder);
-        Assert.Equal(QuestStatus.Complete, status);
-        Assert.Equal(0, teleports);
-        Assert.True(setAside, "the held quest is set aside for the ordinary retry window");
+        StrandedRun run = await StrandedRoundsAsync(bindAt);
+        Assert.Equal(0, run.Teleports);
+        Assert.All(run.Rounds, round => { Assert.True(round.SetAside); Assert.Equal(QuestStatus.Complete, round.Status); });
     }
 
     [Fact]
-    public async Task CompletedQuest_StrongHazardOnEveryRoute_NoBindPoint_IsKeptAndSetAsideAgain()
+    public async Task CompletedQuest_StrongHazardOnEveryRoute_BindPointBesideEnder_TeleportsKeepsTheQuestAndSetsItAside()
     {
-        (int teleports, bool setAside, QuestStatus status) = await StrandedRoundsAsync(BindAt.None);
-        Assert.Equal(QuestStatus.Complete, status);
-        Assert.Equal(0, teleports);
-        Assert.True(setAside);
+        StrandedRun run = await StrandedRoundsAsync(BindAt.BesideEnder);
+        Assert.Equal(1, run.Teleports);
+        Assert.All(run.Rounds, round => { Assert.True(round.SetAside); Assert.Equal(QuestStatus.Complete, round.Status); });
     }
 
     [Fact]
-    public async Task CompletedQuest_StrongHazardOnEveryRoute_BindPointBesideEnder_TeleportsAndKeepsTheQuest()
+    public async Task CompletedQuest_StrongHazardOnEveryRoute_BotAlreadyAtItsBindPoint_SkipsTheTeleportAndSetsTheQuestAside()
     {
-        (int teleports, _, QuestStatus status) = await StrandedRoundsAsync(BindAt.BesideEnder);
-        Assert.Equal(QuestStatus.Complete, status);
-        Assert.Equal(1, teleports);
+        StrandedRun run = await StrandedRoundsAsync(BindAt.BesideBot);
+        Assert.Equal(0, run.Teleports);
+        Assert.All(run.Rounds, round => { Assert.True(round.SetAside); Assert.Equal(QuestStatus.Complete, round.Status); });
+    }
+
+    [Fact]
+    public async Task CompletedQuest_StrongHazardOnEveryRoute_TeleportRefused_FallsBackToTheSetAside()
+    {
+        StrandedRun run = await StrandedRoundsAsync(BindAt.BesideEnder, refuseTeleport: true);
+        Assert.Equal(0, run.Teleports);
+        Assert.All(run.Rounds, round => { Assert.True(round.SetAside); Assert.Equal(QuestStatus.Complete, round.Status); });
+    }
+
+    [Fact]
+    public async Task CompletedQuest_HeldAgainstAPermanentHazard_IsAbandonedAtTheHoldCapWithNoLevelGained()
+    {
+        StrandedRun run = await StrandedRoundsAsync(BindAt.FarFromEnder, rounds: PlayerbotWorldDestinations.MaxHeldSetAsides, mobLevel: 14);
+        Assert.All(run.Rounds.Take(PlayerbotWorldDestinations.MaxHeldSetAsides - 1), round => Assert.Equal(QuestStatus.Complete, round.Status));
+        Assert.NotEqual(QuestStatus.Complete, run.Status);
+    }
+
+    [Fact]
+    public async Task CompletedQuest_HeldAgainstAPermanentHazard_ALevelGainedRestartsTheHold()
+    {
+        StrandedRun run = await StrandedRoundsAsync(BindAt.FarFromEnder, rounds: PlayerbotWorldDestinations.MaxHeldSetAsides,
+            levelUpAfterRound: 5, mobLevel: 14);
+        Assert.All(run.Rounds, round => Assert.Equal(QuestStatus.Complete, round.Status));
     }
 
     [Fact]
     public async Task IncompleteQuest_StrongHazardOnEveryRoute_NeverTeleportsForTheQuest()
     {
-        (int teleports, _, QuestStatus status) = await StrandedRoundsAsync(BindAt.BesideEnder, complete: false);
-        Assert.Equal(0, teleports);
-        Assert.Equal(QuestStatus.Incomplete, status);
+        StrandedRun run = await StrandedRoundsAsync(BindAt.BesideEnder, complete: false);
+        Assert.Equal(0, run.Teleports);
+        Assert.Equal(QuestStatus.Incomplete, run.Status);
     }
 
     [Fact]

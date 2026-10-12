@@ -173,7 +173,9 @@ bot's strength, an over-level mob, a lethal spell, a remembered flee, and a deat
 diagnosed after the same three failures from one spot as a steep ascent, then the quest is set aside for ten minutes. The
 third set-aside no longer abandons a completed quest (bot QA #283: 47 finished quests were abandoned in one 4-hour window): if the
 bot's bind point is on the same map within `BindNearEnderYards` (250) of the ender, the bot teleports there (non-urgent, the
-brain's five-minute bind-teleport cooldown) and keeps the quest; otherwise the quest is kept and set aside for ten minutes again.
+brain's five-minute bind-teleport cooldown, and not when the bot already stands within `BindArrivedYards` (50) of it) and keeps the quest; either way
+the quest is set aside for ten minutes again. A hazard that never goes away cannot hold it forever: after `MaxHeldSetAsides` (12, about two hours) set-asides
+with no level gained since the first one the quest is abandoned after all (a level gained restarts the count; in memory only).
 A steep-ground refusal still abandons on the third set-aside, and its ID is retained in a bounded, per-bot persistent refusal so
 its giver cannot offer it again to that bot. `PlayerbotQuestEnderPocketTests` covers the hand-in and over-level refusal with synthetic creatures;
 `FromStarbreezeStall_TheMeshRoutesToGaerolas` probes the extracted terrain without simulating live combat.
@@ -523,7 +525,9 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   third in a row sets it aside. The goals carry on while it is set aside.
   **Stranded unhomed bots:** the explore index lists only creatures within a few levels of the bot, so an unhomed bot among much stronger creatures
   has none nearby. When a stalled Explore goal is given up and the atlas holds no creature of the bot's level within `StrandedExploreRings` (3 rings, about 480 yards)
-  on its map, the bot teleports to its bind point (non-urgent, the five-minute bind-teleport cooldown; live 2026-10-12, bot QA #286 and others). A homed bot keeps `InwardLeg`.
+  on its map and creatures more than `StrandedLevelMargin` (2) levels above it stand there, the bot teleports to its bind point (non-urgent, the five-minute bind-teleport
+  cooldown; live 2026-10-12, bot QA #286 and others), unless it is already within `BindArrivedYards` (100) of the bind point or the bind point is stranded for its level too.
+  An over-levelled bot in a low zone or a city, and a homed bot (which keeps `InwardLeg`), are not teleported.
 * **Errands override the walk home.** A vendor or trainer visit that has something useful to do (`PlayerbotTownGoals.HasCandidate`,
   `PlayerbotTrainerDestinations.HasCandidate`), a quest exchange already under way, and the turn-in of a completed quest (the way to its ender is never
   restricted) may take the bot anywhere, in any zone; the bot walks home afterwards. The zone clip does not change this: a capital trip for a trainer or a

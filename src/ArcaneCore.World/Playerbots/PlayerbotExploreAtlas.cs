@@ -131,6 +131,25 @@ internal sealed class PlayerbotExploreAtlas
         return false;
     }
 
+    /// <summary>
+    /// Whether a creature more than <paramref name="margin"/> levels above <paramref name="level"/> stands within
+    /// <paramref name="rings"/> rings of <paramref name="from"/> (the threat index, which keeps the strongest samples of each
+    /// 80-yard cell): the bot is under-levelled for the area, not merely in a place with nothing to fight (a city, a low zone).
+    /// </summary>
+    internal bool HasStrongerNear(uint map, uint level, Vector3 from, int rings, int margin)
+    {
+        if (!float.IsFinite(from.X) || !float.IsFinite(from.Y)) return false;
+        int reach = (int)MathF.Ceiling(rings * CellYards / ThreatCellYards);
+        int cx = ThreatCellOf(from.X), cy = ThreatCellOf(from.Y);
+        for (int x = cx - reach; x <= cx + reach; x++)
+            for (int y = cy - reach; y <= cy + reach; y++)
+                if (_threats.TryGetValue((map, x, y), out ThreatCell? cell))
+                    foreach (List<Threat> samples in cell.ByFaction.Values)
+                        foreach (Threat threat in samples)
+                            if (threat.MinLevel > level + margin) return true;
+        return false;
+    }
+
     /// <summary>A candidate near an elite or creature at least five levels higher is a poor unattended grinding site.</summary>
     internal bool HasStrongHazard(Candidate candidate, uint level, Func<uint, bool> hostileFaction)
     {

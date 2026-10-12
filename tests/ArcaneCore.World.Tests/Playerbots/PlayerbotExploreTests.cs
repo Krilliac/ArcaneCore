@@ -359,9 +359,9 @@ public sealed class PlayerbotExploreTests
 
     // Bot QA #286/#290/#293/#295/#309/#282/#310: an unhomed level 7-8 bot among level 10-14 creatures, the nearest fit over 1000 yards away.
     private const float StrandX = -8949.95f, StrandY = -132.49f, StrandZ = 83.53f;
-    private static readonly Vector3 StrandBind = new(-9500f, -132.49f, 83.53f);
+    private static readonly Vector3 StrandBind = new(-11500f, -132.49f, 83.53f);
 
-    private static CreatureContent StrandedContent(bool fitting)
+    private static CreatureContent StrandedContent(bool fitting, bool strandedBind = false)
     {
         var templates = new List<CreatureTemplate>
         {
@@ -372,12 +372,15 @@ public sealed class PlayerbotExploreTests
         uint guid = 1;
         foreach ((float dx, float dy) in new[] { (300f, 0f), (-350f, 120f), (0f, 400f), (0f, -440f), (450f, 450f) })
             spawns.Add(new CreatureSpawn { Guid = guid++, Entry = 99201, MapId = 0, X = StrandX + dx, Y = StrandY + dy, Z = StrandZ });
+        if (strandedBind)
+            foreach ((float dx, float dy) in new[] { (60f, 0f), (-80f, 50f), (0f, 90f) })
+                spawns.Add(new CreatureSpawn { Guid = guid++, Entry = 99201, MapId = 0, X = StrandBind.X + dx, Y = StrandBind.Y + dy, Z = StrandZ });
         spawns.Add(new CreatureSpawn { Guid = guid++, Entry = 99202, MapId = 0, X = StrandX + (fitting ? 200 : 2000), Y = StrandY, Z = StrandZ });
         return new CreatureContent(templates, spawns, [], [], []);
     }
 
     /// <summary>Gives a stalled Explore goal up for a level 8 bot and reports whether it ended at its bind point.</summary>
-    private static async Task<bool> StallExploringAsync(CreatureContent content, bool homed)
+    private static async Task<bool> StallExploringAsync(CreatureContent content, bool homed, byte level = 8, bool bindAtBot = false)
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
@@ -395,9 +398,10 @@ public sealed class PlayerbotExploreTests
             {
                 WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new AlwaysRoute());
                 Player player = session.Player!;
-                player.Level = 8;
+                player.Level = level;
                 player.SetPosition(StrandX, StrandY, StrandZ, 0);
-                player.Home = new HomeBind(0, 12, StrandBind.X, StrandBind.Y, StrandBind.Z);
+                Vector3 bind = bindAtBot ? new(StrandX + 20, StrandY, StrandZ) : StrandBind;
+                player.Home = new HomeBind(0, 12, bind.X, bind.Y, bind.Z);
                 if (homed) brain.Home = new PlayerbotHomeArea(0, new Vector3(StrandX, StrandY, StrandZ), 750f, "Test");
                 brain.HoldGoalForTests(PlayerbotGoalKind.Explore, 0, 0);
                 brain.GiveUpStalledGoal(player, shareable: false);
@@ -412,7 +416,7 @@ public sealed class PlayerbotExploreTests
                 if (arrived) return true;
                 await host.World.AdvanceClockAsync(50);
             }
-            return false;
+            return await host.OnWorldAsync(() => brain.BindTeleported); // a no-op teleport onto the same spot counts
         }
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }
@@ -424,6 +428,18 @@ public sealed class PlayerbotExploreTests
     [Fact]
     public async Task StalledExplore_UnhomedBotWithAFittingSpawn200YardsAway_StaysPut()
         => Assert.False(await StallExploringAsync(StrandedContent(fitting: true), homed: false));
+
+    [Fact]
+    public async Task StalledExplore_BotAlreadyAtItsBindPoint_IsNotTeleported()
+        => Assert.False(await StallExploringAsync(StrandedContent(fitting: false), homed: false, bindAtBot: true));
+
+    [Fact]
+    public async Task StalledExplore_BindPointStrandedForItsLevelToo_IsNotTeleported()
+        => Assert.False(await StallExploringAsync(StrandedContent(fitting: false, strandedBind: true), homed: false));
+
+    [Fact]
+    public async Task StalledExplore_OverLevelledBotWithNothingToFight_IsNotTeleported()
+        => Assert.False(await StallExploringAsync(StrandedContent(fitting: false), homed: false, level: 30));
 
     [Fact]
     public async Task StalledExplore_HomedBotAmongStrongCreatures_IsNotTeleported()
