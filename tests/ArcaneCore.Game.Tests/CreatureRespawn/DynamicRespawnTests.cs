@@ -385,7 +385,7 @@ public sealed class DynamicRespawnTests
                     new Dictionary<uint, (uint, uint)> { [1] = (600, 0), [2] = (600, 0) })
                 : PoolCatalog.Empty,
         };
-        var system = new GameObjectMapSystem(map, content) { Random = new Random(seed) };
+        var system = new GameObjectMapSystem(map, content, random: new Random(seed));
         map.AddUpdater(system);
         AddCrowd(world, 20, 0);
         Run(world, 200);
@@ -428,5 +428,42 @@ public sealed class DynamicRespawnTests
         }
 
         Assert.True(switched > 0, "the pool never picked the other member, so SpawnMember was not exercised");
+    }
+
+    private static List<long> RandomisedDelays(Action<DynamicRespawnOptions>? tune)
+    {
+        WorldRuntime world = TestWorld.CreateRuntime();
+        using (world)
+        {
+            tune?.Invoke(world.Options.Respawn.Dynamic);
+            Map map = world.GetMap(0);
+            GameObjectSpawn spawn = GameObjects.GameObjectTestKit.GoSpawn(1, 700, 0, 0, spawnTimeSeconds: 120) with { SpawnFlags = 0x04 }; // RANDOM_RESPAWN_TIME: x urand(90,110)/100
+            var content = new GameObjectContent([GameObjects.GameObjectTestKit.GoTemplate(700, GameObjectType.Generic)], [spawn], [], [], []);
+            var system = new GameObjectMapSystem(map, content, random: new Random(1234));
+            map.AddUpdater(system);
+            AddCrowd(world, 20, 0);
+            Run(world, 200);
+            GameObject go = system.GameObjects.Single();
+            var delays = new List<long>();
+            for (int i = 0; i < 12; i++)
+            {
+                system.Despawn(go);
+                delays.Add(go.RespawnAtMs - system.ClockMs);
+                system.ForceRespawn(go);
+            }
+
+            return delays;
+        }
+    }
+
+    [Fact]
+    public void Disabled_TheRandomisedDelaySequence_IsIdenticalToHavingNoDynamicSection()
+    {
+        List<long> untouched = RandomisedDelays(null);
+        List<long> disabledWithValues = RandomisedDelays(o => { o.Enabled = false; o.PlayerThreshold = 0; o.ScalePerPlayer = 5f; o.MinimumSeconds = 1; });
+
+        Assert.Equal(untouched, disabledWithValues);
+        Assert.True(untouched.Distinct().Count() > 3, "the 0x04 flag should vary the delay");
+        Assert.All(untouched, ms => Assert.InRange(ms, 108_000, 132_000)); // 120 s x 90..110 %
     }
 }

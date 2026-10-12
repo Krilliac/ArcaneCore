@@ -262,10 +262,10 @@ formula or the count) is TrinityCore's/AzerothCore's dynamic respawn rate. `Crea
   is unloaded, and for durable chests, which are excluded).
 - **Persistence:** `RespawnAtMs` is set to the scaled time before `SaveRespawnOnDeath`, so `creature_respawn` stores the scaled time and a
   restart does not reset it. No schema change.
+- **DynamicRate:** when `World:Respawn:Dynamic:Enabled` is on, `Creatures:Respawn:DynamicRate` no longer applies to any creature, including the ones this feature excludes (elites when `IncludeElitesAndRares` is off, pool and spawn-group members, scripted delays); with it off, `DynamicRate` runs exactly as before.
 - **Live:** every key is in `WorldConfigKeys` (`.reload config`, validated: out-of-range values are refused; a bad start-up value turns the
   scaling off and logs a warning). A death uses the values in force at that moment.
 - **Corpses:** a corpse is removed when its respawn time is reached. The code has no separate corpse-decay minimum, so `MinimumSeconds` (default 30) is the floor: a scaled respawn is never earlier than 30 s after death by default. Lowering it below the time players need to loot cuts loot short.
-  short. 30 or more is safer on a real server.
 - **GM:** `.spawninfo dynamic` (GameMaster) prints whether it is on, the players counted at your position, the multiplier, and example delays.
 - **Not done:** a respawn already scheduled is not re-evaluated when more players arrive later (the count is taken once, at death).
 

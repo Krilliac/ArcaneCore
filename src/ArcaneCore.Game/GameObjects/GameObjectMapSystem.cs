@@ -68,11 +68,16 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private long _nextQuestRefreshMs;
     private uint _nextTemporaryCounter;
 
-    public GameObjectMapSystem(Map map, GameObjectContent content, LootService? loot = null, ILootQuestJournal? quests = null, ILogger? logger = null)
+    public GameObjectMapSystem(Map map, GameObjectContent content, LootService? loot = null, ILootQuestJournal? quests = null, ILogger? logger = null, Random? random = null)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(content);
         Map = map;
+        if (random is not null)
+        {
+            Random = random; // before InitializePools, which hands it to the pool state
+        }
+
         _content = content;
         Loot = loot;
         Quests = quests;
