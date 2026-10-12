@@ -1,7 +1,10 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets.Control;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Effects;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -202,6 +205,64 @@ public sealed class PlayerbotQaSpellMonitorTests
         using var bare = new QaSpellKit(brokenDamage: true);
         for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats; i++) bare.Cast(bare.Bot, QaSpellKit.SelfNuke);
         Assert.Contains(bare.Signals, s => s.Kind == QaSignalKind.SpellNoEffect && s.Spell == QaSpellKit.SelfNuke);
+    }
+
+    // Issue #239: 27965 "Suicide" (Spell.dbc: effect 1 INSTAKILL, effect 2 APPLY_AURA DUMMY, both on the caster) is what a Spirit of Redemption priest casts
+    // at itself when the form ends (vmangos SpellAuras.cpp:5735). The kill removes the aura the spell applies, so the hit "left no aura".
+    [Fact]
+    public void AnInstakillOfTheTarget_IsADamageEffect_NotNoEffect()
+    {
+        const uint suicide = 27965;
+        using var kit = new QaSpellKit(extra:
+        [
+            QaSpellKit.Spell(suicide, QaSpellKit.Effect(SpellEffectName.Instakill, 0), QaSpellKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy))
+                with { Duration = new SpellDuration(30_000, 0, 30_000) },
+        ]);
+        kit.System.Damage = new MapCombatDamageSink();
+        kit.World.GetMap(0).Combat.SpellMitigation = kit.System;
+        new DirectCombatEffects().Register(kit.System);
+
+        for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats * 2; i++)
+        {
+            kit.Cast(kit.Bot, suicide);
+            Assert.False(kit.Bot.IsAlive, "the instakill must really kill the caster");
+            kit.Bot.Health = kit.Bot.MaxHealth;
+            kit.Bot.Combat.DeathState = DeathState.Alive;
+        }
+
+        Assert.DoesNotContain(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
+    }
+
+    // Issue #240: 10946 Mind Blast (Rank 8), the Spell.dbc row (SCHOOL_DAMAGE 424+d25, +2.4/level, levels 52-57) deals damage like every other rank; a
+    // hit on a unit with an invincibility threshold (Spirit of Redemption, a death-prevention boss) takes nothing by design (vmangos Unit.cpp:825-850).
+    [Fact]
+    public void MindBlastRank8_DealsDamage_AndAHitOnAThresholdTargetThatCannotLoseHealthIsNotNoEffect()
+    {
+        const uint mindBlast = 10946;
+        SpellInfo rank8 = QaSpellKit.Spell(mindBlast, new SpellEffectInfo
+        {
+            Effect = SpellEffectName.SchoolDamage, BasePoints = 424, BaseDice = 1, DieSides = 25, RealPointsPerLevel = 2.4f,
+            TargetA = SpellImplicitTarget.UnitEnemy,
+        }) with { School = SpellSchool.Shadow, MaxLevel = 57, BaseLevel = 52, SpellLevel = 52, RangeIndex = 4, Range = new SpellRange(0, 30), DamageClass = SpellDamageClass.Magic };
+        using var kit = new QaSpellKit(extra: [rank8]);
+        kit.System.Damage = new MapCombatDamageSink();
+        kit.World.GetMap(0).Combat.SpellMitigation = kit.System;
+
+        uint before = kit.Human.Health;
+        kit.System.CastSpell(kit.Bot, mindBlast, SpellCastTargets.ForUnit(kit.Human.Guid), triggered: true);
+        Assert.True(kit.Human.Health < before, "Mind Blast rank 8 must damage a normal target");
+        Assert.DoesNotContain(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
+
+        kit.Human.Combat.DeathState = DeathState.Alive; // the 100 health of the test player did not survive the hit
+        kit.Human.Health = kit.Human.MaxHealth;
+        kit.Human.InvincibilityHpThreshold = kit.Human.MaxHealth; // a Spirit of Redemption: health cannot fall
+        for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats * 2; i++)
+        {
+            Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(kit.Bot, mindBlast, SpellCastTargets.ForUnit(kit.Human.Guid), triggered: true));
+        }
+
+        Assert.Equal(kit.Human.MaxHealth, kit.Human.Health);
+        Assert.DoesNotContain(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -180,11 +181,16 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
 
     /// <summary>
     /// A damage hit on a target with an absorb shield (SCHOOL_ABSORB, MANA_SHIELD) cannot be judged: the outcome counts damage dealt after absorbs, so a fully
-    /// absorbed hit looks like none. Only reached on the rare path where nothing measurable happened.
+    /// absorbed hit looks like none; likewise a hit on a unit already at its invincibility threshold. Only reached on the rare path where nothing measurable happened.
     /// </summary>
     private bool Unmeasurable(SpellTargetOutcome outcome, SpellFacts facts, int selected)
     {
         if ((selected & facts.DamageMask) == 0) return false;
+
+        // A unit with an invincibility threshold (Spirit of Redemption, a death-prevention boss) never loses health at or below it: vmangos
+        // Unit::DealDamage (Unit.cpp:825-850) takes at most the health above the threshold, so a hit on it deals nothing by design.
+        uint threshold = outcome.Target.InvincibilityHpThreshold;
+        if (threshold != 0 && outcome.Target.Health <= threshold) return true;
         IReadOnlyList<SpellAuraHolder> holders = _gaps.System.GetAuras(outcome.Target);
         for (int i = 0; i < holders.Count; i++)
         {
@@ -306,6 +312,7 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
                     case SpellEffectName.WeaponDamageNoschool:
                     case SpellEffectName.NormalizedWeaponDmg:
                     case SpellEffectName.WeaponPercentDamage:
+                    case SpellEffectName.Instakill: // a kill is the effect (Suicide, 27965: the kill also strips the aura the spell applies)
                         damage |= 1 << i;
                         break;
                     case SpellEffectName.Heal when effect.BasePoints + 1 > 0:
