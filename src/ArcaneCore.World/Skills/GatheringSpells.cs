@@ -11,6 +11,8 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.GameObjects;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.World.Skills;
 
@@ -51,6 +53,14 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
     }
 
     private GameObjectLootFeature? Objects => services.GetService<GameObjectLootFeature>();
+
+    private ILogger? _logger;
+
+    /// <summary>
+    /// Refusals that reach the effect (after the cast went through) show the client nothing - no loot window, no error text - so the realm log
+    /// is the only place their cause appears.
+    /// </summary>
+    private ILogger Logger => _logger ??= services.GetService<ILoggerFactory>()?.CreateLogger<GatheringSpells>() ?? (ILogger)NullLogger.Instance;
 
     private ushort ConfigMaxSkill => SkillRules.ConfigMaxSkillValue(skills.SkillOptions.MaxPlayerLevel);
 
@@ -152,6 +162,8 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         uint lockId = go is not null ? GameObjectLocks.LockIdOf(go.Template) : item?.Template.LockId ?? 0;
         if (go is null && item is null)
         {
+            Logger.LogInformation("Spell {Spell} ({Name}) by {Player}: its open-lock target ({Mask}, object {Object}, item {Item}) is gone or out of this map; nothing opened",
+                context.Spell.Id, context.Spell.Name, player.Name, context.Cast.Targets.Mask, context.Cast.Targets.GameObject, context.Cast.Targets.Item);
             return;
         }
 
@@ -190,6 +202,13 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
             GameObjectUseResult opened = Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, key?.Entry ?? 0,
                 (uint)Math.Max(0, SimpleValue(effect)), rollsSkill ? RollFor : null)
                 ?? GameObjectUseResult.Unsupported;
+            if (opened != GameObjectUseResult.Ok)
+            {
+                Logger.LogInformation(
+                    "Spell {Spell} ({Name}) by {Player}: {Object} '{ObjectName}' (type {Type}, lock {Lock}, lock type {LockType}, distance {Distance:0.00}) refused the open: {Result}",
+                    context.Spell.Id, context.Spell.Name, player.Name, go.Guid, go.Template.Name, go.Type, lockId, effect.MiscValue, go.DistanceTo(player), opened);
+            }
+
             if (opened == GameObjectUseResult.Ok && rollsSkill && go.Type != GameObjectType.Chest)
             {
                 RollFor(go);

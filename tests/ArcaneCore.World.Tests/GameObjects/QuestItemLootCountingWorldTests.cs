@@ -117,4 +117,46 @@ public sealed class QuestItemLootCountingWorldTests
             Assert.Equal((uint)kill, counter);
         }
     }
+
+    /// <summary>
+    /// The 5875 client prints the centre-screen "Scorpid Worker Tail: n/10" line once per SMSG_QUESTUPDATE_ADD_ITEM it receives (n is its own bag
+    /// count, so two packets print two identical lines); SMSG_ITEM_PUSH_RESULT only gives the chat "You receive loot" line
+    /// (D:/WoW-RE-Research/protocol/quest-item-progress.md). One looted tail must therefore produce exactly one of each on the wire, carrying the
+    /// item entry and the looted count.
+    /// </summary>
+    [Fact]
+    public async Task LootingTheQuestItem_SendsOneQuestUpdateAddItem_AndOneItemPushResult()
+    {
+        var quests = new QuestJournalFixture
+        {
+            Templates = [new QuestTemplate { Entry = QuestId, Method = 2, QuestLevel = 3, MinLevel = 1, Title = "Sting of the Scorpid", ReqItemId1 = Tail, ReqItemCount1 = Required }],
+        };
+        await using WorldTestHost host = Start(quests);
+        await using WorldTestClient client = await host.ConnectAsync();
+        byte[] key = await host.AddAccountAsync("LOOTER");
+        await client.AuthenticateAsync("LOOTER", key);
+        await client.CreateCharacterAsync("Looter");
+        var account = (await host.Accounts.FindByUsernameAsync("LOOTER"))!;
+        CharacterRecord character = (await host.Characters.GetByAccountAsync(account.Id)).Single();
+        quests.Characters.Seed(new CharacterQuestStatus(character.Id, QuestId, (byte)QuestStatus.Incomplete, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+        await client.LoginAsync((ulong)character.Id);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Looter") is { } p
+            && ((WorldSession)p.Session).Services.GetRequiredService<QuestNpcFeature>().Services.StateOf(p) is { Loaded: true }, "the quest journal to load");
+
+        for (int kill = 1; kill <= 3; kill++)
+        {
+            ulong corpse = await KillAsync(host);
+            Assert.Equal(1, await OpenAsync(client, corpse));
+            await client.SendAsync(WorldOpcode.CmsgAutostoreLootItem, [0]);
+            List<(WorldOpcode Opcode, byte[] Payload)> packets = await client.CollectFromAsync(WorldOpcode.SmsgLootRemoved);
+            await client.SendAsync(WorldOpcode.CmsgLootRelease, BitConverter.GetBytes(corpse));
+            packets.AddRange(await client.CollectFromAsync(WorldOpcode.SmsgLootReleaseResponse));
+
+            byte[] update = Assert.Single(packets, p => p.Opcode == WorldOpcode.SmsgQuestupdateAddItem).Payload;
+            var reader = new PacketReader(update);
+            Assert.Equal(Tail, reader.ReadUInt32());
+            Assert.Equal(1u, reader.ReadUInt32());
+            Assert.Single(packets, p => p.Opcode == WorldOpcode.SmsgItemPushResult);
+        }
+    }
 }
