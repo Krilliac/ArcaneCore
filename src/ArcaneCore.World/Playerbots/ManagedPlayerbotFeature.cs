@@ -371,6 +371,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     public bool IsPartyDriven(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && active.PartyDriven;
 
     /// <summary>The brain of a running bot (inspection and the scenario harness; null when not running).</summary>
+    /// <summary>Whether the bot is in the active set (test seam; <see cref="FindBrain"/> also hides a paused one).</summary>
+    internal bool IsActive(Guid botId) => _active.ContainsKey(botId);
+
     internal PlayerbotBrain? FindBrain(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Brain : null;
 
     /// <summary>The party AI of a running bot while it drives the bot (inspection and the scenario harness), otherwise null.</summary>
@@ -1364,6 +1367,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                         }
 
                         IReadOnlyList<bool> applied = await store.UpdateManyAsync(updates, CancellationToken.None).ConfigureAwait(false);
+                        if (applied.Count != count)
+                            throw new InvalidOperationException($"managed-update-many-mismatch: {applied.Count} results for {count} updates");
                         // The committed rows first: nothing below may leave a written bot with a stale revision.
                         var refused = new List<ActiveBot>();
                         for (int j = 0; j < count; j++)
@@ -1420,12 +1425,34 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         if (row is null) logger.LogWarning("Playerbot {BotId} has no registry row any more; dropping it from the active set", botId);
         else logger.LogWarning("Playerbot {BotId} was faulted out of band ({Code}); dropping it from the active set", botId, row.ErrorCode);
         active.Paused = true;
+        // A row that exists keeps the bot's suspensions across a restart, as a stop does.
+        if (row is not null)
+        {
+            try { await SaveBotSetAsidesAsync(active, force: true).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            { logger.LogWarning(ex, "Playerbot {BotId} set-aside save failed ({Type})", botId, ex.GetType().Name); }
+        }
+
         if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
-        if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(botId);
+        try { if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(botId); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        { logger.LogWarning(ex, "Playerbot {BotId} controller detach failed ({Type})", botId, ex.GetType().Name); }
         active.Session.Kick();
         if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(botId, active))) Interlocked.Increment(ref _activeVersion);
         if (row is not null) { active.Record = row; PublishStopped(row, active.Name, active.MapId); }
+        else
+        {
+            // The same cleanup as an in-process delete: no status line, quarantine or home is kept for a bot with no row.
+            _quarantine.TryRemove(botId, out _);
+            _homes.TryRemove(botId, out _);
+            lock (_snapshotGate)
+            {
+                Volatile.Write(ref _snapshot, Volatile.Read(ref _snapshot).Where(s => s.BotId != botId).ToArray());
+                _snapshotEpoch++;
+            }
+        }
+
         try { await active.Scope.DisposeAsync().ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         { logger.LogWarning(ex, "Playerbot {BotId} scope disposal failed ({Type})", botId, ex.GetType().Name); }
