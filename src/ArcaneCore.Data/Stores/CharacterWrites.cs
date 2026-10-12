@@ -1,7 +1,5 @@
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 
 namespace ArcaneCore.Data.Stores;
@@ -21,19 +19,7 @@ namespace ArcaneCore.Data.Stores;
 internal static class CharacterWrites
 {
     /// <summary>Whether <paramref name="db"/> was configured with the characters write fence (<c>Cluster:Fencing:Enabled</c>).</summary>
-    public static bool IsFenced(DbContext db)
-    {
-        IEnumerable<IInterceptor>? interceptors = db.GetService<IDbContextOptions>().FindExtension<CoreOptionsExtension>()?.Interceptors;
-        if (interceptors is null)
-            return false;
-        foreach (IInterceptor interceptor in interceptors)
-        {
-            if (interceptor is CharacterWriteFenceInterceptor)
-                return true;
-        }
-
-        return false;
-    }
+    public static bool IsFenced(DbContext db) => CharacterOwnershipGuard.IsFenceActive(db);
 
     /// <summary>Runs <paramref name="write"/> in a verified transaction when the fence is on, plainly otherwise. <paramref name="token"/> outranks the ambient token when not null.</summary>
     public static async Task InTransactionAsync(
