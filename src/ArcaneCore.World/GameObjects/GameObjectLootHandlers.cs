@@ -71,6 +71,11 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length < 8)
         {
+            if (session.SilentDropLogEnabled)
+            {
+                session.LogSilentDrop(WorldOpcode.CmsgGameobjUse, "short payload (" + payload.Length + " bytes)");
+            }
+
             return;
         }
 
@@ -83,10 +88,22 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
 
         if (player.Map is not { } map || Feature(session)?.FindSystem(map) is not { } system)
         {
+            if (session.SilentDropLogEnabled)
+            {
+                session.LogSilentDrop(WorldOpcode.CmsgGameobjUse, "no map or gameobject system for the player", guid.Value, guid.Entry);
+            }
+
             return;
         }
 
-        if (system.Use(player, guid) == GameObjectUseResult.TooFar && system.Find(guid) is { } gameObject)
+        int answered = session.ClientRejectionsSent;
+        GameObjectUseResult useResult = system.Use(player, guid);
+        if (useResult != GameObjectUseResult.Ok && session.SilentDropLogEnabled && session.ClientRejectionsSent == answered)
+        {
+            session.LogSilentDrop(WorldOpcode.CmsgGameobjUse, "gameobject use refused without a reply: " + useResult, guid.Value, guid.Entry, (uint)useResult);
+        }
+
+        if (useResult == GameObjectUseResult.TooFar && system.Find(guid) is { } gameObject)
         {
             // Refused already; far beyond any interaction distance it is a remote-use attempt (docs/areas/anticheat.md).
             session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnGameObjectTooFar(session, player, gameObject);
@@ -98,12 +115,23 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length < 8 || LootOf(session, player) is not { } loot)
         {
+            if (session.SilentDropLogEnabled)
+            {
+                session.LogSilentDrop(WorldOpcode.CmsgLoot, payload.Length < 8 ? "short payload (" + payload.Length + " bytes)" : "no loot service for the player's map");
+            }
+
             return;
         }
 
         var reader = new PacketReader(payload);
         ObjectGuid source = new(reader.ReadUInt64());
+        int answered = session.ClientRejectionsSent;
         LootResult result = loot.Open(player, source);
+        if (result != LootResult.Ok && session.SilentDropLogEnabled && session.ClientRejectionsSent == answered)
+        {
+            session.LogSilentDrop(WorldOpcode.CmsgLoot, "loot open refused: " + result, source.Value, source.Entry, (uint)result);
+        }
+
         if (result != LootResult.Ok && session.Logger.IsEnabled(LogLevel.Debug))
         {
             string diagnostic = JsonSerializer.Serialize(loot.DescribeOpen(player, source, result));
@@ -116,6 +144,11 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length < 1 || LootOf(session, player) is not { } loot)
         {
+            if (session.SilentDropLogEnabled)
+            {
+                session.LogSilentDrop(WorldOpcode.CmsgAutostoreLootItem, payload.Length < 1 ? "empty payload" : "no loot service for the player's map");
+            }
+
             return;
         }
 
@@ -131,6 +164,11 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length < 8 || LootOf(session, player) is not { } loot)
         {
+            if (session.SilentDropLogEnabled)
+            {
+                session.LogSilentDrop(WorldOpcode.CmsgLootRelease, payload.Length < 8 ? "short payload (" + payload.Length + " bytes)" : "no loot service for the player's map");
+            }
+
             return;
         }
 

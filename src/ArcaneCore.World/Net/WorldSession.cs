@@ -171,6 +171,7 @@ public sealed partial class WorldSession : IPlayerSession
         _guard = guard;
         _protection = guard?.Options ?? DefaultProtection;
         _packetLimiter = NetGuard.CreatePacketLimiter(_protection);
+        InitObservability(services);
     }
 
     /// <summary>
@@ -287,6 +288,8 @@ public sealed partial class WorldSession : IPlayerSession
         {
             throw new ArgumentException($"{WorldOpcodeNames.GetName(opcode)} payload of {payload.Length} bytes exceeds the SMSG size field");
         }
+
+        ObserveOutbound(opcode, payload);
 
         if (_managed)
         {

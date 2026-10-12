@@ -43,6 +43,7 @@ public static class WorldProductionServices
         services.AddWorldWatchdog(configuration);
         services.AddWorldMetrics(configuration); // Ops:Metrics, off by default (docs/ops/metrics.md)
         services.AddWorldOpsDiagnostics(configuration); // .debug alloc / .debug dump, dumps off by default (docs/ops/diagnostics.md)
+        services.AddWorldObservability(configuration); // client-rejection log + duplicate-packet detector (docs/ops/observability.md)
         services.AddSingleton(clientData);
         services.AddHostedService<WiringAuditReporter>(); // last: one summary line once the host has started (docs/ops/wiring-audit.md)
         return services;
