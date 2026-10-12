@@ -390,6 +390,7 @@ public sealed class ChargeEffectTests
 
         // vmangos UpdateSplinePosition -> Player::SetPosition (Unit.cpp:10672): the player's spline step ends the state; a creature's does not.
         kit.System.CastSpell(wolf, Charge, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        Assert.Equal(20f + Gap(wolf, target), wolf.X, 2); // it really charged, so the kept state is not a failed cast
         Assert.Equal(Dance, wolf.GetUInt32(UpdateFields.UnitNpcEmotestate));
 
         kit.System.CastSpell(caster, Charge, SpellCastTargets.ForUnit(target.Guid), triggered: true);
