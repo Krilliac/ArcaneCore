@@ -421,7 +421,7 @@ internal static class UpdateScriptWriter
         string apply = provider switch
         {
             DatabaseProvider.Sqlite => "sqlite3 -bail <database-file> < this-file.sql",
-            DatabaseProvider.PostgreSql => "psql -1 -v ON_ERROR_STOP=1 -d <database> -f this-file.sql",
+            DatabaseProvider.PostgreSql => "psql -v ON_ERROR_STOP=1 -d <database> -f this-file.sql",
             _ => "mysql <database> < this-file.sql   (the mysql/mariadb client; stops at the first error)",
         };
         var header = new StringBuilder();

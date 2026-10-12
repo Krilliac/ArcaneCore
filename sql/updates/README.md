@@ -34,15 +34,17 @@ option or cmd.exe.
 | Provider | POSIX shell / cmd.exe | PowerShell or any shell |
 |---|---|---|
 | SQLite | `sqlite3 -bail <db> < file.sql` | `sqlite3 -bail <db> ".read file.sql"` |
-| PostgreSQL | `psql -1 -v ON_ERROR_STOP=1 -d <db> -f file.sql` | same (`-f` works everywhere) |
-| MariaDB | `mariadb <db> < file.sql` | `mariadb <db> -e "source file.sql"` (add `--abort-source-on-error`) |
+| PostgreSQL | `psql -v ON_ERROR_STOP=1 -d <db> -f file.sql` | same (`-f` works everywhere) |
+| MariaDB | `mariadb <db> < file.sql` | `mariadb --abort-source-on-error <db> -e "source file.sql"` |
 
+- MariaDB `source` (the `-e "source ..."` form) **continues after an error by default**; `--abort-source-on-error` is what
+  makes it stop at the guard. Never drop it.
 - **Never use `--force`** (mysql/mariadb) or drop `ON_ERROR_STOP` (psql): the guard at the top of every file works by making the
   client stop, and a client that carries on would run the changes anyway.
 - SQLite: one transaction; a failure leaves the database unchanged (`-bail` stops at the first error and the open transaction is
   rolled back when the client exits).
-- PostgreSQL: one transaction; a failure changes nothing. The files carry their own `BEGIN`/`COMMIT`, so `-1` is optional and may
-  print a harmless "transaction already in progress" warning.
+- PostgreSQL: one transaction; a failure changes nothing. The files carry their own `BEGIN`/`COMMIT`, so do not add `-1`
+  (`--single-transaction`): psql's documentation warns against combining it with files that manage their own transaction.
 - MariaDB: no transaction (MariaDB commits DDL implicitly). The guard is a `BEGIN NOT ATOMIC ... SIGNAL SQLSTATE '45000'` block
   between `DELIMITER //` lines, so use the command-line client (or one that understands `DELIMITER`); the rest is plain statements.
 

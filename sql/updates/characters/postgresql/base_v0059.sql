@@ -5,7 +5,7 @@
 -- to: 59
 -- owner: baseline: every module through schema version 59
 -- body-sha256: 5811fd6bf3edb063647aaa6738260bf481727318d3f68968dd8f3b373219be93
--- apply: psql -1 -v ON_ERROR_STOP=1 -d <database> -f this-file.sql
+-- apply: psql -v ON_ERROR_STOP=1 -d <database> -f this-file.sql
 
 BEGIN;
 

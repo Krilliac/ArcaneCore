@@ -269,7 +269,7 @@
   },
   "files": {
     "mariadb/base_v0059.sql": "4d8831bca7f10716842f30f344e6961e7ad905b7779bc6f7a818afe157509015",
-    "postgresql/base_v0059.sql": "e7491965356a54b25f3146e6ba28b023f8dede3507ebb16c0744c6e2281b203f",
+    "postgresql/base_v0059.sql": "7e6f5bfa2a9a2c100cb728188efbe905e09bdab81666c96826b2242f3cb701b5",
     "sqlite/base_v0059.sql": "70592fa8ff7c29e40b475f926ba9b71fe0d5cfa10584668d68c01613214c89bc"
   }
 }

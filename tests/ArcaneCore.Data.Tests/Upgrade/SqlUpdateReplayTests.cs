@@ -118,7 +118,7 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
     /// </summary>
     [Theory]
     [MemberData(nameof(NonPostgresProviders))]
-    public async Task AnInterruptedBaseline_IsRefusedByTheBaseline_AndResumedByTheBootstrapper(DatabaseProvider provider)
+    public async Task AnInterruptedBaseline_IsRefusedByTheBaseline_AndFinishedByArcaneDbUpgrade(DatabaseProvider provider)
     {
         const string component = "auth";
         SchemaDefinition schema = SchemaProbe.SchemaOf(component);
@@ -152,7 +152,7 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
                 Assert.Equal(interrupted, await SqlUpdateSupport.CatalogDumpAsync(db, schema, tolerateMissingVersionTable: true));
             }
 
-            await SchemaBootstrapper.EnsureAsync(db, schema);
+            await SchemaUpgrader.ApplyAsync(db, schema); // the README's recovery route: 'arcane-db upgrade' plans (and could refuse) first
             Assert.True(expected == await SqlUpdateSupport.CatalogDumpAsync(db, schema), $"a baseline interrupted after {cut} change(s) did not converge");
         }
     }

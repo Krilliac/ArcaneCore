@@ -38,7 +38,7 @@
   },
   "files": {
     "mariadb/base_v0005.sql": "73601929a1f6ea5b6c432414560e2a0b2465332c2c1f05d56a6fdb5b71081ccb",
-    "postgresql/base_v0005.sql": "df44acd539d655eadbca092defc7f8a32b99b73cf993fe3591b50ff38bd248ad",
+    "postgresql/base_v0005.sql": "05634eff236df86f585c4d6a64da2a62375eecf2d214408b0dcb77cd260b0315",
     "sqlite/base_v0005.sql": "0a25ead6b952b86a54283faf3df1178aeaac9745f3055f06be16fcfcf8caf486"
   }
 }
