@@ -41,6 +41,9 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private readonly Dictionary<ObjectGuid, (uint Until, uint Level, uint Money)> _noTrainerOffer = [];
 
+    /// <summary>How many times a class trainer's offer was worked out rather than read from the memo (tests).</summary>
+    internal int TrainerQuotesAsked { get; private set; }
+
     /// <summary>How long a vendor's refusal to sell an item to the bot keeps the bot from asking again.</summary>
     internal const uint RefusedPurchaseMs = 600_000;
 
@@ -846,6 +849,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         if (_noTrainerOffer.TryGetValue(npc.Guid, out (uint Until, uint Level, uint Money) memo)
             && memo.Level == level && money <= memo.Money && unchecked((int)(memo.Until - now)) > 0)
             return false;
+        TrainerQuotesAsked++;
         if (services.GetClassTrainerQuote(player, npc) is not null)
         {
             _noTrainerOffer.Remove(npc.Guid);
