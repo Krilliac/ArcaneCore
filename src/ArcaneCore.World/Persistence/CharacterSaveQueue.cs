@@ -2,7 +2,9 @@ using System.Diagnostics;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.World.Ops.Announce;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -38,6 +40,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<CharacterSaveQueue> _logger;
+    private readonly IOpsAnnouncer? _announcer;
     private readonly WorldRuntimeOptions _settings; // the shared options object: the two warning thresholds are live (.reload config)
     private readonly Lock _gate = new();
     private readonly Lock _reportGate = new();
@@ -65,12 +68,21 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     /// <param name="scopes">Where the scoped <see cref="ICharacterStore"/> comes from.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <param name="options">Backlog warning thresholds (<c>World:SaveQueueWarnDepth</c>, <c>World:SaveQueueWarnAgeMs</c>); the defaults when null.</param>
-    public CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<CharacterSaveQueue> logger, IOptions<WorldRuntimeOptions>? options = null)
+    /// <param name="announcer">Tells the staff about queue trouble (World:Announce:Saves); none when null. Any thread; never blocks, never throws.</param>
+    public CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<CharacterSaveQueue> logger, IOptions<WorldRuntimeOptions>? options = null, IOpsAnnouncer? announcer = null)
     {
         _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _settings = options?.Value ?? new WorldRuntimeOptions();
+        _announcer = announcer;
     }
+
+    /// <summary>Consecutive "database is locked" failures after which a busy database counts as a storm worth telling the staff about (the whole backoff ladder was used).</summary>
+    private const int BusyStormStreak = 3;
+
+    // Staff only (World:Announce:Saves). Never called with _gate held: the announcer takes its own lock and posts to the world thread.
+    private void Announce(AnnounceSeverity severity, string text, string? detail, string key)
+        => _announcer?.Announce(AnnounceCategory.Saves, severity, text, detail, gmOnly: true, dedupKey: key);
 
     /// <summary>Characters with a snapshot waiting or being written.</summary>
     public int Pending => Volatile.Read(ref _pending);
@@ -109,22 +121,43 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     {
         ArgumentNullException.ThrowIfNull(state);
         CharacterState copy = Copy(state);
+        bool quarantined = false;
+        bool closed = false;
         lock (_gate)
         {
-            if (_held.Contains(state.Id) || _quarantined.Contains(state.Id))
+            if (_quarantined.Contains(state.Id))
+            {
+                quarantined = true;
+            }
+            else if (_held.Contains(state.Id))
             {
                 return;
             }
-
-            if (_stopped)
+            else if (_stopped)
             {
                 _logger.LogError("save queue closed; character {Id} state not accepted", state.Id);
-                return;
+                closed = true;
+            }
+            else
+            {
+                Slot slot = GetSlot(state.Id);
+                PutState(slot, copy);
+                AddHint(slot, priority: false);
+            }
+        }
+
+        if (quarantined || closed)
+        {
+            if (quarantined)
+            {
+                Announce(AnnounceSeverity.Warning, "A character snapshot was refused: its save ownership is quarantined", $"character {state.Id}; the snapshot is dropped until the character is resumed", $"save-quarantined:{state.Id}");
+            }
+            else
+            {
+                Announce(AnnounceSeverity.Error, "The character save queue is closed: a snapshot was not accepted", $"character {state.Id}", "save-closed");
             }
 
-            Slot slot = GetSlot(state.Id);
-            PutState(slot, copy);
-            AddHint(slot, priority: false);
+            return;
         }
 
         _signal.Release();
@@ -344,13 +377,20 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             }
         }
 
+        InvalidOperationException? notDrained = null;
         lock (_gate)
         {
             if (_failed.Count > 0)
             {
-                throw new InvalidOperationException($"character saves did not drain for characters {string.Join(", ", _failed.Keys.Order())}",
+                notDrained = new InvalidOperationException($"character saves did not drain for characters {string.Join(", ", _failed.Keys.Order())}",
                     _failed.Values.First().Failure);
             }
+        }
+
+        if (notDrained is not null)
+        {
+            Announce(AnnounceSeverity.Critical, "The character save queue could not drain: snapshots were not written", notDrained.Message, "save-drain-failed");
+            throw notDrained;
         }
     }
 
@@ -555,13 +595,22 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             catch (Exception ex) when (DatabaseTransience.IsBusy(ex) && !IsStopping()) // also with a cancelled token: the lock wait ended, the snapshot must still be retried
             {
                 TimeSpan pause;
+                int streak;
+                int retained;
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex, Deferred: true);
                     long ticks = BusyBackoffTicks[Math.Min(_busyStreak, BusyBackoffTicks.Length - 1)];
-                    _busyStreak++;
+                    streak = ++_busyStreak;
                     _busyUntil = Stopwatch.GetTimestamp() + ticks;
                     pause = Stopwatch.GetElapsedTime(0, ticks);
+                    retained = _failed.Count;
+                }
+
+                if (streak >= BusyStormStreak)
+                {
+                    Announce(AnnounceSeverity.Warning, "The database is busy: character saves keep failing and are being retried",
+                        $"{streak} consecutive locked-database failures, {retained} snapshot(s) retained, next pause {(long)pause.TotalMilliseconds} ms", "save-busy-storm");
                 }
 
                 _logger.LogWarning(ex, "saving character {Id} failed: the database is locked by another writer; snapshot retained, saves pause {PauseMs} ms then retry", state.Id, (long)pause.TotalMilliseconds);
@@ -585,6 +634,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 }
 
                 _logger.LogError(ex, "saving character {Id} failed; authoritative snapshot retained", state.Id);
+                Announce(AnnounceSeverity.Error, "A character save failed; the snapshot is retained", $"character {state.Id}: {ex.GetType().Name}: {ex.Message}", "save-failed");
                 throw;
             }
         }
@@ -844,10 +894,13 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         {
             _logger.LogWarning("character save backlog: {Depth} characters pending, oldest waiting {AgeMs} ms (warns at {WarnDepth} characters or {WarnAgeMs} ms)",
                 depth, (long)age.TotalMilliseconds, warnDepth, warnAgeMs);
+            Announce(AnnounceSeverity.Warning, "The character save queue is backed up",
+                $"{depth} characters pending, oldest waiting {(long)age.TotalMilliseconds} ms (warns at {warnDepth} characters or {warnAgeMs} ms)", "save-backlog");
         }
         else if (cleared)
         {
             _logger.LogInformation("character save backlog cleared: {Depth} characters pending, oldest waiting {AgeMs} ms", depth, (long)age.TotalMilliseconds);
+            Announce(AnnounceSeverity.Info, "The character save queue caught up", $"{depth} characters pending", "save-backlog-cleared");
         }
     }
 
