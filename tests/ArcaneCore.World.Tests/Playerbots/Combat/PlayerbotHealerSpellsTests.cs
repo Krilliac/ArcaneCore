@@ -115,16 +115,26 @@ public sealed class PlayerbotHealerSpellsTests
     }
 
     [Fact]
-    public void ATriggerSpellEffect_WhoseTriggeredSpellHeals_IsAHeal()
+    public void AScriptEffect_IsOnlyMatchedToAHealSiblingOfTheSameFamilyAndIcon()
     {
-        SpellInfo trigger = Row(900_501, "Trigger Mend", "Rank 1", 0, 0, 1, 0, 5, 40f,
-            Effect(SpellEffectName.TriggerSpell, SpellImplicitTarget.UnitFriend, 0) with { TriggerSpell = LesserHealingWave1.Id });
-        PlayerbotAbilities book = PlayerbotAbilities.Resolve([trigger, LesserHealingWave1], [], StoreOf(trigger, LesserHealingWave1));
-        Assert.Contains(trigger, book.DirectHeals);
-        Assert.Equal(PlayerbotAbilities.HealAmount(LesserHealingWave1), book.HealAmountOf(trigger));
-        // A script effect with no heal sibling (Judgement-shaped) and a trigger of a damage spell are not heals.
+        // Same name, rank-less, with a Heal effect, but another family or another icon: not what the script casts.
+        SpellInfo otherFamily = HolyLightHeal with { Id = 900_503, SpellFamilyName = 11 };
+        SpellInfo otherIcon = HolyLightHeal with { Id = 900_504, SpellIconId = 71 };
+        Assert.Null(PlayerbotAbilities.ClassifyHeal(HolyLight1, AuraType.None, StoreOf(HolyLight1, otherFamily, otherIcon)));
+        Assert.NotNull(PlayerbotAbilities.ClassifyHeal(HolyLight1, AuraType.None, StoreOf(HolyLight1, otherFamily, otherIcon, HolyLightHeal)));
+        // A script effect with no heal sibling at all (Judgement-shaped) is not a heal either.
         SpellInfo judgement = Row(900_502, "Judgement Like", "Rank 1", 10, 0, 9, 0, 5, 40f, Effect(SpellEffectName.ScriptEffect, SpellImplicitTarget.UnitFriend, 0));
         Assert.Null(PlayerbotAbilities.ClassifyHeal(judgement, AuraType.None, StoreOf(judgement)));
+    }
+
+    [Fact]
+    public void TheScriptedHealSibling_IsTheLowestId_AndAReplacedStoreIsReindexed()
+    {
+        SpellInfo higher = HolyLightHeal with { Id = 19969 };
+        Assert.NotNull(PlayerbotAbilities.ClassifyHeal(HolyLight1, AuraType.None, StoreOf(HolyLight1, higher, HolyLightHeal)));
+        SpellStore without = StoreOf(HolyLight1);
+        Assert.Null(PlayerbotAbilities.ClassifyHeal(HolyLight1, AuraType.None, without));
+        Assert.NotNull(PlayerbotAbilities.ClassifyHeal(HolyLight1, AuraType.None, StoreOf(HolyLight1, higher)));
     }
 
     [Fact]
@@ -181,6 +191,15 @@ public sealed class PlayerbotHealerSpellsTests
         uint before = await h.WoundAsync(0, 1);
         Assert.True(await h.UpdateOutOfCombatAsync()); // Healing Wave names TARGET_UNIT_FRIEND_CHAIN_HEAL (45)
         await h.Host.WaitForWorldAsync(() => h.Friends[0].Player!.Health >= before + 34, "the friend is healed by Healing Wave");
+    }
+
+    [Fact]
+    public async Task ShamanBot_HealsItself_WithHealingWave_WhenItIsTheTarget()
+    {
+        await using Healers h = await Healers.StartAsync(Class.Shaman, [HealingWave1], learn: [HealingWave1.Id], friends: 0);
+        uint before = await h.Host.OnWorldAsync(() => { h.Bot.Player!.Health = 1; return h.Bot.Player.Health; });
+        Assert.True(await h.UpdateOutOfCombatAsync()); // sent as a unit target naming the bot (TARGET_UNIT_FRIEND_CHAIN_HEAL)
+        await h.Host.WaitForWorldAsync(() => h.Bot.Player!.Health >= before + 34, "the bot heals itself with Healing Wave");
     }
 
     [Fact]

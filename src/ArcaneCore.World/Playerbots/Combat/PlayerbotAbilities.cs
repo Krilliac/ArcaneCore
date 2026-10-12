@@ -150,7 +150,7 @@ internal sealed class PlayerbotAbilities
     /// Whether <paramref name="spell"/> heals (<paramref name="aura"/> None: directly; PeriodicHeal: over time), who it can land on, and
     /// how much a cast restores; null when it does not heal. A direct heal is an effect Heal, or a ScriptEffect (Holy Light, Flash of
     /// Light: the script casts the rank-less sibling spell of the same name, family and icon that carries the Heal effect, with this
-    /// effect's value) or TriggerSpell effect whose triggered spell has a Heal effect. The reach comes from the healing effect's
+    /// effect's value). No real 5875 healer-family spell triggers a heal through a TriggerSpell effect (checked in spell_template). The reach comes from the healing effect's
     /// TargetA; any area effect on the spell (a radius) makes it a <see cref="PlayerbotHealReach.Party"/> heal.
     /// </summary>
     internal static (PlayerbotHealReach Reach, int Amount)? ClassifyHeal(SpellInfo spell, AuraType aura, SpellStore? store)
@@ -170,8 +170,6 @@ internal sealed class PlayerbotAbilities
                 if (effect.Effect == SpellEffectName.Heal) effectAmount = 0; // counted by HealAmount below
                 else if (effect.Effect == SpellEffectName.ScriptEffect && ReachOf(effect.TargetA) != PlayerbotHealReach.None
                     && ScriptedHeal(spell, store) is not null) effectAmount = points;
-                else if (effect.Effect == SpellEffectName.TriggerSpell && store?.Get(effect.TriggerSpell) is { } triggered
-                    && triggered.HasEffect(SpellEffectName.Heal)) effectAmount = HealAmount(triggered);
                 else continue;
             }
             else if (effect.Effect == SpellEffectName.ApplyAura && effect.AuraType == aura && effect.Amplitude > 0)
@@ -201,6 +199,7 @@ internal sealed class PlayerbotAbilities
         _ => PlayerbotHealReach.None,
     };
 
+    // Ordering for choosing among a spell's heal effects: a unit the caster can pick beats a group heal beats caster-only.
     private static int Strength(PlayerbotHealReach reach) => reach switch
     {
         PlayerbotHealReach.SelfOnly => 1,
@@ -214,13 +213,24 @@ internal sealed class PlayerbotAbilities
     private static SpellInfo? ScriptedHeal(SpellInfo spell, SpellStore? store)
     {
         if (store is null || spell.Rank.Length == 0) return null;
+        return s_scriptedHeals.GetValue(store, static s => BuildScriptedHealIndex(s))
+            .GetValueOrDefault((spell.SpellFamilyName, spell.SpellIconId, spell.Name));
+    }
+
+    // One index per SpellStore instance (a replaced store is a new key, so a stale index is never read): rank-less Heal spells by
+    // (family, icon, name); the lowest id wins so the sibling is deterministic.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SpellStore, Dictionary<(uint, uint, string), SpellInfo>> s_scriptedHeals = new();
+
+    private static Dictionary<(uint, uint, string), SpellInfo> BuildScriptedHealIndex(SpellStore store)
+    {
+        var index = new Dictionary<(uint, uint, string), SpellInfo>();
         foreach (SpellInfo other in store.All)
         {
-            if (other.Id != spell.Id && other.Rank.Length == 0 && other.SpellFamilyName == spell.SpellFamilyName
-                && other.SpellIconId == spell.SpellIconId && string.Equals(other.Name, spell.Name, StringComparison.Ordinal)
-                && other.HasEffect(SpellEffectName.Heal)) return other;
+            if (other.Rank.Length != 0 || !other.HasEffect(SpellEffectName.Heal)) continue;
+            var key = (other.SpellFamilyName, other.SpellIconId, other.Name);
+            if (!index.TryGetValue(key, out SpellInfo? current) || other.Id < current.Id) index[key] = other;
         }
 
-        return null;
+        return index;
     }
 }
