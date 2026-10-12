@@ -117,7 +117,7 @@ internal sealed class FakeFacts : IQaContentFacts
 
     public IReadOnlyList<uint> QuestObjectiveCreatures(uint quest) => Objectives.GetValueOrDefault(quest) ?? [];
 
-    public IReadOnlyList<QaEnderFact> QuestEnders(uint quest) => Enders.GetValueOrDefault(quest) ?? [];
+    public IReadOnlyList<QaEnderFact> QuestEnders(uint quest, uint entry) => [.. (Enders.GetValueOrDefault(quest) ?? []).Where(e => e.Entry == entry)];
 
     public int SpawnCount(uint map, uint entry) => Spawns.GetValueOrDefault((map, entry));
 

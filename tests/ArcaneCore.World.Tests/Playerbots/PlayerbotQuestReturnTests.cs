@@ -235,6 +235,97 @@ public sealed partial class PlayerbotQuestReturnTests
         finally { brain.Stop(); }
     }
 
+    /// <summary>
+    /// Bot QA marks a stall as the walk home only when the brain was returning that very quest: an NPC that both gives and ends a quest is
+    /// also the target of a bot on its way to take it, and that stall must not be reported as a trip to the ender.
+    /// </summary>
+    [Fact]
+    public async Task OnlyAStallOfTheWalkHome_IsMarkedAsAReturnTrip()
+    {
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: true);
+        WorldTestHost host = fixture.Host;
+        WorldSession session = fixture.Session;
+        await fixture.AcceptAndCompleteAsync();
+        await host.World.InvokeAsync(() =>
+        {
+            var player = session.Player!;
+            var giver = (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 150, player.Y, player.Z, 0);
+            WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(player.Z));
+            return true;
+        });
+        await host.WaitForWorldAsync(() => !session.Player!.VisibleObjects.Contains(QuestInteractionFixture.Guid), "offscreen return giver");
+        var walkingHome = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+        var takingIt = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                var player = session.Player!;
+                string stall(uint quest) => $"stalled 120s: goal=Quest target={QuestInteractionFixture.Entry} quest={quest} at 0.0,0.0,0.0 map 0";
+                session.ManagedBudget = new ManagedActionBudget(1);
+                walkingHome.Update(500);
+                Assert.Equal(PlayerbotGoalKind.Quest, walkingHome.Goal);
+                Assert.Contains(" return-trip qa[", walkingHome.QaReportContext(player, stall(QuestInteractionFixture.QuestId)), StringComparison.Ordinal);
+                // The stall names another quest than the one returned: not the walk home.
+                Assert.DoesNotContain("return-trip", walkingHome.QaReportContext(player, stall(QuestInteractionFixture.UnrelatedId)), StringComparison.Ordinal);
+                // A brain that never entered the walk home (on its way to take the quest from the same NPC).
+                Assert.DoesNotContain("return-trip", takingIt.QaReportContext(player, stall(QuestInteractionFixture.QuestId)), StringComparison.Ordinal);
+                return true;
+            });
+        }
+        finally { walkingHome.Stop(); takingIt.Stop(); }
+    }
+
+    /// <summary>
+    /// While walking home the bot serves another completed quest's ender only within reach: one beside it is turned in on the way, one in
+    /// view but out of reach is not walked to.
+    /// </summary>
+    [Fact]
+    public async Task WalkingHome_ServesAnotherCompletedQuestsEnderOnlyWithinReach()
+    {
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: true, distractor: true);
+        WorldTestHost host = fixture.Host;
+        WorldSession session = fixture.Session;
+        await fixture.AcceptAndCompleteAsync();
+        Creature? other = null;
+        await host.World.InvokeAsync(() =>
+        {
+            var player = session.Player!;
+            var giver = (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 150, player.Y, player.Z, 0);
+            other = new Creature(DistractorSpawn, new CreatureTemplate { Entry = DistractorEntry, Name = "Second ender",
+                Faction = 900011, NpcFlags = 2, MinLevelHealth = 20, MaxLevelHealth = 20, DisplayIds = [49] }, null, CreatureContent.Empty, new Random(3));
+            other.SetPosition(player.X - 2, player.Y, player.Z, 0);
+            player.Map.AddObject(other);
+            WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(player.Z));
+            return true;
+        });
+        await host.WaitForWorldAsync(() => !session.Player!.VisibleObjects.Contains(QuestInteractionFixture.Guid)
+            && session.Player.VisibleObjects.Contains(other!.Guid), "offscreen ender, visible second ender");
+        await host.World.InvokeAsync(() =>
+        {
+            // Take the second quest (a talk-to quest, complete on accept) while not on the trip, and stop before it is turned in.
+            var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+            for (int i = 0; i < 8 && fixture.Feature.Services.StateOf(session.Player!)!.Quests.Get(QuestInteractionFixture.UnrelatedId)?.Status != QuestStatus.Complete; i++)
+            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(session.Player!, 500); }
+            Assert.Equal(QuestStatus.Complete, fixture.Feature.Services.StateOf(session.Player!)!.Quests.Get(QuestInteractionFixture.UnrelatedId)?.Status);
+            return true;
+        });
+        await host.World.InvokeAsync(() =>
+        {
+            var player = session.Player!;
+            var returning = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true }) { ReturnQuest = QuestInteractionFixture.QuestId };
+            Assert.True(returning.HasCandidate(player), "the second ender beside the bot is served");
+            other!.SetPosition(player.X - 30, player.Y, player.Z, 0);
+            Assert.Contains(other.Guid, player.VisibleObjects);
+            Assert.False(returning.HasCandidate(player), "the second ender in view but out of reach is skipped");
+            returning.ReturnQuest = 0;
+            Assert.True(returning.HasCandidate(player), "off the trip it is walked to as before");
+            return true;
+        });
+    }
+
     [Fact]
     public async Task VisibleCompletedQuestRewardsNormallyBeforeFreshAttackAndPersists()
     {
@@ -437,7 +528,8 @@ public sealed partial class PlayerbotQuestReturnTests
         public async Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
         {
             QuestContent content = await ((IQuestContentStore)original).LoadAsync(cancellationToken);
-            return content with { Starters = [.. content.Starters, new CreatureQuestRelation { Id = DistractorEntry, Quest = QuestInteractionFixture.UnrelatedId }] };
+            var relation = new CreatureQuestRelation { Id = DistractorEntry, Quest = QuestInteractionFixture.UnrelatedId };
+            return content with { Starters = [.. content.Starters, relation], Enders = [.. content.Enders, relation] };
         }
     }
 

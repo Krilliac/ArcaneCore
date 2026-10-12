@@ -29,8 +29,8 @@ internal interface IQaContentFacts
     /// <summary>The creature entries the quest's kill/speak objectives name (the positive ReqCreatureOrGOId values).</summary>
     IReadOnlyList<uint> QuestObjectiveCreatures(uint quest);
 
-    /// <summary>Every spawn of every creature that ends the quest (its <c>creature_involvedrelation</c> rows), on any map; empty when unknown.</summary>
-    IReadOnlyList<QaEnderFact> QuestEnders(uint quest);
+    /// <summary>Every spawn, on any map, of <paramref name="entry"/> when it ends the quest (a <c>creature_involvedrelation</c> row); empty when it does not or the content is unknown.</summary>
+    IReadOnlyList<QaEnderFact> QuestEnders(uint quest, uint entry);
 
     int SpawnCount(uint map, uint entry);
 
@@ -56,7 +56,7 @@ internal sealed class NoQaContentFacts : IQaContentFacts
 
     public IReadOnlyList<uint> QuestObjectiveCreatures(uint quest) => [];
 
-    public IReadOnlyList<QaEnderFact> QuestEnders(uint quest) => [];
+    public IReadOnlyList<QaEnderFact> QuestEnders(uint quest, uint entry) => [];
 
     public int SpawnCount(uint map, uint entry) => 0;
 
@@ -92,20 +92,17 @@ internal sealed class PlayerbotQaContentFacts(IServiceProvider services) : IQaCo
         return [.. q.ReqCreatureOrGOId.Where(id => id > 0).Select(id => (uint)id).Distinct()];
     }
 
-    public IReadOnlyList<QaEnderFact> QuestEnders(uint quest)
+    public IReadOnlyList<QaEnderFact> QuestEnders(uint quest, uint entry)
     {
-        if (quest == 0 || Quests is not { } quests || Creatures?.Content is not { } content) return [];
+        if (quest == 0 || Quests is not { } quests || Creatures?.Content is not { } content || !quests.CreatureEndersOf(quest).Contains(entry)) return [];
+        string name = content.FindTemplate(entry)?.Name ?? string.Empty;
         var found = new List<QaEnderFact>();
-        foreach (uint entry in quests.CreatureEndersOf(quest))
+        foreach (uint map in content.MapsWithSpawns)
         {
-            string name = content.FindTemplate(entry)?.Name ?? string.Empty;
-            foreach (uint map in content.MapsWithSpawns)
+            foreach (CreatureSpawn spawn in content.GetSpawns(map, entry))
             {
-                foreach (CreatureSpawn spawn in content.GetSpawns(map, entry))
-                {
-                    if (found.Count >= MaxEnderSpawns) return found;
-                    found.Add(new QaEnderFact(entry, name, map, spawn.X, spawn.Y, spawn.Z));
-                }
+                if (found.Count >= MaxEnderSpawns) return found;
+                found.Add(new QaEnderFact(entry, name, map, spawn.X, spawn.Y, spawn.Z));
             }
         }
 

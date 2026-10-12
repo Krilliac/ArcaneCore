@@ -72,6 +72,9 @@ internal sealed record QaSignal
 
     public uint Map { get; init; }
 
+    /// <summary>A stall of the walk home to a completed quest's ender (the line carries <see cref="PlayerbotQaSignalParser.ReturnTripToken"/>).</summary>
+    public bool ReturnTrip { get; init; }
+
     public float X { get; init; }
 
     public float Y { get; init; }

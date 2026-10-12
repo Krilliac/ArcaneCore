@@ -239,7 +239,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             death ? [.. _recentDeathSources.Where(d => d.Map == _lastQaDeathMap
                 && System.Numerics.Vector3.Distance(d.Position, _lastQaDeathPosition) <= PlayerbotStallWatch.DeathLoopYards)
                 .Select(d => d.Source)] : null);
-        return observation.ToLogSuffix();
+        // A stall of the walk home to a completed quest's ender: the quest the line names is the one being returned. A stall on the way to
+        // take a quest from an NPC that also ends it is not marked (PlayerbotQaSignalParser.ReturnTripToken).
+        bool returnTrip = !death && _quests.ReturnQuest != 0 && QuestFromReport(report) == _quests.ReturnQuest;
+        return (returnTrip ? ArcaneCore.World.Playerbots.Qa.PlayerbotQaSignalParser.ReturnTripToken : string.Empty) + observation.ToLogSuffix();
     }
 
     private static string? GoalFromReport(string report)

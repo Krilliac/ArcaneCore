@@ -145,7 +145,7 @@ internal static class PlayerbotQaClassifier
             }
         }
 
-        if (questGoal && s.Quest != 0 && target != 0 && EnderTrip(s, facts, target, title) is { } trip) return trip;
+        if (questGoal && s.ReturnTrip && s.Quest != 0 && target != 0 && EnderTrip(s, facts, target, title) is { } trip) return trip;
 
         string subject = questGoal && s.Quest != 0 ? string.Create(CultureInfo.InvariantCulture, $"quest {s.Quest}{(title is null ? string.Empty : " (" + title + ")")}") : $"goal {s.Goal}";
         return new QaClassification(QaCause.Unknown, "no missing content found for " + subject
@@ -153,13 +153,15 @@ internal static class PlayerbotQaClassifier
     }
 
     /// <summary>
-    /// A stall whose target is an ender of its quest is a completed quest's trip home (the brain's target then is the ender, never an earlier
-    /// goal's). Nothing is missing for it: the cause names the ender, how far it is from the bot and whether it is on another map, so the finding
-    /// says where the bot was going instead of "no missing content found". Null when the target is not one of the quest's enders.
+    /// A stall the brain marked as the walk home to a completed quest's ender (<see cref="QaSignal.ReturnTrip"/>) whose target is an ender of
+    /// the quest. The mark is needed: in vanilla one NPC often gives and ends a quest, so the target alone does not say whether the bot was
+    /// going to take the quest or to turn it in. Nothing is missing for it: the cause names the ender, how far it is from the bot and whether
+    /// it is on another map, so the finding says where the bot was going instead of "no missing content found". Null when the target is not
+    /// one of the quest's enders.
     /// </summary>
     private static QaClassification? EnderTrip(QaSignal s, IQaContentFacts facts, uint target, string? title)
     {
-        IReadOnlyList<QaEnderFact> spawns = [.. facts.QuestEnders(s.Quest).Where(e => e.Entry == target)];
+        IReadOnlyList<QaEnderFact> spawns = [.. facts.QuestEnders(s.Quest, target)];
         if (spawns.Count == 0) return null;
 
         string who = string.Create(CultureInfo.InvariantCulture, $"ender {target}{(spawns[0].Name.Length == 0 ? string.Empty : " (" + spawns[0].Name + ")")}");
