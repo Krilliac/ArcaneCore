@@ -26,6 +26,19 @@ public sealed class WorldFixtureSchemaTests : IDisposable
         return path;
     }
 
+    private string Create(string sql, bool wal)
+    {
+        string path = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ConnectionString))
+        {
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = (wal ? "PRAGMA journal_mode=WAL;" : "") + sql;
+            command.ExecuteNonQuery();
+        }
+        return path;
+    }
+
     private string WithVersion(int version)
         => Create($"CREATE TABLE world_schema (Id INTEGER PRIMARY KEY, Version INTEGER NOT NULL); INSERT INTO world_schema (Id, Version) VALUES (1, {version});");
 
@@ -63,15 +76,67 @@ public sealed class WorldFixtureSchemaTests : IDisposable
     }
 
     [Fact]
-    public void TheFixtureIsOpenedReadOnly()
+    public void AWalFixtureIsNeitherModifiedNorGivenSidecarFiles()
     {
-        string path = WithVersion(51);
-        DateTime before = File.GetLastWriteTimeUtc(path);
-        long length = new FileInfo(path).Length;
+        string path = Create("CREATE TABLE world_schema (Id INTEGER PRIMARY KEY, Version INTEGER NOT NULL); INSERT INTO world_schema (Id, Version) VALUES (1, 51);", wal: true);
+        Assert.False(File.Exists(path + "-wal"));
+        Assert.False(File.Exists(path + "-shm"));
+        byte[] bytes = File.ReadAllBytes(path);
+        DateTime modified = File.GetLastWriteTimeUtc(path);
 
-        WorldFixtureSchema.SkipReason(path, 53);
+        string? reason = WorldFixtureSchema.SkipReason(path, 53);
 
-        Assert.Equal(before, File.GetLastWriteTimeUtc(path));
-        Assert.Equal(length, new FileInfo(path).Length);
+        Assert.Contains("schema 51 is older", reason);
+        Assert.False(File.Exists(path + "-wal"), "the helper left a -wal file next to the fixture");
+        Assert.False(File.Exists(path + "-shm"), "the helper left a -shm file next to the fixture");
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Equal(modified, File.GetLastWriteTimeUtc(path));
     }
+
+    [Fact]
+    public void AFixtureInAReadOnlyDirectoryStillReportsItsVersion()
+    {
+        string path = Create("CREATE TABLE world_schema (Id INTEGER PRIMARY KEY, Version INTEGER NOT NULL); INSERT INTO world_schema (Id, Version) VALUES (1, 53);", wal: true);
+        var info = new FileInfo(path) { IsReadOnly = true };
+        try
+        {
+            Assert.Null(WorldFixtureSchema.SkipReason(path, 53));
+        }
+        finally
+        {
+            info.IsReadOnly = false;
+        }
+    }
+
+    [Fact]
+    public void AFixtureStillBeingCreatedHasItsOwnMessage()
+    {
+        string? reason = WorldFixtureSchema.SkipReason(WithVersion(0), 53);
+
+        Assert.NotNull(reason);
+        Assert.Contains("still being created", reason);
+    }
+
+    [Fact]
+    public void ANonDatabaseFileGivesAMessageInsteadOfThrowing()
+    {
+        string path = Path.Combine(directory, "garbage.db");
+        File.WriteAllText(path, "this is not a sqlite database, just text padding padding padding padding padding padding");
+
+        string? reason = WorldFixtureSchema.SkipReason(path, 53);
+
+        Assert.NotNull(reason);
+        Assert.Contains("refresh the fixture", reason);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("Z:/no/such/world.db")]
+    public void AnUnsetOrMissingFixtureIsLeftToTheOtherGates(string? path)
+        => Assert.Null(WorldFixtureSchema.SkipReasonForPath(path, 53));
+
+    [Fact]
+    public void SkipReasonForPathReadsTheNamedFile()
+        => Assert.Contains("schema 51 is older", WorldFixtureSchema.SkipReasonForPath(WithVersion(51), 53));
 }
