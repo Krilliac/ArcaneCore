@@ -702,6 +702,12 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>Benchmark seam (tests): every timed world feature of every tick: its name, time (µs) and allocation.</summary>
     internal Action<string, long, long>? FeatureObserver { get; set; }
 
+    /// <summary>
+    /// Where the world loop reads the GC counters that it differences around every tick (test seam; default the runtime's
+    /// <see cref="GcSnapshot.Read"/>). The delegate is cached, so the per-tick read allocates nothing.
+    /// </summary>
+    internal Func<GcSnapshot> GcSource { get; set; } = GcSnapshot.Read;
+
     /// <summary>The phase times of the last <see cref="RunTick"/> (world thread).</summary>
     public TickPhases LastTickPhases { get; private set; }
 
@@ -951,10 +957,15 @@ public sealed class WorldRuntime : IDisposable
             }
 
             long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            Func<GcSnapshot> gcSource = GcSource; // one read; the seam is replaced only before the loop runs
+            GcSnapshot gcBefore = gcSource();
             long stampBefore = Stopwatch.GetTimestamp();
             RunTick(diff, MapUpdateObserver);
             long durationMicros = (Stopwatch.GetTimestamp() - stampBefore) * 1_000_000 / Stopwatch.Frequency;
+            GcDelta gcDelta = gcSource().Since(gcBefore);
             long tickBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+            // The GC split belongs to the phases the slow-tick record, the watchdog's hang line and the slow-update line all print.
+            LastTickPhases = LastTickPhases with { GcCaptured = true, Gc = gcDelta };
             Stats.Record(durationMicros, tickBytes, interval * 1000L, frameMicros, LastTickPhases);
             if (durationMicros > interval * 1000L)
             {

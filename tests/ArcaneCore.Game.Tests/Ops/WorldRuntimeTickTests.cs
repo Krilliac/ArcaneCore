@@ -273,6 +273,107 @@ public sealed class WorldRuntimeTickTests
         Assert.Equal(0, world.PendingCommandCount);
     }
 
+    /// <summary>A GC counter source the test advances by hand, so a "collection" happens inside a chosen tick.</summary>
+    private sealed class FakeGc
+    {
+        private long _pauseTicks;
+        private int _gen0, _gen1, _gen2;
+
+        public GcSnapshot Read() => new(Volatile.Read(ref _pauseTicks), Volatile.Read(ref _gen0), Volatile.Read(ref _gen1), Volatile.Read(ref _gen2));
+
+        public void Collect(TimeSpan pause, int gen0, int gen1, int gen2)
+        {
+            Interlocked.Add(ref _pauseTicks, pause.Ticks);
+            Interlocked.Add(ref _gen0, gen0);
+            Interlocked.Add(ref _gen1, gen1);
+            Interlocked.Add(ref _gen2, gen2);
+        }
+    }
+
+    // RED proof: with the capture removed from WorldRuntime.Run, LastTickPhases carries no GC and this line has no "gc" field.
+    [Fact]
+    public void SlowWorldUpdate_TickDuration_NamesTheGcPauseAndCollectionsThatHappenedInsideTheTick()
+    {
+        var log = new CapturingLogger();
+        var gc = new FakeGc();
+        using WorldRuntime world = Create(log, o =>
+        {
+            o.TickIntervalMs = 60;
+            o.Perf.SlowWorldUpdate = 40;
+            o.Perf.SlowWorldUpdateMeasure = SlowWorldUpdateMeasure.TickDuration;
+        });
+        world.GcSource = gc.Read;
+        world.Start();
+        WaitFor(() => world.Stats.Snapshot().TotalTicks >= 4);
+        Assert.DoesNotContain(log.Entries, e => e.EventName == PerformanceLogOptions.EventName);
+
+        world.Post(() =>
+        {
+            gc.Collect(TimeSpan.FromMilliseconds(2345.5), 3, 2, 1); // a blocking gen2 inside this tick
+            Thread.Sleep(70);
+        });
+        WaitFor(() => log.Entries.Any(e => e.EventName == PerformanceLogOptions.EventName));
+
+        string message = log.Entries.First(e => e.EventName == PerformanceLogOptions.EventName).Message;
+        Assert.Contains("gc 2345.5 ms (gen0 +3, gen1 +2, gen2 +1)", message);
+
+        // The slow-tick record the watchdog's TickHang line reads carries the same split.
+        SlowTickInfo worst = world.Stats.SlowTicks(TimeSpan.FromMinutes(1))[0];
+        Assert.True(worst.Phases.GcCaptured);
+        Assert.Equal(TimeSpan.FromMilliseconds(2345.5).Ticks, worst.Phases.Gc.PauseTicks);
+        Assert.Contains("gc 2345.5 ms (gen0 +3, gen1 +2, gen2 +1)", worst.Phases.Format());
+    }
+
+    [Fact]
+    public void ATickWithoutCollections_ReportsZeroGc_AndEarlierCollectionsAreNotCharged()
+    {
+        var gc = new FakeGc();
+        gc.Collect(TimeSpan.FromSeconds(9), 40, 10, 5); // before the world starts: not part of any tick
+        using WorldRuntime world = Create(new CapturingLogger());
+        world.GcSource = gc.Read;
+        world.Start();
+        WaitFor(() => world.Stats.Snapshot().TotalTicks >= 3);
+        world.Post(() => Thread.Sleep(30)); // an over-interval tick that records a slow-tick entry
+        WaitFor(() => world.Stats.SlowTicks(TimeSpan.FromMinutes(1)).Count > 0);
+
+        TickPhases phases = world.Stats.SlowTicks(TimeSpan.FromMinutes(1))[0].Phases;
+        Assert.True(phases.GcCaptured);
+        Assert.Equal(new GcDelta(0, 0, 0, 0), phases.Gc);
+        Assert.EndsWith("gc 0.0 ms (gen0 +0, gen1 +0, gen2 +0)", phases.Format());
+    }
+
+    [Fact]
+    public void TickPhasesFormat_OmitsGcWhenNoneWasCaptured_AndThePauseIsNeverNegative()
+    {
+        var phases = new TickPhases(1000, 2000, 3000);
+        Assert.DoesNotContain("gc ", phases.Format());
+        Assert.EndsWith("gc 1.5 ms (gen0 +1, gen1 +0, gen2 +0)", (phases with { GcCaptured = true, Gc = new GcDelta(15_000, 1, 0, 0) }).Format());
+
+        var before = new GcSnapshot(100, 5, 5, 5);
+        Assert.Equal(new GcDelta(0, 0, 0, 0), new GcSnapshot(50, 4, 4, 4).Since(before));
+    }
+
+    [Fact]
+    public void ReadingTheGcCounters_AllocatesNothing()
+    {
+        using WorldRuntime world = Create(new CapturingLogger());
+        Func<GcSnapshot> source = world.GcSource;
+        GcSnapshot warm = source();
+        _ = source().Since(warm); // JIT both paths first
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        long pause = 0;
+        for (int i = 0; i < 10_000; i++)
+        {
+            GcSnapshot a = source();
+            GcSnapshot b = source();
+            pause += b.Since(a).PauseTicks;
+        }
+
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(pause >= 0);
+        Assert.Equal(0, allocated);
+    }
+
     private sealed class SleepingUpdater(int ms) : IMapUpdater
     {
         public void Update(Map map, uint diffMs) => Thread.Sleep(ms);

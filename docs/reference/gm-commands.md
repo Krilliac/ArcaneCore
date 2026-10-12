@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 191 |
-| `Administrator` | 6 | 285 |
+| `GameMaster` | 3 | 192 |
+| `Administrator` | 6 | 290 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -53,6 +53,12 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug vis list` | 3 | GameMaster | declared retail level | Syntax: .debug vis list List your drawings with their marker counts and the seconds they have left. |
 | `.debug vis clear` | 3 | GameMaster | declared retail level | Syntax: .debug vis clear Remove all your markers now. |
 | `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. |
+| `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
+| `.debug alloc` ... | 6 | Administrator | declared retail level | Syntax: .debug alloc $subcommand Sample what the server allocates, by type, for a while: start, report, stop. |
+| `.debug alloc start` | 6 | Administrator | declared retail level | Syntax: .debug alloc start [seconds=30] Start sampling allocations (the runtime's GCAllocationTick event, about one per 100 KB) for 1-600 seconds; it stops by itself. One sample at a time. |
+| `.debug alloc report` | 6 | Administrator | declared retail level | Syntax: .debug alloc report [top=15] List the biggest allocating types of the running or last sample, separately for the small, large and pinned object heaps: sampled MiB, MiB per second and share. The numbers are sampled estimates. |
+| `.debug alloc stop` | 6 | Administrator | declared retail level | Syntax: .debug alloc stop Stop the running allocation sample now; .debug alloc report still shows its result. |
+| `.debug dump` | 6 | Administrator | declared retail level | Syntax: .debug dump [full\|heap\|mini] Write a dump of this server process to disk (default full). Off unless Ops:Diagnostics:Dumps:Enabled is set: a dump holds session keys and passwords. A full dump suspends the process for about a minute at 7 GB. Heap dumps fail on some hosts (E_INVALIDARG); use full. |
 | `.deplenish` | 3 | GameMaster | declared retail level | Syntax: .deplenish Set the health of the selected unit or yourself to 1 and its power to 0. |
 | `.replenish` | 3 | GameMaster | declared retail level | Syntax: .replenish Restore the health, and the mana of a mana user, of the selected unit or yourself. |
 | `.event` ... | 3 | GameMaster | declared retail level | Syntax: .event #event_id Show the information of an event. |

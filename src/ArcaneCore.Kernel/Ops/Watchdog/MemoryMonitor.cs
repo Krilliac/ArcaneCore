@@ -22,6 +22,15 @@ public readonly record struct MemorySample(
 {
     /// <summary>Memory load as a percentage of the available memory (0 when unknown).</summary>
     public int LoadPercent => TotalAvailableBytes <= 0 ? 0 : (int)(MemoryLoadBytes * 100 / TotalAvailableBytes);
+
+    /// <summary>Free (fragmented) bytes inside the large object heap after the last GC (0 when the runtime does not report them).</summary>
+    public long LohFragmentedBytes { get; init; }
+
+    /// <summary>The large object heap's fragmentation as a percentage of its size after the last GC (0 when it is empty or unknown).</summary>
+    public double LohFragmentationPercent => LohBytes <= 0 ? 0 : Math.Min(100d, LohFragmentedBytes * 100d / LohBytes);
+
+    /// <summary>The pause of the most recent full blocking collection in milliseconds (0 before the first one).</summary>
+    public double LastFullBlockingPauseMs { get; init; }
 }
 
 /// <summary>Where the memory monitor reads from; a seam so tests feed synthetic samples.</summary>
@@ -37,6 +46,9 @@ public sealed class GcMemoryProbe : IMemoryProbe
     {
         GCMemoryInfo info = GC.GetGCMemoryInfo();
         ReadOnlySpan<GCGenerationInfo> generations = info.GenerationInfo;
+        // The last full blocking collection is the one that stalls the world; Index 0 means none has happened yet.
+        GCMemoryInfo full = GC.GetGCMemoryInfo(GCKind.FullBlocking);
+        double lastFullPauseMs = full.Index == 0 || full.PauseDurations.Length == 0 ? 0 : full.PauseDurations[0].TotalMilliseconds;
         // Before the first collection the info describes no GC (Index 0) and every size is 0; the live total is the honest heap figure then.
         return new MemorySample(
             info.Index == 0 ? GC.GetTotalMemory(false) : info.HeapSizeBytes,
@@ -49,7 +61,11 @@ public sealed class GcMemoryProbe : IMemoryProbe
             info.HighMemoryLoadThresholdBytes,
             GC.CollectionCount(2),
             info.PauseTimePercentage,
-            Environment.WorkingSet);
+            Environment.WorkingSet)
+        {
+            LohFragmentedBytes = generations.Length > 3 ? generations[3].FragmentationAfterBytes : 0,
+            LastFullBlockingPauseMs = lastFullPauseMs,
+        };
     }
 }
 
@@ -97,6 +113,8 @@ public sealed class MemoryMonitor : IWatchdogMonitor
     private readonly Counter _heapGauge;
     private readonly Counter _gen2Gauge;
     private readonly Counter _lohGauge;
+    private readonly Counter _lohFragmentedGauge;
+    private readonly Counter _lastFullPauseGauge;
     private readonly Counter _gen2Collections;
     private readonly Counter _actions;
     private readonly Counter _samples;
@@ -125,6 +143,8 @@ public sealed class MemoryMonitor : IWatchdogMonitor
         _heapGauge = counters.GetOrAdd("watchdog.memory.heap_bytes", CounterKind.Gauge);
         _gen2Gauge = counters.GetOrAdd("watchdog.memory.gen2_bytes", CounterKind.Gauge);
         _lohGauge = counters.GetOrAdd("watchdog.memory.loh_bytes", CounterKind.Gauge);
+        _lohFragmentedGauge = counters.GetOrAdd("watchdog.memory.loh_fragmented_bytes", CounterKind.Gauge);
+        _lastFullPauseGauge = counters.GetOrAdd("watchdog.gc.last_full_pause_ms", CounterKind.Gauge);
         _gen2Collections = counters.GetOrAdd("watchdog.memory.gen2_collections", CounterKind.Gauge);
         _actions = counters.GetOrAdd("watchdog.memory.actions");
         _samples = counters.GetOrAdd("watchdog.memory.samples");
@@ -216,6 +236,8 @@ public sealed class MemoryMonitor : IWatchdogMonitor
         _heapGauge.Set(sample.HeapBytes);
         _gen2Gauge.Set(sample.Gen2Bytes);
         _lohGauge.Set(sample.LohBytes);
+        _lohFragmentedGauge.Set(sample.LohFragmentedBytes);
+        _lastFullPauseGauge.Set((long)Math.Round(sample.LastFullBlockingPauseMs));
         _gen2Collections.Set(sample.Gen2Collections);
 
         HeapHighWaterBytes = Math.Max(HeapHighWaterBytes, sample.HeapBytes);
@@ -228,8 +250,8 @@ public sealed class MemoryMonitor : IWatchdogMonitor
         {
             _loggedGen2 = Gen2HighWaterBytes;
             _loggedLoh = LohHighWaterBytes;
-            _logger.LogInformation(WatchdogEvents.MemoryGrowth, "heap high-water marks: gen2 {Gen2MiB} MiB, LOH {LohMiB} MiB, heap {HeapMiB} MiB (fragmented {FragMiB} MiB, working set {WsMiB} MiB, {Gen2Count} gen2 collections, pause {Pause:F1}%)",
-                Mib(Gen2HighWaterBytes), Mib(LohHighWaterBytes), Mib(sample.HeapBytes), Mib(sample.FragmentedBytes), Mib(sample.WorkingSetBytes), sample.Gen2Collections, sample.PauseTimePercent);
+            _logger.LogInformation(WatchdogEvents.MemoryGrowth, "heap high-water marks: gen2 {Gen2MiB} MiB, LOH {LohMiB} MiB, heap {HeapMiB} MiB (fragmented {FragMiB} MiB, LOH fragmented {LohFragMiB} MiB = {LohFragPercent:F0}%, working set {WsMiB} MiB, {Gen2Count} gen2 collections, pause {Pause:F1}%, last full blocking GC pause {FullPauseMs:F0} ms)",
+                Mib(Gen2HighWaterBytes), Mib(LohHighWaterBytes), Mib(sample.HeapBytes), Mib(sample.FragmentedBytes), Mib(sample.LohFragmentedBytes), sample.LohFragmentationPercent, Mib(sample.WorkingSetBytes), sample.Gen2Collections, sample.PauseTimePercent, sample.LastFullBlockingPauseMs);
         }
 
         if (_options.WarnHeapBytes > 0 && sample.HeapBytes >= _options.WarnHeapBytes && _heapLimiter.TryAcquire(nowMicros, out long suppressed))
