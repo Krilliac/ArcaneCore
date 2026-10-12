@@ -1273,4 +1273,16 @@ internal readonly record struct PlayerbotThreat(Vector3 Position, float Radius, 
         if (!IgnoresHeight && MathF.Max(0f, MathF.Abs(Position.Z - spot.Z) - Radii) > CreatureAggro.MaxZDistance) return false;
         return Vector3.Distance(Position, spot) < Radius + margin;
     }
+
+    /// <summary>
+    /// Whether this creature's aggro reach and <paramref name="other"/>'s share a zone, that is, some spot is inside both: the
+    /// distance between them is under the sum of the radii (and, for two creatures bound by the height limit, within it).
+    /// Neither creature has to stand inside the other's reach for a bot walking between them to be attacked by both.
+    /// </summary>
+    internal bool Overlaps(PlayerbotThreat other)
+    {
+        if (!IgnoresHeight && !other.IgnoresHeight
+            && MathF.Max(0f, MathF.Abs(Position.Z - other.Position.Z) - Radii - other.Radii) > CreatureAggro.MaxZDistance) return false;
+        return Vector3.Distance(Position, other.Position) < Radius + other.Radius;
+    }
 }

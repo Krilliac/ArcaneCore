@@ -172,6 +172,51 @@ public sealed class PopulationBandPlannerTests
         Assert.Equal(Team.Alliance, PopulationBandPlanner.ChooseTeam(half, 3, 3)); // a tie: Alliance
     }
 
+    private static PopulationRaceClassCache FactionCache(params (byte Race, uint Faction)[] races)
+        => new(races.SelectMany(r => Vanilla[r.Race].Select(c => (r.Race, c))), races.ToDictionary(r => r.Race, r => r.Faction));
+
+    [Fact]
+    public void PlanSafe_TestsEachBandAndFactionOnce_WhenNothingIsSafe()
+    {
+        var options = new PlayerbotPopulationOptions
+        {
+            Factions = PopulationFactions.Alliance, ZoneLevelSlack = 4, Bands = Bands((1, 10, 1)),
+        };
+        PopulationZoneAtlas atlas = Atlas();
+        int Calls(PopulationRaceClassCache cache)
+        {
+            int calls = 0;
+            Assert.Null(PopulationBandPlanner.PlanSafe(options, [5], [0], 0, 0, cache, atlas, new Dictionary<uint, int>(), true,
+                new Random(3), (_, _, _) => { calls++; return false; }));
+            return calls;
+        }
+
+        int oneFaction = Calls(FactionCache((1, 1)));
+        Assert.True(oneFaction > 0);
+        // Four Alliance races with four factions, six or five classes each: each faction's full search runs once, not once per class.
+        Assert.Equal(4 * oneFaction, Calls(FactionCache((1, 1), (3, 3), (4, 4), (7, 115))));
+        // A second race of the same faction adds no search.
+        Assert.Equal(oneFaction, Calls(FactionCache((1, 1), (3, 1))));
+    }
+
+    [Fact]
+    public void PlanSafe_StillFindsAPlacement_ForALaterClassWhenAnEarlierFactionFailed()
+    {
+        var options = new PlayerbotPopulationOptions
+        {
+            Factions = PopulationFactions.Alliance, ZoneLevelSlack = 4, Bands = Bands((1, 10, 1)),
+        };
+        PopulationZoneAtlas atlas = Atlas();
+        PopulationRaceClassCache cache = FactionCache((1, 1), (4, 4));
+        for (int seed = 0; seed < 40; seed++)
+        {
+            PopulationPlan? plan = PopulationBandPlanner.PlanSafe(options, [5], [0], 0, 0, cache, atlas, new Dictionary<uint, int>(), true,
+                new Random(seed), (_, _, faction) => faction == 4);
+            Assert.NotNull(plan);
+            Assert.Equal((byte)4, plan.Race); // the human faction is refused wherever it is tried first
+        }
+    }
+
     [Fact]
     public void WithoutBoost_OnlyBandsReachableAtLevelOneAreUsed()
     {

@@ -101,6 +101,9 @@ internal sealed record PopulationLevelRule(int Slack, int FullSlackMaxFloor, int
 /// <summary>A zone, one of its graveyards, and the levels a bot placed there may have.</summary>
 internal sealed record PopulationPlacement(PopulationZone Zone, WorldSafeLoc Location, int LowLevel, int HighLevel);
 
+/// <summary>A safe location and exact level chosen before a character is created.</summary>
+internal sealed record PopulationSafeSelection(PopulationPlacement Placement, int Level);
+
 /// <summary>
 /// The zones bots can be placed in, built from the area table and the graveyard catalog (both immutable; a content reload replaces them
 /// and the feature rebuilds the atlas). A zone qualifies when it is a zone (no parent), lies on an allowed map, is not excluded, is not a
@@ -268,5 +271,45 @@ internal sealed class PopulationZoneAtlas
         WorldSafeLoc[] locations = [.. zone.LocationsFor(team).Where(l => Takes(zone, l, team, minLevel, maxLevel, rule))];
         WorldSafeLoc location = locations[random.Next(locations.Length)];
         return new PopulationPlacement(zone, location, Math.Max(minLevel, zone.LowestLevelAt(location, team, rule)), Math.Min(maxLevel, zone.MaxLevel));
+    }
+
+    /// <summary>
+    /// Try the least-assigned fitting zones first, including every eligible level and team-linked graveyard before giving up.
+    /// <paramref name="safe"/> reads terrain and creature content on the world thread; a refused zone is skipped in this
+    /// selection, even when it stays least-assigned after the refusal.
+    /// </summary>
+    internal PopulationSafeSelection? PickSafe(int minLevel, int maxLevel, Team team, PopulationLevelRule rule,
+        IReadOnlyDictionary<uint, int> assigned, Random random, Func<WorldSafeLoc, int, bool> safe)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(assigned);
+        ArgumentNullException.ThrowIfNull(random);
+        ArgumentNullException.ThrowIfNull(safe);
+        var ordered = FittingZones(minLevel, maxLevel, team, rule)
+            .Select(zone => (Zone: zone, Tie: random.Next()))
+            .OrderBy(pair => assigned.GetValueOrDefault(pair.Zone.ZoneId)).ThenBy(pair => pair.Tie);
+        foreach (var (zone, _) in ordered)
+        {
+            IReadOnlyList<WorldSafeLoc> locations = zone.LocationsFor(team);
+            int firstLocation = random.Next(locations.Count);
+            for (int place = 0; place < locations.Count; place++)
+            {
+                WorldSafeLoc location = locations[(firstLocation + place) % locations.Count];
+                if (!Takes(zone, location, team, minLevel, maxLevel, rule)) continue;
+                // The levels this location takes under the rule (its floor and creature survey), not the zone's.
+                int low = Math.Max(minLevel, zone.LowestLevelAt(location, team, rule));
+                int high = Math.Min(maxLevel, zone.MaxLevel);
+                int levels = high - low + 1;
+                int firstLevel = random.Next(levels);
+                for (int step = 0; step < levels; step++)
+                {
+                    int level = low + ((firstLevel + step) % levels);
+                    if (safe(location, level))
+                        return new PopulationSafeSelection(new PopulationPlacement(zone, location, low, high), level);
+                }
+            }
+        }
+
+        return null;
     }
 }
