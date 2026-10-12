@@ -190,11 +190,13 @@ internal sealed class PlayerbotQaPublisher
         var pass = new Pass(transport, redactor);
         try
         {
-            if (!await CloseDuplicatesAsync(pass, cancellationToken).ConfigureAwait(false)) return;
             foreach (QaFindingView finding in eligible)
             {
-                if (!await PublishOneAsync(finding.Id, pass, cancellationToken).ConfigureAwait(false)) break;
+                if (!await PublishOneAsync(finding.Id, pass, cancellationToken).ConfigureAwait(false)) return;
             }
+
+            // Closing duplicates comes last: the comments of findings that are still happening have first call on the hourly comment budget, which the closes share.
+            await CloseDuplicatesAsync(pass, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -297,6 +299,8 @@ internal sealed class PlayerbotQaPublisher
 
             QaIssueIndex index = await IndexOfAsync(pass, cancellationToken).ConfigureAwait(false);
             QaIssueRef? found = index.ByMarker(id);
+            // A finding that holds issue #N and finds #N in the list has its issue, whatever marker its body carries (an issue handed over by a merged finding has that finding's).
+            if (found is null && current.Publication.Pinned && current.Publication.Issue > 0) found = index.ByNumber(current.Publication.Issue);
             string marker = PlayerbotQaIssueComposer.MarkerOf(id);
             if (found is null && current.Publication.Issue > 0 && index.ByNumber(current.Publication.Issue) is null)
             {
@@ -416,21 +420,40 @@ internal sealed class PlayerbotQaPublisher
             {
                 QaIssueIndex index = await IndexOfAsync(pass, cancellationToken).ConfigureAwait(false);
                 QaIssueRef? issue = index.ByNumber(duplicate.Issue);
-                if (issue is { Open: false })
+                if (issue is null)
+                {
+                    // Not in the list (deleted, unlabelled, or beyond a cut-short list): unknown, so left alone and kept pending.
+                    _logger.LogInformation("Bot QA: duplicate issue #{Number} is not in the issue list; left alone", duplicate.Issue);
+                    continue;
+                }
+
+                if (!issue.Open)
                 {
                     _state.MarkDuplicateHandled(duplicate.Id); // already closed by a person: nothing to say
                     continue;
                 }
 
-                DateTime now = _time.GetUtcNow().UtcDateTime;
-                if (!Ledger.CanComment(now, git.MaxCommentsPerHour))
+                // Never close an open issue in favour of one that is closed or unknown.
+                if (index.ByNumber(survivor.Publication.Issue) is not { Open: true })
                 {
-                    _logger.LogInformation("Bot QA: the hourly comment cap ({Cap}) is reached; the duplicate issue #{Number} is closed on a later pass", git.MaxCommentsPerHour, duplicate.Issue);
-                    return true;
+                    _logger.LogInformation("Bot QA: issue #{Number} is a duplicate of #{Survivor}, which is not open; left open", duplicate.Issue, survivor.Publication.Issue);
+                    continue;
                 }
 
-                await pass.Transport.CommentAsync(duplicate.Issue, PlayerbotQaIssueComposer.DuplicateComment(survivor.Publication.Issue), cancellationToken).ConfigureAwait(false);
-                Ledger.RecordComment(now);
+                DateTime now = _time.GetUtcNow().UtcDateTime;
+                if (!duplicate.Commented)
+                {
+                    if (!Ledger.CanComment(now, git.MaxCommentsPerHour))
+                    {
+                        _logger.LogInformation("Bot QA: the hourly comment cap ({Cap}) is reached; the duplicate issue #{Number} is closed on a later pass", git.MaxCommentsPerHour, duplicate.Issue);
+                        return true;
+                    }
+
+                    await pass.Transport.CommentAsync(duplicate.Issue, PlayerbotQaIssueComposer.DuplicateComment(survivor.Publication.Issue), cancellationToken).ConfigureAwait(false);
+                    Ledger.RecordComment(now);
+                    _state.MarkDuplicateCommented(duplicate.Id); // a failed close below retries the close only, never the comment
+                }
+
                 await pass.Transport.CloseAsDuplicateAsync(duplicate.Issue, cancellationToken).ConfigureAwait(false);
                 _state.MarkDuplicateHandled(duplicate.Id);
                 _logger.LogInformation("Bot QA: closed issue #{Number} as a duplicate of #{Survivor}", duplicate.Issue, survivor.Publication.Issue);

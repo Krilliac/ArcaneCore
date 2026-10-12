@@ -138,9 +138,9 @@ public sealed class PlayerbotQaGitHubOptions
 
     /// <summary>
     /// When findings are merged into one (the same problem met in several places) and each had its own issue, comment on the absorbed issue with a link to the surviving one and
-    /// close it as not planned (a duplicate). Off keeps the absorbed issue open and untouched; the merge is recorded in the store either way.
+    /// close it as not planned (a duplicate). Off (the default, so the first start after an upgrade can be checked: the start-up log lists every issue it would close as <c>issue #a -> duplicate of #b</c>) keeps the absorbed issue open and untouched; the merge is recorded in the store either way.
     /// </summary>
-    public bool CloseAbsorbedDuplicates { get; set; } = true;
+    public bool CloseAbsorbedDuplicates { get; set; }
 
     /// <summary>The labels put on created issues; the first one is also how existing issues are listed (1..10 labels; a configured list replaces the default).</summary>
     public string[] Labels { get; set; } = ["bot-qa"];

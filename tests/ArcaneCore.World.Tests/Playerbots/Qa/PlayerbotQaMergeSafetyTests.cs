@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ArcaneCore.World.Playerbots.Qa;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -10,6 +11,82 @@ namespace ArcaneCore.World.Tests.Playerbots.Qa;
 /// Merging findings must never lose an issue: the id of a merged-away finding is recorded, an outcome the publisher still reports for it reaches the
 /// survivor, a finding the publisher works on is not aged out, and the issue of an absorbed published finding is closed as a duplicate of the survivor's.
 /// </summary>
+/// <summary>The realism probe needs a copy of a live findings file (<c>ARCANECORE_QA_REALISM_FILE</c>); without it the test is reported as Skipped, never as a silent pass.</summary>
+public sealed class QaRealismFactAttribute : FactAttribute
+{
+    public const string Variable = "ARCANECORE_QA_REALISM_FILE";
+
+    public QaRealismFactAttribute()
+    {
+        string? path = Environment.GetEnvironmentVariable(Variable);
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) Skip = $"{Variable} is not set to a copy of a findings.json.";
+    }
+}
+
+/// <summary>An in-memory GitHub as the publisher sees it: issues with bodies, every create, comment and close recorded, closes that can be made to fail.</summary>
+internal sealed class ScriptedTransport : IQaIssueTransport
+{
+    private readonly Dictionary<int, (bool Open, string Body)> _issues = [];
+    private int _next = 500;
+
+    public List<string> Calls { get; } = [];
+
+    public int CloseFailures { get; set; }
+
+    public bool SupportsSearch => false;
+
+    public int Add(string body, bool open = true)
+    {
+        _issues[_next] = (open, body);
+        return _next++;
+    }
+
+    public bool IsOpen(int number) => _issues[number].Open;
+
+    public Task<QaIssueIndex> ListIndexAsync(CancellationToken cancellationToken)
+    {
+        var index = new QaIssueIndex(complete: true);
+        foreach ((int number, (bool open, string body)) in _issues) index.Add(new QaIssueRef(number, open, $"https://github.com/x/y/issues/{number}"), body);
+        return Task.FromResult(index);
+    }
+
+    public Task<(QaIssueRef Issue, string Body)?> GetIssueAsync(int number, CancellationToken cancellationToken) => Task.FromResult<(QaIssueRef, string)?>(null);
+
+    public Task<QaIssueRef?> SearchByMarkerAsync(string id, CancellationToken cancellationToken) => Task.FromResult<QaIssueRef?>(null);
+
+    public Task<QaIssueRef> CreateIssueAsync(string title, string body, IReadOnlyList<string> labels, CancellationToken cancellationToken)
+    {
+        int number = Add(body);
+        Calls.Add("create " + number);
+        return Task.FromResult(new QaIssueRef(number, true, $"https://github.com/x/y/issues/{number}"));
+    }
+
+    public Task CommentAsync(int number, string body, CancellationToken cancellationToken)
+    {
+        Calls.Add($"comment {number}{(body.StartsWith("Duplicate of", StringComparison.Ordinal) ? " duplicate" : string.Empty)}");
+        return Task.CompletedTask;
+    }
+
+    public Task ReopenAsync(int number, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken)
+    {
+        Calls.Add("close " + number);
+        if (CloseFailures > 0)
+        {
+            CloseFailures--;
+            throw new PlayerbotQaPublishException("close failed", transient: true);
+        }
+
+        _issues[number] = (false, _issues[number].Body);
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+    }
+}
+
 public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output) : IDisposable
 {
     private static readonly byte[] Salt = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
@@ -155,13 +232,13 @@ public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output
         }
     }
 
-    private PlayerbotQaPublisher Publisher(PlayerbotQaAggregator aggregator, PlayerbotQaOptions options, Func<IQaIssueTransport> make, ListLogger? log = null)
+    private PlayerbotQaPublisher Publisher(PlayerbotQaAggregator aggregator, PlayerbotQaOptions options, Func<IQaIssueTransport> make, ListLogger? log = null, ManualTime? time = null)
         => new(options, _directory, aggregator, new PlayerbotQaRedactor(), log ?? new ListLogger(), name => name == "ARCANECORE_GITHUB_TOKEN" ? QaData.FakeToken : null,
-            _ => make(), new ManualTime(QaData.T0), "test-build");
+            _ => make(), time ?? new ManualTime(QaData.T0), "test-build");
 
     private static PlayerbotQaOptions Options(Action<PlayerbotQaGitHubOptions>? configure = null)
     {
-        var options = new PlayerbotQaOptions { GitHub = { Enabled = true, Publish = true, Repository = QaData.Repo, MinOccurrences = 3, MinDistinctBots = 2 } };
+        var options = new PlayerbotQaOptions { GitHub = { Enabled = true, Publish = true, Repository = QaData.Repo, MinOccurrences = 3, MinDistinctBots = 2, CloseAbsorbedDuplicates = true } };
         configure?.Invoke(options.GitHub);
         return options;
     }
@@ -302,6 +379,184 @@ public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output
         Assert.All(aggregator.Snapshot(), f => Assert.Equal(f.Anchor!.Map, f.Map));
     }
 
+    /// <summary>Two published loop findings (a: three occurrences, b: four) merged by a bridging signal, with their issues in the scripted GitHub. The survivor has the lower issue number.</summary>
+    private static (string Survivor, string Absorbed, int SurvivorIssue, int AbsorbedIssue) PublishedPair(PlayerbotQaAggregator aggregator, ScriptedTransport github, bool survivorOpen = true)
+    {
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 3, countB: 4);
+        int issueB = github.Add(PlayerbotQaIssueComposer.MarkerOf(b) + "\n\nbody b", survivorOpen);
+        int issueA = github.Add(PlayerbotQaIssueComposer.MarkerOf(a) + "\n\nbody a");
+        aggregator.Apply(b, new QaPublicationUpdate(Published(issueB), null, 4));
+        aggregator.Apply(a, new QaPublicationUpdate(Published(issueA), null, 3));
+        Assert.Equal(b, Ingest(aggregator, bridge));
+        return (b, a, issueB, issueA);
+    }
+
+    [Fact]
+    public async Task AnIssueHandedOverToTheSurvivor_IsFoundByItsNumber_AndCommentedNotRecreated()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 3, countB: 4);
+        var github = new ScriptedTransport();
+        int issue = github.Add(PlayerbotQaIssueComposer.MarkerOf(a) + "\n\nbody a"); // the issue carries the ABSORBED finding's marker
+        aggregator.Pin(a);
+        Assert.Equal(b, Ingest(aggregator, bridge)); // a is merged into b while its issue is being created
+        aggregator.Apply(a, new QaPublicationUpdate(Published(issue), QaData.T0, 3));
+        aggregator.Unpin(a);
+        Assert.Equal(Published(issue), aggregator.Get(b)!.Publication);
+
+        var time = new ManualTime(QaData.T0);
+        PlayerbotQaPublisher publisher = Publisher(aggregator, Options(), () => github, time: time);
+        time.Advance(TimeSpan.FromHours(25)); // a comment is due
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+        time.Advance(TimeSpan.FromHours(25));
+        Ingest(aggregator, Loop(-10600f, 250f, 0, null, 202, 531));
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+
+        Assert.DoesNotContain(github.Calls, c => c.StartsWith("create", StringComparison.Ordinal));
+        Assert.Equal([$"comment {issue}", $"comment {issue}"], github.Calls);
+    }
+
+    [Fact]
+    public async Task AFailedClose_IsRetried_WithoutCommentingAgain()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        var github = new ScriptedTransport { CloseFailures = 1 };
+        (_, _, int kept, int lost) = PublishedPair(aggregator, github);
+        PlayerbotQaPublisher publisher = Publisher(aggregator, Options(), () => github);
+
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+        Assert.Equal([$"comment {kept}", $"comment {lost} duplicate", $"close {lost}"], github.Calls); // the survivor's own comment, then the duplicate's; the close failed
+        Assert.True(aggregator.PendingDuplicates().Single().Commented);
+
+        github.Calls.Clear();
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+        Assert.Equal([$"close {lost}"], github.Calls); // retried, and not commented again
+        Assert.Empty(aggregator.PendingDuplicates());
+        Assert.False(github.IsOpen(lost));
+        Assert.True(github.IsOpen(kept));
+    }
+
+    [Fact]
+    public async Task AnOpenIssue_IsNeverClosedInFavourOfAClosedOrUnknownOne()
+    {
+        // The survivor's issue was closed on GitHub since the merge: the absorbed (open) issue stays open and the entry stays pending.
+        PlayerbotQaAggregator aggregator = New();
+        var github = new ScriptedTransport();
+        (_, _, int kept, int lost) = PublishedPair(aggregator, github, survivorOpen: false);
+        var log = new ListLogger();
+        await Publisher(aggregator, Options(), () => github, log).RunAsync(aggregator.Snapshot(), CancellationToken.None);
+        Assert.DoesNotContain(github.Calls, c => c.Contains("duplicate", StringComparison.Ordinal) || c.StartsWith("close", StringComparison.Ordinal));
+        Assert.True(github.IsOpen(lost));
+        Assert.Single(aggregator.PendingDuplicates());
+        Assert.Contains(log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains($"#{lost} is a duplicate of #{kept}", StringComparison.Ordinal));
+
+        // The absorbed issue is not in the issue list at all: unknown, so untouched.
+        PlayerbotQaAggregator other = New();
+        var empty = new ScriptedTransport();
+        (_, string absorbed, int survivorIssue, _) = PublishedPair(other, empty);
+        other.Apply(absorbed, new QaPublicationUpdate(Published(9999))); // the id is merged away: recorded as the absorbed issue, which GitHub's list does not have
+        QaAbsorbed entry = Assert.Single(other.PendingDuplicates());
+        Assert.NotEqual(survivorIssue, entry.Issue);
+        empty.Calls.Clear();
+        await Publisher(other, Options(), () => empty).RunAsync(other.Snapshot(), CancellationToken.None);
+        Assert.DoesNotContain(empty.Calls, c => c.Contains("duplicate", StringComparison.Ordinal) || c.StartsWith("close", StringComparison.Ordinal));
+        Assert.Single(other.PendingDuplicates());
+    }
+
+    [Fact]
+    public void TheSurvivorOfAnInFlightAlias_IsProtected_AndADeadSurvivorDoesNotStrandTheEntry()
+    {
+        PlayerbotQaAggregator aggregator = New(stale: TimeSpan.FromHours(24));
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 1, countB: 3);
+        aggregator.Pin(a);
+        Assert.Equal(b, Ingest(aggregator, bridge));
+        Assert.Equal(0, aggregator.AgeOut(QaData.T0.AddDays(5))); // b is the survivor of the finding being published: it stays
+        Assert.NotNull(aggregator.Get(b));
+
+        aggregator.Reset(b); // the survivor is gone by hand while a is still in flight
+        aggregator.Apply(a, new QaPublicationUpdate(Published(31)));
+        Assert.Empty(aggregator.PendingDuplicates());
+        Assert.Empty(aggregator.Export().Absorbed!);
+        aggregator.Unpin(a);
+
+        // Without an in-flight publish a dead survivor's alias is pruned by the next pass.
+        PlayerbotQaAggregator again = New(stale: TimeSpan.FromHours(24));
+        (_, string d, QaSignal bridge2) = TwoLoops(again, countA: 1, countB: 3);
+        Ingest(again, bridge2);
+        Assert.Single(again.Export().Absorbed!);
+        again.Reset(d);
+        again.AgeOut(QaData.T0);
+        Assert.Empty(again.Export().Absorbed!);
+    }
+
+    [Fact]
+    public void RestoredDeathLoopAttackers_AreCappedAtEight()
+    {
+        PlayerbotQaAggregator maker = New();
+        QaFindingView view = Fragment(maker, Loop(100f, 100f, 0, null, [1, 2, 3, 4, 5, 6, 7, 8]));
+        QaSample sample = view.Samples![0] with { Attackers = [.. Enumerable.Range(1, 20).Select(i => (uint)i)] };
+        PlayerbotQaAggregator target = New();
+        target.Restore(new QaAggregatorState([view with { Samples = [sample] }], new Dictionary<string, ulong[]>()));
+        Assert.Equal(QaFinding.MaxLoopAttackers, Assert.Single(target.Snapshot()).Attackers.Count);
+    }
+
+    [Fact]
+    public async Task GhCliTransport_RunsTheCommentAndCloseCommandsItShouldRun()
+    {
+        var gh = new FakeGh();
+        int number = gh.Add("body");
+        PlayerbotQaGitHubOptions options = new() { Enabled = true, Repository = QaData.Repo, Publish = true, Transport = PlayerbotQaGitHubTransport.GhCli };
+        using var client = new PlayerbotQaGhCliClient(gh, "gh", QaData.Repo, options, null, _directory);
+        string n = number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        await client.CommentAsync(number, PlayerbotQaIssueComposer.DuplicateComment(7), CancellationToken.None);
+        await client.CloseAsDuplicateAsync(number, CancellationToken.None);
+
+        Assert.Equal(["issue", "comment", n, "--repo", QaData.Repo, "--body-file"], gh.Requests[0].Arguments.Take(6));
+        Assert.Equal(["issue", "close", n, "--repo", QaData.Repo, "--reason", "not planned"], gh.Requests[1].Arguments);
+        Assert.Contains("Duplicate of #7", gh.BodyFiles[0].Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClosingAbsorbedDuplicates_IsOffByDefault()
+    {
+        Assert.False(new PlayerbotQaOptions().GitHub.CloseAbsorbedDuplicates);
+    }
+
+    [Fact]
+    public void TheStartUpLog_ListsEveryIssueItWouldClose_ByNumberOnly()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        var github = new ScriptedTransport();
+        (_, _, int kept, int lost) = PublishedPair(aggregator, github);
+        QaAggregatorState state = aggregator.Export();
+        new PlayerbotQaStore(_directory, new ListLogger()).Save(new QaStoreFile { SaltBase64 = Convert.ToBase64String(Salt), Findings = state.Findings, Bots = state.Bots, Absorbed = state.Absorbed! });
+
+        var log = new ListLogger();
+        var options = new PlayerbotQaOptions { Directory = _directory };
+        using Microsoft.Extensions.DependencyInjection.ServiceProvider services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSingleton<Microsoft.Extensions.Options.IOptions<PlayerbotQaOptions>>(Microsoft.Extensions.Options.Options.Create(options))
+            .AddSingleton(new PlayerbotQaSignalBus(64))
+            .AddSingleton<Microsoft.Extensions.Logging.ILogger<PlayerbotQaFeature>>(new ListLogger<PlayerbotQaFeature>(log))
+            .BuildServiceProvider();
+        var feature = new PlayerbotQaFeature(services) { Time = new ManualTime(QaData.T0) };
+        feature.Attach(null!);
+
+        Assert.Contains(log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains($"issue #{lost} -> duplicate of #{kept}", StringComparison.Ordinal) && m.Contains("left alone", StringComparison.Ordinal));
+        Assert.Single(feature.Aggregator!.PendingDuplicates());
+    }
+
+    private sealed class ListLogger<T>(ListLogger inner) : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => inner.Log(logLevel, eventId, state, exception, formatter);
+    }
+
+
     private static QaFindingView Fragment(PlayerbotQaAggregator maker, QaSignal signal, QaPublication? publication = null, bool oldFormat = true)
     {
         PlayerbotQaAggregator one = New();
@@ -344,11 +599,10 @@ public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output
     /// Local-only: when <c>ARCANECORE_QA_REALISM_FILE</c> names a copy of a live <c>findings.json</c>, load it into an aggregator and check that every
     /// published or known-closed id survives or is recorded as absorbed. Without the variable the test does nothing (a copy of live data is never committed).
     /// </summary>
-    [Fact]
+    [QaRealismFact]
     public void RealisticStore_CollapsesAndKeepsEveryPublishedId()
     {
-        string? path = Environment.GetEnvironmentVariable("ARCANECORE_QA_REALISM_FILE");
-        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+        string path = Environment.GetEnvironmentVariable(QaRealismFactAttribute.Variable)!;
         QaStoreFile file = JsonSerializer.Deserialize(File.ReadAllText(path), QaStoreJsonContext.Default.QaStoreFile)!;
         DateTime newest = file.Findings.Max(f => f.LastSeenUtc);
         string[] pinned = [.. file.Findings.Where(f => f.Publication?.Pinned == true).Select(f => f.Id)];

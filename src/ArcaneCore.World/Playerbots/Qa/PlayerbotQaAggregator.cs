@@ -27,6 +27,11 @@ internal interface IQaPublicationState
     void MarkDuplicateHandled(string id)
     {
     }
+
+    /// <summary>The absorbed finding's issue got its duplicate comment (a close that fails afterwards is retried without commenting again).</summary>
+    void MarkDuplicateCommented(string id)
+    {
+    }
 }
 
 /// <summary>
@@ -34,7 +39,7 @@ internal interface IQaPublicationState
 /// outcome the publisher still reports for it reaches the survivor. <see cref="Issue"/> is its GitHub issue when it had one that the survivor's
 /// does not replace (0 otherwise); <see cref="Handled"/> says the issue was closed as a duplicate of the survivor's (or needs no closing).
 /// </summary>
-internal sealed record QaAbsorbed(string Id, string Survivor, int Issue = 0, bool Handled = true);
+internal sealed record QaAbsorbed(string Id, string Survivor, int Issue = 0, bool Handled = true, bool Commented = false);
 
 /// <summary>The aggregator's persisted state: the findings, per finding the salted hashes of the bots that met it, and the merged-away ids.</summary>
 internal sealed record QaAggregatorState(IReadOnlyList<QaFindingView> Findings, IReadOnlyDictionary<string, ulong[]> Bots, IReadOnlyList<QaAbsorbed>? Absorbed = null);
@@ -580,16 +585,25 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         }
     }
 
-    /// <summary>How many merged-away findings had a published issue that is not the survivor's (running total of the current set).</summary>
-    internal int AbsorbedIssues
+    public void MarkDuplicateCommented(string id)
     {
-        get { lock (_gate) return _absorbed.Values.Count(a => a.Issue > 0); }
+        lock (_gate)
+        {
+            if (_absorbed.TryGetValue(id, out QaAbsorbed? a)) _absorbed[id] = a with { Commented = true };
+        }
     }
 
     private void ApplyToAbsorbed(QaAbsorbed gone, QaPublicationUpdate update)
     {
-        _byId.TryGetValue(gone.Survivor, out QaFinding? survivor);
-        if (survivor is not null && !survivor.Publication.Pinned)
+        if (!_byId.TryGetValue(gone.Survivor, out QaFinding? survivor))
+        {
+            // The survivor is gone as well: the alias protects nothing now, and the issue is left as it is (open, with its marker, as before any merge).
+            _absorbed.Remove(gone.Id);
+            log?.LogWarning("Bot QA: issue #{Issue} was opened for finding {Id}, which was merged into a finding that no longer exists; it is left open", update.Publication.Issue, PlayerbotQaFingerprint.ShortId(gone.Id));
+            return;
+        }
+
+        if (!survivor.Publication.Pinned)
         {
             survivor.Publication = update.Publication;
             if (update.LastCommentUtc is { } at) survivor.LastCommentUtc = at;
@@ -601,7 +615,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
         bool closed = update.Publication.State == QaPublicationState.KnownClosed;
         _absorbed[gone.Id] = gone with { Issue = update.Publication.Issue, Handled = closed };
-        if (survivor?.Publication.Issue is > 0 and int survivorIssue && update.Publication.Issue > 0)
+        if (survivor.Publication.Issue is > 0 and int survivorIssue && update.Publication.Issue > 0)
         {
             log?.LogInformation("Bot QA: issue #{Absorbed} (finding {AbsorbedId}) absorbed into #{Survivor} (finding {SurvivorId}); one problem, one issue",
                 update.Publication.Issue, PlayerbotQaFingerprint.ShortId(gone.Id), survivorIssue, PlayerbotQaFingerprint.ShortId(gone.Survivor));
@@ -723,7 +737,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
         foreach (uint attacker in attackers)
         {
-            if (attacker != 0 && finding.Attackers.Count < QaFinding.MaxAttackers) finding.Attackers.Add(attacker);
+            if (attacker != 0 && finding.Attackers.Count < QaFinding.MaxLoopAttackers) finding.Attackers.Add(attacker);
         }
 
         finding.DeathSource = !string.IsNullOrEmpty(view.DeathSource) ? view.DeathSource
@@ -771,11 +785,24 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         QaFinding? victim = null;
         foreach (QaFinding f in _byId.Values)
         {
-            if (f.Publication.Pinned || _inFlight.ContainsKey(f.Id) || !eligible(f)) continue;
+            if (f.Publication.Pinned || IsProtected(f.Id) || !eligible(f)) continue;
             if (victim is null || Cheaper(f, victim)) victim = f;
         }
 
         return victim;
+    }
+
+    /// <summary>A finding the publisher is working on, or the survivor of one it is working on that was merged away meanwhile (its outcome lands on the survivor).</summary>
+    private bool IsProtected(string id)
+    {
+        if (_inFlight.Count == 0) return false;
+        if (_inFlight.ContainsKey(id)) return true;
+        foreach (string working in _inFlight.Keys)
+        {
+            if (_absorbed.TryGetValue(working, out QaAbsorbed? a) && string.Equals(a.Survivor, id, StringComparison.Ordinal)) return true;
+        }
+
+        return false;
     }
 
     private static bool OneOff(QaFinding f) => f.Count <= 1 && f.DistinctBots <= 1;
@@ -799,7 +826,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         lock (_gate)
         {
             // A finding the publisher is working on stays until it is done with it, or its issue number would have nowhere to go.
-            QaFinding[] stale = [.. _byId.Values.Where(f => !_inFlight.ContainsKey(f.Id) && IsStale(f.Publication, f.Coverage, f.LastSeenUtc, now))];
+            QaFinding[] stale = [.. _byId.Values.Where(f => !IsProtected(f.Id) && IsStale(f.Publication, f.Coverage, f.LastSeenUtc, now))];
             foreach (QaFinding f in stale) Remove(f);
             if (stale.Length > 0)
             {
@@ -813,12 +840,12 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
     }
 
     /// <summary>
-    /// Forget the merged-away ids that no longer protect anything: one without an issue whose survivor is gone. An id with an issue stays for ever
-    /// (it is the issue's marker); the rest are bounded by twice the finding cap. Call under the lock.
+    /// Forget the merged-away ids whose survivor is gone (reset by hand, or dropped): the alias protects nothing, and an issue it was to close is left open as it was
+    /// before the merge. The rest are bounded by twice the finding cap, those without an issue first. Call under the lock.
     /// </summary>
     private void PruneAbsorbed()
     {
-        foreach (string id in _absorbed.Where(p => p.Value.Issue == 0 && !_byId.ContainsKey(p.Value.Survivor)).Select(p => p.Key).ToList()) _absorbed.Remove(id);
+        foreach (string id in _absorbed.Where(p => !_byId.ContainsKey(p.Value.Survivor) && !IsProtected(p.Key)).Select(p => p.Key).ToList()) _absorbed.Remove(id);
         int excess = _absorbed.Count - maxFindings * 2;
         if (excess <= 0) return;
         foreach (string id in _absorbed.Where(p => p.Value.Issue == 0).Select(p => p.Key).Order(StringComparer.Ordinal).Take(excess).ToList()) _absorbed.Remove(id);

@@ -110,6 +110,14 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             _publisher.Ledger.Restore(saved.Ledger);
             _log.LogInformation("Bot QA restored {Count} findings from {Path} ({Dropped} invalid or over the cap, {Aged} aged out, {Merged} merged into another, {Issues} issues of merged findings to close as duplicates)",
                 aggregator.Count, _store.FilePath, dropped, aggregator.AgedOut, aggregator.Merged, aggregator.PendingDuplicates().Count);
+            foreach (QaAbsorbed duplicate in aggregator.PendingDuplicates())
+            {
+                if (aggregator.Get(duplicate.Survivor) is { } survivor && survivor.Publication.Issue > 0)
+                {
+                    _log.LogInformation("Bot QA: issue #{Issue} -> duplicate of #{Survivor} ({Action})", duplicate.Issue, survivor.Publication.Issue,
+                        options.GitHub.CloseAbsorbedDuplicates ? "will be commented and closed" : "left alone: World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates is off");
+                }
+            }
         }
 
         Aggregator = aggregator;
