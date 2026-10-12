@@ -2,6 +2,7 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Creatures;
 using ArcaneCore.Data.Loot;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Instances;
 using Microsoft.EntityFrameworkCore;
 
@@ -13,21 +14,24 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
     public async Task<InstanceStoreSnapshot> LoadAsync(CancellationToken cancellationToken = default)
     {
         // vmangos MapPersistentStateManager::CleanupInstances: binds of deleted characters or of
-        // missing instances go first.
-        await db.Set<CharacterInstanceRow>()
-            .Where(b => !db.Characters.Any(c => c.Id == b.CharacterId))
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        await db.Set<CharacterInstanceRow>()
-            .Where(b => !db.Set<InstanceRow>().Any(i => i.Id == b.InstanceId))
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        await db.Set<CharacterLastInstanceRow>()
-            .Where(l => !db.Characters.Any(c => c.Id == l.CharacterId))
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        // missing instances go first. It runs after the world's claim, so under the fence it is one verified transaction.
+        await CharacterWrites.InTransactionAsync(db, async () =>
+        {
+            await db.Set<CharacterInstanceRow>()
+                .Where(b => !db.Characters.Any(c => c.Id == b.CharacterId))
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await db.Set<CharacterInstanceRow>()
+                .Where(b => !db.Set<InstanceRow>().Any(i => i.Id == b.InstanceId))
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await db.Set<CharacterLastInstanceRow>()
+                .Where(l => !db.Characters.Any(c => c.Id == l.CharacterId))
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
-        // The group_instance half of CleanupInstances: rows of a deleted leader or of a missing instance.
-        await db.Set<GroupInstanceRow>()
-            .Where(b => !db.Characters.Any(c => c.Id == b.LeaderCharacterId) || !db.Set<InstanceRow>().Any(i => i.Id == b.InstanceId))
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            // The group_instance half of CleanupInstances: rows of a deleted leader or of a missing instance.
+            await db.Set<GroupInstanceRow>()
+                .Where(b => !db.Characters.Any(c => c.Id == b.LeaderCharacterId) || !db.Set<InstanceRow>().Any(i => i.Id == b.InstanceId))
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
 
         List<InstanceRow> instances = await db.Set<InstanceRow>().AsNoTracking().OrderBy(i => i.Id).ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CharacterInstanceRow> binds = await db.Set<CharacterInstanceRow>().AsNoTracking()
@@ -65,8 +69,9 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
     {
         // vmangos InstanceData::SaveToDB updates only an existing instance row. A delayed write
         // after reset must not recreate the deleted instance.
-        await db.Set<InstanceRow>().Where(i => i.Id == (int)instanceId)
-            .ExecuteUpdateAsync(s => s.SetProperty(i => i.Data, data), cancellationToken).ConfigureAwait(false);
+        await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<InstanceRow>().Where(i => i.Id == (int)instanceId).ExecuteUpdateAsync(s => s.SetProperty(i => i.Data, data), cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default)
@@ -116,9 +121,9 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
     public async Task DeleteBindAsync(int characterId, uint instanceId, CancellationToken cancellationToken = default)
     {
         int id = (int)instanceId;
-        await db.Set<CharacterInstanceRow>()
-            .Where(b => b.CharacterId == characterId && b.InstanceId == id)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<CharacterInstanceRow>().Where(b => b.CharacterId == characterId && b.InstanceId == id).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task SaveGroupBindAsync(GroupInstanceBindRecord bind, CancellationToken cancellationToken = default)
@@ -142,9 +147,9 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
     public async Task DeleteGroupBindAsync(int leaderCharacterId, uint instanceId, CancellationToken cancellationToken = default)
     {
         int id = (int)instanceId;
-        await db.Set<GroupInstanceRow>()
-            .Where(b => b.LeaderCharacterId == leaderCharacterId && b.InstanceId == id)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<GroupInstanceRow>().Where(b => b.LeaderCharacterId == leaderCharacterId && b.InstanceId == id).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task SaveResetTimeAsync(InstanceResetRecord reset, CancellationToken cancellationToken = default)

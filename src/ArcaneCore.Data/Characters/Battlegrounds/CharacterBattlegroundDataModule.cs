@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -103,5 +104,6 @@ public sealed class EfBattlegroundEntryPointStore(CharacterDbContext db) : IBatt
     }
 
     public Task DeleteAsync(int characterId, CancellationToken cancellationToken = default)
-        => db.Set<CharacterBattlegroundRow>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken);
+        => CharacterWrites.InTransactionAsync(
+            db, () => db.Set<CharacterBattlegroundRow>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken), cancellationToken);
 }

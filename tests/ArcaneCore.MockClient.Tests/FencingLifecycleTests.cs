@@ -3,7 +3,10 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Chr;
 using ArcaneCore.Data.Stores;
+using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Honor;
+using ArcaneCore.Kernel.Instances;
 using ArcaneCore.MockClient.Hosting;
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
@@ -75,8 +78,20 @@ public sealed class FencingLifecycleTests
             Assert.Equal(guid, relog.Self.Guid);
         }
 
+        // Set-based writes of the stores that used to bypass the fence (ExecuteDelete/ExecuteUpdate), made while the world owns the database.
+        await using (AsyncServiceScope writes = server.Services.CreateAsyncScope())
+        {
+            int id = checked((int)guid);
+            await writes.ServiceProvider.GetRequiredService<IHonorStore>().ResetAsync(id, token);
+            await writes.ServiceProvider.GetRequiredService<ICharacterSpellStore>().RemoveAsync(id, 1, token);
+            await writes.ServiceProvider.GetRequiredService<IExploredZonesStore>().DeleteAsync(id, token);
+            await writes.ServiceProvider.GetRequiredService<IInstanceStore>().DeleteBindAsync(id, 1, token);
+        }
+
         await server.StopWorldAsync(token);
         Assert.False(await IsClaimedAsync(server, token));
+        Assert.Empty(logged.Of<CharacterWriteFenceException>());
+        Assert.Empty(logged.Of<CharacterOwnershipRejectedException>());
 
         // The same file can be owned again once the claim is released.
         await using SyntheticArcaneServer successor = await SyntheticArcaneServer.StartAsync(

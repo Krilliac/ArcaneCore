@@ -146,8 +146,9 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
     public async Task CompleteAsync(Guid operationId, CancellationToken cancellationToken = default)
     {
         string key = operationId.ToString("D");
-        await db.Set<CharacterDeletionRow>().Where(r => r.OperationId == key)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<CharacterDeletionRow>().Where(r => r.OperationId == key).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
