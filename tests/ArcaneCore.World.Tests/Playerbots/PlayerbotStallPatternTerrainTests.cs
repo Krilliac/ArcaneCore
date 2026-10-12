@@ -7,7 +7,7 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// <summary>
 /// The places where the live stress test's bots stalled (2026-10-08, 200 managed bots in every starting zone; 74 stalled,
 /// D:/ArcaneCore-lanes/_plan/stress-bot-failures-20261008.txt), on the real terrain: a bot is put where a stalled one stood and
-/// follows <see cref="PlayerbotNavigation.TryPlanToward"/> routes, as its quest travel does, to the creature its goal named
+/// follows <see cref="PlayerbotNavigation.PlanToward"/> routes, as its quest travel does, to the creature its goal named
 /// (positions from the stall reports and the world database's spawns).
 /// </summary>
 public sealed partial class PlayerbotRealTerrainNavigationTests
