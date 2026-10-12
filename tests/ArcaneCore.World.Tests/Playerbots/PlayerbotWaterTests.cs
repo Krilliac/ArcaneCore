@@ -105,8 +105,8 @@ public sealed class PlayerbotWaterTests
     }
 
     /// <summary>
-    /// A sick bot still walks its quest returns and errands (the sickness stand-down only stops an idle bot): crossing a ford while sick
-    /// must not be pulled back to the bank, or the route and the escape fight each other until the sickness ends (review, cycle 2).
+    /// A sick bot that is walking is not diverted into the water escape by its sickness alone: on its first think the sickness stand-down
+    /// stops it and the goal is Rest, not Escape. The escape then takes it out on a later think (see SickSubmergedBotOffRoute_IsStoodDownThenEscapes).
     /// </summary>
     [Fact]
     public async Task SickMovingBotCrossingShallowWater_IsNotDivertedByTheEscape()
@@ -135,7 +135,128 @@ public sealed class PlayerbotWaterTests
                 session.ManagedBudget = new ManagedActionBudget(4);
                 brain.Update(500);
 
+                Assert.Equal(PlayerbotGoalKind.Rest, brain.Goal);
                 Assert.NotEqual(PlayerbotGoalKind.Escape, brain.Goal);
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// The drowning-risk path: a sick bot walking off its route in water is stood down first (goal Rest, StandDownWhileSick), and once the
+    /// stop is acknowledged the next think finds it standing under water and the escape takes it to the shore.
+    /// </summary>
+    [Fact]
+    public async Task SickSubmergedBotOffRoute_IsStoodDownThenEscapes()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                PlayerbotSicknessTestKit.Apply(host.WorldServices, player);
+                MovementInfo moving = player.Movement; moving.Flags |= MovementFlags.Forward;
+                var packet = new PacketWriter(); moving.Write(packet);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                session.TryManagedAction(WorldOpcode.MsgMoveHeartbeat, packet.ToArray());
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                Assert.True(PlayerbotWater.Submerged(player));
+
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                Assert.Equal(PlayerbotGoalKind.Rest, brain.Goal);
+
+                // Acknowledge the stop: pump the movement orders until the bot stands still.
+                for (int pump = 0; pump < 8 && player.Movement.HasFlag(MovementFlags.Forward); pump++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    PlayerbotMovementControl.Update(session, player);
+                }
+                Assert.False(player.Movement.HasFlag(MovementFlags.Forward), "the stand-down must have stopped the bot");
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater; // the stop's heartbeat re-sampled the terrain
+                Assert.True(PlayerbotWater.Submerged(player));
+
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                Assert.Equal(PlayerbotGoalKind.Escape, brain.Goal);
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward), "the escape must start toward the shore");
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>The still variant: a sick bot that already stands under water is taken out by the escape on its first think.</summary>
+    [Fact]
+    public async Task SickSubmergedStillBot_EscapesAfterOneThink()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                PlayerbotSicknessTestKit.Apply(host.WorldServices, player);
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                Assert.True(PlayerbotWater.Submerged(player));
+                Assert.False(player.Movement.HasFlag(MovementFlags.Forward));
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+
+                Assert.Equal(PlayerbotGoalKind.Escape, brain.Goal);
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward), "the escape must start toward the shore");
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>A group handing the bot back clears the water route planned before it: a submerged, standing bot then plans afresh.</summary>
+    [Fact]
+    public async Task ResumeAfterGroup_ClearsTheWaterRoute_AndTheStillBotEscapesAfresh()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                player.Health = 20;
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                brain.Risk.BeginWait(player);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                Assert.Equal(PlayerbotGoalKind.Escape, brain.Goal); // a water route is now planned
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
+
+                brain.ResumeAfterGroup();
+                Assert.Equal(PlayerbotGoalKind.Explore, brain.Goal);
+                for (int pump = 0; pump < 8 && player.Movement.HasFlag(MovementFlags.Forward); pump++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    PlayerbotMovementControl.Stop(session, player);
+                    PlayerbotMovementControl.Update(session, player);
+                }
+                Assert.False(player.Movement.HasFlag(MovementFlags.Forward));
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                Assert.True(PlayerbotWater.Submerged(player));
+
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                Assert.Equal(PlayerbotGoalKind.Escape, brain.Goal);
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward), "a fresh escape must start toward the shore");
                 return true;
             });
         }
