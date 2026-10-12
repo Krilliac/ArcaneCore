@@ -294,6 +294,8 @@ public sealed class CreatureAiFactory
 
         // Dungeon and raid ScriptNames that bind by name (an EventAI host, a gossip/quest script, an inert trigger AI).
         Instances.Scripts.Uldaman.ArchaerasAddAI.Register(this);
+        Instances.Scripts.Naxxramas.GothikAnchorAI.Register(this);
+        Instances.Scripts.Naxxramas.InvisibleManAI.Register(this);
     }
 
     public IReadOnlyCollection<string> Names => _factories.Keys;

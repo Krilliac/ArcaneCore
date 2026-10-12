@@ -38,7 +38,6 @@ public sealed class ScriptCoverageTests(ITestOutputHelper output)
         // Doom'rel has his gossip (DoomrelGossip, an INpcGossipScript registered by DungeonEventFeature) but no AI; the catalogue answers for AIs.
         (230, 9039, "boss_doomrel"),
         (329, 10917, "npc_aurius"),
-        (533, 16137, "spell_anchor"), (533, 17286, "npc_invible_man"),
     ];
 
     [WorldFixtureFact]
