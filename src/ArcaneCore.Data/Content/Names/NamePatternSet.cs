@@ -5,7 +5,7 @@ namespace ArcaneCore.Data.Content.Names;
 
 /// <summary>
 /// An immutable "any pattern matches" set for character-name filtering: a set of case-insensitive substring literals plus a few
-/// combined non-backtracking regexes. It answers exactly what a loop over one regex per source row would, at a roughly constant
+/// combined non-backtracking regexes (plus the odd row that must stand alone). It answers exactly what a loop over one regex per source row would, at a roughly constant
 /// heap cost instead of one automaton per row. Safe for concurrent reads (the regexes and the search values are thread-safe).
 /// </summary>
 public sealed class NamePatternSet

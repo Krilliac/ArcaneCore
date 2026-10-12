@@ -10,12 +10,19 @@ using Xunit.Abstractions;
 
 namespace ArcaneCore.Data.Tests.Names;
 
+/// <summary>Serialises the heap-measuring and 770 MB-oracle tests: <c>GC.GetTotalMemory</c> counts the whole process.</summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class NamePatternHeavyCollection
+{
+    public const string Name = "NamePatternHeavy";
+}
+
 /// <summary>
 /// The combined <see cref="NamePatternSet"/> must answer exactly what the old loop over one regex per DBC row answered. The
 /// oracle here is that old loop (each row compiled alone with the original options). The real-DBC facts are skipped, naming
 /// ARCANECORE_TEST_DBC_DIR, when it is unset.
 /// </summary>
-[Collection("NamePatternHeavy")]
+[Collection(NamePatternHeavyCollection.Name)]
 public sealed class NamePatternSetEquivalenceTests(ITestOutputHelper output)
 {
     private const RegexOptions OldOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
@@ -52,14 +59,36 @@ public sealed class NamePatternSetEquivalenceTests(ITestOutputHelper output)
     [Fact]
     public void ARowThatIsValidAloneButNotInsideAGroup_FallsBackToItsOwnRegex()
     {
-        // "(?x)q # c" comments out the closing ")" of its group, so the combined text does not parse; the chunk must degrade
-        // to one regex per row and still answer correctly.
-        List<string> patterns = ["abc", "(?x)q # c", "def"];
-        NamePatternSet set = NamesDbcReader.Build(patterns, 256, useLiterals: false);
-        Assert.Equal(3, set.Regexes.Count);
-        Assert.True(set.IsMatch("xxq"));
-        Assert.True(set.IsMatch("DEF"));
-        Assert.False(set.IsMatch("zzz"));
+        // In (?x) mode "#" comments out everything to the next newline. Joined, "(?x)ab#" swallows its own ")" and, when a later
+        // row starts with a newline, still parses as "(?:(?x)ab cd)", silently changing what the row matches. Rows with "#", LF or
+        // CR therefore never join a chunk; every other row construct is closed by its own parentheses (see Combine).
+        string[][] cases =
+        [
+            ["(?x)ab#", "\ncd"],
+            ["(?x)ab#", "\rcd"],
+            ["(?x)ab # c", "\n  cd"],
+            ["abc", "(?x)q # c", "def"],
+            ["a(?#note)b", "cd", "(?x) e f ", "g\\#h", "[#]i"],
+            ["(?x)ab#", "xyz", "\ncd", "(?-x:w v)"],
+        ];
+        string[] names = ["ab", "AB", "cd", "abcd", "ab cd", "abc", "xxq", "DEF", "zzz", "ab\ncd", "ef", "e f", "g#h", "#i", "i", "wv", "w v", "xyz", "nb"];
+        foreach (string[] rows in cases)
+        {
+            IReadOnlyList<Regex> oracle = OldPerRow(rows);
+            foreach (int chunk in new[] { 256, 2 })
+            {
+                NamePatternSet set = NamesDbcReader.Build(rows, chunk, useLiterals: false);
+                foreach (string name in names)
+                    Assert.True(OldAny(oracle, name) == set.IsMatch(name), $"rows=[{string.Join(" ; ", rows)}] chunk={chunk} name='{name}'");
+            }
+        }
+
+        // The excluded row is compiled alone; its neighbours still share one regex.
+        NamePatternSet mixed = NamesDbcReader.Build(["abc", "(?x)q # c", "def"], 256, useLiterals: false);
+        Assert.Equal(2, mixed.Regexes.Count);
+        Assert.True(mixed.IsMatch("xxq"));
+        Assert.True(mixed.IsMatch("DEF"));
+        Assert.False(mixed.IsMatch("zzz"));
     }
 
     [Theory]
@@ -86,17 +115,29 @@ public sealed class NamePatternSetEquivalenceTests(ITestOutputHelper output)
     [Fact]
     public void LiteralCharacters_NeverHaveACaseOrEquivalent()
     {
-        // The literal fast path is only sound for characters the case-insensitive regex treats as themselves. Confirm against
-        // the runtime's own casing tables for every char the detector accepts.
-        int accepted = 0;
+        // The literal fast path is only sound for characters the case-insensitive regex treats as themselves. Ask the regex
+        // engine itself (not the casing tables): one interpreted IgnoreCase | CultureInvariant class over every accepted char
+        // must match no char outside that set, so nothing folds onto an accepted char, and a future runtime change is caught.
+        var acceptedChars = new List<char>();
+        for (int c = 0; c <= 0xFFFF; c++)
+            if (NamesDbcReader.TryGetCaselessLiteral(((char)c).ToString(), out _)) acceptedChars.Add((char)c);
+        int accepted = acceptedChars.Count;
+
+        var set = new StringBuilder("^[");
+        for (int i = 0; i < acceptedChars.Count;)
+        {
+            int j = i;
+            while (j + 1 < acceptedChars.Count && acceptedChars[j + 1] == acceptedChars[j] + 1) j++;
+            set.Append("\\u").Append(((int)acceptedChars[i]).ToString("X4")).Append("-\\u").Append(((int)acceptedChars[j]).ToString("X4"));
+            i = j + 1;
+        }
+
+        var folds = new Regex(set.Append("]$").ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var members = new HashSet<char>(acceptedChars);
         for (int c = 0; c <= 0xFFFF; c++)
         {
             char ch = (char)c;
-            if (!NamesDbcReader.TryGetCaselessLiteral(ch.ToString(), out _)) continue;
-            accepted++;
-            Assert.Equal(ch, char.ToUpperInvariant(ch));
-            Assert.Equal(ch, char.ToLowerInvariant(ch));
-            Assert.False(char.IsSurrogate(ch));
+            if (!members.Contains(ch)) Assert.False(folds.IsMatch(ch.ToString()), $"U+{c:X4} folds onto an accepted literal char");
         }
 
         Assert.True(accepted > 20_000);
@@ -184,6 +225,8 @@ public sealed class NamePatternSetEquivalenceTests(ITestOutputHelper output)
         yield return bare.ToUpperInvariant();
         yield return "Xq" + bare + "Qx";
         yield return bare.Replace('k', '\u212A').Replace('K', '\u212A');
+        yield return new string([.. bare.Select(c => c is >= '!' and <= '~' ? (char)(c + 0xFEE0) : c)]);
+        yield return new string([.. bare.Select(c => c is >= '\u3041' and <= '\u3096' ? (char)(c + 0x60) : c is >= '\u30A1' and <= '\u30F6' ? (char)(c - 0x60) : c)]);
         if (bare.Length > 1) yield return bare[..^1];
     }
 

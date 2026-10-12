@@ -148,48 +148,70 @@ public static class NamesDbcReader
 
     /// <summary>
     /// Joins already-validated patterns into <c>(?:p1)|(?:p2)|...</c> regexes of at most <paramref name="chunkRows"/> rows.
-    /// Each row sits in its own non-capturing group, so its anchors and inline options keep their per-row meaning. A chunk
-    /// whose combination does not parse (a row valid alone but not inside a group) falls back to one regex per row.
+    /// Each row sits in its own non-capturing group, so its anchors, alternation and inline options (all scoped to the enclosing
+    /// group) keep their per-row meaning, and every construct a row opens (group, class, <c>(?#</c> comment) is closed by that
+    /// row because each row parsed alone. The one thing that crosses a group boundary is a line comment: under an inline
+    /// <c>(?x)</c>, <c>#</c> runs to the next line feed, which can belong to a later row and swallow the row's own closing
+    /// parenthesis while the join still parses. Rows containing <c>#</c>, LF or CR are therefore compiled alone, never joined.
+    /// A chunk whose combination still does not parse falls back to one regex per row.
     /// </summary>
     internal static List<Regex> Combine(IReadOnlyList<string> patterns, int chunkRows)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(chunkRows, 1);
         var result = new List<Regex>((patterns.Count / chunkRows) + 1);
-        var text = new System.Text.StringBuilder();
-        for (int start = 0; start < patterns.Count; start += chunkRows)
+        var joinable = new List<string>(Math.Min(patterns.Count, chunkRows));
+        foreach (string pattern in patterns)
         {
-            int end = Math.Min(start + chunkRows, patterns.Count);
-            text.Clear();
-            for (int i = start; i < end; i++)
+            if (pattern.AsSpan().IndexOfAny('#', '\n', '\r') >= 0)
             {
-                if (i > start) text.Append('|');
-                text.Append("(?:").Append(patterns[i]).Append(')');
-            }
-
-            Regex? combined = null;
-            try
-            {
-                combined = new Regex(text.ToString(), PatternOptions, RegexTimeout);
-            }
-            catch (Exception error) when (error is ArgumentException or NotSupportedException)
-            {
-            }
-
-            if (combined is not null)
-            {
-                WarmUp(combined);
-                result.Add(combined);
+                result.Add(CompileWarm(pattern));
                 continue;
             }
 
-            for (int i = start; i < end; i++)
-            {
-                var single = new Regex(patterns[i], PatternOptions, RegexTimeout);
-                WarmUp(single);
-                result.Add(single);
-            }
+            joinable.Add(pattern);
+            if (joinable.Count == chunkRows) FlushChunk(joinable, result);
         }
+
+        if (joinable.Count > 0) FlushChunk(joinable, result);
         return result;
+    }
+
+    private static void FlushChunk(List<string> rows, List<Regex> result)
+    {
+        var text = new System.Text.StringBuilder();
+        for (int i = 0; i < rows.Count; i++)
+        {
+            if (i > 0) text.Append('|');
+            text.Append("(?:").Append(rows[i]).Append(')');
+        }
+
+        Regex? combined = null;
+        try
+        {
+            combined = new Regex(text.ToString(), PatternOptions, RegexTimeout);
+        }
+        catch (Exception error) when (error is ArgumentException or NotSupportedException)
+        {
+        }
+
+        if (combined is not null)
+        {
+            WarmUp(combined);
+            result.Add(combined);
+        }
+        else
+        {
+            foreach (string row in rows) result.Add(CompileWarm(row));
+        }
+
+        rows.Clear();
+    }
+
+    private static Regex CompileWarm(string pattern)
+    {
+        var regex = new Regex(pattern, PatternOptions, RegexTimeout);
+        WarmUp(regex);
+        return regex;
     }
 
     /// <summary>
