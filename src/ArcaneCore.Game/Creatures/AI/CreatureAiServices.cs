@@ -282,7 +282,8 @@ public sealed class CreatureAiFactory
         Scripts.StinkyIgnatzAI.QuestHorde,
         Scripts.TriageDoctorAI.QuestTriageA,
         Scripts.TriageDoctorAI.QuestTriageH,
-        Scripts.ShayLeafrunnerAI.QuestWanderingShay];
+        Scripts.ShayLeafrunnerAI.QuestWanderingShay,
+        Instances.Scripts.BlackrockDepths.MarshalWindsorAI.QuestJailBreak];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
     public CreatureAiFactory()
@@ -291,6 +292,12 @@ public sealed class CreatureAiFactory
         {
             RegisterEntryScript(spec.Entry, E(c => new Scripts.Escorts.DataDrivenEscortAI(c, spec)), spec.QuestId);
         }
+
+        // Blackrock Depths: the gossip-only prisoners of the Jail Break (Marshal Windsor's AI is registered by the instance script).
+        RegisterNpcScript(Instances.Scripts.BlackrockDepths.DughalStormwingGossip.ScriptName, nameof(Instances.Scripts.BlackrockDepths.DughalStormwingGossip),
+            gossip: new Instances.Scripts.BlackrockDepths.DughalStormwingGossip());
+        RegisterNpcScript(Instances.Scripts.BlackrockDepths.TobiasSeecherGossip.ScriptName, nameof(Instances.Scripts.BlackrockDepths.TobiasSeecherGossip),
+            gossip: new Instances.Scripts.BlackrockDepths.TobiasSeecherGossip());
     }
 
     public IReadOnlyCollection<string> Names => _factories.Keys;

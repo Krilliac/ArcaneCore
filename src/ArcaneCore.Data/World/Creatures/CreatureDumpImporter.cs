@@ -1159,8 +1159,9 @@ public sealed class CreatureDumpImporter
     }
 
     // gossip_texts of the ported dungeon scripts: gnomeregan.cpp GOSSIP_ITEM_START; boss_victor_nefarius.cpp GOSSIP_ITEM_NEFARIUS_1..3
-    // (-3469000..-3469002) and boss_vaelastrasz.cpp GOSSIP_ITEM_VAEL_1..2 (-3469003, -3469004).
-    private static bool IsDungeonGossipText(int id) => id is -3090000 or (>= -3469004 and <= -3469000);
+    // (-3469000..-3469002) and boss_vaelastrasz.cpp GOSSIP_ITEM_VAEL_1..2 (-3469003, -3469004); the Blackrock Depths block -3230000..-3230003
+    // (the Dughal Stormwing and Tobias Seecher Jail Break options, Doom'rel's challenge and the fourth line of the block).
+    private static bool IsDungeonGossipText(int id) => id is -3090000 or (>= -3469004 and <= -3469000) or (>= -3230003 and <= -3230000);
 
     // broadcast_text: the columns mangos-classic ObjectMgr::LoadBroadcastText reads (ObjectMgr.cpp:7786-7821).
     private void ReadBroadcastText(DumpRow row)

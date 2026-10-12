@@ -122,9 +122,11 @@ public sealed partial class BlackrockDepthsInstance
             if (entry == 8905) creature.System?.CastSpell(creature, 10255, creature, triggered: true);
         }
 
+        RecordJailBreakCreature(creature);
         if (!_entryAisRegistered && Instance.FindUpdater<CreatureMapSystem>() is { } creatures)
         {
             _entryAisRegistered = true;
+            RegisterJailBreakAis(creatures);
             creatures.RegisterEntryAi(NpcAmbassadorFlamelash, c => new AmbassadorFlamelashAI(c, this));
             creatures.RegisterEntryAi(9033, c => new GeneralAngerforgeAI(c));
             creatures.RegisterEntryAi(9018, c => new HighInterrogatorGerstahnAI(c));
@@ -153,6 +155,7 @@ public sealed partial class BlackrockDepthsInstance
 
     private void RecordDepthsObject(GameObject go)
     {
+        RecordJailBreakObject(go);
         if (go.Entry is 165738 or 165739 && !_mugAiRegistered && Instance.FindUpdater<GameObjectMapSystem>() is { } mugObjects)
         {
             _mugAiRegistered = true;
@@ -284,6 +287,9 @@ public sealed partial class BlackrockDepthsInstance
                 }
                 Encounters[5] = data;
                 break;
+            case TypeQuestJailBreak:
+                SetJailBreakData(data);
+                return; // the original does not save TYPE_QUEST_JAIL_BREAK when it is DONE (spec 230-npc_marshal_windsor.md section 8)
             case TypeFlamelash:
                 for (int i = 0; i < 7; i++) DoUseDoorOrButton(GoFirstRune + (uint)i);
                 return; // the original does not store TYPE_FLAMELASH
@@ -346,6 +352,7 @@ public sealed partial class BlackrockDepthsInstance
     public override void OnCreatureDeath(Creature creature)
     {
         uint entry = creature.Template.Entry;
+        OnJailBreakPrisonerDeath(creature);
         if (entry is 8905 or 9476 && GetData(TypeVault) == EncounterState.InProgress)
         {
             _vaultCreatures.Remove(creature.Guid);
