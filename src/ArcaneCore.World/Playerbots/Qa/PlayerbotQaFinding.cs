@@ -174,8 +174,8 @@ internal sealed record QaFindingView
     public QaAnchor? Anchor { get; init; }
 
     /// <summary>
-    /// A death loop's attacker entries seen so far (the union over its signals, at most <see cref="QaFinding.MaxAttackers"/>); empty for other
-    /// kinds and in older files (the samples' attackers, else the subject's, stand in then).
+    /// A death loop's identity: the attacker entries of its first signal (at most <see cref="QaFinding.MaxAttackers"/>); empty for other kinds
+    /// and in older files (the oldest saved sample's attackers, else the subject's, stand in then).
     /// </summary>
     public IReadOnlyList<uint> Attackers { get; init; } = [];
 
@@ -306,7 +306,13 @@ internal sealed class QaFinding
     /// <summary>Where the first sample was; never changes once set.</summary>
     public QaAnchor? Anchor { get; set; }
 
+    /// <summary>A death loop's identity: the attackers (non-zero) of its first signal; never widened afterwards.</summary>
     public SortedSet<uint> Attackers { get; } = [];
+
+    private string? _identity;
+
+    /// <summary>The key without its location (cached; <see cref="Key"/> never changes).</summary>
+    public string Identity => _identity ??= PlayerbotQaFingerprint.LocationFreeKey(Key);
 
     public string DeathSource { get; set; } = string.Empty;
 
