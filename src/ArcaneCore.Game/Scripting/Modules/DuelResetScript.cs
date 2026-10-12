@@ -236,6 +236,7 @@ public sealed class DuelResetScript : IPlayerHooks
         uint now = spells.NowMs;
         var restored = new List<PersistedCooldown>();
         var client = new List<(uint SpellId, uint Ms)>();
+        var onEvent = new List<uint>();
         foreach (SavedCooldown c in saved)
         {
             uint spellLeft = Left(c.SpellEndMs, now);
@@ -253,7 +254,16 @@ public sealed class DuelResetScript : IPlayerHooks
             uint left = Math.Max(spellLeft, categoryLeft);
             if (left is > 0 and <= TenMinutesMs)
             {
-                client.Add((c.Cooldown.SpellId, left));
+                // A COOLDOWN_ON_EVENT spell (Feign Death, Cold Blood, Inner Focus, Nature's Swiftness, Stealth) puts the client entry on hold when
+                // SMSG_SPELL_COOLDOWN names it and only SMSG_COOLDOWN_EVENT releases it, so it is told with the event instead.
+                if (spells.Store.Get(c.Cooldown.SpellId)?.HasAttribute(SpellAttributes.CooldownOnEvent) == true)
+                {
+                    onEvent.Add(c.Cooldown.SpellId);
+                }
+                else
+                {
+                    client.Add((c.Cooldown.SpellId, left));
+                }
             }
         }
 
@@ -262,6 +272,11 @@ public sealed class DuelResetScript : IPlayerHooks
         if (client.Count > 0)
         {
             player.Session.Send(WorldOpcode.SmsgSpellCooldown, SpellPackets.BuildSpellCooldown(player.Guid, client));
+        }
+
+        foreach (uint spellId in onEvent)
+        {
+            player.Session.Send(WorldOpcode.SmsgCooldownEvent, SpellPackets.BuildCooldownEvent(spellId, player.Guid));
         }
     }
 

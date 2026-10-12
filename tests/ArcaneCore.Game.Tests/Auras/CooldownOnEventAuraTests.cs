@@ -22,8 +22,6 @@ public sealed class CooldownOnEventAuraTests : IDisposable
     private const uint StealthRank1 = 945010; // real Stealth/Prowl shape: no own recovery, 10 s category 38
     private const uint StealthRank2 = 945011;
     private const uint OtherCategorySpell = 945012;
-    private const uint ShiftStealth = 945013; // carries a ModShapeshift aura like Stealth's form 30
-    private const uint OtherShift = 945015;
     private const uint FriendStealth = 945014; // aura on an explicit friendly target
     private const uint CategoryMs = 10_000;
     private const uint Category = 38;
@@ -52,17 +50,6 @@ public sealed class CooldownOnEventAuraTests : IDisposable
             Category38(StealthRank1),
             Category38(StealthRank2),
             Category38(OtherCategorySpell) with { Attributes = SpellAttributes.None },
-            Category38(ShiftStealth) with
-            {
-                Effects = [Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModShapeshift, misc: 30)],
-            },
-            Spell(OtherShift, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModShapeshift, misc: 1)) with
-            {
-                Duration = new SpellDuration(-1, 0, -1),
-                SpellVisual = 1,
-                StartRecoveryCategory = 0,
-                StartRecoveryTime = 0,
-            },
             Category38(FriendStealth) with
             {
                 Effects = [Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitFriend, Probe)],
@@ -74,7 +61,7 @@ public sealed class CooldownOnEventAuraTests : IDisposable
             });
         (_player, _session) = _kit.AddPlayer(1);
         (_enemy, _enemySession) = _kit.AddPlayer(2, 2);
-        _kit.Spellbook.Teach(_player, StealthLike, ShortStealth, PlainBuff, StealthRank1, StealthRank2, OtherCategorySpell, ShiftStealth, FriendStealth);
+        _kit.Spellbook.Teach(_player, StealthLike, ShortStealth, PlainBuff, StealthRank1, StealthRank2, OtherCategorySpell, FriendStealth);
     }
 
     public void Dispose() => _kit.Dispose();
@@ -299,18 +286,36 @@ public sealed class CooldownOnEventAuraTests : IDisposable
     }
 
     [Fact]
-    public void ProwlEndingByAFormChange_StartsTheCooldown()
+    public void ACategoryOnlyCooldown_IsListedInInitialSpells_AfterARelog()
     {
-        Cast(ShiftStealth);
-        _session.Clear();
-        // a new form's holder keeps itself and removes every other shapeshift holder (SpellSystem.Forms.cs; nothing in src calls it yet)
-        Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_player, OtherShift, SpellCastTargets.ForSelf(), triggered: true));
-        SpellAuraHolder keep = _kit.System.GetAuras(_player).Single(h => h.Spell.Id == OtherShift);
-        _kit.System.RemoveOtherShapeshiftHolders(_player, keep);
-        Assert.False(_kit.System.HasAura(_player, ShiftStealth));
-        Assert.True(_kit.System.HasAura(_player, OtherShift));
+        Cast(StealthRank1);
+        _kit.System.CancelAura(_player, StealthRank1);
+        _kit.Advance(3_000, step: 1000);
+        SpellStateSnapshot snapshot = _kit.System.CaptureState(_player, nowUnixMs: 1_000_000);
+        _kit.System.RemoveUnit(_player); // logout: the state and its owner map are dropped
+        _kit.System.RestoreCooldowns(_player, snapshot.Cooldowns, nowUnixMs: 1_000_000);
 
-        Assert.Single(CooldownEvents(ShiftStealth));
-        Assert.False(Ready(ShiftStealth));
+        IReadOnlyList<InitialSpellCooldown> listed = _kit.System.GetActiveCooldowns(_player);
+
+        InitialSpellCooldown entry = Assert.Single(listed, c => c.Category == Category);
+        Assert.Equal(StealthRank1, entry.SpellId); // the lowest known spell of the category, on-event spells first
+        Assert.Equal(0u, entry.CooldownMs);
+        Assert.InRange(entry.CategoryCooldownMs, 6_000u, 7_000u);
+
+        // 5875 SMSG_INITIAL_SPELLS cooldown entry: u16 spell, u16 item, u16 category, u32 recovery, u32 category recovery.
+        byte[] packet = SpellPackets.BuildInitialSpells([StealthRank1], listed);
+        int at = 1 + 2 + 4 + 2; // flag, spell count, one spell (u16 id + u16 slot), cooldown count
+        Assert.Equal((ushort)StealthRank1, BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(at))); // synthetic id wraps to u16
+        Assert.Equal(Category, (uint)BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(at + 4)));
+        Assert.Equal(entry.CategoryCooldownMs, BinaryPrimitives.ReadUInt32LittleEndian(packet.AsSpan(at + 10)));
+    }
+
+    [Fact]
+    public void ACategoryOnlyCooldown_KeepsTheRecordedOwner_WhenAnotherRankStartedItFirst()
+    {
+        _kit.System.CastSpell(_player, StealthRank2, SpellCastTargets.ForSelf(), triggered: true);
+        _kit.System.CancelAura(_player, StealthRank2);
+
+        Assert.Equal(StealthRank2, Assert.Single(_kit.System.GetActiveCooldowns(_player), c => c.Category == Category).SpellId);
     }
 }

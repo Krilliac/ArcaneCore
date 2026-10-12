@@ -1667,7 +1667,48 @@ public sealed partial class SpellSystem
             result.Add(new InitialSpellCooldown(spellId, owner.ItemId, owner.Category, 0, until - now));
         }
 
+        // A category cooldown nothing above lists (COOLDOWN_ON_EVENT spells such as Stealth, Prowl, Shadowmeld, Presence of Mind have no
+        // cooldown of their own, only the category; a relog restores just the category row): the client keeps it under a spell of the
+        // category (vmangos "client keeps track of category cd by original spellId"), so name the recorded owner or else a known spell.
+        foreach ((uint categoryId, uint categoryUntil) in state.CategoryCooldowns.OrderBy(c => c.Key))
+        {
+            if (categoryUntil <= now || result.Any(c => c.Category == categoryId))
+            {
+                continue;
+            }
+
+            uint spellId = state.CategoryOwners.TryGetValue(categoryId, out uint recordedOwner) && Store.Get(recordedOwner) is not null
+                ? recordedOwner : FindCategorySpell(unit, categoryId);
+            if (spellId != 0)
+            {
+                result.Add(new InitialSpellCooldown(spellId, 0, categoryId, 0, categoryUntil - now));
+            }
+        }
+
         return result;
+    }
+
+    /// <summary>The lowest-id spell of a category the unit may use (a player's spellbook), COOLDOWN_ON_EVENT spells first; 0 when none.</summary>
+    private uint FindCategorySpell(Unit unit, uint category)
+    {
+        uint best = 0;
+        bool bestOnEvent = false;
+        foreach (SpellInfo candidate in Store.All)
+        {
+            if (candidate.Category != category || (unit is Player player && Spellbook is { } book && !book.HasSpell(player, candidate.Id)))
+            {
+                continue;
+            }
+
+            bool onEvent = candidate.HasAttribute(SpellAttributes.CooldownOnEvent);
+            if (best == 0 || (onEvent && !bestOnEvent) || (onEvent == bestOnEvent && candidate.Id < best))
+            {
+                best = candidate.Id;
+                bestOnEvent = onEvent;
+            }
+        }
+
+        return best;
     }
 
     private static void ExpireCooldowns(UnitSpellState state, uint now)

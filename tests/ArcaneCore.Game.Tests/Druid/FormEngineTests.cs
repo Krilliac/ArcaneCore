@@ -43,6 +43,7 @@ public sealed class FormEngineTests
     private const uint FelineSwiftness = 17002;
     private const uint LeaderKnown = 17007;
     private const uint LeaderEffect = 24932;
+    private const uint Prowl = 5215;           // Stances cat, COOLDOWN_ON_EVENT, category 38 / 10 s like the real spell
     private const uint TigersFury = 5217;       // a cat-only self buff (Stances 1)
     private const uint Claw = 1082;             // Stances cat
     private const uint HealingTouch = 5185;     // NOT_SHAPESHIFT
@@ -102,6 +103,16 @@ public sealed class FormEngineTests
         {
             Stances = 1,
             Duration = new SpellDuration(6000, 0, 6000),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+        yield return Spell(Prowl, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.ModCritPercent)) with
+        {
+            Attributes = SpellAttributes.CooldownOnEvent,
+            Stances = 1,
+            Category = 38,
+            CategoryRecoveryTime = 10_000,
+            Duration = new SpellDuration(-1, 0, -1),
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,
         };
@@ -275,6 +286,27 @@ public sealed class FormEngineTests
         Assert.False(rig.Has(FelineSwiftness));     // IsRemovedOnShapeLost
         Assert.False(rig.Has(TigersFury));
         Assert.Equal([((byte)0, (byte)1), ((byte)1, (byte)0)], rig.Listener.Changes);
+    }
+
+    [Fact]
+    public void ProwlEnding_BecauseCatFormIsLost_StartsTheCooldownAndTellsTheClient()
+    {
+        using var rig = new Rig();
+        rig.Cast(CatForm);
+        rig.Cast(Prowl);
+        Assert.True(rig.Has(Prowl));
+        var session = (FakeSession)rig.Player.Session;
+        session.Clear();
+        Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgCooldownEvent);
+
+        rig.System.CancelAura(rig.Player, CatForm); // the real ShapeshiftService.RemoveForm drops the stance-bound Prowl
+
+        Assert.False(rig.Has(Prowl));
+        Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgCooldownEvent
+            && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(p.Payload) == Prowl);
+        Assert.False(rig.System.IsSpellReady(rig.Player, rig.Kit.Store.Get(Prowl)!));
+        rig.Kit.Advance(10_000, step: 1000);
+        Assert.True(rig.System.IsSpellReady(rig.Player, rig.Kit.Store.Get(Prowl)!));
     }
 
     // --- bear, dire bear ----------------------------------------------------------------------------------------

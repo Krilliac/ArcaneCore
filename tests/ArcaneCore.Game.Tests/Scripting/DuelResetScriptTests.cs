@@ -16,11 +16,13 @@ public sealed class DuelResetScriptTests
 {
     private const uint ShortCooldown = 930310; // 60 s recovery
     private const uint LongCooldown = 930311;  // 30 min recovery (a profession cooldown)
+    private const uint EventCooldown = 930312; // 60 s recovery, COOLDOWN_ON_EVENT (Feign Death, Cold Blood, Inner Focus)
 
     private static DuelRig NewRig() => new(extraSpells:
     [
         Spell(ShortCooldown, Effect(SpellEffectName.Dummy, 0)) with { RecoveryTime = 60_000 },
         Spell(LongCooldown, Effect(SpellEffectName.Dummy, 0)) with { RecoveryTime = 30 * 60_000 },
+        Spell(EventCooldown, Effect(SpellEffectName.Dummy, 0)) with { RecoveryTime = 60_000, Attributes = SpellAttributes.CooldownOnEvent },
     ]);
 
     private static DuelResetScript Install(DuelRig rig, DuelResetSettings settings)
@@ -68,6 +70,29 @@ public sealed class DuelResetScriptTests
         Assert.Equal(15_000u, Left(rig, rig.A, ShortCooldown)); // the pre-duel cooldown, five seconds later
         Assert.Equal(45_000u, Left(rig, rig.B, ShortCooldown));
         Assert.Equal(595_000u, Left(rig, rig.A, LongCooldown));
+    }
+
+    [Fact]
+    public void ARestoredCooldownOnEventSpell_IsReleasedWithACooldownEvent_NotHeldBySmsgSpellCooldown()
+    {
+        using var rig = NewRig();
+        Install(rig, new DuelResetSettings { Zones = "" });
+        StartCooldown(rig, rig.A, EventCooldown, 20_000);
+        StartCooldown(rig, rig.A, ShortCooldown, 20_000);
+        rig.Challenge();
+        rig.AcceptAndStart();
+        rig.SessionA.Clear();
+
+        rig.Service.Cancel(rig.B); // A wins: the saved cooldowns come back
+
+        Assert.True(Left(rig, rig.A, EventCooldown) > 0);
+        Assert.Contains(DuelRig.Packets(rig.SessionA, WorldOpcode.SmsgCooldownEvent),
+            p => System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(p) == EventCooldown);
+        // SMSG_SPELL_COOLDOWN: u64 caster, then (u32 spell, u32 ms) pairs; the plain spell is in it, the event spell is not.
+        uint[] listed = [.. DuelRig.Packets(rig.SessionA, WorldOpcode.SmsgSpellCooldown).SelectMany(p =>
+            Enumerable.Range(0, (p.Length - 8) / 8).Select(i => System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(8 + (i * 8)))))];
+        Assert.Contains(ShortCooldown, listed);
+        Assert.DoesNotContain(EventCooldown, listed);
     }
 
     [Fact]
