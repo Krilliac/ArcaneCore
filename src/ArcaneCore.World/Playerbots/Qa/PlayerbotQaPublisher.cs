@@ -163,7 +163,7 @@ internal sealed class PlayerbotQaPublisher
 
         bool gh = git.Transport == PlayerbotQaGitHubTransport.GhCli;
         // REST needs the token; gh uses its own login and only gets the token when GhPassToken is on.
-        bool needsToken = !gh || git.GhPassToken;
+        bool needsToken = git.RequiresToken();
         string? token = needsToken ? _getEnvironmentVariable(git.TokenEnvironmentVariable) : null;
         if ((needsToken && string.IsNullOrEmpty(token)) || !PlayerbotQaGitHubOptions.IsValidRepository(git.Repository))
         {

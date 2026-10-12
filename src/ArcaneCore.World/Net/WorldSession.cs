@@ -122,6 +122,7 @@ public sealed partial class WorldSession : IPlayerSession
     private readonly ILogger _logger;
     private readonly IOutboundPacketObserver? _outboundPacketObserver;
     private readonly NetGuard? _guard;
+    private readonly UnhandledOpcodeTracker _unhandled;
     private readonly NetProtectionOptions _protection;
     private readonly IpKey? _address;
     // The client build's wire protocol (multi-version design S0). Pre-auth framing uses ClientProtocols.PreAuth;
@@ -166,6 +167,7 @@ public sealed partial class WorldSession : IPlayerSession
         _options = options;
         _logger = logger;
         _outboundPacketObserver = services.GetService<IOutboundPacketObserver>();
+        _unhandled = services.GetService<UnhandledOpcodeTracker>() ?? UnhandledOpcodeTracker.Shared;
         _guard = guard;
         _protection = guard?.Options ?? DefaultProtection;
         _packetLimiter = NetGuard.CreatePacketLimiter(_protection);
@@ -625,8 +627,7 @@ public sealed partial class WorldSession : IPlayerSession
 
             if (!_opcodes.TryGet(opcode, out OpcodeHandler handler))
             {
-                _logger.LogDebug("[{Endpoint}] unhandled {Opcode} ({Length} bytes)",
-                    RemoteEndpoint, WorldOpcodeNames.GetName(opcode), payload.Length);
+                ReportUnhandled(opcode, payload.Length);
                 return true;
             }
 
@@ -712,6 +713,25 @@ public sealed partial class WorldSession : IPlayerSession
         BinaryPrimitives.WriteUInt32LittleEndian(pong, sequence);
         Send(WorldOpcode.SmsgPong, pong);
         return true;
+    }
+
+    /// <summary>
+    /// A packet whose opcode has no handler is dropped and the connection stays open. It is counted per opcode
+    /// (<see cref="UnhandledOpcodeTracker"/>, metric <c>arcanecore.net.opcode.unhandled</c>) and the first occurrence in the process is a
+    /// Warning, so a missing or unregistered handler shows up in the log instead of the client feature silently doing nothing.
+    /// </summary>
+    private void ReportUnhandled(WorldOpcode opcode, int length)
+    {
+        long count = _unhandled.Record(opcode);
+        if (count == 1)
+        {
+            string label = UnhandledOpcodeTracker.LabelOf(opcode);
+            string name = label == UnhandledOpcodeTracker.UnknownLabel ? "an unnamed opcode" : label;
+            _logger.LogWarning("[{Endpoint}] client sent {Opcode} (0x{Value:X3}) which has no handler; further occurrences are counted (metric {Metric}, .server wiring)",
+                RemoteEndpoint, name, (ushort)opcode, UnhandledOpcodeTracker.MetricName);
+        }
+
+        _logger.LogDebug("[{Endpoint}] unhandled {Opcode} ({Length} bytes)", RemoteEndpoint, WorldOpcodeNames.GetName(opcode), length);
     }
 
     private async Task<bool> HandleAuthSessionAsync(byte[] payload)

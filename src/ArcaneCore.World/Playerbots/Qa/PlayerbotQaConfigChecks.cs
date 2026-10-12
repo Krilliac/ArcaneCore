@@ -37,7 +37,7 @@ public sealed class PlayerbotQaConfigChecks : IConfigCheck
                 "set GitHub:Enabled true, or remove Publish"));
         }
 
-        if (git is { Enabled: true, Publish: true } && PlayerbotQaGitHubOptions.IsValidVariableName(git.TokenEnvironmentVariable)
+        if (git is { Enabled: true, Publish: true } && git.RequiresToken() && PlayerbotQaGitHubOptions.IsValidVariableName(git.TokenEnvironmentVariable)
             && string.IsNullOrEmpty(Environment.GetEnvironmentVariable(git.TokenEnvironmentVariable)))
         {
             issues.Add(new ConfigIssue(ConfigSeverity.Warning, github + ":TokenEnvironmentVariable",

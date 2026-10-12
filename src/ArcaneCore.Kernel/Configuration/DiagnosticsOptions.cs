@@ -59,6 +59,22 @@ public sealed class DiagnosticsOptions
     /// logs once that the key is ignored. Default off: the hook runs on every throw, caught or not.
     /// </summary>
     public bool FirstChanceExceptions { get; set; }
+
+    /// <summary>
+    /// How many occurrences of one fault (an exception type thrown from one place, caught at one of the
+    /// server's catch-and-log sites) are logged in full. After that the site logs that fault at most once a
+    /// minute, with "(N more since)"; every occurrence is still counted in the fault ledger
+    /// (<c>.server faults</c>, the <c>arcanecore_faults_total</c> metric). 0 logs the first occurrence and then
+    /// once a minute. Default 10.
+    /// </summary>
+    public int FaultLogLimit { get; set; } = 10;
+
+    /// <summary>
+    /// How many distinct faults the fault ledger keeps. A fault beyond the cap is counted into one overflow
+    /// entry, never dropped. Default 512; a lower value bounds memory on a server that throws a new exception
+    /// signature per request.
+    /// </summary>
+    public int FaultMaxSignatures { get; set; } = 512;
 }
 
 /// <summary>What a failed release-mode invariant does after it is logged and counted.</summary>

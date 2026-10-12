@@ -216,6 +216,26 @@ public sealed class M6LogoutAndCommandTests
     }
 
     [Fact]
+    public async Task ServerInfo_ShowsTheFaultsLine_ToGameMastersOnly()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("FAULTGM", "Faultgm", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".server info");
+        var lines = new List<string>();
+        for (int i = 0; i < 14; i++) lines.Add((await gm.ReadChatAsync()).Text);
+        Assert.Contains(lines, l => l.StartsWith("Server diagnostics: faults: ", StringComparison.Ordinal));
+
+        await using WorldTestClient player = await host.EnterWorldAsync("FAULTPL", "Faultpl");
+        await player.CollectAsync();
+        await player.SendChatAsync(ChatType.Say, Language.Common, ".server info");
+        for (int i = 0; i < 13; i++) Assert.DoesNotContain("faults:", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
+        // A stray 14th line would be the first reply to the next command, so the negative check can fail.
+        await player.SendChatAsync(ChatType.Say, Language.Common, ".server motd");
+        Assert.StartsWith("Current Message of the day", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ServerInfo_Motd_AndAbbreviations()
     {
         await using var host = WorldTestHost.Start(configure: o => o.Motd = "Be excellent@to each other");

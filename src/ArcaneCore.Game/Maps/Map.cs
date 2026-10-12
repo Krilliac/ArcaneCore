@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Updates;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -702,7 +703,7 @@ public sealed class Map
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "map {MapId} updater {Updater} failed", MapId, updater.GetType().Name);
+                _logger.LogFault("map-updater", ex, "map {MapId} updater {Updater} failed", MapId, updater.GetType().Name);
                 CountUpdaterFault(updater);
             }
 
@@ -817,7 +818,7 @@ public sealed class Map
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "deferred work on map {MapId} failed", MapId);
+                    _logger.LogFault("map-deferred", ex, "deferred work on map {MapId} failed", MapId);
                 }
             }
 
@@ -952,7 +953,7 @@ public sealed class Map
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "packet handling failed for {Player}; disconnecting", player.Name);
+            _logger.LogFault("packet-handling", ex, "packet handling failed for {Player}; disconnecting", player.Name);
             player.Session.Kick();
         }
     }

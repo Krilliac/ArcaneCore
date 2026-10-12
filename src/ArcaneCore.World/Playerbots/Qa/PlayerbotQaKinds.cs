@@ -38,6 +38,7 @@ internal static class QaKinds
         new(QaSignalKind.SpellUnsupported, "spell unsupported", "spell-unsupported", 30, BotIndependent: true, SingleOccurrence: true, SpellKind: true),
         new(QaSignalKind.SpellRefused, "spell refused", "spell-refused", 20, BotIndependent: false, SingleOccurrence: false, SpellKind: true),
         new(QaSignalKind.SpellNoEffect, "spell no effect", "spell-no-effect", 28, BotIndependent: false, SingleOccurrence: false, SpellKind: true),
+        new(QaSignalKind.ServerFault, "server fault", "server-fault", 42, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
     ]);
 
     /// <summary>Every row, in kind order.</summary>
