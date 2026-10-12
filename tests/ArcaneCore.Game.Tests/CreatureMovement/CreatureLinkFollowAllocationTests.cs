@@ -43,25 +43,6 @@ public sealed class CreatureLinkFollowAllocationTests
 
     private static Creature BySpawn(CreatureMapSystem system, uint guid) => system.Creatures.Single(c => c.Spawn?.Guid == guid);
 
-    /// <summary>
-    /// Bytes allocated by the cheapest of several 50-update windows. GC.GetAllocatedBytesForCurrentThread jumps by about one allocation
-    /// quantum (7-8 KB) when a gen0 GC triggered by another thread (xunit runs test classes in parallel) lands inside a window, even though this
-    /// thread allocated nothing. A per-creature allocation (5000 creatures, >= 8 bytes each) shows in every window; the artifact hits at most
-    /// a window or two, so the minimum is the real steady-state cost.
-    /// </summary>
-    private static long MinAllocatedPerWindow(CreatureMapSystem system)
-    {
-        long min = long.MaxValue;
-        for (int window = 0; window < 8; window++)
-        {
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < 50; i++) system.UpdateLinkedFollowers();
-            min = Math.Min(min, GC.GetAllocatedBytesForCurrentThread() - before);
-        }
-
-        return min;
-    }
-
     [Fact]
     public void LinkedFollowerUpdate_AllocatesNothingThatScalesWithTheCreatureCount()
     {
@@ -75,15 +56,13 @@ public sealed class CreatureLinkFollowAllocationTests
 
             for (int i = 0; i < 10; i++) system.UpdateLinkedFollowers(); // warm-up: JIT, delegate caches
 
-            long steady = MinAllocatedPerWindow(system);
+            Action window = () => { for (int i = 0; i < 50; i++) system.UpdateLinkedFollowers(); };
+            AllocationProbe.AssertEveryCleanWindowAtMost(window, 4_096, $"50 follower updates with {system.Creatures.Count} creatures");
 
             // The template slave's master is gone: every update searches the map for another (the allocation-free candidate scan).
             system.KillCreature(BySpawn(system, Master));
             for (int i = 0; i < 10; i++) system.UpdateLinkedFollowers(); // warm-up of the searching path
-            long searching = MinAllocatedPerWindow(system);
-
-            Assert.True(steady <= 4_096, $"50 follower updates allocated {steady} bytes with {system.Creatures.Count} creatures");
-            Assert.True(searching <= 4_096, $"50 searching follower updates allocated {searching} bytes with {system.Creatures.Count} creatures");
+            AllocationProbe.AssertEveryCleanWindowAtMost(window, 4_096, $"50 searching follower updates with {system.Creatures.Count} creatures");
         }
     }
 

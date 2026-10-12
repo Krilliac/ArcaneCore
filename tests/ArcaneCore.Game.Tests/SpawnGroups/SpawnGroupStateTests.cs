@@ -96,39 +96,25 @@ public sealed class SpawnGroupStateTests
         group.Remove(real, host);
         Assert.Single(group.Spawn(host, random)); // warm the scratch collections
 
-        // A gen0 GC triggered by another test thread can add ~one allocation quantum (7-8 KB) to this thread's counter inside a window; a real
-        // allocation shows in every window, so the claim is that the cheapest window allocates nothing.
         int returned = 0;
-        long allocated = long.MaxValue;
-        for (int window = 0; window < 5 && allocated != 0; window++)
+        AllocationProbe.AssertEveryCleanWindowAtMost(() =>
         {
-            long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 1000; i++)
             {
                 returned += group.Spawn(host, random).Count; // full (counted, not asserted per call: Assert.Empty boxes an enumerator)
             }
-
-            allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
-        }
-
-        Assert.Equal(0, allocated);
+        }, 0, "1000 full-group spawns");
         Assert.Equal(0, returned);
 
         group.Remove(real, host);
         host.Pending.Add(real); // waiting for its respawn time
-        allocated = long.MaxValue;
-        for (int window = 0; window < 5 && allocated != 0; window++)
+        AllocationProbe.AssertEveryCleanWindowAtMost(() =>
         {
-            long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 1000; i++)
             {
                 returned += group.Spawn(host, random).Count;
             }
-
-            allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
-        }
-
-        Assert.Equal(0, allocated);
+        }, 0, "1000 pending-respawn spawns");
         Assert.Equal(0, returned);
 
         host.Pending.Clear();

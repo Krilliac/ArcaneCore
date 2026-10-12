@@ -360,24 +360,18 @@ public sealed class WorldRuntimeTickTests
         Func<GcSnapshot> source = world.GcSource;
         GcSnapshot warm = source();
         _ = source().Since(warm); // JIT both paths first
-        // A gen0 GC triggered by another test thread can add ~one allocation quantum (7-8 KB) to this thread's counter inside a window; a real
-        // allocation shows in every window, so the claim is that the cheapest window allocates nothing.
-        long pause = 0, allocated = long.MaxValue;
-        for (int window = 0; window < 5 && allocated != 0; window++)
+        long pause = 0;
+        AllocationProbe.AssertEveryCleanWindowAtMost(() =>
         {
-            long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 10_000; i++)
             {
                 GcSnapshot a = source();
                 GcSnapshot b = source();
                 pause += b.Since(a).PauseTicks;
             }
-
-            allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
-        }
+        }, 0, "10000 GC counter reads");
 
         Assert.True(pause >= 0);
-        Assert.Equal(0, allocated);
     }
 
     private sealed class SleepingUpdater(int ms) : IMapUpdater
