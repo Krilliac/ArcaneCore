@@ -279,10 +279,26 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private int _repairPlansThisThink;
     private bool _repairClockedThisThink;
+    private bool _thinksAreAnnounced;
+    private uint _thinkStampMs;
 
-    /// <summary>A new think begins: its repair plan budget (<see cref="MaxRepairPlansPerThink"/>) and its one stuck-clock tick are whole again.</summary>
+    /// <summary>
+    /// A new think begins: its repair plan budget (<see cref="MaxRepairPlansPerThink"/>) and its one stuck-clock tick are whole again.
+    /// A caller that never announces its thinks is not stuck with the first think's budget for life: for it, a think is a world clock
+    /// reading (<see cref="OpenThinkIfClockMoved"/>), so the budget and the stuck tick come back whenever the world clock has moved.
+    /// </summary>
     internal void BeginThink()
     {
+        _thinksAreAnnounced = true;
+        _repairPlansThisThink = 0;
+        _repairClockedThisThink = false;
+    }
+
+    /// <summary>For a caller that does not call <see cref="BeginThink"/>: the world clock moving on opens a new think.</summary>
+    private void OpenThinkIfClockMoved(uint now)
+    {
+        if (_thinksAreAnnounced || now == _thinkStampMs) return;
+        _thinkStampMs = now;
         _repairPlansThisThink = 0;
         _repairClockedThisThink = false;
     }
@@ -352,6 +368,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         }
 
         uint now = session.World.NowMs;
+        OpenThinkIfClockMoved(now);
         RefreshRepairSpawns(player, map.MapId, services);
         Vector3 here = new(player.X, player.Y, player.Z);
         // The spawn being walked to: closing on it resets the stuck clock; a route walked to its end (a route toward a far goal is

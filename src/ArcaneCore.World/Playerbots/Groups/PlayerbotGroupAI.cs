@@ -440,9 +440,11 @@ internal sealed class PlayerbotGroupAI
             return;
         }
 
-        // Out after the leader: walk to the instance's exit.
-        if (group.State == PlayerbotGroupState.Leaving && player.MapId == group.Goal.MapId
-            && (leader is null || !ReferenceEquals(leader.Map, player.Map))
+        // Out after the leader: walk to the instance's exit. A run retry can leave a survivor inside while the resurrected leader
+        // is outside; the gathering step cannot finish until that survivor takes the exit trigger too.
+        if ((group.State == PlayerbotGroupState.Leaving || group.Run is { Step: PlayerbotRunStep.Retry }
+                && group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)
+            && player.MapId == group.Goal.MapId && (leader is null || !ReferenceEquals(leader.Map, player.Map))
             && PlayerbotGroupCoordinator.ExitOf(_session.World, player.MapId) is { } exit)
         {
             Goal = PlayerbotGoalKind.Group;

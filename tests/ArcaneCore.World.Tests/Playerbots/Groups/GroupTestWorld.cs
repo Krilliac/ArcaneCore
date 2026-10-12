@@ -81,6 +81,9 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// <summary>Where the dungeon tests' giver and bots stand: Westfall, 30 yards east of the Deadmines entrance.</summary>
     public static readonly Vector3 EntranceArea = new(-11178f, 1679.6f, DeadminesTestContent.OutsideFloor);
 
+    /// <summary>Inside Orgrimmar, beside the real RFC area trigger 2230 (test movement uses open paths).</summary>
+    public static readonly Vector3 RfcEntranceArea = new(1835f, -4427.26f, -10.4478f);
+
     private GroupTestWorld(ScenarioTestWorld world, PlayerbotOptions options)
     {
         World = world;
@@ -98,9 +101,10 @@ internal sealed class GroupTestWorld : IAsyncDisposable
 
     /// <param name="quests">The quests the giver offers.</param>
     /// <param name="dungeon">The Deadmines content (map 36, its triggers), the giver at <see cref="EntranceArea"/>.</param>
+    /// <param name="rfc">RFC map, trigger, encounter, creature and graveyard content for an end-to-end run.</param>
     /// <param name="extraCreatures">More creature templates and their spawns (the bosses of the dungeon and raid run tests).</param>
     public static async Task<GroupTestWorld> StartAsync(uint[] quests, Action<PlayerbotOptions>? configure = null, bool dungeon = false,
-        Action<IServiceCollection>? services = null, (CreatureTemplate Template, CreatureSpawn Spawn)[]? extraCreatures = null)
+        Action<IServiceCollection>? services = null, (CreatureTemplate Template, CreatureSpawn Spawn)[]? extraCreatures = null, bool rfc = false)
     {
         var options = new PlayerbotOptions
         {
@@ -108,10 +112,11 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             Groups = { FormationTimeoutSeconds = 600 },
         };
         configure?.Invoke(options);
-        var content = new GroupContent(quests, dungeon, extraCreatures ?? []);
+        var content = new GroupContent(quests, dungeon, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])]);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(collection =>
         {
             if (dungeon) DeadminesTestContent.Register(collection);
+            if (rfc) GroupRfcContent.Register(collection);
             collection.AddSingleton<IOptions<PlayerbotOptions>>(Microsoft.Extensions.Options.Options.Create(options));
             collection.AddSingleton<ICreatureDataStore>(content);
             collection.AddSingleton<IQuestContentStore>(content);
@@ -122,7 +127,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
         });
         await world.Host.OnWorldAsync(() =>
         {
-            WorldCollision.Of(world.Host.World).Install(lineOfSight: new Floor(), pathfinder: new OpenPathfinder());
+            WorldCollision.Of(world.Host.World).Install(lineOfSight: new Floor(rfc), pathfinder: rfc ? new GroupRfcContent.Pathfinder() : new OpenPathfinder());
             SpellFeature spells = world.Services.GetRequiredService<SpellFeature>();
             spells.System.Store = new SpellStore([.. spells.System.Store.All, TauntSpell(), ResurrectionSpell()], [], []);
             return true;
@@ -134,7 +139,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// Create and start an autonomous bot, then (world thread) raise it to <paramref name="level"/>, teach it <paramref name="spells"/>
     /// and, when given, put it at <paramref name="at"/> (map 0).
     /// </summary>
-    public async Task<(Guid Id, string Name)> AddBotAsync(string name, byte race, byte cls, byte level, uint[] spells, Vector3? at = null)
+    public async Task<(Guid Id, string Name)> AddBotAsync(string name, byte race, byte cls, byte level, uint[] spells, Vector3? at = null, uint mapId = 0)
     {
         PlayerbotOperationResult created = await Bots.CreateAsync(name, race, cls);
         Assert.True(created.Success, created.Code);
@@ -148,7 +153,11 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             SpellFeature feature = World.Services.GetRequiredService<SpellFeature>();
             foreach (uint spell in spells) feature.Spellbook.LearnSpell(player, spell);
             player.Health = player.MaxHealth;
-            if (at is { } spot) player.Relocate(spot.X, spot.Y, spot.Z, 0, World.Host.World.NowMs);
+            if (at is { } spot)
+            {
+                if (mapId == player.MapId) player.Relocate(spot.X, spot.Y, spot.Z, 0, World.Host.World.NowMs);
+                else World.Services.GetRequiredService<ArcaneCore.World.Teleport.TeleportFeature>().Teleports.TeleportTo(player, mapId, spot.X, spot.Y, spot.Z, 0f);
+            }
             return true;
         });
         return (id, name);
@@ -204,7 +213,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     };
 
     /// <summary>Flat ground everywhere: the dungeon's floor inside map 36, the Westfall floor near its entrance, the start's height elsewhere.</summary>
-    private sealed class Floor : ILineOfSight
+    private sealed class Floor(bool rfc) : ILineOfSight
     {
         public bool Enabled => true;
 
@@ -217,7 +226,8 @@ internal sealed class GroupTestWorld : IAsyncDisposable
         }
 
         public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
-            => mapId == 36 ? DeadminesTestContent.InsideFloor : x < -10_000f ? DeadminesTestContent.OutsideFloor : StartZ;
+            => mapId == 36 ? DeadminesTestContent.InsideFloor : rfc && mapId == GroupRfcContent.Map ? -15.5288f
+                : rfc && mapId == 1 && x > 1000f ? RfcEntranceArea.Z : x < -10_000f ? DeadminesTestContent.OutsideFloor : StartZ;
 
         public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
         {
@@ -249,7 +259,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 Hostile(WarlordEntry, "Group Warlord", level: 10, health: 1500, minDamage: 6, maxDamage: 9, rank: 1),
                 Hostile(BruteEntry, "Group Brute", level: 1, health: 150, minDamage: 1, maxDamage: 1, rank: 0),
                 Hostile(BossEntry, "Deadmines Boss", level: 12, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
-                .. extra.Select(e => e.Template),
+                .. extra.Select(e => e.Template).DistinctBy(t => t.Entry),
             ],
             [
                 new CreatureSpawn { Guid = GiverSpawn, Entry = GiverEntry, MapId = 0, X = Home.X + 3f, Y = Home.Y, Z = Home.Z, Orientation = MathF.PI },

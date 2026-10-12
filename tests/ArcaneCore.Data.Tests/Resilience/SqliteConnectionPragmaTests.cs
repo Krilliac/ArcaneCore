@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
@@ -15,8 +14,9 @@ namespace ArcaneCore.Data.Tests.Resilience;
 
 /// <summary>
 /// SQLite connection setup (docs/areas/persistence.md): <c>busy_timeout</c> on every connection EF opens, the journal and synchronous
-/// settings the durability story depends on, EF's write transactions taking the write lock at BEGIN, and what the pragma buys two
-/// writers on one file. MariaDB, MySQL and PostgreSQL connections are untouched.
+/// settings the durability story depends on, EF's write transactions taking the write lock at BEGIN, and what the pragma buys a
+/// second writer: with a held write lock it waits at least the configured timeout inside SQLite before SQLITE_BUSY, and with the
+/// pragma at 0 it is refused at once (measured on the raw handle, so Microsoft.Data.Sqlite's retry loop cannot mask it). MariaDB, MySQL and PostgreSQL connections are untouched.
 /// </summary>
 public sealed class SqliteConnectionPragmaTests : IDisposable
 {
@@ -159,16 +159,57 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     }
 
     [Fact]
-    public async Task TwoConcurrentWritersBothCommitQuicklyWithoutSqliteBusy()
+    public async Task ContenderBlocksForAtLeastTheConfiguredBusyTimeoutBeforeSqliteBusy()
     {
-        // Writer A holds the write lock for 40 ms, writer B (an EF transaction, as the save queue's stores use) arrives while it does.
-        // With busy_timeout SQLite's own handler retries within milliseconds of the release. Without it, Microsoft.Data.Sqlite's retry loop
-        // sleeps 150 ms between attempts, so B commits up to 150 ms late (the RED half of this test).
-        double withPragma = await WriterLatencyAfterReleaseAsync("5000");
-        double withoutPragma = await WriterLatencyAfterReleaseAsync("0");
-        Assert.True(withPragma < 100, $"with busy_timeout the second writer committed {withPragma:F0} ms after the first released the lock");
-        Assert.True(withoutPragma > withPragma, $"without busy_timeout {withoutPragma:F0} ms was not slower than with it ({withPragma:F0} ms)");
-        Assert.True(withoutPragma >= 80, $"without busy_timeout the second writer committed {withoutPragma:F0} ms after the release: the 150 ms retry quantisation is not what this test measures");
+        // Lower bound only, so machine load can lengthen the wait but never fail the test. Windows sleep granularity is why the bound
+        // sits below the configured 300 ms: SQLite's busy handler sleeps the whole timeout in slices.
+        (int result, TimeSpan elapsed) = await ContendForTheWriteLockAsync(busyTimeoutMs: 300);
+        Assert.Equal(5, result); // SQLITE_BUSY: the holder never released, so the wait ended by timing out.
+        Assert.True(elapsed >= TimeSpan.FromMilliseconds(250), $"the contender returned SQLITE_BUSY after {elapsed.TotalMilliseconds:F0} ms; busy_timeout=300 must hold it for at least 250 ms");
+    }
+
+    [Fact]
+    public async Task ContenderGetsSqliteBusyAtOnceWhenTheBusyTimeoutIsZero()
+    {
+        // The control for the test above: without the pragma the same call fails immediately, so the 250 ms there is the pragma's doing.
+        (int result, TimeSpan elapsed) = await ContendForTheWriteLockAsync(busyTimeoutMs: 0);
+        Assert.Equal(5, result);
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(250), $"with busy_timeout=0 the contender took {elapsed.TotalMilliseconds:F0} ms to get SQLITE_BUSY");
+    }
+
+    /// <summary>
+    /// One connection holds <c>BEGIN IMMEDIATE</c> for the whole measurement. A second connection, opened through EF so the interceptor
+    /// applies <c>busy_timeout</c>, then asks for the write lock directly on the SQLite handle. Going to the handle bypasses
+    /// Microsoft.Data.Sqlite's command retry loop (which retries SQLITE_BUSY for the command timeout and would rescue the call), so
+    /// the elapsed time is SQLite's own busy handler and nothing else.
+    /// </summary>
+    private async Task<(int Result, TimeSpan Elapsed)> ContendForTheWriteLockAsync(int busyTimeoutMs)
+    {
+        string connection = Connection("writers.db");
+        await using ServiceProvider provider = Build(("Database:Provider", "Sqlite"), ("Database:ConnectionString", connection),
+            ("Database:SqliteBusyTimeoutMs", busyTimeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        await InitializeProbeAsync(provider, connection);
+
+        await using var holder = new SqliteConnection(connection);
+        await holder.OpenAsync();
+        await ScalarAsync(holder, "BEGIN IMMEDIATE");
+
+        await using AsyncServiceScope scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        await db.Database.OpenConnectionAsync();
+        var contender = (SqliteConnection)db.Database.GetDbConnection();
+        Assert.Equal((long)busyTimeoutMs, await ScalarAsync(contender, "PRAGMA busy_timeout"));
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        int result = SQLitePCL.raw.sqlite3_exec(contender.Handle, "BEGIN IMMEDIATE");
+        clock.Stop();
+        if (result == 0)
+        {
+            SQLitePCL.raw.sqlite3_exec(contender.Handle, "ROLLBACK");
+        }
+
+        await ScalarAsync(holder, "ROLLBACK");
+        return (result, clock.Elapsed);
     }
 
     [Fact]
@@ -196,40 +237,6 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
             Provider = DatabaseProvider.MariaDb, ConnectionString = "Server=127.0.0.1;Port=1;Database=arcane;User=arcane;Password=arcane;Connect Timeout=1;",
         }));
         Assert.DoesNotContain(Interceptors(maria), interceptor => interceptor is SqliteConnectionPragmaInterceptor);
-    }
-
-    private async Task<double> WriterLatencyAfterReleaseAsync(string busyTimeoutMs)
-    {
-        string file = Path.Combine(_directory, "latency-" + busyTimeoutMs + ".db");
-        string connection = new SqliteConnectionStringBuilder { DataSource = file, Pooling = false, DefaultTimeout = 20 }.ToString();
-        await using ServiceProvider provider = Build(("Database:Provider", "Sqlite"), ("Database:ConnectionString", connection), ("Database:SqliteBusyTimeoutMs", busyTimeoutMs));
-        await InitializeProbeAsync(provider, connection);
-
-        await using var holder = new SqliteConnection(connection);
-        await holder.OpenAsync();
-        await ScalarAsync(holder, "PRAGMA busy_timeout = 0");
-        await ScalarAsync(holder, "BEGIN IMMEDIATE");
-        long released = 0;
-        Task<long> writer = Task.Run(async () =>
-        {
-            await using AsyncServiceScope scope = provider.CreateAsyncScope();
-            var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
-            await using var transaction = await db.Database.BeginTransactionAsync();
-            await db.Database.ExecuteSqlRawAsync("INSERT INTO pragma_probe VALUES (2)");
-            await transaction.CommitAsync();
-            return Stopwatch.GetTimestamp();
-        });
-
-        await Task.Delay(40);
-        await ScalarAsync(holder, "INSERT INTO pragma_probe VALUES (1)");
-        await ScalarAsync(holder, "COMMIT");
-        released = Stopwatch.GetTimestamp();
-        long committed = await writer.WaitAsync(TimeSpan.FromSeconds(20));
-
-        await using var check = new SqliteConnection(connection);
-        await check.OpenAsync();
-        Assert.Equal(2L, await ScalarAsync(check, "SELECT count(*) FROM pragma_probe"));
-        return Stopwatch.GetElapsedTime(released, committed).TotalMilliseconds;
     }
 
     private async Task InitializeProbeAsync(ServiceProvider provider, string connection)

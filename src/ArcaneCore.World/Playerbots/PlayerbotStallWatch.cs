@@ -134,6 +134,7 @@ internal sealed class PlayerbotStallWatch
         // A death loop is over once the bot has lived through a whole stall bound.
         if (_deathLoopReport is not null && unchecked(nowMs - _aliveSinceMs) >= stallMs) _deathLoopReport = null;
         Fingerprint current = fingerprint(player);
+        PlayerbotThinkProbe.Phase("stall decision");
         if (!_started || player.MapId != _anchorMap || !current.Equals(_fingerprint)
             || Vector3.Distance(position, _anchor) >= ProgressYards)
         {
@@ -324,6 +325,9 @@ internal sealed class PlayerbotSharedSetAsides
     /// <summary>The longest set-aside (repeats double it).</summary>
     internal const uint MaxSetAsideMs = 7_200_000;
 
+    /// <summary>After a day without a report, a goal's next shared stall starts at the first duration again.</summary>
+    internal const uint RepeatQuietMs = 86_400_000;
+
     /// <summary>The most goals remembered.</summary>
     internal const int MaxKeys = 256;
 
@@ -356,6 +360,11 @@ internal sealed class PlayerbotSharedSetAsides
             _records[key] = record = new Record();
         }
 
+        if (record.Times != 0 && unchecked(nowMs - record.LastMs) > RepeatQuietMs && !Active(record, nowMs))
+        {
+            record.Times = 0;
+            record.UntilMs = 0;
+        }
         record.LastMs = nowMs;
         record.Bots.RemoveAll(seen => unchecked(nowMs - seen.AtMs) > WindowMs || seen.Bot == bot);
         record.Bots.Add(new Stall(bot, nowMs, map, position));

@@ -370,13 +370,17 @@ internal static class PlayerbotTram
         switch (trip.Stage)
         {
             case TramStage.ToEntrance:
+                PlayerbotThinkProbe.Phase("tram entrance");
                 return ToEntrance(session, player, map, trip, options, elapsedMs, now);
             case TramStage.ToPlatform:
             case TramStage.Waiting:
+                PlayerbotThinkProbe.Phase("tram platform");
                 return AtPlatform(session, player, map, trip, options, elapsedMs, now);
             case TramStage.Aboard:
+                PlayerbotThinkProbe.Phase("tram ride");
                 return Ride(session, player, map, trip, now);
             case TramStage.ToExit:
+                PlayerbotThinkProbe.Phase("tram exit");
                 return ToExit(session, player, map, trip, options, elapsedMs, now, out failure);
             default:
                 return TramStep.Idle;
@@ -428,8 +432,10 @@ internal static class PlayerbotTram
             || unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000)
         {
             // Pick (again): the car that stops here soonest at a time the bot can be beside it.
+            PlayerbotThinkProbe.Phase("tram choose car");
             if (!ChooseCar(player, map, system, trip, here, options, now, out string? why))
                 return LeaveAfterFailure(trip, here, now, why ?? $"tram: no car stops at the {here.Name} platform");
+            PlayerbotThinkProbe.Phase("tram platform");
         }
 
         if (trip.Stage == TramStage.ToPlatform)
@@ -649,6 +655,7 @@ internal static class PlayerbotTram
     private static bool Walk(WorldSession session, Player player, TramTrip trip, Vector3 target, PlayerbotOptions options, uint elapsedMs, uint now,
         bool toward)
     {
+        PlayerbotThinkProbe.Phase("tram walk");
         float left = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), target);
         if (left + ProgressYards <= trip.Best)
         {
@@ -664,6 +671,7 @@ internal static class PlayerbotTram
         trip.Route = null;
         // One path query per PlanRetryMs while none is found (the mesh tiles ahead may still be loading); the progress bound above ends it.
         if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
+        PlayerbotThinkProbe.Phase("tram plan");
         bool planned = toward ? PlayerbotNavigation.TryPlanToward(player, target, options, out PlayerbotRoute? next)
             : PlayerbotNavigation.TryPlan(player, target, options, out next);
         if (!planned || next is null)

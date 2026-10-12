@@ -16,6 +16,21 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class PlayerbotSharedSetAsideTests
 {
     [Fact]
+    public void QuietGoal_LosesItsRepeatPenaltyBeforeTheNextSharedStall()
+    {
+        var shared = new PlayerbotSharedSetAsides();
+        for (ulong bot = 1; bot <= 3; bot++)
+            shared.Report(PlayerbotGoalKind.Quest, 0, 6562, bot, 1_000);
+        Assert.Equal(1, Assert.Single(shared.Export(1_000, 1_000_000)).RepeatCount);
+
+        uint afterQuietPeriod = 1_000 + PlayerbotSharedSetAsides.RepeatQuietMs + 1;
+        Assert.Null(shared.Report(PlayerbotGoalKind.Quest, 0, 6562, 4, afterQuietPeriod));
+        Assert.Null(shared.Report(PlayerbotGoalKind.Quest, 0, 6562, 5, afterQuietPeriod));
+        Assert.Equal("quest 6562 for 30 min", shared.Report(PlayerbotGoalKind.Quest, 0, 6562, 6, afterQuietPeriod)?.Goal);
+        Assert.Equal(1, Assert.Single(shared.Export(afterQuietPeriod, 2_000_000)).RepeatCount);
+    }
+
+    [Fact]
     public void RepeatedSharedSuspensions_KeepPersistedRepeatCountWithinStoreLimit()
     {
         var shared = new PlayerbotSharedSetAsides();

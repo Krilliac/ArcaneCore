@@ -88,6 +88,7 @@ internal static partial class PlayerbotQaSignalParser
             {
                 Kind = QaSignalKind.Stall, AtUtc = atUtc, BotKey = Key(m, botKey), Goal = m.Groups["goal"].Value, Target = target, Quest = quest,
                 HasPosition = true, Map = map, X = x, Y = y, Z = z, Seconds = seconds, Message = Clean(message, m),
+                Bot = QaBotObservation.FromLog(message),
                 OutsideHome = message.EndsWith(OutsideHomeSuffix, StringComparison.Ordinal),
             };
             return true;
@@ -108,10 +109,12 @@ internal static partial class PlayerbotQaSignalParser
                 }
             }
 
+            QaBotObservation? observation = QaBotObservation.FromLog(message);
             signal = new QaSignal
             {
                 Kind = QaSignalKind.DeathLoop, AtUtc = atUtc, BotKey = Key(m, botKey), HasPosition = true, Map = map, X = x, Y = y, Z = z,
                 Attackers = [.. attackers.Distinct().Order()], Seconds = seconds, Count = deaths, Message = Clean(message, m),
+                Bot = observation, Goal = observation?.Goal ?? string.Empty, Quest = observation?.Quest ?? 0,
             };
             return true;
         }

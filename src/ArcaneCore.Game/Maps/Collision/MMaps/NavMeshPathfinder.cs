@@ -80,7 +80,11 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
     /// <summary>Load a terrain tile's navmesh tile (vmangos <c>MMapManager::loadMap</c>). False when nothing was loaded.</summary>
     public bool LoadTile(uint mapId, int tileX, int tileY)
+        => LoadTile(mapId, tileX, tileY, out _);
+
+    private bool LoadTile(uint mapId, int tileX, int tileY, out bool prefetchHit)
     {
+        prefetchHit = false;
         if (GetNavMesh(mapId) is not { } mesh)
         {
             return false;
@@ -94,6 +98,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         string path = Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY));
         if (_prefetch.TryTake(mapId, tileX, tileY, out NavMeshTile? prefetched))
         {
+            prefetchHit = true;
             if (mesh.AddTile(tileX, tileY, prefetched))
             {
                 return true;
@@ -138,14 +143,14 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     void ICollisionTileLifecycle.OnTileLoaded(uint mapId, int tileX, int tileY)
     {
         _gridTiles.Add((mapId, tileX, tileY));
-        _onDemand.Remove((mapId, tileX, tileY)); // the grid holds it now
+        RemoveOnDemand((mapId, tileX, tileY)); // the grid holds it now
         LoadTile(mapId, tileX, tileY);
     }
 
     void ICollisionTileLifecycle.OnTileUnloaded(uint mapId, int tileX, int tileY)
     {
         _gridTiles.Remove((mapId, tileX, tileY));
-        _onDemand.Remove((mapId, tileX, tileY));
+        RemoveOnDemand((mapId, tileX, tileY));
         UnloadTile(mapId, tileX, tileY);
     }
 
@@ -160,9 +165,41 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
     private readonly HashSet<(uint Map, int X, int Y)> _gridTiles = [];
     private readonly Dictionary<(uint Map, int X, int Y), long> _onDemand = [];
+    private readonly Dictionary<uint, int> _onDemandPerMap = [];
     private readonly HashSet<(uint Map, int X, int Y)> _noTile = [];
     private long _queryStamp;
     private int _queryLoads;
+
+    /// <summary>Drop a tile from <see cref="_onDemand"/>, keeping the per-map count (<see cref="_onDemandPerMap"/>) in step.</summary>
+    private void RemoveOnDemand((uint Map, int X, int Y) key)
+    {
+        if (!_onDemand.Remove(key))
+        {
+            return;
+        }
+
+        if (_onDemandPerMap.TryGetValue(key.Map, out int count) && count > 1)
+        {
+            _onDemandPerMap[key.Map] = count - 1;
+        }
+        else
+        {
+            _onDemandPerMap.Remove(key.Map);
+        }
+    }
+
+    /// <summary>Record a tile as loaded for a query at <paramref name="stamp"/>, keeping the per-map count in step.</summary>
+    private void SetOnDemand((uint Map, int X, int Y) key, long stamp)
+    {
+        if (_onDemand.TryAdd(key, stamp))
+        {
+            _onDemandPerMap[key.Map] = _onDemandPerMap.GetValueOrDefault(key.Map) + 1;
+        }
+        else
+        {
+            _onDemand[key] = stamp;
+        }
+    }
 
     /// <summary>Tiles loaded for queries and not held by a grid (tests and inspection).</summary>
     public int OnDemandTileCount => _onDemand.Count;
@@ -186,12 +223,27 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     }
 
     private readonly Dictionary<(uint Map, NavTerrain Include, NavTerrain Exclude), Task<NavRegionGraph?>> _regionGraphs = [];
+    private readonly object _regionGraphsLock = new();
+    private readonly SemaphoreSlim _regionBuildSlots = new(MaxConcurrentRegionBuilds, MaxConcurrentRegionBuilds);
+
+    /// <summary>
+    /// The most region graph builds running at once (each reads every tile of a map: seconds and hundreds of megabytes for a continent).
+    /// More requests wait for a slot without holding a thread.
+    /// </summary>
+    public const int MaxConcurrentRegionBuilds = 2;
+
+    /// <summary>Builds one region graph; <see cref="NavRegionGraph.Build"/> unless a test substitutes it.</summary>
+    internal Func<string, uint, NavTerrain, NavTerrain, NavRegionGraph> RegionGraphBuilder { get; set; }
+        = (directory, mapId, include, exclude) => NavRegionGraph.Build(directory, mapId, include, exclude);
 
     /// <summary>
     /// The map's region graph for polygons with some flag of <paramref name="include"/> and none of <paramref name="exclude"/>
     /// (<see cref="NavRegionGraph"/>), or null: the map has no navmesh, the graph is still being built, or building it failed. The
     /// first call starts the build on the thread pool (it reads every tile of the map once: seconds for a continent) and every call
-    /// answers at once; nothing is read on the calling thread. World thread.
+    /// answers at once; nothing is read on the calling thread. At most <see cref="MaxConcurrentRegionBuilds"/> builds run at once, and one
+    /// map/filter is built once however often and from however many threads it is asked for. A failed build is remembered (null), not
+    /// retried: the answer stays "no graph" until the process restarts. The request table is locked; the navmesh lookup itself is
+    /// the world thread's (<see cref="GetNavMesh"/>).
     /// </summary>
     public NavRegionGraph? RegionGraph(uint mapId, NavTerrain include, NavTerrain exclude)
     {
@@ -208,16 +260,24 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         }
 
         (uint, NavTerrain, NavTerrain) key = (mapId, include, exclude);
-        if (!_regionGraphs.TryGetValue(key, out Task<NavRegionGraph?>? build))
+        lock (_regionGraphsLock)
         {
+            if (_regionGraphs.TryGetValue(key, out Task<NavRegionGraph?>? existing))
+            {
+                return existing;
+            }
+
             string directory = _directory;
             ILogger logger = _logger;
-            build = Task.Run(() =>
+            SemaphoreSlim slots = _regionBuildSlots;
+            Func<string, uint, NavTerrain, NavTerrain, NavRegionGraph> builder = RegionGraphBuilder;
+            Task<NavRegionGraph?> build = Task.Run<NavRegionGraph?>(async () =>
             {
+                await slots.WaitAsync().ConfigureAwait(false);
                 try
                 {
                     var watch = System.Diagnostics.Stopwatch.StartNew();
-                    NavRegionGraph graph = NavRegionGraph.Build(directory, mapId, include, exclude);
+                    NavRegionGraph graph = builder(directory, mapId, include, exclude);
                     logger.LogInformation("MMaps: map {MapId} region graph built from {Tiles} tiles in {Ms} ms: {Regions} regions, {Links} portal links",
                         mapId, graph.TileCount, watch.ElapsedMilliseconds, graph.RegionCount, graph.LinkCount);
                     return graph;
@@ -227,11 +287,14 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
                     logger.LogError(ex, "MMaps: map {MapId} region graph could not be built; long routes there plan without it", mapId);
                     return null;
                 }
+                finally
+                {
+                    slots.Release();
+                }
             });
             _regionGraphs[key] = build;
+            return build;
         }
-
-        return build;
     }
 
     /// <summary>
@@ -313,7 +376,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         {
             if (_onDemand.ContainsKey(key))
             {
-                _onDemand[key] = _queryStamp;
+                _onDemand[key] = _queryStamp; // existing key: the per-map count is unchanged
             }
 
             return true;
@@ -324,7 +387,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             return false;
         }
 
-        if (_onDemand.Count(entry => entry.Key.Map == mapId) >= MaxOnDemandTiles)
+        if (_onDemandPerMap.GetValueOrDefault(mapId) >= MaxOnDemandTiles)
         {
             // Release the tile used longest ago, never one this query reached.
             (uint Map, int X, int Y) oldest = default;
@@ -343,14 +406,15 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
                 return false;
             }
 
-            _onDemand.Remove(oldest);
+            RemoveOnDemand(oldest);
             UnloadTile(oldest.Map, oldest.X, oldest.Y);
         }
 
         _queryLoads++;
         long loadStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        bool loaded = LoadTile(mapId, terrain.X, terrain.Y);
-        PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted);
+        bool loaded = LoadTile(mapId, terrain.X, terrain.Y, out bool prefetchHit);
+        PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted,
+            mapId, terrain.X, terrain.Y, prefetchHit);
         if (!loaded)
         {
             if (_noTile.Count < 16_384)
@@ -361,7 +425,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             return false;
         }
 
-        _onDemand[key] = _queryStamp;
+        SetOnDemand(key, _queryStamp);
         return true;
     }
 

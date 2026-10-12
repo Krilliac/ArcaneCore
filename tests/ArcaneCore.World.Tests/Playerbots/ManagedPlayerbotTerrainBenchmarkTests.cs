@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -34,6 +35,7 @@ internal sealed class BotTerrainBenchmarkFactAttribute : FactAttribute
             Skip = $"{Variable}, {LiveSnapshotReplayFactAttribute.WorldVariable} and {RealTerrainBotFactAttribute.Variable} are not all set: "
                 + "the managed-bot terrain benchmark did NOT run (docs/integration/tick-scaling-20261009.md).";
         }
+        Skip ??= RealContent.WorldFixtureSchema.SkipReasonForEnvironment();
     }
 }
 
@@ -105,6 +107,9 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
         }).Build();
         await using (ServiceProvider bootstrap = new ServiceCollection().AddLogging().AddCharacterDatabase(configuration).BuildServiceProvider())
             await bootstrap.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
+        // The snapshot is a read-only input. Upgrade only this test's copy, as the world daemon does before attaching features.
+        await using (ServiceProvider worldBootstrap = new ServiceCollection().AddLogging().AddWorldDatabase(configuration).BuildServiceProvider())
+            await worldBootstrap.GetRequiredService<WorldDbInitializer>().InitializeAsync();
 
         int max = steps[^1];
         await using WorldTestHost host = WorldTestHost.Start(
@@ -487,8 +492,10 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             {
                 var total = new TickSample();
                 _total.AddTo(total);
+                ThinkStats thinks = _thinks;
+                _thinks = new ThinkStats(); // freeze the hold window before the report enumerates it
                 return new StepResult(_ticks.Count, _ticks.Order().ToArray(), total, _maps.Order().ToArray(), _bot.Order().ToArray(),
-                    _mapsBytes, _featuresBytes, Interlocked.Read(ref _botBytes), [.. _slowest], _thinks);
+                    _mapsBytes, _featuresBytes, Interlocked.Read(ref _botBytes), [.. _slowest], thinks);
             }
         }
     }
@@ -505,8 +512,9 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
         private readonly long[] _buckets = new long[Bounds.Length + 1];
         private readonly Dictionary<string, (int Count, double Ms)> _bySlowestPhase = new(StringComparer.Ordinal);
         private readonly Dictionary<string, (int Count, double Ms)> _byLargestSearch = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<(double Ms, int Queries, long Nodes)>> _phaseThinks = new(StringComparer.Ordinal);
         private readonly List<(double Ms, string Line)> _slowest = [];
-        private long _slowSearches, _slowNodes, _slowCapped, _slowTiles, _allNodes, _allSearches, _clamped, _refused;
+        private long _slowSearches, _slowNodes, _slowCapped, _slowTiles, _allNodes, _allSearches, _allQueries, _clamped, _refused;
         private double _slowQueryMs, _slowTotalMs;
 
         public void Add(PlayerbotThinkProbe probe)
@@ -518,8 +526,20 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             _buckets[bucket]++;
             _allNodes += probe.Search.Nodes;
             _allSearches += probe.Search.Searches;
+            _allQueries += probe.Queries;
             _clamped += probe.Clamped;
             _refused += probe.Refused;
+            string phase = probe.SlowestPhase;
+            if (!_phaseThinks.TryGetValue(phase, out List<(double Ms, int Queries, long Nodes)>? samples))
+                _phaseThinks[phase] = samples = [];
+            samples.Add((ms, probe.Queries, probe.Search.Nodes));
+            if (_slowest.Count < 10 || ms > _slowest[^1].Ms)
+            {
+                _slowest.Add((ms, string.Create(CultureInfo.InvariantCulture,
+                    $"{ms:F1} ms by {probe.Subject.Driver}, goal {probe.Subject.Goal}, slowest phase {phase}: {probe.Describe()}")));
+                _slowest.Sort((a, b) => b.Ms.CompareTo(a.Ms));
+                if (_slowest.Count > 10) _slowest.RemoveAt(_slowest.Count - 1);
+            }
             if (ms < SlowMs) return;
             _slowTotalMs += ms;
             _slowSearches += probe.Search.Searches;
@@ -527,18 +547,11 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             _slowCapped += probe.Search.Capped;
             _slowTiles += probe.Search.TileLoads;
             _slowQueryMs += probe.QueryTicks * 1000.0 / Stopwatch.Frequency;
-            string phase = probe.SlowestPhase;
             (int c, double m) = _bySlowestPhase.GetValueOrDefault(phase);
             _bySlowestPhase[phase] = (c + 1, m + ms);
             string search = probe.Largest.Nodes > 0 ? probe.Largest.Phase : "(no search)";
             (c, m) = _byLargestSearch.GetValueOrDefault(search);
             _byLargestSearch[search] = (c + 1, m + ms);
-            if (_slowest.Count < 12 || ms > _slowest[^1].Ms)
-            {
-                _slowest.Add((ms, string.Create(CultureInfo.InvariantCulture, $"{ms:F1} ms by {probe.Subject.Driver}, goal {probe.Subject.Goal}: {probe.Describe()}")));
-                _slowest.Sort((a, b) => b.Ms.CompareTo(a.Ms));
-                if (_slowest.Count > 12) _slowest.RemoveAt(_slowest.Count - 1);
-            }
         }
 
         public IEnumerable<string> Lines()
@@ -546,7 +559,16 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
             double[] sorted = [.. _ms.Order()];
             string P(double pct) => sorted.Length == 0 ? "-" : sorted[Math.Clamp((int)Math.Ceiling(pct / 100 * sorted.Length) - 1, 0, sorted.Length - 1)].ToString("F2", CultureInfo.InvariantCulture);
             yield return string.Create(CultureInfo.InvariantCulture,
-                $"thinks {sorted.Length}: p50 {P(50)} ms, p99 {P(99)} ms, p99.9 {P(99.9)} ms, max {(sorted.Length == 0 ? 0 : sorted[^1]):F1} ms; {_allSearches} searches, {_allNodes} nodes; fallback queries cut short by the think budget {_clamped}, refused {_refused}");
+                $"thinks {sorted.Length}: p50 {P(50)} ms, p95 {P(95)} ms, p99 {P(99)} ms, p99.9 {P(99.9)} ms, max {(sorted.Length == 0 ? 0 : sorted[^1]):F1} ms; {_allQueries} queries, {_allSearches} searches, {_allNodes} nodes; fallback queries cut short by the think budget {_clamped}, refused {_refused}");
+            foreach ((string phase, List<(double Ms, int Queries, long Nodes)> samples) in _phaseThinks.OrderByDescending(p => p.Value.Count))
+            {
+                double[] times = samples.Select(s => s.Ms).Order().ToArray();
+                double Rank(double percentile) => times[Math.Clamp((int)Math.Ceiling(percentile / 100 * times.Length) - 1, 0, times.Length - 1)];
+                yield return string.Create(CultureInfo.InvariantCulture,
+                    $"think phase {phase}: n {samples.Count}, think ms p50 {Rank(50):F2} p95 {Rank(95):F2} p99 {Rank(99):F2} max {times[^1]:F2}; "
+                    + $"queries/think mean {samples.Average(s => s.Queries):F2} max {samples.Max(s => s.Queries)}, "
+                    + $"nodes/think mean {samples.Average(s => s.Nodes):F0} max {samples.Max(s => s.Nodes)} (grouped by slowest phase)");
+            }
             var buckets = new StringBuilder("think histogram (ms):");
             for (int i = 0; i < _buckets.Length; i++)
             {
@@ -564,7 +586,7 @@ public sealed class ManagedPlayerbotTerrainBenchmarkTests(ITestOutputHelper outp
                 .Select(p => string.Create(CultureInfo.InvariantCulture, $"{p.Key} {p.Value.Count}x/{p.Value.Ms:F0} ms")));
             foreach ((double _, string line) in _slowest)
             {
-                yield return "slow think " + line;
+                yield return "top think " + line;
             }
         }
     }

@@ -19,21 +19,36 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// <summary>The shipped timeout (<c>Database:SqliteBusyTimeoutMs</c>).</summary>
     public const int DefaultBusyTimeoutMs = 5000;
 
+    /// <summary>The shipped bound on a characters-database command's lock wait (<c>Database:SqliteWriteTimeoutMs</c>).</summary>
+    public const int DefaultWriteTimeoutMs = 5000;
+
     /// <summary>The largest accepted <c>Database:SqliteBusyTimeoutMs</c>.</summary>
     public const int MaxBusyTimeoutMs = 60000;
 
-    private static readonly ConcurrentDictionary<int, SqliteConnectionPragmaInterceptor> Instances = new();
+    private static readonly ConcurrentDictionary<(int Busy, int Write), SqliteConnectionPragmaInterceptor> Instances = new();
 
-    private SqliteConnectionPragmaInterceptor(int busyTimeoutMs) => BusyTimeoutMs = busyTimeoutMs;
+    private SqliteConnectionPragmaInterceptor(int busyTimeoutMs, int writeTimeoutMs)
+    {
+        BusyTimeoutMs = busyTimeoutMs;
+        WriteTimeoutMs = writeTimeoutMs;
+    }
 
     /// <summary>The configured busy timeout in milliseconds; 0 leaves SQLite's own "fail at once" behaviour.</summary>
     public int BusyTimeoutMs { get; }
 
     /// <summary>
+    /// The bound in milliseconds on any command's lock wait on the connections this interceptor opens (0: none, the connection string's Default Timeout stands).
+    /// Applied by lowering the connection's Default Timeout (whole seconds, rounded up) at open, before <c>busy_timeout</c> is derived from it, so EF's
+    /// <c>BEGIN IMMEDIATE</c>, which the driver creates with that timeout, is bounded too. Used for the characters database, whose write queues must not sit in a
+    /// 30 s lock wait.
+    /// </summary>
+    public int WriteTimeoutMs { get; }
+
+    /// <summary>
     /// The shared interceptor for a timeout. One instance per value keeps EF's internal service provider cache keyed on the same
     /// interceptor object across the many option builds a host makes.
     /// </summary>
-    public static SqliteConnectionPragmaInterceptor For(int busyTimeoutMs)
+    public static SqliteConnectionPragmaInterceptor For(int busyTimeoutMs, int writeTimeoutMs = 0)
     {
         if (busyTimeoutMs is < 0 or > MaxBusyTimeoutMs)
         {
@@ -41,7 +56,13 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
                 $"Database:SqliteBusyTimeoutMs must be between 0 and {MaxBusyTimeoutMs}, not {busyTimeoutMs}.");
         }
 
-        return Instances.GetOrAdd(busyTimeoutMs, static ms => new SqliteConnectionPragmaInterceptor(ms));
+        if (writeTimeoutMs is < 0 or > MaxBusyTimeoutMs)
+        {
+            throw new InvalidOperationException(
+                $"Database:SqliteWriteTimeoutMs must be between 0 and {MaxBusyTimeoutMs}, not {writeTimeoutMs}.");
+        }
+
+        return Instances.GetOrAdd((busyTimeoutMs, writeTimeoutMs), static key => new SqliteConnectionPragmaInterceptor(key.Busy, key.Write));
     }
 
     public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
@@ -64,6 +85,15 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
 
     private SqliteCommand CreatePragma(SqliteConnection connection)
     {
+        if (WriteTimeoutMs > 0)
+        {
+            int seconds = (int)Math.Min(int.MaxValue, (WriteTimeoutMs + 999L) / 1000);
+            if (seconds < connection.DefaultTimeout)
+            {
+                connection.DefaultTimeout = seconds;
+            }
+        }
+
         // Never wait inside SQLite longer than the connection's own timeout: that loop checks the clock only between attempts.
         int milliseconds = (int)Math.Min(BusyTimeoutMs, connection.DefaultTimeout * 1000L);
         SqliteCommand command = connection.CreateCommand();

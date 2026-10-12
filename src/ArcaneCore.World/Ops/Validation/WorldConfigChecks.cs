@@ -91,6 +91,7 @@ public sealed class WorldConfigChecks : IConfigCheck
         if (component == DatabaseComponent.Auth)
         {
             Range(issues, configuration, "Database:SqliteBusyTimeoutMs", 5000, 0, 60000, "0 to disable, or 1-60000 milliseconds (default 5000)");
+            Range(issues, configuration, "Database:SqliteWriteTimeoutMs", 5000, 0, 60000, "0 to keep the connection string timeout, or 1-60000 milliseconds (default 5000)");
         }
 
         if (own)

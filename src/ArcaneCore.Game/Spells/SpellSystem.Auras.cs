@@ -745,7 +745,8 @@ public sealed partial class SpellSystem
         uint amount = aura.Type == AuraType.PeriodicDamagePercent
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
-        Unit caster = ResolveAuraCaster(holder) ?? target;
+        Unit? resolvedCaster = ResolveAuraCaster(holder);
+        Unit caster = resolvedCaster ?? target;
         // Class scripts (Consecration, Curse of Doom): Periodic/SpellSystem.PeriodicDamageScripts.cs, vmangos SpellAuras.cpp:5869-5874.
         IPeriodicDamageScript? script = aura.Type == AuraType.PeriodicDamage ? FindPeriodicDamageScript(holder.Spell.Id) : null;
         float? scripted = script?.CalculateTick(this, holder, aura, caster, amount);
@@ -773,6 +774,11 @@ public sealed partial class SpellSystem
 
         uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true, startsCombat: true, critical: false, durabilityLoss: true,
             reflected: holder.IsReflected && ReferenceEquals(caster, target));
+        if (dealt > 0 && !target.IsAlive && resolvedCaster is null && target is Player player)
+        {
+            player.LastEnvironmentalDeath = null; // this death has one source
+            player.LastMissingCasterPeriodicDeath = true;
+        }
         OnDamageTaken(target, caster, dealt, periodic: true, absorbed, holder.Spell.Id);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Absorbed: absorbed, Resisted: resisted)), includeSelf: true);

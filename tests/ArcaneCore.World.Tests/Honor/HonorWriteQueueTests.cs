@@ -66,6 +66,63 @@ public sealed class HonorWriteQueueTests
     }
 
     [Fact]
+    public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_WithNoFurtherTrigger()
+    {
+        var store = new MemoryHonorStore { LockedWrites = 4 }; // three inline attempts fail, the first sweep fails, the second lands
+        await using ServiceProvider provider = new ServiceCollection().AddSingleton<IHonorStore>(store).BuildServiceProvider();
+        var queue = new HonorWriteQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+        queue.Start();
+        queue.AppendCp(1, Row(1));
+        await queue.FlushAsync().WaitAsync(Budget);
+
+        Assert.True(queue.HasRetainedFailure(1));
+        Assert.Empty(store.Rows(1));
+        Assert.Equal(3, store.WriteAttempts);
+
+        // No timer: the sweeps are driven explicitly, so the attempt counts are exact.
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync().WaitAsync(Budget);
+        Assert.True(queue.HasRetainedFailure(1));
+        Assert.Equal(4, store.WriteAttempts);
+
+        Assert.True(queue.PostRetainedSweepForTest());
+        await queue.FlushAsync().WaitAsync(Budget);
+        Assert.False(queue.HasRetainedFailure(1));
+        Assert.Single(store.Rows(1));
+        Assert.Equal(5, store.WriteAttempts);
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task TheRealRetryTimer_EventuallyLandsAWriteHeldByALongLock()
+    {
+        var store = new MemoryHonorStore { LockedWrites = 4 };
+        await using ServiceProvider provider = new ServiceCollection().AddSingleton<IHonorStore>(store).BuildServiceProvider();
+        var queue = new HonorWriteQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetainedRetryInterval = TimeSpan.FromMilliseconds(50) };
+        queue.Start();
+        queue.AppendCp(1, Row(1));
+        await queue.FlushAsync().WaitAsync(Budget);
+
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (queue.HasRetainedFailure(1))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained write was never retried by the timer");
+            await Task.Delay(10);
+        }
+
+        Assert.Single(store.Rows(1));
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ARetryIntervalThatIsNotPositive_IsRefusedAtStart()
+    {
+        await using ServiceProvider provider = new ServiceCollection().AddSingleton<IHonorStore>(new MemoryHonorStore()).BuildServiceProvider();
+        var queue = new HonorWriteQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetainedRetryInterval = TimeSpan.Zero };
+        Assert.Throws<ArgumentOutOfRangeException>(() => queue.Start());
+    }
+
+    [Fact]
     public async Task A_failed_write_is_retained_and_the_login_barrier_refuses_until_storage_recovers()
     {
         (HonorWriteQueue queue, MemoryHonorStore store, ServiceProvider provider) = Create();

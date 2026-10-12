@@ -14,6 +14,149 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class ManagedPlayerbotLifecycleTests
 {
     [Fact]
+    public async Task Shutdown_StopsEightBotsTogether_AndFlushesEachCharacterOnce()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxBots = 8, manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        string[] names = ["Stopone", "Stoptwo", "Stopthree", "Stopfour", "Stopfive", "Stopsix", "Stopseven", "Stopeight"];
+        Guid[] ids = new Guid[names.Length];
+        int[] characterIds = new int[names.Length];
+        int[] savesBefore = new int[names.Length];
+        for (int i = 0; i < names.Length; i++)
+        {
+            ids[i] = Assert.IsType<Guid>((await feature.CreateAsync(names[i], 1, 1)).BotId);
+            Assert.True((await feature.StartScriptedAsync(ids[i].ToString(), new IdleController())).Success);
+            characterIds[i] = (await owners.FindAsync(ids[i]))!.CharacterId;
+            savesBefore[i] = characters.SavesFor(characterIds[i]);
+        }
+
+        // Hold the first stop that reaches its persistence write, independent of dictionary order.
+        // The old foreach cannot advance past it; a batched stop reaches the other seven.
+        TaskCompletionSource<Guid> held = owners.HoldNextUpdate();
+        long ticksAtStart = host.World.Stats.Snapshot().TotalTicks;
+        Task shutdown = feature.ShutdownBeforeWorldStopAsync();
+        bool advanced = false;
+        long ticksBeforeRelease = 0;
+        try
+        {
+            Guid heldId = await held.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            try
+            {
+                await host.WaitForWorldAsync(
+                    () => ids.Where(id => id != heldId).All(id => owners.Peek(id)?.State is ManagedPlayerbotState.Stopping or ManagedPlayerbotState.Stopped),
+                    "all other bots begin stopping while the first update is held");
+                advanced = true;
+            }
+            catch (TimeoutException) { /* prove the missing progress after releasing the gate and draining shutdown */ }
+            Assert.False(shutdown.IsCompleted);
+            ticksBeforeRelease = host.World.Stats.Snapshot().TotalTicks;
+        }
+        finally { owners.ReleaseHeldUpdates(); }
+
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(advanced, "shutdown did not begin stopping the other seven bots while one stop write was held");
+        long ticksToFinish = host.World.Stats.Snapshot().TotalTicks - ticksBeforeRelease;
+        long totalTicks = host.World.Stats.Snapshot().TotalTicks - ticksAtStart;
+        Console.WriteLine($"Eight-bot shutdown used {totalTicks} world ticks total, {ticksToFinish} after the held stop was released");
+        Assert.InRange(totalTicks, 0, 64);
+        Assert.InRange(ticksToFinish, 0, 24);
+        for (int i = 0; i < ids.Length; i++)
+        {
+            Assert.Equal(ManagedPlayerbotState.Stopped, (await owners.FindAsync(ids[i]))!.State);
+            Assert.Equal(savesBefore[i] + 1, characters.SavesFor(characterIds[i]));
+            Assert.Null(host.Registry.Find((await owners.FindAsync(ids[i]))!.AccountId));
+        }
+    }
+
+    [Fact]
+    public async Task Shutdown_OneStopFailingMidBatch_StillStopsTheOthersAndReportsTheFailure()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxBots = 40, manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        // More than one batch of 32, so the failing stop is in the first batch or in the second whichever order the bots are taken.
+        const int count = 34;
+        Guid[] ids = new Guid[count];
+        for (int i = 0; i < count; i++)
+        {
+            ids[i] = Assert.IsType<Guid>((await feature.CreateAsync($"Batchbot{(char)('a' + i / 26)}{(char)('a' + i % 26)}", 1, 1)).BotId);
+            Assert.True((await feature.StartScriptedAsync(ids[i].ToString(), new IdleController())).Success);
+        }
+
+        owners.FailUpdatesOf(ids[3]);
+        try
+        {
+            AggregateException failure = await Assert.ThrowsAsync<AggregateException>(() => feature.ShutdownBeforeWorldStopAsync());
+
+            Assert.Contains(failure.InnerExceptions, e => e is InvalidOperationException { Message: "fixture-update-failure" });
+            foreach (Guid id in ids.Where(id => id != ids[3]))
+            {
+                Assert.Equal(ManagedPlayerbotState.Stopped, owners.Peek(id)!.State);
+                Assert.Null(host.Registry.Find(owners.Peek(id)!.AccountId));
+            }
+            Assert.NotEqual(ManagedPlayerbotState.Stopped, owners.Peek(ids[3])!.State);
+        }
+        finally { owners.FailUpdatesOf(null); }
+    }
+
+    [Fact]
+    public async Task Shutdown_EveryStopFailing_AttemptsEveryBatch_WhateverTheHashOrder()
+    {
+        // Every stop fails, so each of the 34 bots (two batches of 32) must report its own failure: a batch that never ran, in any
+        // enumeration order, leaves fewer than 34. (The one-failing test above proves the others still reach Stopped.)
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxBots = 40, manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        const int count = 34;
+        for (int i = 0; i < count; i++)
+        {
+            Guid id = Assert.IsType<Guid>((await feature.CreateAsync($"Allfail{(char)('a' + i / 26)}{(char)('a' + i % 26)}", 1, 1)).BotId);
+            Assert.True((await feature.StartScriptedAsync(id.ToString(), new IdleController())).Success);
+        }
+
+        owners.FailAllUpdates(true);
+        try
+        {
+            AggregateException failure = await Assert.ThrowsAsync<AggregateException>(() => feature.ShutdownBeforeWorldStopAsync());
+            Assert.Equal(count, failure.InnerExceptions.Count(e => e is InvalidOperationException { Message: "fixture-update-failure" }));
+        }
+        finally { owners.FailAllUpdates(false); }
+    }
+
+    /// <summary>
+    /// The checkpoint runs on a pool thread, but a bot's goal is read from the coordinators' world-thread-owned collections: every read
+    /// (GoalReadProbe) must happen on the world thread. RED before the fix: the checkpoint read the goal three times per bot off-thread.
+    /// </summary>
+    [Fact]
+    public async Task TheCheckpoint_ReadsEveryBotsGoal_OnTheWorldThread()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Checkgoal", 1, 1)).BotId);
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new IdleController())).Success);
+
+        int offThread = 0;
+        feature.GoalReadProbe = () => { if (!host.World.IsWorldThread) Interlocked.Increment(ref offThread); };
+        for (int tick = 0; tick < 110; tick++) await host.World.AdvanceClockAsync(50); // the checkpoint starts at 5000 ms
+        Task checkpoint = await host.World.InvokeAsync(() => feature.LastCheckpoint);
+        Assert.NotSame(Task.CompletedTask, checkpoint); // a checkpoint did start
+        await checkpoint.WaitAsync(TimeSpan.FromSeconds(30));
+        feature.GoalReadProbe = null;
+
+        Assert.Equal(0, Volatile.Read(ref offThread));
+    }
+
+    [Fact]
     public async Task StoppedBots_DoNotTakeASlot_OnlyRunningBotsCountAgainstMaxBots()
     {
         // The live world of 2026-10-08 (MaxBots 10) refused '.playerbot create' with 5 bots running and 5 stopped.
@@ -115,6 +258,31 @@ public sealed class ManagedPlayerbotLifecycleTests
         Assert.True((await feature.CreateAsync("Regtwo", 1, 1)).Success);
         Assert.Equal("playerbot-registry-full", (await feature.CreateAsync("Regthree", 1, 1)).Code);
         Assert.Equal(2, (await owners.LoadAllAsync()).Count);
+    }
+
+    [Fact]
+    public async Task Delete_RemovesCharacterAndRegistryRow_RefusesWhileRunning()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => o.MaxRegisteredBots = 1);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Deleteone", 1, 1)).BotId!.Value;
+        Assert.Equal("playerbot-registry-full", (await feature.CreateAsync("Deletetwo", 1, 1)).Code);
+        Assert.True((await feature.StartAsync(id.ToString())).Success);
+
+        Assert.Equal("bot-running", (await feature.DeleteAsync(id.ToString())).Code);
+        Assert.Single(await owners.LoadAllAsync());
+
+        Assert.True((await feature.StopAsync(id.ToString())).Success);
+        PlayerbotOperationResult deleted = await feature.DeleteAsync(id.ToString());
+        Assert.True(deleted.Success, deleted.Code);
+        Assert.Empty(await owners.LoadAllAsync());
+        Assert.DoesNotContain(feature.Snapshot(), b => b.BotId == id);
+        Assert.Equal("bot-not-found", (await feature.DeleteAsync(id.ToString())).Code);
+        Assert.True((await feature.CreateAsync("Deletetwo", 1, 1)).Success, "the freed registry slot is usable again");
+        await feature.ShutdownBeforeWorldStopAsync();
     }
 
     [Fact]
@@ -759,9 +927,26 @@ public sealed class ManagedPlayerbotLifecycleTests
             return Task.CompletedTask;
         }
 
+        private Guid? _failBot;
+
+        /// <summary>Every update of <paramref name="botId"/> throws until this is called with null.</summary>
+        public void FailUpdatesOf(Guid? botId) => _failBot = botId;
+
+        private volatile bool _failAll;
+
+        /// <summary>Every update of every bot throws while this is true.</summary>
+        public void FailAllUpdates(bool fail) => _failAll = fail;
+
         private Guid? _holdBot;
         private TaskCompletionSource? _held;
+        private TaskCompletionSource<Guid>? _nextUpdateHeld;
         private TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<Guid> HoldNextUpdate()
+        {
+            _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _nextUpdateHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
 
         /// <summary>The next update of <paramref name="botId"/> waits until <see cref="ReleaseHeldUpdates"/>; the returned task completes when it is waiting.</summary>
         public TaskCompletionSource HoldUpdatesOf(Guid botId)
@@ -775,14 +960,22 @@ public sealed class ManagedPlayerbotLifecycleTests
         public void ReleaseHeldUpdates()
         {
             _holdBot = null;
+            _nextUpdateHeld = null;
             _release.TrySetResult();
         }
 
+        public Task<bool> DeleteAsync(Guid botId, int accountId, int characterId, CancellationToken cancellationToken = default)
+            => Task.FromResult(_items.TryGetValue(botId, out ManagedPlayerbot? current) && current.AccountId == accountId
+                && current.CharacterId == characterId
+                && _items.TryRemove(new KeyValuePair<Guid, ManagedPlayerbot>(botId, current)));
+
         public async Task<bool> UpdateAsync(ManagedPlayerbot bot, long expectedRevision, CancellationToken cancellationToken = default)
         {
-            if (_holdBot == bot.BotId && _held is { } held)
+            TaskCompletionSource<Guid>? next = Interlocked.Exchange(ref _nextUpdateHeld, null);
+            if (next is not null || _holdBot == bot.BotId && _held is not null)
             {
-                held.TrySetResult();
+                next?.TrySetResult(bot.BotId);
+                _held?.TrySetResult();
                 await _release.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
             }
 
@@ -791,6 +984,7 @@ public sealed class ManagedPlayerbotLifecycleTests
 
         private bool Update(ManagedPlayerbot bot, long expectedRevision)
         {
+            if (_failAll || _failBot == bot.BotId) throw new InvalidOperationException("fixture-update-failure");
             if (FailNextUpdate) { FailNextUpdate = false; throw new InvalidOperationException("fixture-update-failure"); }
             while (_items.TryGetValue(bot.BotId, out ManagedPlayerbot? current))
             {

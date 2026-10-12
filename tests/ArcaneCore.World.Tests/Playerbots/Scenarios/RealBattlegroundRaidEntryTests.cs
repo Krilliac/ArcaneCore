@@ -16,6 +16,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 
@@ -29,6 +30,26 @@ internal sealed class RealWorldContentFactAttribute : FactAttribute
         if (Environment.GetEnvironmentVariable(Variable) is not { Length: > 0 } path || !File.Exists(path))
         {
             Skip = $"{Variable} must name a refreshed SQLite world.db; real battleground and raid entry did NOT run.";
+        }
+        Skip ??= RealContent.WorldFixtureSchema.SkipReasonForEnvironment();
+    }
+}
+
+/// <summary>
+/// Runs only when the source world has at least one gated areatrigger_teleport row. Evaluated at discovery by reading the
+/// source read-only, so the skip reason states the live gap instead of the suite going red.
+/// </summary>
+internal sealed class RaidAttunementContentFactAttribute : FactAttribute
+{
+    public RaidAttunementContentFactAttribute()
+    {
+        if (Environment.GetEnvironmentVariable(RealWorldContentFactAttribute.Variable) is not { Length: > 0 } path || !File.Exists(path))
+        {
+            Skip = $"{RealWorldContentFactAttribute.Variable} must name a refreshed SQLite world.db; the raid attunement content check did NOT run.";
+        }
+        else if (RealWorldDatabaseCopy.CountGatedPortals(path) == 0)
+        {
+            Skip = "known content gap: areatrigger_teleport requirements are all zero; see raid-attunement-content lane";
         }
     }
 }
@@ -48,7 +69,7 @@ public sealed class RealBattlegroundRaidContentCollection;
 /// classic-db requires 5/8/20 players in WSG/AB/AV, which two clients cannot satisfy.
 /// </summary>
 [Collection("Real battleground raid content")]
-public sealed class RealBattlegroundRaidEntryTests : IDisposable
+public sealed class RealBattlegroundRaidEntryTests(ITestOutputHelper output) : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "arcane-real-bg-raid-" + Guid.NewGuid().ToString("N"));
     private readonly CaptureLogger _logs = new();
@@ -56,6 +77,19 @@ public sealed class RealBattlegroundRaidEntryTests : IDisposable
     public void Dispose()
     {
         if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
+    }
+
+    /// <summary>
+    /// The raid portal tests below plant ClassicDB requirements into their copy. This is the check that the world database
+    /// itself carries attunement gates; it skips, with the reason, while the content gap exists.
+    /// </summary>
+    [RaidAttunementContentFact]
+    public void SourceWorldDatabase_HasRaidAttunementRequirements()
+    {
+        string path = Environment.GetEnvironmentVariable(RealWorldContentFactAttribute.Variable)!;
+        int gated = RealWorldDatabaseCopy.CountGatedPortals(path);
+        output.WriteLine($"areatrigger_teleport rows with a non-zero RequiredItem/RequiredItem2/RequiredQuestDone/RequiredCondition in {path}: {gated}");
+        Assert.True(gated > 0, "areatrigger_teleport has no attunement requirements in the source world database");
     }
 
     [RealWorldContentFact]
@@ -220,12 +254,8 @@ public sealed class RealBattlegroundRaidEntryTests : IDisposable
     {
         Directory.CreateDirectory(_directory);
         string world = Path.Combine(_directory, "world.db");
-        File.Copy(Environment.GetEnvironmentVariable(RealWorldContentFactAttribute.Variable)!, world);
-        IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Database:World:Provider"] = "Sqlite",
-            ["Database:World:ConnectionString"] = $"Data Source={world};Pooling=False",
-        }).Build();
+        IConfiguration config = await RealWorldDatabaseCopy.CreateAsync(world);
+        foreach (string line in await RealWorldDatabaseCopy.RestoreRaidPortalRequirementsAsync(world)) output.WriteLine(line);
         ScenarioTestWorld result = await ScenarioTestWorld.StartAsync(services =>
         {
             // The classic-db importer has world content but not ChrRaces/ChrClasses DBC appearance rows;

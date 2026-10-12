@@ -74,13 +74,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     }
 
     /// <summary>
-    /// A home-bound bot keeps a completed quest if its ender is in its home or within a short local trip. Otherwise a completed
-    /// breadcrumb would occupy a quest-log slot while the bot repeatedly tries to cross the continent to turn it in.
+    /// A home-bound bot keeps a completed quest if its ender is in its home or within a short local trip. A bot without a
+    /// home also abandons a proven handoff to the other continent, which its travel planner cannot make.
     /// Use the ordinary client abandon packet so the journal, source items and persistence follow the same path as a player.
     /// </summary>
     internal bool AbandonDistantCompletedQuest(Player player)
     {
-        if (Home is not { } home || player.Combat.IsInCombat || !player.IsAlive) return false;
+        if (player.Combat.IsInCombat || !player.IsAlive) return false;
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         CreatureContent? content = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
         if (services?.StateOf(player) is not { Loaded: true } state || content is null) return false;
@@ -88,23 +88,35 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (status.Status != QuestStatus.Complete || status.Rewarded || IsRefused(id)
                 || services.Quests.Get(id) is not { IsActive: true } || !services.IsRewardable(id)) continue;
-            bool reasonable = services.Quests.CreatureEndersOf(id)
-                .SelectMany(entry => content.GetSpawns(player.MapId, entry))
-                .Where(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn))
-                .Any(spawn => ReasonableReturnTrip(home, player.MapId, player.X, player.Y, spawn));
-            if (reasonable) continue;
-            int slot = state.Quests.FindSlot(id);
-            if (slot >= QuestConstants.MaxQuestLogSize) continue;
-            if (!_session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
-            // Managed dispatch reports only that the session stayed InWorld. The handler may have refused the abandon.
-            if (state.Quests.Get(id) is { Status: QuestStatus.Complete, Rewarded: false })
+            if (!PlayerbotWorldDestinations.RequiresIntercontinentTravel(player.MapId, services.Quests, content, id))
             {
-                Refuse(id, _session.World.NowMs);
-                return false;
+                if (Home is not { } home) continue;
+                bool reasonable = services.Quests.CreatureEndersOf(id)
+                    .SelectMany(entry => content.GetSpawns(player.MapId, entry))
+                    .Where(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn))
+                    .Any(spawn => ReasonableReturnTrip(home, player.MapId, player.X, player.Y, spawn));
+                if (reasonable) continue;
             }
-            return true;
+            if (TryAbandonCompletedQuest(_session, player, id, out bool attempted)) return true;
+            if (attempted) Refuse(id, _session.World.NowMs);
+            return false;
         }
         return false;
+    }
+
+    /// <summary>Both distant returns and repeated steep-return failures abandon through vmangos
+    /// <c>WorldSession::HandleQuestLogRemoveQuest</c>, QuestHandler.cpp:327, and verify the journal changed.</summary>
+    internal static bool TryAbandonCompletedQuest(WorldSession session, Player player, uint questId, out bool attempted)
+    {
+        attempted = false;
+        if (session.Services.GetService<QuestNpcFeature>()?.Services.StateOf(player) is not { Loaded: true } state
+            || state.Quests.Get(questId) is not { Status: QuestStatus.Complete, Rewarded: false }) return false;
+        int slot = state.Quests.FindSlot(questId);
+        if (slot < 0 || slot >= QuestConstants.MaxQuestLogSize
+            || !session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
+        attempted = true;
+        // Managed dispatch means only that the session stayed InWorld; the handler can still refuse the packet.
+        return state.Quests.Get(questId) is not { Status: QuestStatus.Complete, Rewarded: false };
     }
 
     internal static bool ReasonableReturnTrip(PlayerbotHomeArea home, uint mapId, float playerX, float playerY,
@@ -176,7 +188,11 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             _route = null;
 
         float dx = target.Npc.X - player.X, dy = target.Npc.Y - player.Y, dz = target.Npc.Z - player.Z;
-        if ((dx * dx) + (dy * dy) + (dz * dz) > QuestNpcServices.InteractionDistance * QuestNpcServices.InteractionDistance)
+        float distanceSquared = (dx * dx) + (dy * dy) + (dz * dz);
+        // Match the server's creature reach: vmangos WorldObject::IsWithinDist (Object.cpp:1738) adds both
+        // bounding radii and compares strict 3D distance. The last walkable point can already be in reach.
+        float reach = QuestNpcServices.InteractionDistance + target.Npc.BoundingRadius + player.BoundingRadius;
+        if (!float.IsFinite(distanceSquared) || !float.IsFinite(reach) || reach <= 0 || distanceSquared >= reach * reach)
         {
             if (_route is null && !PlayerbotNavigation.TryPlan(player,
                     new System.Numerics.Vector3(target.Npc.X, target.Npc.Y, target.Npc.Z), _options, out _route))
@@ -243,6 +259,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private QuestTarget? FindCandidate(Player player, QuestNpcServices services, PlayerNpcState state)
     {
         ArcaneCore.Kernel.WorldData.Loot.LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
+        CreatureContent? content = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false, IsNotSelectable: false } npc
@@ -280,7 +297,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (services.Quests.Get(id) is not { } quest
                     || (_stage != Stage.Accept && services.CanTakeQuest(player, id) != true))
                     continue;
-                if (_stage == Stage.None && !PlayerbotWorldDestinations.CanPursueStarter(player, quest, loot, services.Npcs)) continue;
+                if (_stage == Stage.None && (content is not null
+                    && PlayerbotWorldDestinations.RequiresIntercontinentTravel(player.MapId, services.Quests, content, id)
+                    || !PlayerbotWorldDestinations.CanPursueStarter(player, quest, loot, services.Npcs))) continue;
                 if (_stage == Stage.None && Home is { } home && !HomeAllows(home, player, services, npc, quest)) continue;
                 if (_stage != Stage.Accept && state.Quests.Get(id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
                     continue;

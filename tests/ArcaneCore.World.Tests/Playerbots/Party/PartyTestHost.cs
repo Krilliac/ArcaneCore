@@ -200,6 +200,11 @@ internal static class PartyTestHost
         public Task CreateAsync(ManagedPlayerbot bot, CancellationToken cancellationToken = default)
             => _items.TryAdd(bot.BotId, bot) ? Task.CompletedTask : throw new InvalidOperationException("duplicate-owner");
 
+        public Task<bool> DeleteAsync(Guid botId, int accountId, int characterId, CancellationToken cancellationToken = default)
+            => Task.FromResult(_items.TryGetValue(botId, out ManagedPlayerbot? current) && current.AccountId == accountId
+                && current.CharacterId == characterId
+                && _items.TryRemove(new KeyValuePair<Guid, ManagedPlayerbot>(botId, current)));
+
         public Task<bool> UpdateAsync(ManagedPlayerbot bot, long expectedRevision, CancellationToken cancellationToken = default)
         {
             while (_items.TryGetValue(bot.BotId, out ManagedPlayerbot? current))

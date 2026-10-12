@@ -87,6 +87,7 @@ builder.Services.AddWorldConsole(builder.Configuration); // typed GM commands at
 builder.Services.AddNetProtection(builder.Configuration);
 builder.Services.AddWorldWatchdog(builder.Configuration);
 builder.Services.AddWorldMetrics(builder.Configuration); // Ops:Metrics, off by default (docs/ops/metrics.md)
+builder.Services.AddWorldOpsDiagnostics(builder.Configuration); // .debug alloc / .debug dump, dumps off by default (docs/ops/diagnostics.md)
 builder.Services.AddSingleton(clientData);
 
 IHost host = builder.Build();

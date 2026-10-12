@@ -1,7 +1,9 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Social;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -70,6 +72,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
     private Task? _consumer;
     private Task? _stop;
+    private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
     private int _pending;
 
@@ -96,6 +99,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         FlushCharacter,
         Retry,
         DrainAll,
+        Sweep,
     }
 
     /// <summary>Writes queued or in progress (one per key waiting, not one per request).</summary>
@@ -125,7 +129,31 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
     }
 
-    public void Start() => _consumer ??= Task.Run(ConsumeAsync);
+    /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per key, stopping at the first locked one; tests shorten it).</summary>
+    public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
+    internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
+
+    public void Start()
+    {
+        if (_consumer is not null)
+        {
+            return;
+        }
+
+        _retry = new RetainedRetryTimer(RetainedRetryInterval, HasAnyRetained, () => _channel.Writer.TryWrite(new Work(WorkKind.Sweep, default, default, 0, 0, null)));
+        _retry.Start();
+        _consumer = Task.Run(ConsumeAsync);
+    }
+
+    private bool HasAnyRetained()
+    {
+        lock (_gate)
+        {
+            return _retained.Count > 0;
+        }
+    }
 
     public void SetSocial(int characterId, int otherId, SocialFlags flags) => TrySetSocial(characterId, otherId, flags);
 
@@ -348,6 +376,11 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             _stopped = true;
         }
 
+        if (_retry is not null)
+        {
+            await _retry.StopAsync().ConfigureAwait(false);
+        }
+
         _channel.Writer.TryWrite(new Work(WorkKind.DrainAll, default, default, 0, 0, null));
         _channel.Writer.TryComplete();
         if (_consumer is not null)
@@ -543,6 +576,20 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
                         await RetryOpaqueAsync(null, MaxAttempts).ConfigureAwait(false);
                         break;
+                    case WorkKind.Sweep:
+                        try
+                        {
+                            if (!_stopped)
+                            {
+                                await SweepRetainedAsync().ConfigureAwait(false);
+                            }
+                        }
+                        finally
+                        {
+                            _retry?.SweepFinished();
+                        }
+
+                        break;
                     default:
                         work.Done?.TrySetResult();
                         break;
@@ -644,14 +691,55 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
     }
 
-    private async Task RetryOneAsync(Key key, Retained retained, int attempts)
+    /// <summary>
+    /// On the consumer: one attempt for each retained write (friend/ignore rows by character, then guilds, petitions and purges), so a lock that outlasts the
+    /// inline retries does not leave a write held in memory with nobody to retry it. Stops at the first locked database; any other failure does not stop it.
+    /// </summary>
+    private async Task SweepRetainedAsync()
+    {
+        KeyValuePair<Key, Retained>[] rows;
+        lock (_gate)
+        {
+            rows =
+            [
+                .. _retained.OrderBy(r => r.Key.Kind == KeyKind.Row ? 0 : 1).ThenBy(r => r.Key.A).ThenBy(r => r.Key.B).ThenBy(r => r.Key.Kind),
+            ];
+        }
+
+        int failed = 0;
+        bool locked = false;
+        Exception? first = null;
+        for (int i = 0; i < rows.Length; i++)
+        {
+            Exception? failure = await RetryOneAsync(rows[i].Key, rows[i].Value, 1).ConfigureAwait(false);
+            if (failure is null)
+            {
+                continue;
+            }
+
+            failed++;
+            first ??= failure;
+            if (DatabaseTransience.IsBusy(failure))
+            {
+                locked = true;
+                break;
+            }
+        }
+
+        if (failed > 0)
+        {
+            _logger.LogWarning("social retry: {Failed} of {Total} retained writes still failing{Locked}; first: {Reason}", failed, rows.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
+        }
+    }
+
+    private async Task<Exception?> RetryOneAsync(Key key, Retained retained, int attempts)
     {
         Payload value;
         lock (_gate)
         {
             if (!_retained.TryGetValue(key, out Retained? current) || !ReferenceEquals(current, retained))
             {
-                return; // superseded or discarded meanwhile
+                return null; // superseded or discarded meanwhile
             }
 
             value = retained.Value;
@@ -662,7 +750,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             if (!_retained.TryGetValue(key, out Retained? current) || !ReferenceEquals(current, retained))
             {
-                return;
+                return null;
             }
 
             if (failure is null)
@@ -675,6 +763,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                 retained.Failure = failure;
             }
         }
+
+        return failure;
     }
 
     /// <summary>Apply one key's value to the store. Null on success; otherwise the last failure.</summary>

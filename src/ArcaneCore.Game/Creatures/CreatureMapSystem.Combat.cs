@@ -306,11 +306,12 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     /// <see cref="ICreaturePathQuery"/>: <see cref="FindPath"/> plus the pathfinder's verdict. No path and a partial path
     /// (<see cref="PathType.Incomplete"/>, the route ends at the point nearest the destination) are unreachable; a straight line
     /// without navigation data, a shortcut and a complete path are reachable. World thread; no allocation beyond the path itself.
+    /// The caller checks <see cref="HasPathBudget"/> first and defers (<c>TargetedMovementGenerator.Step</c>); this always searches.
     /// </summary>
     IReadOnlyList<Vector3> ICreaturePathQuery.FindPath(Creature creature, Vector3 destination, out bool reachable)
     {
         var start = new Vector3(creature.X, creature.Y, creature.Z);
-        PathResult path = Map.Collision.FindPath(start, destination);
+        PathResult path = SearchPath(start, destination);
         if (!path.HasPath)
         {
             reachable = false;
@@ -326,6 +327,10 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
 
         return corners;
     }
+
+    bool ICreaturePathQuery.HasPathBudget => HasPathBudget;
+
+    void ICreaturePathQuery.NoteDeferred(Creature creature) => NoteDeferredPath(creature);
 
     /// <summary>vmangos MAP_ALTERAC_VALLEY: the map whose unreachable victims lose their threat after one second (Creature.cpp:1026-1027).</summary>
     private const uint AlteracValleyMapId = 30;

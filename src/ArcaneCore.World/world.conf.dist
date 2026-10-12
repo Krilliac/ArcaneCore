@@ -38,7 +38,7 @@
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
 #   CREATURES                   64 keys
-#   DATABASE                    14 keys
+#   DATABASE                    16 keys
 #   DIAGNOSTICS                 9 keys
 #   ECONOMY                     29 keys
 #   ENCHANTING                  3 keys
@@ -55,7 +55,7 @@
 #   NAMES                       2 keys
 #   NET                         16 keys
 #   NPCSERVICES                 8 keys
-#   OPS                         39 keys
+#   OPS                         42 keys
 #   PAGETEXT                    1 keys
 #   PERFORMANCELOG              4 keys
 #   PETS                        7 keys
@@ -2801,6 +2801,21 @@ Database.ConnectionString = ""
 Database.Provider = MariaDb
 
 #
+#    Database.SlowTransactionWarnMs
+#        Description: How long (milliseconds, default 2000; 0 disables) a database transaction may
+#                     stay open before it is logged at WARN with the DbContext and the code that
+#                     closed it, on every provider. A transaction that holds the write lock this
+#                     long is what makes other writers fail with "database is locked", so the next
+#                     holder names itself in the log (docs/areas/persistence.md).
+#        Type: int
+#        Default: 2000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.SlowTransactionWarnMs = 2000
+
+#
 #    Database.SqliteBusyTimeoutMs
 #        Description: SQLite only: how long (0..60000 ms, default 5000) a connection waits inside
 #                     SQLite for another connection's write lock before reporting "database is
@@ -2818,6 +2833,26 @@ Database.Provider = MariaDb
 #        Docs: docs/reference/configuration.md#database
 #
 Database.SqliteBusyTimeoutMs = 5000
+
+#
+#    Database.SqliteWriteTimeoutMs
+#        Description: SQLite only, characters database only: the longest (0..60000 ms, default 5000;
+#                     rounded up to whole seconds) any command on a characters connection waits for
+#                     another connection's write lock before it fails as "database is locked". It
+#                     replaces the connection's Default Timeout (30 s) when smaller, set when the
+#                     connection opens, so it also bounds EF's BEGIN IMMEDIATE and, through the
+#                     busy-timeout clamp, SQLite's own wait. Without it a writer holding the file
+#                     for a minute held each save queue's single consumer for the full 30 s per
+#                     attempt. Failed saves are retained and retried by their queues. 0 keeps the
+#                     connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it
+#                     (docs/areas/persistence.md).
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.SqliteWriteTimeoutMs = 5000
 
 #
 #    Database.Upgrade.LockTimeoutSeconds
@@ -4879,6 +4914,49 @@ Net.Protection.WorldPacketsPerSecond = 4000
 ###############################################################################
 # OPS
 ###############################################################################
+
+#----------------------------------------------------------------------------
+# Ops:Diagnostics
+#----------------------------------------------------------------------------
+
+#
+#    Ops.Diagnostics.Dumps.Directory
+#        Description: The directory the dump files are written to. Empty (default) means dumps
+#                     beside the text log file (Logging:ArcaneCore:File:Path, so logs/dumps by
+#                     default). It is created on the first dump.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsdiagnostics
+#
+Ops.Diagnostics.Dumps.Directory = ""
+
+#
+#    Ops.Diagnostics.Dumps.Enabled
+#        Description: true lets an administrator write a dump of the running world with .debug dump.
+#                     Default false, because a dump holds everything in memory: session keys,
+#                     password material in flight, character data. Keep the dump directory private
+#                     and delete the files when the analysis is done.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsdiagnostics
+#
+Ops.Diagnostics.Dumps.Enabled = false
+
+#
+#    Ops.Diagnostics.Dumps.MinIntervalSeconds
+#        Description: The least seconds between two dumps, so a repeated command cannot suspend the
+#                     process again and again or fill the disk. 0 disables the limit. Default 600.
+#        Type: int
+#        Default: 600
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opsdiagnostics
+#
+Ops.Diagnostics.Dumps.MinIntervalSeconds = 600
 
 #----------------------------------------------------------------------------
 # Ops:Metrics

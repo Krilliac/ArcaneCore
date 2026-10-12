@@ -33,8 +33,9 @@ public static partial class ContentImporterCli
 
     /// <summary>
     /// <c>refresh</c>: bring a world database that an older importer built up to the tables the current world reads, without touching the
-    /// creature, object, item, quest, loot or NPC tables it already has. Every table it writes is replaced (emptied, then filled) inside one
-    /// transaction, and only when the inputs carry it, so a second run with the same inputs leaves the same rows and a failure changes nothing.
+    /// creature, object, item, quest, loot or NPC tables it already has. Tables it writes are replaced (emptied, then filled), except
+    /// matching portal rows whose entry requirements alone are updated. All writes happen inside one transaction and only when the inputs
+    /// carry them, so a second run with the same inputs leaves the same rows and a failure changes nothing.
     /// Tables: <c>world_safe_locs</c> and <c>game_graveyard_zone</c> (dump; <c>WorldSafeLocs.dbc</c> fills ids the dump lacks), the battleground
     /// tables, <c>exploration_basexp</c> and <c>game_weather</c>, <c>areatrigger_tavern</c>, <c>transports</c>, <c>spell_proc_event</c> (build
     /// 5875, cooldown unit from the dump's classic-db revision unless given), the relay DB scripts, the quest, gossip and event DB scripts and
@@ -108,6 +109,7 @@ public static partial class ContentImporterCli
         var gossip = new NpcDumpImporter();
         var spawnGroups = new SpawnGroupDumpImporter();
         var pools = new PoolDumpImporter();
+        var locations = new LocationDumpImporter();
         WorldStateContent worldState;
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
@@ -148,6 +150,12 @@ public static partial class ContentImporterCli
         {
             pools.Read(reader);
         }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            locations.Read(reader);
+        }
+        IReadOnlyCollection<AreaTriggerTeleportRow> portalRequirements = locations.Snapshot().Portals;
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
@@ -318,6 +326,7 @@ public static partial class ContentImporterCli
         Count("exploration_basexp", worldState.BaseXp.Count, worldState.BaseXp.Count > 0);
         Count("game_weather", worldState.Weather.Count, worldState.BaseXp.Count > 0 || worldState.Weather.Count > 0);
         Count(AreaTriggerTavernDataModule.Table, taverns.Ids.Count, taverns.SawTable);
+        Count("areatrigger_teleport (requirements)", portalRequirements.Count, portalRequirements.Count > 0);
         Count(InstanceEncounterDataModule.Table, encounters.Rows.Count, encounters.SawTable);
         Count(TransportWorldDataModule.Table, transports.Rows.Count, transports.SawTable);
         Count("gameobject_template (type 15)", transports.Ships.Count, transports.Ships.Count > 0);
@@ -567,6 +576,11 @@ public static partial class ContentImporterCli
 
                             o.WriteLine($"  game_event: the world has {existing.ToString(CultureInfo.InvariantCulture)} event(s) already; the seven game-event tables are left as they are");
                         }
+                    }
+
+                    if (portalRequirements.Count > 0)
+                    {
+                        counts["areatrigger_teleport (requirements)"] = await locations.RefreshPortalRequirementsAsync(db, token).ConfigureAwait(false);
                     }
                 }, ct).ConfigureAwait(false);
 

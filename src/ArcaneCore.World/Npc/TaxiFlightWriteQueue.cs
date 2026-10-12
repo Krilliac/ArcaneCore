@@ -1,5 +1,7 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -32,12 +34,16 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 {
     private const int MaxAttempts = 3;
 
+    /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per character, stopping at the first locked one; tests shorten it).</summary>
+    public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
+
     private readonly Channel<Work> _channel = Channel.CreateUnbounded<Work>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Lock _gate = new();
     private readonly Dictionary<int, Unsaved> _characters = [];
     private Task? _consumer;
     private Task? _stop;
+    private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
     private int _pending;
 
@@ -48,6 +54,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         FlushCharacter,
         Retry,
         DrainAll,
+        Sweep,
     }
 
     /// <summary>Writes queued or in progress.</summary>
@@ -65,7 +72,20 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    public void Start() => _consumer ??= Task.Run(ConsumeAsync);
+    /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
+    internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
+
+    public void Start()
+    {
+        if (_consumer is not null)
+        {
+            return;
+        }
+
+        _retry = new RetainedRetryTimer(RetainedRetryInterval, () => RetainedCharacters.Count > 0, () => _channel.Writer.TryWrite(new Work(0, Kind.Sweep, null)));
+        _retry.Start();
+        _consumer = Task.Run(ConsumeAsync);
+    }
 
     /// <summary>Queue saving the route of a character that logged out mid-flight; replaces any older request.</summary>
     public void Save(int characterId, TaxiFlightRoute route) => Save(characterId, route, abandon: null);
@@ -149,6 +169,11 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        if (_retry is not null)
+        {
+            await _retry.StopAsync().ConfigureAwait(false);
+        }
+
         _channel.Writer.TryWrite(new Work(0, Kind.DrainAll, null));
         _channel.Writer.TryComplete();
         if (_consumer is not null)
@@ -274,6 +299,20 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                         }
 
                         break;
+                    case Kind.Sweep:
+                        try
+                        {
+                            if (!_stopped)
+                            {
+                                await SweepRetainedAsync().ConfigureAwait(false);
+                            }
+                        }
+                        finally
+                        {
+                            _retry?.SweepFinished();
+                        }
+
+                        break;
                     default:
                         work.Done?.TrySetResult();
                         break;
@@ -288,15 +327,53 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
+    /// <summary>
+    /// On the consumer: one attempt for each retained character, ascending, so a lock that outlasts the inline retries does not leave the write held
+    /// in memory with nobody to retry it. Stops at the first locked database (the rest would only wait out the same lock); any other failure does not stop it.
+    /// </summary>
+    private async Task SweepRetainedAsync()
+    {
+        int[] retained;
+        lock (_gate)
+        {
+            retained = [.. _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).Order()];
+        }
+
+        int failed = 0;
+        bool locked = false;
+        Exception? first = null;
+        for (int i = 0; i < retained.Length; i++)
+        {
+            Exception? failure = await ExecuteAsync(retained[i], onlyIfFailed: true, clearQueued: false, sweep: true).ConfigureAwait(false);
+            if (failure is null)
+            {
+                continue;
+            }
+
+            failed++;
+            first ??= failure;
+            if (DatabaseTransience.IsBusy(failure))
+            {
+                locked = true;
+                break;
+            }
+        }
+
+        if (failed > 0)
+        {
+            logger.LogWarning("taxi route retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
+        }
+    }
+
     /// <summary>Persist the character's outstanding operation (nothing if there is none, or it is not failed and <paramref name="onlyIfFailed"/>).</summary>
-    private async Task ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued)
+    private async Task<Exception?> ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued, bool sweep = false)
     {
         Operation operation;
         lock (_gate)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
             {
-                return;
+                return null;
             }
 
             if (clearQueued)
@@ -307,7 +384,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             if ((onlyIfFailed && unsaved.Failure is null) || unsaved.Operation is not { } current)
             {
                 Release(characterId, unsaved);
-                return;
+                return null;
             }
 
             operation = current;
@@ -317,7 +394,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         {
             try
             {
-                await WriteAsync(characterId, operation).ConfigureAwait(false);
+                await WriteAsync(characterId, operation, sweep ? 1 : MaxAttempts).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -327,9 +404,10 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     // Only the request that failed is retained; a newer one replaced it and is queued itself.
                     if (_characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.Operation?.Generation == operation.Generation)
                     {
-                        if (operation.Abandon is not null)
+                        if (!sweep && operation.Abandon is not null && !DatabaseTransience.IsBusy(ex))
                         {
-                            // Give the route up rather than keep it: the owner relocates the character and the row goes.
+                            // Give the route up rather than keep it: the owner relocates the character and the row goes. Not when the database is merely locked by
+                            // another writer: that says nothing about the route, so it is kept and retried. A retry sweep never abandons: it only leaves the entry retained.
                             replacement = unsaved.Operation = new Operation(null, ++unsaved.Generation, null);
                         }
                         else
@@ -341,8 +419,12 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 if (replacement is null)
                 {
-                    logger.LogError(ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
-                    return;
+                    if (!sweep)
+                    {
+                        logger.LogError(ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
+                    }
+
+                    return ex;
                 }
 
                 logger.LogError(ex, "taxi route save for character {Character} failed; the route is abandoned and its row deleted", characterId);
@@ -355,7 +437,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             {
                 if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
                 {
-                    return;
+                    return null;
                 }
 
                 if (unsaved.Operation?.Generation == operation.Generation)
@@ -367,7 +449,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 Release(characterId, unsaved);
             }
 
-            return;
+            return null;
         }
     }
 
@@ -392,7 +474,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    private async Task WriteAsync(int characterId, Operation operation)
+    private async Task WriteAsync(int characterId, Operation operation, int attempts)
     {
         for (int attempt = 1; ; attempt++)
         {
@@ -416,7 +498,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 return;
             }
-            catch (Exception ex) when (attempt < MaxAttempts)
+            catch (Exception ex) when (attempt < attempts)
             {
                 logger.LogWarning(ex, "taxi route write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);

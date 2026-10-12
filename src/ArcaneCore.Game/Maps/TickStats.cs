@@ -67,9 +67,51 @@ public readonly record struct TickPhases(long CommandsMicros, long MapsMicros, l
     /// <summary>Posted world commands run this tick.</summary>
     public int CommandsRun { get; init; }
 
-    /// <summary>The split as one log fragment: commands, world-tick handlers, per-tick feature updates, maps, autosave.</summary>
+    /// <summary>True when <see cref="Gc"/> was captured around the tick (the world loop does; a direct <c>RunTick</c> call does not).</summary>
+    public bool GcCaptured { get; init; }
+
+    /// <summary>
+    /// What the garbage collector did while the tick ran: the process-wide pause time and collection counts that elapsed between the
+    /// start and the end of the tick body. A blocking collection suspends the world thread too, so its pause is inside the tick time.
+    /// </summary>
+    public GcDelta Gc { get; init; }
+
+    /// <summary>The split as one log fragment: commands, world-tick handlers, per-tick feature updates, maps, autosave, and (when captured) the GC.</summary>
+    public string Format()
+    {
+        string phases = string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"commands {CommandsMicros / 1000} ms ({CommandsRun} run), world-tick handlers {WorldTickMicros / 1000} ms, features {Math.Max(0, FeaturesMicros - WorldTickMicros) / 1000} ms, maps {MapsMicros / 1000} ms, autosave {AutosaveMicros / 1000} ms ({AutosaveSnapshots} snapshots)");
+        return GcCaptured ? phases + ", " + Gc.Format() : phases;
+    }
+}
+
+/// <summary>
+/// The garbage collector's counters at one instant: total pause time and the three collection counts. Reading them is a handful of
+/// runtime counter loads and allocates nothing (a struct of four integers), so the world loop takes two per tick.
+/// </summary>
+public readonly record struct GcSnapshot(long PauseTicks, int Gen0, int Gen1, int Gen2)
+{
+    /// <summary>Read the counters now (<see cref="GC.GetTotalPauseDuration"/>, <see cref="GC.CollectionCount(int)"/>).</summary>
+    public static GcSnapshot Read() => new(GC.GetTotalPauseDuration().Ticks, GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
+
+    /// <summary>The counters that elapsed from <paramref name="before"/> to this reading.</summary>
+    public GcDelta Since(in GcSnapshot before) => new(
+        Math.Max(0, PauseTicks - before.PauseTicks), Math.Max(0, Gen0 - before.Gen0), Math.Max(0, Gen1 - before.Gen1), Math.Max(0, Gen2 - before.Gen2));
+}
+
+/// <summary>
+/// GC activity over an interval. <see cref="Gen0"/> counts every collection (the runtime's <c>CollectionCount(0)</c> includes the
+/// collections of the older generations), <see cref="Gen1"/> those of generation 1 or 2, <see cref="Gen2"/> the gen2 ones: one blocking
+/// gen2 collection shows as +1 in all three.
+/// </summary>
+public readonly record struct GcDelta(long PauseTicks, int Gen0, int Gen1, int Gen2)
+{
+    /// <summary>The pause time in milliseconds.</summary>
+    public double PauseMs => PauseTicks / (double)TimeSpan.TicksPerMillisecond;
+
+    /// <summary>"gc 2345.1 ms (gen0 +1, gen1 +1, gen2 +1)".</summary>
     public string Format() => string.Create(System.Globalization.CultureInfo.InvariantCulture,
-        $"commands {CommandsMicros / 1000} ms ({CommandsRun} run), world-tick handlers {WorldTickMicros / 1000} ms, features {Math.Max(0, FeaturesMicros - WorldTickMicros) / 1000} ms, maps {MapsMicros / 1000} ms, autosave {AutosaveMicros / 1000} ms ({AutosaveSnapshots} snapshots)");
+        $"gc {PauseMs:F1} ms (gen0 +{Gen0}, gen1 +{Gen1}, gen2 +{Gen2})");
 }
 
 /// <summary>Where the world thread is inside a tick (<see cref="WorldRuntime.CurrentPosition"/>).</summary>

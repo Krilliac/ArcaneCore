@@ -102,6 +102,98 @@ public sealed class TaxiFlightWriteQueueTests
     }
 
     [Fact]
+    public async Task ALockedDatabase_KeepsTheRouteInsteadOfAbandoningIt_AndTheSaveLandsOnTheNextBarrier()
+    {
+        await using var fixture = Fixture.Create();
+        fixture.Store.FailBusy = true;
+        int abandoned = 0;
+        fixture.Queue.Save(7, Route, () => Interlocked.Increment(ref abandoned));
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+
+        // Another writer holds the file: that says nothing about the route, so the player is not teleported and the row is not deleted.
+        Assert.Equal(0, abandoned);
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+        Assert.Empty(fixture.Store.Calls);
+
+        fixture.Store.FailBusy = false;
+        await fixture.Queue.FlushCharacterAsync(7).WaitAsync(Budget);
+        Assert.False(fixture.Queue.HasRetainedFailure(7));
+        Assert.NotNull(fixture.Store.Saved(7));
+        Assert.Equal(0, abandoned);
+    }
+
+    [Fact]
+    public async Task ALockThatOutlastsTheInlineRetries_IsLandedByTheRetrySweep_AndTheRouteIsNeverAbandoned()
+    {
+        await using var fixture = Fixture.Create(Timeout.InfiniteTimeSpan);
+        fixture.Store.LockedWrites = 4; // three inline attempts fail, the first sweep fails, the second lands
+        int abandoned = 0;
+        fixture.Queue.Save(7, Route, () => Interlocked.Increment(ref abandoned));
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+        Assert.Equal(3, fixture.Store.Attempts(7));
+
+        // No timer: the sweeps are driven explicitly, so the attempt counts are exact.
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+        Assert.Equal(4, fixture.Store.Attempts(7));
+
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+        Assert.False(fixture.Queue.HasRetainedFailure(7));
+        Assert.Equal(5, fixture.Store.Attempts(7));
+        Assert.NotNull(fixture.Store.Saved(7));
+        Assert.Equal(0, abandoned);
+    }
+
+    [Fact]
+    public async Task ASweepThatFailsForAnotherReason_LeavesTheRouteRetained_AndNeverAbandonsIt()
+    {
+        await using var fixture = Fixture.Create(Timeout.InfiniteTimeSpan);
+        fixture.Store.FailBusy = true; // the inline attempts fail as a lock: retained, not abandoned
+        int abandoned = 0;
+        fixture.Queue.Save(7, Route, () => Interlocked.Increment(ref abandoned));
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+
+        fixture.Store.FailBusy = false;
+        fixture.Store.FailWrites = true; // now a failure that is not a lock
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+        Assert.Equal(0, abandoned);
+        Assert.Empty(fixture.Store.Calls);
+
+        fixture.Store.FailWrites = false;
+        Assert.True(fixture.Queue.PostRetainedSweepForTest());
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+        Assert.False(fixture.Queue.HasRetainedFailure(7));
+        Assert.Equal(Route, fixture.Store.Saved(7));
+        Assert.Equal(0, abandoned);
+    }
+
+    [Fact]
+    public async Task TheRealRetryTimer_EventuallyLandsAWriteHeldByALongLock()
+    {
+        await using var fixture = Fixture.Create(TimeSpan.FromMilliseconds(50));
+        fixture.Store.LockedWrites = 4;
+        fixture.Queue.Save(7, Route);
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (fixture.Queue.HasRetainedFailure(7))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained write was never retried by the timer");
+            await Task.Delay(10);
+        }
+
+        Assert.NotNull(fixture.Store.Saved(7));
+    }
+
+    [Fact]
     public async Task ASupersededFailingSave_DoesNotRunItsFallback()
     {
         await using var fixture = Fixture.Create();
@@ -213,21 +305,24 @@ public sealed class TaxiFlightWriteQueueTests
     {
         private readonly ServiceProvider _services;
 
-        private Fixture(ServiceProvider services, FakeStore store)
+        private Fixture(ServiceProvider services, FakeStore store, TimeSpan? retryInterval)
         {
             _services = services;
             Store = store;
-            Queue = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance);
+            Queue = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance)
+            {
+                RetainedRetryInterval = retryInterval ?? TimeSpan.FromSeconds(30),
+            };
             Queue.Start();
         }
 
         public FakeStore Store { get; }
         public TaxiFlightWriteQueue Queue { get; }
 
-        public static Fixture Create()
+        public static Fixture Create(TimeSpan? retryInterval = null)
         {
             var store = new FakeStore();
-            return new Fixture(new ServiceCollection().AddSingleton<ICharacterTaxiFlightStore>(store).BuildServiceProvider(), store);
+            return new Fixture(new ServiceCollection().AddSingleton<ICharacterTaxiFlightStore>(store).BuildServiceProvider(), store, retryInterval);
         }
 
         public async ValueTask DisposeAsync()
@@ -256,6 +351,10 @@ public sealed class TaxiFlightWriteQueueTests
         private int _hold;
 
         public volatile bool FailWrites;
+        public volatile bool FailBusy;
+
+        /// <summary>The number of upcoming writes that fail as SQLite reports a file another writer holds (a lock that clears by itself).</summary>
+        public int LockedWrites;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -322,6 +421,22 @@ public sealed class TaxiFlightWriteQueueTests
             {
                 Entered.TrySetResult();
                 await Release.Task.ConfigureAwait(false);
+            }
+
+            int left;
+            do
+            {
+                left = Volatile.Read(ref LockedWrites);
+            }
+            while (left > 0 && Interlocked.CompareExchange(ref LockedWrites, left - 1, left) != left);
+            if (left > 0)
+            {
+                throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
+            }
+
+            if (FailBusy)
+            {
+                throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
             }
 
             if (FailWrites)

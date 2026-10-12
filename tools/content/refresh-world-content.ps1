@@ -12,6 +12,7 @@
     creature_battleground, gameobject_battleground  dump
     exploration_basexp, game_weather               dump
     areatrigger_tavern, transports                 dump
+    areatrigger_teleport entry requirements       dump; update matching portal rows only, keep destinations and custom rows
     gameobject_template, type 15 rows only         dump (the ships and zeppelins; every other object is left alone)
     spell_proc_event                               dump (cooldown unit from the classic-db core revision)
     dbscripts_on_relay, dbscript_relay_template    dump
@@ -34,8 +35,9 @@
   TaxiPathNode.dbc is read to check every ship's route (data0 of its type 15 row): a route the world server would refuse at
   start (fewer than three path nodes, a map without a map_template row, no speed) is reported as a "check:" line.
 
-  Each of these tables is emptied and refilled inside one transaction, and only when the inputs carry it; any failure leaves the
-  database as it was. Before writing, the script
+  The listed tables are emptied and refilled inside one transaction when the inputs carry them, except matching
+  areatrigger_teleport rows, whose requirement fields alone are updated. Any failure leaves the database as it was.
+  Before writing, the script
 
     1. refuses a database another process holds open (stop the world server first),
     2. copies the database to -BackupDirectory and checks the copy's SHA-256, and the same for a leftover -wal file (committed

@@ -44,6 +44,7 @@ How to read the tables:
 - [`Names`](#names)
 - [`Net:Protection`](#netprotection)
 - [`NpcServices`](#npcservices)
+- [`Ops:Diagnostics`](#opsdiagnostics)
 - [`Ops:Metrics`](#opsmetrics)
 - [`Ops:Watchdog`](#opswatchdog)
 - [`PageText`](#pagetext)
@@ -385,7 +386,9 @@ How to read the tables:
 | `Database:Characters:SqliteBusyTimeoutMs` | `int?` | `null` | - | SQLite only: this component's busy timeout in milliseconds (0..60000), overriding `Database:SqliteBusyTimeoutMs`. Unset inherits it. Other engines ignore it. |
 | `Database:ConnectionString` | `string` | `""` | - | The connection string for any component that has no `Database:<Component>` sub-section of its own. The shipped Realm file uses this single-database form. |
 | `Database:Provider` | `DatabaseProvider` | `MariaDb` | - | The relational engine for any component that has no `Database:<Component>` sub-section of its own (the single-database layout). MariaDB is the primary engine; MySql, PostgreSql and Sqlite are also supported. Values: `MariaDb`, `MySql`, `PostgreSql`, `Sqlite`. |
+| `Database:SlowTransactionWarnMs` | `int` | `2000` | - | How long (milliseconds, default 2000; 0 disables) a database transaction may stay open before it is logged at WARN with the DbContext and the code that closed it, on every provider. A transaction that holds the write lock this long is what makes other writers fail with "database is locked", so the next holder names itself in the log (docs/areas/persistence.md). |
 | `Database:SqliteBusyTimeoutMs` | `int` | `5000` | - | SQLite only: how long (0..60000 ms, default 5000) a connection waits inside SQLite for another connection's write lock before reporting "database is locked", set as `PRAGMA busy_timeout` on every connection (never more than the connection string's Default Timeout, and clamped to `Resilience:Database:QueryTimeoutMs` when the database guard is on, so a refused call never outlives its deadline in SQLite's busy handler). Without it a waiting writer retries only every 150 ms, so the many background writers on one SQLite file starve each other. 0 disables the pragma. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md). |
+| `Database:SqliteWriteTimeoutMs` | `int` | `5000` | - | SQLite only, characters database only: the longest (0..60000 ms, default 5000; rounded up to whole seconds) any command on a characters connection waits for another connection's write lock before it fails as "database is locked". It replaces the connection's Default Timeout (30 s) when smaller, set when the connection opens, so it also bounds EF's `BEGIN IMMEDIATE` and, through the busy-timeout clamp, SQLite's own wait. Without it a writer holding the file for a minute held each save queue's single consumer for the full 30 s per attempt. Failed saves are retained and retried by their queues. 0 keeps the connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md). |
 | `Database:Upgrade:LockTimeoutSeconds` | `int` | `60` | - | How long a start waits for another process's schema work, in seconds; must be 1..86400 or the start is refused as a configuration error. |
 | `Database:Upgrade:Policy` | `SchemaPolicy` | `Always` | - | What a start may do to the schema. `Always` (default) creates and upgrades; `CreateOnly` creates an empty database but refuses to upgrade an existing one (the retail-like setting for production, where `arcane-db upgrade` applies updates); `Never` only verifies. See docs/ops/database-upgrade.md. Values: `Always`, `CreateOnly`, `Never`. |
 | `Database:World:ConnectionString` | `string` | `""` | - | The connection string of this component's database. The shipped files carry the development placeholder user `arcane`; change it for any real deployment. |
@@ -611,6 +614,14 @@ How to read the tables:
 | `NpcServices:TaxiNodesDbcPath` | `string` | `null` | - | Build-5875 TaxiNodes.dbc; when set its node positions and faction mounts replace the imported table. |
 | `NpcServices:TaxiPathDbcPath` | `string` | `null` | - | Build-5875 TaxiPath.dbc; when set its routes and costs replace the imported table. |
 | `NpcServices:TaxiPathNodeDbcPath` | `string` | `null` | - | Build-5875 TaxiPathNode.dbc (flight waypoints). |
+
+## `Ops:Diagnostics`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Ops:Diagnostics:Dumps:Directory` | `string` | `""` | - | The directory the dump files are written to. Empty (default) means `dumps` beside the text log file (`Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump. |
+| `Ops:Diagnostics:Dumps:Enabled` | `bool` | `false` | - | `true` lets an administrator write a dump of the running world with `.debug dump`. Default false, because a dump holds everything in memory: session keys, password material in flight, character data. Keep the dump directory private and delete the files when the analysis is done. |
+| `Ops:Diagnostics:Dumps:MinIntervalSeconds` | `int` | `600` | - | The least seconds between two dumps, so a repeated command cannot suspend the process again and again or fill the disk. 0 disables the limit. Default 600. |
 
 ## `Ops:Metrics`
 

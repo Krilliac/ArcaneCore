@@ -36,6 +36,17 @@ public sealed class MotionMaster
     /// <summary>Generators above the default, bottom first.</summary>
     public IReadOnlyList<MovementGeneratorType> ActiveTypes => [.. _stack.Select(g => g.Type)];
 
+    /// <summary>Whether a generator of this type is in the stack above the default; <see cref="ActiveTypes"/> without the snapshot.</summary>
+    public bool HasActive(MovementGeneratorType type)
+    {
+        for (int i = 0; i < _stack.Count; i++)
+        {
+            if (_stack[i].Type == type) return true;
+        }
+
+        return false;
+    }
+
     /// <summary>The unit a chase or follow generator on top is after.</summary>
     public Unit? TargetedUnit => Top is TargetedMovementGenerator targeted ? targeted.Target : null;
 

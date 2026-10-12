@@ -13,9 +13,12 @@ public sealed class NamesDbcReaderTests
     {
         byte[] image = Image(["bad", "\\^reserved\\$"]);
         var file = DbcFile.Parse(image);
-        var patterns = NamesDbcReader.Read(file, "NamesReserved.dbc");
-        Assert.Matches(patterns[0], "not-bad-name");
-        Assert.Matches(patterns[1], "Reserved");
+        NamePatternSet patterns = NamesDbcReader.Read(file, "NamesReserved.dbc");
+        Assert.Equal(2, patterns.Rows);
+        Assert.True(patterns.IsMatch("not-bad-name"));
+        Assert.True(patterns.IsMatch("Reserved"));
+        Assert.False(patterns.IsMatch("xReservedx"));
+        Assert.False(patterns.IsMatch("Thrall"));
         Assert.Throws<InvalidDataException>(() => NamesDbcReader.Read(DbcFile.Parse(Image(["(?<=x)bad"])), "NamesReserved.dbc"));
     }
 
@@ -26,10 +29,11 @@ public sealed class NamesDbcReaderTests
         // 100 ms limit under memory pressure, where NameCatalog then refused a legal name as profane. The engine is linear in
         // the (short) input, so the ceiling is a backstop and must leave room for that build or a GC pause.
         string[] rows = [.. Enumerable.Range(0, 200).Select(i => $"(bad|evil|gm){i}.*")];
-        IReadOnlyList<System.Text.RegularExpressions.Regex> patterns = NamesDbcReader.Read(DbcFile.Parse(Image(rows)), "NamesProfanity.dbc");
+        NamePatternSet patterns = NamesDbcReader.Read(DbcFile.Parse(Image(rows)), "NamesProfanity.dbc");
 
-        Assert.All(patterns, pattern => Assert.True(pattern.MatchTimeout >= TimeSpan.FromSeconds(1), $"match timeout {pattern.MatchTimeout}"));
-        var catalog = new NameCatalog(patterns, [], []);
+        Assert.Equal(200, patterns.Rows);
+        Assert.All(patterns.Regexes, pattern => Assert.True(pattern.MatchTimeout >= TimeSpan.FromSeconds(1), $"match timeout {pattern.MatchTimeout}"));
+        var catalog = new NameCatalog(patterns, NamePatternSet.Empty, []);
         Assert.Equal(NameCatalogResult.Allowed, catalog.Check("Warmupname"));
         Assert.Equal(NameCatalogResult.Allowed, catalog.Check("Thrall"));
         Assert.Equal(NameCatalogResult.Profane, catalog.Check("Evil199x"));
@@ -68,7 +72,7 @@ public sealed class NamesDbcReaderTests
         byte[] badOffset = Image(["bad"]);
         BinaryPrimitives.WriteUInt32LittleEndian(badOffset.AsSpan(24), 99);
         Assert.Throws<InvalidDataException>(() => NamesDbcReader.Read(DbcFile.Parse(badOffset), "NamesReserved.dbc"));
-        Assert.Single(NamesDbcReader.Read(DbcFile.Parse(Image(["\uFFFD"])), "NamesReserved.dbc"));
+        Assert.Equal(1, NamesDbcReader.Read(DbcFile.Parse(Image(["\uFFFD"])), "NamesReserved.dbc").Rows);
     }
 
     private static byte[] Image(string[] patterns)

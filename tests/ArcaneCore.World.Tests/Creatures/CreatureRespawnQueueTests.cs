@@ -45,6 +45,11 @@ public sealed class CreatureRespawnQueueTests
         /// <summary>While set, every write fails (a lasting outage); cleared, writes land again.</summary>
         public volatile bool Down;
 
+        /// <summary>While set, every write fails as SQLite reports a file another connection holds.</summary>
+        public volatile bool Locked;
+
+        public int Attempts;
+
         /// <summary>When set, a save waits for it before it lands (a write still in flight).</summary>
         public TaskCompletionSource? HoldSaves { get; set; }
 
@@ -60,6 +65,12 @@ public sealed class CreatureRespawnQueueTests
             {
                 SaveHeld.TrySetResult();
                 await hold.Task.ConfigureAwait(false);
+            }
+
+            Interlocked.Increment(ref Attempts);
+            if (Locked)
+            {
+                throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
             }
 
             if (Down || Interlocked.Decrement(ref _failuresLeft) >= 0)
@@ -154,6 +165,37 @@ public sealed class CreatureRespawnQueueTests
         Assert.Equal(Now + 60, queue.GetPending(409, 3)[9]); // the same guid in another instance
         queue.Save(0, 0, 10, Now + 70);
         Assert.DoesNotContain(10u, world.Keys); // a snapshot, not a live view
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ALockedDatabase_IsNotRetriedInline_AndTheRetainedWriteLandsOnTheRetryTimer()
+    {
+        var store = new FakeStore { Locked = true };
+        await using ServiceProvider sp = Build(store);
+        var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance)
+        {
+            RetainedRetryInterval = TimeSpan.FromSeconds(1),
+        };
+        queue.Start();
+
+        queue.Save(0, 0, 1, Now + 100);
+        queue.Save(0, 0, 2, Now + 100);
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        // An inline retry would have been 3 attempts each, with 600 ms of back-off.
+        Assert.Equal(2, store.Attempts); // one attempt per write: the lock wait was not repeated inline
+        Assert.Equal(2, queue.RetainedCount);
+
+        store.Locked = false;
+        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        while (queue.RetainedCount > 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the retained writes were never retried");
+            await Task.Delay(20);
+        }
+
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(2, store.Rows.Count);
         await queue.StopAsync();
     }
 

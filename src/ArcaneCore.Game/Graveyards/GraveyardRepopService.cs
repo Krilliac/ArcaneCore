@@ -47,6 +47,7 @@ public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportServi
         WorldSafeLoc? graveyard = Choose(player, map);
         if (graveyard is null)
         {
+            player.LastReleasedGraveyard = null;
             // "Fix invisible spirit healer if you die close to graveyard" (Player.cpp:5021-5022).
             MarkVisibility(player);
             return false;
@@ -62,6 +63,7 @@ public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportServi
 
         bool moved = teleports() is { } service
             && service.TeleportTo(player, graveyard.MapId, graveyard.X, graveyard.Y, graveyard.Z, graveyard.Orientation);
+        player.LastReleasedGraveyard = moved ? graveyard : null;
         MarkVisibility(player);
         return moved;
     }

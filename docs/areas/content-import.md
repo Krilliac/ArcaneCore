@@ -426,7 +426,10 @@ feature reads:
 before those schema columns existed retains zeroes until its portal rows are reimported. `refresh-portals <dump>... --database <file>`
 replaces only `areatrigger_teleport` in an existing current-schema world; `--dry-run` reports the row count first. The replacement
 removes portal rows absent from the dump, so inspect custom rows and run against a backup before applying it to a live world.
-The trigger shapes (`areatrigger_template`) come from `AreaTrigger.dbc` through
+The normal `refresh` also updates required level, both required items, rewarded quest and condition on portal ids present in both
+the dump and world. It leaves each portal's name, destination and message, and custom portal rows, as they are. A missing portal
+table in the source changes none. `refresh-portals` remains the full-table replacement for an operator who needs the dump's
+destinations and complete portal set. The trigger shapes (`areatrigger_template`) come from `AreaTrigger.dbc` through
 `refresh --dbc-dir` (above) and `map_template`/`area_template` through `refresh --dbc-dir` or `import-map-dbc` (below); a portal row
 cannot fire until its trigger exists and its target map is in `map_template`. Verified: 103 portals and 269 GM teleports imported; the
 daemon logged "103 area trigger teleports, 269 teleport locations".

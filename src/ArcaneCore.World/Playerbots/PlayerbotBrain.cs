@@ -13,6 +13,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
+using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -38,6 +39,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private PlayerbotConsumableKind _restKind;
     private int _roamDirection;
     private int _exploreRefusals;
+    private bool _exploreIslandWatchStarted;
+    private bool _earlyExploreIslandChecked;
+    private System.Numerics.Vector3 _exploreIslandAnchor;
+    private uint _exploreIslandMap;
+    private uint _exploreIslandSince;
     private PlayerbotExploreAtlas.Candidate? _exploreCandidate;
     private readonly Dictionary<(uint Map, int X, int Y), uint> _exploreBlockedCells = [];
     private readonly List<(uint Map, int X, int Y)> _expiredExploreCells = new(64);
@@ -145,6 +151,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     // The creature entries attacking the bot at its last living update: its killers when it dies (the server clears a dead
     // player's attackers before the brain sees the death).
     private readonly HashSet<uint> _attackerEntries = [];
+    private readonly Dictionary<uint, QaAttackerFact> _attackerFacts = [];
+    private readonly Dictionary<uint, QaAttackerFact> _recentDeathAttackerFacts = [];
+    private readonly List<(uint AtMs, uint Map, System.Numerics.Vector3 Position, string Source)> _recentDeathSources = [];
+    private uint _lastQaDeathMs;
+    private string _lastQaDeathGoal = "unknown";
+    private uint _lastQaDeathQuest;
+    private uint _lastQaDeathMap;
+    private System.Numerics.Vector3 _lastQaDeathPosition;
+    private string _lastQaDeathSource = "Unobserved";
+    private string _killingBlowSource = "Unobserved";
     private readonly object _killWatchGate = new();
     private PlayerbotKillObserver? _killObserver;
     private Player? _observedPlayer;
@@ -201,6 +217,48 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     /// <summary>Stalls reported so far.</summary>
     internal int StallCount => _stall.Count;
+
+    /// <summary>Context for the warning the QA log tap parses; no bot identity or issue-key fields are added.</summary>
+    internal string QaReportContext(Player player, string report)
+    {
+        bool death = report.StartsWith("death loop:", StringComparison.Ordinal);
+        int attackerStart = death ? report.IndexOf("attackers=", StringComparison.Ordinal) : -1;
+        string listedAttackers = attackerStart >= 0 ? report[(attackerStart + "attackers=".Length)..] : string.Empty;
+        HashSet<uint> entries = [];
+        foreach (string value in listedAttackers.Split('/'))
+            if (uint.TryParse(value, out uint entry)) entries.Add(entry);
+        var graveyard = death ? player.LastReleasedGraveyard : null;
+        float? distance = graveyard is not null && graveyard.MapId == _lastQaDeathMap
+            ? System.Numerics.Vector3.Distance(_lastQaDeathPosition,
+                new System.Numerics.Vector3(graveyard.X, graveyard.Y, graveyard.Z)) : null;
+        var observation = new QaBotObservation(player.Level, player.Race.ToString(), player.Team.ToString(), player.Class.ToString(),
+            death ? _lastQaDeathGoal : GoalFromReport(report) ?? _goal.ToString(),
+            death ? _lastQaDeathQuest : QuestFromReport(report) ?? QuestId,
+            graveyard?.Id ?? 0, distance, death ? _lastQaDeathSource : "None",
+            death ? [.. _recentDeathAttackerFacts.Values.Where(f => entries.Contains(f.Entry)).OrderBy(f => f.Entry)] : [],
+            death ? [.. _recentDeathSources.Where(d => d.Map == _lastQaDeathMap
+                && System.Numerics.Vector3.Distance(d.Position, _lastQaDeathPosition) <= PlayerbotStallWatch.DeathLoopYards)
+                .Select(d => d.Source)] : null);
+        return observation.ToLogSuffix();
+    }
+
+    private static string? GoalFromReport(string report)
+    {
+        int start = report.IndexOf("goal=", StringComparison.Ordinal);
+        if (start < 0) return null;
+        start += 5;
+        int end = report.IndexOf(' ', start);
+        return end > start ? report[start..end] : null;
+    }
+
+    private static uint? QuestFromReport(string report)
+    {
+        int start = report.IndexOf("quest=", StringComparison.Ordinal);
+        if (start < 0) return null;
+        start += 6;
+        int end = report.IndexOf(' ', start);
+        return uint.TryParse(end > start ? report[start..end] : report[start..], out uint quest) ? quest : null;
+    }
 
     /// <summary>Goals given up for stalls so far (<see cref="PlayerbotStallWatch.GiveUps"/>).</summary>
     internal int StallGiveUps => _stall.GiveUps;
@@ -301,8 +359,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 uint recoveryInterval = _thinkElapsed;
                 _thinkElapsed = 0;
-                PlayerbotThinkProbe.Phase("recovery");
+                PlayerbotThinkProbe.Phase("recovery hazard scan");
                 Risk.ScanHazards(player); // a ghost keeps watching the creatures round its body (the revive spot)
+                PlayerbotThinkProbe.Phase("recovery update");
                 _recovery.Update(player, recoveryInterval);
             }
             return;
@@ -388,7 +447,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
             GiveUpStalledGoal(player);
 
-
         if (PlayerbotMotion.ConsumeLoop(player))
         {
             // The motion gave up a loop (PlayerbotMotion): drop this intent, skip its target for a while, and let the
@@ -411,7 +469,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
-            PlayerbotThinkProbe.Phase("recovery");
+            PlayerbotThinkProbe.Phase("recovery update");
             _recovery.Update(player, interval);
             return;
         }
@@ -887,7 +945,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         PlayerbotMovementControl.Stop(_session, player);
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
         // on an island too; suppressing the shared set-aside must not suppress local escape.
-        EscapeIsland(player);
+        EscapeIsland(player, out _);
     }
 
     /// <summary>
@@ -902,10 +960,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// there, and stalled within two minutes of every login). True when the bot was moved.
     /// </para>
     /// </summary>
-    private bool EscapeIsland(Player player)
+    private bool EscapeIsland(Player player, out bool onIsland)
     {
+        onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
         if (!PlayerbotNavigation.IsOnMeshIsland(player, _options)) return false;
+        onIsland = true;
         uint now = _session.World.NowMs;
         // Home first, but only when the teleport home would be made: a refused TryTeleport would set the walk of a bot inside its home
         // aside as blocked (PlayerbotHomeReturn.Refuse), and the bind point is the way out then, as from an unsafe landing.
@@ -927,8 +987,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>What counts as progress for the stall watch besides moving.</summary>
     private PlayerbotStallWatch.Fingerprint Fingerprint(Player player)
     {
+        PlayerbotThinkProbe.Phase("stall inventory");
         uint items = 0;
         foreach (Item item in player.Inventory.AllItems) items += item.Count;
+        PlayerbotThinkProbe.Phase("stall quests");
         int quests = 0, rewarded = 0;
         uint objectives = 0;
         if (_session.Services.GetService<Npc.QuestNpcFeature>()?.Services.StateOf(player) is { Loaded: true } state)
@@ -941,7 +1003,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
         }
 
+        PlayerbotThinkProbe.Phase("stall spells");
         int spells = _session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0;
+        PlayerbotThinkProbe.Phase("stall vitals");
         // Resting is standing still by design: health or mana rising above the best seen during the rest is its progress.
         ulong vitals = (ulong)player.Health + (player.PowerType == PowerType.Mana ? ArcaneCore.Game.Spells.SpellSystem.GetPower(player, PowerType.Mana) : 0u);
         _restMark = _goal == PlayerbotGoalKind.Rest ? Math.Max(_restMark, vitals) : 0;
@@ -1254,14 +1318,36 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         NoteErrand(_goal, TargetEntry, QuestId);
         _attackerEntries.Clear();
+        _attackerFacts.Clear();
         _attackers.Clear();
         foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
-            if (unit is Creature creature && !creature.CharmerOrOwnerGuid.IsPlayer && _attackerEntries.Add(creature.Entry) | !_attackers.Contains((creature.Guid, creature.Entry)))
+        {
+            if (unit is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) continue;
+            _attackerEntries.Add(creature.Entry);
+            CaptureAttacker(player, creature);
+            if (!_attackers.Contains((creature.Guid, creature.Entry)))
                 _attackers.Add((creature.Guid, creature.Entry));
+        }
+    }
+
+    private void CaptureAttacker(Player player, Creature creature)
+    {
+        if (_attackerFacts.TryGetValue(creature.Entry, out QaAttackerFact? known))
+        {
+            if (known.Level == creature.Level) return; // already captured in this update (attacker and threat, or the killing blow): skip the repeat. RememberAttackers clears the facts each living update, so hostility stays fresh.
+        }
+        else if (_attackerFacts.Count >= 16) return;
+        var template = creature.Template;
+        bool guard = (template.Behaviour & CreatureBehaviourFlags.Guard) != 0;
+        bool hostile = player.Map?.Combat.Hooks.IsHostileTo(creature, player) ?? false;
+        _attackerFacts[creature.Entry] = new QaAttackerFact(creature.Entry, creature.Level, template.MinLevel, template.MaxLevel,
+            template.Rank, guard, hostile);
     }
 
     // A creature can land its first lethal hit between two bot updates; the living snapshot above
     // never sees that attacker. The map's kill observer carries it to us before RecordDeath runs.
+    internal void ObserveKillingBlows(Player player) => WatchKills(player);
+
     private void WatchKills(Player player)
     {
         MapCombat? combat = player.Map?.Combat;
@@ -1279,9 +1365,20 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private void RememberKiller(Unit? killer)
     {
+        if (Volatile.Read(ref _stopped) != 0) return;
+        _killingBlowSource = killer switch
+        {
+            null => "Unknown",
+            _ when ReferenceEquals(killer, _observedPlayer) => "Self",
+            Creature { CharmerOrOwnerGuid.IsPlayer: true } => "PlayerPet",
+            Creature => "Creature",
+            Player => "Player",
+            _ => "Other",
+        };
         // A player's pet or totem is not the content's danger: never set its entry aside.
-        if (Volatile.Read(ref _stopped) != 0 || killer is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) return;
+        if (killer is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) return;
         _attackerEntries.Add(creature.Entry);
+        if (_observedPlayer is { } player) CaptureAttacker(player, creature);
         if (!_attackers.Contains((creature.Guid, creature.Entry)))
             _attackers.Add((creature.Guid, creature.Entry));
     }
@@ -1298,6 +1395,24 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private void RecordDeath(Player player)
     {
         uint now = _session.World.NowMs;
+        if (unchecked(now - _lastQaDeathMs) > PlayerbotStallWatch.DeathLoopWindowMs) _recentDeathAttackerFacts.Clear();
+        foreach ((uint entry, QaAttackerFact fact) in _attackerFacts)
+            if (_recentDeathAttackerFacts.Count < 16 || _recentDeathAttackerFacts.ContainsKey(entry)) _recentDeathAttackerFacts[entry] = fact;
+        _lastQaDeathMs = now;
+        _lastQaDeathGoal = _goal.ToString();
+        _lastQaDeathQuest = QuestId;
+        _lastQaDeathMap = player.MapId;
+        _lastQaDeathPosition = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        _lastQaDeathSource = player.LastEnvironmentalDeath?.ToString()
+            ?? (player.LastMissingCasterPeriodicDeath ? "PeriodicCasterMissing" : _killingBlowSource);
+        _recentDeathSources.RemoveAll(d => unchecked(now - d.AtMs) > PlayerbotStallWatch.DeathLoopWindowMs);
+        if (_recentDeathSources.Count >= 16) _recentDeathSources.RemoveAt(0);
+        _recentDeathSources.Add((now, player.MapId, _lastQaDeathPosition, _lastQaDeathSource));
+        player.LastEnvironmentalDeath = null;
+        player.LastMissingCasterPeriodicDeath = false;
+        player.LastReleasedGraveyard = null;
+        player.RepopDestinationResolved = false;
+        _killingBlowSource = "Unobserved";
         (bool loop, IReadOnlyList<uint> setAside) = _stall.RecordDeath(now, player.MapId,
             new System.Numerics.Vector3(player.X, player.Y, player.Z), _attackerEntries);
         _attackerEntries.Clear();
@@ -1479,6 +1594,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private void Explore(Player player, uint elapsedMs)
     {
         _goal = PlayerbotGoalKind.Explore;
+        if (EscapeConfinedExplore(player)) return; // the island check was this think's work
         if (_exploreCandidate is not null && _exploreHasPosition
             && (_exploreLastMap != player.MapId || System.Numerics.Vector3.DistanceSquared(
                 _exploreLastPosition, new(player.X, player.Y, player.Z)) > 300f * 300f))
@@ -1492,6 +1608,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _exploreHasPosition = true;
         if (_route is { Complete: false })
         {
+            PlayerbotThinkProbe.Phase("explore advance");
             if (ExploreMovementPaused(player, elapsedMs)) return;
             if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, elapsedMs, _session.World.NowMs))
             {
@@ -1503,6 +1620,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         if (player.Map is null)
             return;
+        PlayerbotThinkProbe.Phase("explore candidates");
         if (TryExploreSpawns(player, elapsedMs)) return;
         // Wander onward: keep roughly the current facing (within +-60 degrees, golden-ratio spread so successive legs
         // differ). Only after repeated refusals turn anywhere. The old golden-angle-from-zero choice sent each leg
@@ -1523,9 +1641,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             && (area.DistanceTo(player.X, player.Y) > area.ExploreRadius
                 || area.ZoneClipped && !area.InZone(destination.X, destination.Y, destination.Z)))
             destination = InwardLeg(area, player, _exploreRefusals);
+        PlayerbotThinkProbe.Phase("explore wander plan");
         if (PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
         {
             _exploreRefusals = 0;
+            PlayerbotThinkProbe.Phase("explore advance");
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, _session.World.NowMs))
                 _route = null;
         }
@@ -1534,6 +1654,39 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _exploreRefusals++;
             PlayerbotMovementControl.Stop(_session, player);
         }
+    }
+
+    private bool EscapeConfinedExplore(Player player)
+    {
+        if (player.Map is null || !player.IsAlive || player.Combat.IsInCombat) return false;
+        uint now = _session.World.NowMs;
+        var at = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        if (!_exploreIslandWatchStarted || _exploreIslandMap != player.MapId
+            || System.Numerics.Vector2.DistanceSquared(new(at.X, at.Y),
+                new(_exploreIslandAnchor.X, _exploreIslandAnchor.Y)) > PlayerbotNavigation.IslandYards * PlayerbotNavigation.IslandYards)
+        {
+            _exploreIslandWatchStarted = true;
+            _exploreIslandAnchor = at;
+            _exploreIslandMap = player.MapId;
+            _exploreIslandSince = now;
+            _earlyExploreIslandChecked = false;
+        }
+
+        // Short valid routes on a small island can move a bot more than the stall watch's 10-yard
+        // progress bound while keeping it trapped. Diagnose once when exploration stays confined.
+        if (_earlyExploreIslandChecked || unchecked(now - _exploreIslandSince) < 15_000u) return false;
+        if (player.Map is not { InstanceId: 0 }) return false;
+        // The check's path searches (up to IslandDirections, counted as the think's fallbacks) are this think's work: the caller plans
+        // no route of its own after it.
+        if (!EscapeIsland(player, out bool onIsland) && onIsland)
+        {
+            // On an island but not moved (the home teleport is on cooldown, say): ask again in 15 seconds.
+            _exploreIslandSince = now;
+            return true;
+        }
+
+        _earlyExploreIslandChecked = true;
+        return true;
     }
 
     private void BlockExploreCell(PlayerbotExploreAtlas.Candidate candidate)
@@ -1607,6 +1760,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _exploreFactionFilter ??= ExploreAttackableFaction;
             _exploreThreatFilter ??= ExploreHostileFaction;
             _exploreBlockedFilter ??= ExploreBlocked;
+            PlayerbotThinkProbe.Phase("explore atlas find");
             _exploreCandidate = atlas.Find(mapId, player.Level, new(player.X, player.Y, player.Z), _exploreEligibleFilter,
                 _exploreBlockedFilter, out _, _exploreFactionFilter);
             if (_exploreCandidate is null)
@@ -1617,6 +1771,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
 
         PlayerbotExploreAtlas.Candidate chosen = _exploreCandidate.Value;
+        PlayerbotThinkProbe.Phase("explore plan");
         if (ExploreMovementPaused(player, elapsedMs)) return true;
         var destination = new System.Numerics.Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z);
         if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
@@ -1627,6 +1782,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         _goal = PlayerbotGoalKind.Explore;
         TargetEntry = chosen.Spawn.Entry;
+        PlayerbotThinkProbe.Phase("explore advance");
         if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
         {
             if (!_route!.Complete) BlockExploreCell(chosen);

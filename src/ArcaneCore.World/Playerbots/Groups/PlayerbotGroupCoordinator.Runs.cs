@@ -1,12 +1,15 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using ArcaneCore.Data.World.Instances;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Instances;
@@ -139,6 +142,50 @@ public sealed partial class PlayerbotGroupCoordinator
     // --- starting a run ------------------------------------------------------------------------------------------------
 
     private readonly record struct RunCandidate(PlayerbotGroupBot Bot, Player Player);
+
+    /// <summary>
+    /// Start one catalogue wing with explicitly selected managed bots on the world thread. This skips only the random start roll;
+    /// formation, level, entrance, team, role and group ownership checks remain the same as an automatic run.
+    /// </summary>
+    internal BotGroup? StartRun(PlayerbotRunPlan requested, IReadOnlyList<Guid> botIds)
+    {
+        ArgumentNullException.ThrowIfNull(requested);
+        ArgumentNullException.ThrowIfNull(botIds);
+        if (_world is null || !_options.Groups.Enabled || !_options.Groups.DungeonRuns.Enabled
+            || _groups.Count >= _options.Groups.MaxGroups || GroupManagerOrNull() is not { } groupManager) return null;
+        PlayerbotRunPlan? plan = Catalogue().Plans.FirstOrDefault(p => p.MapId == requested.MapId && p.Segment == requested.Segment);
+        if (plan is null || botIds.Count != plan.Size || botIds.Distinct().Count() != botIds.Count) return null;
+        PlayerbotRunOptions runs = _options.Groups.DungeonRuns;
+        int active = _groups.Count(g => g.Run is { } run && run.Plan.Raid == plan.Raid);
+        if (plan.Raid ? !runs.Raids.Enabled || active >= runs.Raids.MaxConcurrentRaids : active >= runs.MaxConcurrentRuns) return null;
+        if (WorldMaps.Of(_world).FindAreaTriggerTeleport(plan.EntranceTrigger) is not { } teleport) return null;
+
+        IWorldFeature[] features = [.. services.GetServices<IWorldFeature>()];
+        IConditionEvaluator? conditions = features.OfType<IConditionEvaluator>().FirstOrDefault();
+        IAreaTriggerGate[] gates = [.. features.OfType<IAreaTriggerGate>()];
+        InstanceFeature? instances = features.OfType<InstanceFeature>().FirstOrDefault();
+        AreaTriggerWaivers waivers = plan.Raid && runs.Raids.SkipPrerequisites
+            ? AreaTriggerWaivers.Item | AreaTriggerWaivers.Quest | AreaTriggerWaivers.Condition : AreaTriggerWaivers.None;
+        (byte min, byte max) = plan.Band(runs);
+        var candidates = new List<PlayerbotGroupCandidate>(botIds.Count);
+        foreach (Guid id in botIds)
+        {
+            if (!_bots.TryGetValue(id, out PlayerbotGroupBot bot) || !bot.Free || _memberOf.ContainsKey(id) || _waiting.ContainsKey(id)
+                || bot.Session.Player is not { IsInWorld: true, IsAlive: true } player || (player.Flags & PlayerFlags.Ghost) != 0
+                || player.Combat.IsInCombat || player.MapId != plan.EntranceMap || player.Level < min || player.Level > max
+                || IsRunSetAside(id, plan) || groupManager.GetGroup(player.Guid) is not null || groupManager.GetInvite(player.Guid) is not null
+                || Vector3.Distance(new Vector3(player.X, player.Y, player.Z), plan.Entrance) > runs.MaxTravelYards
+                || !AreaTriggerRequirements.Check(player, teleport, conditions, gates, waivers).Verdict.Allowed
+                || plan.Raid && instances?.Instances.GetPlayerBind(player.Guid, plan.MapId) is { Permanent: true }) return null;
+            candidates.Add(Candidate(id, player, Now));
+        }
+
+        if (candidates.Select(c => c.Team).Distinct().Count() != 1) return null;
+        (int tanks, int healers) = PlayerbotGroupContent.RunRoleNeeds(plan.Size, plan.Raid, _options.Groups);
+        if (PlayerbotGroupContent.Match(candidates, plan.Size, _options.Groups, (tanks, healers)) is not { } formed) return null;
+        FormRun(plan, formed, runs);
+        return _groups[^1];
+    }
 
     /// <summary>
     /// Every scan: when a dungeon or raid slot is free and the start roll succeeds, pick the wing with the most eligible free bots that
@@ -359,6 +406,54 @@ public sealed partial class PlayerbotGroupCoordinator
         if (group.Succeeded && run.Step == PlayerbotRunStep.Leave) run.Apply(PlayerbotRunSignal.Left);
         if (run.Complete) _runsCompleted++;
         else _runsGivenUp++;
+    }
+
+    /// <summary>
+    /// Observability only. A completed run's leader asks for the reset the way a client would (CMSG_RESET_INSTANCES through the
+    /// ordinary handler) and notes and logs the answer: the reset, or the refusal with its reason (an offline member or an
+    /// occupied map). It does not make the next run fresh: the disband that follows resets the group's instances itself
+    /// (InstanceManager.OnGroupDisbanding, vmangos Group::Disband), and a refusal here means that reset skips the same save.
+    /// Skipped when any member of the server group is not a managed bot, because ResetSave unbinds every player on the save.
+    /// vmangos WorldSession::HandleResetInstancesOpcode and Group::ResetInstances(INSTANCE_RESET_ALL).
+    /// </summary>
+    private void ResetCompletedRun(BotGroup group)
+    {
+        if (!group.Succeeded || group.Run is not { Step: PlayerbotRunStep.Leave or PlayerbotRunStep.Complete }
+            || !_bots.TryGetValue(group.LeaderBotId, out PlayerbotGroupBot bot)
+            || bot.Session.Player is not { } leader || leader.Guid != group.LeaderGuid) return;
+
+        if (group.Members.Any(m => m.Real) || GroupManagerOrNull()?.GetGroup(leader.Guid) is { } server
+            && server.Members.Any(m => !group.Members.Any(b => !b.Real && b.Guid == m.Guid)))
+        {
+            Note($"group {group.Id} reset request skipped: a member is not a managed bot");
+            return;
+        }
+
+        WorldSession session = bot.Session;
+        session.DrainManagedPackets(WorldOpcode.SmsgInstanceReset, WorldOpcode.SmsgInstanceResetFailed);
+        if (!Act(session, WorldOpcode.CmsgResetInstances, [], budgeted: false))
+        {
+            Note($"group {group.Id} reset request was not handled");
+            logger.LogWarning("Playerbot group {Group} reset request was not handled", group.Id);
+            return;
+        }
+
+        foreach (ManagedSessionPacket packet in session.DrainManagedPackets(WorldOpcode.SmsgInstanceReset, WorldOpcode.SmsgInstanceResetFailed))
+        {
+            if (packet.Opcode == WorldOpcode.SmsgInstanceReset && packet.Payload.Length >= 4)
+            {
+                uint map = BinaryPrimitives.ReadUInt32LittleEndian(packet.Payload);
+                Note($"group {group.Id} reset instance {map}");
+                logger.LogInformation("Playerbot group {Group} reset instance {Map}", group.Id, map);
+            }
+            else if (packet.Opcode == WorldOpcode.SmsgInstanceResetFailed && packet.Payload.Length >= 8)
+            {
+                var reason = (InstanceResetFailedReason)BinaryPrimitives.ReadUInt32LittleEndian(packet.Payload);
+                uint map = BinaryPrimitives.ReadUInt32LittleEndian(packet.Payload.AsSpan(4));
+                Note($"group {group.Id} reset instance {map} failed: {reason}");
+                logger.LogWarning("Playerbot group {Group} reset instance {Map} failed: {Reason}", group.Id, map, reason);
+            }
+        }
     }
 
     // --- the policy seam and the entry waiver --------------------------------------------------------------------------

@@ -72,6 +72,23 @@ public sealed class AuraCasterOwnershipTests
     }
 
     [Fact]
+    public void FatalPeriodicTickWithMissingCaster_RecordsItsSource()
+    {
+        using var kit = CreateKit(AuraType.PeriodicDamage);
+        RecordDamage(kit);
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        target.Health = 5;
+        Apply(kit, caster, target);
+        kit.World.RemovePlayer(caster);
+
+        kit.Advance(1000);
+
+        Assert.False(target.IsAlive);
+        Assert.True(target.LastMissingCasterPeriodicDeath);
+    }
+
+    [Fact]
     public void SameCaster_ReapplicationStacksRefreshesAndStillPausesWhileThatActorIsPending()
     {
         using var kit = CreateKit(AuraType.PeriodicDamage);

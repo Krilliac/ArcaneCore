@@ -65,7 +65,10 @@ internal sealed record QaPublication(QaPublicationState State, int Issue = 0, st
 }
 
 /// <summary>One piece of evidence: where and when, who attacked, and the redacted log line.</summary>
-internal sealed record QaSample(DateTime AtUtc, bool HasPosition, uint Map, float X, float Y, float Z, uint[] Attackers, string Message);
+internal sealed record QaSample(DateTime AtUtc, bool HasPosition, uint Map, float X, float Y, float Z, uint[] Attackers, string Message)
+{
+    public QaBotObservation? Bot { get; init; }
+}
 
 /// <summary>
 /// An immutable snapshot of a finding (commands, reports and the publisher read these; the aggregator keeps the mutable state). Also the
@@ -174,7 +177,7 @@ internal sealed record QaFindingView
     public bool QuestIsGoal => Goal.Length == 0 || QuestIsGoalOf(Kind, Goal);
 
     internal static bool QuestIsGoalOf(QaSignalKind kind, string goal)
-        => kind != QaSignalKind.Stall || string.Equals(goal, "Quest", StringComparison.Ordinal);
+        => kind is not (QaSignalKind.Stall or QaSignalKind.DeathLoop) || string.Equals(goal, "Quest", StringComparison.Ordinal);
 
     internal static string LabelOf(QaSignalKind kind) => Enum.IsDefined(kind) ? QaKinds.Of(kind).Label : kind.ToString();
 

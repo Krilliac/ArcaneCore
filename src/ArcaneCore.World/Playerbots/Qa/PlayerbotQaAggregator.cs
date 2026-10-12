@@ -83,15 +83,16 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 }
 
                 if (signal.BotClass is > 0 and < 32) finding.ClassMask |= 1u << signal.BotClass;
-                finding.Samples.Add(new QaSample(signal.AtUtc, signal.HasPosition, signal.Map, signal.X, signal.Y, signal.Z, [.. signal.Attackers], signal.Message));
+                finding.Samples.Add(new QaSample(signal.AtUtc, signal.HasPosition, signal.Map, signal.X, signal.Y, signal.Z, [.. signal.Attackers], signal.Message)
+                    { Bot = signal.Bot });
                 while (finding.Samples.Count > maxSamples) finding.Samples.RemoveAt(0);
             }
 
             CopyIds(finding, signal);
-            if (signal.Quest != 0) finding.Quest = signal.Quest;
+            if (signal.Quest != 0 || signal.Kind == QaSignalKind.DeathLoop) finding.Quest = signal.Quest;
             if (signal.Target != 0) finding.Target = signal.Target;
             if (signal.HasPosition) finding.Map = signal.Map;
-            finding.QuestTitle = cause.QuestTitle ?? finding.QuestTitle;
+            finding.QuestTitle = signal.Kind == QaSignalKind.DeathLoop ? cause.QuestTitle : cause.QuestTitle ?? finding.QuestTitle;
             finding.Cause = cause.Cause;
             finding.CauseDetail = cause.Detail;
             finding.Goal = signal.Goal;

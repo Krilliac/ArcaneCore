@@ -17,4 +17,10 @@ public interface IManagedPlayerbotStore
     Task CreateAsync(ManagedPlayerbot bot, CancellationToken cancellationToken = default);
     /// <summary>Optimistic revision update; identity fields never change. False means a stale operation.</summary>
     Task<bool> UpdateAsync(ManagedPlayerbot bot, long expectedRevision, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Remove the registry row of a bot whose character is already deleted (a character deletion also clears the row in the
+    /// same transaction in production; this removes what is left). Identity-checked: the row is removed only while it still has
+    /// this account and character. True when a row was removed.
+    /// </summary>
+    Task<bool> DeleteAsync(Guid botId, int accountId, int characterId, CancellationToken cancellationToken = default);
 }

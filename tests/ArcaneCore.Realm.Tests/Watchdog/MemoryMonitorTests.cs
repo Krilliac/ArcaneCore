@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Watchdog;
+using ArcaneCore.Kernel.Ops.Watchdog.Counters;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -224,6 +225,42 @@ public sealed class MemoryMonitorTests
         monitor.Stop();
         Assert.Equal(0, monitor.HeapHighWaterBytes);
         Assert.Empty(_log.Lines);
+    }
+
+    // The GC-pause investigation: the growth line and the counters say how fragmented the LOH is and how long the last full GC stopped the world.
+    [Fact]
+    public void GrowthLine_AndCounters_CarryLohFragmentationAndTheLastFullBlockingPause()
+    {
+        CounterRegistry counters = WatchdogTestSupport.NewRegistry();
+        var options = new MemoryMonitorOptions { SampleIntervalSeconds = 10, GrowthLogBytes = 16 * Mib };
+        var monitor = new MemoryMonitor(options, _clock, counters, _probe, _actuator, _log);
+        _probe.Sample = _probe.Sample with { LohBytes = 3000 * Mib, LohFragmentedBytes = 1750 * Mib, LastFullBlockingPauseMs = 2345.4 };
+        monitor.Sample(_clock.NowMicros);
+
+        string line = Assert.Single(_log.Of(WatchdogEvents.MemoryGrowth)).Message;
+        Assert.Contains("LOH fragmented 1750 MiB = 58%", line);
+        Assert.Contains("last full blocking GC pause 2345 ms", line);
+        Assert.Equal(1750 * Mib, counters.Find("watchdog.memory.loh_fragmented_bytes")!.Value);
+        Assert.Equal(2345, counters.Find("watchdog.gc.last_full_pause_ms")!.Value);
+        Assert.Equal(CounterKind.Gauge, counters.Find("watchdog.gc.last_full_pause_ms")!.Kind);
+        Assert.Equal(58.3, _probe.Sample.LohFragmentationPercent, 1);
+    }
+
+    [Fact]
+    public void LohFragmentationPercent_IsZeroForAnEmptyLoh_AndNeverAbove100()
+    {
+        Assert.Equal(0, default(MemorySample).LohFragmentationPercent);
+        Assert.Equal(100, (default(MemorySample) with { LohBytes = 10, LohFragmentedBytes = 50 }).LohFragmentationPercent);
+    }
+
+    [Fact]
+    public void RealProbe_ReportsLohFragmentationAndTheLastFullBlockingPause()
+    {
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: false);
+        MemorySample sample = new GcMemoryProbe().Read();
+        Assert.True(sample.LohFragmentedBytes >= 0);
+        Assert.True(sample.LohFragmentationPercent is >= 0 and <= 100);
+        Assert.True(sample.LastFullBlockingPauseMs > 0, "a forced blocking gen2 collection has happened, so its pause must be reported");
     }
 
     [Fact]

@@ -12,6 +12,7 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
     private readonly ConcurrentDictionary<int, IReadOnlyList<ActionButton>> _buttons = new();
     private int _nextId;
     private int _saves;
+    private readonly ConcurrentDictionary<int, int> _savesByCharacter = new();
 
     public Task<IReadOnlyList<CharacterRecord>> GetByAccountAsync(int accountId, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<CharacterRecord>>(
@@ -81,6 +82,7 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
         }
 
         Interlocked.Increment(ref _saves);
+        _savesByCharacter.AddOrUpdate(state.Id, 1, (_, count) => count + 1);
         return Task.CompletedTask;
     }
 
@@ -102,6 +104,8 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
 
     /// <summary>Number of state saves received.</summary>
     public int SaveCount => Volatile.Read(ref _saves);
+
+    public int SavesFor(int characterId) => _savesByCharacter.GetValueOrDefault(characterId);
 }
 
 internal sealed class InMemoryWorldDataStore : IWorldDataStore

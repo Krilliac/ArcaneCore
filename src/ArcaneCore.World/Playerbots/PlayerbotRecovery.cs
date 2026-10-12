@@ -369,6 +369,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         if (elapsedMs == 0 || !player.IsInWorld)
             return false;
+        PlayerbotThinkProbe.Phase("recovery start");
         if (player.IsAlive)
         {
             Reset();
@@ -404,8 +405,13 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             throw new InvalidOperationException(Stalled);
         }
 
-        if (_spiritHealer) return SpiritHealer(player, elapsedMs, now);
+        if (_spiritHealer)
+        {
+            PlayerbotThinkProbe.Phase("recovery healer");
+            return SpiritHealer(player, elapsedMs, now);
+        }
 
+        PlayerbotThinkProbe.Phase("recovery body decision");
         bool stalled = Stuck(now);
         Corpse? corpse = player.Combat.Corpse;
         PlayerbotCorpsePlace place = corpse is null ? PlayerbotCorpsePlace.None
@@ -444,7 +450,9 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 verdict.Detail is { Length: > 0 } detail ? " (" + detail + ")" : string.Empty);
         }
 
+        PlayerbotThinkProbe.Phase("recovery entrance");
         AreaTriggerTemplate? entrance = place == PlayerbotCorpsePlace.OtherMap ? FindEntrance(player, corpse!.MapId) : null;
+        PlayerbotThinkProbe.Phase("recovery revive spot");
         bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && WithinReclaimDistance(player, corpse!);
         long wait = atCorpse ? player.Map?.Combat.CorpseReclaimWaitSeconds(player) ?? 0 : 0;
         bool hostile = atCorpse && wait <= 0 && Camped(player, Hazards?.Invoke(player) ?? []);
@@ -452,6 +460,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: _preferSpiritHealer,
             reviveSpotKnown: spot is not null);
         LastStep = step;
+        PlayerbotThinkProbe.Phase("recovery action");
         switch (step)
         {
             case PlayerbotRecoveryStep.Release:
@@ -479,6 +488,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
             case PlayerbotRecoveryStep.WalkToReviveSpot:
                 // Not progress for the no-progress bound: a camp that keeps moving must not keep the ghost walking for good.
+                PlayerbotThinkProbe.Phase("recovery revive walk");
                 return Walk(player, spot!.Value, _spotKey!, elapsedMs, now, countsAsProgress: false);
 
             case PlayerbotRecoveryStep.Reclaim:
@@ -486,9 +496,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 return session.TryManagedAction(WorldOpcode.CmsgReclaimCorpse, PlayerbotNavigation.GuidPayload(corpse!.Guid.Value));
 
             case PlayerbotRecoveryStep.WalkToCorpse:
+                PlayerbotThinkProbe.Phase("recovery corpse walk");
                 return Walk(player, new Vector3(corpse!.X, corpse.Y, corpse.Z), corpse.Guid, elapsedMs, now);
 
             case PlayerbotRecoveryStep.WalkToEntrance:
+                PlayerbotThinkProbe.Phase("recovery entrance walk");
                 return Walk(player, new Vector3(entrance!.X, entrance.Y, entrance.Z), entrance, elapsedMs, now);
 
             default:
@@ -496,6 +508,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 _spiritHealer = true;
                 ClearWalk();
                 MarkProgress(now);
+                PlayerbotThinkProbe.Phase("recovery healer");
                 return SpiritHealer(player, elapsedMs, now);
         }
     }
@@ -545,6 +558,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     private bool SpiritHealer(Player player, uint elapsedMs, long now)
     {
         LastStep = PlayerbotRecoveryStep.SpiritHealer;
+        PlayerbotThinkProbe.Phase("recovery healer lookup");
         Creature? healer = NearestSpiritHealer(player);
         // On the long way round to a healer (DetourToHealer) it drops out of sight for a while (a ghost sees it only so far): the walk
         // goes on to where it stands, under the same bounds, until it is in sight again.
@@ -572,6 +586,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             serverAccepts: serverAccepts);
         if (step == PlayerbotSpiritHealerStep.DetourToHealer)
         {
+            PlayerbotThinkProbe.Phase("recovery healer detour");
             _detourTriedFor = healer!.Guid;
             if (PlayerbotNavigation.TryPlanFar(player, new Vector3(healer.X, healer.Y, healer.Z), options, PlayerbotNavigation.MaxSearchNodes,
                     out PlayerbotRoute? detour) && detour is { Points.Count: > 1 }
@@ -596,6 +611,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
 
         LastSpiritHealerStep = step;
+        PlayerbotThinkProbe.Phase("recovery healer action");
         switch (step)
         {
             case PlayerbotSpiritHealerStep.ResumeCorpseRun:
@@ -817,6 +833,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
         if (_route is null || _route.Complete)
         {
+            PlayerbotThinkProbe.Phase("recovery walk plan");
             if (!PlayerbotNavigation.TryPlanToward(player, goal, options, out _route))
             {
                 _route = null;
@@ -829,6 +846,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
 
         PlayerbotRoute route = _route!;
+        PlayerbotThinkProbe.Phase("recovery walk advance");
         bool advanced = PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, session.World.NowMs);
         float left = RouteLeft(player, route, goal);
         if (float.IsFinite(left))
@@ -1254,5 +1272,17 @@ internal readonly record struct PlayerbotThreat(Vector3 Position, float Radius, 
     {
         if (!IgnoresHeight && MathF.Max(0f, MathF.Abs(Position.Z - spot.Z) - Radii) > CreatureAggro.MaxZDistance) return false;
         return Vector3.Distance(Position, spot) < Radius + margin;
+    }
+
+    /// <summary>
+    /// Whether this creature's aggro reach and <paramref name="other"/>'s share a zone, that is, some spot is inside both: the
+    /// distance between them is under the sum of the radii (and, for two creatures bound by the height limit, within it).
+    /// Neither creature has to stand inside the other's reach for a bot walking between them to be attacked by both.
+    /// </summary>
+    internal bool Overlaps(PlayerbotThreat other)
+    {
+        if (!IgnoresHeight && !other.IgnoresHeight
+            && MathF.Max(0f, MathF.Abs(Position.Z - other.Position.Z) - Radii - other.Radii) > CreatureAggro.MaxZDistance) return false;
+        return Vector3.Distance(Position, other.Position) < Radius + other.Radius;
     }
 }

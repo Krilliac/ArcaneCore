@@ -43,6 +43,7 @@ internal sealed class LiveSnapshotReplayFactAttribute : FactAttribute
             || !File.Exists(Environment.GetEnvironmentVariable(WorldVariable) ?? "")
             || !Directory.Exists(Path.Combine(Environment.GetEnvironmentVariable(RealTerrainBotFactAttribute.Variable) ?? "", "mmaps")))
             Skip = $"{CharactersVariable}, {WorldVariable} and {RealTerrainBotFactAttribute.Variable} are not all set: the live replay did NOT run.";
+        Skip ??= RealContent.WorldFixtureSchema.SkipReasonForEnvironment();
     }
 }
 

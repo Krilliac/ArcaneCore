@@ -330,7 +330,15 @@ public sealed partial class CreatureMapSystem
         creature.WalkSpeed = creature.CreatureWalkSpeed;
         creature.RunSpeed = creature.CreatureRunSpeed;
         creature.ClearChangedFields();
+        if (_creatures.TryGetValue(creature.Guid, out Creature? replaced) && !ReferenceEquals(replaced, creature))
+        {
+            // Two creatures with one ObjectGuid: the old one leaves _creatures, so it must leave the indexes too.
+            System.Diagnostics.Debug.Fail($"creature {creature.Guid} added over a different creature of the same guid");
+            UnindexCreature(replaced);
+        }
+
         _creatures[creature.Guid] = creature;
+        IndexCreature(creature);
         if (creature.IsNewObject)
         {
             _newCreatures.Add(creature);
@@ -369,6 +377,7 @@ public sealed partial class CreatureMapSystem
         }
 
         _creatures.Remove(creature.Guid);
+        UnindexCreature(creature);
         _corpseDespawns.Remove(creature);
         _forcedDespawns.RemoveAll(d => ReferenceEquals(d.Creature, creature));
         NotifySummonerOfRemoval(creature);

@@ -28,6 +28,10 @@ GM commands: `.playerbot create|start|stop` (Administrator), `.playerbot status|
 (GameMaster), `.playerbot scenario list|run` (Administrator, below). The autonomous brain's
 behaviour is described in `docs/integration/playerbot-*.md`.
 
+On world shutdown, managed bots stop in groups of at most 32 while the world thread is still running. Each bot's
+logout queues its character state and waits for that character's save to flush; the next group starts only after
+all stops in the current group settle. The world thread and final save queue stop afterward.
+
 Before a pull the brain weighs each candidate's risk against its reward, and in a fight it retreats past the creatures' leash when
 it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. The risk decision ends each `.playerbot status`
 line and has its own `BOTINSPECT` line.
@@ -136,6 +140,13 @@ this set-aside covers the enders that are near on the map but behind steep groun
 `AtTheAshenvaleStall_TheRidgeIsNoMeshIsland_AndTheBrainWalksTheBotOff`; the decision itself is tested through the brain in
 `PlayerbotQuestSteepReturnTests`. None of this establishes a walkable approach from the ridge or completes the quest.
 
+Bot QA #218 exposed a second stop near Je'neu: from three Ashenvale approach points the region route reached
+the last walkable point about 5.6 yards from his centre and found no further mesh route. The bot had required
+5 yards between centres, while the quest server accepts strict 3D distance below 5 yards plus both bounding
+radii (vmangos `src/game/Objects/Object.cpp`, `WorldObject::IsWithinDist`; Je'neu model 12953 radius 0.306 and
+player radius 0.389). `PlayerbotQuestGoals` now uses that same reach before planning another step; the
+packet-level `QuestGiverWithinServerRadiusAdjustedReach_IsQueriedWithoutAnotherPath` confirms the exchange.
+
 Some walkable ground is a navigation-mesh **island**: polygons the mesh joins to nothing round them, so every route from there ends at the
 island's edge nearest the goal and the next plan is refused, whatever the goal. Inside the round wall of the Molsen Farm in Westfall
 (x -10305..-10274, y 1355..1385) the collision data closes it too: the wall stands 1.7 to 3 yards above the ground inside, and no floor
@@ -143,14 +154,31 @@ within a step and in sight leads over it. Live 2026-10-11 (bot QA #180, live-w23
 every goal they took (quest 65 to Wiley the Black, quest 2039 to Bingles Blastenheimer, the Harvest Watchers beside the farm), for hours and
 across restarts (Wfbotac was saved there). When a stall gives a goal up (`GiveUpStalledGoal`, including a failed tram trip's bot-local
 set-aside), the brain asks
-`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 60 yards out; an island ends every one within 45 yards) and, out of combat in the
+`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 120 yards out; an island ends every one within 55 yards) and, out of combat in the
 open world, moves the bot off as from an unsafe landing: a homed bot teleports home (`PlayerbotHomeTeleportReason.Island`, logged `stalled on
 ground no route leaves`) when that teleport would be made, else (an unhomed bot, or the home teleport's 5-minute cooldown) to its bind point.
 The bind-point teleport, here and after an unsafe landing, is refused as the teleport home is: in a group (a grouped bot can still run the
 brain), a duel, on a battleground, in the air, during another teleport (an unsafe landing replaces the resurrection's near one), to a map
 not allowed; not urgent, at most one every 5 minutes, so a bind point that is itself an island cannot loop (`PlayerbotMeshIslandTests`,
-`AGroupedUnhomedBot_RevivedAmongStrongHostiles_IsNotTeleportedToItsBindPoint`). An island beside water or a void, where a probe point
+`AGroupedUnhomedBot_RevivedAmongStrongHostiles_IsNotTeleportedToItsBindPoint`). An exploring bot that stays within 55 yards of its
+first position for 15 seconds asks the same island question once before the full stall bound. This handles the isolated upper Stormwind
+ridge near (-8490, 489, 150), where short routes repeatedly ended within ten yards, and the lower ledge near (-8486, 510, 121), where
+the bot could move twelve yards without leaving the island and the mesh ends within 50 yards in every direction. Both previously held the
+bot for two minutes
+(bot QA #207, `StormwindRidge_ExploringBotEscapesTheIslandBeforeTheStallBound`). Connected ground around the sampled #221, #180,
+#130 and #131 points remains on ordinary exploration (`ConnectedExploreGround_DoesNotTriggerAnIslandTeleport`).
+An island beside water or a void, where a probe point
 has no polygon near it (a NoPath answer), is never detected: its bots still stall and give their goals up one by one.
+
+**Intercontinent quest handoffs.** The bot's tram and elevators stay on one continent, and its ordinary
+quest travel has no ship or zeppelin route between maps 0 and 1. Before acceptance, visible and offscreen
+starters are skipped when all known static creature enders stand on the other continent; a local alternative,
+unknown scripted ender or instance ender is left eligible. This excludes the Winterspring to Eastern
+Plaguelands deliveries 6030 (#236) and 5601 (#235) from autonomous pickup. Previously completed copies
+held by unhomed bots are abandoned through the normal quest-log packet. The existing home-area rule still
+limits long local turn-ins. `DukeAndPamelaStyleCrossContinentEnder_IsIneligibleForOffscreenTravel`,
+`CrossContinentEnder_DoesNotBecomeAVisibleStarterGoal` and
+`PreviouslyCompletedCrossContinentDelivery_IsAbandonedByAnUnhomedBot` cover these decisions.
 
 #### Travel by the Deeprun Tram
 
@@ -501,7 +529,9 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   `no zone clip`.
 * **Provisioning.** `tools/ops/provision-bots.ps1 -Home` sets each bot's home to the place it is teleported to ([bot provisioning](../ops/bot-provisioning.md)).
 * **Stalls outside the home.** A goal on which `PlayerbotSharedSetAsides.BotsToShare` (3) different bots stalled within 30 minutes is set aside for
-  every bot (30 min, doubling to at most 2 h). Only the stalls of bots **inside their home area** (or with none) count
+  every bot (30 min, doubling to at most 2 h). After a full day without a stall on that goal, its next
+  shared set-aside starts at 30 minutes again (`QuietGoal_LosesItsRepeatPenaltyBeforeTheNextSharedStall`).
+  Only the stalls of bots **inside their home area** (or with none) count
   (`PlayerbotBrain.GiveUpStalledGoal`, `StallOutsideHome`): a homed bot outside it (on another map, on its way back, on a turn-in or capital
   errand) stalls where its home does not keep it, which says nothing about the goal for the bots whose home it is. It still sets the goal aside
   for itself (10 min), and its stall line ends `it gives up that goal outside its home` (bot QA: cause `OutsideHome`, never published). The

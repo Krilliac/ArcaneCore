@@ -281,6 +281,15 @@ than two bots left), `leader-gone`, or `leader-stopped` (the leader's bot stoppe
 the run goes on. A given-up run walks out of the instance first, then disbands; every bot still in it sets the wing aside. Totals:
 `completed` and `given-up` in the runs line.
 
+After a completed run has left the instance, its leader sends `CMSG_RESET_INSTANCES` while the group still exists, then every bot
+disbands. This is observability: the leader asks the way a client would and the coordinator records each `SMSG_INSTANCE_RESET` or
+`SMSG_INSTANCE_RESET_FAILED` reply, with the map and the failure reason (offline member or occupied instance), so a refusal is visible.
+A refusal does not hold the group together, and the request is skipped when any member of the group is not a managed bot, because a
+reset unbinds every player on the save. The fresh instance for the next run comes from the disband itself, which resets the group's
+instances (`InstanceManager.OnGroupDisbanding`, vmangos `Group::Disband`); a refused request means that reset skips the same save.
+The Deadmines scenario test runs the same bots twice and checks a new instance with living boss and trash; it uses synthetic content,
+not an imported-world or client replay.
+
 **Trash** (`PlayerbotRunRoute.NextPull`, pure): the leader plans a path to the current boss every 3 seconds; a hostile, living creature
 not already in combat that stands within 15 yards of a point still ahead on that path is in the way, because walking
 past it would pull it anyway; a pack is the creatures within 10 yards of its first member (how classic-db places its groups). The leader
@@ -364,6 +373,16 @@ per requirement kind and formed with the quotas once every bot has the key item,
 matching and `Waives` (None for a real player, a bot outside the run, a dungeon run's bot, another teleport, the switch off). The
 import is tested in `ArcaneCore.Data.Tests/InstanceEncounterImportTests`, the requirement check and waivers in
 `ArcaneCore.Game.Tests/Teleport/TeleportRequirementsTests`.
+
+`PlayerbotRunClearWorldTests` now drives five Horde bots through RFC trigger 2230 into one group-bound instance on the manual clock.
+It checks the three-creature Ragefire Trogg/Shaman test pack dies before any boss engages, then forces three deaths during a pull and
+checks Wiped, Retry, Enter and Clear with the same dead trash still dead. A second case has no resurrection spell: its ghosts walk back
+to the RFC entrance and revive inside. The fixture uses classic-db z2815 entries, levels, bosses and teleports and build-5875 trigger
+volumes, with compact test pack positions, scaled combat stats, an open corridor path and a test graveyard. Without terrain data, the
+fixture links map 389 to its AreaTable.dbc area 2437 for graveyard lookup (the build-5875 Map.dbc linked zone, field 19, which production reads too).
+`StartRun(plan, bots)` starts a selected catalogue
+wing through the normal formation checks without the random roll. On a retry, a living member still inside walks through the exit to
+join an outside leader before the group gathers. This test does not establish an imported-world or real-terrain RFC clear.
 
 ## Live replay (2026-10-08)
 
