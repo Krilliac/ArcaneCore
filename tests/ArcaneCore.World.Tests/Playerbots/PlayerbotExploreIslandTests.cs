@@ -53,6 +53,52 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         brain.Stop();
     }
 
+    [RealTerrainBotTheory]
+    [InlineData(-10038.9f, 649.6f, 38.2f)] // #221, Elwynn
+    [InlineData(-10233.5f, 1362.6f, 40.3f)] // #180, outside the Molsen wall
+    public async Task ConnectedGround_DwellOver15Seconds_RunsABoundedCountedIslandCheck_AndDoesNotTeleport(float x, float y, float z)
+    {
+        var start = new Vector3(x, y, z);
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(start, 0);
+        var brain = new PlayerbotBrain(terrain.Session, new PlayerbotOptions { Enabled = true });
+        await terrain.Host.OnWorldAsync(() => terrain.Player.Home = new HomeBind(0, 40, -6240.3f, 331f, 382.8f));
+
+        // The bot stays put (an empty action budget starts no movement) for 20 seconds, so the 15-second confinement watch fires.
+        var probe = new PlayerbotThinkProbe();
+        int maxQueries = 0;
+        var perTick = new List<int>();
+        for (int tick = 0; tick < 200; tick++)
+        {
+            await terrain.Host.OnWorldAsync(() =>
+            {
+                terrain.Session.ManagedBudget = new ManagedActionBudget(0);
+                probe.Begin();
+                brain.Update(100);
+                probe.End();
+                maxQueries = Math.Max(maxQueries, probe.Queries);
+                perTick.Add(probe.Queries);
+            });
+            await terrain.Host.World.AdvanceClockAsync(100);
+        }
+
+        Vector3 after = await terrain.Host.OnWorldAsync(() => new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z));
+        Assert.True(Vector2.Distance(new(after.X, after.Y), new(start.X, start.Y)) < PlayerbotNavigation.IslandYards,
+            $"the dwelling bot moved to {after}: it must stay inside the confinement radius for the check to fire");
+        // A think plans one route query; the think that runs the island check (connected ground: its first probe proves it) plans none
+        // of its own, so no think counts more than one. Were the check additive to the plan, that think would count two.
+        Assert.True(maxQueries == 1, $"the busiest think made {maxQueries} counted queries: {string.Join(',', perTick)}");
+        int checkQueries = await terrain.Host.OnWorldAsync(() =>
+        {
+            probe.Begin();
+            Assert.False(PlayerbotNavigation.IsOnMeshIsland(terrain.Player, new PlayerbotOptions()));
+            probe.End();
+            return probe.Queries;
+        });
+        Assert.True(checkQueries is >= 1 and <= PlayerbotNavigation.IslandDirections, $"the island check counted {checkQueries} queries");
+        brain.Stop();
+    }
+
     // Bot QA #207's upper Stormwind ridge is a small mesh island. The prior probe measured
     // routes ending within ten yards and watched the bot remain there until the 120-second stall bound.
     [RealTerrainBotTheory]

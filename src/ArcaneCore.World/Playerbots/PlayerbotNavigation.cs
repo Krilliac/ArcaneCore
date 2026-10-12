@@ -507,7 +507,10 @@ internal static class PlayerbotNavigation
     /// on, or the path was cut at its point bound), and any answer without the mesh (no navigation data, or no polygon under the bot: other
     /// recoveries' cases), says no. So an island beside water or a void, where a probe point has no polygon near it (a NoPath answer), is
     /// never detected: its bots still stall, and are given up goal by goal as before. At most
-    /// <see cref="IslandDirections"/> queries; the brain asks only once a stall gives a goal up (PlayerbotBrain.EscapeIsland).
+    /// <see cref="IslandDirections"/> queries, all through <see cref="PlayerbotThinkProbe.Find"/> as fallbacks (counted, and held to the
+    /// think's node budget: a query the budget cut short or refused proves nothing and answers no). The brain asks once a stall gives
+    /// a goal up and once when exploring stays confined (PlayerbotBrain.EscapeIsland, EscapeConfinedExplore), and does nothing else
+    /// in that think.
     /// <para>
     /// Live 2026-10-11 (bot QA #180, live-w23-r1, main 85023136): the ground inside the round wall of the Molsen Farm in Westfall
     /// (x -10305..-10274, y 1355..1385, the wall 1.7 to 3 yards high) is such an island, closed by the collision data too (no floor
@@ -524,13 +527,17 @@ internal static class PlayerbotNavigation
         if (player.Map is not { } map) return false;
         Vector3 start = PlayerbotMotion.CurrentPosition(player);
         if (!Finite(start)) return false;
+        using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         for (int direction = 0; direction < IslandDirections; direction++)
         {
             float angle = direction * 2f * MathF.PI / IslandDirections;
             Vector3 probe = start + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0) * IslandProbeYards);
-            PathResult path = map.Collision.FindPath(start, probe, new PathOptions { MaxPoints = IslandPathPoints,
+            int cutBefore = PlayerbotThinkProbe.Active?.Clamped ?? 0;
+            PathResult path = PlayerbotThinkProbe.Find(map.Collision, start, probe, new PathOptions { MaxPoints = IslandPathPoints,
                 Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = IslandSearchNodes,
                 LoadTiles = true });
+            // A search the think's node budget cut short ends early on ground that may go on: no proof of an island.
+            if ((PlayerbotThinkProbe.Active?.Clamped ?? 0) != cutBefore) return false;
             // A path cut at the point bound (Short) ends early on ground that goes on: winding connected ground, never an island.
             if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.Short)) != 0 || !Finite(path.End)
                 || Vector2.Distance(Flat(path.End), Flat(start)) > IslandYards)

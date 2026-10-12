@@ -891,7 +891,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         PlayerbotMovementControl.Stop(_session, player);
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
         // on an island too; suppressing the shared set-aside must not suppress local escape.
-        EscapeIsland(player);
+        EscapeIsland(player, out _);
     }
 
     /// <summary>
@@ -906,10 +906,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// there, and stalled within two minutes of every login). True when the bot was moved.
     /// </para>
     /// </summary>
-    private bool EscapeIsland(Player player)
+    private bool EscapeIsland(Player player, out bool onIsland)
     {
+        onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
         if (!PlayerbotNavigation.IsOnMeshIsland(player, _options)) return false;
+        onIsland = true;
         uint now = _session.World.NowMs;
         // Home first, but only when the teleport home would be made: a refused TryTeleport would set the walk of a bot inside its home
         // aside as blocked (PlayerbotHomeReturn.Refuse), and the bind point is the way out then, as from an unsafe landing.
@@ -1483,7 +1485,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private void Explore(Player player, uint elapsedMs)
     {
         _goal = PlayerbotGoalKind.Explore;
-        if (EscapeConfinedExplore(player)) return;
+        if (EscapeConfinedExplore(player)) return; // the island check was this think's work
         if (_exploreCandidate is not null && _exploreHasPosition
             && (_exploreLastMap != player.MapId || System.Numerics.Vector3.DistanceSquared(
                 _exploreLastPosition, new(player.X, player.Y, player.Z)) > 300f * 300f))
@@ -1560,8 +1562,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // Short valid routes on a small island can move a bot more than the stall watch's 10-yard
         // progress bound while keeping it trapped. Diagnose once when exploration stays confined.
         if (_earlyExploreIslandChecked || unchecked(now - _exploreIslandSince) < 15_000u) return false;
+        if (player.Map is not { InstanceId: 0 }) return false;
+        // The check's path searches (up to IslandDirections, counted as the think's fallbacks) are this think's work: the caller plans
+        // no route of its own after it.
+        if (!EscapeIsland(player, out bool onIsland) && onIsland)
+        {
+            // On an island but not moved (the home teleport is on cooldown, say): ask again in 15 seconds.
+            _exploreIslandSince = now;
+            return true;
+        }
+
         _earlyExploreIslandChecked = true;
-        return EscapeIsland(player);
+        return true;
     }
 
     private void BlockExploreCell(PlayerbotExploreAtlas.Candidate candidate)
