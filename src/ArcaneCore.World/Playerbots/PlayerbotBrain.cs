@@ -393,9 +393,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _recovery.Reset();
 
         // The water escape owns a bot that would otherwise stand still under water: a rest or a loot wait, or an escape already
-        // under way. A sick bot still walks its quest returns and errands, so sickness alone is not a reason: the sickness stand-down
-        // stops it first and the idle check below then takes it out. A bot that is walking a route or riding a trip is never diverted by it (see the idle check after
-        // the trips and the retreat below). Movement itself continues on world ticks; a route is planned only on entry or after it ends.
+        // under way. A sick bot still walks its quest returns and errands, so sickness alone is not a reason: StandDownWhileSick stops
+        // it on an earlier think than the idle check after the trips and the retreat, and that check then takes the standing bot out.
+        // A bot that is walking a route or riding a trip is never diverted by this block. Movement itself continues on world ticks;
+        // a route is planned only on entry or after it ends.
         bool submerged = PlayerbotWater.Submerged(player);
         if (!submerged)
         {
