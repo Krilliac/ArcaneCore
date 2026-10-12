@@ -12813,6 +12813,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:MaxDeliveryYards",
+      "section": "World:Playerbots",
+      "type": "float",
+      "kind": "scalar",
+      "elementType": "float",
+      "enumValues": null,
+      "default": "1200",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Maximum same-map straight-line trip from a quest giver to its nearest present ender for an unhomed bot (0 disables the distance limit; 0..100000).",
+      "allowed": "a number from 0 to 100000 ('.' is the decimal point); 0 disables the distance limit",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:MaxFaults",
       "section": "World:Playerbots",
       "type": "int",
