@@ -456,6 +456,26 @@ public sealed class PlayerbotQaAggregatorTests
     }
 
     [Fact]
+    public void OldFormatDeathLoop_WithSamplesFromSeveralLoops_MatchesEveryLoopItAlreadyStoodFor()
+    {
+        // Before anchors one finding per cell merged every death loop there, so its samples hold several attacker sets.
+        PlayerbotQaAggregator first = New();
+        string id = Ingest(first, LoopFrom(2036f, -3378f, "Creature", 3821));
+        PlayerbotQaAggregator second = New();
+        Ingest(second, LoopFrom(2040f, -3380f, "Creature", 2829));
+        QaSample[] samples = [.. first.Export().Findings[0].Samples!, .. second.Export().Findings[0].Samples!];
+        QaAggregatorState old = first.Export();
+        QaAggregatorState state = old with { Findings = [.. old.Findings.Select(f => OldLoop(f, samples: samples))] };
+
+        PlayerbotQaAggregator target = New();
+        Assert.Equal(0, target.Restore(state));
+        // The newer sample's attacker belongs to the existing finding (and its issue), not to a variant.
+        Assert.Equal(id, Ingest(target, LoopFrom(2040f, -3380f, "Creature", 2829)));
+        Assert.Equal(id, Ingest(target, LoopFrom(2040f, -3380f, "Creature", 3821)));
+        Assert.Single(target.Snapshot());
+    }
+
+    [Fact]
     public void OldFormatDeathLoop_WithoutSamples_TakesAttackersFromTheSubject()
     {
         PlayerbotQaAggregator source = New();

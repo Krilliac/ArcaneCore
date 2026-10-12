@@ -330,13 +330,16 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
     }
 
     /// <summary>
-    /// A death loop's identity (its first signal's attackers and death source): as saved, else the oldest saved sample's, else (attackers only) the subject's <c>attackers 1/2</c>.
+    /// A death loop's identity (its first signal's attackers and death source): as saved; for an older file without one, the union of
+    /// the saved samples' attackers (that finding already stood for every loop in its cell), else the subject's <c>attackers 1/2</c>.
     /// </summary>
     private static void RestoreLoop(QaFinding finding, QaFindingView view)
     {
         IEnumerable<uint> attackers = view.Attackers ?? [];
-        // The identity is the first signal's attackers: the oldest saved sample that has any.
-        if (!attackers.Any()) attackers = (view.Samples ?? []).Select(sm => sm.Attackers ?? []).FirstOrDefault(a => a.Length > 0) ?? [];
+        // No saved identity means a file from before anchors, where one finding per cell merged every death loop seen
+        // there; its samples are the last few signals, not the first. The union of their attackers keeps those loops
+        // matching the existing finding (and its issue) instead of opening variants.
+        if (!attackers.Any()) attackers = (view.Samples ?? []).SelectMany(sm => sm.Attackers ?? []).Distinct().ToList();
         if (!attackers.Any() && view.Subject is { } subject && subject.LastIndexOf("attackers ", StringComparison.Ordinal) is var at and >= 0)
         {
             attackers = subject[(at + "attackers ".Length)..].Split('/').Select(t => uint.TryParse(t, NumberStyles.None, CultureInfo.InvariantCulture, out uint a) ? a : 0u);
