@@ -7,10 +7,6 @@ using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Playerbots.Qa;
 
-/// <summary>
-/// Merging findings must never lose an issue: the id of a merged-away finding is recorded, an outcome the publisher still reports for it reaches the
-/// survivor, a finding the publisher works on is not aged out, and the issue of an absorbed published finding is closed as a duplicate of the survivor's.
-/// </summary>
 /// <summary>The realism probe needs a copy of a live findings file (<c>ARCANECORE_QA_REALISM_FILE</c>); without it the test is reported as Skipped, never as a silent pass.</summary>
 public sealed class QaRealismFactAttribute : FactAttribute
 {
@@ -33,6 +29,12 @@ internal sealed class ScriptedTransport : IQaIssueTransport
 
     public int CloseFailures { get; set; }
 
+    /// <summary>Comments that fail with a transient error before one succeeds.</summary>
+    public int CommentFailures { get; set; }
+
+    /// <summary>Issue-list calls that fail with a transient error before one succeeds.</summary>
+    public int ListFailures { get; set; }
+
     public bool SupportsSearch => false;
 
     public int Add(string body, bool open = true)
@@ -45,6 +47,12 @@ internal sealed class ScriptedTransport : IQaIssueTransport
 
     public Task<QaIssueIndex> ListIndexAsync(CancellationToken cancellationToken)
     {
+        if (ListFailures > 0)
+        {
+            ListFailures--;
+            throw new PlayerbotQaPublishException("list failed", transient: true);
+        }
+
         var index = new QaIssueIndex(complete: true);
         foreach ((int number, (bool open, string body)) in _issues) index.Add(new QaIssueRef(number, open, $"https://github.com/x/y/issues/{number}"), body);
         return Task.FromResult(index);
@@ -63,6 +71,12 @@ internal sealed class ScriptedTransport : IQaIssueTransport
 
     public Task CommentAsync(int number, string body, CancellationToken cancellationToken)
     {
+        if (CommentFailures > 0)
+        {
+            CommentFailures--;
+            throw new PlayerbotQaPublishException("comment failed", transient: true);
+        }
+
         Calls.Add($"comment {number}{(body.StartsWith("Duplicate of", StringComparison.Ordinal) ? " duplicate" : string.Empty)}");
         return Task.CompletedTask;
     }
@@ -87,6 +101,10 @@ internal sealed class ScriptedTransport : IQaIssueTransport
     }
 }
 
+/// <summary>
+/// Merging findings must never lose an issue: the id of a merged-away finding is recorded, an outcome the publisher still reports for it reaches the
+/// survivor, a finding the publisher works on is not aged out, and the issue of an absorbed published finding is closed as a duplicate of the survivor's.
+/// </summary>
 public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output) : IDisposable
 {
     private static readonly byte[] Salt = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
@@ -416,6 +434,121 @@ public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output
         Assert.Equal([$"comment {issue}", $"comment {issue}"], github.Calls);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AHandedOverIssue_AfterATransientFailure_IsStillTheSurvivorsIssue_AndNeverFiledTwice(bool commentFails)
+    {
+        PlayerbotQaAggregator aggregator = New();
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 3, countB: 4);
+        var github = new ScriptedTransport();
+        int issue = github.Add(PlayerbotQaIssueComposer.MarkerOf(a) + "\n\nbody a"); // the issue carries the ABSORBED finding's marker
+        aggregator.Pin(a);
+        Assert.Equal(b, Ingest(aggregator, bridge));
+        aggregator.Apply(a, new QaPublicationUpdate(Published(issue), QaData.T0, 3));
+        aggregator.Unpin(a);
+
+        var time = new ManualTime(QaData.T0);
+        PlayerbotQaPublisher publisher = Publisher(aggregator, Options(), () => github, time: time);
+        if (commentFails) github.CommentFailures = 1;
+        else github.ListFailures = 1;
+
+        time.Advance(TimeSpan.FromHours(25));
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+        QaPublication afterFailure = aggregator.Get(b)!.Publication;
+        Assert.Equal(QaPublicationState.Failed, afterFailure.State);
+        Assert.Equal(issue, afterFailure.Issue); // the failed attempt keeps the number
+
+        time.Advance(TimeSpan.FromHours(25));
+        Ingest(aggregator, Loop(-10600f, 250f, 0, null, 202, 531));
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+        time.Advance(TimeSpan.FromHours(25));
+        Ingest(aggregator, Loop(-10600f, 250f, 0, null, 202, 531));
+        await publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
+
+        Assert.DoesNotContain(github.Calls, c => c.StartsWith("create", StringComparison.Ordinal));
+        Assert.Equal(Published(issue).State, aggregator.Get(b)!.Publication.State);
+        Assert.Equal(issue, aggregator.Get(b)!.Publication.Issue);
+        Assert.True(github.IsOpen(issue));
+    }
+
+    [Fact]
+    public void AbsorbedFindingWithAFailedPublication_KeepsItsIssueTracked_AndClosableAsADuplicate()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 1, countB: 1);
+        aggregator.Apply(a, new QaPublicationUpdate(new QaPublication(QaPublicationState.Failed, 40, "comment failed")));
+        aggregator.Apply(b, new QaPublicationUpdate(Published(12)));
+
+        Assert.Equal(b, Ingest(aggregator, bridge));
+
+        Assert.Equal(new QaAbsorbed(a, b, 40, false), Assert.Single(aggregator.PendingDuplicates()));
+    }
+
+    [Fact]
+    public void APendingFinding_MergedWithAFailedOneThatHoldsAnIssue_KeepsThatIssue()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 1, countB: 4); // b is the busiest, and Pending
+        aggregator.Apply(a, new QaPublicationUpdate(new QaPublication(QaPublicationState.Failed, 40, "comment failed")));
+
+        string survivor = Ingest(aggregator, bridge);
+
+        Assert.True(survivor == a || survivor == b);
+        QaFindingView only = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(40, only.Publication.Issue);
+        Assert.Empty(aggregator.PendingDuplicates());
+    }
+
+    [Fact]
+    public void AFailedSurvivor_ThatHoldsAnIssue_IsNotOverwrittenByAnInFlightOutcome_ThatIssueIsRecordedForClosing()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator, countA: 1, countB: 1);
+        aggregator.Apply(b, new QaPublicationUpdate(new QaPublication(QaPublicationState.Failed, 12, "list failed")));
+        aggregator.Pin(a);
+        Assert.Equal(b, Ingest(aggregator, bridge)); // a (Pending, in flight) is merged into b, which holds #12 although it failed
+
+        aggregator.Apply(a, new QaPublicationUpdate(Published(77)));
+        aggregator.Unpin(a);
+
+        Assert.Equal(12, aggregator.Get(b)!.Publication.Issue);
+        Assert.Equal(new QaAbsorbed(a, b, 77, false), Assert.Single(aggregator.PendingDuplicates()));
+    }
+
+    [Fact]
+    public void ARepointedAlias_IsNotMarkedCommented_ForTheNewSurvivor()
+    {
+        PlayerbotQaAggregator aggregator = New();
+        (string a, string b, QaSignal bridge) = TwoLoops(aggregator);
+        string c = Ingest(aggregator, Loop(-10700f, 200f, 0, null, 777));
+        aggregator.Apply(a, new QaPublicationUpdate(Published(40)));
+        aggregator.Apply(b, new QaPublicationUpdate(Published(12)));
+        aggregator.Apply(c, new QaPublicationUpdate(Published(5)));
+        Assert.Equal(b, Ingest(aggregator, bridge));
+        aggregator.MarkDuplicateCommented(a);
+        Assert.True(aggregator.PendingDuplicates().Single(x => x.Id == a).Commented);
+
+        Assert.Equal(c, Ingest(aggregator, Loop(-10650f, 225f, 0, null, 777, 202))); // b is merged into c (#5 < #12)
+
+        QaAbsorbed repointed = aggregator.PendingDuplicates().Single(x => x.Id == a);
+        Assert.Equal(c, repointed.Survivor);
+        Assert.False(repointed.Commented); // the comment named #12, not #5
+    }
+
+    [Fact]
+    public void AStoreWrittenBeforeCommentedExisted_ReadsCommentedAsFalse()
+    {
+        const string json = """{"FormatVersion":1,"SaltBase64":"AQID","Absorbed":[{"Id":"aaaaaaaaaaaaaaaa","Survivor":"bbbbbbbbbbbbbbbb","Issue":40,"Handled":false}]}""";
+
+        QaStoreFile file = JsonSerializer.Deserialize(json, QaStoreJsonContext.Default.QaStoreFile)!;
+
+        QaAbsorbed entry = Assert.Single(file.Absorbed);
+        Assert.Equal(40, entry.Issue);
+        Assert.False(entry.Handled);
+        Assert.False(entry.Commented);
+    }
+
     [Fact]
     public async Task AFailedClose_IsRetried_WithoutCommentingAgain()
     {
@@ -597,7 +730,7 @@ public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output
 
     /// <summary>
     /// Local-only: when <c>ARCANECORE_QA_REALISM_FILE</c> names a copy of a live <c>findings.json</c>, load it into an aggregator and check that every
-    /// published or known-closed id survives or is recorded as absorbed. Without the variable the test does nothing (a copy of live data is never committed).
+    /// published or known-closed id survives or is recorded as absorbed. Without the variable the test is reported as Skipped (a copy of live data is never committed).
     /// </summary>
     [QaRealismFact]
     public void RealisticStore_CollapsesAndKeepsEveryPublishedId()

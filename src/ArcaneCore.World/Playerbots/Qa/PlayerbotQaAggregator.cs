@@ -402,7 +402,8 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
     {
         QaPublicationState.Published => 0,
         QaPublicationState.KnownClosed => 1,
-        _ => 2,
+        _ when f.Publication.Issue > 0 => 2, // Failed: the issue exists, only the last call failed
+        _ => 3,
     };
 
     /// <summary>
@@ -415,7 +416,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
     {
         QaFinding survivor = findings
             .OrderBy(static f => PublicationRank(f))
-            .ThenBy(static f => f.Publication.Pinned ? f.Publication.Issue : 0)
+            .ThenBy(static f => f.Publication.Issue)
             .ThenByDescending(static f => f.Count)
             .ThenBy(static f => f.Id, StringComparer.Ordinal)
             .First();
@@ -426,9 +427,9 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             Absorb(survivor, other);
             Remove(other);
             Merged++;
-            bool issue = other.Publication.Pinned && other.Publication.Issue > 0;
+            bool issue = other.Publication.Issue > 0; // any state: a Failed publication keeps the number of an issue that exists
             _absorbed[other.Id] = new QaAbsorbed(other.Id, survivor.Id, issue ? other.Publication.Issue : 0, !issue || other.Publication.State == QaPublicationState.KnownClosed);
-            foreach (string earlier in _absorbed.Where(p => p.Value.Survivor == other.Id).Select(p => p.Key).ToList()) _absorbed[earlier] = _absorbed[earlier] with { Survivor = survivor.Id };
+            foreach (string earlier in _absorbed.Where(p => p.Value.Survivor == other.Id).Select(p => p.Key).ToList()) _absorbed[earlier] = _absorbed[earlier] with { Survivor = survivor.Id, Commented = false }; // the comment named the old survivor
             if (issue)
             {
                 log?.LogInformation("Bot QA: issue #{Absorbed} (finding {AbsorbedId}) absorbed into #{Survivor} (finding {SurvivorId}); one problem, one issue",
@@ -472,7 +473,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
         if (!into.Publication.Pinned) into.OccurrencesReported = Math.Max(into.OccurrencesReported, from.OccurrencesReported);
         if (from.LastCommentUtc is { } commented && (into.LastCommentUtc is null || commented > into.LastCommentUtc)) into.LastCommentUtc = commented;
-        if (into.Publication.State is QaPublicationState.Pending && from.Publication.State is not QaPublicationState.Pending) into.Publication = from.Publication;
+        if ((into.Publication.State is QaPublicationState.Pending && from.Publication.State is not QaPublicationState.Pending) || (into.Publication.Issue <= 0 && from.Publication.Issue > 0)) into.Publication = from.Publication;
         List<QaSample> samples = [.. into.Samples, .. from.Samples];
         samples.Sort(static (x, y) => x.AtUtc.CompareTo(y.AtUtc));
         into.Samples.Clear();
@@ -603,7 +604,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             return;
         }
 
-        if (!survivor.Publication.Pinned)
+        if (survivor.Publication.Issue <= 0)
         {
             survivor.Publication = update.Publication;
             if (update.LastCommentUtc is { } at) survivor.LastCommentUtc = at;
