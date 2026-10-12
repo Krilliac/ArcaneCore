@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -116,29 +117,32 @@ public sealed class EfCharacterTalentStore(CharacterDbContext db) : ICharacterTa
     public async Task SaveAsync(int characterId, CharacterTalentState state, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(state);
-        int updated = await db.Set<CharacterTalentRow>().Where(r => r.CharacterId == characterId)
-            .ExecuteUpdateAsync(
-                s => s.SetProperty(r => r.ResetMultiplier, state.ResetMultiplier).SetProperty(r => r.ResetTimeUnix, state.ResetTimeUnix),
-                cancellationToken).ConfigureAwait(false);
-        if (updated > 0)
+        await CharacterWrites.InTransactionAsync(db, async () =>
         {
-            return;
-        }
-
-        try
-        {
-            db.Set<CharacterTalentRow>().Add(new CharacterTalentRow
+            int updated = await db.Set<CharacterTalentRow>().Where(r => r.CharacterId == characterId)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(r => r.ResetMultiplier, state.ResetMultiplier).SetProperty(r => r.ResetTimeUnix, state.ResetTimeUnix),
+                    cancellationToken).ConfigureAwait(false);
+            if (updated > 0)
             {
-                CharacterId = characterId,
-                ResetMultiplier = state.ResetMultiplier,
-                ResetTimeUnix = state.ResetTimeUnix,
-            });
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            db.ChangeTracker.Clear();
-        }
+                return;
+            }
+
+            try
+            {
+                db.Set<CharacterTalentRow>().Add(new CharacterTalentRow
+                {
+                    CharacterId = characterId,
+                    ResetMultiplier = state.ResetMultiplier,
+                    ResetTimeUnix = state.ResetTimeUnix,
+                });
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                db.ChangeTracker.Clear();
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<uint>> GetDisabledAsync(int characterId, CancellationToken cancellationToken = default)
@@ -186,9 +190,9 @@ public sealed class EfCharacterTalentStore(CharacterDbContext db) : ICharacterTa
         }
 
         List<uint> wanted = [.. spells.Distinct()];
-        await db.Set<CharacterSpellDisabledRow>()
-            .Where(r => r.CharacterId == characterId && wanted.Contains(r.Spell))
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<CharacterSpellDisabledRow>().Where(r => r.CharacterId == characterId && wanted.Contains(r.Spell)).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -197,6 +201,7 @@ public sealed class EfCharacterTalentStore(CharacterDbContext db) : ICharacterTa
     /// </summary>
     public async Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // deletes only the rows of an id with no characters row: the deletion lifetime fence is token-independent
         await db.Set<CharacterTalentRow>()
             .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);

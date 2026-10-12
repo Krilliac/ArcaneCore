@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Items;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -62,11 +63,14 @@ public sealed class EfItemLootMaintenance(CharacterDbContext db) : IItemLootMain
     public async Task<int> DeleteOrphanedLootAsync(CancellationToken cancellationToken = default)
     {
         IQueryable<ItemInstanceRow> items = db.Set<ItemInstanceRow>();
-        int stacks = await db.Set<ItemLootRow>().Where(r => !items.Any(i => i.Guid == r.ItemGuid))
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        int states = await db.Set<ItemLootStateRow>().Where(r => !items.Any(i => i.Guid == r.ItemGuid))
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        return stacks + states;
+        return await CharacterWrites.InTransactionAsync(db, async () =>
+        {
+            int stacks = await db.Set<ItemLootRow>().Where(r => !items.Any(i => i.Guid == r.ItemGuid))
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            int states = await db.Set<ItemLootStateRow>().Where(r => !items.Any(i => i.Guid == r.ItemGuid))
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            return stacks + states;
+        }, cancellationToken).ConfigureAwait(false);
     }
 }
 

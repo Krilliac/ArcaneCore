@@ -2,6 +2,7 @@ using System.Data.Common;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Ownership;
+using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Social;
@@ -296,6 +297,59 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
             "the fence wraps single-statement saves in a verified transaction; it is not free when on");
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task SetBasedWrites_UnderTheFence_RunVerified_WhenOwned_AndLeaveRowsUnchanged_WhenTheOwnerIsStale(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using ServiceProvider services = await BuildAsync(connection, fence: true);
+        int id = await CreateCharacterAsync(connection, "SetBased");
+        CharacterOwnershipToken first = await AcquireAsync(services);
+        var context = services.GetRequiredService<CharacterOwnershipContext>();
+        context.Current = first;
+
+        // Startup cleanup (EfInstanceStore.LoadAsync) used to throw under the fence; the owner now runs it.
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            var instances = new EfInstanceStore(db);
+            await instances.LoadAsync();
+            await instances.SaveInstanceAsync(new InstanceRecord(5, 33, 1000));
+            await instances.SaveBindAsync(new CharacterInstanceBindRecord(id, 5, true));
+            await instances.SaveInstanceDataAsync(5, "owned");
+            await new EfCharacterSpellStore(db).AddAsync(id, [133, 168]);
+            await new EfCharacterSpellStore(db).RemoveAsync(id, 168);
+        }
+
+        async Task<(string? Data, int Binds, IReadOnlyList<uint> Spells)> SnapshotAsync()
+        {
+            await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
+            InstanceStoreSnapshot snapshot = await new EfInstanceStore(db).LoadAsync();
+            return (snapshot.Instances.Single().Data, snapshot.Binds.Count, await new EfCharacterSpellStore(db).GetAsync(id));
+        }
+
+        var before = await SnapshotAsync();
+        Assert.Equal("owned", before.Data);
+        Assert.Equal(1, before.Binds);
+        Assert.Equal([133u], before.Spells);
+
+        // Another node takes over; every set-based write of this process is now refused and changes nothing.
+        await TakeoverAsync(services, first);
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            await AssertRejectedAsync(() => new EfInstanceStore(db).SaveInstanceDataAsync(5, "stale"));
+            await AssertRejectedAsync(() => new EfInstanceStore(db).DeleteBindAsync(id, 5));
+            await AssertRejectedAsync(() => new EfCharacterSpellStore(db).RemoveAsync(id, 133));
+            await AssertRejectedAsync(() => new EfInstanceStore(db).LoadAsync());
+        }
+
+        var after = await SnapshotAsync();
+        Assert.Equal(before.Data, after.Data);
+        Assert.Equal(before.Binds, after.Binds);
+        Assert.Equal(before.Spells, after.Spells);
+    }
+
     /// <summary>The same writes in every configuration; fence null builds the context with no registration at all.</summary>
     private async Task<List<string>> WorkloadAsync(DatabaseProvider provider, bool? fence, CommandLog log)
     {
@@ -335,6 +389,12 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
                 await new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 500, 1)]);
                 await new EfItemStore(db).SaveInventoryAsync(id, new InventorySnapshot([new(0, 19, Item(300, 25))]));
                 await new EfCharacterStore(db).SaveStateAsync(State(id, 3, token));
+                await new EfInstanceStore(db).SaveBindAsync(new CharacterInstanceBindRecord(id, 8, true));
+                await new EfInstanceStore(db).SaveInstanceDataAsync(8, "data");
+                await new EfInstanceStore(db).DeleteBindAsync(id, 8);
+                await new EfCharacterSpellStore(db).AddAsync(id, [133]);
+                await new EfCharacterSpellStore(db).RemoveAsync(id, 133);
+                await new EfCharacterStore(db).CompleteAsync(Guid.NewGuid());
             }
             finally
             {

@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Gm;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -143,11 +144,13 @@ public sealed class EfGmAuditStore(CharacterDbContext db) : IGmAuditStore
     }
 
     public async Task DeleteMuteAsync(int accountId, CancellationToken cancellationToken = default)
-        => await db.Set<AccountMuteRow>().Where(r => r.AccountId == accountId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        => await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<AccountMuteRow>().Where(r => r.AccountId == accountId).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 
     public Task<int> DeleteExpiredMutesAsync(long nowUnix, CancellationToken cancellationToken = default)
-        => db.Set<AccountMuteRow>().Where(r => r.MutedUntil <= nowUnix).ExecuteDeleteAsync(cancellationToken);
+        => CharacterWrites.InTransactionAsync(
+            db, () => db.Set<AccountMuteRow>().Where(r => r.MutedUntil <= nowUnix).ExecuteDeleteAsync(cancellationToken), cancellationToken);
 
     public async Task<IReadOnlyList<GmTicketRecord>> LoadOpenTicketsAsync(CancellationToken cancellationToken = default)
         => [.. (await db.Set<GmTicketRow>().AsNoTracking().Where(r => r.Status == (byte)GmTicketStatus.Open)
@@ -178,6 +181,7 @@ public sealed class EfGmAuditStore(CharacterDbContext db) : IGmAuditStore
     }
 
     public async Task DeleteTicketAsync(int ticketId, CancellationToken cancellationToken = default)
-        => await db.Set<GmTicketRow>().Where(r => r.Id == ticketId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        => await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<GmTicketRow>().Where(r => r.Id == ticketId).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 }

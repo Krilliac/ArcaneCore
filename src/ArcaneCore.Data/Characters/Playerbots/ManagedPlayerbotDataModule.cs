@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -116,7 +117,7 @@ public sealed class EfManagedPlayerbotStore(CharacterDbContext db) : IManagedPla
             || current.AccountName != bot.AccountName || current.CreatedUnix != bot.CreatedUnix)
             return false;
 
-        int changed = await db.Set<ManagedPlayerbotRow>()
+        int changed = await CharacterWrites.InTransactionAsync(db, () => db.Set<ManagedPlayerbotRow>()
             .Where(row => row.BotId == bot.BotId && row.Revision == expectedRevision)
             .ExecuteUpdateAsync(update => update
                 .SetProperty(row => row.DesiredEnabled, bot.DesiredEnabled)
@@ -126,7 +127,7 @@ public sealed class EfManagedPlayerbotStore(CharacterDbContext db) : IManagedPla
                 .SetProperty(row => row.QuestId, bot.QuestId)
                 .SetProperty(row => row.Revision, bot.Revision)
                 .SetProperty(row => row.UpdatedUnix, bot.UpdatedUnix)
-                .SetProperty(row => row.ErrorCode, bot.ErrorCode), cancellationToken).ConfigureAwait(false);
+                .SetProperty(row => row.ErrorCode, bot.ErrorCode), cancellationToken), cancellationToken).ConfigureAwait(false);
         return changed == 1;
     }
 
@@ -168,9 +169,9 @@ public sealed class EfManagedPlayerbotStore(CharacterDbContext db) : IManagedPla
     }
 
     public async Task<bool> DeleteAsync(Guid botId, int accountId, int characterId, CancellationToken cancellationToken = default)
-        => await db.Set<ManagedPlayerbotRow>()
+        => await CharacterWrites.InTransactionAsync(db, () => db.Set<ManagedPlayerbotRow>()
             .Where(row => row.BotId == botId && row.AccountId == accountId && row.CharacterId == characterId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false) == 1;
+            .ExecuteDeleteAsync(cancellationToken), cancellationToken).ConfigureAwait(false) == 1;
 
     private static ManagedPlayerbot ToRecord(ManagedPlayerbotRow row)
         => new(row.BotId, row.AccountId, row.CharacterId, row.AccountName, row.DesiredEnabled, row.State,

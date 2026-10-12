@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Social;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -170,6 +171,7 @@ public sealed class EfPetitionStore(CharacterDbContext db) : IPetitionStore
     private async Task PurgeAsync(int characterId, CancellationToken cancellationToken)
     {
         // Conditional on the id having no character row, per statement, like the social purge.
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // deletes only the rows of an id with no characters row: the deletion lifetime fence is token-independent
         List<int> owned = await db.Set<PetitionRow>()
             .Where(p => p.OwnerId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .Select(p => p.Id)
