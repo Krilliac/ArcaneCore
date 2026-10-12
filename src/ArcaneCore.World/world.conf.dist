@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       362 keys
+#   WORLD                       363 keys
 #
 ###############################################################################
 
@@ -11726,6 +11726,21 @@ World.Playerbots.ThinkIntervalMs = 500
 #----------------------------------------------------------------------------
 # World:Playerbots:Qa
 #----------------------------------------------------------------------------
+
+#
+#    World.Playerbots.Qa.AutoPruneHours
+#        Description: Hours after which a finding not seen again is forgotten on every pass, counted
+#                     from the later of its last sighting and the server start (so a restart prunes
+#                     nothing at once). A finding that holds a GitHub issue is never forgotten, and
+#                     GitHub is never touched. 0 (default) is off; the same as .playerbot qa prune
+#                     #hours (0..8760).
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.AutoPruneHours = 0
 
 #
 #    World.Playerbots.Qa.Directory

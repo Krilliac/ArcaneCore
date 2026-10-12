@@ -146,8 +146,32 @@ New stall and death-loop evidence samples include the bot's level, race, team, c
 
 `.playerbot qa` lists the top ten, `.playerbot qa top [n]` up to 25, `.playerbot qa show <id>` shows one finding (at least 4 hex
 characters of the id) with its samples and a `.go xyz` command to the place, and `.playerbot qa reset [<id>]` forgets findings
-locally (GitHub is never touched). Ranking is severity, then count, then last seen (newest first), then id, so equal findings always
+locally (GitHub is never touched), `.playerbot qa prune` forgets the stale ones. Ranking is severity, then count, then last seen (newest first), then id, so equal findings always
 list the same way. Every chat line is at most 220 characters and redacted.
+
+**Stale findings.** A finding last seen before this process started was not met by the running build, so it may already be fixed
+(the findings file keeps them across restarts). `.playerbot qa` and `.playerbot qa top [n]` first fold in the queued warnings, then hide
+the stale ones behind one hint line ("N stale findings (not seen since this server started) hidden"); `.playerbot qa top [n] all` lists
+them after every current one, marked `(stale)`. A stale finding whose issue is open (Published) is not hidden: it is listed in its place,
+marked `(stale)`. Every `top` line shows when the finding was last seen (`<1m ago`, `5m ago`, `2h ago`, `1d ago`). `report.md` lists the stale ones
+last under "Stale (not seen since <start>)" (one table row each, no evidence block) and has a "Last seen" column; `report.json` marks them `"Stale": true`.
+
+**Pruning.** `.playerbot qa prune [#hours] [closed] [dry]` forgets the findings not seen for `#hours` (default 12, 1..720); `dry` lists what
+would go (at most ten lines) and changes nothing. The reply gives the count by kind, how many remain, and how many old findings were kept.
+It is local only (GitHub is never touched) and takes effect on disk at the next save, like `reset`.
+
+- **A finding that holds a GitHub issue is never forgotten by age.** Its issue number is the only local memory of the issue: a marker lookup
+  cannot always find it again (an issue handed over by a merged finding, a death-loop variant, the `gh` transport without search).
+- **`closed`** also forgets findings whose issue is known closed (`KnownClosed`), whatever their age. It leaves a persisted tombstone (at most 1000,
+  oldest first) for the finding and for the ids merged into it, so a recurrence takes the closed issue number back and stays `KnownClosed`: no new issue,
+  no comment (unless `ReopenClosed` is on, which does that for any closed finding). A death loop's tombstone also keeps its attackers, so a different
+  loop that hashes to the same id never takes its issue.
+- A finding without an issue that recurs is created again with the same id; the publisher finds an existing issue by its marker as usual, and if that
+  lookup finds nothing, it files a new one like for any new finding.
+- Skipped: a finding the publisher is working on, a finding with a duplicate issue still to close, and the start-up spell-coverage findings (by age).
+
+`World:Playerbots:Qa:AutoPruneHours` (default 0, off) runs the same age prune (without `closed`) on every pass, counted from the later of a
+finding's last sighting and the server start, so a restart never prunes anything before the age has passed in this process. It logs the short ids it forgot.
 
 Every `ExportIntervalSeconds` (default 300) one pass saves `qa/findings.json`, writes `qa/report.md` and `qa/report.json` (ranked,
 redacted, no bot identity) and runs the publisher. `Directory` is relative to the profile folder or absolute. Writes are atomic (temp

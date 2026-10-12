@@ -42,7 +42,21 @@ internal interface IQaPublicationState
 internal sealed record QaAbsorbed(string Id, string Survivor, int Issue = 0, bool Handled = true, bool Commented = false);
 
 /// <summary>The aggregator's persisted state: the findings, per finding the salted hashes of the bots that met it, and the merged-away ids.</summary>
-internal sealed record QaAggregatorState(IReadOnlyList<QaFindingView> Findings, IReadOnlyDictionary<string, ulong[]> Bots, IReadOnlyList<QaAbsorbed>? Absorbed = null);
+internal sealed record QaAggregatorState(IReadOnlyList<QaFindingView> Findings, IReadOnlyDictionary<string, ulong[]> Bots, IReadOnlyList<QaAbsorbed>? Absorbed = null,
+    IReadOnlyList<QaTombstone>? Tombstones = null);
+
+/// <summary>
+/// What <see cref="PlayerbotQaAggregator.Prune"/> removed (or, for a dry run, would remove): how many (<see cref="Count"/>), by kind label, the first
+/// <see cref="PlayerbotQaAggregator.PruneListed"/> highest-ranked of them (bounded), how many findings are (or would be) left, and how many old ones were kept
+/// because they hold a GitHub issue.
+/// </summary>
+internal sealed record QaPruneResult(int Count, IReadOnlyList<KeyValuePair<string, int>> Kinds, IReadOnlyList<QaFindingView> Listed, int Remaining, bool Dry, int Kept);
+
+/// <summary>
+/// A finding that <c>prune closed</c> forgot, or a merge alias of one: the issue it stood for (closed). A new finding with this id takes the issue back
+/// as KnownClosed. A death loop also keeps its attackers and death source, so a different loop that now hashes to the same id is not given its issue.
+/// </summary>
+internal sealed record QaTombstone(string Id, QaSignalKind Kind, int Issue, uint[] Attackers, string DeathSource, DateTime PrunedUtc);
 
 /// <summary>
 /// Folds signals into findings. One lock guards everything (microseconds per signal); every read returns immutable views.
@@ -67,10 +81,17 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
     private const uint NoMap = uint.MaxValue;
 
+    /// <summary>The most findings <see cref="Prune"/> returns as views.</summary>
+    internal const int PruneListed = 10;
+
+    /// <summary>The most tombstones kept (the oldest go first).</summary>
+    internal const int TombstoneCap = 1000;
+
     private readonly object _gate = new();
     private readonly Dictionary<string, QaFinding> _byId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, QaAbsorbed> _absorbed = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _inFlight = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, QaTombstone> _tombs = new(StringComparer.Ordinal);
 
     // Lookup indexes over _byId (kept by Add/Remove): a signal looks at its group, its group base or the loops of its map, never at every finding.
     private readonly Dictionary<string, QaFinding> _stallByGroup = new(StringComparer.Ordinal);
@@ -127,12 +148,12 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
             if (finding is null)
             {
-                if (_byId.ContainsKey(id) || _absorbed.ContainsKey(id))
+                if (Taken(id, probe, out QaTombstone? tomb))
                 {
                     // The v1 key of this signal names a finding that is another death loop (other attackers): this loop gets a variant key of its own.
                     key = VariantKey(key, signal);
                     id = PlayerbotQaFingerprint.Hash(key);
-                    for (int n = 2; _byId.ContainsKey(id) || _absorbed.ContainsKey(id); n++)
+                    for (int n = 2; Taken(id, probe, out tomb); n++)
                     {
                         key = VariantKey(PlayerbotQaFingerprint.Key(signal), signal) + "|n=" + n.ToString(CultureInfo.InvariantCulture);
                         id = PlayerbotQaFingerprint.Hash(key);
@@ -153,6 +174,13 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 }
 
                 if (!signal.FromCoverage && signal.HasPosition) finding.Anchor = new QaAnchor(signal.Map, signal.X, signal.Y);
+                if (tomb is not null)
+                {
+                    // A finding forgotten by `prune closed` whose issue was closed: it takes the issue number back instead of looking the issue up again.
+                    finding.Publication = new QaPublication(QaPublicationState.KnownClosed, tomb.Issue);
+                    _tombs.Remove(tomb.Id);
+                }
+
                 Add(finding);
             }
 
@@ -232,6 +260,21 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             _snapshot = null;
             return finding.Id;
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="id"/> cannot be the id of a new finding: a finding or merge alias holds it, or a tombstone of a DIFFERENT death loop does
+    /// (the variant key is then used, so a loop never takes another loop's issue). A tombstone that fits the signal is returned for the new finding to claim.
+    /// Call under the lock.
+    /// </summary>
+    private bool Taken(string id, Probe? probe, out QaTombstone? tomb)
+    {
+        tomb = null;
+        if (_byId.ContainsKey(id) || _absorbed.ContainsKey(id)) return true;
+        if (!_tombs.TryGetValue(id, out QaTombstone? held)) return false;
+        if (held.Kind == QaSignalKind.DeathLoop && probe is { Kind: QaSignalKind.DeathLoop } loop && !SameLoop(held.Attackers, held.DeathSource, loop)) return true;
+        tomb = held;
+        return false;
     }
 
     /// <summary>What decides which finding a stall or death loop is: a signal's, or a finding's own (kept for it).</summary>
@@ -547,6 +590,77 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         }
     }
 
+    /// <summary>
+    /// Forget (or, with <paramref name="dry"/>, only list) the findings last seen more than <paramref name="age"/> before <paramref name="nowUtc"/> and, with
+    /// <paramref name="closed"/>, those whose GitHub issue is known closed whatever their age. A finding that holds an issue (Published, Failed, KnownClosed) is
+    /// NEVER forgotten by age: its issue number is the only local memory of the issue (a marker lookup cannot always find it again: an issue handed over by a
+    /// merged finding, a death-loop variant, a transport without search). Only <paramref name="closed"/> forgets a KnownClosed finding, and it leaves a bounded
+    /// <see cref="QaTombstone"/> for it and for its merge aliases, so a recurrence takes the issue number back and stays KnownClosed. A start-up coverage finding is not
+    /// pruned by age, a finding the publisher is working on and one with a duplicate issue still to close are skipped. <paramref name="floorUtc"/> (the automatic prune
+    /// passes the process start) is the earliest a finding can count as last seen, so nothing is forgotten before the age has passed in this process.
+    /// Local only. Pruned findings that recur are created anew (an issue-less one is found again by its marker).
+    /// </summary>
+    internal QaPruneResult Prune(DateTime nowUtc, TimeSpan age, bool closed, bool dry, DateTime? floorUtc = null)
+    {
+        DateTime cutoff = nowUtc - age;
+        lock (_gate)
+        {
+            int kept = 0;
+            var victims = new List<QaFinding>();
+            foreach (QaFinding f in _byId.Values)
+            {
+                if (IsProtected(f.Id)) continue;
+                DateTime seen = floorUtc is { } floor && floor > f.LastSeenUtc ? floor : f.LastSeenUtc;
+                bool close = closed && f.Publication.State == QaPublicationState.KnownClosed && !HasPendingDuplicate(f.Id);
+                bool old = !f.Coverage && seen < cutoff;
+                if (old && f.Publication.HoldsIssue && !close)
+                {
+                    kept++;
+                    continue;
+                }
+
+                if (old || close) victims.Add(f);
+            }
+
+            QaFinding[] listed = [.. victims.OrderByDescending(static f => f.Severity).ThenByDescending(static f => f.Count).ThenByDescending(static f => f.LastSeenUtc)
+                .ThenBy(static f => f.Id, StringComparer.Ordinal).Take(PruneListed)];
+            KeyValuePair<string, int>[] kinds = [.. victims.GroupBy(static f => QaFindingView.LabelOf(f.Kind))
+                .Select(static g => new KeyValuePair<string, int>(g.Key, g.Count()))
+                .OrderByDescending(static p => p.Value).ThenBy(static p => p.Key, StringComparer.Ordinal)];
+            var result = new QaPruneResult(victims.Count, kinds, [.. listed.Select(static f => f.ToView())], _byId.Count - victims.Count, dry, kept);
+            if (dry || victims.Count == 0) return result;
+            foreach (QaFinding f in victims)
+            {
+                if (f.Publication.HoldsIssue) Tombstone(f, nowUtc);
+                Remove(f);
+            }
+
+            while (_tombs.Count > TombstoneCap)
+            {
+                QaTombstone oldest = _tombs.Values.OrderBy(static t => t.PrunedUtc).ThenBy(static t => t.Id, StringComparer.Ordinal).First();
+                _tombs.Remove(oldest.Id);
+            }
+
+            PruneAbsorbed();
+            _snapshot = null;
+            return result;
+        }
+    }
+
+    /// <summary>Remember that <paramref name="f"/> and every id merged into it stood for issue <c>f.Publication.Issue</c>, closed. Call under the lock.</summary>
+    private void Tombstone(QaFinding f, DateTime nowUtc)
+    {
+        int issue = f.Publication.Issue;
+        uint[] attackers = [.. f.Attackers.Order()];
+        _tombs[f.Id] = new QaTombstone(f.Id, f.Kind, issue, attackers, f.DeathSource, nowUtc);
+        foreach (QaAbsorbed alias in _absorbed.Values.Where(a => a.Survivor == f.Id))
+        {
+            _tombs[alias.Id] = new QaTombstone(alias.Id, f.Kind, issue, attackers, f.DeathSource, nowUtc);
+        }
+    }
+
+    private bool HasPendingDuplicate(string id) => _absorbed.Values.Any(a => a.Survivor == id && a.Issue > 0 && !a.Handled);
+
     /// <summary>The state to persist.</summary>
     internal QaAggregatorState Export()
     {
@@ -554,7 +668,8 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         {
             return new QaAggregatorState([.. _byId.Values.Select(f => f.ToView())],
                 _byId.Values.Where(f => f.Bots.Count > 0).ToDictionary(f => f.Id, f => f.Bots.Order().ToArray(), StringComparer.Ordinal),
-                [.. _absorbed.Values.OrderBy(a => a.Id, StringComparer.Ordinal)]);
+                [.. _absorbed.Values.OrderBy(a => a.Id, StringComparer.Ordinal)],
+                [.. _tombs.Values.OrderBy(t => t.Id, StringComparer.Ordinal)]);
         }
     }
 
@@ -638,6 +753,12 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         {
             ClearFindings();
             _absorbed.Clear();
+            _tombs.Clear();
+            foreach (QaTombstone t in (state.Tombstones ?? []).Where(static t => t?.Id is { Length: PlayerbotQaFingerprint.FullChars } && t.Issue > 0 && Enum.IsDefined(t.Kind)).Take(TombstoneCap))
+            {
+                _tombs[t.Id] = t with { Attackers = [.. (t.Attackers ?? []).Take(QaFinding.MaxLoopAttackers)], DeathSource = t.DeathSource ?? string.Empty };
+            }
+
             foreach (QaAbsorbed a in state.Absorbed ?? [])
             {
                 if (a.Id is { Length: PlayerbotQaFingerprint.FullChars } && a.Survivor is { Length: PlayerbotQaFingerprint.FullChars } && a.Id != a.Survivor) _absorbed[a.Id] = a with { Issue = Math.Max(0, a.Issue) };

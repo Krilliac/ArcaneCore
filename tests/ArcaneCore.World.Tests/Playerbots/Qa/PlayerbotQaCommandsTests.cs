@@ -64,8 +64,9 @@ public sealed class PlayerbotQaCommandsTests : IDisposable
         });
     }
 
+    // Seen just now: a finding last seen before the server started is stale, and `top` hides it (PlayerbotQaPruneTests covers that).
     private static string Ingest(PlayerbotQaFeature feature, QaSignal signal)
-        => feature.Aggregator!.Ingest(signal, NoQaContentFacts.Instance, QaData.T0) ?? throw new InvalidOperationException("refused");
+        => feature.Aggregator!.Ingest(signal with { AtUtc = DateTime.UtcNow }, NoQaContentFacts.Instance, DateTime.UtcNow) ?? throw new InvalidOperationException("refused");
 
     [Fact]
     public async Task Qa_WhenDisabled_SaysItIsNotRunning()

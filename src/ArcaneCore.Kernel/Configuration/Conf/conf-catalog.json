@@ -14576,6 +14576,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Qa:AutoPruneHours",
+      "section": "World:Playerbots:Qa",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "0",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Hours after which a finding not seen again is forgotten on every pass, counted from the later of its last sighting and the server start (so a restart prunes nothing at once). A finding that holds a GitHub issue is never forgotten, and GitHub is never touched. 0 (default) is off; the same as `.playerbot qa prune #hours` (0..8760).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Qa:Directory",
       "section": "World:Playerbots:Qa",
       "type": "string",

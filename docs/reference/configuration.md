@@ -1350,6 +1350,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `World:Playerbots:Qa:AutoPruneHours` | `int` | `0` | - | Hours after which a finding not seen again is forgotten on every pass, counted from the later of its last sighting and the server start (so a restart prunes nothing at once). A finding that holds a GitHub issue is never forgotten, and GitHub is never touched. 0 (default) is off; the same as `.playerbot qa prune #hours` (0..8760). |
 | `World:Playerbots:Qa:Directory` | `string` | `"qa"` | - | The folder of the findings file, the exports (`report.md`, `report.json`) and the dry-run issues (`pending-issues/`): relative to the profile folder, or absolute. |
 | `World:Playerbots:Qa:Enabled` | `bool` | `true` | - | Aggregate the bot stall, death-loop, fault and missing-data warnings into findings (on by default; it is cheap and never touches the world thread). |
 | `World:Playerbots:Qa:ExportIntervalSeconds` | `int` | `300` | - | Seconds between two passes that save the findings, write the exports and publish (10..86400). |
