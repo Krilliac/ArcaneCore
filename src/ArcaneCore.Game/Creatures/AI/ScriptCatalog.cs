@@ -15,6 +15,9 @@ public enum ScriptKind
     /// <summary>A script AI the map's instance script gives the entry when it runs (<see cref="InstanceScriptedAis"/>: a <c>RegisterEntryAi</c> or a raid boss selection).</summary>
     InstanceScriptAi,
 
+    /// <summary>An open-world boss of <c>WorldBossScripts</c> (<c>RaidBossAI.Create</c>'s map-independent fallback).</summary>
+    WorldBossAi,
+
     /// <summary>A named AI registered with <see cref="CreatureAiFactory.Register"/> under the template's ScriptName.</summary>
     ScriptName,
 
@@ -63,7 +66,7 @@ public readonly record struct ScriptResolution(ScriptKind Kind, string Implement
 
 /// <summary>
 /// One runtime answer to "which AI does creature entry X get on map M". It mirrors the selection order of
-/// <c>CreatureMapSystem.CreateAi</c>: the map's own script AI (live registrations, then <see cref="DungeonBossAis"/>, then <see cref="InstanceScriptedAis"/>), the template's ScriptName
+/// <c>CreatureMapSystem.CreateAi</c>: the map's own script AI (live registrations, then <see cref="DungeonBossAis"/>, then <see cref="InstanceScriptedAis"/>, then <c>WorldBossScripts</c>), the template's ScriptName
 /// (named AI, then entry script, then a gossip/quest-only script), then the AIName, then the defaults. What an instance script (or a raid boss selection) gives an entry at run
 /// time is read from <see cref="InstanceScriptedAis"/>. Read-only; the registries are filled at start-up, so any thread may call it
 /// (a live <see cref="CreatureMapSystem"/> only from its map's thread).
@@ -95,6 +98,11 @@ public sealed class ScriptCatalog(CreatureAiFactory factory, CreatureContent con
         if (InstanceScriptedAis.Contains(mapId, entry))
         {
             return new ScriptResolution(ScriptKind.InstanceScriptAi, $"(instance script of map {mapId})", scriptName, true);
+        }
+
+        if (Array.IndexOf(Creatures.Scripts.WorldBosses.WorldBossScripts.Entries, entry) >= 0)
+        {
+            return new ScriptResolution(ScriptKind.WorldBossAi, "WorldBossScripts", scriptName, true);
         }
 
         if (scriptName.Length > 0 && factory.IsNamedAi(scriptName))

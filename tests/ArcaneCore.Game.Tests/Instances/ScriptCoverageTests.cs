@@ -6,6 +6,18 @@ using Xunit.Abstractions;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
+/// <summary>Skipped (reported as Skipped, not Passed) unless ARCANECORE_TEST_WORLD_DB names an existing world database.</summary>
+internal sealed class WorldFixtureFactAttribute : FactAttribute
+{
+    public WorldFixtureFactAttribute()
+    {
+        if (ScriptCoverageProbe.WorldDbPath() is null)
+        {
+            Skip = "ARCANECORE_TEST_WORLD_DB must name a world.db; the dungeon/raid script coverage did NOT run.";
+        }
+    }
+}
+
 /// <summary>
 /// The script coverage of the dungeons and raids of the real world fixture (ARCANECORE_TEST_WORLD_DB, opened read-only and immutable, never
 /// written). Every ScriptName a spawned creature of a dungeon (MapType 1) or raid (MapType 2) map carries must resolve through
@@ -30,15 +42,10 @@ public sealed class ScriptCoverageTests(ITestOutputHelper output)
         (533, 16137, "spell_anchor"), (533, 17286, "npc_invible_man"),
     ];
 
-    [Fact]
+    [WorldFixtureFact]
     public void EveryDungeonAndRaidScriptName_ResolvesOrIsListedMissing()
     {
-        if (ScriptCoverageProbe.WorldDbPath() is not { } path)
-        {
-            output.WriteLine("ARCANECORE_TEST_WORLD_DB is not set: the fixture coverage did NOT run.");
-            return;
-        }
-
+        string path = ScriptCoverageProbe.WorldDbPath()!;
         ScriptCoverageProbe.World world = ScriptCoverageProbe.Load(path);
         var catalog = new ScriptCatalog(new CreatureAiFactory(), world.Content);
         var all = new List<ScriptCoverageRow>();

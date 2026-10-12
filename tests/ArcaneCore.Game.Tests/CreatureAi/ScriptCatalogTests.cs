@@ -101,6 +101,18 @@ public sealed class ScriptCatalogTests
         Assert.Null(ArcaneCore.Game.Instances.Scripts.DungeonBossAis.Describe(map == 289 ? 329u : 289u, entry));
     }
 
+    [Theory]
+    [InlineData(6109u, "boss_azuregos", 1u, ScriptKind.WorldBossAi)]
+    [InlineData(12397u, "boss_kazzak", 0u, ScriptKind.WorldBossAi)]
+    [InlineData(11583u, "boss_nefarian", 469u, ScriptKind.InstanceScriptAi)]
+    [InlineData(15989u, "boss_sapphiron", 533u, ScriptKind.InstanceScriptAi)]
+    public void OpenWorldAndSummonedBosses_Resolve(uint entry, string script, uint map, ScriptKind kind)
+    {
+        ScriptResolution r = Resolve(T(entry, script), map);
+        Assert.Equal(kind, r.Kind);
+        Assert.True(r.ScriptNameResolved);
+    }
+
     [Fact]
     public void MapEntryAi_IsSeenThroughALiveMap()
     {

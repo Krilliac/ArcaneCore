@@ -68,7 +68,8 @@ internal static class ScriptCoverageProbe
     /// The entries (of <paramref name="entries"/>) that get a script AI when the instance script of <paramref name="mapId"/> runs: the instance is
     /// built in the dungeon test kit (which stands in for the map), each entry is spawned with a template that has no AIName and no ScriptName, and an
     /// entry counts when its creature's AI is not one of the plain default AIs. Behavioural: it sees <c>RegisterEntryAi</c> in any hook and the
-    /// raid boss selection. Empty when the map has no instance script.
+    /// raid boss selection. Empty when the map has no instance script. The kit's map is map 36, so this assumes no instance script branches on
+    /// <c>Map.MapId</c> when it registers an AI (none does today; a script that did would read as unscripted here and fail the proof loudly).
     /// </summary>
     public static HashSet<uint> ScriptedEntries(uint mapId, IReadOnlyCollection<uint> entries)
     {
