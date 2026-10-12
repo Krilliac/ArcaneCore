@@ -1,4 +1,6 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
@@ -70,7 +72,7 @@ public sealed class RateCommandTests
     {
         await using var host = WorldTestHost.Start();
         RateDefinition rate = ServerRates.Find(name)!;
-        float wanted = Math.Clamp(1.75f, rate.Min, rate.Max);
+        float wanted = name == "Rate.XP.Personal.Min" ? 0.5f : Math.Clamp(1.75f, rate.Min, rate.Max); // Min may not pass Max (1)
         (RateStatus before, RateStatus during, RateStatus after, RateSetResult result) = await host.OnWorldAsync(() =>
         {
             ServerRates rates = ServerRates.For(host.World);
@@ -303,25 +305,107 @@ public sealed class RateCommandTests
         Assert.Equal(3f, host.WorldServices.GetRequiredService<QuestNpcFeature>().Options.RateDropMoney); // one vmangos key scales both
     }
 
+    private static readonly CreatureTemplate Beast = new()
+    {
+        Entry = 91, Name = "Beast", Faction = 14, MinLevel = 1, MaxLevel = 1, MinLevelHealth = 100, MaxLevelHealth = 100,
+        MinMeleeDamage = 10, MaxMeleeDamage = 20, MinRangedDamage = 4, MaxRangedDamage = 8,
+    };
+
+    private static Creature SpawnBeast(WorldTestHost host, Player near)
+        => host.WorldServices.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(near.Map!).SpawnTemporary(Beast, near.X, near.Y, near.Z, 0);
+
     [Fact]
-    public async Task CreatureRates_ApplyToLiveDamage_AndToCreaturesSpawnedAfterwards()
+    public async Task CreatureDamageRate_IsPushedIntoLiveCreaturesMeleeAndRangedFields_HpOnlyForNewSpawns()
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
         await admin.CollectAsync();
-        CreatureStatRates rates = host.WorldServices.GetRequiredService<ArcaneCore.World.Creatures.CreatureWorldFeature>().Options.Rates;
-        var template = new CreatureTemplate { Entry = 91, Name = "Beast", Faction = 14, MinLevel = 1, MaxLevel = 1, MinLevelHealth = 100, MaxLevelHealth = 100 };
-        Creature Spawn(uint guid) => new(guid, template, new CreatureSpawn { Guid = guid, Entry = 91, MapId = 0, X = 0, Y = 0, Z = 83.5f }, CreatureContent.Empty, new Random(1), statRates: rates);
-        Creature existing = Spawn(900200);
+        Player player = await host.PlayerAsync("Admin");
+        Creature existing = await host.OnWorldAsync(() => SpawnBeast(host, player));
+        (float Min, float Max, float RMin, float RMax) Fields() => (existing.GetFloat(UpdateFields.UnitFieldMindamage), existing.GetFloat(UpdateFields.UnitFieldMaxdamage),
+            existing.GetFloat(UpdateFields.UnitFieldMinrangeddamage), existing.GetFloat(UpdateFields.UnitFieldMaxrangeddamage));
+        Assert.Equal((10f, 20f, 4f, 8f), await host.OnWorldAsync(Fields));
 
         await SayAsync(admin, ".rates set creature.normal.damage 2.5");
         await admin.ReadChatAsync();
         await SayAsync(admin, ".rates set creature.normal.hp 3");
         Assert.Contains("Applies to creatures created or respawned afterwards", (await admin.ReadChatAsync()).Text);
 
-        Assert.Equal(2.5f, existing.DamageRate);
-        Assert.Equal(100u, existing.MaxHealth);
-        Assert.Equal(300u, Spawn(900201).MaxHealth);
+        Assert.Equal((25f, 50f, 10f, 20f), await host.OnWorldAsync(Fields));
+        Assert.Equal(100u, await host.OnWorldAsync(() => existing.MaxHealth));
+        Creature fresh = await host.OnWorldAsync(() => SpawnBeast(host, player));
+        Assert.Equal(300u, await host.OnWorldAsync(() => fresh.MaxHealth));
+        Assert.Equal(25f, await host.OnWorldAsync(() => fresh.GetFloat(UpdateFields.UnitFieldMindamage)));
+
+        await SayAsync(admin, ".rates reset all");
+        await admin.ReadChatAsync();
+        Assert.Equal((10f, 20f, 4f, 8f), await host.OnWorldAsync(Fields));
+    }
+
+    [Fact]
+    public async Task ReloadConfig_RollbackPutsTheOverridesBack()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        ProgressionOptions options = host.WorldServices.GetRequiredService<ProgressionFeature>().Progression.Options;
+        await SayAsync(admin, ".rates set xp 6");
+        await admin.ReadChatAsync();
+        ArcaneCore.Game.Reload.ContentCandidate candidate = await new ArcaneCore.World.Reload.ConfigContentReloadable(host.WorldServices).BuildAsync(CancellationToken.None);
+
+        (float committed, int overridesAfterCommit, float rolledBack, int overridesAfterRollback, IReadOnlyList<Exception> failures) = await host.OnWorldAsync(() =>
+        {
+            var transaction = new ArcaneCore.Game.Reload.ReloadTransaction();
+            candidate.Commit(host.World, transaction);
+            float c = options.RateXpKill;
+            int o = ServerRates.For(host.World).OverrideCount;
+            // A step after the rate step fails in the real reload; the transaction then undoes everything newest first.
+            IReadOnlyList<Exception> errors = transaction.Rollback();
+            return (c, o, options.RateXpKill, ServerRates.For(host.World).OverrideCount, errors);
+        });
+
+        Assert.Equal(1f, committed);
+        Assert.Equal(0, overridesAfterCommit);
+        Assert.Equal(6f, rolledBack);
+        Assert.Equal(1, overridesAfterRollback);
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public async Task ResetRestoresATargetStoredAsDouble_Exactly()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        var talents = host.WorldServices.GetRequiredService<ArcaneCore.World.Talents.TalentFeature>().Options;
+        await host.OnWorldAsync(() => talents.PointsRate = 1.1);
+
+        await SayAsync(admin, ".rates set talent 2");
+        await admin.ReadChatAsync();
+        await SayAsync(admin, ".rates reset talent");
+        await admin.ReadChatAsync();
+
+        Assert.Equal(1.1, await host.OnWorldAsync(() => talents.PointsRate));
+    }
+
+    [Fact]
+    public async Task PersonalMin_AndMax_CannotCross()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        ProgressionOptions options = host.WorldServices.GetRequiredService<ProgressionFeature>().Progression.Options;
+
+        await SayAsync(admin, ".rates set Rate.XP.Personal.Min 2");
+        Assert.Contains("would be above Rate.XP.Personal.Max 1", (await admin.ReadChatAsync()).Text);
+        await SayAsync(admin, ".rates set Rate.XP.Personal.Max 0.5");
+        Assert.Contains("would be below Rate.XP.Personal.Min 1", (await admin.ReadChatAsync()).Text);
+        Assert.Equal((1f, 1f), await host.OnWorldAsync(() => (options.RateXpPersonalMin, options.RateXpPersonalMax)));
+
+        await SayAsync(admin, ".rates set Rate.XP.Personal.Max 4");
+        await admin.ReadChatAsync();
+        await SayAsync(admin, ".rates set Rate.XP.Personal.Min 3");
+        Assert.StartsWith("Rate Rate.XP.Personal.Min: 1 -> 3", (await admin.ReadChatAsync()).Text);
     }
 
     [Fact]

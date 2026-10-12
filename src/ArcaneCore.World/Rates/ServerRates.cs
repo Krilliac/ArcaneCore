@@ -28,7 +28,24 @@ public readonly record struct RateChange(RateDefinition Rate, float Old, float N
 public readonly record struct RateScope(IServiceProvider Services, WorldRuntime World, ILogger Logger);
 
 /// <summary>One option object (or one property of it) a rate reads and writes. Both delegates run on the world thread.</summary>
-public readonly record struct RateTarget(Func<float> Get, Action<float> Set);
+/// <remarks>
+/// <paramref name="Snapshot"/> captures the value in its native type and returns the action that puts it back exactly (null: the float read through
+/// <paramref name="Get"/> is restored), so a target stored as a double does not lose precision on reset.
+/// </remarks>
+public readonly record struct RateTarget(Func<float> Get, Action<float> Set, Func<Action>? Snapshot = null)
+{
+    internal Action Capture()
+    {
+        if (Snapshot is { } snapshot)
+        {
+            return snapshot();
+        }
+
+        float value = Get();
+        Action<float> set = Set;
+        return () => set(value);
+    }
+}
 
 /// <summary>
 /// One live-tunable rate: its vmangos configuration name (<c>Rate.XP.Kill</c>), short aliases, the allowed range and how to reach the
@@ -36,7 +53,8 @@ public readonly record struct RateTarget(Func<float> Get, Action<float> Set);
 /// features running now; it returns no target when the owning feature is not running.
 /// </summary>
 public sealed class RateDefinition(
-    string name, string description, float min, float max, Func<RateScope, IReadOnlyList<RateTarget>> resolve, string appliesTo, string[] aliases)
+    string name, string description, float min, float max, Func<RateScope, IReadOnlyList<RateTarget>> resolve, string appliesTo, string[] aliases,
+    Action<RateScope>? applied = null, Func<RateScope, float, string?>? crossCheck = null)
 {
     /// <summary>The vmangos name, e.g. <c>Rate.XP.Kill</c>.</summary>
     public string Name { get; } = name;
@@ -57,6 +75,12 @@ public sealed class RateDefinition(
     public IReadOnlyList<string> Aliases { get; } = aliases;
 
     internal Func<RateScope, IReadOnlyList<RateTarget>> Resolve { get; } = resolve;
+
+    /// <summary>Runs after every change of the rate (set, reset, reload, rollback) once the targets hold the new value: pushes it into state the option object does not own.</summary>
+    internal Action<RateScope>? Applied { get; } = applied;
+
+    /// <summary>A check against other rates (null: fine), run by <see cref="ServerRates.TrySet"/> after the range check.</summary>
+    internal Func<RateScope, float, string?>? CrossCheck { get; } = crossCheck;
 
     /// <summary>Null when <paramref name="value"/> is acceptable, else the reason it is not.</summary>
     public string? Validate(float value)
@@ -101,7 +125,9 @@ public sealed class ServerRates
 {
     private static readonly ConditionalWeakTable<WorldRuntime, ServerRates> s_perWorld = new();
 
-    private readonly Dictionary<RateDefinition, float[]> _baselines = [];
+    private readonly Dictionary<RateDefinition, Override> _baselines = [];
+
+    private sealed record Override(float Display, Action[] Restores);
 
     /// <summary>Raised after every change (set, reset, reload) with the old and new value. A handler that throws is logged and skipped.</summary>
     public event Action<RateChange>? RateChanged;
@@ -155,8 +181,8 @@ public sealed class ServerRates
         }
 
         float current = targets[0].Get();
-        return _baselines.TryGetValue(rate, out float[]? baselines)
-            ? new RateStatus(rate, true, current, baselines[0], true)
+        return _baselines.TryGetValue(rate, out Override? saved)
+            ? new RateStatus(rate, true, current, saved.Display, true)
             : new RateStatus(rate, true, current, current, false);
     }
 
@@ -181,10 +207,16 @@ public sealed class ServerRates
             return RateSetResult.NotRunning;
         }
 
+        error = rate.CrossCheck?.Invoke(scope, value);
+        if (error is not null)
+        {
+            return RateSetResult.Invalid;
+        }
+
         float old = targets[0].Get();
         if (!_baselines.ContainsKey(rate))
         {
-            _baselines[rate] = [.. targets.Select(t => t.Get())];
+            _baselines[rate] = new Override(old, [.. targets.Select(t => t.Capture())]);
         }
 
         foreach (RateTarget target in targets)
@@ -192,6 +224,7 @@ public sealed class ServerRates
             target.Set(value);
         }
 
+        rate.Applied?.Invoke(scope);
         Publish(scope, new RateChange(rate, old, value, RateChangeKind.Set, actor, reason));
         return RateSetResult.Ok;
     }
@@ -201,24 +234,27 @@ public sealed class ServerRates
     {
         ArgumentNullException.ThrowIfNull(rate);
         ArgumentNullException.ThrowIfNull(actor);
-        if (!_baselines.Remove(rate, out float[]? baselines))
+        if (!_baselines.TryGetValue(rate, out Override? saved))
         {
             return false;
         }
 
+        // Resolve first: if the feature is gone the saved value is kept rather than dropped unapplied.
         IReadOnlyList<RateTarget> targets = rate.Resolve(scope);
         if (targets.Count == 0)
         {
             return false;
         }
 
+        _baselines.Remove(rate);
         float old = targets[0].Get();
-        for (int i = 0; i < targets.Count && i < baselines.Length; i++)
+        foreach (Action restore in saved.Restores)
         {
-            targets[i].Set(baselines[i]);
+            restore();
         }
 
-        Publish(scope, new RateChange(rate, old, baselines[0], kind, actor, null));
+        rate.Applied?.Invoke(scope);
+        Publish(scope, new RateChange(rate, old, saved.Display, kind, actor, null));
         return true;
     }
 

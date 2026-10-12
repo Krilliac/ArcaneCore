@@ -11,6 +11,8 @@ using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Economy;
+using ArcaneCore.Game.Stats;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Honor;
 using ArcaneCore.World.Npc;
@@ -41,9 +43,30 @@ public static class RateCatalog
     /// <summary>Every live-tunable rate, in display order.</summary>
     public static IReadOnlyList<RateDefinition> All { get; } = Build();
 
-    private static Func<RateScope, IReadOnlyList<RateTarget>> On<T>(Func<RateScope, T?> find, Func<T, float> get, Action<T, float> set)
+    private static Func<RateScope, IReadOnlyList<RateTarget>> On<T>(Func<RateScope, T?> find, Func<T, float> get, Action<T, float> set, Func<T, Action>? snapshot = null)
         where T : class
-        => scope => find(scope) is { } owner ? [new RateTarget(() => get(owner), v => set(owner, v))] : None;
+        => scope => find(scope) is { } owner
+            ? [new RateTarget(() => get(owner), v => set(owner, v), snapshot is null ? null : () => snapshot(owner))]
+            : None;
+
+    // A creature's weapon damage fields hold the rate from spawn; a changed Rate.Creature.*.Damage is pushed into every live creature through
+    // the same recalculation the damage auras use (melee, composing with the active auras) plus the ranged pair.
+    private static void RefreshCreatureDamage(RateScope scope)
+    {
+        if (scope.Services.GetService<CreatureWorldFeature>() is not { } creatures || scope.Services.GetService<SpellFeature>() is not { } spells)
+        {
+            return;
+        }
+
+        foreach (CreatureMapSystem system in creatures.Systems)
+        {
+            foreach (Creature creature in system.Creatures)
+            {
+                CreatureDamageStats.UpdateMelee(creature, spells.System);
+                CreatureDamageStats.UpdateRanged(creature);
+            }
+        }
+    }
 
     private static Func<RateScope, IReadOnlyList<RateTarget>> Both(Func<RateScope, IReadOnlyList<RateTarget>> first, Func<RateScope, IReadOnlyList<RateTarget>> second)
         => scope =>
@@ -55,8 +78,8 @@ public static class RateCatalog
 
     private static RateDefinition Rate(
         string name, string description, Func<RateScope, IReadOnlyList<RateTarget>> resolve, float min = 0f, float max = DefaultMax, string appliesTo = Live,
-        params string[] aliases)
-        => new(name, description, min, max, resolve, appliesTo, aliases);
+        Action<RateScope>? applied = null, Func<RateScope, float, string?>? crossCheck = null, params string[] aliases)
+        => new(name, description, min, max, resolve, appliesTo, aliases, applied, crossCheck);
 
     private static ProgressionOptions? Progression(RateScope s) => s.Services.GetService<ProgressionFeature>()?.Progression.Options;
 
@@ -90,8 +113,10 @@ public static class RateCatalog
             Rate("Rate.XP.Kill.Elite", "kill experience of an elite creature", On(Progression, o => o.RateXpKillElite, (o, v) => o.RateXpKillElite = v), aliases: ["xp.elite"]),
             Rate("Rate.XP.Quest", "quest experience", On(Quests, o => o.RateXpQuest, (o, v) => o.RateXpQuest = v)),
             Rate("Rate.XP.Explore", "exploration experience", On(s => WorldStateHooks.For(s.World).ExplorationSettings, o => o.RateXp, (o, v) => o.RateXp = v)),
-            Rate("Rate.XP.Personal.Min", "lowest rate .modify xprate accepts", On(Progression, o => o.RateXpPersonalMin, (o, v) => o.RateXpPersonalMin = v)),
-            Rate("Rate.XP.Personal.Max", "highest rate a player below GameMaster may set with .modify xprate", On(Progression, o => o.RateXpPersonalMax, (o, v) => o.RateXpPersonalMax = v)),
+            Rate("Rate.XP.Personal.Min", "lowest rate .modify xprate accepts", On(Progression, o => o.RateXpPersonalMin, (o, v) => o.RateXpPersonalMin = v),
+                crossCheck: (s, v) => Progression(s) is { } o && v > o.RateXpPersonalMax ? $"Rate.XP.Personal.Min {ServerRates.Show(v)} would be above Rate.XP.Personal.Max {ServerRates.Show(o.RateXpPersonalMax)}" : null),
+            Rate("Rate.XP.Personal.Max", "highest rate a player below GameMaster may set with .modify xprate", On(Progression, o => o.RateXpPersonalMax, (o, v) => o.RateXpPersonalMax = v),
+                crossCheck: (s, v) => Progression(s) is { } o && v < o.RateXpPersonalMin ? $"Rate.XP.Personal.Max {ServerRates.Show(v)} would be below Rate.XP.Personal.Min {ServerRates.Show(o.RateXpPersonalMin)}" : null),
 
             // Rested experience.
             Rate("Rate.Rest.InGame", "rested pool growth while online", On(Rest, o => o.RateInGame, (o, v) => o.RateInGame = v), aliases: ["rest"]),
@@ -102,7 +127,11 @@ public static class RateCatalog
             Rate("Rate.Reputation.Gain", "every reputation change", On(Reputation, o => o.Gain, (o, v) => o.Gain = v), aliases: ["rep", "reputation"]),
             Rate("Rate.Reputation.LowLevel.Kill", "reputation from gray kills", On(Reputation, o => o.LowLevelKill, (o, v) => o.LowLevelKill = v), aliases: ["rep.lowlevel"]),
             Rate("Rate.Honor", "honor earned from kills, battleground bonuses and quests", On(Honor, o => o.Rate, (o, v) => o.Rate = v), aliases: ["honor"]),
-            Rate("Rate.Talent", "talent points per level", On(s => s.Services.GetService<TalentFeature>()?.Options, o => (float)o.PointsRate, (o, v) => o.PointsRate = v), aliases: ["talent"]),
+            Rate("Rate.Talent", "talent points per level", On(s => s.Services.GetService<TalentFeature>()?.Options, o => (float)o.PointsRate, (o, v) => o.PointsRate = v, o =>
+            {
+                double exact = o.PointsRate;
+                return () => o.PointsRate = exact;
+            }), aliases: ["talent"]),
 
             // Power and health regeneration, fall damage.
             Rate("Rate.Health", "spirit health regeneration", On(Combat, o => o.RateHealth, (o, v) => o.RateHealth = v), aliases: ["health", "regen.health"]),
@@ -154,7 +183,7 @@ public static class RateCatalog
         foreach (var r in ranks)
         {
             yield return Rate($"Rate.Creature.{r.Rank}.HP", $"spawn health of {r.Label} creatures", On(Creatures, r.Hp, r.SetHp), min: 0.01f, appliesTo: NewSpawns);
-            yield return Rate($"Rate.Creature.{r.Rank}.Damage", $"melee and ranged weapon damage of {r.Label} creatures", On(Creatures, r.Damage, r.SetDamage));
+            yield return Rate($"Rate.Creature.{r.Rank}.Damage", $"melee and ranged weapon damage of {r.Label} creatures", On(Creatures, r.Damage, r.SetDamage), applied: RefreshCreatureDamage);
             yield return Rate($"Rate.Creature.{r.Rank}.SpellDamage", $"damage spells of {r.Label} creatures", On(Creatures, r.Spell, r.SetSpell));
         }
     }
