@@ -41,8 +41,31 @@ public sealed class HandlerFaultDispatchTests
         }
     }
 
+    /// <summary>A query opcode on the containment allowlist (WorldSession.IsContainableWorldOpcode).</summary>
+    private const WorldOpcode ContainedOpcode = WorldOpcode.CmsgNameQuery;
+
+    private static readonly byte[] InternalErrorNotification = [.. Encoding.ASCII.GetBytes("Internal error"), 0];
+
     [Fact]
-    public async Task AThrowingCastHandler_SendsCastFailedInternalError_AndTheSessionGoesOn()
+    public async Task AThrowingAllowlistedQueryHandler_SendsTheInternalError_AndTheSessionGoesOn()
+    {
+        await using var host = WorldTestHost.Start();
+        Swap(host, t => t.OnWorld(ContainedOpcode, (_, _, _) => ThrowBug()), ContainedOpcode);
+        await using WorldTestClient client = await host.EnterWorldAsync("QUERYBUG", "Querybug");
+
+        await client.SendAsync(ContainedOpcode, new byte[8]);
+        byte[] notification = await client.ReadUntilAsync(WorldOpcode.SmsgNotification);
+        Assert.Equal(InternalErrorNotification, notification);
+        AssertNoMarker([(WorldOpcode.SmsgNotification, notification)]);
+
+        // Contained: the session still answers on the world thread, and the same opcode is handled again.
+        await client.SendAsync(ContainedOpcode, new byte[8]);
+        Assert.Equal(InternalErrorNotification, await client.ReadUntilAsync(WorldOpcode.SmsgNotification));
+        await host.OnWorldAsync(() => { });
+    }
+
+    [Fact]
+    public async Task AThrowingCastHandler_SendsCastFailedInternalError_ThenDisconnects()
     {
         await using var host = WorldTestHost.Start();
         Swap(host, t => t.OnWorld(WorldOpcode.CmsgCastSpell, (_, _, _) => ThrowBug()), WorldOpcode.CmsgCastSpell);
@@ -55,13 +78,12 @@ public sealed class HandlerFaultDispatchTests
         Assert.Equal(new byte[] { 0x10, 0x4A, 0x00, 0x00, 0x02, 0x1C }, result);
         AssertNoMarker([(WorldOpcode.SmsgCastResult, result)]);
 
-        // Contained: the session still answers on the world thread.
-        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(133));
-        Assert.Equal(new byte[] { 0x85, 0x00, 0x00, 0x00, 0x02, 0x1C }, await client.ReadUntilAsync(WorldOpcode.SmsgCastResult));
+        // A spell is state-changing: not on the allowlist, so the session is dropped after the reply.
+        Assert.True(await client.IsClosedByServerAsync(), "a non-allowlisted handler fault disconnects");
     }
 
     [Fact]
-    public async Task AThrowingItemMoveHandler_SendsInventoryChangeFailureInternalBagError()
+    public async Task AThrowingItemMoveHandler_SendsInventoryChangeFailureInternalBagError_ThenDisconnects()
     {
         await using var host = WorldTestHost.Start();
         Swap(host, t => t.OnWorld(WorldOpcode.CmsgSwapInvItem, (_, _, _) => ThrowBug()), WorldOpcode.CmsgSwapInvItem);
@@ -73,27 +95,67 @@ public sealed class HandlerFaultDispatchTests
         Assert.Equal(1 + 8 + 8 + 1, failure.Length);
         Assert.Equal(40, failure[0]); // EQUIP_ERR_INT_BAG_ERROR -> ERR_INTERNAL_BAG_ERROR
         AssertNoMarker([(WorldOpcode.SmsgInventoryChangeFailure, failure)]);
+        Assert.True(await client.IsClosedByServerAsync(), "a non-allowlisted handler fault disconnects");
+    }
+
+    /// <summary>
+    /// Economy handlers mutate before they can throw (loot money credits before it clears the bag, a split decrements
+    /// before it stores): absorbing the fault would make the exception a repeatable duplication loop. They disconnect.
+    /// </summary>
+    [Theory]
+    [InlineData(WorldOpcode.CmsgLootMoney)]
+    [InlineData(WorldOpcode.CmsgSplitItem)]
+    public async Task AThrowingEconomyHandler_StillDisconnects(WorldOpcode opcode)
+    {
+        await using var host = WorldTestHost.Start();
+        Swap(host, t => t.OnWorld(opcode, (_, _, _) => ThrowBug()), opcode);
+        await using WorldTestClient client = await host.EnterWorldAsync("ECONBUG", "Econbug");
+
+        await client.SendAsync(opcode, new byte[8]);
+        Assert.True(await client.IsClosedByServerAsync(), $"{opcode} throwing must disconnect, not be contained");
+    }
+
+    [Fact]
+    public void TheAllowlist_ExcludesEconomyMovementAndMail_AndIncludesQueries()
+    {
+        Assert.True(WorldSession.IsContainableWorldOpcode(WorldOpcode.CmsgNameQuery));
+        Assert.True(WorldSession.IsContainableWorldOpcode(WorldOpcode.CmsgMessagechat));
+        Assert.True(WorldSession.IsContainableWorldOpcode(WorldOpcode.CmsgSetSelection));
+        foreach (WorldOpcode opcode in new[]
+        {
+            WorldOpcode.CmsgLootMoney, WorldOpcode.CmsgSplitItem, WorldOpcode.CmsgSendMail, WorldOpcode.CmsgMailTakeItem,
+            WorldOpcode.CmsgMailTakeMoney, WorldOpcode.CmsgCastSpell, WorldOpcode.CmsgBuyItem, WorldOpcode.CmsgSellItem,
+            WorldOpcode.MsgMoveHeartbeat, WorldOpcode.MsgMoveStartForward,
+        })
+        {
+            Assert.False(WorldSession.IsContainableWorldOpcode(opcode), $"{opcode} must not be contained");
+        }
     }
 
     [Fact]
     public async Task RepeatedFaults_AreRateLimited_AndAStormDisconnects()
     {
         await using var host = WorldTestHost.Start();
-        Swap(host, t => t.OnWorld(WorldOpcode.CmsgCastSpell, (_, _, _) => ThrowBug()), WorldOpcode.CmsgCastSpell);
+        Swap(host, t => t.OnWorld(ContainedOpcode, (_, _, _) => ThrowBug()), ContainedOpcode);
         await using WorldTestClient client = await host.EnterWorldAsync("STORMBUG", "Stormbug");
 
-        // Faults 1..4: contained; only the first ClientError.Burst are told to the client.
+        // Faults 1..4: contained; only the first ClientError.Burst are told to the client. Wait for each told reply
+        // (no fixed collection window), which also proves the session is still handling packets.
         for (int i = 0; i < WorldSession.HandlerFaultStorm - 1; i++)
         {
-            await client.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(18960));
+            await client.SendAsync(ContainedOpcode, new byte[8]);
+            if (i < Game.ClientErrors.ClientError.Burst)
+            {
+                byte[] told = await client.ReadUntilAsync(WorldOpcode.SmsgNotification);
+                AssertNoMarker([(WorldOpcode.SmsgNotification, told)]);
+            }
         }
 
-        List<(WorldOpcode Opcode, byte[] Payload)> received = await client.CollectFromAsync(WorldOpcode.SmsgCastResult, TimeSpan.FromSeconds(1));
-        Assert.Equal(Game.ClientErrors.ClientError.Burst, received.Count(p => p.Opcode == WorldOpcode.SmsgCastResult));
-        AssertNoMarker(received);
+        // The world thread has handled all four faults (it processes the session queue in order) and is alive.
+        await host.OnWorldAsync(() => { });
 
         // Fault 5 within the window: the session is treated as broken and dropped.
-        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(18960));
+        await client.SendAsync(ContainedOpcode, new byte[8]);
         Assert.True(await client.IsClosedByServerAsync(), "the fifth handler fault within the window disconnects");
         await host.OnWorldAsync(() => { }); // the world thread is alive
     }

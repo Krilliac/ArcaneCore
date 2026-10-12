@@ -378,11 +378,12 @@ public sealed partial class WorldSession : IPlayerSession
                 Kick();
                 return;
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+            catch (Exception ex) when (ex is not (OutOfMemoryException or ArcaneCore.Kernel.Diagnostics.InvariantViolationException))
             {
-                // A server bug in a handler: the player is told in the client's own words, the fault is logged with
-                // its exception and recorded, and the session goes on unless it is closing or faulting in a storm
-                // (WorldSession.HandlerFaults.cs, docs/areas/client-errors.md).
+                // A server bug in a handler: the player is told in the client's own words and the fault is logged with
+                // its exception and recorded. Only allowlisted read-only opcodes then go on (unless closing or in a
+                // storm); every other opcode disconnects after the reply (WorldSession.HandlerFaults.cs,
+                // docs/areas/client-errors.md). InvariantViolationException (the Debug stop signal) is not absorbed.
                 if (!ContainWorldHandlerFault(packet.Handler.Opcode, packet.Payload, player, ex))
                 {
                     return;
@@ -571,10 +572,11 @@ public sealed partial class WorldSession : IPlayerSession
 
     /// <summary>
     /// Only the controlled outcome the readers raise deliberately (<see cref="MalformedPacket"/>) is
-    /// a client fault. Anything else a handler throws (an <see cref="IndexOutOfRangeException"/> from
-    /// its own tables, a null, a cast) is a server bug: it is not caught here, so it reaches the
-    /// Error log with its stack trace (<c>WorldServer</c> "session error" on the session task,
-    /// <c>Map</c> "packet handling failed" on the world thread), and the connection is closed there.
+    /// a client fault, and it always disconnects. Anything else a handler throws (an
+    /// <see cref="IndexOutOfRangeException"/> from its own tables, a null, a cast) is a server bug: the
+    /// player is sent the matching ClientError and the fault is logged with its stack trace and recorded.
+    /// Whether the session then goes on depends on the opcode: only the allowlisted read-only ones are
+    /// contained (<see cref="IsContainableWorldOpcode"/>); all others, and a fault storm, close the connection.
     /// </summary>
     private static bool IsMalformed(Exception exception) => MalformedPacket.Is(exception);
 
@@ -682,12 +684,12 @@ public sealed partial class WorldSession : IPlayerSession
             _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
             return false;
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException && IsContainedSessionFault(opcode))
+        catch (Exception ex) when (ex is not (OutOfMemoryException or ArcaneCore.Kernel.Diagnostics.InvariantViolationException) && IsContainedSessionFault(opcode))
         {
             // Character create, delete or login threw at the character screen: answer with its failure code
-            // (WorldSession.HandlerFaults.cs). Any other session-handler fault still leaves the session.
-            ContainSessionHandlerFault(opcode, ex);
-            return true;
+            // (WorldSession.HandlerFaults.cs), counted against the storm limit. Any other session-handler fault
+            // still leaves the session.
+            return ContainSessionHandlerFault(opcode, ex);
         }
     }
 

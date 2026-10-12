@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game;
 using ArcaneCore.Game.ClientErrors;
+using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
@@ -13,11 +14,16 @@ namespace ArcaneCore.World.Net;
 /// <see cref="ClientError"/>, in the words the client uses for the action that failed (docs/areas/client-errors.md).
 /// The cause is logged and goes into the fault ledger; the packet never carries it.
 /// <para>
-/// World handlers: the fault is contained and the next queued packet is handled. A run of faults is treated as a broken
-/// session: the <see cref="HandlerFaultStorm"/>-th fault inside <see cref="HandlerFaultStormWindowMs"/> disconnects, as
-/// every handler fault did before. Session (character screen) handlers: only CMSG_CHAR_CREATE, CMSG_CHAR_DELETE and
-/// CMSG_PLAYER_LOGIN are contained, and only while the session is still at the character screen. They answer with the
-/// matching failure code, which the client is waiting for. Any other session-handler fault still leaves the session.
+/// World handlers: containment is an ALLOWLIST (<see cref="IsContainableWorldOpcode"/>). Only opcodes known to be
+/// read-only or idempotent are contained: the player is told and the next queued packet is handled. A handler that
+/// mutates state before it can throw (loot money credits before it clears the bag, a split-stack decrements before it
+/// stores) would turn a repeatable exception into a duplication loop if it were absorbed, so every opcode NOT on the
+/// list sends its ClientError (the player sees the message) and then disconnects, as every handler fault did before. New
+/// handlers therefore default to disconnect. Among the contained opcodes a run of faults is still treated as a broken
+/// session: the <see cref="HandlerFaultStorm"/>-th fault inside <see cref="HandlerFaultStormWindowMs"/> disconnects.
+/// Session (character screen) handlers: only CMSG_CHAR_CREATE, CMSG_CHAR_DELETE and CMSG_PLAYER_LOGIN are contained,
+/// and only while the session is still at the character screen. They answer with the matching failure code, which the
+/// client is waiting for, and count against the same storm limit. Any other session-handler fault still leaves the session.
 /// </para>
 /// </summary>
 public sealed partial class WorldSession
@@ -32,7 +38,8 @@ public sealed partial class WorldSession
 
     /// <summary>
     /// World thread: a world handler threw. Tells the client, records the fault, and returns true to keep handling this
-    /// session's packets, or false when the session is being dropped (already closing, or a fault storm).
+    /// session's packets, or false when the session is being dropped (already closing, an opcode that is not on the
+    /// containment allowlist, or a fault storm).
     /// </summary>
     private bool ContainWorldHandlerFault(WorldOpcode opcode, byte[] payload, Player player, Exception exception)
     {
@@ -45,6 +52,16 @@ public sealed partial class WorldSession
         }
 
         ClientError.Internal(this, ContextForWorldPacket(opcode, payload), cause, _logger, exception);
+        if (!IsContainableWorldOpcode(opcode))
+        {
+            // State-changing (or unreviewed) handler: it may have half-applied its effect, and absorbing the fault
+            // would let the client repeat it. The player has been told; now the session goes.
+            _logger.LogError("[{Endpoint}] {Opcode} handler fault is not containable; disconnecting '{Player}'",
+                RemoteEndpoint, WorldOpcodeNames.GetName(opcode), player.Name);
+            Kick();
+            return false;
+        }
+
         if (!_handlerFaults.TryAcquire(Environment.TickCount64))
         {
             _logger.LogError("[{Endpoint}] {Count} handler faults within {Seconds} s; disconnecting '{Player}'",
@@ -60,12 +77,54 @@ public sealed partial class WorldSession
     private bool IsContainedSessionFault(WorldOpcode opcode)
         => _state == SessionState.CharacterSelect && !_kick.IsCancellationRequested && ContextForSessionPacket(opcode) is not null;
 
-    /// <summary>Session task: answer a contained character-screen fault with its failure code.</summary>
-    private void ContainSessionHandlerFault(WorldOpcode opcode, Exception exception)
+    /// <summary>
+    /// Session task: answer a contained character-screen fault with its failure code. Returns false when the faults
+    /// form a storm and the session was kicked.
+    /// </summary>
+    private bool ContainSessionHandlerFault(WorldOpcode opcode, Exception exception)
     {
         ClientErrorContext context = ContextForSessionPacket(opcode)!.Value;
         ClientError.Internal(this, context, $"{WorldOpcodeNames.GetName(opcode)} handler threw for account '{AccountName}'", _logger, exception);
+        if (!_handlerFaults.TryAcquire(Environment.TickCount64))
+        {
+            _logger.LogError("[{Endpoint}] {Count} handler faults within {Seconds} s; disconnecting account '{Account}'",
+                RemoteEndpoint, HandlerFaultStorm, HandlerFaultStormWindowMs / 1000, AccountName);
+            Kick();
+            return false;
+        }
+
+        return true;
     }
+
+    /// <summary>
+    /// The containment allowlist: world opcodes whose handlers only read state, or only repeat a cosmetic or
+    /// idempotent change, so absorbing a fault cannot be turned into a duplication or corruption loop. Everything else,
+    /// including every economy, inventory, loot, mail, trade, spell and quest-reward handler, is NOT contained.
+    /// <para>
+    /// Movement (MSG_MOVE_*) is deliberately excluded: a movement handler fault leaves position, the broadcast and the
+    /// anti-cheat state out of step, and a client that keeps moving would repeat it. It keeps the old behaviour and
+    /// disconnects.
+    /// </para>
+    /// </summary>
+    internal static bool IsContainableWorldOpcode(WorldOpcode opcode) => opcode is
+        // Queries.
+        WorldOpcode.CmsgNameQuery or WorldOpcode.CmsgItemQuerySingle or WorldOpcode.CmsgItemQueryMultiple
+        or WorldOpcode.CmsgItemNameQuery or WorldOpcode.CmsgCreatureQuery or WorldOpcode.CmsgGameobjectQuery
+        or WorldOpcode.CmsgQuestQuery or WorldOpcode.CmsgPageTextQuery or WorldOpcode.CmsgGuildQuery
+        or WorldOpcode.CmsgGuildInfo or WorldOpcode.CmsgGuildRoster or WorldOpcode.CmsgPetNameQuery
+        or WorldOpcode.CmsgPetitionQuery or WorldOpcode.CmsgQuestgiverStatusQuery or WorldOpcode.CmsgWho
+        or WorldOpcode.CmsgInspect or WorldOpcode.CmsgQueryTime or WorldOpcode.CmsgPlayedTime
+        // Chat, emotes and channels.
+        or WorldOpcode.CmsgMessagechat or WorldOpcode.CmsgEmote or WorldOpcode.CmsgTextEmote
+        or WorldOpcode.CmsgJoinChannel or WorldOpcode.CmsgLeaveChannel or WorldOpcode.CmsgChannelList
+        or WorldOpcode.CmsgChannelPassword or WorldOpcode.CmsgChannelSetOwner or WorldOpcode.CmsgChannelOwner
+        or WorldOpcode.CmsgChannelModerator or WorldOpcode.CmsgChannelUnmoderator or WorldOpcode.CmsgChannelMute
+        or WorldOpcode.CmsgChannelUnmute or WorldOpcode.CmsgChannelInvite or WorldOpcode.CmsgChannelKick
+        or WorldOpcode.CmsgChannelBan or WorldOpcode.CmsgChannelUnban or WorldOpcode.CmsgChannelAnnouncements
+        or WorldOpcode.CmsgChannelModerate
+        // Friend list read, selection and cosmetic UI state.
+        or WorldOpcode.CmsgFriendList or WorldOpcode.CmsgSetSelection or WorldOpcode.CmsgStandstatechange
+        or WorldOpcode.CmsgSetsheathed;
 
     /// <summary>The character-screen opcodes whose client waits for a result code.</summary>
     internal static ClientErrorContext? ContextForSessionPacket(WorldOpcode opcode) => opcode switch
@@ -78,10 +137,14 @@ public sealed partial class WorldSession
 
     /// <summary>
     /// The client error for a world opcode. A cast echoes its spell id (CMSG_CAST_SPELL starts with it); the item opcodes
-    /// get the inventory internal error; everything else gets the notification.
+    /// get the inventory internal error; the mail opcodes get the mail result (they disconnect afterwards, being economy);
+    /// everything else gets the notification.
     /// </summary>
     internal static ClientErrorContext ContextForWorldPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload) => opcode switch
     {
+        WorldOpcode.CmsgSendMail => ClientErrorContext.Mail(0, MailAction.Send),
+        WorldOpcode.CmsgMailTakeMoney => ClientErrorContext.Mail(0, MailAction.MoneyTaken),
+        WorldOpcode.CmsgMailTakeItem => ClientErrorContext.Mail(0, MailAction.ItemTaken),
         WorldOpcode.CmsgCastSpell => ClientErrorContext.SpellCast(payload.Length >= 4 ? BinaryPrimitives.ReadUInt32LittleEndian(payload) : 0),
         WorldOpcode.CmsgSwapItem or WorldOpcode.CmsgSwapInvItem or WorldOpcode.CmsgSplitItem or WorldOpcode.CmsgAutoequipItem
             or WorldOpcode.CmsgAutoequipItemSlot or WorldOpcode.CmsgAutostoreBagItem or WorldOpcode.CmsgDestroyitem

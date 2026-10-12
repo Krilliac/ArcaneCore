@@ -67,8 +67,8 @@ ClientError.Internal(session, ClientErrorContext.Mail(mailId, MailAction.Send), 
 | `Mail(mailId, action)` | SMSG_SEND_MAIL_RESULT (0x239) | u32 mail, u32 action, u32 6 |
 | `Generic` | SMSG_NOTIFICATION (0x1CB) | "Internal error" |
 
-Without an exception, the ledger entry is a `ServerRejectionException` carrying the cause, whose stack includes the
-rejecting call site, so two callers rejecting are two ledger signatures.
+Without an exception, the ledger entry is a `ServerRejectionException` carrying the cause. It is never thrown, so it
+has no stack; the site name (`client-error/<kind>`) and the cause text identify the caller.
 
 **Rate limit.** Unsolicited errors (`Generic`, `SpellCast`, `ItemMove`) are limited per session to
 `ClientError.Burst` (3) in a sliding `ClientError.WindowMs` (10 s); past that the fault is still logged and recorded but
@@ -77,18 +77,28 @@ nothing is sent. Answers the client is waiting for (character screen, mail) are 
 **Handler faults.** An opcode handler that throws something other than the malformed-packet outcome is a server bug
 (`WorldSession.HandlerFaults.cs`):
 
-- World handlers (world thread): the fault is contained. The client gets the context error for the opcode
-  (CMSG_CAST_SPELL -> spell, the item move/equip/use opcodes -> item, anything else -> notification) and the session's
-  next packet is handled. The `WorldSession.HandlerFaultStorm`-th (5th) fault inside
-  `WorldSession.HandlerFaultStormWindowMs` (60 s) disconnects, as every handler fault did before. A session already being
-  dropped sends nothing and only records the fault.
+- World handlers (world thread): containment is an **allowlist** (`WorldSession.IsContainableWorldOpcode`). Every
+  fault sends the context error for the opcode (CMSG_CAST_SPELL -> spell, the item move/equip/use opcodes -> item, the
+  mail opcodes -> mail result, anything else -> notification), logs and records the fault. Then:
+  - an opcode on the allowlist (queries, who, inspect, chat and emotes, channel operations, friend list read,
+    selection, stand state and sheathe) is contained: the session's next packet is handled. The
+    `WorldSession.HandlerFaultStorm`-th (5th) contained fault inside `WorldSession.HandlerFaultStormWindowMs` (60 s)
+    disconnects;
+  - every other opcode, including all economy, inventory, loot, mail, trade, spell and quest-reward handlers, sends
+    the error and then disconnects, as every handler fault did before. New handlers default to this. Movement is
+    deliberately not on the allowlist either.
+  A session already being dropped sends nothing and only records the fault. `InvariantViolationException` (the Debug
+  stop signal) is never absorbed.
 - Session handlers (session task): CMSG_CHAR_CREATE, CMSG_CHAR_DELETE and CMSG_PLAYER_LOGIN faults at the character
-  screen are answered with their failure code and the session stays. Any other session-handler fault, or one after the
+  screen are answered with their failure code and the session stays; they count against the same storm limit. Any other session-handler fault, or one after the
   login has begun, still leaves the session.
 - A malformed packet still disconnects (docs/ops/netguard.md).
 
-A contained fault may leave state the handler half-changed; that is the trade for not disconnecting a player over one
-bug. The storm rule bounds how long a session can run in that state.
+Why an allowlist: a handler can change state before it throws (loot money credits the player before it clears the bag; a
+split-stack lowers the source count before it stores the new stack). Absorbing that fault would let the client repeat
+the same packet and duplicate each time. So only handlers that read state, or repeat an idempotent or cosmetic change,
+are contained; a state-changing handler still disconnects. The guarantee is that, not a time bound: the storm rule only
+caps how many repeated contained (read-only) faults a session may generate before it is dropped.
 
-Tests: `ClientErrorTests` (packets, rate limit, no leak, ledger), `HandlerFaultDispatchTests` (a throwing cast, item
-move and char-create handler through a real session, and the storm), `WorldProtectionTests` (the generic case).
+Tests: `ClientErrorTests` (packets, rate limit, no leak, ledger), `HandlerFaultDispatchTests` (a throwing allowlisted query is contained; cast,
+item move, loot money and split item reply then disconnect; char-create is answered; the storm), `WorldProtectionTests` (the generic case).
