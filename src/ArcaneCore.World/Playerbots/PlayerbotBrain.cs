@@ -1599,6 +1599,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private bool IsUnreachable(Creature creature)
         => _unreachable.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
 
+    /// <summary>Whether a live creature in sight is no target for the bot (the grind filter's rules; <see cref="PlayerbotWorldDestinations.Untakeable"/>).</summary>
+    internal bool IsUntakeable(Player player, Creature creature)
+        => IsSkipped(creature) || _contention.IsSetAside(creature.Guid.Value, _session.World.NowMs)
+            || IsSomeoneElses(player, creature, GroupsOf(player))
+            || player.Map is { } map && !map.Combat.Hooks.CanAttack(player, creature);
+
     /// <summary>
     /// A creature the goals do not choose now: unreachable, of an entry set aside (stall, death loop), or outside the bot's home area
     /// (outside the circle or, for a zone-clipped home, out of the home's zone: <see cref="PlayerbotHomeArea.Contains(Unit)"/>; a
@@ -1606,12 +1612,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// the bot is on the home map, so a bot away on an errand (a vendor in Stormwind) picks no fight on the road (fail closed).
     /// The defensive-attacker path does not use this: a bot always fights back.
     /// </summary>
-    /// <summary>Whether a live creature in sight is no target for the bot (the grind filter's rules; <see cref="PlayerbotWorldDestinations.Untakeable"/>).</summary>
-    internal bool IsUntakeable(Player player, Creature creature)
-        => IsSkipped(creature) || _contention.IsSetAside(creature.Guid.Value, _session.World.NowMs)
-            || IsSomeoneElses(player, creature, GroupsOf(player))
-            || player.Map is { } map && !map.Combat.Hooks.CanAttack(player, creature);
-
     private bool IsSkipped(Creature creature)
         => IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
             || _contention.IsEntrySuspended(creature.Entry, _session.World.NowMs)
