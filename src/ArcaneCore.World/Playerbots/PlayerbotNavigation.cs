@@ -15,6 +15,8 @@ namespace ArcaneCore.World.Playerbots;
 /// <summary>One bounded, collision-backed route owned by a server-managed player.</summary>
 internal sealed class PlayerbotRoute
 {
+    /// <summary>A completed quest's ender route may cross only individually manageable pack hazards.</summary>
+    internal bool CompletedQuestReturn { get; set; }
     internal PlayerbotRoute(IReadOnlyList<Vector3> points, float distance, bool navigated = false)
     {
         Points = points;
@@ -94,8 +96,9 @@ internal static class PlayerbotNavigation
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
-        out PlayerbotRoute? route, bool trial = false)
-        => Plan(player, destination, destination, options, partial: false, trial, out route, out _);
+        out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false)
+        => Plan(player, destination, destination, options, partial: false, trial, out route, out _,
+            completedQuestReturn: completedQuestReturn);
 
     /// <summary>
     /// A route to <paramref name="destination"/> with no hazard check at all: only the escape from a ring of strong creatures
@@ -129,7 +132,8 @@ internal static class PlayerbotNavigation
     /// healer, and a living bot with a far quest giver stood still for good.
     /// </para>
     /// </summary>
-    internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route)
+    internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
+        bool completedQuestReturn = false)
     {
         route = null;
         Vector3 origin = new(player.X, player.Y, player.Z);
@@ -144,12 +148,13 @@ internal static class PlayerbotNavigation
         // Beyond the first step the map's region graph knows the way, round mountains and out of dead ends: the leg goes to a portal
         // of that way (RegionLeg). Only when the graph does not decide (none, still being built, both ends in one region) do the
         // goal-first query and the straight-line steps below plan.
-        if (distance > chunk && RegionLeg(player, goal, options, out route) is { } planned) return planned;
+        if (distance > chunk && RegionLeg(player, goal, options, out route, completedQuestReturn) is { } planned) return planned;
         // When the mesh had a corridor to judge (no path, a blacklisted end), the shorter straight-line points below would only repeat
         // the refusal: one plan attempt costs one query, as before. Only an unloaded tile or no mesh (a refused straight line) goes on.
         if (distance > chunk && distance <= options.MaxRouteYards)
         {
-            if (Plan(player, goal, goal, options, partial: true, trial: false, out route, out bool goalStraightRefused)) return true;
+            if (Plan(player, goal, goal, options, partial: true, trial: false, out route, out bool goalStraightRefused,
+                completedQuestReturn: completedQuestReturn)) return true;
             if (!goalStraightRefused) return false;
         }
         // A point that far may lie on a navigation-mesh tile not loaded yet (tiles load with the map's grids, around the players):
@@ -160,7 +165,8 @@ internal static class PlayerbotNavigation
         for (; ; chunk /= 2)
         {
             Vector3 destination = distance > chunk ? origin + ((goal - origin) * (chunk / distance)) : goal;
-            if (Plan(player, destination, goal, options, partial: true, trial: false, out route, out bool straightRefused)) return true;
+            if (Plan(player, destination, goal, options, partial: true, trial: false, out route, out bool straightRefused,
+                completedQuestReturn: completedQuestReturn)) return true;
             if (!straightRefused || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
         }
     }
@@ -194,7 +200,8 @@ internal static class PlayerbotNavigation
     /// Deadwind Pass, Redridge, the Burning Steppes and Blackrock Mountain: twelve legs, 9,400 yards).
     /// </para>
     /// </summary>
-    private static bool? RegionLeg(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route)
+    private static bool? RegionLeg(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
+        bool completedQuestReturn)
     {
         route = null;
         if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
@@ -220,8 +227,10 @@ internal static class PlayerbotNavigation
         // The portal is a point on the walkable mesh joined to the bot's: the query reaches it, or closes on it partially. When neither
         // query is a route (a blacklisted portal, a hazard in the way) the graph does not decide: the goal-first query and the
         // straight-line steps still get their turn.
-        if (Plan(player, portals[pick], portals[pick], options, partial: true, trial: false, out route, out _)) return true;
-        if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, trial: false, out route, out _)) return true;
+        if (Plan(player, portals[pick], portals[pick], options, partial: true, trial: false, out route, out _,
+            completedQuestReturn: completedQuestReturn)) return true;
+        if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, trial: false, out route, out _,
+            completedQuestReturn: completedQuestReturn)) return true;
         route = null;
         return null;
     }
@@ -233,10 +242,12 @@ internal static class PlayerbotNavigation
     /// <param name="straightRefused">The mesh had no corridor to offer, only a straight line (an unloaded tile, or no mesh), and the terrain
     /// stepper refused that line.</param>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial, bool trial,
-        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null)
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false)
     {
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes) || route is null) return false;
-        if (!Guards.TryGetValue(player, out PlayerbotRisk? risk) || risk.Blocking(player, route.Points) is not { } hazard) return true;
+        route.CompletedQuestReturn = completedQuestReturn;
+        if (!Guards.TryGetValue(player, out PlayerbotRisk? risk)
+            || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn) is not { } hazard) return true;
 
         // The way passes through a hazard: walk round it (by a corner before it and one past it, on either side), or not at all.
         PlayerbotRoute direct = route;
@@ -268,7 +279,8 @@ internal static class PlayerbotNavigation
                 bool[] legs = [.. Enumerable.Repeat(first.Navigated, first.Points.Count - 1),
                     .. Enumerable.Repeat(middle.Navigated, middle.Points.Count - 1), .. Enumerable.Repeat(last.Navigated, last.Points.Count - 1)];
                 var detour = new PlayerbotRoute(points, length, legs);
-                if (risk.Blocking(player, detour.Points) is not null) continue;
+                if (risk.Blocking(player, detour.Points, completedReturn: completedQuestReturn) is not null) continue;
+                detour.CompletedQuestReturn = completedQuestReturn;
                 route = detour;
                 return true;
             }
@@ -638,6 +650,20 @@ internal static class PlayerbotNavigation
         return true;
     }
 
+    /// <summary>A connected ordinary route still crosses a hazard the completed-return rule keeps in force.</summary>
+    internal static bool HasBlockingReturnHazard(Player player, Vector3 goal, PlayerbotOptions options,
+        out PlayerbotHazard hazard)
+    {
+        hazard = default;
+        if (!Guards.TryGetValue(player, out PlayerbotRisk? risk) || risk.Hazards.Count == 0
+            || !PlanDirect(player, goal, goal, options, partial: false, out PlayerbotRoute? route, out _,
+                DiagnosisSearchNodes) || route is null
+            || risk.Blocking(player, route.Points, completedReturn: true) is not { } blocked)
+            return false;
+        hazard = blocked;
+        return true;
+    }
+
     /// <summary>The corners of a way off steep ground tried as the place where the ordinary routes begin again.</summary>
     private const int SteepEscapeCorners = 16;
 
@@ -782,7 +808,8 @@ internal static class PlayerbotNavigation
         if (Guards.TryGetValue(player, out PlayerbotRisk? risk))
         {
             List<Vector3> rest = [PlayerbotMotion.CurrentPosition(player), .. route.Points.Skip(route.NextPoint)];
-            if (risk.Blocking(player, rest, strong: !risk.IsEscape(route)) is not null)
+            if (risk.Blocking(player, rest, strong: !risk.IsEscape(route),
+                completedReturn: route.CompletedQuestReturn) is not null)
             {
                 PlayerbotMovementControl.Stop(session, player);
                 return false;

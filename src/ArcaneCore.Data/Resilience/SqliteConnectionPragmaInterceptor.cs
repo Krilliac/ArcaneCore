@@ -38,8 +38,10 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
 
     /// <summary>
     /// The bound in milliseconds on any command's lock wait on the connections this interceptor opens (0: none, the connection string's Default Timeout stands).
-    /// Applied by lowering the connection's Default Timeout (whole seconds, rounded up) at open, before <c>busy_timeout</c> is derived from it, so EF's
-    /// <c>BEGIN IMMEDIATE</c>, which the driver creates with that timeout, is bounded too. Used for the characters database, whose write queues must not sit in a
+    /// Applied by lowering the connection's Default Timeout (whole seconds, rounded up; 0, unlimited, is replaced too) at open, before <c>busy_timeout</c> is derived from it, so EF's
+    /// <c>BEGIN IMMEDIATE</c>, which the driver creates with that timeout, is bounded too. This is only the backstop: a command created BEFORE the open
+    /// (EF's ExecuteUpdate/Delete, ExecuteScalar and raw SQL) has already copied the old Default Timeout, so <see cref="DataServiceCollectionExtensions.ConfigureProvider"/>
+    /// also lowers it in the connection string. Used for the characters database, whose write queues must not sit in a
     /// 30 s lock wait.
     /// </summary>
     public int WriteTimeoutMs { get; }
@@ -65,6 +67,22 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         return Instances.GetOrAdd((busyTimeoutMs, writeTimeoutMs), static key => new SqliteConnectionPragmaInterceptor(key.Busy, key.Write));
     }
 
+    /// <summary>
+    /// The one place the write bound becomes a <c>Default Timeout</c>: <paramref name="writeTimeoutMs"/> in whole seconds, rounded up, replaces
+    /// <paramref name="currentSeconds"/> when that is longer or 0 (0 means unlimited in Microsoft.Data.Sqlite, so a bound must override it);
+    /// a shorter current value is kept, and a <paramref name="writeTimeoutMs"/> of 0 or less changes nothing.
+    /// </summary>
+    public static int ApplyWriteBound(int currentSeconds, int writeTimeoutMs)
+    {
+        if (writeTimeoutMs <= 0)
+        {
+            return currentSeconds;
+        }
+
+        int bound = (int)((writeTimeoutMs + 999L) / 1000); // fits an int for any int input
+        return currentSeconds == 0 || bound < currentSeconds ? bound : currentSeconds;
+    }
+
     public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
     {
         if (connection is SqliteConnection sqlite)
@@ -85,14 +103,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
 
     private SqliteCommand CreatePragma(SqliteConnection connection)
     {
-        if (WriteTimeoutMs > 0)
-        {
-            int seconds = (int)Math.Min(int.MaxValue, (WriteTimeoutMs + 999L) / 1000);
-            if (seconds < connection.DefaultTimeout)
-            {
-                connection.DefaultTimeout = seconds;
-            }
-        }
+        connection.DefaultTimeout = ApplyWriteBound(connection.DefaultTimeout, WriteTimeoutMs);
 
         // Never wait inside SQLite longer than the connection's own timeout: that loop checks the clock only between attempts.
         int milliseconds = (int)Math.Min(BusyTimeoutMs, connection.DefaultTimeout * 1000L);

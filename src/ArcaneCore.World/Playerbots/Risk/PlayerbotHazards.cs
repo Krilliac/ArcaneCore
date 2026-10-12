@@ -7,7 +7,8 @@ namespace ArcaneCore.World.Playerbots;
 internal readonly record struct PlayerbotGap(int Direction, Vector3 Exit, float ExitYards, float Exposure);
 
 /// <summary>One place a living bot keeps out of: a remembered death or retreat, or a creature that kills outright (or one it fled from).</summary>
-internal readonly record struct PlayerbotHazard(uint MapId, Vector3 At, float Radius, uint UntilMs, ObjectGuid Creature, string Kind)
+internal readonly record struct PlayerbotHazard(uint MapId, Vector3 At, float Radius, uint UntilMs, ObjectGuid Creature, string Kind,
+    bool ReturnPassable = false)
 {
     /// <summary>Whether <paramref name="point"/> lies inside (flat distance, a few yards of height either way do not matter).</summary>
     internal bool Covers(Vector3 point) => Vector2.Distance(new(At.X, At.Y), new(point.X, point.Y)) < Radius && MathF.Abs(At.Z - point.Z) < Radius;
@@ -69,11 +70,13 @@ internal sealed class PlayerbotHazards
     internal void BeginStrongScan() => _scan = unchecked(_scan + 1);
 
     /// <summary>A strong creature seen alive by this look: its hazard is set (in place when it has one), lasting <paramref name="lifeMs"/>.</summary>
-    internal void SetStrong(uint mapId, Vector3 at, float radius, uint nowMs, uint lifeMs, ObjectGuid creature)
+    internal void SetStrong(uint mapId, Vector3 at, float radius, uint nowMs, uint lifeMs, ObjectGuid creature,
+        bool returnPassable = false)
     {
         if (creature.IsEmpty || radius <= 0 || !Finite(at)) return;
         if (_strong.Count >= MaxStrong && !_strong.ContainsKey(creature)) return;
-        _strong[creature] = (new PlayerbotHazard(mapId, at, radius, unchecked(nowMs + lifeMs), creature, StrongKind), _scan);
+        _strong[creature] = (new PlayerbotHazard(mapId, at, radius, unchecked(nowMs + lifeMs), creature, StrongKind,
+            returnPassable), _scan);
     }
 
     /// <summary>End a look: drop the strong hazards of creatures it did not see alive and strong (killed, gone, out of sight, no longer too strong).</summary>
@@ -101,9 +104,12 @@ internal sealed class PlayerbotHazards
     /// <summary>
     /// The first hazard <paramref name="points"/> pass through, sampled every 2 yards, or null. A hazard the walk starts in is not
     /// held against it (the bot may always walk out of one). Without <paramref name="strong"/> the strong creatures are not held
-    /// against it either (the escape route's own walk, <see cref="PlayerbotRisk.EscapeRoute"/>). Copies nothing.
+    /// against it either (the escape route's own walk, <see cref="PlayerbotRisk.EscapeRoute"/>). A completed return keeps
+    /// individually strong and over-level creatures but may cross pack-only hazards marked <see cref="PlayerbotHazard.ReturnPassable"/>.
+    /// Copies nothing.
     /// </summary>
-    internal PlayerbotHazard? FirstOnRoute(uint mapId, IReadOnlyList<Vector3> points, uint nowMs, bool strong = true)
+    internal PlayerbotHazard? FirstOnRoute(uint mapId, IReadOnlyList<Vector3> points, uint nowMs, bool strong = true,
+        bool completedReturn = false)
     {
         if (points.Count < 2) return null;
         Expire(nowMs);
@@ -121,7 +127,8 @@ internal sealed class PlayerbotHazards
                     if (hazard.MapId == mapId && hazard.Covers(point) && !hazard.Covers(start)) return hazard;
                 if (!strong) continue;
                 foreach ((PlayerbotHazard hazard, uint _) in _strong.Values)
-                    if (hazard.MapId == mapId && Live(hazard, nowMs) && hazard.Covers(point) && !hazard.Covers(start)) return hazard;
+                    if (hazard.MapId == mapId && Live(hazard, nowMs) && (!completedReturn || !hazard.ReturnPassable)
+                        && hazard.Covers(point) && !hazard.Covers(start)) return hazard;
             }
         }
 

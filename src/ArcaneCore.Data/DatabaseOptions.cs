@@ -65,8 +65,8 @@ public sealed class DatabaseOptions
 
     /// <summary>
     /// SQLite only, characters database only: the longest (0..60000 ms, default 5000; rounded up to whole seconds) any command on a characters connection
-    /// waits for another connection's write lock before it fails as "database is locked". It replaces the connection's Default Timeout (30 s) when smaller, set
-    /// when the connection opens, so it also bounds EF's <c>BEGIN IMMEDIATE</c> and, through the busy-timeout clamp, SQLite's own wait. Without it a
+    /// waits for another connection's write lock before it fails as "database is locked". It is written into the connection string's Default Timeout (30 s) when smaller, and
+    /// replaces 0 (unlimited), so it bounds every command including EF's first one and its <c>BEGIN IMMEDIATE</c>, and through the busy-timeout clamp SQLite's own wait. Without it a
     /// writer holding the file for a minute held each save queue's single consumer for the full 30 s per attempt. Failed saves are retained and retried
     /// by their queues. 0 keeps the connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
     /// </summary>
@@ -78,6 +78,14 @@ public sealed class DatabaseOptions
     /// "database is locked", so the next holder names itself in the log (docs/areas/persistence.md).
     /// </summary>
     public int SlowTransactionWarnMs { get; set; } = ArcaneCore.Data.Resilience.SlowTransactionInterceptor.DefaultWarnMs;
+
+    /// <summary>
+    /// How long (milliseconds, default 2000; 0 disables) a single database command may take to execute before it is logged at WARN with the DbContext, whether
+    /// it ran inside a transaction or autocommitted, whether it was a write, the first 80 characters of its SQL (parameter values are never logged) and the code
+    /// that issued it, on every provider. It sees what the transaction warning cannot: writes that autocommit and wait in "database is locked". Identical
+    /// warnings are limited to one per 10 s (docs/areas/persistence.md).
+    /// </summary>
+    public int SlowCommandWarnMs { get; set; } = ArcaneCore.Data.Resilience.SlowCommandInterceptor.DefaultWarnMs;
 
     public DatabaseConnectionOptions? Auth { get; set; }
 

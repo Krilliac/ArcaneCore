@@ -197,6 +197,8 @@ internal sealed class PlayerbotSuspensions
     private const int Max = 64;
     private readonly Dictionary<uint, uint> _entries = [];
     private readonly Dictionary<uint, uint> _quests = [];
+    private readonly HashSet<uint> _unreachableQuests = [];
+    private readonly Queue<uint> _unreachableOrder = [];
     private int _version;
     internal int Version => Volatile.Read(ref _version);
 
@@ -204,7 +206,17 @@ internal sealed class PlayerbotSuspensions
         => entry != 0 && (Active(_entries, entry, nowMs) || Shared?.IsEntrySetAside(entry, nowMs) == true);
 
     internal bool IsQuestSuspended(uint quest, uint nowMs)
-        => quest != 0 && (Active(_quests, quest, nowMs) || Shared?.IsQuestSetAside(quest, nowMs) == true);
+        => quest != 0 && (_unreachableQuests.Contains(quest) || Active(_quests, quest, nowMs)
+            || Shared?.IsQuestSetAside(quest, nowMs) == true);
+
+    /// <summary>Never take again a completed quest this bot abandoned after three unreachable-ender diagnoses.</summary>
+    internal void MarkUnreachableQuest(uint quest)
+    {
+        if (quest == 0 || !_unreachableQuests.Add(quest)) return;
+        if (_unreachableOrder.Count >= Max) _unreachableQuests.Remove(_unreachableOrder.Dequeue());
+        _unreachableOrder.Enqueue(quest);
+        Interlocked.Increment(ref _version);
+    }
 
     /// <summary>What every bot of the world sets aside (<see cref="PlayerbotSharedSetAsides"/>), or null.</summary>
     internal PlayerbotSharedSetAsides? Shared { get; set; }
@@ -246,6 +258,8 @@ internal sealed class PlayerbotSuspensions
         foreach ((uint id, uint until) in _quests)
             if (Remaining(until, nowMs) is > 0 and var remaining)
                 rows.Add(new(botId, characterId, PlayerbotSetAsideKind.Quest, id, unixNowMs + remaining));
+        foreach (uint id in _unreachableOrder)
+            rows.Add(new(botId, characterId, PlayerbotSetAsideKind.UnreachableQuest, id, long.MaxValue));
         if (_training && Remaining(_trainingUntilMs, nowMs) is > 0 and var trainingRemaining)
             rows.Add(new(botId, characterId, PlayerbotSetAsideKind.Training, 0, unixNowMs + trainingRemaining));
         return [.. rows];
@@ -255,6 +269,12 @@ internal sealed class PlayerbotSuspensions
     {
         foreach (PlayerbotSetAside row in rows)
         {
+            if (row.Kind == PlayerbotSetAsideKind.UnreachableQuest && row.TargetId != 0
+                && row.ExpiresUnixMs == long.MaxValue)
+            {
+                MarkUnreachableQuest(row.TargetId);
+                continue;
+            }
             long remaining = row.ExpiresUnixMs - unixNowMs;
             if (remaining <= 0 || remaining > SuspendMs) continue;
             uint until = unchecked(nowMs + (uint)remaining);

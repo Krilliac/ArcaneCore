@@ -1,5 +1,7 @@
 using System.Globalization;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -156,7 +158,7 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
         long now = _clockMs();
         if (!Due(QaSignalKind.SpellNoEffect, cast.Spell.Id, 0, now)) return;
         Report(bot, cast.Spell, QaSignalKind.SpellNoEffect, string.Empty, ExpectText(facts.Expect), -1, string.Empty, 0, 0,
-            string.Create(CultureInfo.InvariantCulture, $"{NoEffectRepeats} hits in a row of spell {cast.Spell.Id} by one bot dealt no damage, healing or aura"));
+            string.Create(CultureInfo.InvariantCulture, $"{NoEffectRepeats} hits in a row of spell {cast.Spell.Id} by one bot dealt no damage, healing or aura{TargetIdentity(outcome.Target)}"));
     }
 
     private bool Worked(SpellCast cast, SpellTargetOutcome outcome, SpellFacts facts, int selected)
@@ -180,11 +182,12 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
 
     /// <summary>
     /// A damage hit on a target with an absorb shield (SCHOOL_ABSORB, MANA_SHIELD) cannot be judged: the outcome counts damage dealt after absorbs, so a fully
-    /// absorbed hit looks like none. Only reached on the rare path where nothing measurable happened.
+    /// absorbed hit looks like none. An INSTAKILL deals its damage with no absorb step (vmangos Spell::EffectInstaKill, SpellEffects.cpp:283 is a plain
+    /// DealDamage of the whole health), so only the other damage effects qualify. Only reached on the rare path where nothing measurable happened.
     /// </summary>
     private bool Unmeasurable(SpellTargetOutcome outcome, SpellFacts facts, int selected)
     {
-        if ((selected & facts.DamageMask) == 0) return false;
+        if ((selected & facts.DamageMask & ~facts.InstakillMask) == 0) return false;
         IReadOnlyList<SpellAuraHolder> holders = _gaps.System.GetAuras(outcome.Target);
         for (int i = 0; i < holders.Count; i++)
         {
@@ -192,6 +195,30 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Who took the hits that did nothing, for the evidence line: kind and entry, health, the invincibility threshold (a leaked Spirit of Redemption or
+    /// a death-prevention that never ended shows here), whether an absorb aura is present and whether a quest settlement holds the unit.
+    /// </summary>
+    private string TargetIdentity(Unit target)
+    {
+        bool absorb = false;
+        IReadOnlyList<SpellAuraHolder> holders = _gaps.System.GetAuras(target);
+        for (int i = 0; i < holders.Count && !absorb; i++)
+        {
+            absorb = holders[i].HasAura(AuraType.SchoolAbsorb) || holders[i].HasAura(AuraType.ManaShield);
+        }
+
+        string kind = target switch
+        {
+            Player => "player",
+            Creature creature => string.Create(CultureInfo.InvariantCulture, $"creature {creature.Entry}"),
+            _ => target.GetType().Name,
+        };
+        bool settling = target is Player { IsQuestSettlementPending: true };
+        return string.Create(CultureInfo.InvariantCulture,
+            $"; last target: {kind}, health {target.Health}/{target.MaxHealth}, invincibility threshold {target.InvincibilityHpThreshold}, absorb aura {(absorb ? "yes" : "no")}, quest settlement pending {(settling ? "yes" : "no")}");
     }
 
     private static string ExpectText(byte expect)
@@ -291,7 +318,7 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
 
     private SpellFacts Compute(SpellInfo spell)
     {
-        int damage = 0, heal = 0, aura = 0;
+        int damage = 0, heal = 0, aura = 0, kill = 0;
         if (!spell.IsPassive)
         {
             IReadOnlyList<SpellEffectInfo> effects = spell.Effects;
@@ -308,6 +335,10 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
                     case SpellEffectName.WeaponPercentDamage:
                         damage |= 1 << i;
                         break;
+                    case SpellEffectName.Instakill: // a kill is the effect (Suicide, 27965: the kill also strips the aura the spell applies)
+                        damage |= 1 << i;
+                        kill |= 1 << i;
+                        break;
                     case SpellEffectName.Heal when effect.BasePoints + 1 > 0:
                         heal |= 1 << i;
                         break;
@@ -319,10 +350,10 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver
         }
 
         byte expect = (byte)((damage != 0 ? ExpectDamage : 0) | (heal != 0 ? ExpectHeal : 0) | (aura != 0 ? ExpectAura : 0));
-        return new SpellFacts(spell, _gaps.Of(spell), damage, heal, aura, expect);
+        return new SpellFacts(spell, _gaps.Of(spell), damage, heal, aura, expect, kill);
     }
 
-    private sealed record SpellFacts(SpellInfo Spell, QaSpellGap[] Gaps, int DamageMask, int HealMask, int AuraMask, byte Expect)
+    private sealed record SpellFacts(SpellInfo Spell, QaSpellGap[] Gaps, int DamageMask, int HealMask, int AuraMask, byte Expect, int InstakillMask)
     {
         public int MeasurableMask { get; } = DamageMask | HealMask | AuraMask;
     }

@@ -127,7 +127,7 @@ internal static class PlayerbotQaClassifier
                 return new QaClassification(QaCause.MissingData, NoSpawns(s, target, template is null), title);
             }
 
-            if (target == 0 && objectives.Count > 0 && objectives.All(entry => Spawns(s, facts, entry) == 0))
+            if (target == 0 && !s.ReturnTrip && objectives.Count > 0 && objectives.All(entry => Spawns(s, facts, entry) == 0))
             {
                 return new QaClassification(QaCause.MissingData, string.Create(CultureInfo.InvariantCulture,
                     $"none of the quest objective creatures ({string.Join('/', objectives)}) has a spawn {Where(s)}"), title);
@@ -145,9 +145,56 @@ internal static class PlayerbotQaClassifier
             }
         }
 
+        // A walk home whose plan failed logs target=0 (the destinations set the target only for a plan that succeeded). The ender is then the
+        // quest's only ender creature; with none (a game object ends it, or the content is unknown) or several (which one the bot was going
+        // to is not known) nothing is claimed and the generic verdict below stands.
+        uint tripTarget = target;
+        if (questGoal && s.ReturnTrip && s.Quest != 0 && target == 0 && facts.QuestEnderEntries(s.Quest) is [var only]) tripTarget = only;
+        if (questGoal && s.ReturnTrip && s.Quest != 0 && tripTarget != 0 && EnderTrip(s, facts, tripTarget, title) is { } trip) return trip;
+
         string subject = questGoal && s.Quest != 0 ? string.Create(CultureInfo.InvariantCulture, $"quest {s.Quest}{(title is null ? string.Empty : " (" + title + ")")}") : $"goal {s.Goal}";
         return new QaClassification(QaCause.Unknown, "no missing content found for " + subject
             + (target != 0 ? string.Create(CultureInfo.InvariantCulture, $", target {target}") : string.Empty), title);
+    }
+
+    /// <summary>
+    /// A stall the brain marked as the walk home to a completed quest's ender (<see cref="QaSignal.ReturnTrip"/>) whose target is an ender of
+    /// the quest. The mark is needed: in vanilla one NPC often gives and ends a quest, so the target alone does not say whether the bot was
+    /// going to take the quest or to turn it in. Nothing is missing for it: the cause names the ender, how far it is from the bot and whether
+    /// it is on another map, so the finding says where the bot was going instead of "no missing content found". Null when the target is not
+    /// one of the quest's enders.
+    /// </summary>
+    private static QaClassification? EnderTrip(QaSignal s, IQaContentFacts facts, uint target, string? title)
+    {
+        IReadOnlyList<QaEnderFact> spawns = [.. facts.QuestEnders(s.Quest, target)];
+        if (spawns.Count == 0) return null;
+
+        string who = string.Create(CultureInfo.InvariantCulture, $"ender {target}{(spawns[0].Name.Length == 0 ? string.Empty : " (" + spawns[0].Name + ")")}");
+        string subject = string.Create(CultureInfo.InvariantCulture, $"quest {s.Quest}{(title is null ? string.Empty : " (" + title + ")")}");
+        string where;
+        if (!s.HasPosition)
+        {
+            where = "its distance from the bot is unknown (the stall has no position)";
+        }
+        else
+        {
+            QaEnderFact? best = null;
+            float bestSquared = float.MaxValue;
+            foreach (QaEnderFact e in spawns)
+            {
+                if (e.Map != s.Map) continue;
+                float dx = e.X - s.X, dy = e.Y - s.Y;
+                float squared = (dx * dx) + (dy * dy);
+                if (squared < bestSquared) { bestSquared = squared; best = e; }
+            }
+
+            where = best is { } near
+                ? string.Create(CultureInfo.InvariantCulture, $"nearest spawn {MathF.Sqrt(bestSquared):F0} yd from the bot on map {s.Map} at {near.X:F0},{near.Y:F0},{near.Z:F0}")
+                : string.Create(CultureInfo.InvariantCulture, $"on another map ({string.Join('/', spawns.Select(e => e.Map).Distinct())}; the bot is on map {s.Map}), where the bot cannot walk");
+        }
+
+        return new QaClassification(QaCause.Unknown, string.Create(CultureInfo.InvariantCulture,
+            $"no missing content found for {subject}: the bot was walking to its {who}, {where}"), title);
     }
 
     private static int Spawns(QaSignal s, IQaContentFacts facts, uint entry)
@@ -157,9 +204,10 @@ internal static class PlayerbotQaClassifier
 
     /// <summary>
     /// Whether the spawn check looks at the signal's map only. A shared set-aside's position is only its first stall (the bots behind it may
-    /// have stalled on other maps, and its finding's cause is recomputed with every repeat): its check stays on every map.
+    /// have stalled on other maps, and its finding's cause is recomputed with every repeat): its check stays on every map. So does a walk home
+    /// (<see cref="QaSignal.ReturnTrip"/>): the ender is where the quest was left, often on another map, and a spawn there is not missing data.
     /// </summary>
-    private static bool OnItsMap(QaSignal s) => s.HasPosition && s.Kind != QaSignalKind.SharedSetAside;
+    private static bool OnItsMap(QaSignal s) => s.HasPosition && s.Kind != QaSignalKind.SharedSetAside && !s.ReturnTrip;
 
     private static string NoSpawns(QaSignal s, uint entry, bool noTemplate)
         => string.Create(CultureInfo.InvariantCulture, $"creature entry {entry} has no spawn {Where(s)}") + (noTemplate ? " and no creature_template row" : string.Empty);

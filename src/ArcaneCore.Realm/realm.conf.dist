@@ -27,7 +27,7 @@
 # SECTIONS
 #
 #   AUTH                        15 keys
-#   DATABASE                    10 keys
+#   DATABASE                    11 keys
 #   DIAGNOSTICS                 6 keys
 #   LOGGING                     16 keys
 #   NET                         16 keys
@@ -315,6 +315,23 @@ Database.ConnectionString = ""
 Database.Provider = MariaDb
 
 #
+#    Database.SlowCommandWarnMs
+#        Description: How long (milliseconds, default 2000; 0 disables) a single database command
+#                     may take to execute before it is logged at WARN with the DbContext, whether it
+#                     ran inside a transaction or autocommitted, whether it was a write, the first
+#                     80 characters of its SQL (parameter values are never logged) and the code that
+#                     issued it, on every provider. It sees what the transaction warning cannot:
+#                     writes that autocommit and wait in "database is locked". Identical warnings
+#                     are limited to one per 10 s (docs/areas/persistence.md).
+#        Type: int
+#        Default: 2000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.SlowCommandWarnMs = 2000
+
+#
 #    Database.SlowTransactionWarnMs
 #        Description: How long (milliseconds, default 2000; 0 disables) a database transaction may
 #                     stay open before it is logged at WARN with the DbContext and the code that
@@ -352,14 +369,14 @@ Database.SqliteBusyTimeoutMs = 5000
 #    Database.SqliteWriteTimeoutMs
 #        Description: SQLite only, characters database only: the longest (0..60000 ms, default 5000;
 #                     rounded up to whole seconds) any command on a characters connection waits for
-#                     another connection's write lock before it fails as "database is locked". It
-#                     replaces the connection's Default Timeout (30 s) when smaller, set when the
-#                     connection opens, so it also bounds EF's BEGIN IMMEDIATE and, through the
-#                     busy-timeout clamp, SQLite's own wait. Without it a writer holding the file
-#                     for a minute held each save queue's single consumer for the full 30 s per
-#                     attempt. Failed saves are retained and retried by their queues. 0 keeps the
-#                     connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it
-#                     (docs/areas/persistence.md).
+#                     another connection's write lock before it fails as "database is locked". It is
+#                     written into the connection string's Default Timeout (30 s) when smaller, and
+#                     replaces 0 (unlimited), so it bounds every command including EF's first one
+#                     and its BEGIN IMMEDIATE, and through the busy-timeout clamp SQLite's own wait.
+#                     Without it a writer holding the file for a minute held each save queue's
+#                     single consumer for the full 30 s per attempt. Failed saves are retained and
+#                     retried by their queues. 0 keeps the connection string's Default Timeout.
+#                     MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
 #        Type: int
 #        Default: 5000
 #        Allowed: a whole number, -2147483648 to 2147483647

@@ -248,6 +248,18 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         await ScalarAsync(setup, "CREATE TABLE IF NOT EXISTS pragma_probe(id INTEGER)");
     }
 
+    [Fact]
+    public async Task TheInterceptor_ReplacesAnUnlimitedDefaultTimeoutWithTheWriteBound_AndDerivesBusyTimeoutFromIt()
+    {
+        string connection = Connection("unlimited.db", defaultTimeout: 0);
+        var builder = new DbContextOptionsBuilder<DbContext>().UseSqlite(connection).AddInterceptors(SqliteConnectionPragmaInterceptor.For(300, 1000));
+        await using var db = new DbContext(builder.Options);
+        await db.Database.OpenConnectionAsync();
+        var sqlite = (SqliteConnection)db.Database.GetDbConnection();
+        Assert.Equal(1, sqlite.DefaultTimeout);
+        Assert.Equal(300L, await ScalarAsync(sqlite, "PRAGMA busy_timeout"));
+    }
+
     private string Connection(string name, int defaultTimeout = 30)
         => new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, name), Pooling = false, DefaultTimeout = defaultTimeout }.ToString();
 

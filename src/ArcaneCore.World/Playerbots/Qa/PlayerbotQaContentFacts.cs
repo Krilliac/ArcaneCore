@@ -7,6 +7,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots.Qa;
 
+/// <summary>One spawn of a creature that ends a quest (turns it in): the destination of a completed quest's trip.</summary>
+internal readonly record struct QaEnderFact(uint Entry, string Name, uint Map, float X, float Y, float Z);
+
 /// <summary>The creature template facts the classifier uses.</summary>
 internal readonly record struct QaTemplateFacts(uint Rank, byte MinLevel, byte MaxLevel, string ScriptName, bool Guard = false);
 
@@ -25,6 +28,12 @@ internal interface IQaContentFacts
 
     /// <summary>The creature entries the quest's kill/speak objectives name (the positive ReqCreatureOrGOId values).</summary>
     IReadOnlyList<uint> QuestObjectiveCreatures(uint quest);
+
+    /// <summary>The creature entries that end the quest (its <c>creature_involvedrelation</c> rows), distinct; empty when none or unknown.</summary>
+    IReadOnlyList<uint> QuestEnderEntries(uint quest);
+
+    /// <summary>Every spawn, on any map, of <paramref name="entry"/> when it ends the quest (a <c>creature_involvedrelation</c> row); empty when it does not or the content is unknown.</summary>
+    IReadOnlyList<QaEnderFact> QuestEnders(uint quest, uint entry);
 
     int SpawnCount(uint map, uint entry);
 
@@ -49,6 +58,10 @@ internal sealed class NoQaContentFacts : IQaContentFacts
     public int? QuestLevel(uint quest) => null;
 
     public IReadOnlyList<uint> QuestObjectiveCreatures(uint quest) => [];
+
+    public IReadOnlyList<uint> QuestEnderEntries(uint quest) => [];
+
+    public IReadOnlyList<QaEnderFact> QuestEnders(uint quest, uint entry) => [];
 
     public int SpawnCount(uint map, uint entry) => 0;
 
@@ -83,6 +96,29 @@ internal sealed class PlayerbotQaContentFacts(IServiceProvider services) : IQaCo
         if (quest == 0 || Quests?.Get(quest) is not { } q) return [];
         return [.. q.ReqCreatureOrGOId.Where(id => id > 0).Select(id => (uint)id).Distinct()];
     }
+
+    public IReadOnlyList<uint> QuestEnderEntries(uint quest)
+        => quest == 0 || Quests is not { } quests ? [] : [.. quests.CreatureEndersOf(quest).Distinct()];
+
+    public IReadOnlyList<QaEnderFact> QuestEnders(uint quest, uint entry)
+    {
+        if (quest == 0 || Quests is not { } quests || Creatures?.Content is not { } content || !quests.CreatureEndersOf(quest).Contains(entry)) return [];
+        string name = content.FindTemplate(entry)?.Name ?? string.Empty;
+        var found = new List<QaEnderFact>();
+        foreach (uint map in content.MapsWithSpawns)
+        {
+            foreach (CreatureSpawn spawn in content.GetSpawns(map, entry))
+            {
+                if (found.Count >= MaxEnderSpawns) return found;
+                found.Add(new QaEnderFact(entry, name, map, spawn.X, spawn.Y, spawn.Z));
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>A quest has a handful of ender spawns; the cap bounds a pathological row.</summary>
+    private const int MaxEnderSpawns = 64;
 
     public int SpawnCount(uint map, uint entry) => Creatures?.Content.GetSpawns(map, entry).Count ?? 0;
 
