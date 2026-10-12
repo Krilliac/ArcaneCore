@@ -54,12 +54,26 @@ public sealed class NavTileSyncCounterTests : IDisposable
         TileLoadDetail slowest = PathSearchCounters.SlowestSyncTile;
         Assert.Equal((0u, 31, 31), (slowest.MapId, slowest.X, slowest.Y));
         Assert.False(slowest.PrefetchHit);
-        Assert.Equal(processReads + 1, PathSearchCounters.ProcessTileReads.Reads);
+        // Process-wide and shared with tests running in parallel: other classes may add reads, never remove ours.
+        Assert.True(PathSearchCounters.ProcessTileReads.Reads >= processReads + 1);
 
         // The same tile again (a second grid over it): resident, so nothing more is counted.
         ((ICollisionTileLifecycle)nav).OnTileLoaded(0, 31, 31);
         Assert.Equal(1, (PathSearchCounters.Current - before).SyncTileReads);
         Assert.Equal(1, _tileReads);
+    }
+
+    [Fact]
+    public void ATileThatInstallsNothing_IsAFailure_NotAnInstall()
+    {
+        NavMeshPathfinder nav = Pathfinder();
+        PathSearchTotals before = PathSearchCounters.Current;
+
+        ((ICollisionTileLifecycle)nav).OnTileLoaded(0, 5, 5); // no such tile file
+
+        PathSearchTotals spent = PathSearchCounters.Current - before;
+        Assert.Equal(0, spent.SyncTileReads);
+        Assert.Equal(1, spent.TileLoadFailures);
     }
 
     [Fact]

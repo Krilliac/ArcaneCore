@@ -154,6 +154,11 @@ internal sealed class MapUpdateDiagnostics
 
         sb.Append("; navmesh tile reads on world thread: ").Append(Tiles.SyncTileReads).Append(" (")
             .Append(Tiles.SyncTileReadMs.ToString("F1", CultureInfo.InvariantCulture)).Append(" ms)");
+        if (Tiles.TileLoadFailures > 0)
+        {
+            sb.Append(", failed ").Append(Tiles.TileLoadFailures);
+        }
+
         if (Tiles.TilesPending > 0)
         {
             sb.Append(", pending ").Append(Tiles.TilesPending);

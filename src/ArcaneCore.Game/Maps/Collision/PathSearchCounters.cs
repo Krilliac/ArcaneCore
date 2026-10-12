@@ -18,6 +18,7 @@ public static class PathSearchCounters
     [ThreadStatic] private static long t_capped;
     [ThreadStatic] private static long t_tilesPending;
     [ThreadStatic] private static long t_gridTileLoads;
+    [ThreadStatic] private static long t_tileFailures;
     [ThreadStatic] private static long t_gridTileLoadTicks;
     [ThreadStatic] private static TileLoadDetail t_slowestSync;
     [ThreadStatic] private static bool t_captureTiles;
@@ -44,7 +45,7 @@ public static class PathSearchCounters
 
     /// <summary>This thread's totals so far.</summary>
     public static PathSearchTotals Current => new(t_searches, t_nodes, t_expansions, t_tileLoads, t_tileLoadTicks, t_capped, t_tilesPending,
-        t_gridTileLoads, t_gridTileLoadTicks);
+        t_gridTileLoads, t_gridTileLoadTicks, t_tileFailures);
 
     /// <summary>
     /// The slowest navigation tile installation (an on-demand read or a grid's tile load) on this thread since
@@ -81,25 +82,28 @@ public static class PathSearchCounters
         if (capped) t_capped++;
     }
 
-    /// <summary>A navigation tile was read for a query, taking <paramref name="ticks"/> (<see cref="Stopwatch"/> ticks).</summary>
-    internal static void RecordTileLoad(long ticks, uint mapId, int tileX, int tileY, bool prefetchHit)
+    /// <summary>
+    /// A navigation tile was read for a query, taking <paramref name="ticks"/> (<see cref="Stopwatch"/> ticks). A read that installed
+    /// nothing (<paramref name="installed"/> false: no such tile, unreadable file) counts as a failure, but its time still counts.
+    /// </summary>
+    internal static void RecordTileLoad(long ticks, uint mapId, int tileX, int tileY, bool prefetchHit, bool installed = true)
     {
-        t_tileLoads++;
+        if (installed) t_tileLoads++; else t_tileFailures++;
         t_tileLoadTicks += ticks;
-        NoteSync(ticks, mapId, tileX, tileY, prefetchHit);
+        NoteSync(ticks, mapId, tileX, tileY, prefetchHit, installed);
     }
 
     /// <summary>A grid's navigation tile was installed on this thread (<c>OnTileLoaded</c>), taking <paramref name="ticks"/>; a prefetch hit only adds the parsed tile.</summary>
-    internal static void RecordGridTileLoad(long ticks, uint mapId, int tileX, int tileY, bool prefetchHit)
+    internal static void RecordGridTileLoad(long ticks, uint mapId, int tileX, int tileY, bool prefetchHit, bool installed = true)
     {
-        t_gridTileLoads++;
+        if (installed) t_gridTileLoads++; else t_tileFailures++;
         t_gridTileLoadTicks += ticks;
-        NoteSync(ticks, mapId, tileX, tileY, prefetchHit);
+        NoteSync(ticks, mapId, tileX, tileY, prefetchHit, installed);
     }
 
-    private static void NoteSync(long ticks, uint mapId, int tileX, int tileY, bool prefetchHit)
+    private static void NoteSync(long ticks, uint mapId, int tileX, int tileY, bool prefetchHit, bool installed)
     {
-        Interlocked.Increment(ref s_processTileReads);
+        if (installed) Interlocked.Increment(ref s_processTileReads);
         Interlocked.Add(ref s_processTileReadTicks, ticks);
         if (ticks > t_slowestSync.Ticks)
             t_slowestSync = new TileLoadDetail(mapId, tileX, tileY, ticks, prefetchHit);
@@ -113,12 +117,12 @@ public readonly record struct TileLoadDetail(uint MapId, int X, int Y, long Tick
 
 /// <summary>A snapshot of <see cref="PathSearchCounters"/>; the difference of two is the work between them.</summary>
 public readonly record struct PathSearchTotals(long Searches, long Nodes, long Expansions, long TileLoads, long TileLoadTicks, long Capped, long TilesPending = 0,
-    long GridTileLoads = 0, long GridTileLoadTicks = 0)
+    long GridTileLoads = 0, long GridTileLoadTicks = 0, long TileLoadFailures = 0)
 {
     public static PathSearchTotals operator -(PathSearchTotals a, PathSearchTotals b)
         => new(a.Searches - b.Searches, a.Nodes - b.Nodes, a.Expansions - b.Expansions, a.TileLoads - b.TileLoads,
             a.TileLoadTicks - b.TileLoadTicks, a.Capped - b.Capped, a.TilesPending - b.TilesPending,
-            a.GridTileLoads - b.GridTileLoads, a.GridTileLoadTicks - b.GridTileLoadTicks);
+            a.GridTileLoads - b.GridTileLoads, a.GridTileLoadTicks - b.GridTileLoadTicks, a.TileLoadFailures - b.TileLoadFailures);
 
     /// <summary>The tile reads' time in milliseconds.</summary>
     public double TileLoadMs => TileLoadTicks * 1000.0 / Stopwatch.Frequency;

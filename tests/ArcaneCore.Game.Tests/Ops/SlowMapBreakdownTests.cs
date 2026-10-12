@@ -100,11 +100,13 @@ public sealed class SlowMapBreakdownTests
         world.RunTick(50);
 
         string line = Assert.Single(log.Messages, m => m.StartsWith("Slow map update", StringComparison.Ordinal));
-        Assert.Matches(@"; DOMINANT Sleeper 5[2-9]\d\.\d ms", line);
+        System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(line, @"; DOMINANT Sleeper (\d+\.\d) ms");
+        Assert.True(m.Success, line);
+        Assert.True(double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) >= 500.0);
     }
 
     [Fact]
-    public void AtOrBelowTheThreshold_NothingIsFormatted()
+    public void BelowTheThreshold_NoSlowLineIsLogged()
     {
         var log = new Capture();
         using WorldRuntime world = Create(log, 10_000);

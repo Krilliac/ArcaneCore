@@ -156,8 +156,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
         // The grid's tile is installed on the world thread: a prefetch hit only adds the parsed tile, a miss reads the file here.
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        LoadTile(mapId, tileX, tileY, out bool prefetchHit);
-        PathSearchCounters.RecordGridTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - started, mapId, tileX, tileY, prefetchHit);
+        bool installed = LoadTile(mapId, tileX, tileY, out bool prefetchHit);
+        PathSearchCounters.RecordGridTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - started, mapId, tileX, tileY, prefetchHit, installed);
     }
 
     void ICollisionTileLifecycle.OnTileUnloaded(uint mapId, int tileX, int tileY)
@@ -472,7 +472,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         bool prefetchHit = readTile is not null;
         bool loaded = readTile is not null ? InstallReadTile(mapId, terrain.X, terrain.Y, readTile) : LoadTile(mapId, terrain.X, terrain.Y, out prefetchHit);
         PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted,
-            mapId, terrain.X, terrain.Y, prefetchHit);
+            mapId, terrain.X, terrain.Y, prefetchHit, loaded);
         if (!loaded)
         {
             if (_noTile.Count < 16_384)
