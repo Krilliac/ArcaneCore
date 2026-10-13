@@ -93,4 +93,57 @@ public sealed class GmClientHandlersTests
         MovementInfo arrival = await AcknowledgeAsync(gm, host, "Gctugm");
         Assert.Equal((-8700f, -100f, 96f), (arrival.X, arrival.Y, arrival.Z));
     }
+
+    private static byte[] RawPosition(float x, float y, float z, float o)
+    {
+        var w = new PacketWriter(16);
+        w.WriteSingle(x);
+        w.WriteSingle(y);
+        w.WriteSingle(z);
+        w.WriteSingle(o);
+        return w.ToArray();
+    }
+
+    [Fact]
+    public async Task SetRawPosition_PlainPlayer_GetsNoPermission_AdministratorMovesOnTheSameMap()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("GCRPP", "Gcrpp");
+        await using WorldTestClient admin = await host.EnterWorldAsync("GCRPA", "Gcrpa", AccountSecurity.Administrator);
+        await host.PlaceAsync("Gcrpa", -8800f, -100f, 90f);
+        await player.CollectAsync(Quiet);
+        await admin.CollectAsync(Quiet);
+
+        await player.SendAsync(WorldOpcode.MsgMoveTeleportCheat, RawPosition(-8700f, -100f, 91f, 0f));
+        Assert.Equal(GmClientHandlers.NoPermission, new PacketReader(await player.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
+        Assert.DoesNotContain(await player.CollectAsync(Quiet), p => p.Opcode == WorldOpcode.MsgMoveTeleportAck);
+
+        await admin.SendAsync(WorldOpcode.CmsgMoveSetRawPosition, RawPosition(-8700f, -100f, 91f, 0f));
+        MovementInfo arrival = await AcknowledgeAsync(admin, host, "Gcrpa");
+        Assert.Equal((-8700f, -100f, 91f), (arrival.X, arrival.Y, arrival.Z));
+    }
+
+    [Fact]
+    public async Task Whois_AdministratorOnly_NamesTheAccount_OrSaysWhyNot()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("GCWHP", "Gcwhp");
+        await using WorldTestClient admin = await host.EnterWorldAsync("GCWHA", "Gcwha", AccountSecurity.Administrator);
+        await player.CollectAsync(Quiet);
+        await admin.CollectAsync(Quiet);
+
+        await player.SendAsync(WorldOpcode.CmsgWhois, Name("Gcwha"));
+        Assert.Equal(GmClientHandlers.NoPermission, new PacketReader(await player.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
+        Assert.DoesNotContain(await player.CollectAsync(Quiet), p => p.Opcode == WorldOpcode.SmsgWhois);
+
+        await admin.SendAsync(WorldOpcode.CmsgWhois, Name(""));
+        Assert.Equal(GmClientHandlers.NeedCharacterName, new PacketReader(await admin.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
+
+        await admin.SendAsync(WorldOpcode.CmsgWhois, Name("nobodyhere"));
+        Assert.Equal("Player Nobodyhere not found or offline", new PacketReader(await admin.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
+
+        await admin.SendAsync(WorldOpcode.CmsgWhois, Name("gcwhp"));
+        string text = new PacketReader(await admin.ReadUntilAsync(WorldOpcode.SmsgWhois)).ReadCString();
+        Assert.StartsWith("Gcwhp's account is GCWHP, e-mail: Unknown, last ip: ", text);
+    }
 }

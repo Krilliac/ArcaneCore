@@ -106,7 +106,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_CREATURE_QUERY_RESPONSE` | `0x0061` | — | 3 | decoded |
 | `CMSG_WHO` | `0x0062` | handled | — | — |
 | `SMSG_WHO` | `0x0063` | — | 23 | decoded |
-| `CMSG_WHOIS` | `0x0064` | unhandled | — | — |
+| `CMSG_WHOIS` | `0x0064` | handled | — | — |
 | `SMSG_WHOIS` | `0x0065` | — | 0 | — |
 | `CMSG_FRIEND_LIST` | `0x0066` | handled | — | — |
 | `SMSG_FRIEND_LIST` | `0x0067` | — | 1839 | decoded |
@@ -204,7 +204,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `MSG_MOVE_SET_WALK_MODE` | `0x00C3` | handled | 0 | — |
 | `MSG_MOVE_TOGGLE_LOGGING` | `0x00C4` | unhandled | 0 | — |
 | `MSG_MOVE_TELEPORT` | `0x00C5` | unhandled | 313 | allowlisted |
-| `MSG_MOVE_TELEPORT_CHEAT` | `0x00C6` | unhandled | 0 | — |
+| `MSG_MOVE_TELEPORT_CHEAT` | `0x00C6` | handled | 0 | — |
 | `MSG_MOVE_TELEPORT_ACK` | `0x00C7` | handled | 240 | decoded |
 | `MSG_MOVE_TOGGLE_FALL_LOGGING` | `0x00C8` | unhandled | 0 | — |
 | `MSG_MOVE_FALL_LAND` | `0x00C9` | handled | 0 | — |
@@ -231,7 +231,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_MOVE_WATER_WALK` | `0x00DE` | — | 59 | decoded |
 | `SMSG_MOVE_LAND_WALK` | `0x00DF` | — | 33 | decoded |
 | `MSG_MOVE_SET_RAW_POSITION_ACK` | `0x00E0` | unhandled | 0 | — |
-| `CMSG_MOVE_SET_RAW_POSITION` | `0x00E1` | unhandled | — | — |
+| `CMSG_MOVE_SET_RAW_POSITION` | `0x00E1` | handled | — | — |
 | `SMSG_FORCE_RUN_SPEED_CHANGE` | `0x00E2` | — | 7 | decoded |
 | `CMSG_FORCE_RUN_SPEED_CHANGE_ACK` | `0x00E3` | handled | — | — |
 | `SMSG_FORCE_RUN_BACK_SPEED_CHANGE` | `0x00E4` | — | 1 | decoded |
