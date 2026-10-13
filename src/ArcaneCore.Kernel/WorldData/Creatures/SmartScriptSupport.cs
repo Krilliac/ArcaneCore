@@ -31,7 +31,7 @@ public static class SmartScriptSupport
 
     // ---- actions ----
 
-    private static readonly FrozenSet<byte> CreatureActions = new byte[] { 1, 5, 11, 12, 17, 22, 23, 24, 28, 30, 31, 41, 67, 69, 73, 74, 80, 87, 88 }.ToFrozenSet();
+    private static readonly FrozenSet<byte> CreatureActions = new byte[] { 1, 2, 3, 5, 11, 12, 17, 20, 21, 22, 23, 24, 28, 30, 31, 37, 41, 67, 69, 73, 74, 80, 87, 88 }.ToFrozenSet();
 
     // SUMMON_CREATURE (12) and MOVE_TO_POS (69) need a creature owner; a GO has no summoner or motion master here.
     private static readonly FrozenSet<byte> GameObjectActions = new byte[] { 1, 11, 22, 23, 30, 31, 67, 73, 74, 80, 87, 88 }.ToFrozenSet();
@@ -115,6 +115,7 @@ public static class SmartScriptSupport
                 (SmartScriptSource.GameObject, 12) => ": CreatureMapSystem.SummonAt needs a creature summoner",
                 (SmartScriptSource.GameObject, 69) => ": a game object has no motion master",
                 (SmartScriptSource.GameObject, 24) => ": a game object cannot evade",
+                (SmartScriptSource.GameObject, 20 or 21 or 37) => ": the action acts on the script's own creature",
                 (SmartScriptSource.AreaTrigger, 11) => ": AzerothCore summons a trigger creature to cast and ArcaneCore has none",
                 (SmartScriptSource.AreaTrigger, 22 or 23 or 30 or 31 or 67 or 73 or 74) => ": the area-trigger script lives for one trigger only",
                 _ => string.Empty,

@@ -93,7 +93,8 @@ public sealed class SmartScript
         if (!Enum.IsDefined((SmartAction)row.ActionType)) return $"action {row.ActionType} (row {row.Id})";
         if (!Enum.IsDefined((SmartTarget)row.TargetType)) return $"target {row.TargetType} (row {row.Id})";
         // SUMMON_CREATURE and MOVE_TO_POS act through the creature the script belongs to; an owner without one cannot run them.
-        if (Me is null && row.ActionType is (byte)SmartAction.SummonCreature or (byte)SmartAction.MoveToPos or (byte)SmartAction.Evade)
+        if (Me is null && row.ActionType is (byte)SmartAction.SummonCreature or (byte)SmartAction.MoveToPos or (byte)SmartAction.Evade
+            or (byte)SmartAction.AutoAttack or (byte)SmartAction.AllowCombatMovement or (byte)SmartAction.Die)
             return $"action {row.ActionType} needs a creature owner (row {row.Id})";
         return null;
     }
@@ -362,6 +363,40 @@ public sealed class SmartScript
                         system.SummonAt(me, r.ActionParam1, t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ, t.Orientation, attack, r.ActionParam3);
                 }
 
+                break;
+            case SmartAction.SetFaction:
+                // SMART_ACTION_SET_FACTION: every creature target takes param1, or its template faction back for 0.
+                foreach (Creature c in targets.OfType<Creature>()) c.FactionTemplate = r.ActionParam1 != 0 ? r.ActionParam1 : c.Template.Faction;
+                break;
+            case SmartAction.MorphToEntryOrModel:
+                // SMART_ACTION_MORPH_TO_ENTRY_OR_MODEL: a model of template param1, else model param2, else the native model.
+                foreach (Creature c in targets.OfType<Creature>())
+                {
+                    if (r.ActionParam1 != 0)
+                    {
+                        if (system?.Content.FindTemplate(r.ActionParam1) is { } template)
+                            c.DisplayId = Creature.ChooseDisplayId(template, new Random((int)Rand(0, int.MaxValue - 1)));
+                    }
+                    else c.DisplayId = r.ActionParam2 != 0 ? r.ActionParam2 : c.NativeDisplayId;
+                }
+
+                break;
+            case SmartAction.AutoAttack:
+                // SMART_ACTION_AUTO_ATTACK: `me` starts or stops its melee swing.
+                if (me?.AI is CreatureSmartAI smartAi) smartAi.SetMeleeEnabled(r.ActionParam1 != 0);
+                break;
+            case SmartAction.AllowCombatMovement:
+                // SMART_ACTION_ALLOW_COMBAT_MOVEMENT: `me` chases its victim or stands still.
+                if (me?.AI is { } meAi && meAi.CombatMovement != (r.ActionParam1 != 0))
+                {
+                    meAi.CombatMovement = r.ActionParam1 != 0;
+                    system?.ApplyCombatMovement(me);
+                }
+
+                break;
+            case SmartAction.Die:
+                // SMART_ACTION_DIE: `me` dies (no killer).
+                if (system is not null && me is { IsAlive: true }) system.KillCreature(me);
                 break;
             case SmartAction.PlayEmote:
                 // SmartScript.cpp SMART_ACTION_PLAY_EMOTE: every unit target plays the emote. Players have no emote seam here, so only creatures do.
