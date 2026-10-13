@@ -6,8 +6,10 @@ namespace ArcaneCore.Game.Stealth;
 /// <summary>
 /// vmangos Player::HandleStealthedUnitsDetection (Player.cpp:22007-22052), driven by the player update timer
 /// (Player.cpp:272, 1141-1151: first run after 1000 ms, then every 2000 ms): every player re-evaluates, in detect mode, each stealthed
-/// unit of the map (the distance limit is part of the detection formula), so a unit appears when it comes into detection distance
-/// and disappears when it leaves it. The updater does no work, not even timer upkeep, while no unit is stealthed (the timers restart at the next stealth, so the phase of the 2000 ms cadence is not retail-exact).
+/// unit of the map that the check can still change. A unit the player does not see, standing beyond
+/// <see cref="StealthOptions.MaxPlayerDetectRange"/>, cannot be detected and is skipped. A unit already visible is always
+/// rechecked, so it disappears when it walks out. The updater does no work, not even timer upkeep, while no unit is stealthed
+/// (the timers restart at the next stealth, so the phase of the 2000 ms cadence is not retail-exact).
 /// </summary>
 public sealed class StealthDetectionUpdater : IMapUpdater
 {
@@ -67,6 +69,11 @@ public sealed class StealthDetectionUpdater : IMapUpdater
     private void Pass(Map map, Player player)
     {
         PassesRun++;
+        // Player detectors use MaxPlayerDetectRange (StealthDetection; creature detectors use MaxCreatureDetectRange in
+        // StealthServices). The distance is the 3D center distance StealthVisibilityRule feeds CanDetectStealthOf, which
+        // rejects anything past the cap. A unit the player already sees is still rechecked so it drops on the way out.
+        float range = (StealthServices.Find(map)?.Options ?? StealthOptions.Default).MaxPlayerDetectRange;
+        float rangeSq = range * range;
         foreach (Unit unit in _registry.Stealthed())
         {
             if (ReferenceEquals(unit, player) || !ReferenceEquals(unit.Map, map))
@@ -74,9 +81,17 @@ public sealed class StealthDetectionUpdater : IMapUpdater
                 continue;
             }
 
-            // vmangos visits whole cells around the player (Cell::VisitAllObjects) and AnyStealthedCheck has no distance test, so units
-            // past the maximum detect range are evaluated too: CanDetectStealthOf says no and a unit already in the list is dropped.
-            // The visibility range check inside the update ignores units too far away to matter.
+            if (!player.VisibleObjects.Contains(unit.Guid))
+            {
+                float dx = player.X - unit.X;
+                float dy = player.Y - unit.Y;
+                float dz = player.Z - unit.Z;
+                if ((dx * dx) + (dy * dy) + (dz * dz) > rangeSq)
+                {
+                    continue;
+                }
+            }
+
             map.UpdateVisibilityWithDetection(player, unit);
         }
     }
