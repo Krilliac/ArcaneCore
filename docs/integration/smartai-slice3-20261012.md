@@ -24,7 +24,20 @@ action 24 (it needs a creature owner, like 12 and 69).
   target with param1 0 keeps its auras. The `onlyOwnedAuras` param is ignored.
 - **FORCE_DESPAWN respawn param.** AzerothCore's param2 (forced respawn timer) is ignored; a database spawn respawns after its own delay.
 
-## Still open (slice 3b and later)
+## Slice 3b (branch `grok/w37-smartai-slice3b`)
+
+| Action | Name | Behaviour here |
+|---|---|---|
+| 2 | SET_FACTION | Every creature target takes faction param1; 0 restores its template faction. |
+| 3 | MORPH_TO_ENTRY_OR_MODEL | Every creature target wears a model of template param1, else model param2, else its native model. |
+| 20 | AUTO_ATTACK | `me` starts (param1 1) or stops (0) its melee swing. |
+| 21 | ALLOW_COMBAT_MOVEMENT | `me` chases its victim (1) or stands (0); no change when already so. |
+| 37 | DIE | `me` dies without a killer (`CreatureMapSystem.KillCreature`). |
+
+Actions 20, 21 and 37 act on the script's own creature, so a game object row with them is refused, and a game-object-run timed list skips them.
+The creature action set is now `1, 2, 3, 5, 11, 12, 17, 20, 21, 22, 23, 24, 28, 30, 31, 37, 41, 67, 69, 73, 74, 80, 87, 88`.
+
+## Still open (slice 3c and later)
 
 The remaining rejected events, actions and targets in the slice-2 tables, AIName for game objects, and ending the area-trigger handler when a
 script ran.
