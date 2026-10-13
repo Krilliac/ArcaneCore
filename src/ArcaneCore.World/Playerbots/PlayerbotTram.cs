@@ -33,6 +33,35 @@ internal sealed record TramPlatform(AreaTriggerTemplate Entrance, AreaTriggerTel
 
     public Vector3 EntranceCentre => new(Entrance.X, Entrance.Y, Entrance.Z);
 
+    /// <summary>How far inside the entrance volume's circle on the continent floor <see cref="Approach"/> stands.</summary>
+    internal const float ApproachInsetYards = 2f;
+
+    /// <summary>
+    /// Where a bot walks to take this entrance: on the continent floor (the height <see cref="Arrival"/> puts a player at), inside the
+    /// entrance volume, on the landing's side of it. The trigger centre is the middle of the instance volume. Ironforge's (2175) floats
+    /// 6.3 yards above that floor, outside the pathfinder's near box (5 yards) and <see cref="PlayerbotNavigation.ProjectedEndYards"/> (6),
+    /// so a way to the centre from the continent is not a walk onto a point the mesh will stand on (live 2026-10-12).
+    /// </summary>
+    public Vector3 Approach
+    {
+        get
+        {
+            Vector3 centre = EntranceCentre;
+            Vector3 landing = Arrival;
+            if (Entrance.Radius <= 0f) return centre;
+            float rise = centre.Z - landing.Z;
+            float circleSq = (Entrance.Radius * Entrance.Radius) - (rise * rise);
+            if (circleSq <= 0.25f) return centre; // the recorded floor does not meet the volume
+            float along = MathF.Max(0f, MathF.Sqrt(circleSq) - ApproachInsetYards);
+            float dx = landing.X - centre.X, dy = landing.Y - centre.Y;
+            float flat = MathF.Sqrt((dx * dx) + (dy * dy));
+            if (flat < 0.5f) return new Vector3(centre.X, centre.Y, landing.Z);
+            along = MathF.Min(along, MathF.Max(0f, flat - 0.25f));
+            float scale = along / flat;
+            return new Vector3(centre.X + (dx * scale), centre.Y + (dy * scale), landing.Z);
+        }
+    }
+
     /// <summary>Where the entrance puts a player on the tram map.</summary>
     public Vector3 Landing => new(EntranceTeleport.TargetX, EntranceTeleport.TargetY, EntranceTeleport.TargetZ);
 
@@ -200,7 +229,8 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
 
 /// <summary>
 /// Autonomous bots ride the Deeprun Tram between Stormwind and Ironforge the way a player does (docs/areas/playbots.md, "Travel by the
-/// Deeprun Tram"): walk into the entrance trigger, arrive on the tram map, walk to the platform beside a car that will stop there, wait,
+/// Deeprun Tram"): walk to a point on the continent floor inside the entrance trigger (<see cref="TramPlatform.Approach"/>), arrive on
+/// the tram map, walk to the platform beside a car that will stop there, wait,
 /// step aboard when it stands at the platform, ride it through the tunnel, step off when it stands at the other platform, and walk into
 /// that platform's exit trigger. The trip is begun by a goal that travels (<see cref="PlayerbotWorldDestinations"/>) when
 /// <see cref="TramNetwork.Choose"/> says the destination lies on the other side, and is then driven by the brain before anything else
@@ -406,7 +436,7 @@ internal static class PlayerbotTram
 
         if (map.MapId != trip.From.ContinentMap)
             return Fail(session, player, trip, now, $"tram: left for map {map.MapId} on the way to the {trip.From.Name} entrance");
-        if (!Walk(session, player, trip, trip.From.EntranceCentre, options, elapsedMs, now, toward: true))
+        if (!Walk(session, player, trip, trip.From.Approach, options, elapsedMs, now, toward: true))
         {
             return Fail(session, player, trip, now, string.Create(CultureInfo.InvariantCulture,
                 $"tram: no way to the {trip.From.Name} entrance from {player.X:F1},{player.Y:F1},{player.Z:F1}"));
