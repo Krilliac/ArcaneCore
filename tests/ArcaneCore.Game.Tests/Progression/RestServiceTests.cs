@@ -170,6 +170,38 @@ public sealed class RestServiceTests
     }
 
     [Fact]
+    public void APvPEnforcedCapital_DoesNotStartACityRest_AndEndsOneThatIsNotAnInn()
+    {
+        (Player player, PlayerProgression progression, RestService rest, _) = Create();
+
+        // vmangos Player::UpdateZone: city rest is CAPITAL && !inPvPEnforcedArea. Horde in Stormwind (or Alliance in
+        // Orgrimmar) is enforced even on a PvE realm, so standing there must not rest and must not grow the pool.
+        PvpAreaState.Set(player, true);
+        rest.OnZoneEntered(player, Capital, 0);
+        Assert.Equal(RestType.None, rest.GetRestType(player));
+        Assert.False(RestService.IsResting(player));
+        rest.Update(EightHoursMs, new Environment());
+        Assert.Equal(0f, progression.RestBonus(player));
+
+        // A city rest already in progress ends on entering that capital, so the tick no longer adds to the pool.
+        PvpAreaState.Set(player, false);
+        rest.OnZoneEntered(player, Capital, 1_000);
+        Assert.Equal(RestType.InCity, rest.GetRestType(player));
+        PvpAreaState.Set(player, true);
+        rest.OnZoneEntered(player, Capital, 2_000);
+        Assert.Equal(RestType.None, rest.GetRestType(player));
+        rest.Update(2_000 + EightHoursMs, new Environment());
+        Assert.Equal(0f, progression.RestBonus(player));
+
+        // An inn is not cleared (the else-if excludes REST_TYPE_IN_TAVERN); the hostile capital does not override it.
+        rest.OnTavernTrigger(player, 1, 3_000);
+        rest.OnZoneEntered(player, Capital, 4_000);
+        Assert.Equal(RestType.InTavern, rest.GetRestType(player));
+        Assert.True(RestService.IsResting(player));
+        Assert.Equal(1u, rest.TavernTrigger(player));
+    }
+
+    [Fact]
     public void ATavernRest_SurvivesAZoneChange_ButACityOverridesIt_AndIsNotOverwrittenByATavernTrigger()
     {
         (Player player, _, RestService rest, _) = Create();
