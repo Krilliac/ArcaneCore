@@ -223,7 +223,19 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             return;
         }
 
-        uint mount = player.Team == Team.Alliance ? source?.MountAlliance ?? 0 : source?.MountHorde ?? 0;
+        // ContinueTaxiFlight asks for the other faction's mount when this node's own is missing
+        // (vmangos Player.cpp:18118 → GetTaxiMountDisplayId allowed_alt_team, ObjectMgr.cpp:7423-7434).
+        // A flight-master takeoff does not; only a resumed route does.
+        uint mount = 0;
+        if (source is { } start)
+        {
+            bool alliance = player.Team == Team.Alliance;
+            mount = alliance ? start.MountAlliance : start.MountHorde;
+            if (mount == 0)
+            {
+                mount = alliance ? start.MountHorde : start.MountAlliance;
+            }
+        }
         if (player.IsAlive && mount != 0 && Flights?.ResumeFlight(player, route, mount,
             (p, cost) => services.GetService<QuestNpcFeature>()?.Services.TryCharge(p, cost) == true) == true)
         {
