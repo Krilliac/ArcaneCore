@@ -257,8 +257,10 @@ live 2026-10-11, 117 dwarf and gnome bots with Dun Morogh, Ironforge and Loch Mo
   landing whose teleport lands back beside it (2171, 2166). Anything else (one entrance, an exit missing or landing elsewhere) is no
   tram, and no bot rides. The cars are the map-wide elevators of map 369 (the six "Subway" objects 176080-176085 and their
   TransportAnimation.dbc paths; docs/areas/transports.md).
-* **The trip** (`TramStage`): walk into the entrance trigger (the bot may take that one teleport only while its trip heads there,
-  `PlayerbotAreaTriggers.AllowTeleportsTo(369)`); on the tram map, pick the car that stops at this platform soonest at a time the bot can
+* **The trip** (`TramStage`): walk to a point on the continent floor inside the entrance trigger, on the side of the exit's landing
+  (`TramPlatform.Approach`; the bot may take that one teleport only while its trip heads there,
+  `PlayerbotAreaTriggers.AllowTeleportsTo(369)`). The trigger centre is not that point: it is the middle of the instance volume, and
+  Ironforge's floats 6.3 yards above the floor. On the tram map, pick the car that stops at this platform soonest at a time the bot can
   be beside it (`PlayerbotTram.NextDock` samples the car's animation every 250 ms over two cycles), walk to the platform spot beside
   where it will stand (8.6 yards off the track's centre line, the car's half width from its model bounds plus two, where the floor is
   level with the landing), wait, and step aboard when it stands there. Aboard, the bot reports what a client standing on a transport
@@ -310,6 +312,13 @@ still where it started, logged as `tram: the trip failed` without a reason. Two 
 the entrance at 328 s, aboard at 346 s, out at Ironforge at 427 s (before: still at Sentinel Hill, failed at 60.7 s with "tram: the trip
 failed"). `PlayerbotTramFarStartTests` is the same in the fixture world (a 2,330-yard incomplete way under the trigger; a trip with no way
 fails with its reason; the height bound for the partial and the exact planner: 4.75 yards under the destination accepted, 10 refused).
+
+**Live 2026-10-12.** 406 refusals of `tram: no way to the Deeprun Tram - Ironforge Instance entrance` (Dun Morogh -6598, 314 and
+-6494, 324; Loch Modan -5568, -453; Wetlands -4716, -888) and some of the Stormwind entrance (-9067, 8). The walk aimed at the trigger
+centre. Ironforge's centre is 6.3 yards above the continent floor the paired exit stands a player on, outside the pathfinder's near box
+(5 yards) and `ProjectedEndYards` (6): on a mesh of that floor the way to the centre is incomplete and is not an arrival, so a Loch Modan
+start (inside one route) is refused whole. The approach is that floor, inside the volume, on the landing's side
+(`PlayerbotTramEntranceApproachTests`).
 
 Tests: `PlayerbotTramRouteTests` (the brain drives a bot from the Stormwind tram exit to Ironforge with the classic-db trigger and car
 rows, a synthetic animation and flat floors, with the anticheat judging the bot as a client: no fake transport, no speed; a destination of

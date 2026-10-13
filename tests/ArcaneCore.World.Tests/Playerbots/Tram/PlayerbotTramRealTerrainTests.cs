@@ -97,14 +97,14 @@ public sealed class PlayerbotTramRealTerrainTests(ITestOutputHelper output)
             Assert.Equal(2175u, from);
             (bool planned, double planMs) = await host.OnWorldAsync(() =>
             {
-                Vector3 entrance = PlayerbotTram.TripOf(player)!.From.EntranceCentre;
+                Vector3 entrance = PlayerbotTram.TripOf(player)!.From.Approach;
                 var watch = Stopwatch.StartNew();
                 bool planned = PlayerbotNavigation.TryPlanToward(player, entrance,
                     new PlayerbotOptions { Enabled = true }, out PlayerbotRoute? route) && route is not null;
                 return (planned, watch.Elapsed.TotalMilliseconds);
             });
-            output.WriteLine($"first walking leg to Ironforge planned={planned}; {planMs:F2} ms");
-            Assert.True(planned, "Coldridge bot could not plan its first leg to the Ironforge tram entrance");
+            output.WriteLine($"first walking leg to the Ironforge approach planned={planned}; {planMs:F2} ms");
+            Assert.True(planned, "Coldridge bot could not plan its first leg to the Ironforge tram approach");
         }
         finally
         {
