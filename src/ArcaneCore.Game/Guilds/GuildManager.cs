@@ -97,12 +97,37 @@ public sealed partial class GuildManager(SocialContext context)
                 continue;
             }
 
-            if (guild.Find(guild.LeaderId) is null)
+            // vmangos Guild::CheckGuildStructure (Guild.cpp:328-350).
+            bool repaired = false;
+            if (guild.Find(guild.LeaderId) is not { } leader)
             {
-                // vmangos Guild::LoadMembersFromDB: a missing leader is replaced by the best ranked member.
+                // DelMember (Guild.cpp:539-561): a missing leader is replaced by the best ranked member,
+                // with no broadcast (the old slot is gone).
                 GuildMember best = guild.Members.OrderBy(m => m.Rank).First();
-                guild.LeaderId = best.CharacterId;
-                best.Rank = Guild.GuildMasterRank;
+                SetLeader(guild, best);
+                repaired = true;
+            }
+            else if (leader.Rank != Guild.GuildMasterRank)
+            {
+                // The leader's rank is the guild master's (Guild.cpp:339-340). Left on a lower rank,
+                // the leader cannot invite, speak or remove.
+                ChangeRank(guild, leader, Guild.GuildMasterRank);
+                repaired = true;
+            }
+
+            // Only the leader may sit on the guild master rank (Guild.cpp:342-348). A second one
+            // cannot be demoted or removed: both refuse rank 0.
+            foreach (GuildMember member in guild.Members)
+            {
+                if (member.CharacterId != guild.LeaderId && member.Rank == Guild.GuildMasterRank)
+                {
+                    ChangeRank(guild, member, Guild.OfficerRank);
+                    repaired = true;
+                }
+            }
+
+            if (repaired)
+            {
                 Save(guild);
             }
 
