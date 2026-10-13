@@ -165,6 +165,59 @@ internal static class PopulationBandPlanner
     }
 
     /// <summary>
+    /// Fresh launch with the start-zone cap (<see cref="PlayerbotPopulationOptions.FreshStartZoneCap"/>). The faction is chosen as in
+    /// <see cref="PlanFresh(PlayerbotPopulationOptions, int, int, PopulationRaceClassCache, Random)"/>, then the classes of the faction
+    /// in random order; the first class with a race whose start area holds fewer than <paramref name="cap"/> bots wins, and of its
+    /// open races the one in the least crowded area (ties at random), which spreads the bots over the six start areas. When the
+    /// preferred faction has no open area and both factions are configured, the other faction is tried (the share is kept whenever a
+    /// start area is open). <paramref name="startCounts"/> maps an area key (<see cref="PopulationStartAreas.Areas"/>) to its bots.
+    /// Null with <paramref name="full"/> false: no valid race and class; null with <paramref name="full"/> true: valid ones exist but
+    /// every start area they could use is at the cap (creation is deferred, not failed). A cap of 0 is no cap.
+    /// </summary>
+    public static PopulationFreshPlan? PlanFresh(PlayerbotPopulationOptions options, int alliance, int horde, PopulationRaceClassCache cache, Random random,
+        IReadOnlyDictionary<string, int> startCounts, int cap, out bool full)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(cache);
+        ArgumentNullException.ThrowIfNull(random);
+        ArgumentNullException.ThrowIfNull(startCounts);
+        full = false;
+        if (cap <= 0) return PlanFresh(options, alliance, horde, cache, random);
+        Team preferred = ChooseTeam(options, alliance, horde);
+        Team[] teams = options.Factions == PopulationFactions.Both ? [preferred, preferred == Team.Alliance ? Team.Horde : Team.Alliance] : [preferred];
+        bool anyValid = false;
+        foreach (Team team in teams)
+        {
+            byte[] classes = [.. cache.ClassesFor(team, options.Classes)];
+            for (int i = classes.Length - 1; i > 0; i--)
+            {
+                int j = random.Next(i + 1);
+                (classes[i], classes[j]) = (classes[j], classes[i]);
+            }
+
+            foreach (byte cls in classes)
+            {
+                IReadOnlyList<byte> races = cache.RacesFor(team, cls);
+                if (races.Count > 0) anyValid = true;
+                int least = int.MaxValue;
+                var open = new List<byte>();
+                foreach (byte race in races)
+                {
+                    int held = PopulationStartAreas.AreaOf(race) is { } area ? startCounts.GetValueOrDefault(area) : 0;
+                    if (held >= cap) continue;
+                    if (held < least) { least = held; open.Clear(); }
+                    if (held == least) open.Add(race);
+                }
+
+                if (open.Count > 0) return new PopulationFreshPlan(team, open[random.Next(open.Count)], cls);
+            }
+        }
+
+        full = anyValid;
+        return null;
+    }
+
+    /// <summary>
     /// Plans one new bot, or returns null when nothing fits (no band with a deficit that a zone takes, no race and class). Without the
     /// boost only level 1 can be given, so only bands containing level 1 are eligible and the level is 1.
     /// </summary>

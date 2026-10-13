@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Graveyards;
@@ -98,6 +99,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     // Pass-thread-only (one pass at a time): placements refused in a row after a bot was created, and the pass the pause began at.
     private int _placementRefusals;
     private long _pausedAtPass;
+    // Pass-thread-only: the clock of the last start-home sweep, and (written by a pass, read by the world thread) the clock before which
+    // a rush that found every start area full starts no new pass.
+    private long _lastHomeSweepMs = long.MinValue / 2;
+    private long _rushDeferredUntilMs;
     private readonly Dictionary<Guid, int> _pendingFailures = [];
     private readonly Dictionary<Guid, long> _pendingRetryAt = [];
     // A member row whose Band is this value is pending deletion: its bot was created and could not be placed. The row is written
@@ -214,6 +219,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         _world = world;
         world.Updated += OnUpdated;
         world.TickCompleted += OnTickCompleted;
+        if (Managed is { } managed) managed.HomesClearedByOperator += OnHomesClearedByOperator;
     }
 
     public async Task StopAsync()
@@ -223,6 +229,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         {
             world.Updated -= OnUpdated;
             world.TickCompleted -= OnTickCompleted;
+            if (Managed is { } managed) managed.HomesClearedByOperator -= OnHomesClearedByOperator;
         }
 
         await _stop.CancelAsync().ConfigureAwait(false);
@@ -309,6 +316,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         if (_rush.Paused || _rush.StopRequested) return;
+        // Every start area is at its cap: nothing to create until the sweep graduates a bot, which the interval passes do. Wait for
+        // one interval instead of loading the registry on every batch.
+        if (ClockMs < Volatile.Read(ref _rushDeferredUntilMs)) return;
         _rush.Pacer.Add(elapsedMs, _rush.PerSecond);
         if (!_pass.IsCompleted) return;
         int batch = _rush.Pacer.Take(Math.Min(_rush.Remaining, PopulationRush.MaxPerPass));
@@ -401,7 +411,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             bool sick = spells?.GetAuras(player).Any(h => !h.IsRemoved && h.Spell.Id == SpiritHealerResurrection.ResurrectionSicknessSpell) == true;
             bool stalled = managed.FindBrain(status.BotId)?.StallReport is not null;
             running.Add(new PopulationBotFacts(status.BotId, player.Level, player.Team, player.ZoneId, autonomous, busy,
-                realZones.Contains(player.ZoneId), vetoes.Any(v => v.OwnsPlacement(status.BotId)), !player.IsAlive, sick, stalled));
+                realZones.Contains(player.ZoneId), vetoes.Any(v => v.OwnsPlacement(status.BotId)), !player.IsAlive, sick, stalled,
+                (byte)player.Race, (byte)player.Class, player.MapId, player.X, player.Y));
         }
 
         IPopulationTickSource source = Source;
@@ -696,6 +707,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
             var ctx = new PassContext(input, scope.ServiceProvider, store, known, members, desired, have, effectiveTarget);
             int changed = 0;
+            int homeChanges = 0;
+            // Graduation: a start home follows its bot's level. Not in a rush batch pass (the interval passes that run beside a rush do it).
+            if (input.RushCount == 0 && pop.FreshLaunch && pop.FreshStartHome && input.Managed.HomesAvailable)
+            {
+                homeChanges = await SweepStartHomesAsync(ctx, ct).ConfigureAwait(false);
+            }
+
             switch (decision.Action)
             {
                 case PopulationAction.Add:
@@ -734,7 +752,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 if (moved > 0) actions += (actions.Length == 0 ? string.Empty : ", ") + $"moved {moved}";
             }
 
+            if (homeChanges > 0) actions += (actions.Length == 0 ? string.Empty : ", ") + $"start homes {homeChanges}";
             if (ctx.Note is not null) actions += (actions.Length == 0 ? string.Empty : ", ") + "held back: " + ctx.Note;
+            if (input.RushCount > 0 && ctx.Note is not null && ctx.Note.StartsWith(PopulationRush.StartZonesFullNote, StringComparison.Ordinal))
+                Volatile.Write(ref _rushDeferredUntilMs, ClockMs + (pop.IntervalSeconds * 1000L));
             // A rush keeps the tick window: its brake reads the load the rush itself causes.
             if (changed > 0 && input.RushCount == 0)
             {
@@ -897,6 +918,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         PlayerbotPopulationOptions pop = ctx.Input.Pop;
         int created = 0;
         bool fresh = pop.FreshLaunch;
+        // Fresh launch gives each new bot its start home; the homes are also how the start areas are counted for the cap.
+        bool startHomes = fresh && pop.FreshStartHome && managed.HomesAvailable;
+        Dictionary<string, int> startCounts = startHomes ? StartCounts(managed, ctx.RunningNow.Union(ctx.Members.Keys)) : [];
         if (!fresh && ctx.Input.TerrainHold is { } hold) return (0, quietWhenNothingFits ? null : hold, false);
         if (!fresh && !ctx.Input.TeleportAvailable) return (0, "the teleport service is not available", false);
         if (_placementRefusals >= MaxPlacementRefusals && Volatile.Read(ref _passes) - _pausedAtPass > PauseLiftsAfterPasses)
@@ -918,7 +942,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             PopulationFreshPlan? freshPlan = null;
             if (fresh)
             {
-                freshPlan = PopulationBandPlanner.PlanFresh(pop, ctx.Alliance, ctx.Horde, cache, _random);
+                bool full = false;
+                freshPlan = startHomes
+                    ? PopulationBandPlanner.PlanFresh(pop, ctx.Alliance, ctx.Horde, cache, _random, startCounts, pop.FreshStartZoneCap, out full)
+                    : PopulationBandPlanner.PlanFresh(pop, ctx.Alliance, ctx.Horde, cache, _random);
+                if (freshPlan is null && full)
+                    return (created, string.Create(CultureInfo.InvariantCulture,
+                        $"{PopulationRush.StartZonesFullNote}: every start area a new bot could use holds {pop.FreshStartZoneCap} bots (FreshStartZoneCap); creation resumes as bots graduate at level {pop.FreshGraduateLevel}"), false);
                 if (freshPlan is null) return (created, quietWhenNothingFits ? null : "no valid race and class for the configured factions and classes", false);
             }
             else
@@ -957,6 +987,16 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
             ctx.Members[botId] = member;
             planned[planBand]++;
+
+            // The home goes on before the start, so the first brain already has it. A bot whose home could not be set is not refused: it
+            // runs homeless and the next sweep tries again.
+            if (startHomes)
+            {
+                string? homeError = await ApplyStartHomeAsync(managed, ctx.Scoped, botId, planRace, planClass, StartHomeStage.Start, ct).ConfigureAwait(false);
+                if (homeError is not null) Fail($"the start home of {made.Name} was not set: {homeError}");
+                // Counted whether or not the home was set: the cap fails closed (the next sweep sets the home).
+                if (PopulationStartAreas.AreaOf(planRace) is { } startArea) startCounts[startArea] = startCounts.GetValueOrDefault(startArea) + 1;
+            }
 
             PlayerbotOperationResult start = await managed.StartAsync(botId.ToString(), ct).ConfigureAwait(false);
             if (!start.Success) { Fail($"start of new bot {made.Name} refused: {start.Code}"); return (created, null, true); }
@@ -1003,6 +1043,213 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         return (created, null, false);
+    }
+
+    /// <summary>
+    /// The most start-home attempts one sweep makes (a start position query, a world-thread hop and a database write each; failures
+    /// count as much as successes, so a map the server does not allow can never make a sweep cost more than this).
+    /// </summary>
+    internal const int MaxHomeChangesPerSweep = 25;
+
+    /// <summary>Sweeps a bot whose start home could not be set waits before the next attempt (about 5 minutes at the default interval), so failing bots never starve the others of the 25 attempts.</summary>
+    private const int HomeRetrySweeps = 30;
+
+    /// <summary>
+    /// A population member row with this <c>Band</c> belongs to a bot whose start home an operator cleared (<c>.playerbot home clear</c>):
+    /// the sweep never gives it one again. Like <see cref="PendingDeleteBand"/> the band is only a marker (a fresh-launch pool has the one band 0).
+    /// </summary>
+    internal const byte HomeOptOutBand = byte.MaxValue - 1;
+
+    private int _sweeps;
+    private readonly Dictionary<Guid, int> _homeRetrySweep = [];
+    private readonly Dictionary<byte, StartPosition> _starts = [];
+    private readonly object _optOutGate = new();
+    private readonly HashSet<Guid> _optedOut = [];
+    private readonly List<Guid> _optOutToPersist = [];
+
+    /// <summary>An operator cleared these bots' start homes: they stay homeless (called before the homes are removed; any thread).</summary>
+    private void OnHomesClearedByOperator(IReadOnlyList<Guid> botIds)
+    {
+        lock (_optOutGate)
+            foreach (Guid id in botIds)
+                if (_optedOut.Add(id)) _optOutToPersist.Add(id);
+    }
+
+    private bool IsOptedOut(Guid botId)
+    {
+        lock (_optOutGate) return _optedOut.Contains(botId);
+    }
+
+    /// <summary>Writes the opt-out marker of the members whose homes an operator cleared since the last sweep.</summary>
+    private async Task PersistOptOutsAsync(PassContext ctx, CancellationToken ct)
+    {
+        Guid[] pending;
+        lock (_optOutGate)
+        {
+            pending = [.. _optOutToPersist];
+            _optOutToPersist.Clear();
+        }
+
+        foreach (Guid id in pending)
+        {
+            if (!ctx.Members.TryGetValue(id, out PlayerbotPopulationMember? member) || member.Band == HomeOptOutBand) continue;
+            member = member with { Band = HomeOptOutBand, UpdatedUnix = NowUnix() };
+            await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
+            ctx.Members[id] = member;
+        }
+    }
+
+    /// <summary>The bots of each start area that hold a start-stage home, running or parked (the cap counts these; a graduated bot has left the valley).</summary>
+    private static Dictionary<string, int> StartCounts(ManagedPlayerbotFeature managed, IEnumerable<Guid> bots)
+    {
+        var counts = new Dictionary<string, int>();
+        foreach (Guid id in bots)
+            if (managed.HomeOf(id) is { } home && PopulationStartAreas.TryParse(home.Place, out StartHomeStage stage, out string area) && stage == StartHomeStage.Start)
+                counts[area] = counts.GetValueOrDefault(area) + 1;
+        return counts;
+    }
+
+    /// <summary>
+    /// Gives a bot the home of <paramref name="stage"/> round its race's start position (<see cref="IWorldDataStore.GetStartPositionAsync"/>,
+    /// asked once per race). Null on success, otherwise why not. The map is checked against <c>AllowedMaps</c> before any query.
+    /// </summary>
+    private async Task<string?> ApplyStartHomeAsync(ManagedPlayerbotFeature managed, IServiceProvider scoped, Guid botId, byte race, byte cls,
+        StartHomeStage stage, CancellationToken ct)
+    {
+        if (PopulationStartAreas.AreaOf(race) is not { } area) return $"race {race} has no start area";
+        uint continent = PopulationStartAreas.ContinentOf(race);
+        if (!managed.AllowsHomeMap(continent)) return $"map {continent} is not an allowed playerbot map";
+        StartPosition? start = await GetStartAsync(scoped, race, cls, ct).ConfigureAwait(false);
+        if (start is null) return $"no start position for race {race} class {cls}";
+        return await SetStartHomeAsync(managed, botId, start.MapId, new Vector3(start.X, start.Y, start.Z), area, stage, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The start position of a race, asked of the store once and kept (the position does not depend on the class).</summary>
+    private async Task<StartPosition?> GetStartAsync(IServiceProvider scoped, byte race, byte cls, CancellationToken ct)
+    {
+        if (_starts.TryGetValue(race, out StartPosition? known)) return known;
+        StartPosition? start = await scoped.GetRequiredService<IWorldDataStore>().GetStartPositionAsync(race, cls, ct).ConfigureAwait(false);
+        if (start is not null) _starts[race] = start;
+        return start;
+    }
+
+    /// <summary>Stores and applies one start home, clipped to the start zone when the terrain knows the zone of the centre (a centre it does not know would give a home that contains nothing). Null on success, otherwise why not.</summary>
+    private async Task<string?> SetStartHomeAsync(ManagedPlayerbotFeature managed, Guid botId, uint mapId, Vector3 centre, string area,
+        StartHomeStage stage, CancellationToken ct)
+    {
+        if (!managed.AllowsHomeMap(mapId)) return $"map {mapId} is not an allowed playerbot map";
+        uint zone = await _world!.InvokeAsync(() => managed.ZoneAt(mapId, centre), ct).ConfigureAwait(false);
+        try
+        {
+            ManagedPlayerbotFeature.HomeOutcome outcome = await managed.SetHomesAsync([new ManagedPlayerbotFeature.HomeTarget(botId, mapId, centre)],
+                PopulationStartAreas.RadiusOf(stage, _options.Population), PopulationStartAreas.PlaceOf(area, stage), ct, zoneClipped: zone != 0, logFailures: false).ConfigureAwait(false);
+            return outcome.Set == 1 ? null : "the home was not stored";
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return $"{ex.GetType().Name}: {ex.Message}";
+        }
+    }
+
+    /// <summary>Whether a bot is still in its start country: on the start map and either in the start zone or within the graduated home's radius of the start position.</summary>
+    private static bool InStartCountry(PopulationBotFacts bot, StartPosition start, PlayerbotPopulationOptions pop)
+    {
+        if (bot.MapId != start.MapId) return false;
+        if (bot.ZoneId == start.ZoneId) return true;
+        float dx = bot.X - start.X, dy = bot.Y - start.Y;
+        return (dx * dx) + (dy * dy) <= (float)pop.FreshZoneHomeRadius * pop.FreshZoneHomeRadius;
+    }
+
+    /// <summary>
+    /// Graduation (see <see cref="PopulationStartAreas"/>): each running bot of the population gets the home of its level's stage.
+    /// A bot with no home gets one round its race's start position (the live fresh launch made bots with none), but a bot at or above
+    /// <c>FreshGraduateLevel</c> only while it is still in its start country: one that has already moved on is left alone (it counts as
+    /// released). A start home widens at <c>FreshGraduateLevel</c> and is removed at <c>FreshReleaseLevel</c>; a home whose radius no
+    /// longer matches the live option is resized. A home an operator set (any other place text), and a bot whose home an operator
+    /// cleared (<see cref="HomeOptOutBand"/>), are never touched. At most <see cref="MaxHomeChangesPerSweep"/> attempts per sweep,
+    /// failures included, and one sweep per interval. Failures are summed up in one warning. Returns the homes changed.
+    /// </summary>
+    private async Task<int> SweepStartHomesAsync(PassContext ctx, CancellationToken ct)
+    {
+        ManagedPlayerbotFeature managed = ctx.Input.Managed;
+        PlayerbotPopulationOptions pop = ctx.Input.Pop;
+        if (ctx.Input.ClockMs - _lastHomeSweepMs < pop.IntervalSeconds * 1000L) return 0;
+        _lastHomeSweepMs = ctx.Input.ClockMs;
+        int sweep = ++_sweeps;
+        await PersistOptOutsAsync(ctx, ct).ConfigureAwait(false);
+        int attempts = 0, changes = 0, failed = 0;
+        string? firstError = null;
+        var cleared = new List<Guid>();
+        foreach (PopulationBotFacts bot in ctx.Input.Running)
+        {
+            if (attempts >= MaxHomeChangesPerSweep) break;
+            if (!ctx.Members.TryGetValue(bot.BotId, out PlayerbotPopulationMember? member)) continue;
+            if (member.Band == HomeOptOutBand || IsOptedOut(bot.BotId)) continue;
+            if (_homeRetrySweep.TryGetValue(bot.BotId, out int retryAt) && sweep < retryAt) continue;
+            StartHomeStage want = PopulationStartAreas.StageFor(bot.Level, pop);
+            PlayerbotHome? home = managed.HomeOf(bot.BotId);
+            bool ours = false;
+            StartHomeStage have = StartHomeStage.None;
+            string area = string.Empty;
+            if (home is not null && !(ours = PopulationStartAreas.TryParse(home.Place, out have, out area))) continue; // an operator's home
+            if (want == StartHomeStage.None)
+            {
+                if (ours) { cleared.Add(bot.BotId); attempts++; }
+                continue;
+            }
+
+            string? error;
+            if (!ours)
+            {
+                if (PopulationStartAreas.AreaOf(bot.Race) is not { } botArea) continue;
+                uint continent = PopulationStartAreas.ContinentOf(bot.Race);
+                if (!managed.AllowsHomeMap(continent))
+                {
+                    // Nothing is queried for a map the server does not allow.
+                    failed++;
+                    firstError ??= $"map {continent} is not an allowed playerbot map";
+                    continue;
+                }
+
+                if (!_starts.ContainsKey(bot.Race)) attempts++; // the start position query
+                StartPosition? start = await GetStartAsync(ctx.Scoped, bot.Race, bot.Class, ct).ConfigureAwait(false);
+                if (start is null)
+                {
+                    failed++;
+                    firstError ??= $"no start position for race {bot.Race} class {bot.Class}";
+                    _homeRetrySweep[bot.BotId] = sweep + HomeRetrySweeps;
+                    continue;
+                }
+
+                // A bot of the graduated levels that already left its start country is released, not pulled back.
+                if (want == StartHomeStage.Zone && !InStartCountry(bot, start, pop)) continue;
+                attempts++;
+                error = await SetStartHomeAsync(managed, bot.BotId, start.MapId, new Vector3(start.X, start.Y, start.Z), botArea, want, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                if (have == want && (int)MathF.Round(home!.Radius) == (want == StartHomeStage.Zone ? pop.FreshZoneHomeRadius : pop.FreshStartHomeRadius)) continue;
+                attempts++;
+                error = await SetStartHomeAsync(managed, bot.BotId, home!.MapId, new Vector3(home.X, home.Y, home.Z), area, want, ct).ConfigureAwait(false);
+            }
+
+            if (error is null) { changes++; _homeRetrySweep.Remove(bot.BotId); continue; }
+            failed++;
+            firstError ??= error;
+            _homeRetrySweep[bot.BotId] = sweep + HomeRetrySweeps;
+        }
+
+        if (cleared.Count > 0) changes += await managed.ClearHomesAsync(cleared, ct, byOperator: false).ConfigureAwait(false);
+        if (_homeRetrySweep.Count > 4096)
+            foreach (Guid stale in _homeRetrySweep.Where(r => r.Value <= sweep).Select(r => r.Key).ToArray()) _homeRetrySweep.Remove(stale);
+        if (failed > 0)
+        {
+            _lastError = $"{failed} start homes were not set (first: {firstError})";
+            logger.LogWarning("Playerbot population: {Failed} of {Attempts} start home attempts failed this sweep (first: {Error}); each is retried after {Sweeps} sweeps", failed, attempts, firstError, HomeRetrySweeps);
+        }
+
+        if (changes > 0) logger.LogInformation("Playerbot population: {Changes} start home changes (graduation at level {Graduate}, release at level {Release})", changes, pop.FreshGraduateLevel, pop.FreshReleaseLevel);
+        return changes;
     }
 
     /// <summary>
