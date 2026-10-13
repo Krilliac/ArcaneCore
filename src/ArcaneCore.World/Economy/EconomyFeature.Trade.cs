@@ -201,6 +201,14 @@ public sealed partial class EconomyFeature
         TradeSide theirs = trade.OtherSide(player);
         Player other = theirs.Player;
 
+        // vmangos Player::SetPosition already cancelled before this opcode if a step left interaction distance.
+        // A map tick may not have run yet, so the accept itself must not complete that trade.
+        if (trade.SeparatedByMovement())
+        {
+            CancelTrade(player, TradeStatus.TradeCanceled);
+            return;
+        }
+
         // vmangos TradeHandler.cpp:251-257: an accept right after a modification is bounced with BACK_TO_TRADE.
         long nowMs = NowMs;
         if (TradeRules.ScamPrevented(mine.LastModifiedMs, nowMs, Options.TradeScamPreventionMs, Options.TradeScamPreventionWholeSeconds))
@@ -549,7 +557,11 @@ public sealed partial class EconomyFeature
         trade.Target.Player.Session.Send(WorldOpcode.SmsgTradeStatus, packet);
     }
 
-    /// <summary>Map tick: trades whose partners died, separated or left the map are cancelled (vmangos Player::Update).</summary>
+    /// <summary>
+    /// Map tick: trades whose partners died, left the map, walked past interaction distance, or passed
+    /// <see cref="TradeRules.MaxDistance"/> are cancelled (vmangos Player::SetPosition, Player.cpp:5977-5979,
+    /// and the accept-time TRADE_DISTANCE check).
+    /// </summary>
     internal void CheckTrades(Map map)
     {
         if (_trades.Count == 0)
@@ -561,7 +573,10 @@ public sealed partial class EconomyFeature
         {
             Player a = trade.Initiator.Player;
             Player b = trade.Target.Player;
-            if (!a.IsAlive || !b.IsAlive || !ReferenceEquals(a.Map, b.Map) || !TradeSession.InRange(a, b))
+            // Always sample, including a step that stays inside interaction distance, so the next
+            // tick measures from the latest positions rather than from where the trade opened.
+            bool separated = trade.SeparatedByMovement();
+            if (!a.IsAlive || !b.IsAlive || !ReferenceEquals(a.Map, b.Map) || separated || !TradeSession.InRange(a, b))
             {
                 CancelTrade(a, TradeStatus.TradeCanceled);
             }
