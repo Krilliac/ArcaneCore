@@ -47,7 +47,12 @@ internal sealed class PlayerbotWarlockRotation : PlayerbotClassRotation
             ?? SummonDemon(s)
             ?? Do(s, HealthFunnel, s.PetUnit, s.Pet == RotationPetStatus.Alive && s.PetUnit?.HealthPercent < 40f && s.Self.HealthPercent > 60f)
             ?? Do(s, LifeTap, s.Self, s.PowerPercent < 40f && s.Self.HealthPercent > 90f)
-            ?? CommandPet(s);
+            // CommandPet is the whole think (the brain returns before the fight). An Imp has no melee attack and its Firebolt
+            // starts with autocast off, so a command that has not put the demon on the victim does no damage. Repeating it
+            // leaves the warlock standing on a pull. Goal stays Combat and nothing ever hits the creature. Send the demon while
+            // still closing in (a cast-time nuke cannot finish on the move). Once the bot is standing and a cast is ready,
+            // yield so that cast is the think.
+            ?? (s.Victim is { IsAlive: true } pull && !s.IsMoving && Casts(s, pull) is not null ? null : CommandPet(s));
 
     /// <summary>
     /// A demon by role (vmangos picks one of the known summons at random): alone, the Voidwalker tanks for the warlock; in a group
@@ -69,8 +74,17 @@ internal sealed class PlayerbotWarlockRotation : PlayerbotClassRotation
 
     protected override RotationAction? Fight(RotationState s, RotationUnit v)
     {
-        return CommandPet(s)
-            ?? Do(s, DeathCoil, v, v.InMeleeRange && v.TargetsBot || v.IsCasting)
+        // vmangos commands the pet and still casts in the same update. This rotation returns one action. Leading with the
+        // pet command meant a demon that was not already on the victim (the usual Imp, which cannot melee) replaced Immolate
+        // and Shadow Bolt for every think, so the fight never produced a kill. Cast when standing; send the demon when the
+        // bot is still moving, or when nothing else can be cast.
+        RotationAction? cast = Casts(s, v);
+        return s.IsMoving ? CommandPet(s) ?? cast : cast ?? CommandPet(s);
+    }
+
+    /// <summary>The in-combat casts, in the vmangos order, without the pet command.</summary>
+    private static RotationAction? Casts(RotationState s, RotationUnit v)
+        => Do(s, DeathCoil, v, v.InMeleeRange && v.TargetsBot || v.IsCasting)
             ?? Do(s, Shadowburn, v, v.HealthPercent < 10f)
             ?? Do(s, SearingPain, v, v.HealthPercent < 20f)
             ?? (s.Attackers.Count > 1 && FirstAttackerOtherThan(s, v) is { } extra
@@ -87,5 +101,4 @@ internal sealed class PlayerbotWarlockRotation : PlayerbotClassRotation
             ?? Do(s, ShadowBolt, v)
             ?? Do(s, LifeTap, s.Self, s.PowerPercent < 10f && s.Self.HealthPercent > 70f)
             ?? Wand(s, v, 5f);
-    }
 }
