@@ -26,7 +26,7 @@
 
 # SECTIONS
 #
-#   ANTICHEAT                   43 keys
+#   ANTICHEAT                   44 keys
 #   AUCTIONHOUSEBOT             39 keys
 #   AURAS                       4 keys
 #   AUTOBROADCAST               3 keys
@@ -74,8 +74,8 @@
 #   STATS                       1 keys
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
-#   WARDEN                      14 keys
-#   WORLD                       362 keys
+#   WARDEN                      15 keys
+#   WORLD                       410 keys
 #
 ###############################################################################
 
@@ -568,6 +568,20 @@ AntiCheat.SpeedSlackYards = 2
 #        Docs: docs/reference/configuration.md#anticheat
 #
 AntiCheat.SpeedTolerancePercent = 10
+
+#
+#    AntiCheat.StaffNoticeCooldownSeconds
+#        Description: The staff line for a kick, an autoban or a failed autoban is sent at most once
+#                     per account and kind per this many seconds; repeats inside the window are
+#                     counted and reported as one "N more suppressed" line. Independent of
+#                     World:Announce. 0 sends every line. 0-3600, default 30.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#anticheat
+#
+AntiCheat.StaffNoticeCooldownSeconds = 30
 
 #
 #    AntiCheat.TeleportDistance
@@ -7584,6 +7598,20 @@ Warden.ScanIntervalMinSeconds = 30
 #
 Warden.ScansPerRequest = 3
 
+#
+#    Warden.StaffNoticeCooldownSeconds
+#        Description: Warden:StaffNoticeCooldownSeconds: the staff line for a Kick or Ban verdict is
+#                     sent at most once per account and action per this many seconds; repeats inside
+#                     the window are counted and reported as one "N more suppressed" line.
+#                     Independent of World:Announce. 0 sends every line. 0-3600, default 30.
+#        Type: uint
+#        Default: 30
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#warden
+#
+Warden.StaffNoticeCooldownSeconds = 30
+
 ###############################################################################
 # WORLD
 ###############################################################################
@@ -8113,6 +8141,200 @@ World.WriterDrainGrace = 00:00:00
 #----------------------------------------------------------------------------
 
 #
+#    World.Announce.AntiCheat.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.AntiCheat.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.DedupSeconds = 30
+
+#
+#    World.Announce.AntiCheat.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.GmNotify = true
+
+#
+#    World.Announce.AntiCheat.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.IncludeDetails = true
+
+#
+#    World.Announce.AntiCheat.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Info
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.MinimumSeverity = Info
+
+#
+#    World.Announce.AntiCheat.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.RateBurst = 10
+
+#
+#    World.Announce.AntiCheat.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.RatePerMinute = 20
+
+#
+#    World.Announce.AntiCheat.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.WorldMessage = false
+
+#
+#    World.Announce.BotQa.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.BotQa.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 3600
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.DedupSeconds = 3600
+
+#
+#    World.Announce.BotQa.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.GmNotify = true
+
+#
+#    World.Announce.BotQa.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.IncludeDetails = true
+
+#
+#    World.Announce.BotQa.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Info
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.MinimumSeverity = Info
+
+#
+#    World.Announce.BotQa.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.RateBurst = 5
+
+#
+#    World.Announce.BotQa.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.RatePerMinute = 6
+
+#
+#    World.Announce.BotQa.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.WorldMessage = false
+
+#
 #    World.Announce.Enabled
 #        Description: Master switch for delivery to players and staff. When false announcements are
 #                     still logged and counted.
@@ -8123,6 +8345,103 @@ World.WriterDrainGrace = 00:00:00
 #        Docs: docs/reference/configuration.md#worldannounce
 #
 World.Announce.Enabled = true
+
+#
+#    World.Announce.Faults.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.Faults.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.DedupSeconds = 300
+
+#
+#    World.Announce.Faults.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.GmNotify = true
+
+#
+#    World.Announce.Faults.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.IncludeDetails = true
+
+#
+#    World.Announce.Faults.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Warning
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.MinimumSeverity = Warning
+
+#
+#    World.Announce.Faults.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.RateBurst = 5
+
+#
+#    World.Announce.Faults.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.RatePerMinute = 6
+
+#
+#    World.Announce.Faults.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.WorldMessage = false
 
 #
 #    World.Announce.HotSwap.AllowNamesInWorldMessage
@@ -8258,6 +8577,297 @@ World.Announce.HotSwap.WorldMessageIncludeReason = true
 #        Docs: docs/reference/configuration.md#worldannounce
 #
 World.Announce.HotSwap.WorldMessageOnFailure = false
+
+#
+#    World.Announce.Saves.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.Saves.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.DedupSeconds = 120
+
+#
+#    World.Announce.Saves.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.GmNotify = true
+
+#
+#    World.Announce.Saves.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.IncludeDetails = true
+
+#
+#    World.Announce.Saves.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Warning
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.MinimumSeverity = Warning
+
+#
+#    World.Announce.Saves.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.RateBurst = 5
+
+#
+#    World.Announce.Saves.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.RatePerMinute = 6
+
+#
+#    World.Announce.Saves.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.WorldMessage = false
+
+#
+#    World.Announce.Shutdown.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.Shutdown.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.DedupSeconds = 0
+
+#
+#    World.Announce.Shutdown.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.GmNotify = true
+
+#
+#    World.Announce.Shutdown.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.IncludeDetails = true
+
+#
+#    World.Announce.Shutdown.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Info
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.MinimumSeverity = Info
+
+#
+#    World.Announce.Shutdown.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.RateBurst = 10
+
+#
+#    World.Announce.Shutdown.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.RatePerMinute = 20
+
+#
+#    World.Announce.Shutdown.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.WorldMessage = false
+
+#
+#    World.Announce.Wiring.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.Wiring.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.DedupSeconds = 300
+
+#
+#    World.Announce.Wiring.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.GmNotify = true
+
+#
+#    World.Announce.Wiring.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.IncludeDetails = true
+
+#
+#    World.Announce.Wiring.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Warning
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.MinimumSeverity = Warning
+
+#
+#    World.Announce.Wiring.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.RateBurst = 10
+
+#
+#    World.Announce.Wiring.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.RatePerMinute = 20
+
+#
+#    World.Announce.Wiring.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.WorldMessage = false
 
 #----------------------------------------------------------------------------
 # World:Chat
