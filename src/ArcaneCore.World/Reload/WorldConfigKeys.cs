@@ -263,6 +263,16 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Home:DangerLevelMargin", o => o.Home.DangerLevelMargin, (o, v) => o.Home.DangerLevelMargin = v,
             PlayerbotHomeOptions.CheckLevelMargin),
 
+        // How bots share the mobs of one place (docs/areas/playbots.md, Contention): each bot reads the shared object at its next think.
+        LivePlayerbotsValue("Contention:HelpChance", o => o.Contention.HelpChance, (o, v) => o.Contention.HelpChance = v,
+            PlayerbotContentionOptions.CheckChance),
+        LivePlayerbotsValue("Contention:ClaimPenaltyYards", o => o.Contention.ClaimPenaltyYards, (o, v) => o.Contention.ClaimPenaltyYards = v,
+            PlayerbotContentionOptions.CheckPenalty),
+        LivePlayerbotsValue("Contention:SomeoneElsesMemorySeconds", o => o.Contention.SomeoneElsesMemorySeconds,
+            (o, v) => o.Contention.SomeoneElsesMemorySeconds = v, PlayerbotContentionOptions.CheckMemory),
+        LivePlayerbotsValue("Contention:ContentionSuspendMinutes", o => o.Contention.ContentionSuspendMinutes,
+            (o, v) => o.Contention.ContentionSuspendMinutes = v, PlayerbotContentionOptions.CheckSuspend),
+
         // Not vmangos keys: the population manager (docs/areas/playbots-population.md). PlayerbotPopulationFeature reads the shared
         // PlayerbotOptions.Population at every pass; the lists are compared and replaced as one value.
         LivePlayerbots("Population:Enabled", o => o.Population.Enabled, (o, v) => o.Population.Enabled = v),

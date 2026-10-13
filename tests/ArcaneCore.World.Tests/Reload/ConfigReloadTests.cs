@@ -651,6 +651,12 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Home)}:{property.Name}");
         }
 
+        // How bots share the mobs of one place is live key by key (docs/areas/playbots.md, Contention).
+        foreach (PropertyInfo property in typeof(PlayerbotContentionOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Contention)}:{property.Name}");
+        }
+
         // The population section is live key by key (docs/areas/playbots-population.md).
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Population.PlayerbotPopulationOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

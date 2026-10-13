@@ -6,6 +6,7 @@ using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
@@ -27,10 +28,12 @@ namespace ArcaneCore.World.Playerbots;
 /// persistence; this controller owns only bounded ordinary gameplay decisions for one session.
 /// </summary>
 internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
-    PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default, PlayerbotSharedSetAsides? shared = null)
+    PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default, PlayerbotSharedSetAsides? shared = null,
+    PlayerbotClaims? claims = null)
 {
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
+    private readonly PlayerbotContention _contention = new(options, claims);
     private PlayerbotRoute? _route;
     private bool _routeAbandoned;
 
@@ -239,6 +242,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _killObserver = null;
             _observedPlayer = null;
         }
+        // The claims registry and the bot's claim are world-thread state; Stop runs on any thread, so the release is posted.
+        if (_session.World is { IsStopped: false } world)
+        {
+            if (world.IsWorldThread) _contention.ReleaseClaim();
+            else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); return true; });
+        }
         _planningStop.Cancel();
         _planningStop.Dispose();
     }
@@ -338,6 +347,15 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>Whether goals skip creatures of <paramref name="entry"/> for now (a stall or a death loop set it aside; tests).</summary>
     internal bool IsEntrySetAside(uint entry) => _suspensions.IsEntrySuspended(entry, _session.World.NowMs);
 
+    /// <summary>How this bot shares mobs with the others: its claim, the mobs it left alone, the help it gives (inspection and tests).</summary>
+    internal PlayerbotContention Contention => _contention;
+
+    /// <summary>The bot's spell helper (tests).</summary>
+    internal PlayerbotCombatSpells CombatSpells => _combatSpells;
+
+    /// <summary>The fleet's soft claims on untagged mobs (<see cref="PlayerbotClaims"/>; inspection and tests).</summary>
+    internal PlayerbotClaims Claims => _contention.Claims;
+
     internal void Update(uint elapsedMs)
     {
         if (!_options.Enabled || _stopped != 0 || _session.Player is not { } player)
@@ -349,6 +367,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _town.Budget = _trainers.Budget = _riding.Budget = _budget; _economy.SpendBudget = _budget;
         _riding.Suspensions = _suspensions;
+        _quests.Contention ??= _contention;
+        _quests.OnContentionExhausted ??= RaiseContentionExhausted;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
         PlayerbotThinkProbe.Phase("brain");
@@ -625,6 +645,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         if (completedReturn != 0)
         {
+            _contention.ReleaseClaim(); // the walk to the ender holds no mob
             _goal = PlayerbotGoalKind.Quest;
             QuestId = completedReturn;
             // Leave ongoing spell execution to its ordinary completion. Travel does
@@ -653,6 +674,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
+        // A bot with no target holds no claim (the paths below that clear the target and wander, travel or explore leave it here).
+        if (_target is null) _contention.ReleaseClaim();
         PlayerbotThinkProbe.Phase("threats");
         Creature? outgoingVictim = player.Combat.Victim is Creature victim
             && player.Map is { } map && victim.IsInWorld && victim.IsAlive && ReferenceEquals(victim.Map, map)
@@ -838,14 +861,23 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (_modelChoice == "explore") { _target = null; PlayerbotThinkProbe.Phase("explore"); Explore(player, interval); return; }
         }
 
+        // A mob another player tagged while the bot walked to it is no longer the bot's to take: help its tagger or leave it alone, then
+        // choose afresh in this same think (docs/areas/playbots.md, Contention).
+        if (_target is { IsAlive: true } held && ReferenceEquals(held.Map, player.Map)) DropIfSomeoneElses(player, held);
+
         if (_target is null || _target.Map != player.Map)
         {
             PlayerbotThinkProbe.Phase("choose target");
             Creature? previousTarget = _target;
             uint preferred = _quests.PreferredCreatureEntry;
+            _contention.ReleaseClaim();
+            _contention.EndAssist();
+            _contention.BlockedSeen = 0;
             _target = _options.Risk.Enabled
-                ? Risk.ChooseTarget(player, preferred, IsSkipped, questObjective: preferred != 0)
-                : FindTarget(player, preferred, IsSkipped);
+                ? Risk.ChooseTarget(player, preferred, IsSkipped, questObjective: preferred != 0, _contention)
+                : FindTarget(player, preferred, IsSkipped, _contention);
+            if (_target is not null) _contention.Claim(player.Guid.Value, _target, _session.World.NowMs);
+            else if (preferred != 0 && _contention.BlockedSeen > 0 && !AnyFreeOfEntry(player, preferred)) _contention.NoteContested(preferred, _session.World.NowMs);
             _rangedIdleMs = 0;
             // Keep an exploration route across decisions; otherwise every thought changes
             // direction after only its first terrain step and the player never travels.
@@ -879,6 +911,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         PlayerbotThinkProbe.Phase("combat");
         if (target.IsAlive)
         {
+            // The soft claim on the mob being walked to (refreshed each think; ended once it is tagged).
+            _contention.Claim(player.Guid.Value, target, _session.World.NowMs);
+
+            // A tagger the bot decided to help: heal it first when the bot can, else fight the mob like any target.
+            if (_contention.IsAssisting(target.Guid) && TryHealTagger(player))
+            {
+                _goal = PlayerbotGoalKind.Combat;
+                return;
+            }
+
             // A losing fight is given up (PlayerbotRiskModel.Judge) before the next blow.
             if (player.Combat.IsInCombat && Risk.ObserveFight(player, target))
             {
@@ -975,6 +1017,22 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 _attacking = _session.TryManagedAction(WorldOpcode.CmsgAttackswing,
                     PlayerbotNavigation.GuidPayload(target.Guid.Value));
             }
+            return;
+        }
+
+        // A kill the bot helped with, or one that went to another player's tap, is no loot or credit of the bot's: no request, no wait
+        // for a response that will not come, and the spawn is left alone for a while.
+        if (!HasLootRights(player, target))
+        {
+            _contention.EndAssist();
+            _contention.ReleaseClaim();
+            _contention.MarkSomeoneElses(target.Guid.Value, _session.World.NowMs);
+            _contention.NoteLostMob(target.Entry);
+            _target = null;
+            _route = null;
+            _attacking = false;
+            _lootOpened = false;
+            TargetEntry = 0;
             return;
         }
 
@@ -1234,6 +1292,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         // Death starts a new gameplay lifetime. Drop only controller-owned, transient
         // intent; the recovery helper still owns the ordinary release/reclaim flow.
+        _contention.ReleaseClaim();
+        _contention.EndAssist();
         _target = null;
         TargetEntry = 0;
         AbandonRoute();
@@ -1382,41 +1442,73 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         return opened;
     }
 
-    internal static Creature? FindTarget(Player player, uint preferredEntry = 0, Func<Creature, bool>? skip = null)
-        => FindTargets(player, preferredEntry, skip).FirstOrDefault();
+    internal static Creature? FindTarget(Player player, uint preferredEntry = 0, Func<Creature, bool>? skip = null,
+        PlayerbotContention? contention = null)
+    {
+        PlayerbotWeighedTarget[] slot = t_oneTarget ??= new PlayerbotWeighedTarget[1];
+        int found = CollectTargets(player, preferredEntry, skip, 1, contention, slot);
+        Creature? best = found > 0 ? slot[0].Creature : null;
+        slot[0] = default;
+        return best;
+    }
+
+    // The single-slot buffer of FindTarget: one per thread (the world thread in a live server), so the call allocates nothing once warm.
+    [ThreadStatic]
+    private static PlayerbotWeighedTarget[]? t_oneTarget;
 
     /// <summary>
-    /// The candidates <see cref="FindTarget"/> chooses from, best first (the quest objective, then the nearest). A non-objective
-    /// may be at most <paramref name="maxLevelsAbove"/> levels above the bot (1 without the risk estimate); the named quest
-    /// objective may be any level when the risk estimate weighs it (<paramref name="maxLevelsAbove"/> above 1).
+    /// The best candidates of <see cref="FindTarget"/>, best first, into <paramref name="best"/> (its length is how many are kept): one
+    /// pass over the creatures the bot sees, keeping the lowest weights, with no allocation. A candidate weighs its distance in yards; with
+    /// a <paramref name="contention"/> it also weighs 25 yards (<see cref="PlayerbotContentionOptions.ClaimPenaltyYards"/>) more for each
+    /// other bot already walking to it while it is untagged, and a stable per-(bot, mob) offset of up to 10 yards, so a crowd of bots
+    /// spreads over the mobs near it instead of all picking the nearest. A non-objective may be at most <paramref name="maxLevelsAbove"/>
+    /// levels above the bot (1 without the risk estimate); the named quest objective may be any level when the risk estimate weighs it
+    /// (<paramref name="maxLevelsAbove"/> above 1). Returns how many were kept.
     /// </summary>
-    internal static IEnumerable<Creature> FindTargets(Player player, uint preferredEntry = 0, Func<Creature, bool>? skip = null,
-        int maxLevelsAbove = 1)
+    internal static int CollectTargets(Player player, uint preferredEntry, Func<Creature, bool>? skip, int maxLevelsAbove,
+        PlayerbotContention? contention, PlayerbotWeighedTarget[] best)
     {
-        if (player.Map is not { } map)
-            return [];
+        if (player.Map is not { } map || best.Length == 0)
+            return 0;
 
-        GroupManager? groups = (player.Session as WorldSession)?.Services.GetService<Social.SocialFeature>()?.Context.Groups;
+        GroupManager? groups = GroupsOf(player);
         uint grayLevel = ArcaneCore.Game.Progression.ExperienceFormulas.GrayLevel(player.Level);
-        return player.VisibleObjects
-            .Select(guid => map.FindObject(guid))
-            .OfType<Creature>()
-            .Where(creature => skip is null || !skip(creature))
-            .Where(creature => creature.IsAlive && map.Combat.Hooks.CanAttack(player, creature))
-            .Where(creature => creature.Level <= player.Level + maxLevelsAbove
-                || maxLevelsAbove > 1 && preferredEntry != 0 && creature.Entry == preferredEntry)
+        uint now = (player.Session as WorldSession)?.World.NowMs ?? 0;
+        ulong botGuid = player.Guid.Value;
+        int count = 0;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (map.FindObject(guid) is not Creature creature) continue;
+            if (skip is not null && skip(creature)) continue;
+            if (!creature.IsAlive || !map.Combat.Hooks.CanAttack(player, creature)) continue;
+            if (creature.Level > player.Level + maxLevelsAbove
+                && !(maxLevelsAbove > 1 && preferredEntry != 0 && creature.Entry == preferredEntry)) continue;
             // Grey creatures give no experience (XP::GetGrayLevel); idle grinding leaves them alone. A named quest
             // objective is still allowed: the quest asks for that creature whatever its level.
-            .Where(creature => preferredEntry != 0 && creature.Entry == preferredEntry || creature.Level > grayLevel)
-            .Where(creature => !IsSomeoneElses(player, creature, groups))
-            .Where(creature => preferredEntry != 0 ? creature.Entry == preferredEntry : creature.Template.CreatureType != 8)
+            if (!(preferredEntry != 0 && creature.Entry == preferredEntry || creature.Level > grayLevel)) continue;
+            if (!(preferredEntry != 0 ? creature.Entry == preferredEntry : creature.Template.CreatureType != 8)) continue;
+            if (contention is null ? IsSomeoneElses(player, creature, groups) : contention.Blocks(player, creature, groups, now)) continue;
+
             // Ordinary idle grinding must not initiate attacks on town/service NPCs.
             // Explicit quest objectives and the existing defensive-victim path keep
             // their normal authoritative combat checks.
-            .Where(creature => preferredEntry != 0 || creature.Template.NpcFlags == 0)
-            .Where(creature => float.IsFinite(creature.X) && float.IsFinite(creature.Y) && float.IsFinite(creature.Z))
-            .OrderBy(creature => preferredEntry != 0 && creature.Entry == preferredEntry ? 0 : 1)
-            .ThenBy(creature => Distance(player, creature));
+            if (preferredEntry == 0 && creature.Template.NpcFlags != 0) continue;
+            if (!(float.IsFinite(creature.X) && float.IsFinite(creature.Y) && float.IsFinite(creature.Z))) continue;
+
+            float distance = Distance(player, creature);
+            float weight = contention is null ? distance : contention.Weigh(botGuid, creature, distance, now);
+            if (count == best.Length && !(weight < best[count - 1].Weight)) continue;
+            int at = count < best.Length ? count++ : count - 1;
+            while (at > 0 && weight < best[at - 1].Weight)
+            {
+                best[at] = best[at - 1];
+                at--;
+            }
+
+            best[at] = new PlayerbotWeighedTarget { Creature = creature, Weight = weight };
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -1441,6 +1533,29 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private System.Numerics.Vector3 _chaseGoal;
     private bool _chaseTruncated;
+
+    /// <summary>
+    /// Whether a living, attackable creature of <paramref name="entry"/> in the bot's sight is free (not another player's, not set aside).
+    /// A bot that finds none to take while one is free (unreachable, suspended, outside its home, refused by the risk estimate) is not
+    /// being contended for it: only a bot with every creature of the entry taken by others accrues contested time.
+    /// </summary>
+    private bool AnyFreeOfEntry(Player player, uint entry)
+    {
+        if (player.Map is not { } map) return false;
+        GroupManager? groups = GroupsOf(player);
+        uint now = _session.World.NowMs;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (map.FindObject(guid) is not Creature creature || creature.Entry != entry || !creature.IsAlive
+                || !map.Combat.Hooks.CanAttack(player, creature)) continue;
+            if (!_contention.IsSetAside(creature.Guid.Value, now) && !IsSomeoneElses(player, creature, groups)) return true;
+        }
+
+        return false;
+    }
+
+    private static GroupManager? GroupsOf(Player player)
+        => (player.Session as WorldSession)?.Services.GetService<Social.SocialFeature>()?.Context.Groups;
 
     /// <summary>Whether <paramref name="target"/> is inside the arc the server swings in (<see cref="CombatConstants.AutoAttackArc"/>).</summary>
     private static bool FacesTarget(Player player, Creature target)
@@ -1477,7 +1592,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>
     /// Whether <paramref name="creature"/> belongs to another player's fight: tapped by someone outside the bot's group (the
     /// client's grey name: UNIT_DYNFLAG_TAPPED without TAPPED_BY_PLAYER as the bot sees it, LootService's viewer filter over
-    /// Creature.LootTapPlayerGuid), or fighting a player who is neither the bot nor in its group (its victim, or any player on
+    /// Creature.LootTapper), or fighting a player who is neither the bot nor in its group (its victim, or any player on
     /// its threat list). vmangos bots take such targets only from their leader's fight (PartyBotAI::SelectAttackTarget).
     /// </summary>
     internal static bool IsSomeoneElses(Player player, Creature creature, GroupManager? groups)
@@ -1488,12 +1603,49 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (creature.Combat.Victim is Player victim && IsStranger(player, victim, groups))
             return true;
         if (!creature.Combat.HasThreatList) return false;
-        foreach (ThreatEntry entry in creature.Combat.Threat.Entries)
+        IReadOnlyList<ThreatEntry> entries = creature.Combat.Threat.Entries;
+        for (int index = 0; index < entries.Count; index++) // indexed: an enumerator over the interface would be boxed for every candidate
         {
-            if (entry.Target is Player other && IsStranger(player, other, groups))
+            if (entries[index].Target is Player other && IsStranger(player, other, groups))
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// The player behind a creature's tag or fight: the player who tapped it (or the owner of the pet that did), else the stranger it
+    /// fights or holds on its threat list. Null when nobody can be found.
+    /// </summary>
+    internal static Player? TaggerOf(Player player, Creature creature, GroupManager? groups)
+    {
+        if (creature.Map is not { } map) return null;
+        ObjectGuid tap = creature.LootTapper;
+        if (!tap.IsEmpty)
+        {
+            if (map.FindPlayer(tap) is { } tapper) return tapper;
+            if (map.FindObject(tap) is Unit pet && pet.CharmerOrOwnerGuid.IsPlayer && map.FindPlayer(pet.CharmerOrOwnerGuid) is { } owner) return owner;
+        }
+
+        if (creature.Combat.Victim is Player victim && IsStranger(player, victim, groups)) return victim;
+        if (!creature.Combat.HasThreatList) return null;
+        IReadOnlyList<ThreatEntry> entries = creature.Combat.Threat.Entries;
+        for (int index = 0; index < entries.Count; index++)
+            if (entries[index].Target is Player other && IsStranger(player, other, groups)) return other;
+        return null;
+    }
+
+    /// <summary>
+    /// Whether the corpse of <paramref name="creature"/> is the bot's to loot and count: the viewer's own tapped flag (the tap is the
+    /// bot's or its group's), and not a tap that is another's (<see cref="Game.Loot.LootService.UnitDynFlagTapped"/> without
+    /// <see cref="Game.Loot.LootService.UnitDynFlagTappedByPlayer"/> as the bot sees it) or a kill that earns nobody credit. A corpse with
+    /// no tap on record is left to the loot request, as before.
+    /// </summary>
+    internal static bool HasLootRights(Player player, Creature creature)
+    {
+        if (!creature.KillCreditAllowed) return false;
+        uint seen = creature.GetValueFor(UpdateFields.UnitDynamicFlags, player);
+        if ((seen & Game.Loot.LootService.UnitDynFlagTappedByPlayer) != 0) return true;
+        return (seen & Game.Loot.LootService.UnitDynFlagTapped) == 0;
     }
 
     private static bool IsStranger(Player player, Player other, GroupManager? groups)
@@ -1554,7 +1706,138 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// </summary>
     private bool IsSkipped(Creature creature)
         => IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
+            || _contention.IsEntrySuspended(creature.Entry, _session.World.NowMs)
             || _home is { } home && creature.MapId == home.MapId && !home.Contains(creature);
+
+    /// <summary>
+    /// The held mob turned out to be another player's (a tag or a fight the bot is not part of, <see cref="IsSomeoneElses"/>; the bot is
+    /// not on its threat list). Leave it alone for <see cref="PlayerbotContentionOptions.SomeoneElsesMemorySeconds"/> and let the caller
+    /// choose again, unless the bot decides to help its tagger (<see cref="PlayerbotContention.Decide"/>, at most once per mob per memory
+    /// window): then it keeps the mob as an assist-only target, no credit and no loot, until the mob dies or the tagger stops fighting.
+    /// </summary>
+    private void DropIfSomeoneElses(Player player, Creature held)
+    {
+        uint now = _session.World.NowMs;
+        ulong mob = held.Guid.Value;
+        bool mine = player.Combat.ThreatenedBy.Contains(held) || ReferenceEquals(held.Combat.Victim, player);
+
+        if (_contention.IsAssisting(held.Guid))
+        {
+            // The mob evaded and the bot tagged it afresh: it is the bot's own now, kill and loot included.
+            if (mine && held.LootTapper == player.Guid) { _contention.EndAssist(); return; }
+            if (player.Map?.FindPlayer(_contention.AssistTagger) is { IsAlive: true } helped && helped.Combat.IsInCombat) return;
+            _contention.EndAssist();
+            if (!mine) LeaveSomeoneElses(player, held, now);
+            return;
+        }
+
+        if (mine) return;
+        if (_contention.IsSetAside(mob, now)) { LeaveSomeoneElses(player, held, now); return; }
+        GroupManager? groups = GroupsOf(player);
+        if (!IsSomeoneElses(player, held, groups)) return;
+
+        // Only a tagged mob has a tagger to help: an untagged one that merely fights a stranger is left alone (helping would take its tag).
+        Player? tagger = held.LootTapper.IsEmpty ? null : TaggerOf(player, held, groups);
+        bool shares = tagger is not null && _quests.SharesKillQuest(player, tagger, held.Entry);
+        var facts = new PlayerbotHelpFacts(tagger is not null,
+            tagger is null ? float.PositiveInfinity : Distance(player, tagger),
+            player.MaxHealth == 0 ? 0f : player.Health * 100f / player.MaxHealth,
+            _quests.ReturnQuest != 0 || Risk.Retreat.Active || Risk.Waiting,
+            tagger is not null && TaggerIsLosing(tagger),
+            tagger?.Session is WorldSession { IsManaged: false },
+            shares);
+        if (tagger is not null && shares) RaiseContentionSignal(player, tagger, held, groups, now);
+        if (_contention.Decide(facts, player.Guid.Value, mob, now) == PlayerbotHelpDecision.Help && tagger is not null)
+        {
+            _contention.BeginAssist(held.Guid, tagger.Guid);
+            _contention.ReleaseClaim();
+            return;
+        }
+
+        LeaveSomeoneElses(player, held, now);
+    }
+
+    private void LeaveSomeoneElses(Player player, Creature mob, uint now)
+    {
+        _contention.MarkSomeoneElses(mob.Guid.Value, now);
+        _contention.NoteLostMob(mob.Entry);
+        _contention.ReleaseClaim();
+        if (_attacking || ReferenceEquals(player.Combat.Victim, mob)) _session.TryManagedAction(WorldOpcode.CmsgAttackstop, []);
+        _target = null;
+        _route = null;
+        _attacking = false;
+        _lootOpened = false;
+        TargetEntry = 0;
+    }
+
+    /// <summary>The tagger is under <see cref="PlayerbotContention.LosingHealthPct"/> of its health, or has <see cref="PlayerbotContention.LosingEnemies"/> enemies on it.</summary>
+    private static bool TaggerIsLosing(Player tagger)
+        => tagger.MaxHealth > 0 && tagger.Health * 100f < PlayerbotContention.LosingHealthPct * tagger.MaxHealth
+            || Math.Max(tagger.Combat.Attackers.Count, tagger.Combat.ThreatenedBy.Count) >= PlayerbotContention.LosingEnemies;
+
+    /// <summary>
+    /// Both the bot and the tagger are ungrouped and have the creature as an unfinished kill objective of the same quest: ask for a
+    /// group (source "contention"; the coordinator matches by objective, and with <see cref="PlayerbotGroupOptions.InvitePlayers"/> a
+    /// real player nearby is invited, PlayerbotGroupCoordinator.MatchWithPlayer).
+    /// </summary>
+    private void RaiseContentionSignal(Player player, Player tagger, Creature mob, GroupManager? groups, uint now)
+    {
+        if (!_options.Groups.Enabled || groups is null || Distance(player, tagger) > PlayerbotContention.HelpYards) return;
+        if (groups.GetGroup(player.Guid) is not null || groups.GetGroup(tagger.Guid) is not null) return;
+        Risk.RaiseGroupSignal(new PlayerbotGroupSignal(mob.Entry, 2, player.MapId, new System.Numerics.Vector3(mob.X, mob.Y, mob.Z), now,
+            PlayerbotGroupSignal.ContentionSource));
+    }
+
+    /// <summary>The bot gained no credit on its quest creature <paramref name="entry"/> and no other objective is left: ask for a group.</summary>
+    private void RaiseContentionExhausted(uint entry, uint quest)
+    {
+        if (!_options.Groups.Enabled || _session.Player is not { } player) return;
+        Risk.RaiseGroupSignal(new PlayerbotGroupSignal(entry, 2, player.MapId, new System.Numerics.Vector3(player.X, player.Y, player.Z),
+            _session.World.NowMs, PlayerbotGroupSignal.ContentionSource, quest));
+    }
+
+    private static bool IsPvpFlagged(Player player) => (player.UnitFlags & UnitFlags.Pvp) != 0 || (player.Flags & PlayerFlags.FfaPvp) != 0;
+
+    /// <summary>
+    /// Whether the bot may cast a heal at <paramref name="tagger"/>: alive, on the bot's map, of the bot's team and friendly (never
+    /// hostile), not flagged for PvP unless the bot is too (a heal on a flagged player flags the healer), and in line of sight. Range
+    /// and the rest of castability are the rotation's own check. A server refusal would also bar that spell from the bot's own rotation
+    /// for <see cref="PlayerbotCombatSpells.RefusalBackoffMs"/>, so a cast that would be refused is never sent.
+    /// </summary>
+    internal static bool IsSafeHealTarget(Player player, Player tagger)
+    {
+        if (!tagger.IsAlive || !tagger.IsInWorld || !ReferenceEquals(tagger.Map, player.Map) || player.Map is not { } map) return false;
+        if (tagger.Team != player.Team || !map.Combat.Hooks.IsFriendly(player, tagger) || map.Combat.Hooks.IsHostileTo(player, tagger)) return false;
+        if (IsPvpFlagged(tagger) && !IsPvpFlagged(player)) return false;
+        return player.IsWithinLineOfSight(tagger);
+    }
+
+    /// <summary>A direct heal that lands on a unit other than its caster (a self-only heal such as Desperate Prayer would heal the bot, not its tagger).</summary>
+    private static readonly Func<Game.Spells.SpellInfo, bool> HealsAnotherUnit = static spell =>
+    {
+        foreach (Game.Spells.SpellEffectInfo effect in spell.Effects)
+        {
+            if (!effect.IsEmpty && effect.Effect == Game.Spells.SpellEffectName.Heal
+                && effect.TargetA is Game.Spells.SpellImplicitTarget.Unit or Game.Spells.SpellImplicitTarget.UnitFriend
+                    or Game.Spells.SpellImplicitTarget.UnitFriendAndParty) return true;
+        }
+
+        return false;
+    };
+
+    /// <summary>
+    /// A healer class with a direct heal tops the tagger it helps up (below 85% health) before it fights the mob, when
+    /// <see cref="IsSafeHealTarget"/> holds. The combat view is built once for the heals (<see cref="PlayerbotCombatSpells.FirstCastable"/>).
+    /// True: a heal was accepted (or a cast is under way) and the think is spent.
+    /// </summary>
+    internal bool TryHealTagger(Player player)
+    {
+        if (player.Class is not (Game.Class.Priest or Game.Class.Paladin or Game.Class.Druid or Game.Class.Shaman)) return false;
+        if (player.Map?.FindPlayer(_contention.AssistTagger) is not { } tagger || !IsSafeHealTarget(player, tagger)
+            || tagger.MaxHealth == 0 || tagger.Health * 100f >= 85f * tagger.MaxHealth) return false;
+        IReadOnlyList<Game.Spells.SpellInfo> heals = _combatSpells.Abilities(player).DirectHeals;
+        return _combatSpells.FirstCastable(player, heals, tagger, HealsAnotherUnit) is { } heal && _combatSpells.CastAt(player, heal, tagger);
+    }
 
     private void RememberAttackers(Player player)
     {
