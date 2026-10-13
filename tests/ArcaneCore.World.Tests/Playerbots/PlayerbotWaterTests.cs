@@ -105,6 +105,42 @@ public sealed class PlayerbotWaterTests
     }
 
     /// <summary>
+    /// Bot QA #271: three bots drowned in the same Sen'jin cove while their move flag was still set, so the standing-still escape
+    /// never ran. Once the breath bar is nearly empty the swim is abandoned even though the bot is moving.
+    /// </summary>
+    [Fact]
+    public async Task MovingBotOutOfBreath_LeavesTheWater()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                MovementInfo moving = player.Movement; moving.Flags |= MovementFlags.Forward;
+                var packet = new PacketWriter(); moving.Write(packet);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                session.TryManagedAction(WorldOpcode.MsgMoveHeartbeat, packet.ToArray());
+                player.Locomotion.Environment |= EnvironmentFlags.Underwater;
+                MirrorTimer breath = player.Locomotion.MirrorTimers[(int)MirrorTimerType.Breath];
+                breath.SetScale(-1);
+                breath.Start(60_000);
+                breath.SetRemaining(10_000);
+                Assert.True(PlayerbotWater.BreathRunningOut(player));
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+
+                Assert.Equal(PlayerbotGoalKind.Escape, brain.Goal);
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
     /// A sick bot that is walking is not diverted into the water escape by its sickness alone: on its first think the sickness stand-down
     /// stops it and the goal is Rest, not Escape. The escape then takes it out on a later think (see SickSubmergedBotOffRoute_IsStoodDownThenEscapes).
     /// </summary>

@@ -372,6 +372,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 PlayerbotMovementControl.Stop(_session, player);
             }
         }
+        // Out of breath while still swimming: the movement acknowledgement below would otherwise consume every think, and the
+        // bot would follow its underwater route until the breath timer killed it (bot QA #271).
+        if (!dead && PlayerbotWater.Submerged(player) && !player.Combat.IsInCombat && PlayerbotWater.BreathRunningOut(player))
+        {
+            EscapeWater(player, elapsedMs);
+            return;
+        }
+
         // Death cleanup must happen before this seam, but pending movement orders still
         // require their ordinary acknowledgements while alive or ghosted.
         if (PlayerbotMovementControl.Update(_session, player)) return;
@@ -531,9 +539,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
-        // Still under water and standing still (no trip, no retreat, no walk under way): a finished retreat, a risk wait or any
-        // other pause. A brief dip while walking is no breath risk, so a moving bot is left alone.
-        if (submerged && !player.Combat.IsInCombat && (player.Movement.Flags & MovementFlags.MaskMoving) == 0)
+        // Still under water with nothing else owning the bot, or already out of breath while swimming: leave. A brief dip while
+        // walking is no breath risk (the timer has not run down), so a moving bot with breath to spare is left alone.
+        if (submerged && !player.Combat.IsInCombat
+            && ((player.Movement.Flags & MovementFlags.MaskMoving) == 0 || PlayerbotWater.BreathRunningOut(player)))
         {
             EscapeWater(player, interval);
             return;
@@ -1568,6 +1577,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         _attackerEntries.Clear();
         Risk.OnDeath(player, _attackers);
+        if (_options.Risk.Enabled && _lastQaDeathSource == "Drowning")
+        {
+            // One drowning is enough (bot QA #271, Sen'jin coast, three deaths in the same cove). The ordinary death mark is 25 yards,
+            // which a walk back from the beach never enters until the bot is already under. The wider mark refuses that walk.
+            Risk.Hazards.Add(player.MapId, _lastQaDeathPosition, PlayerbotWater.DrowningHazardYards, now,
+                _options.Risk.DangerMemorySeconds, "drowning");
+        }
         _attackers.Clear();
         foreach (uint entry in setAside) _suspensions.SuspendEntry(entry, now);
         if (loop) StallOutsideHome = false; // the death loop is the report now; the mark was the last living stall's

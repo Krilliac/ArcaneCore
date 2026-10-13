@@ -15,6 +15,19 @@ internal static class PlayerbotWater
     internal static bool Submerged(Player player)
         => (player.Locomotion.Environment & EnvironmentFlags.Underwater) != 0;
 
+    /// <summary>
+    /// Breath is counting down and at most <paramref name="remainMs"/> is left. A water-breathing aura regenerates (positive scale)
+    /// and is not running out. The flag alone is not enough: a ford sets it for a step, and the timer is what drowns the bot.
+    /// </summary>
+    internal static bool BreathRunningOut(Player player, uint remainMs = 20_000)
+    {
+        MirrorTimer breath = player.Locomotion.MirrorTimers[(int)MirrorTimerType.Breath];
+        return breath.IsActive && breath.Scale < 0 && breath.Remaining <= remainMs;
+    }
+
+    /// <summary>Yards kept clear after a drowning, wider than an ordinary death mark: the lethal water is the cove, not the corpse.</summary>
+    internal const float DrowningHazardYards = 80f;
+
     internal static bool Submerged(Map map, Vector3 at, float collisionHeight)
     {
         LiquidStatus status = map.GetLiquidStatus(at.X, at.Y, at.Z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid);
