@@ -110,11 +110,11 @@ public static class EasternPlaguelandsCatalog
 
     /// <summary>
     /// The capture-point template numbers used when the 1810xx/1820xx templates are not loaded with type 29 data. The slider
-    /// geometry is the one vmangos draws in ZoneScript.cpp:378-384 (max 1200, grey band 240 = 20%); the radius and minimum time are
-    /// this base's fallback, not sourced.
+    /// geometry is the one vmangos draws in ZoneScript.cpp:378-384 (max 1200, grey band 240 = 20%); the radius (data0 = 80) and minimum
+    /// time (data16 = 480) are the classic-db z2815 type-29 rows of the four towers (181899, 182096-182098), which all agree.
     /// </summary>
     public static readonly CapturePointTemplate FallbackTemplate =
-        new(60f, WorldStateSliderDisplay, WorldStateSliderPosition, WorldStateSliderNeutral, 20, 60, 1200);
+        new(80f, WorldStateSliderDisplay, WorldStateSliderPosition, WorldStateSliderNeutral, 20, 480, 1200);
 
     public const uint TowerBannerEntry = 182106;
 
