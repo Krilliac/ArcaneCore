@@ -16,8 +16,9 @@ namespace ArcaneCore.Game.Tests;
 /// with tiered compilation on, 3 of 30 runs failed an allocation window (5264, 5480 and 8200 bytes; the code under test allocates nothing),
 /// with DOTNET_TieredPGO=0 still 1 of 30, with DOTNET_TieredCompilation=0 0 of 30. So tier-0 to tier-1 promotion (call counting after its
 /// 100 ms delay, background tier-1 compile, OSR of hot loops) landing inside a window is what reads as an allocation; which allocation
-/// that is was not identified. <see cref="WarmUp"/> therefore runs the window until the promotion has had its delay and time to finish
-/// before anything is measured (the approach of docs/integration/tick-allocation-20261004.md).
+/// that is was not identified. <see cref="WarmUp"/> therefore spends enough calls and wall time before the first window that the promotion
+/// has very likely finished (the approach of docs/integration/tick-allocation-20261004.md). It is not guaranteed: the 100 ms delay restarts
+/// whenever other tests in the host compile new tier-0 code. A late promotion over-counts (a flake), it never hides an allocation.
 /// </para>
 /// </summary>
 internal static class AllocationProbe

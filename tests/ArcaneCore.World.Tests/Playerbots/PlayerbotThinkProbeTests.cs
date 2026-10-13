@@ -102,7 +102,7 @@ public sealed class PlayerbotThinkProbeTests
         {
             PlayerbotThinkProbe.Phase("a");
             Spin(4);
-            PlayerbotThinkProbe.Phase("b"); // no work in b: preemption can only lengthen "a", or land in the few ticks between the two marks
+            PlayerbotThinkProbe.Phase("b"); // no work in b: a preemption lengthens "a", or "b" if it lands between the two marks; the asserts allow both
             PlayerbotThinkProbe.Phase("a");
             Spin(4);
         }
