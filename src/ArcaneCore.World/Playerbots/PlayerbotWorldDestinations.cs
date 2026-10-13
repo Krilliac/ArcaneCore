@@ -265,6 +265,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 if (returnQuestId == 0 && preferredCreatureEntry == 0) SettleArrival(player, entry.Entry);
                 return false;
             }
+            bool attemptedBefore = attempted;
             attempted = true;
             Vector3 destination = new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z);
             // Across the Deeprun Tram (Stormwind and Ironforge sides of the continent): the brain drives the trip from the next think,
@@ -309,9 +310,28 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             PlanOutcome planned = PlanOutcome.Route;
             bool returning = returnQuestId != 0 && returnQuestId == questId;
             bool friendlyTown = returning && FriendlyTownEnder(player, entry.Entry);
+            // A spawn in a part of the map no walk joins to the bot's (the region graph's components) is skipped without a path query or a
+            // step toward it: the walk would end at the point nearest it, bot after bot (bot QA cluster C3). Not for a completed quest's
+            // return (the hazard and set-aside rules there are their own). The skip costs no path search, so the next spawn is judged in
+            // this think; when no other spawn of the entry is left to try, the entry and the quest are set aside at once without
+            // counting towards abandoning the quest (PlayerbotSuspensions.SuspendQuest).
+            if (route is null && !returning && PlayerbotNavigation.IsUnreachableOnFoot(player, destination))
+            {
+                attempted = attemptedBefore;
+                _blockedSpawns.Add(entry.Spawn.Guid);
+                if (Suspensions is { } unreachable
+                    && !_entries.Any(other => other.Entry == entry.Entry && !IsBlocked(other.Spawn.Guid, now)))
+                {
+                    unreachable.SuspendEntry(entry.Entry, now);
+                    if (questId != 0) unreachable.SuspendQuest(questId, now, countsAsSetAside: false);
+                }
+
+                continue;
+            }
+
             if (route is null)
                 planned = PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out route,
-                    completedQuestReturn: returning, friendlyTownEnder: friendlyTown, deadEnds: true);
+                    completedQuestReturn: returning, friendlyTownEnder: friendlyTown);
             if (planned == PlanOutcome.Pending)
             {
                 // A tile on the way is still being read: not a verdict on this spawn. Keep the goal, try again next think.
@@ -329,15 +349,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                     Backoff(now);
                 }
                 else _blockedSpawns.Add(entry.Spawn.Guid);
-                // The spawn lies in a region the bot's does not join and the bot stands at the nearest point (or another bot proved it):
-                // no retry can succeed. With no other spawn of the entry left to try the entry and the quest are set aside at once (not
-                // after the stall bound), so the brain picks another goal instead of standing at the dead end.
-                if (PlayerbotNavigation.TakeDeadEndRefusal() && Suspensions is { } deadEnd
-                    && !_entries.Any(other => other.Entry == entry.Entry && other.Spawn.Guid != entry.Spawn.Guid && !IsBlocked(other.Spawn.Guid, now)))
-                {
-                    deadEnd.SuspendEntry(entry.Entry, now);
-                    if (questId != 0) deadEnd.SuspendQuest(questId, now, countsAsSetAside: false);
-                }
                 // A completed quest with just one indexed ender cannot be reached by retrying a plan that keeps failing from the same
                 // spot. Leave quests with alternative enders to the ordinary spawn rotation. The set-aside is local to this bot.
                 // Both the near and the far branch count: far failures arrive once per backoff and still confirm.

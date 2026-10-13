@@ -59,6 +59,7 @@ public sealed class NavRegionGraph
         _firstLink = firstLink;
         _links = links;
         PolygonCount = polygons;
+        _components = new Lazy<(int[], int[])>(LabelComponents, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <summary>One way out of a region: into region <c>To</c> across the portal <c>At</c> (world position).</summary>
@@ -210,6 +211,55 @@ public sealed class NavRegionGraph
 
         return seen.Count;
     }
+
+    private readonly Lazy<(int[] Id, int[] Size)> _components;
+
+    private (int[] Id, int[] Size) LabelComponents()
+    {
+        int count = RegionCount;
+        int[] id = new int[count];
+        Array.Fill(id, -1);
+        var sizes = new List<int>();
+        int[] queue = new int[count];
+        for (int start = 0; start < count; start++)
+        {
+            if (id[start] >= 0)
+            {
+                continue;
+            }
+
+            int label = sizes.Count, head = 0, tail = 0;
+            id[start] = label;
+            queue[tail++] = start;
+            while (head < tail)
+            {
+                int region = queue[head++];
+                for (int l = _firstLink[region]; l < _firstLink[region + 1]; l++)
+                {
+                    int next = _links[l].To;
+                    if (id[next] < 0)
+                    {
+                        id[next] = label;
+                        queue[tail++] = next;
+                    }
+                }
+            }
+
+            sizes.Add(tail);
+        }
+
+        return (id, [.. sizes]);
+    }
+
+    /// <summary>
+    /// The connected component (regions joined by portals, so places a walk joins) that <paramref name="region"/> belongs to, or -1 for no
+    /// region. Labelled once for the whole graph on first use (linear in regions and links, a few milliseconds for a continent); every
+    /// later call is an array read. Safe from any thread.
+    /// </summary>
+    public int ComponentOf(int region) => (uint)region < (uint)RegionCount ? _components.Value.Id[region] : -1;
+
+    /// <summary>How many regions the component of <paramref name="region"/> holds (0 for no region): a few mean a fragment of mesh.</summary>
+    public int ComponentSize(int region) => (uint)region < (uint)RegionCount ? _components.Value.Size[_components.Value.Id[region]] : 0;
 
     /// <summary>
     /// Read every <c>NNNXXYY.mmtile</c> of <paramref name="mapId"/> in <paramref name="directory"/> and build the graph for polygons with

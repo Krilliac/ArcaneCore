@@ -1254,7 +1254,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
-        if (!PlayerbotNavigation.IsOnMeshIsland(player, _options)) return false;
+        // A fragment of mesh (the region graph's component of a few regions, PlayerbotNavigation.IsOnMeshFragment) is an island whose
+        // one straight hop off (TryPlanToward) found no ground beside it, or was not walkable: the same escape applies.
+        if (!PlayerbotNavigation.IsOnMeshIsland(player, _options) && !PlayerbotNavigation.IsOnMeshFragment(player)) return false;
         onIsland = true;
         uint now = _session.World.NowMs;
         // Home first, but only when the teleport home would be made: a refused TryTeleport would set the walk of a bot inside its home
