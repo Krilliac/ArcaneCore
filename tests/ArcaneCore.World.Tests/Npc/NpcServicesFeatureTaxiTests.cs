@@ -57,6 +57,35 @@ public sealed class NpcServicesFeatureTaxiTests
     ]);
 
     [Fact]
+    public async Task Resume_UsesTheOtherFactionsMount_WhenTheNodesOwnTeamMountIsMissing()
+    {
+        // vmangos ContinueTaxiFlight passes allowed_alt_team (Player.cpp:18118). An alliance character whose
+        // departure node has only a horde mount still finishes the route; it is not dropped at the node.
+        await using var rig = await Rig.CreateAsync();
+        rig.Npcs.Extend(new QuestNpcDependencies(), new NpcStore(TaxiContent with
+        {
+            TaxiNodes =
+            [
+                new TaxiNode { Id = 1, MapId = 0, X = 0, Y = 0, Z = Z, MountAlliance = 0, MountHorde = Gryphon },
+                new TaxiNode { Id = 2, MapId = 0, X = 64, Y = 0, Z = Z, MountAlliance = Gryphon, MountHorde = Gryphon },
+                new TaxiNode { Id = 3, MapId = 0, X = 64, Y = 64, Z = Z, MountAlliance = Gryphon, MountHorde = Gryphon },
+            ],
+        }));
+        CharacterRecord stored = Assert.IsType<CharacterRecord>(await rig.Characters.GetByIdAsync(rig.CharacterId));
+        stored.X = 32;
+        stored.Z = 90;
+        await rig.Store.SaveAsync(rig.CharacterId, new TaxiFlightRoute([1, 2], [10], [0]));
+
+        Player relogged = await rig.LoadAsync();
+        rig.Enter(relogged);
+
+        Assert.True(rig.Npcs.Flights!.IsFlying(relogged));
+        Assert.Equal(GryphonDisplay, relogged.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+        Assert.InRange(relogged.X, 31f, 33f);
+        Assert.Equal(90f, relogged.Z);
+    }
+
+    [Fact]
     public async Task LogoutMidFlight_SavesTheRoute_AndTheResumedFlightClearsItWhenItLands()
     {
         await using var rig = await Rig.CreateAsync();
