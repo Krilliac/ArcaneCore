@@ -216,6 +216,46 @@ public sealed class RelayScriptExtraCommandTests
         Assert.Null(t.Elly.Spline);
     }
 
+    // --- 18 DESPAWN_SELF (database spawn) -------------------------------------------------
+
+    /// <summary>
+    /// cmangos SCRIPT_COMMAND_DESPAWN_SELF (ScriptMgr.cpp:2257-2272) on a database spawn is Creature::ForcedDespawn:
+    /// the creature leaves at once and comes back after its respawn delay. Bot QA #285 and #393 reported the step skipped.
+    /// </summary>
+    [Fact]
+    public void DespawnSelf_DatabaseSpawn_LeavesNowAndRespawnsAfterItsDelay()
+    {
+        using Town t = Start([Step(0, 18)]);
+        Assert.NotNull(t.Elly.Spawn);
+        t.Elly.RespawnDelayOnceSeconds = 1;
+        t.Wave();
+
+        Assert.False(t.Elly.IsInWorld);
+        Assert.Equal(CreatureDeathState.Dead, t.Elly.DeathState);
+        long? wait = t.System.RespawnRemainingMs(t.Elly);
+        Assert.NotNull(wait);
+        Assert.InRange(wait!.Value, 1, 1000);
+
+        for (int i = 0; i < 30 && !(t.Elly.IsAlive && t.Elly.IsInWorld); i++) Run(t.World, 100);
+        Assert.True(t.Elly.IsAlive && t.Elly.IsInWorld);
+        Assert.Null(t.Elly.RespawnDelayOnceSeconds);
+    }
+
+    [Fact]
+    public void DespawnSelf_DatabaseSpawn_WaitsOutDatalongBeforeLeaving()
+    {
+        using Town t = Start([Step(0, 18, dataLong: 1000)]);
+        t.Wave();
+        Assert.True(t.Elly.IsAlive && t.Elly.IsInWorld);
+
+        Run(t.World, 500);
+        Assert.True(t.Elly.IsInWorld, "datalong is a delay in milliseconds, not an instant despawn");
+
+        Run(t.World, 600);
+        Assert.False(t.Elly.IsInWorld);
+        Assert.NotNull(t.System.RespawnRemainingMs(t.Elly));
+    }
+
     private static RelayScriptStep Step(uint delay, uint command, uint dataLong = 0, uint dataLong2 = 0, uint dataLong3 = 0, uint flags = 0,
         int dataInt = 0, int dataInt2 = 0, int dataInt3 = 0)
         => new(Relay, delay, 0, command, dataLong, dataLong2, dataLong3, 0, 0, flags, dataInt, dataInt2, dataInt3, 0, 0, 0, 0, 0, 0, 0, 0);

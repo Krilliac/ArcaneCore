@@ -604,29 +604,16 @@ public sealed partial class CreatureMapSystem
                 return false;
             }
 
-            case 18: // SCRIPT_COMMAND_DESPAWN_SELF (:2257-2272): the target creature (the source when only it is one), after datalong ms
+            case 18: // SCRIPT_COMMAND_DESPAWN_SELF (cmangos ScriptMgr.cpp:2257-2272): the target creature, else the source, after datalong ms.
+                     // ForcedDespawn is the respawn timer: a database spawn dies without loot and returns after its delay; a temporary creature is removed.
             {
                 Creature? leaving = target as Creature ?? source as Creature;
-                if (leaving is null)
+                if (leaving is null || !ReferenceEquals(leaving.Map, Map))
                 {
                     return false;
                 }
 
-                if (leaving.Spawn is not null)
-                {
-                    ReportRelay(step, "DESPAWN_SELF of a database spawn (no forced despawn with respawn timer)");
-                    return false;
-                }
-
-                if (step.DataLong == 0)
-                {
-                    Despawn(leaving);
-                }
-                else
-                {
-                    _scriptDespawns.Add((leaving, _clockMs + step.DataLong));
-                }
-
+                ForcedDespawn(leaving, step.DataLong);
                 return false;
             }
 
