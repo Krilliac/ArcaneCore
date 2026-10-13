@@ -45,6 +45,19 @@ internal enum QaSignalKind
     /// Bot-independent: counted in occurrences only, so a fault no bot caused is still reported.
     /// </summary>
     ServerFault,
+
+    /// <summary>
+    /// A dungeon or raid run ended without finishing: the group gave up (no path, too few members, the leader left or stopped, out of wipes) or a gather,
+    /// travel, enter or run step timed out (<see cref="ArcaneCore.World.Playerbots.Groups.PlayerbotGroupCoordinator"/>). Bot-independent: identified by the
+    /// instance map, wing, stage, boss and reason, never by the group.
+    /// </summary>
+    RunFailed,
+
+    /// <summary>
+    /// The world tick hung (<see cref="ArcaneCore.Kernel.Ops.Watchdog.TickMonitor"/>, log event 7102): identified by the tick phase and the kind of work
+    /// running in it, never by a duration. Bot-independent; one occurrence is enough.
+    /// </summary>
+    TickHang,
 }
 
 /// <summary>
@@ -168,4 +181,10 @@ internal sealed record QaSignal
 
     /// <summary>How many occurrences this signal stands for (a polled server fault carries its delta; every other signal is one).</summary>
     public long Occurrences { get; init; } = 1;
+
+    /// <summary>A run failure's stage (<c>travel</c>, <c>boss</c> ...) or a tick hang's phase (<c>Features</c>, <c>Maps</c> ...): a content or code identity, never a bot.</summary>
+    public string Stage { get; init; } = string.Empty;
+
+    /// <summary>The wing (segment) of the dungeon or raid a run failure is about.</summary>
+    public int Segment { get; init; }
 }

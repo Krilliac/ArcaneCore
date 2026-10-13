@@ -113,6 +113,9 @@ internal sealed class PlayerbotRunMachine(PlayerbotRunPlan plan, int maxWipes)
     /// <summary>Why the run was given up (null otherwise).</summary>
     public string? Reason { get; private set; }
 
+    /// <summary>The step the run was in when it was given up (<see cref="Step"/> is <see cref="PlayerbotRunStep.GiveUp"/> from then on).</summary>
+    public PlayerbotRunStep FailedStep { get; private set; }
+
     /// <summary>The bosses the plan routes.</summary>
     public int BossCount => Plan.Bosses.Count;
 
@@ -202,6 +205,7 @@ internal sealed class PlayerbotRunMachine(PlayerbotRunPlan plan, int maxWipes)
 
     private void GiveUp(string reason)
     {
+        FailedStep = Step;
         Step = PlayerbotRunStep.GiveUp;
         Reason = reason;
     }

@@ -5,17 +5,22 @@ using System.Text.Json.Serialization;
 
 namespace ArcaneCore.World.Playerbots.Qa;
 
-/// <summary>One finding as the JSON export shows it (no bot hashes, redacted text).</summary>
+/// <summary>
+/// One finding as the JSON export shows it (no bot hashes, redacted text). The build fields tell "a fix landed and the problem stopped" from "nothing ran there":
+/// <see cref="SeenOnCurrentBuild"/> is whether the running build (the file's <c>Build</c>) met the finding, <see cref="OccurrencesOnCurrentBuild"/> how often, and the file's
+/// <c>BuildSinceUtc</c> is how long it has been running (the server's start); <see cref="Builds"/> holds the counts of the current and the previous build only.
+/// </summary>
 internal sealed record QaReportEntry(int Rank, string Id, string ShortId, string Kind, string Cause, string CauseDetail, double Severity, long Count,
     int DistinctBots, DateTime FirstSeenUtc, DateTime LastSeenUtc, string Subject, string? QuestTitle, string Publication, IReadOnlyList<QaReportSample> Samples,
-    string Goal = "", bool QuestIsGoal = true, bool Stale = false);
+    string Goal = "", bool QuestIsGoal = true, bool Stale = false, string? FirstBuild = null, string? LastBuild = null, IReadOnlyList<QaBuildCount>? Builds = null,
+    bool SeenOnCurrentBuild = false, long OccurrencesOnCurrentBuild = 0, string? ClosedBuild = null, string? ReportedBuild = null);
 
 /// <summary>One evidence sample of the JSON export.</summary>
 internal sealed record QaReportSample(DateTime AtUtc, uint Map, float? X, float? Y, float? Z, IReadOnlyList<uint> Attackers, string Message);
 
 /// <summary><c>qa/report.json</c>.</summary>
 internal sealed record QaReportFile(DateTime GeneratedUtc, string Build, int FindingCount, IReadOnlyList<QaReportEntry> Findings,
-    QaSpellCoverageReport? SpellCoverage = null);
+    QaSpellCoverageReport? SpellCoverage = null, DateTime? BuildSinceUtc = null);
 
 [JsonSourceGenerationOptions(WriteIndented = true, UseStringEnumConverter = true)]
 [JsonSerializable(typeof(QaReportFile))]
@@ -159,7 +164,7 @@ internal static class PlayerbotQaReport
     }
 
     /// <summary>The evidence of one finding as chat lines.</summary>
-    internal static IReadOnlyList<string> ChatShow(QaFindingView f, PlayerbotQaRedactor redactor)
+    internal static IReadOnlyList<string> ChatShow(QaFindingView f, PlayerbotQaRedactor redactor, string? build = null)
     {
         var lines = new List<string>
         {
@@ -167,6 +172,7 @@ internal static class PlayerbotQaReport
             Cut(string.Create(CultureInfo.InvariantCulture, $"cause {f.Cause}: {redactor.Redact(f.CauseDetail)}")),
             string.Create(CultureInfo.InvariantCulture, $"seen {f.Count} times by {f.DistinctBots} bots, sev {f.Severity:F1}, first {f.FirstSeenUtc:u}, last {f.LastSeenUtc:u}, github {f.Publication}"),
         };
+        lines.Add(Cut(BuildLine(f, build, redactor)));
         if (f.QuestTitle is not null) lines.Add(Cut($"{QuestLabel(f, "quest")}: {redactor.Redact(f.QuestTitle)}"));
         foreach (QaSample s in f.Samples.TakeLast(3))
         {
@@ -177,6 +183,15 @@ internal static class PlayerbotQaReport
 
         if (GoHint(f) is { } go) lines.Add("go there: " + go);
         return lines;
+    }
+
+    /// <summary><c>builds first A, last B; per build B=3, A=9; on this build (B): 3</c>; a build a file from before format 2 never stamped reads as unknown.</summary>
+    private static string BuildLine(QaFindingView f, string? build, PlayerbotQaRedactor redactor)
+    {
+        string Name(string? b) => b is null ? "unknown" : redactor.Redact(b);
+        string perBuild = f.BuildCounts.Count == 0 ? "none recorded" : string.Join(", ", f.BuildCounts.Select(e => Name(e.Build) + "=" + e.Count.ToString(CultureInfo.InvariantCulture)));
+        string onThis = build is null ? string.Empty : string.Create(CultureInfo.InvariantCulture, $"; on this build ({Name(build)}): {f.CountOnBuild(build)}");
+        return $"builds first {Name(f.FirstBuild)}, last {Name(f.LastBuild)}; per build {perBuild}{onThis}";
     }
 
     /// <summary>The <c>.go xyz</c> command to the middle sample (null without a position).</summary>
@@ -273,10 +288,13 @@ internal static class PlayerbotQaReport
             entries.Add(new QaReportEntry(i + 1, f.Id, f.ShortId, f.KindLabel, f.Cause.ToString(), redactor.Redact(f.CauseDetail), f.Severity, f.Count, f.DistinctBots,
                 f.FirstSeenUtc, f.LastSeenUtc, redactor.Redact(f.Subject), f.QuestTitle is null ? null : redactor.Redact(f.QuestTitle), f.Publication.ToString(),
                 [.. f.Samples.Select(s => new QaReportSample(s.AtUtc, s.Map, s.HasPosition ? s.X : null, s.HasPosition ? s.Y : null, s.HasPosition ? s.Z : null,
-                    s.Attackers, redactor.Redact(s.Message)))], f.Goal, f.QuestIsGoal, IsStale(f, since)));
+                    s.Attackers, redactor.Redact(s.Message)))], f.Goal, f.QuestIsGoal, IsStale(f, since), f.FirstBuild, f.LastBuild, [.. f.BuildCounts],
+                f.CountOnBuild(build) > 0, f.CountOnBuild(build), f.ClosedBuild, f.ReportedBuild));
         }
 
-        return JsonSerializer.Serialize(new QaReportFile(generatedUtc, build, entries.Count, entries, coverage), QaReportJsonContext.Default.QaReportFile);
+        // The build has been running since this server started (a lower bound: an earlier run of the same build is not tracked). Null when the caller gave no start.
+        DateTime? running = since is { } start && start != DateTime.MaxValue ? start : null;
+        return JsonSerializer.Serialize(new QaReportFile(generatedUtc, build, entries.Count, entries, coverage, running), QaReportJsonContext.Default.QaReportFile);
     }
 
     /// <summary><c>quest Q</c> when the quest is the finding's subject, <c>last quest Q (not the goal)</c> for a stall of another goal.</summary>

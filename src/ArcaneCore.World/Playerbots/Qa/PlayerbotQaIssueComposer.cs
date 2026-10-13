@@ -186,6 +186,23 @@ internal static class PlayerbotQaIssueComposer
         return redactor.Body(text, string.Empty);
     }
 
+    /// <summary>
+    /// The one comment that comes with reopening an issue whose finding recurred on a newer build (<paramref name="build"/>): that build, the occurrences on it, the total,
+    /// the distinct bots and the latest sample. <paramref name="closedBuild"/> is the build the issue was closed on (or last known open on), when known.
+    /// </summary>
+    internal static string RegressionComment(QaFindingView f, string build, string? closedBuild, PlayerbotQaRedactor redactor)
+    {
+        QaSample? latest = f.Samples.Count > 0 ? f.Samples[^1] : null;
+        string at = latest is { HasPosition: true }
+            ? string.Create(CultureInfo.InvariantCulture, $"map {latest.Map} at {latest.X:F1}, {latest.Y:F1}, {latest.Z:F1}")
+            : "no position";
+        string was = closedBuild is null ? string.Empty : $" The issue was closed while build `{PlayerbotQaRedactor.RedactSecrets(closedBuild)}` was running.";
+        string sample = latest is null || f.Kind == QaSignalKind.ServerFault ? string.Empty : $"\n\nSample: `{Code(redactor.Redact(latest.Message))}`";
+        string text = string.Create(CultureInfo.InvariantCulture,
+            $"Regression: this finding occurred again on build `{PlayerbotQaRedactor.RedactSecrets(build)}`, a different build from the one it was closed on.{was} {f.CountOnBuild(build)} occurrences on this build (total {f.Count}){(f.Kind == QaSignalKind.ServerFault ? string.Empty : $", distinct bots {f.DistinctBots}")}, latest at {at} ({f.LastSeenUtc:u}). Reopening.{sample}\n\n_{Footer}_");
+        return redactor.Body(text, string.Empty);
+    }
+
     /// <summary>The comment on an issue whose finding was merged into another: the surviving issue's number, nothing of any bot.</summary>
     internal static string DuplicateComment(int survivorIssue)
         => string.Create(CultureInfo.InvariantCulture,
