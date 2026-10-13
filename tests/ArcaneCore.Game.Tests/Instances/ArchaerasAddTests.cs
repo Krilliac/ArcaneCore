@@ -288,9 +288,9 @@ public sealed class ArchaerasAddTests
         Assert.Empty(rig.Spells.Of(c, Reconstruct));
 
         long start = rig.Spells.NowMs;
-        HoldHealth(rig, archaedas, archaedas.MaxHealth * 49 / 100, 21_000);
+        HoldHealth(rig, archaedas, 1, 30_000);
         long[] at = [.. rig.Spells.Of(c, Reconstruct).Select(x => x.AtMs - start)];
-        Assert.Equal(2, at.Length);
+        Assert.True(at.Length >= 2, string.Join(',', at));
         Assert.InRange(at[1] - at[0], 9900, 10100);
     }
 

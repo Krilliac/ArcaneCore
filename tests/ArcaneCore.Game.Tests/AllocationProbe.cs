@@ -66,22 +66,36 @@ internal static class AllocationProbe
 
     private static bool TryStartNoGcRegion()
     {
-        if (System.Runtime.GCSettings.LatencyMode == System.Runtime.GCLatencyMode.NoGCRegion)
+        // Only one no-GC region exists per process. Parallel allocation tests used to give up at once, then every
+        // window on a busy runner was discarded and the probe failed with "only 1 of 5 GC-free windows".
+        long until = Environment.TickCount64 + 500;
+        while (true)
         {
-            return false; // another test's probe holds the process-wide region
-        }
+            if (System.Runtime.GCSettings.LatencyMode != System.Runtime.GCLatencyMode.NoGCRegion)
+            {
+                try
+                {
+                    if (GC.TryStartNoGCRegion(NoGcBudget))
+                    {
+                        return true;
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // raced another thread entering the region
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    return false; // budget larger than this GC configuration allows
+                }
+            }
 
-        try
-        {
-            return GC.TryStartNoGCRegion(NoGcBudget);
-        }
-        catch (InvalidOperationException)
-        {
-            return false; // raced another thread entering the region
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            return false; // budget larger than this GC configuration allows
+            if (Environment.TickCount64 >= until)
+            {
+                return false;
+            }
+
+            Thread.Sleep(1);
         }
     }
 
