@@ -180,8 +180,10 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     private readonly Dictionary<(uint Map, int X, int Y), long> _onDemand = [];
     private readonly Dictionary<uint, int> _onDemandPerMap = [];
     private readonly HashSet<(uint Map, int X, int Y)> _noTile = [];
+    private readonly List<(uint Map, int X, int Y)> _pendingThisQuery = [];
     private long _queryStamp;
     private int _queryLoads;
+    private bool _trackPendingThisQuery;
 
     /// <summary>Drop a tile from <see cref="_onDemand"/>, keeping the per-map count (<see cref="_onDemandPerMap"/>) in step.</summary>
     private void RemoveOnDemand((uint Map, int X, int Y) key)
@@ -379,36 +381,58 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         }
 
         bool nonBlocking = options.NonBlockingTiles;
-        long pendingBefore = PathSearchCounters.TilesPending;
         _queryStamp++;
         _queryLoads = 0;
-        EnsureTile(mapId, start, nonBlocking);
-        EnsureTile(mapId, end, nonBlocking);
-        if (nonBlocking && PathSearchCounters.TilesPending != pendingBefore)
-        {
-            // An endpoint's tile is still being read: the search cannot even locate it (an endpoint on an unloaded tile would answer a
-            // straight line, which is not what this query will answer once the tile is in).
-            return TilesPendingResult(start);
-        }
-
-        mesh.TileLoader = (x, y) =>
-        {
-            Vector3 center = NavMeshFormat.ToWorld(mesh.TileCenter(x, y));
-            return EnsureTile(mapId, center, nonBlocking) ? mesh.GetTile(x, y) : null;
-        };
+        // Tiles this query found unread. A read that finishes as "no such file" is recorded in _noTile and is no longer open;
+        // only a tile that is still open keeps the answer pending. Reporting pending after that read has left the table makes
+        // the caller await PendingTileRead and find null.
+        _pendingThisQuery.Clear();
+        _trackPendingThisQuery = nonBlocking;
         try
         {
+            EnsureTile(mapId, start, nonBlocking);
+            EnsureTile(mapId, end, nonBlocking);
+            if (nonBlocking && QueryTileStillOpen())
+            {
+                // An endpoint's tile is still being read: the search cannot even locate it (an endpoint on an unloaded tile would
+                // answer a straight line, which is not what this query will answer once the tile is in).
+                return TilesPendingResult(start);
+            }
+
+            mesh.TileLoader = (x, y) =>
+            {
+                Vector3 center = NavMeshFormat.ToWorld(mesh.TileCenter(x, y));
+                return EnsureTile(mapId, center, nonBlocking) ? mesh.GetTile(x, y) : null;
+            };
             PathResult result = FindPath(mesh, mapId, start, end, options);
             // A tile the search wanted was not in yet. A whole path found without it stands (the tile could only have offered another
             // way); any other answer (a partial path, no path, a shortcut) might be only for want of that tile.
-            return nonBlocking && PathSearchCounters.TilesPending != pendingBefore
+            return nonBlocking && QueryTileStillOpen()
                 && (result.Type & (PathType.Incomplete | PathType.NoPath | PathType.NotUsingPath)) != 0
                 ? TilesPendingResult(start) : result;
         }
         finally
         {
+            _trackPendingThisQuery = false;
             mesh.TileLoader = null;
         }
+    }
+
+    /// <summary>
+    /// Whether a tile this query asked for is still unread (in flight, waiting for a read slot, or not yet installed).
+    /// A tile already known to be missing has settled and is not open.
+    /// </summary>
+    private bool QueryTileStillOpen()
+    {
+        foreach ((uint, int, int) key in _pendingThisQuery)
+        {
+            if (!_noTile.Contains(key))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static PathResult TilesPendingResult(Vector3 start) => new(PathType.TilesPending, [start]);
@@ -451,6 +475,11 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             {
                 case TileReadState.Pending:
                     PathSearchCounters.RecordTilePending();
+                    if (_trackPendingThisQuery)
+                    {
+                        _pendingThisQuery.Add((mapId, terrain.X, terrain.Y));
+                    }
+
                     // A read started here is work this query asked for, like a tile loaded: it counts against MaxTilesPerQuery.
                     if (TileReadsStarted != startedBefore)
                     {
