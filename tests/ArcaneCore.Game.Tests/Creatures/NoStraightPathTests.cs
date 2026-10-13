@@ -20,7 +20,7 @@ namespace ArcaneCore.Game.Tests.Creatures;
 /// inside the house stands and evades, flee and wander wait, home teleports, a spent search budget defers, and a scripted move paths around
 /// the hole. A map with no mesh data still moves straight, and an authored route (point, waypoint) with no path still goes straight.
 /// </summary>
-public sealed class NoStraightPathTests
+public sealed partial class NoStraightPathTests
 {
     private const uint MapId = 0;
 
@@ -60,15 +60,16 @@ public sealed class NoStraightPathTests
     {
         private readonly NavMeshFixture? _fixture;
 
-        public Scene(float x, float y, IPathfinder? custom = null, byte movementType = 0, float wander = 0, float playerX = 0, float playerY = 0)
+        public Scene(float x, float y, IPathfinder? custom = null, byte movementType = 0, float wander = 0, float playerX = 0, float playerY = 0,
+            CreatureTemplate? template = null, Func<int, int, bool>? walkable = null)
         {
-            CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, x, y, z: 0, movementType: movementType, wander: wander)]);
+            CreatureContent content = Content([template ?? Template()], [Spawn(1, WolfEntry, x, y, z: 0, movementType: movementType, wander: wander)]);
             (World, _, Creatures) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
             if (custom is null)
             {
                 _fixture = new NavMeshFixture();
                 _fixture.WriteParams(MapId);
-                _fixture.WriteTile(MapId, 31, 31, House());
+                _fixture.WriteTile(MapId, 31, 31, walkable is null ? House() : House() with { Walkable = walkable });
                 var nav = new NavMeshPathfinder(_fixture.Directory);
                 Assert.True(nav.LoadTile(MapId, 31, 31));
                 WorldCollision.Of(World).Install(pathfinder: nav);

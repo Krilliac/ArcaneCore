@@ -358,7 +358,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         }
 
         Vector3 recast = NavMeshFormat.ToRecast(at);
-        return mesh.HaveTileAt(recast) && TryLocate(mesh, recast, options, out NavPolyRef poly, out _, out _)
+        return mesh.HaveTileAt(recast) && TryLocate(mesh, recast, options, 0f, out NavPolyRef poly, out _, out _)
             ? graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly) : -1;
     }
 
@@ -778,8 +778,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
             forceDestination = true;
         }
 
-        if (!TryLocate(mesh, startRc, options, out NavPolyRef startPoly, out Vector3 startOnMesh, out _)
-            || !TryLocate(mesh, endRc, options, out NavPolyRef endPoly, out Vector3 endOnMesh, out bool endFar))
+        if (!TryLocate(mesh, startRc, options, 0f, out NavPolyRef startPoly, out Vector3 startOnMesh, out _)
+            || !TryLocate(mesh, endRc, options, options.EndTolerance, out NavPolyRef endPoly, out Vector3 endOnMesh, out bool endFar))
         {
             // PathFinder.cpp:190-198: a hole in the mesh is a flying shortcut for a flier, NOPATH otherwise.
             return PathResult.StraightLine(start, end, flier ? PathType.Normal | PathType.NotUsingPath | PathType.FlyPath : PathType.NoPath);
@@ -838,9 +838,22 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     private static bool InRange(Vector3 a, Vector3 b, float r, float h)
         => (((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y))) <= r * r && MathF.Abs(a.Z - b.Z) <= h;
 
-    private static bool TryLocate(NavMesh mesh, Vector3 position, PathOptions options, out NavPolyRef poly, out Vector3 onMesh, out bool far)
+    private static bool TryLocate(NavMesh mesh, Vector3 position, PathOptions options, float tolerance, out NavPolyRef poly, out Vector3 onMesh, out bool far)
     {
         far = false;
+        if (tolerance > 0)
+        {
+            // vmangos FindWalkPoly extents {5, zSearchDist, 5}; "far" is the farFromPoly test of BuildPolyPath.
+            if (!mesh.TryFindNearestPoly(position, new Vector3(5, FarExtents.Y, 5), options, out poly, out onMesh))
+            {
+                far = true;
+                return false;
+            }
+
+            far = Vector3.DistanceSquared(onMesh, position) > tolerance * tolerance;
+            return true;
+        }
+
         if (mesh.TryFindNearestPoly(position, NearExtents, options, out poly, out onMesh))
         {
             far = NavMeshTile.DistanceXzSquared(onMesh, position) > 0.01f || MathF.Abs(onMesh.Y - position.Y) > NearExtents.Y;

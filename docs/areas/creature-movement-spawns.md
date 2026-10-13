@@ -306,15 +306,16 @@ comment that "vmangos goes straight on NOPATH" described only the authored-route
 |---|---|---|
 | Chase, follow, pet follow | no move; `IsReachable` false; re-asked every 100 ms; the unreachable-target timer evades (3 s soft, 24 s home) (`TargetedMovementGenerator.cpp:188-189`) | keeps its spline, re-paths next update (as before) |
 | Partial path (`Incomplete`) | walked to the point nearest the target, then stands; unreachable as before | - |
-| Flee / fear, confused | waits 1-1.5 s, then a new point (`FleeingMovementGenerator.cpp:60-63`, `FearMovementGenerator.cpp:43-46`) | retries next update |
+| Flee / fear, confused | waits 1-1.5 s, then a new point (`FleeingMovementGenerator.cpp:60-63`, `FearMovementGenerator.cpp:43-46`; confused: ArcaneCore's choice, vmangos ConfusedMovementGenerator.cpp:72-86 checks no path) | retries next update |
 | Home / evade | teleport home (`NearTeleportTo`, `HomeMovementGenerator.cpp:58-71`); a partial path teleports too; `Direct` runs | retries; teleports after 3 s |
 | Random wander | the leg is skipped, a new point 1-1.5 s later | retries next update |
 | Waypoint, point, formation, scripted `MoveTo` (authored) | straight line, as vmangos (`MoveSplineInit::Move(PathFinder*)` takes the shortcut of a NOPATH finder); counted in `DirectFallbackPaths` | retries next update (scripted moves wait in a per-map queue served first in the next update) |
-| Charge (spell) | no move (`PointMovementGenerator.cpp:237-238`) | not budgeted |
+| Charge (spell) | the cast fails with SPELL_FAILED_NOPATH when the caster is on the ground (not in water, within 1.6 yd of the floor) and the path to the target is NoPath or Incomplete (Spell.cpp:5917-5929; a swimmer charging a target in water passes); a triggered charge makes no move (PointMovementGenerator.cpp:237-238). The path uses the caster's own locomotion (player mover, creature InhabitType) | not budgeted |
 
 A spent budget never walks a creature straight. `CreatureMapSystem.MoveTo` (scripts) now paths; `MoveStraight` is the raw spline.
 Observability: `CreatureMapSystem.NoPathPaths / DirectFallbackPaths / DeferredPathSearches / HomePathTeleports` and the process-wide
 `CreaturePathStats` (the slow-map-update line prints the per-map counts; metrics `arcanecore.creature.path.*`, docs/ops/metrics.md).
+Every creature search carries the creature's `PathMover` (`InhabitType`), so a flier crosses a hole in the mesh as a flying shortcut instead of standing on NoPath. A return home uses `PathOptions.EndTolerance` = 7 yd (vmangos `farFromPoly`, PathFinder.cpp:209-235): a spawn point up to 5 yd off the mesh whose polygon the corridor reaches is walked to; only NoPath or a corridor that does not reach it teleports. The shared classification (0.1 yd) is unchanged for other callers.
 Not copied: vmangos' pet closed-door `CutPathWithDynamicLoS` and `UNIT_STATE_ALLOW_INCOMPLETE_PATH`; the in-LOS stop of a partial chase
 (the creature keeps walking the partial path). Maps without a mesh: `WorldCollision.InstallFallback` has no terrain-step `IPathfinder` to
 install (only the seam exists), so they keep the straight line.

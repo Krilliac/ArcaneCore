@@ -549,7 +549,7 @@ internal sealed class HomeMovementGenerator(CreatureHome home) : ICreatureMoveme
 
         // vmangos sets the final facing only when the spawn point is the target (HomeMovementGenerator.cpp:54-56, 64-65); a position a
         // movement generator supplied (GetResetPosition) carries no orientation (NaN here) and the creature faces its travel direction.
-        PlannedPath plan = mover.PlanPath(creature, destination);
+        PlannedPath plan = mover.PlanPath(creature, destination, toSpawn: true);
         switch (plan.Outcome)
         {
             case PathOutcome.Deferred when _waitedMs < DeferredTeleportMs:

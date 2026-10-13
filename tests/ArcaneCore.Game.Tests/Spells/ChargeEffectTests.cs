@@ -260,7 +260,7 @@ public sealed class ChargeEffectTests
     }
 
     [Fact]
-    public void Charge_WithNoPathAtAll_MakesNoMove()
+    public void Charge_TriggeredWithNoPath_MakesNoMove()
     {
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1, 0, 0);
@@ -270,6 +270,57 @@ public sealed class ChargeEffectTests
         kit.System.CastSpell(caster, Charge, SpellCastTargets.ForUnit(target.Guid), triggered: true);
 
         Assert.Equal(0f, caster.X, 3); // vmangos ChargeMovementGenerator::Initialize returns on PATHFIND_NOPATH: no straight line through the geometry
+    }
+
+    [Fact]
+    public void Charge_WithNoPath_FailsTheCastWithNopath_AndStartsNothing()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1, 0, 0);
+        (Player target, _) = kit.AddPlayer(2, 20, 0);
+        kit.Spellbook.Teach(caster, Charge);
+        WorldCollision.Of(kit.World).Install(new Obstacles { Floor = _ => Z }, new FixedPath { Type = PathType.NoPath });
+
+        Assert.Equal(SpellCastResult.Nopath, kit.System.HandleCastRequest(caster, Charge, SpellCastTargets.ForUnit(target.Guid)));
+
+        Assert.Equal(0f, caster.X, 3);
+        Assert.False(caster.Combat.IsMeleeAttacking);
+        Assert.Null(caster.Combat.Victim);
+        Assert.Equal(0u, SpellSystem.GetPower(caster, PowerType.Rage));
+        Assert.False(kit.System.HasAura(target, ChargeBonus));
+
+        // No cooldown or global cooldown was spent: with a path the same cast goes through at once.
+        WorldCollision.Of(kit.World).Install(pathfinder: StraightLinePathfinder.Instance);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Charge, SpellCastTargets.ForUnit(target.Guid)));
+        Assert.Equal(20f - Gap(caster, target), caster.X, 3);
+    }
+
+    [Fact]
+    public void Charge_WithAPartialPath_FailsTheCast()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1, 0, 0);
+        (Player target, _) = kit.AddPlayer(2, 20, 0);
+        kit.Spellbook.Teach(caster, Charge);
+        WorldCollision.Of(kit.World).Install(new Obstacles { Floor = _ => Z }, new FixedPath { Type = PathType.Incomplete });
+
+        Assert.Equal(SpellCastResult.Nopath, kit.System.HandleCastRequest(caster, Charge, SpellCastTargets.ForUnit(target.Guid)));
+    }
+
+    [Fact]
+    public void Charge_FromTheWater_IsNotRefused_ButTheSameNoPathOnLandIs()
+    {
+        using var wet = new Locomotion.HazardKit(ArcaneCore.Game.Maps.Terrain.LiquidTypeFlags.Water);
+        Player swimmer = wet.AddPlayer(1, Locomotion.HazardKit.Ground, out _);
+        Player wetTarget = wet.AddPlayer(2, Locomotion.HazardKit.Ground, out _);
+        WorldCollision.Of(wet.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
+        Assert.False(ForcedMovement.ChargeHasNoPath(swimmer, wetTarget));
+
+        using var dry = new Locomotion.HazardKit(null);
+        Player walker = dry.AddPlayer(1, Locomotion.HazardKit.Ground, out _);
+        Player dryTarget = dry.AddPlayer(2, Locomotion.HazardKit.Ground, out _);
+        WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
+        Assert.True(ForcedMovement.ChargeHasNoPath(walker, dryTarget));
     }
 
     [Fact]

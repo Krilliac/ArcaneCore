@@ -107,6 +107,9 @@ public sealed class ChargeEffects : ISpellHandlerModule
                 {
                     case SpellEffectName.Charge when IsRooted(caster):
                         return SpellCastResult.Rooted;
+                    case SpellEffectName.Charge when !context.Triggered && context.Target is { } chargeTarget
+                        && ForcedMovement.ChargeHasNoPath(caster, chargeTarget):
+                        return SpellCastResult.Nopath;
                     case SpellEffectName.Leap or SpellEffectName.TeleportUnitsFaceCaster:
                         if ((caster.UnitFlags & UnitFlags.TaxiFlight) != 0)
                         {

@@ -173,6 +173,47 @@ public static class ForcedMovement
         return true;
     }
 
+    /// <summary>The path options of a charge: the unit's own locomotion (<see cref="PathMover.For"/>) and vmangos' 7 yd end tolerance.</summary>
+    private static PathOptions ChargeOptions(Unit unit) => new() { Mover = PathMover.For(unit), EndTolerance = PathOptions.VmangosEndTolerance };
+
+    /// <summary>
+    /// vmangos Spell::CheckCast SPELL_EFFECT_CHARGE (Spell.cpp:5917-5929): a caster on the ground (not in water, within 1.6 yd of the floor)
+    /// needs a path that is neither <see cref="PathType.NoPath"/> nor <see cref="PathType.Incomplete"/> to the target's position; the cast
+    /// fails with SPELL_FAILED_NOPATH otherwise. A swimmer charging at a target in water is let through (the pathfinder's swimming
+    /// shortcut, PathFinder.cpp:197-201); the path length cap of the reference (:5931) is not modelled.
+    /// </summary>
+    public static bool ChargeHasNoPath(Unit caster, Unit target)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(target);
+        if (caster.Map is not { } map || !ReferenceEquals(map, target.Map))
+        {
+            return false;
+        }
+
+        var start = new Vector3(caster.X, caster.Y, caster.Z);
+        if (IsInWater(map, start, out _))
+        {
+            return false;
+        }
+
+        float ground = map.Collision.GetHeight(start.X, start.Y, start.Z);
+        if (ground <= TerrainTile.InvalidHeight || MathF.Abs(ground - start.Z) >= 1.6f)
+        {
+            return false;
+        }
+
+        var destination = new Vector3(target.X, target.Y, target.Z);
+        PathOptions options = ChargeOptions(caster);
+        if (options.Mover is { CanSwim: true } && IsInWater(map, destination, out _))
+        {
+            return false;
+        }
+
+        PathResult path = map.Collision.FindPath(start, destination, options);
+        return (path.Type & (PathType.Incomplete | PathType.NoPath)) != 0;
+    }
+
     /// <summary>
     /// The way a charge goes: the navigation path from the unit to <paramref name="destination"/> when the map has one that reaches it, else
     /// the straight line (<c>generatePath = true</c>, <c>forceDestination = true</c>: the path always ends on the destination). Points after the start.
@@ -185,7 +226,7 @@ public static class ForcedMovement
         ArgumentNullException.ThrowIfNull(unit);
         if (unit.Map?.Collision is { } collision)
         {
-            PathResult path = collision.FindPath(new Vector3(unit.X, unit.Y, unit.Z), destination);
+            PathResult path = collision.FindPath(new Vector3(unit.X, unit.Y, unit.Z), destination, ChargeOptions(unit));
             if ((path.Type & PathType.NoPath) != 0)
             {
                 return [];

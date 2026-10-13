@@ -241,7 +241,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     void ICreatureMover.MoveTo(Creature creature, float x, float y, float z, bool run, float? finalOrientation)
         => MoveStraight(creature, x, y, z, run, finalOrientation);
 
-    PlannedPath ICreatureMover.PlanPath(Creature creature, Vector3 destination) => PlanPath(creature, destination);
+    PlannedPath ICreatureMover.PlanPath(Creature creature, Vector3 destination, bool toSpawn) => PlanPath(creature, destination, toSpawn);
 
     void ICreatureMover.TeleportHome(Creature creature, float x, float y, float z, float orientation)
     {
@@ -413,7 +413,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// are the whole path in one multi-point spline (vmangos MoveSplineInit::MovebyPath) so a move does not re-launch at every corner.
     /// World thread. Allocates the corner list.
     /// </summary>
-    internal PlannedPath PlanPath(Creature creature, Vector3 destination)
+    internal PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false)
     {
         ArgumentNullException.ThrowIfNull(creature);
         if (!HasPathBudget)
@@ -422,7 +422,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             return PlannedPath.Of(PathOutcome.Deferred);
         }
 
-        PathResult path = SearchPath(new Vector3(creature.X, creature.Y, creature.Z), destination);
+        PathResult path = SearchPath(new Vector3(creature.X, creature.Y, creature.Z), destination, PathOptionsFor(creature, toSpawn));
         if ((path.Type & PathType.TilesPending) != 0)
         {
             NoteDeferredPath(creature);
@@ -496,12 +496,34 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _pathFirstDeferred ??= creature;
     }
 
+    private static readonly PathOptions[] s_moverOptions = BuildMoverOptions(0f);
+    private static readonly PathOptions[] s_spawnOptions = BuildMoverOptions(PathOptions.VmangosEndTolerance);
+
+    private static PathOptions[] BuildMoverOptions(float tolerance)
+    {
+        var all = new PathOptions[8];
+        for (uint inhabit = 0; inhabit < all.Length; inhabit++)
+        {
+            all[inhabit] = new PathOptions { Mover = PathMover.FromInhabit(inhabit), EndTolerance = tolerance };
+        }
+
+        return all;
+    }
+
+    /// <summary>
+    /// The query options of a creature: its own locomotion (<c>InhabitType</c>, vmangos PathInfo::createFilter), so a flier gets the flier
+    /// exception (a hole in the mesh is a flying shortcut, not NoPath) and a walker keeps off water it cannot swim. A return home
+    /// (<paramref name="toSpawn"/>) also takes vmangos' 7 yd end tolerance.
+    /// </summary>
+    private static PathOptions PathOptionsFor(Creature creature, bool toSpawn)
+        => (toSpawn ? s_spawnOptions : s_moverOptions)[creature.Template.InhabitType & 7];
+
     /// <summary>One counted search through the map's pathfinder. World thread.</summary>
-    private PathResult SearchPath(Vector3 start, Vector3 destination)
+    private PathResult SearchPath(Vector3 start, Vector3 destination, PathOptions? options = null)
     {
         PathSearchTotals before = PathSearchCounters.Current;
         long started = Stopwatch.GetTimestamp();
-        PathResult path = Map.Collision.FindPath(start, destination);
+        PathResult path = Map.Collision.FindPath(start, destination, options);
         _timing.Path += Stopwatch.GetTimestamp() - started;
         PathSearchTotals spent = PathSearchCounters.Current - before;
         _timing.Searches += (int)spent.Searches;
@@ -516,6 +538,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     public void StopMoving(Creature creature)
     {
         ArgumentNullException.ThrowIfNull(creature);
+        if (_deferredMoves.Count > 0)
+        {
+            _deferredMoves.Remove(creature); // a queued scripted move is stale once the creature is stopped or teleported
+        }
+
         if (!creature.IsMoving)
         {
             return;

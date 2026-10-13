@@ -50,9 +50,10 @@ internal interface ICreatureMover
 
     /// <summary>
     /// Search a path for a motion that decides itself what no path means (<see cref="PathOutcome"/>). The default, for a mover without
-    /// a pathfinder, is <see cref="FindPath"/> labelled <see cref="PathOutcome.Direct"/>.
+    /// a pathfinder, is <see cref="FindPath"/> labelled <see cref="PathOutcome.Direct"/>. <paramref name="toSpawn"/> (a return home) uses the
+    /// vmangos end tolerance (<see cref="Maps.Collision.PathOptions.EndTolerance"/>): a spawn point a few yards off the mesh still has a whole path.
     /// </summary>
-    PlannedPath PlanPath(Creature creature, Vector3 destination) => new(PathOutcome.Direct, FindPath(creature, destination));
+    PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false) => new(PathOutcome.Direct, FindPath(creature, destination));
 
     /// <summary>
     /// Put the creature at the spot at once (vmangos <c>Unit::NearTeleportTo</c>), as an evade return does when no whole path leads home.
