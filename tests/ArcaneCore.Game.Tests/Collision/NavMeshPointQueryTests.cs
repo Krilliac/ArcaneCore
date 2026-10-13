@@ -261,26 +261,18 @@ public sealed class NavMeshPointQueryTests(ITestOutputHelper output)
         NavMeshTile tile = nav.GetNavMesh(MapId)!.GetTile(0, 0)!;
         Vector3 rc = NavMeshFormat.ToRecast(center);
 
-        void Round()
+        Action window = () =>
         {
-            nav.TryGetRandomPointAround(MapId, center, 6f, random, null, out _);
-            nav.Raycast(MapId, new Vector3(2, 2, 0), new Vector3(18, 18, 0));
-            tile.ClosestPointOnPoly(0, rc);
-            nav.GetNavMesh(MapId)!.TryFindNearestPoly(rc, NavMeshPathfinder.NearExtents, PathOptions.Default, out _, out _);
-        }
+            for (int i = 0; i < 200; i++)
+            {
+                nav.TryGetRandomPointAround(MapId, center, 6f, random, null, out _);
+                nav.Raycast(MapId, new Vector3(2, 2, 0), new Vector3(18, 18, 0));
+                tile.ClosestPointOnPoly(0, rc);
+                nav.GetNavMesh(MapId)!.TryFindNearestPoly(rc, NavMeshPathfinder.NearExtents, PathOptions.Default, out _, out _);
+            }
+        };
 
-        for (int i = 0; i < 100; i++)
-        {
-            Round(); // warm-up: JIT, the thread's scratch lists and tile border caches
-        }
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 200; i++)
-        {
-            Round();
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        AllocationProbe.AssertEveryCleanWindowAtMost(window, maxBytes: 0, "point queries");
     }
 
     [Fact]
