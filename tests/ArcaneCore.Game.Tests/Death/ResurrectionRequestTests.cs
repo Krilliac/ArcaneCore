@@ -151,20 +151,22 @@ public sealed class ResurrectionRequestTests
         Assert.Equal(0u, request.Mana);     // a warrior has no mana
     }
 
-    [Fact]
-    public void ResurrectPercent_UsesIntegerArithmetic_SoAFractionIsNeverRoundedUp()
+    [Theory]
+    [InlineData(0.0, 196u, 196u)]
+    [InlineData(0.999, 197u, 197u)]
+    public void ResurrectPercent_DithersAFractionalHealthAndMana(double roll, uint health, uint mana)
     {
-        // SpellEffects.cpp:5246: rand_ditheru(GetMaxHealth() * damage / 100) divides as integers; 19% of 1033 is 196.27 and must
-        // be 196 every time (a float with dither would give 197 about a quarter of the time).
+        // Spell::damage is float (Spell.h). SpellEffects.cpp:5244-5245 hands GetMaxHealth() * damage / 100 to rand_ditheru
+        // (Random.cpp:80-88): 19% of 1033 is 196.27, so the fraction stays 196 when the roll is 0 and becomes 197 when it covers it.
         using var rig = new Rig();
+        rig.Kit.System.Random = new FixedRandom(roll);
         rig.Ghost.MaxHealth = 1033;
+        rig.Ghost.SetUInt32(UpdateFields.UnitFieldMaxpower1, 1033);
 
-        for (int i = 0; i < 60; i++)
-        {
-            ResurrectionRequests.Clear(rig.Ghost);
-            rig.CastAtCorpse(rig.Caster, Percent);
-            Assert.Equal(196u, ResurrectionRequests.Get(rig.Ghost)!.Health);
-        }
+        rig.CastAtCorpse(rig.Caster, Percent);
+
+        ResurrectionRequest request = ResurrectionRequests.Get(rig.Ghost)!;
+        Assert.Equal((health, mana), (request.Health, request.Mana));
     }
 
     [Fact]
@@ -327,5 +329,11 @@ public sealed class ResurrectionRequestTests
         Assert.Equal((new ObjectGuid(0x1000000000000001UL), true), ResurrectionPackets.ReadResponse(accept));
         Assert.Equal((new ObjectGuid(0x1000000000000001UL), false), ResurrectionPackets.ReadResponse(decline));
         Assert.Null(ResurrectionPackets.ReadResponse(accept[..8]));
+    }
+
+    /// <summary>A roll that is always the same value (rand_ditheru reads <see cref="Random.NextDouble"/>).</summary>
+    private sealed class FixedRandom(double value) : Random(1)
+    {
+        public override double NextDouble() => value;
     }
 }

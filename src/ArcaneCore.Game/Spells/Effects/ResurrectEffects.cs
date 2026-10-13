@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -70,11 +71,11 @@ public sealed class ResurrectEffects : ISpellHandlerModule
             return;
         }
 
-        // SpellEffects.cpp:5246-5247: GetMaxHealth() * damage / 100 is uint32 arithmetic (damage converts to unsigned), so the
-        // value handed to rand_ditheru(float) has no fraction and the dither never rounds up.
-        uint percent = (uint)Math.Max(context.Value, 0);
-        uint health = unchecked(target.MaxHealth * percent) / 100;
-        uint mana = unchecked(MapCombat.GetMaxPower(target, PowerType.Mana) * percent) / 100;
+        // SpellEffects.cpp:5244-5245, Spell.h (Spell::damage is float), Random.cpp:80-88: GetMaxHealth() * damage / 100
+        // promotes the health to float, so the fraction survives and rand_ditheru rounds it up with that probability.
+        float percent = Math.Max(context.Value, 0);
+        uint health = SpellRounding.DitherUnsigned(target.MaxHealth * percent / 100f, context.System.Random);
+        uint mana = SpellRounding.DitherUnsigned(MapCombat.GetMaxPower(target, PowerType.Mana) * percent / 100f, context.System.Random);
         Offer(context, target, health, mana);
     }
 
