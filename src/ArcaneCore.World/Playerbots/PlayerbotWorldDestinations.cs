@@ -293,6 +293,18 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 return true;
             }
 
+            // A long trip between two flight path nodes the bot knows and can pay for (PlayerbotTaxi): the brain drives it from the next
+            // think (walk to the flight master, fly, land), and the destination plans again from where the bot lands. A lift's own walk
+            // (above) is taken as it is; the tram and the lift keep their precedence.
+            if (walk is null && PlayerbotTaxi.TryTravelByTaxi(_session, player, player.Map!.MapId, destination, _options) == TaxiTravel.Traveling)
+            {
+                ClearRoute();
+                TargetEntry = entry.Entry;
+                QuestId = questId;
+                ArmTrip(entry.Entry, questId, returnQuestId, preferredCreatureEntry);
+                return true;
+            }
+
             PlayerbotRoute? route = walk;
             PlanOutcome planned = PlanOutcome.Route;
             bool returning = returnQuestId != 0 && returnQuestId == questId;

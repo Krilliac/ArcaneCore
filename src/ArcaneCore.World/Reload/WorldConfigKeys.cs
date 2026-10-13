@@ -273,6 +273,14 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Contention:ContentionSuspendMinutes", o => o.Contention.ContentionSuspendMinutes,
             (o, v) => o.Contention.ContentionSuspendMinutes = v, PlayerbotContentionOptions.CheckSuspend),
 
+        // Not vmangos keys: autonomous flight-path use by bots (docs/areas/playbots.md, Flight paths). PlayerbotTaxi reads the shared
+        // PlayerbotOptions.Taxi at each decision.
+        LivePlayerbots("Taxi:Enabled", o => o.Taxi.Enabled, (o, v) => o.Taxi.Enabled = v),
+        LivePlayerbotsValue("Taxi:MinRouteYards", o => o.Taxi.MinRouteYards, (o, v) => o.Taxi.MinRouteYards = v, PlayerbotTaxiOptions.CheckMinRoute),
+        LivePlayerbotsValue("Taxi:MaxWalkToMasterYards", o => o.Taxi.MaxWalkToMasterYards, (o, v) => o.Taxi.MaxWalkToMasterYards = v,
+            PlayerbotTaxiOptions.CheckMaxWalk),
+        LivePlayerbotsValue("Taxi:BackoffMinutes", o => o.Taxi.BackoffMinutes, (o, v) => o.Taxi.BackoffMinutes = v, PlayerbotTaxiOptions.CheckBackoff),
+
         // Not vmangos keys: the population manager (docs/areas/playbots-population.md). PlayerbotPopulationFeature reads the shared
         // PlayerbotOptions.Population at every pass; the lists are compared and replaced as one value.
         LivePlayerbots("Population:Enabled", o => o.Population.Enabled, (o, v) => o.Population.Enabled = v),

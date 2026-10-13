@@ -166,6 +166,9 @@ public sealed class PlayerbotOptions
     /// <summary>How bots share the mobs of one place: soft claims, helping a tagger, leaving someone else's mob alone (<c>World:Playerbots:Contention</c>; live).</summary>
     public PlayerbotContentionOptions Contention { get; set; } = new();
 
+    /// <summary>Bots discover flight masters and fly between known nodes on long trips (<c>World:Playerbots:Taxi</c>; live).</summary>
+    public PlayerbotTaxiOptions Taxi { get; set; } = new();
+
     /// <summary>A target number of bots kept online by level band and the world's tick time (<c>World:Playerbots:Population</c>; live; off by default).</summary>
     public Population.PlayerbotPopulationOptions Population { get; set; } = new();
 
@@ -247,6 +250,8 @@ public sealed class PlayerbotOptions
         Home.Validate();
         if (Contention is null) throw new InvalidOperationException($"{SectionName}:Contention is missing.");
         Contention.Validate();
+        if (Taxi is null) throw new InvalidOperationException($"{SectionName}:Taxi is missing.");
+        Taxi.Validate();
         if (Population is null) throw new InvalidOperationException($"{SectionName}:Population is missing.");
         Population.Validate();
         if (Social is null) throw new InvalidOperationException($"{SectionName}:Social is missing.");

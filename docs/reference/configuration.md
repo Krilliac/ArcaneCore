@@ -1369,6 +1369,10 @@ How to read the tables:
 | `World:Playerbots:Social:Guilds:MaxBotGuilds` | `int` | `4` | live | The most guilds led by a registered bot at once (0..64; 0 founds none). Lowering it disbands nothing: it only stops new foundings. |
 | `World:Playerbots:Social:Guilds:TargetSize` | `int` | `25` | live | The most members of a bot guild, pending invitations counted (2..500). |
 | `World:Playerbots:StallSeconds` | `int` | `120` | - | Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience, money, bags, quest log and spells did not change) before it reports a stall in `.playerbot list` and gives up its goal (`PlayerbotStallWatch`; 10..86400). |
+| `World:Playerbots:Taxi:BackoffMinutes` | `int` | `10` | live | Minutes a bot does not try to fly after a flight attempt failed (the server refused the flight, the flight master could not be reached, or none stood where the node is): it walks meanwhile (1..1440; default 10). |
+| `World:Playerbots:Taxi:Enabled` | `bool` | `true` | live | Let bots discover flight masters they pass and fly between known nodes (on by default). Off: bots never talk to a flight master. |
+| `World:Playerbots:Taxi:MaxWalkToMasterYards` | `float` | `300` | live | The farthest, in yards, the bot's own position may lie from the flight path node it departs from, and the node it lands at from the trip's end, in a straight line (10..2000; default 300). The two walks together must also be at most half of the straight line. |
+| `World:Playerbots:Taxi:MinRouteYards` | `float` | `600` | live | A trip is flown only when the straight line from the bot to where it is going is at least this many yards (100..20000; default 600). Shorter trips are walked. |
 | `World:Playerbots:ThinkIntervalMs` | `int` | `500` | - | Milliseconds between two decisions of a bot (50..60000). |
 
 ## `World:Playerbots:Qa`

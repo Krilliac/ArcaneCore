@@ -447,6 +447,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     active.Brain.ResumeAfterGroup();
                 }
             }
+            if (controller is not null && active.Session.Player is { } taken) PlayerbotTaxi.Cancel(taken);
             active.Session.ManagedBudget = null;
             if (controller is not null && active.Session.Player is { } player && (active.PartyDriven || active.Party.IsEngaged))
             {
@@ -1263,6 +1264,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
+                        if (!active.BattlegroundDriven) PlayerbotTaxi.Cancel(driven);
                         active.BattlegroundDriven = true;
                         driver = "battleground";
                         PlayerbotThinkProbe.Phase("battleground");
@@ -1278,6 +1280,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
+                        if (!active.GroupDriven) PlayerbotTaxi.Cancel(driven);
                         active.GroupDriven = true;
                         driver = "group";
                         PlayerbotThinkProbe.Phase("group");
@@ -1348,6 +1351,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             ReleaseMotion(active.Session, driven);
             PlayerbotTram.Cancel(driven);
+            PlayerbotTaxi.Cancel(driven);
             // A bot aboard a lift is never moved off the car mid-shaft: its ride ends at the next stop (PlayerbotElevator.Cancel), and the
             // party AI takes it only once it stands on the landing. Meanwhile the ride is driven here (PartyDriven stays false).
             PlayerbotElevator.Cancel(driven);
