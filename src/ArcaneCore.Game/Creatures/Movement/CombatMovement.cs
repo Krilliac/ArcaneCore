@@ -335,6 +335,9 @@ internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : 
     public const float MinQuietDistance = 28.0f;
     public const float MaxQuietDistance = 43.0f;
 
+    /// <summary>The longest leg walked on the navmesh (vmangos FleeingMovementGenerator caps its path at 30 yd).</summary>
+    public const float MeshFleeCap = 30.0f;
+
     private int _remainingMs;
     private int _pauseMs;
 
@@ -440,7 +443,23 @@ internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : 
         distance = Math.Max(distance, 2.0f);
         float x = creature.X + (distance * MathF.Cos(angle));
         float y = creature.Y + (distance * MathF.Sin(angle));
-        float z = mover.GetHeight(creature.MapId, x, y, creature.Z) ?? creature.Z;
+        float z;
+
+        // vmangos FleeingMovementGenerator (:54-63): the leg is walked on the navmesh, capped at 30 yd and cut where the mesh ends or
+        // a steep slope begins. Without mesh data for the spot the terrain-height point stays.
+        float cut = Math.Min(distance, MeshFleeCap);
+        if (mover.TryRaycastMesh(creature, new Vector3(creature.X, creature.Y, creature.Z),
+                new Vector3(creature.X + (cut * MathF.Cos(angle)), creature.Y + (cut * MathF.Sin(angle)), creature.Z), out Vector3 reached))
+        {
+            x = reached.X;
+            y = reached.Y;
+            z = reached.Z;
+        }
+        else
+        {
+            z = mover.GetHeight(creature.MapId, x, y, creature.Z) ?? creature.Z;
+        }
+
         mover.MovePath(creature, mover.FindPath(creature, new Vector3(x, y, z)), run: true, SplineFacing.None);
         _pauseMs = mover.URand(500, 1000);
     }

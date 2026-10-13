@@ -1,3 +1,4 @@
+using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -19,9 +20,9 @@ namespace ArcaneCore.Game.Creatures;
 /// distance of the spawn point, else the spawn point.
 /// </para>
 /// <para>
-/// Limits (docs/areas/creature-movement-spawns.md): vmangos picks the point with a navmesh query
-/// (<c>Creature::GetRandomPoint</c>, <c>MOVE_PATHFINDING | MOVE_EXCLUDE_STEEP_SLOPES</c>); without navmeshes the point is uniform over the
-/// wander disc at the height provider's ground Z (or the spawn Z). Flying creatures (<c>CanFly</c>, :28-44) keep the ground wander.
+/// Point choice (docs/areas/creature-movement-spawns.md): like vmangos (<c>Creature::GetRandomPoint</c>, <c>MOVE_PATHFINDING | MOVE_EXCLUDE_STEEP_SLOPES</c>)
+/// the point is a navmesh point within the wander distance (<see cref="ICreatureMover.TryGetRandomMeshPoint"/>) reached by a mesh path; where no
+/// mesh is loaded it is uniform over the wander disc at the height provider's ground Z (or the spawn Z), walked straight. Flying creatures (<c>CanFly</c>, :28-44) keep the ground wander.
 /// </para>
 /// </summary>
 internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
@@ -111,8 +112,20 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         float destY = home.Y;
         float destZ = home.Z;
 
+        // vmangos Creature::GetRandomPoint with MOVE_PATHFINDING: a point on the navmesh within the wander distance, reachable from the
+        // spawn point, then walked to along the mesh path. Without mesh data for the spot (no navmesh for the map, tile not loaded) the
+        // terrain-height point below stays, drawn exactly as before.
+        bool onMesh = false;
+        if (wander >= 0.1f && mover.TryGetRandomMeshPoint(creature, new Vector3(home.X, home.Y, home.Z), wander, out Vector3 meshPoint))
+        {
+            onMesh = true;
+            destX = meshPoint.X;
+            destY = meshPoint.Y;
+            destZ = meshPoint.Z;
+        }
+
         // WorldObject::GetRandomPoint: below 0.1 yd the spawn point itself.
-        if (wander >= 0.1f)
+        if (!onMesh && wander >= 0.1f)
         {
             double angle = mover.NextDouble() * 2 * Math.PI;
             double distance = wander * Math.Sqrt(mover.NextDouble());
@@ -121,7 +134,15 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             destZ = mover.GetHeight(creature.MapId, destX, destY, home.Z) ?? home.Z;
         }
 
-        mover.MoveTo(creature, destX, destY, destZ, _run ?? ShouldRun(creature, mover), finalOrientation: null);
+        bool run = _run ?? ShouldRun(creature, mover);
+        if (onMesh)
+        {
+            mover.MovePath(creature, mover.FindPath(creature, new Vector3(destX, destY, destZ)), run, SplineFacing.None);
+        }
+        else
+        {
+            mover.MoveTo(creature, destX, destY, destZ, run, finalOrientation: null);
+        }
 
         if (_wanderSteps > 0)
         {

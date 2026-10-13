@@ -144,6 +144,63 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         }
     }
 
+    /// <summary>
+    /// The polygon across edge <paramref name="edge"/> of <paramref name="from"/> at the point <paramref name="crossing"/> on that edge,
+    /// when the edge is not a wall and the polygon passes the filter. A tile-border edge joins a polygon of the adjacent tile only if that
+    /// tile is loaded (nothing is read here). False: a wall, a refused polygon, an unloaded tile, or no polygon opposite the crossing.
+    /// </summary>
+    internal bool TryCrossEdge(NavPolyRef from, int edge, Vector3 crossing, PathOptions options, out NavPolyRef next)
+    {
+        next = default;
+        NavMeshTile tile = from.Tile;
+        NavPoly p = tile.Polys[from.Poly];
+        ushort nei = p.Neighbours[edge];
+        if (nei == 0)
+        {
+            return false;
+        }
+
+        if ((nei & NavMeshFormat.ExternalLink) == 0)
+        {
+            int index = nei - 1;
+            if (index >= tile.Polys.Length || index == from.Poly || !tile.Passes(index, options.EffectiveIncludeFlags, options.ExcludeFlags))
+            {
+                return false;
+            }
+
+            next = new NavPolyRef(tile, index);
+            return true;
+        }
+
+        int side = nei & 0xff;
+        if (NavMeshFormat.SideOffset(side) is not { } offset || GetTile(tile.X + offset.Dx, tile.Y + offset.Dy) is not { } other)
+        {
+            return false;
+        }
+
+        Vector3 a = tile.Vertices[p.Vertices[edge]];
+        Vector3 b = tile.Vertices[p.Vertices[(edge + 1) % p.VertexCount]];
+        bool alongZ = side is 0 or 4;
+        float climb = MathF.Max(MathF.Max(tile.WalkableClimb, other.WalkableClimb), 0.5f);
+        float along = alongZ ? crossing.Z : crossing.X;
+        foreach (BorderEdge candidate in other.GetBorderEdges((side + 4) & 7))
+        {
+            if (TryOverlap(a, b, candidate.A, candidate.B, alongZ, climb, out Vector3 pa, out Vector3 pb)
+                && other.Passes(candidate.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags))
+            {
+                float low = MathF.Min(alongZ ? pa.Z : pa.X, alongZ ? pb.Z : pb.X) - 0.05f;
+                float high = MathF.Max(alongZ ? pa.Z : pa.X, alongZ ? pb.Z : pb.X) + 0.05f;
+                if (along >= low && along <= high)
+                {
+                    next = new NavPolyRef(other, candidate.Poly);
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>2D cross product in the x/z plane (positive: <paramref name="b"/> is counter-clockwise of <paramref name="a"/>).</summary>
     internal static float Cross(Vector3 apex, Vector3 a, Vector3 b)
         => ((a.X - apex.X) * (b.Z - apex.Z)) - ((a.Z - apex.Z) * (b.X - apex.X));
@@ -369,6 +426,290 @@ public static class NavMeshQuery
 
         corridor.Reverse();
         return (corridor, complete);
+    }
+
+    /// <summary>The most polygons a random-point query gathers (a wander circle of a few yards touches a handful).</summary>
+    public const int MaxRandomPointPolys = 256;
+
+    /// <summary>The most rejected samples (a sampled point outside the circle) before the query answers the start point itself.</summary>
+    private const int MaxRandomPointAttempts = 16;
+
+    /// <summary>The most polygons a raycast crosses before it stops where it is.</summary>
+    public const int MaxRaycastPolys = 512;
+
+    [ThreadStatic]
+    private static PointScratch? t_points;
+
+    /// <summary>Reusable state of <see cref="TryRandomPointAround"/>; capacity is kept between queries.</summary>
+    private sealed class PointScratch
+    {
+        public readonly List<NavPolyRef> Polys = [];
+        public readonly List<float> Cumulative = [];
+        public readonly HashSet<NavPolyRef> Seen = [];
+        public readonly List<NavNeighbour> Neighbours = [];
+        public bool InUse;
+    }
+
+    /// <summary>
+    /// A random point on the mesh within <paramref name="radius"/> (horizontal) of <paramref name="center"/>, reachable from
+    /// <paramref name="start"/> (Detour <c>findRandomPointAroundCircle</c>): the polygons reachable from the start across edges that touch
+    /// the circle are gathered (loaded tiles only), one is picked with probability proportional to its horizontal area, and a uniform
+    /// point of it is taken; a point outside the circle is rejected and drawn again (up to 16 times), after which the answer is the start
+    /// position itself. Exactly four values are drawn from <paramref name="random"/> per attempt, so a seed fixes the result.
+    /// Allocation-free after the first call on a thread. Recast space; returns false only for an unusable radius (nothing is drawn).
+    /// </summary>
+    public static bool TryRandomPointAround(NavMesh mesh, NavPolyRef start, Vector3 center, float radius, PathOptions options, Random random, out Vector3 point)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(random);
+        point = center;
+        if (!float.IsFinite(radius) || radius <= 0)
+        {
+            return false;
+        }
+
+        PointScratch scratch = t_points is { InUse: false } cached ? cached : new PointScratch();
+        t_points ??= scratch;
+        scratch.InUse = true;
+        try
+        {
+            return RandomPointCore(mesh, start, center, radius, options, random, scratch, out point);
+        }
+        finally
+        {
+            scratch.InUse = false;
+            scratch.Polys.Clear();
+            scratch.Cumulative.Clear();
+            scratch.Seen.Clear();
+            scratch.Neighbours.Clear();
+        }
+    }
+
+    private static bool RandomPointCore(NavMesh mesh, NavPolyRef start, Vector3 center, float radius, PathOptions options, Random random, PointScratch scratch, out Vector3 point)
+    {
+        List<NavPolyRef> polys = scratch.Polys;
+        List<float> cumulative = scratch.Cumulative;
+        float radiusSquared = radius * radius;
+        polys.Add(start);
+        scratch.Seen.Add(start);
+        for (int head = 0; head < polys.Count && polys.Count < MaxRandomPointPolys; head++)
+        {
+            mesh.CollectNeighbours(polys[head], scratch.Neighbours);
+            foreach (NavNeighbour next in scratch.Neighbours)
+            {
+                if (polys.Count >= MaxRandomPointPolys)
+                {
+                    break;
+                }
+
+                if (!next.To.Tile.Passes(next.To.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags)
+                    || DistanceSegmentSquaredXz(center, next.Left, next.Right) > radiusSquared
+                    || !scratch.Seen.Add(next.To))
+                {
+                    continue;
+                }
+
+                polys.Add(next.To);
+            }
+        }
+
+        float total = 0;
+        foreach (NavPolyRef poly in polys)
+        {
+            total += PolygonAreaXz(poly.Tile, poly.Tile.Polys[poly.Poly]);
+            cumulative.Add(total);
+        }
+
+        for (int attempt = 0; attempt < MaxRandomPointAttempts; attempt++)
+        {
+            double polyDraw = random.NextDouble();
+            double triangleDraw = random.NextDouble();
+            double sDraw = random.NextDouble();
+            double tDraw = random.NextDouble();
+            if (total <= 0)
+            {
+                continue; // only degenerate polygons: nothing to sample, the start position stands
+            }
+
+            float target = (float)(polyDraw * total);
+            int chosen = 0;
+            while (chosen < cumulative.Count - 1 && cumulative[chosen] <= target)
+            {
+                chosen++;
+            }
+
+            NavPolyRef picked = polys[chosen];
+            Vector3 candidate = SampleInPolygon(picked.Tile, picked.Tile.Polys[picked.Poly], (float)triangleDraw, (float)sDraw, (float)tDraw);
+            if (NavMeshTile.DistanceXzSquared(candidate, center) <= radiusSquared)
+            {
+                point = candidate with { Y = picked.Tile.GetPolyHeight(picked.Poly, candidate) };
+                return true;
+            }
+        }
+
+        point = start.Tile.ClosestPointOnPoly(start.Poly, center);
+        return true;
+    }
+
+    private static float PolygonAreaXz(NavMeshTile tile, NavPoly poly)
+    {
+        float twice = 0;
+        Vector3 a = tile.Vertices[poly.Vertices[0]];
+        for (int i = 1; i + 1 < poly.VertexCount; i++)
+        {
+            twice += MathF.Abs(NavMesh.Cross(a, tile.Vertices[poly.Vertices[i]], tile.Vertices[poly.Vertices[i + 1]]));
+        }
+
+        return twice * 0.5f;
+    }
+
+    /// <summary>A uniform point (horizontal) of a convex polygon: a fan triangle by area, then a uniform point of that triangle.</summary>
+    private static Vector3 SampleInPolygon(NavMeshTile tile, NavPoly poly, float triangleDraw, float sDraw, float tDraw)
+    {
+        Vector3 a = tile.Vertices[poly.Vertices[0]];
+        float total = PolygonAreaXz(tile, poly) * 2;
+        float target = triangleDraw * total;
+        int pick = 1;
+        float run = 0;
+        for (int i = 1; i + 1 < poly.VertexCount; i++)
+        {
+            pick = i;
+            run += MathF.Abs(NavMesh.Cross(a, tile.Vertices[poly.Vertices[i]], tile.Vertices[poly.Vertices[i + 1]]));
+            if (run >= target)
+            {
+                break;
+            }
+        }
+
+        Vector3 b = tile.Vertices[poly.Vertices[pick]];
+        Vector3 c = tile.Vertices[poly.Vertices[pick + 1]];
+        float s = MathF.Sqrt(sDraw);
+        return (a * (1 - s)) + (b * (s * (1 - tDraw))) + (c * (s * tDraw));
+    }
+
+    /// <summary>Squared horizontal distance from <paramref name="p"/> to the segment a–b.</summary>
+    private static float DistanceSegmentSquaredXz(Vector3 p, Vector3 a, Vector3 b)
+    {
+        float t = NavMeshTile.ClosestT(a, b, p);
+        return NavMeshTile.DistanceXzSquared(Vector3.Lerp(a, b, t), p);
+    }
+
+    /// <summary>The result of <see cref="Raycast"/> in Recast space.</summary>
+    public readonly record struct RayResult(bool Hit, float Fraction, Vector3 Point);
+
+    /// <summary>
+    /// Walk the mesh surface from <paramref name="start"/> (a point on polygon <paramref name="startPoly"/>) toward <paramref name="end"/>,
+    /// horizontally (Detour <c>raycast</c>): the segment leaves each polygon through the edge it crosses, and the walk goes on into the
+    /// polygon beyond that edge (<see cref="NavMesh.TryCrossEdge"/>) until the end is inside the current polygon (fraction 1) or the edge
+    /// is a wall, a polygon the filter refuses or a tile that is not loaded (a hit, at the edge). The point is on the mesh surface.
+    /// Allocation-free. Recast space.
+    /// </summary>
+    public static RayResult Raycast(NavMesh mesh, NavPolyRef startPoly, Vector3 start, Vector3 end, PathOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        ArgumentNullException.ThrowIfNull(options);
+        float dx = end.X - start.X;
+        float dz = end.Z - start.Z;
+        if ((dx * dx) + (dz * dz) < 1e-10f)
+        {
+            return new RayResult(false, 1f, start);
+        }
+
+        NavPolyRef current = startPoly;
+        float reached = 0f;
+        for (int step = 0; step < MaxRaycastPolys; step++)
+        {
+            if (!ExitEdge(current, start, dx, dz, out float exitT, out int edge))
+            {
+                // Only a numerical edge case on a later polygon (the start is on the mesh): stop at the last edge crossed.
+                return Stop(current, start, dx, dz, reached);
+            }
+
+            if (edge < 0)
+            {
+                return new RayResult(false, 1f, current.Tile.ClosestPointOnPoly(current.Poly, end));
+            }
+
+            reached = Math.Max(reached, exitT);
+            Vector3 crossing = new(start.X + (dx * exitT), 0, start.Z + (dz * exitT));
+            if (!mesh.TryCrossEdge(current, edge, crossing, options, out NavPolyRef next))
+            {
+                return Stop(current, start, dx, dz, reached);
+            }
+
+            current = next;
+        }
+
+        return Stop(current, start, dx, dz, reached);
+    }
+
+    private static RayResult Stop(NavPolyRef poly, Vector3 start, float dx, float dz, float t)
+    {
+        Vector3 at = new(start.X + (dx * t), start.Y, start.Z + (dz * t));
+        return new RayResult(true, t, poly.Tile.ClosestPointOnPoly(poly.Poly, at));
+    }
+
+    /// <summary>
+    /// Detour <c>dtIntersectSegmentPoly2D</c>: where the horizontal ray start + t·(dx, dz), t in [0, 1], leaves the polygon.
+    /// <paramref name="edge"/> is the edge it leaves through, or -1 when the end is inside. False when the start is outside the polygon.
+    /// </summary>
+    private static bool ExitEdge(NavPolyRef poly, Vector3 start, float dx, float dz, out float exitT, out int edge)
+    {
+        NavMeshTile tile = poly.Tile;
+        NavPoly p = tile.Polys[poly.Poly];
+        float tMin = 0f;
+        float tMax = 1f;
+        edge = -1;
+        exitT = 1f;
+        for (int i = 0, j = p.VertexCount - 1; i < p.VertexCount; j = i++)
+        {
+            Vector3 vj = tile.Vertices[p.Vertices[j]];
+            Vector3 vi = tile.Vertices[p.Vertices[i]];
+            float ex = vi.X - vj.X;
+            float ez = vi.Z - vj.Z;
+            float n = (ez * (start.X - vj.X)) - (ex * (start.Z - vj.Z));
+            float d = (dz * ex) - (dx * ez);
+            if (MathF.Abs(d) < 1e-8f)
+            {
+                if (n < 0)
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            float t = n / d;
+            if (d < 0)
+            {
+                if (t > tMin)
+                {
+                    tMin = t;
+                }
+
+                if (tMin > tMax)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                if (t < tMax)
+                {
+                    tMax = t;
+                    edge = j;
+                }
+
+                if (tMax < tMin)
+                {
+                    return false;
+                }
+            }
+        }
+
+        exitT = tMax;
+        return true;
     }
 
     /// <summary>

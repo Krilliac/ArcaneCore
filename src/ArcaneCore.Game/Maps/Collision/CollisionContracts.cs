@@ -97,7 +97,43 @@ public interface IMapAwarePathfinder : IPathfinder
     bool HasNavigationData(uint mapId);
 }
 
-/// <summary>vmangos <c>PathType</c> (PathFinder.h).</summary>
+/// <summary>
+/// Optional: a pathfinder that can pick points on its navigation mesh and walk a ray along it (Detour
+/// <c>findRandomPointAroundCircle</c> and <c>raycast</c>; vmangos <c>Map::GetRandomPointOnGround</c> and the
+/// <c>FleeingMovementGenerator</c> raycast). Used by creature wander and flee to choose destinations that are on the mesh instead
+/// of a terrain-height point that may lie inside a building. Every query answers "unavailable" (false /
+/// <see cref="MeshRaycastResult.Available"/> false) when the map has no mesh, the tile under the query is not loaded or the start is not
+/// on the mesh, so the caller keeps its own behaviour; none throws. Positions are world coordinates; world thread.
+/// </summary>
+public interface IMeshPointQuery
+{
+    /// <summary>
+    /// A random point on the mesh within <paramref name="radius"/> (horizontal) of <paramref name="center"/>, on a polygon reachable from
+    /// the polygon under <paramref name="center"/> across loaded tiles. Deterministic for a given <paramref name="random"/> state; the
+    /// generator is not touched when the answer is unavailable. False when unavailable.
+    /// </summary>
+    bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point);
+
+    /// <summary>
+    /// Walk the mesh surface from <paramref name="start"/> toward <paramref name="end"/> (horizontal) until the segment ends or leaves the
+    /// mesh (a wall edge, a polygon the filter refuses, a tile that is not loaded).
+    /// </summary>
+    MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null);
+}
+
+/// <summary>
+/// The answer of <see cref="IMeshPointQuery.Raycast"/>. <see cref="Fraction"/> is the share of the horizontal segment walked (1: it
+/// reached <c>end</c>), measured from the start's position on the mesh; <see cref="Point"/> is where it stopped, on the mesh surface.
+/// </summary>
+/// <param name="Available">False when no answer could be given (no mesh, tile not loaded, start off the mesh); the rest is meaningless.</param>
+/// <param name="Hit">True when the ray stopped at the mesh boundary before reaching its end.</param>
+public readonly record struct MeshRaycastResult(bool Available, bool Hit, float Fraction, Vector3 Point)
+{
+    /// <summary>No answer.</summary>
+    public static MeshRaycastResult Unavailable(Vector3 end) => new(false, false, 1f, end);
+}
+
+/// <summary>vmangos <c>PathType</c> (PathFinder.h).
 [Flags]
 public enum PathType
 {

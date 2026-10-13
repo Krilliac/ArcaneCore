@@ -49,6 +49,28 @@ internal interface ICreatureMover
     /// <summary>A uniform random integer in [min, max] (vmangos urand).</summary>
     int URand(int min, int max);
 
+    /// <summary>
+    /// A random point on the navmesh within <paramref name="radius"/> of <paramref name="center"/> that the creature can walk to
+    /// (steep slopes excluded, vmangos <c>MOVE_EXCLUDE_STEEP_SLOPES</c>). False when there is no mesh data for the spot: the caller keeps its
+    /// own point choice. Nothing is drawn from the random source in that case.
+    /// </summary>
+    bool TryGetRandomMeshPoint(Creature creature, Vector3 center, float radius, out Vector3 point)
+    {
+        point = center;
+        return false;
+    }
+
+    /// <summary>
+    /// Walk the navmesh from <paramref name="from"/> toward <paramref name="to"/> (steep slopes count as walls): <paramref name="reached"/>
+    /// is where the creature may go, on the mesh; it is <paramref name="to"/> projected onto the mesh when nothing is in the way. False when
+    /// there is no mesh data for the spot (<paramref name="reached"/> is then <paramref name="to"/>).
+    /// </summary>
+    bool TryRaycastMesh(Creature creature, Vector3 from, Vector3 to, out Vector3 reached)
+    {
+        reached = to;
+        return false;
+    }
+
     /// <summary>Ground height near (x, y, z), or null when unknown.</summary>
     float? GetHeight(uint mapId, float x, float y, float z);
 

@@ -48,8 +48,25 @@ live spline inside the create block (`packet_builder.cpp:152-200`).
 * `MovementGeneratorType` numbers follow `Movement/MotionMaster.h:36-59` (Confused 5, Chase 6, Home 7, Point 9, Fleeing 10, Follow 15); the
   values are internal (never persisted or sent; grep of casts found none).
 
-Limits: no navmesh random point and no steep-slope exclusion (vmangos `MOVE_PATHFINDING | MOVE_EXCLUDE_STEEP_SLOPES`; the pathfinder
-has no random-point query, so the point is uniform over the disc at the height provider's Z); no flying circle path (`:28-44`: needs
+* **Wander and flee points are chosen on the navmesh** (lane `w44-path-mesh-points`). `NavMeshPathfinder` implements `IMeshPointQuery`
+  (`Maps/Collision/CollisionContracts.cs`; reached through `map.Collision.MeshPoints`, which is null for a map without a navmesh):
+  `TryGetRandomPointAround` is Detour's `findRandomPointAroundCircle` (the polygons reachable from the one under the centre across edges
+  that touch the circle, loaded tiles only, one picked by horizontal area, a uniform point of it, rejected and redrawn when outside the
+  circle) and `Raycast` is Detour's `raycast` along the mesh surface (`NavMeshQuery.TryRandomPointAround` / `NavMeshQuery.Raycast`). Both
+  take the creature's `Random`, so a seed fixes the result, allocate nothing after the first call on a thread, never read a tile, never
+  throw, and answer "unavailable" (no mesh for the map, tile not loaded, centre more than 3 yd from a polygon) without drawing any
+  random numbers. Wander (`RandomMovementGenerator`) takes the point from `ICreatureMover.TryGetRandomMeshPoint` (around the spawn
+  point, within the wander distance, steep slopes excluded as vmangos `MOVE_EXCLUDE_STEEP_SLOPES`) and walks to it with
+  `FindPath` + `MovePath`, so a townsfolk or guard no longer cuts through a house. Flee (`FleeingMovementGenerator.MoveAway`) casts the
+  leg with `ICreatureMover.TryRaycastMesh`, capped at 30 yd (`MeshFleeCap`), so it ends where the mesh ends or a steep slope or wall begins
+  (`FleeingMovementGenerator.cpp:54-63`). When the query is unavailable both keep the previous choice exactly (terrain-height point,
+  straight `MoveTo`), including the order of the random draws, so meshless maps and unloaded tiles behave as before. What a creature does
+  when `FindPath` finds no path is unchanged (see the pathing notes: that is the no-path lane). Tests:
+  `Collision/NavMeshPointQueryTests.cs` (synthetic tiles; the raycast is compared with DotRecast on seeded mazes),
+  `Collision/NavMeshPointQueryRealTerrainTests.cs` (Goldshire inn, `ARCANECORE_TEST_TERRAIN_DIR`), `Creatures/MeshPointMovementTests.cs`
+  (a wander circle and a flee line that contain a house-sized hole).
+
+Limits: wander and flee choose on the mesh only where a navmesh tile is loaded (vmangos the same); no flying circle path (`:28-44`: needs
 the Flying spline flag plumbed through `ICreatureMover.MovePath`); no timed random / pause-time API (nothing consumes it until waypoint
 node wander exists); vmangos' `Interrupt`/`Finalize` walk-mode reset (`:83-93`) is not sent separately because every spline launch
 already syncs the mode.
@@ -282,7 +299,7 @@ formula or the count) is TrinityCore's/AzerothCore's dynamic respawn rate. `Crea
   `NO_LEASH_EVADE` already exist on the base.
 * **Home-leg teleport fallback** when no path exists (`HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse), `RemoveAurasAtReset`,
   addon reload on arrival.
-* **Wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`; node scripts run since world 45), navmesh random wander points and flying
+* **Wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`; node scripts run since world 45), flying
   wander circles, the spline in the create block (`packet_builder.cpp:152-200`), a GM `.wp show`/`.creature movement` inspection command.
 * **Real-client verification** of the destination-relative spline offsets and the walk/run toggle packets. Both references agree, so the retail layout is the
   default, but the only oracle in the tests is bytes derived by hand from the references.

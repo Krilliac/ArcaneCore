@@ -20,7 +20,7 @@ namespace ArcaneCore.Game.Maps.Collision.MMaps;
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifecycle, ICollisionTilePrefetch
+public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, ICollisionTileLifecycle, ICollisionTilePrefetch
 {
     /// <summary>vmangos <c>PathFinder</c> search box half-extents (Recast x, y, z) for the nearest polygon.</summary>
     public static readonly Vector3 NearExtents = new(3, 5, 3);
@@ -416,6 +416,59 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             _trackPendingThisQuery = false;
             mesh.TileLoader = null;
         }
+    }
+
+    /// <summary>
+    /// <see cref="IMeshPointQuery.TryGetRandomPointAround"/> over the loaded tiles (no tile is read). Unavailable (false, nothing drawn
+    /// from <paramref name="random"/>) when the map has no mesh, the tile under <paramref name="center"/> is not loaded, no polygon lies
+    /// within <see cref="NearExtents"/> of it, or an argument is unusable. The start polygon is the one a path from
+    /// <paramref name="center"/> would start on, so the point is reachable by <see cref="FindPath(uint, Vector3, Vector3, PathOptions?)"/>.
+    /// </summary>
+    public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+    {
+        point = center;
+        if (random is null || !IsFinite(center) || !float.IsFinite(radius) || radius <= 0 || GetNavMesh(mapId) is not { } mesh)
+        {
+            return false;
+        }
+
+        options ??= PathOptions.Default;
+        Vector3 centerRc = NavMeshFormat.ToRecast(center);
+        if (!mesh.HaveTileAt(centerRc) || !mesh.TryFindNearestPoly(centerRc, NearExtents, options, out NavPolyRef startPoly, out Vector3 onMesh))
+        {
+            return false;
+        }
+
+        if (!NavMeshQuery.TryRandomPointAround(mesh, startPoly, onMesh, radius, options, random, out Vector3 found))
+        {
+            return false;
+        }
+
+        point = NavMeshFormat.ToWorld(found);
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="IMeshPointQuery.Raycast"/> over the loaded tiles (no tile is read). Unavailable when the map has no mesh, the tile under
+    /// <paramref name="start"/> is not loaded, or the start is farther than <see cref="NearExtents"/> from any polygon. Only the horizontal
+    /// direction matters; the returned point's height is the mesh's.
+    /// </summary>
+    public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+    {
+        if (!IsFinite(start) || !IsFinite(end) || GetNavMesh(mapId) is not { } mesh)
+        {
+            return MeshRaycastResult.Unavailable(end);
+        }
+
+        options ??= PathOptions.Default;
+        Vector3 startRc = NavMeshFormat.ToRecast(start);
+        if (!mesh.HaveTileAt(startRc) || !mesh.TryFindNearestPoly(startRc, NearExtents, options, out NavPolyRef startPoly, out Vector3 onMesh))
+        {
+            return MeshRaycastResult.Unavailable(end);
+        }
+
+        NavMeshQuery.RayResult ray = NavMeshQuery.Raycast(mesh, startPoly, onMesh, NavMeshFormat.ToRecast(end), options);
+        return new MeshRaycastResult(true, ray.Hit, ray.Fraction, NavMeshFormat.ToWorld(ray.Point));
     }
 
     /// <summary>
