@@ -297,6 +297,27 @@ public sealed class WorldConsoleTests
     }
 
     [Fact]
+    public async Task Console_Commands_KeepsTheFullVerticalList_AndPagesWhenGivenAPageOrText()
+    {
+        await using var host = WorldTestHost.Start();
+        await using var rig = new ExecutorRig(host);
+
+        // A bare .commands is the complete, unpaged retail list: no scrollback problem on a console.
+        string[] full = await rig.RunAsync("commands");
+        Assert.Contains(full, l => l.EndsWith(GmStrings.CommandsAvailable, StringComparison.Ordinal));
+        Assert.Contains(full, l => l.EndsWith("    server ...", StringComparison.Ordinal));
+        Assert.Contains(full, l => l.EndsWith("    levelup", StringComparison.Ordinal));
+        Assert.DoesNotContain(full, l => l.Contains("(page ", StringComparison.Ordinal));
+        Assert.True(full.Length > CommandListing.PageLines, $"{full.Length} lines");
+
+        // With an argument it pages like everywhere else.
+        string[] filtered = await rig.RunAsync("commands e 2");
+        Assert.Contains("Commands matching 'e' (page 2/", filtered[0], StringComparison.Ordinal);
+        Assert.True(filtered.Length <= CommandListing.PageLines);
+        Assert.Contains("Commands (page 1/", (await rig.RunAsync("commands 1"))[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Console_Kick_And_Announce_ByName_Work()
     {
         await using var host = WorldTestHost.Start();

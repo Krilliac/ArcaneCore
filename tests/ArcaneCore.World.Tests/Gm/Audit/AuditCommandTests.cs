@@ -101,7 +101,7 @@ public sealed class AuditCommandTests
         clock.Advance(60);
         await player.SendChatAsync(ChatType.Say, Language.Common, ".commands");
         string[] listed = await player.CollectChatLinesAsync();
-        Assert.Contains(listed, line => line.Contains("commands", StringComparison.Ordinal));
+        Assert.Contains(listed, line => line.Contains(", commands, ", StringComparison.Ordinal));   // a body line, not the footer
         Assert.DoesNotContain(
             listed,
             line => line.Contains("gm", StringComparison.Ordinal) || line.Contains("arcane", StringComparison.Ordinal) || line.Contains("ticket", StringComparison.Ordinal));

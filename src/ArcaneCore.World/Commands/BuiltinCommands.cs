@@ -28,8 +28,8 @@ public static class BuiltinCommands
 
     public static CommandTable Create() => new(
     [
-        new ChatCommand("help", AccountSecurity.Player, "Syntax: .help [command]\nDisplay usage instructions for the given command; without a command, the commands you can use.", Help),
-        new ChatCommand("commands", AccountSecurity.Player, "Syntax: .commands\nDisplay a list of the commands available to you.", ListCommands),
+        new ChatCommand("help", AccountSecurity.Player, "Syntax: .help [command [page]]\nDisplay usage instructions for the given command or group (a group lists its subcommands, paged); without a command, an overview of the commands you can use.", Help),
+        new ChatCommand("commands", AccountSecurity.Player, "Syntax: .commands [page | text [page]]\nDisplay an overview of the commands available to you, one page at a time; with text, list the commands whose name contains it (e.g. .commands npc).", ListCommands),
         new ChatCommand("save", AccountSecurity.Player, "Syntax: .save\nSave your character.", Save),
         new ChatCommand("saveall", AccountSecurity.Moderator, "Syntax: .saveall\nSave all characters in the game.", SaveAll),
         new ChatCommand("server", AccountSecurity.Player, "Server status.", Children:
@@ -56,12 +56,29 @@ public static class BuiltinCommands
     private static bool Help(CommandContext context, string args)
     {
         IReadOnlyList<ChatCommand> roots = context.Commands.Roots;
-        if (args.Length == 0)
+        if (args.Trim().Length == 0)
         {
-            context.Commands.ShowHelpForCommand(context, roots, "help");
-            context.Commands.ShowHelpForCommand(context, roots, string.Empty);
+            if (context.IsConsole)
+            {
+                // The console has no scrollback limit: the retail help text and the full list.
+                context.Commands.ShowHelpForCommand(context, roots, "help");
+                context.Commands.ShowHelpForCommand(context, roots, string.Empty);
+            }
+            else
+            {
+                context.Reply(string.Join('\n', CommandListing.Overview(context.Commands, context.Security, 1)));
+            }
+
+            return true;
         }
-        else if (!context.Commands.ShowHelpForCommand(context, roots, args))
+
+        // ".help <group> <page>": a trailing number pages a group's sub-command list.
+        (string text, int page) = CommandListing.ParseArguments(args);
+        if (text.Length == 0)
+        {
+            context.Reply(string.Join('\n', CommandListing.Overview(context.Commands, context.Security, page)));
+        }
+        else if (!context.Commands.ShowHelpForCommand(context, roots, text, page))
         {
             context.Reply(GmStrings.NoSuchCommand);
         }
@@ -69,9 +86,23 @@ public static class BuiltinCommands
         return true;
     }
 
+    // ".commands" (overview, page 1), ".commands 2" (page of the overview), ".commands npc [2]" (filter): see CommandListing.
     private static bool ListCommands(CommandContext context, string args)
     {
-        context.Commands.ShowHelpForCommand(context, context.Commands.Roots, string.Empty);
+        (string text, int page) = CommandListing.ParseArguments(args);
+        if (text.Length > 0)
+        {
+            context.Reply(string.Join('\n', CommandListing.Filtered(context.Commands, context.Security, text, page)));
+        }
+        else if (context.IsConsole && args.Trim().Length == 0)
+        {
+            context.Commands.ShowHelpForCommand(context, context.Commands.Roots, string.Empty);
+        }
+        else
+        {
+            context.Reply(string.Join('\n', CommandListing.Overview(context.Commands, context.Security, page)));
+        }
+
         return true;
     }
 
