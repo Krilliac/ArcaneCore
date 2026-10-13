@@ -75,20 +75,49 @@ public sealed class ZoneScriptBatch3Tests
     /// <summary>Remtravel on a straight 40 point cmangos waypoint_path 2917 (three yards a point), a player beside him and a quest recorder.</summary>
     private sealed class EscortRig : IDisposable
     {
-        public EscortRig()
+        public const uint ScoutEntry = 2158;
+
+        /// <param name="withPath">Whether waypoint_path 2917 exists (classic-db Updates/4749 is not applied by the importer).</param>
+        /// <param name="questStartScript">Whether the classic-db quest start script 731 (say 925) is loaded.</param>
+        public EscortRig(bool withPath = true, bool questStartScript = false, bool hostile = false)
         {
-            var aiContent = new CreatureAiContent([], [],
-                broadcastTexts: new BroadcastTextCatalog([new BroadcastText(ProspectorRemtravelAI.SayStart, "start line", string.Empty, 1, 0, 0, [0, 0, 0], [0, 0, 0])]));
-            CreatureWaypoint[] path = [.. Enumerable.Range(1, 40).Select(i => new CreatureWaypoint((uint)i, 3f * i, 0f, Z, 0f, 0u))];
+            var broadcast = new List<BroadcastText>
+            {
+                new(ProspectorRemtravelAI.SayStart, "start line", string.Empty, 1, 0, 0, [0, 0, 0], [0, 0, 0]),
+            };
+            for (uint i = 0; i < 6; i++)
+            {
+                broadcast.Add(new BroadcastText(ProspectorRemtravelAI.SayAggro1 + i, $"aggro{i} $n", string.Empty, 1, 0, 0, [0, 0, 0], [0, 0, 0]));
+            }
+
+            RelayScriptStep[] steps = questStartScript
+                ? [new RelayScriptStep(ProspectorRemtravelAI.QuestAbsentMindedPt2, 0, 0, 0, 0, 0, 0, 0, 0, 0, ProspectorRemtravelAI.SayStart, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)]
+                : [];
+            var aiContent = new CreatureAiContent([], [], broadcastTexts: new BroadcastTextCatalog(broadcast))
+            {
+                DbScripts = new DbScriptCatalog(steps.Select(s => (DbScriptKind.QuestStart, s))),
+            };
+            CreatureWaypoint[] path = withPath ? [.. Enumerable.Range(1, 40).Select(i => new CreatureWaypoint((uint)i, 3f * i, 0f, Z, 0f, 0u))] : [];
             CreatureContent content = new(
-                [Template(ProspectorRemtravelAI.Entry, b => { b.NpcFlags = (uint)ArcaneCore.Game.Npc.NpcFlags.QuestGiver; b.UnitFlags = (uint)UnitFlags.ImmuneToNpc; })],
-                [Spawn(1, ProspectorRemtravelAI.Entry, 0, 0)], [], [], [], aiContent,
+                [Template(ProspectorRemtravelAI.Entry, b => { b.NpcFlags = (uint)ArcaneCore.Game.Npc.NpcFlags.QuestGiver; b.UnitFlags = (uint)UnitFlags.ImmuneToNpc; }),
+                    Template(ScoutEntry)],
+                [Spawn(1, ProspectorRemtravelAI.Entry, 0, 0), Spawn(2, ScoutEntry, 300, 0)], [], [], [], aiContent,
                 entryWaypoints: path.Select(p => (CreatureContent.WaypointPathEntry, CreatureContent.WaypointPathBit | ProspectorRemtravelAI.EscortPath, p)));
-            (World, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { ScriptQuests = Quests, QuestEvents = Quests });
+            (World, Map _, System) = CreateAiSystem(content,
+                hostile ? new CreatureAiServices { ScriptQuests = Quests, QuestEvents = Quests, Hostility = new AlwaysHostile() }
+                    : new CreatureAiServices { ScriptQuests = Quests, QuestEvents = Quests });
             (Player, Session) = AddPlayer(World, 1, 0, 0);
-            Npc = Assert.Single(system.Creatures, c => c.Entry == ProspectorRemtravelAI.Entry);
+            Npc = Assert.Single(System.Creatures, c => c.Entry == ProspectorRemtravelAI.Entry);
+            Scout = Assert.Single(System.Creatures, c => c.Entry == ScoutEntry);
             Ai = Assert.IsType<ProspectorRemtravelAI>(Npc.AI);
         }
+
+        public CreatureMapSystem System { get; }
+
+        public Creature Scout { get; }
+
+        /// <summary>The lines said to the player since the last clear.</summary>
+        public List<string> Heard() => [.. Packets(Session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
 
         public WorldRuntime World { get; }
 
@@ -129,10 +158,80 @@ public sealed class ZoneScriptBatch3Tests
         Assert.True(rig.Npc.HasTemporaryFaction);
         Assert.Equal(TemporaryFactionFlags.RestoreRespawn, rig.Npc.TemporaryFactionFlags);
         Assert.Equal(UnitFlags.None, rig.Npc.UnitFlags & UnitFlags.ImmuneToNpc);
-        Assert.Contains("start line", Packets(rig.Session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message));
+        Assert.Equal(["start line"], rig.Heard());
 
         rig.Follow(() => rig.Npc.X > 6f, 20_000);
         Assert.True(rig.Npc.X > 6f, "he walks the path");
+    }
+
+    [Fact]
+    public void Remtravel_WithTheClassicDbQuestStartScript_SaysTheStartLineOnlyOnce()
+    {
+        // Updates/4749's quest start script 731 says 925 and removes the immunity itself, after the AI hook (CreatureQuestScripts).
+        using var rig = new EscortRig(questStartScript: true);
+
+        rig.Ai.OnQuestAccept(rig.Player, ProspectorRemtravelAI.QuestAbsentMindedPt2);
+        Assert.True(rig.System.StartDbScript(DbScriptKind.QuestStart, ProspectorRemtravelAI.QuestAbsentMindedPt2, rig.Npc, rig.Player));
+        Run(rig.World, 500);
+
+        Assert.Equal(["start line"], rig.Heard());
+        Assert.True(rig.Ai.HasEscortState(EscortAI.EscortState.Escorting));
+        Assert.Equal(774u, rig.Npc.FactionTemplate);
+    }
+
+    [Fact]
+    public void Remtravel_WithoutThePath_LeavesHimUntouched()
+    {
+        // waypoint_path 2917 exists only in classic-db Updates/4749, which the importer does not apply: the escort cannot start.
+        using var rig = new EscortRig(withPath: false);
+        uint faction = rig.Npc.FactionTemplate;
+
+        rig.Ai.OnQuestAccept(rig.Player, ProspectorRemtravelAI.QuestAbsentMindedPt2);
+
+        Assert.False(rig.Ai.HasEscortState(EscortAI.EscortState.Escorting));
+        Assert.Equal(faction, rig.Npc.FactionTemplate);
+        Assert.False(rig.Npc.HasTemporaryFaction);
+        Assert.Equal(UnitFlags.ImmuneToNpc, rig.Npc.UnitFlags & UnitFlags.ImmuneToNpc);
+        Assert.Empty(rig.Heard());
+    }
+
+    [Fact]
+    public void Remtravel_Aggro_SaysOneOfSixLines_OnlyTheFirstWithoutATarget()
+    {
+        using var rig = new EscortRig();
+        HashSet<string> kinds = [];
+
+        for (int i = 0; i < 60; i++)
+        {
+            rig.Ai.OnAggro(rig.Player);
+        }
+
+        foreach (string line in rig.Heard())
+        {
+            kinds.Add(line[..6]);
+            if (line.StartsWith("aggro0", StringComparison.Ordinal))
+            {
+                Assert.Contains("$n", line, StringComparison.Ordinal); // 938 is said with no target to name
+            }
+            else
+            {
+                Assert.DoesNotContain("$n", line, StringComparison.Ordinal); // 939-943 name the attacker
+            }
+        }
+
+        Assert.Equal(6, kinds.Count);
+    }
+
+    [Fact]
+    public void Remtravel_CustomEventA_SendsTheSenderAtHim_AndOtherEventsDoNot()
+    {
+        using var rig = new EscortRig(hostile: true);
+
+        rig.Ai.OnReceiveAiEvent(AiEventTypes.CustomEventAiB, rig.Scout, null, 0);
+        Assert.Null(rig.Scout.Combat.Victim);
+
+        rig.Ai.OnReceiveAiEvent(AiEventTypes.CustomEventAiA, rig.Scout, null, 0);
+        Assert.Same(rig.Npc, rig.Scout.Combat.Victim);
     }
 
     [Fact]
