@@ -276,7 +276,8 @@ public sealed class AllocationProfilerTests(ITestOutputHelper output)
         using var profiler = new AllocationProfiler(_ => listener);
         Assert.True(profiler.TryStart(1, out _));
         DateTime deadline = DateTime.UtcNow.AddSeconds(15);
-        while (profiler.IsRunning && DateTime.UtcNow < deadline)
+        // IsRunning turns false when the session is taken out, a moment before its listener is detached: wait for both.
+        while ((profiler.IsRunning || !listener.Disposed) && DateTime.UtcNow < deadline)
         {
             await Task.Delay(50);
         }
