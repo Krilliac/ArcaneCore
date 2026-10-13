@@ -105,6 +105,24 @@ public sealed class RepoHygieneTests : IDisposable
     }
 
     [Fact]
+    public void GeneratedSchemaBaseline_UpToItsCap_IsAllowed()
+    {
+        string path = Plant("sql/updates/world/postgresql/base_v0053.sql", Encoding.ASCII.GetBytes(new string('x', 200 * 1024)));
+        Assert.Empty(ScanOne(path));
+    }
+
+    [Fact]
+    public void GeneratedSchemaBaseline_OverItsCap_OrAStepFileOverTheSqlCap_IsRefused()
+    {
+        string baseline = Plant("sql/updates/world/postgresql/base_v0053.sql", new byte[300 * 1024]);
+        Assert.Contains(ScanOne(baseline), v => v.Path == baseline);
+        string step = Plant("sql/updates/world/postgresql/0054_World.sql", new byte[200 * 1024]);
+        Assert.Contains(ScanOne(step), v => v.Path == step);
+        string deeper = Plant("sql/updates/world/postgresql/x/base_v0053.sql", new byte[200 * 1024]);
+        Assert.Contains(ScanOne(deeper), v => v.Path == deeper);
+    }
+
+    [Fact]
     public void LargeSqlInBaselinesLookalikeDirectory_IsRefused()
     {
         string path = Plant("src/Baselines/world.sql", new byte[200 * 1024]);

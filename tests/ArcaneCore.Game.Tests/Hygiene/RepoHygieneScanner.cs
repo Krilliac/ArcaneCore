@@ -116,11 +116,33 @@ internal static class RepoHygieneScanner
                 yield return "SQL dump banner";
             }
 
-            if (!IsBaseline(path) && new FileInfo(full).Length > MaxSqlBytes)
+            long length = new FileInfo(full).Length;
+            if (IsGeneratedSchemaBaseline(path))
+            {
+                if (length > MaxSchemaBaselineBytes)
+                {
+                    yield return $"generated schema baseline larger than {MaxSchemaBaselineBytes} bytes";
+                }
+            }
+            else if (!IsBaseline(path) && length > MaxSqlBytes)
             {
                 yield return $"SQL file larger than {MaxSqlBytes} bytes outside tests/**/Baselines/";
             }
         }
+    }
+
+    /// <summary>Largest generated schema baseline (<c>sql/updates/&lt;component&gt;/&lt;provider&gt;/base_vNNNN.sql</c>). These are DDL generated from
+    /// the schema model and pinned by SqlUpdateGoldenTests (the world one is ~75 KB with 125 tables); a data dump is megabytes.</summary>
+    private const long MaxSchemaBaselineBytes = 256 * 1024;
+
+    /// <summary><c>sql/updates/&lt;component&gt;/&lt;provider&gt;/base_vNNNN.sql</c>: a schema baseline written by <c>arcane-db export-updates</c>.</summary>
+    private static bool IsGeneratedSchemaBaseline(string path)
+    {
+        string[] parts = path.Split('/');
+        return parts.Length == 5
+            && parts[0].Equals("sql", StringComparison.OrdinalIgnoreCase)
+            && parts[1].Equals("updates", StringComparison.OrdinalIgnoreCase)
+            && parts[4].StartsWith("base_v", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary><c>tests/**/Baselines/*.sql</c>: synthetic frozen schema baselines (directly in a Baselines directory).</summary>
