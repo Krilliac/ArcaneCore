@@ -211,4 +211,63 @@ public sealed class ConfigValidationTests
     [InlineData("World:Port=1")]
     public void HostOptions_AreNotVerbs(string arg)
         => Assert.False(OpsCli.TryRun([arg], Config(), new StringWriter(), out _));
+
+    private const string IntervalKey = "Database:Sqlite:Checkpoint:IntervalMs";
+    private const string JournalKey = "Database:Sqlite:Checkpoint:JournalSizeLimitBytes";
+
+    private static (string, string?)[] SqliteDatabases(params (string, string?)[] extra)
+        => [.. new (string, string?)[]
+        {
+            ("Database:Auth:Provider", "Sqlite"), ("Database:Auth:ConnectionString", "Data Source=auth.db"),
+            ("Database:Characters:Provider", "Sqlite"), ("Database:Characters:ConnectionString", "Data Source=characters.db"),
+            ("Database:World:Provider", "Sqlite"), ("Database:World:ConnectionString", "Data Source=world.db"),
+        }, .. extra];
+
+    [Fact]
+    public void CheckpointIntervalMs_OutsideItsRangeOrNotANumber_IsAnError_OnSqlite()
+    {
+        foreach (string bad in new[] { "99", "3600001", "-5", "fast" })
+        {
+            Assert.Contains(Run(Config(SqliteDatabases((IntervalKey, bad)))).Issues, i => i.Key == IntervalKey && i.Severity == ConfigSeverity.Error);
+        }
+
+        foreach (string good in new[] { "100", "2000", "3600000" })
+        {
+            Assert.DoesNotContain(Run(Config(SqliteDatabases((IntervalKey, good)))).Issues, i => i.Key == IntervalKey);
+        }
+    }
+
+    [Fact]
+    public void CheckpointJournalSizeLimitBytes_OutsideItsRangeOrNotANumber_IsAnError_OnSqlite()
+    {
+        foreach (string bad in new[] { "-1", "1099511627777", "lots", "1.5" })
+        {
+            Assert.Contains(Run(Config(SqliteDatabases((JournalKey, bad)))).Issues, i => i.Key == JournalKey && i.Severity == ConfigSeverity.Error);
+        }
+
+        foreach (string good in new[] { "0", "33554432", "1099511627776" })
+        {
+            Assert.DoesNotContain(Run(Config(SqliteDatabases((JournalKey, good)))).Issues, i => i.Key == JournalKey);
+        }
+    }
+
+    [Fact]
+    public void CheckpointSettings_AreNotChecked_OnAMariaDbOnlyDaemon_OrWhenTheCheckpointerIsDisabled()
+    {
+        // The shipped Config() is all MariaDB: an out-of-range value there is read by nothing and must not stop the daemon (a value that cannot even be bound as a number is reported, see the binder test).
+        Assert.DoesNotContain(Run(Config((IntervalKey, "1"), (JournalKey, "-1"))).Issues, i => i.Key is IntervalKey or JournalKey);
+
+        // Disabled on SQLite: the same.
+        Assert.DoesNotContain(
+            Run(Config(SqliteDatabases(("Database:Sqlite:Checkpoint:Enabled", "false"), (IntervalKey, "1"), (JournalKey, "-1")))).Issues,
+            i => i.Key is IntervalKey or JournalKey);
+    }
+
+    [Fact]
+    public void CheckpointSettings_AreCheckedWhenTheOptionsCannotBeBound()
+    {
+        // An unbindable section (an unknown provider name) cannot say whether SQLite is in use, so the checkpoint values are still checked rather than silently skipped.
+        Assert.Contains(Run(Config(("Database:Provider", "Nonsense"), (IntervalKey, "1"))).Issues, i => i.Key == IntervalKey && i.Severity == ConfigSeverity.Error);
+        Assert.Contains(Run(Config(("Database:Sqlite:Checkpoint:Enabled", "maybe"), (JournalKey, "-1"))).Issues, i => i.Key == JournalKey && i.Severity == ConfigSeverity.Error);
+    }
 }

@@ -108,6 +108,8 @@ public static class ClientFixture
         services.AddSingleton<IConfiguration>(config);
         services.Configure<RealmSeedOptions>(config.GetSection(RealmSeedOptions.SectionName));
         services.AddAuthDatabase(config).AddCharacterDatabase(config).AddWorldDatabase(config);
+        // Provisioning only: no host runs the hosted services, so keep SQLite's own auto-checkpoint.
+        services.PostConfigure<ArcaneCore.Data.DatabaseOptions>(options => options.Sqlite.Checkpoint.Enabled = false);
         await using (ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
         {
             ValidateScopes = true, ValidateOnBuild = true,

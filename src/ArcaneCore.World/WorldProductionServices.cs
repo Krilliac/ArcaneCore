@@ -32,6 +32,8 @@ public static class WorldProductionServices
         // The HostOptions section (e.g. ShutdownTimeout) is not bound by the default builder; a full save
         // drain for many players must not be cut short by the host default (docs/areas/ops-perf.md).
         services.Configure<HostOptions>(configuration.GetSection("HostOptions"));
+        // Hosted services must stop in reverse registration order: the WAL checkpointer (registered with the databases, before WorldHost) has to run its final checkpoint after WorldHost has drained the save queue.
+        services.PostConfigure<HostOptions>(options => options.ServicesStopConcurrently = false);
         services.AddArcaneCoreLogging(configuration);
         services.AddAuthDatabase(configuration);
         services.AddCharacterDatabase(configuration);

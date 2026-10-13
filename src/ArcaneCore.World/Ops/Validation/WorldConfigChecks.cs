@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Globalization;
 using System.Net;
 using ArcaneCore.Data;
+using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Configuration.Validation;
 using Microsoft.Extensions.Configuration;
 
@@ -93,6 +94,11 @@ public sealed class WorldConfigChecks : IConfigCheck
             Range(issues, configuration, "Database:SqliteBusyTimeoutMs", 5000, 0, 60000, "0 to disable, or 1-60000 milliseconds (default 5000)");
             Range(issues, configuration, "Database:SqliteWriteTimeoutMs", 5000, 0, 60000, "0 to keep the connection string timeout, or 1-60000 milliseconds (default 5000)");
             Synchronous(issues, configuration, "Database:SqliteSynchronous");
+            if (SqliteCheckpointInUse(configuration))
+            {
+                Range(issues, configuration, "Database:Sqlite:Checkpoint:IntervalMs", SqliteCheckpointOptions.DefaultIntervalMs, SqliteCheckpointOptions.MinIntervalMs, SqliteCheckpointOptions.MaxIntervalMs, "100-3600000 milliseconds (default 2000)");
+                LongRange(issues, configuration, "Database:Sqlite:Checkpoint:JournalSizeLimitBytes", SqliteCheckpointOptions.DefaultJournalSizeLimitBytes, 0, SqliteCheckpointOptions.MaxBytes, "0 to 1099511627776 bytes (default 33554432)");
+            }
         }
 
         if (own)
@@ -187,6 +193,39 @@ public sealed class WorldConfigChecks : IConfigCheck
     private static void Range(List<ConfigIssue> issues, IConfiguration configuration, string key, int fallback, int min, int max, string expected)
     {
         if (Int(issues, configuration, key, fallback) is { } value && (value < min || value > max))
+        {
+            issues.Add(Error(key, $"{value} is out of range.", $"use {expected}"));
+        }
+    }
+
+    /// <summary>
+    /// Whether the background WAL checkpointer's settings are read at all: it is enabled and at least one database component is SQLite. A MariaDB or PostgreSQL daemon
+    /// (or a disabled checkpointer) ignores them, so a bad value there must not be an error. A configuration that cannot be bound is checked (the binder error is reported elsewhere).
+    /// </summary>
+    private static bool SqliteCheckpointInUse(IConfiguration configuration)
+    {
+        try
+        {
+            DatabaseOptions database = configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>() ?? new DatabaseOptions();
+            return database.Sqlite.Checkpoint.Enabled && Enum.GetValues<DatabaseComponent>().Any(component => database.Resolve(component).Provider == DatabaseProvider.Sqlite);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    private static void LongRange(List<ConfigIssue> issues, IConfiguration configuration, string key, long fallback, long min, long max, string expected)
+    {
+        string? text = configuration[key];
+        long value = fallback;
+        if (!string.IsNullOrWhiteSpace(text) && !long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+        {
+            issues.Add(Error(key, $"'{text}' is not a whole number.", "use a whole number"));
+            return;
+        }
+
+        if (value < min || value > max)
         {
             issues.Add(Error(key, $"{value} is out of range.", $"use {expected}"));
         }

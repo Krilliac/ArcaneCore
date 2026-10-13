@@ -26,16 +26,17 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// <summary>The largest accepted <c>Database:SqliteBusyTimeoutMs</c>.</summary>
     public const int MaxBusyTimeoutMs = 60000;
 
-    private static readonly ConcurrentDictionary<(int Busy, int Write, SqliteSynchronousMode Synchronous, ILogger? Logger), SqliteConnectionPragmaInterceptor> Instances = new();
+    private static readonly ConcurrentDictionary<(int Busy, int Write, SqliteSynchronousMode Synchronous, long WalLimit, ILogger? Logger), SqliteConnectionPragmaInterceptor> Instances = new();
 
     private readonly ILogger? _logger;
 
     /// <summary>Files whose configured NORMAL was refused because they are not in WAL mode (value: the journal mode seen); cleared when the file is seen in WAL again.</summary>
     private readonly ConcurrentDictionary<string, string> _fellBack = new(StringComparer.OrdinalIgnoreCase);
 
-    private SqliteConnectionPragmaInterceptor(int busyTimeoutMs, int writeTimeoutMs, SqliteSynchronousMode synchronous, ILogger? logger)
+    private SqliteConnectionPragmaInterceptor(int busyTimeoutMs, int writeTimeoutMs, SqliteSynchronousMode synchronous, long walJournalSizeLimit, ILogger? logger)
     {
         _logger = logger;
+        WalJournalSizeLimit = walJournalSizeLimit;
         Synchronous = synchronous;
         BusyTimeoutMs = busyTimeoutMs;
         WriteTimeoutMs = writeTimeoutMs;
@@ -52,6 +53,13 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         => Synchronous == SqliteSynchronousMode.Normal && !string.IsNullOrEmpty(dataSource) && _fellBack.ContainsKey(dataSource)
             ? SqliteSynchronousMode.Full
             : Synchronous;
+
+    /// <summary>
+    /// Negative (default): SQLite's own auto-checkpoint stays on. Zero or more: <see cref="SqliteCheckpointService"/> owns checkpointing, so every file-backed connection this interceptor
+    /// opens gets <c>PRAGMA wal_autocheckpoint = 0</c> (a commit never runs a checkpoint, which fsyncs the main database file inside the committing transaction) and
+    /// <c>PRAGMA journal_size_limit</c> of this many bytes (the writer that restarts the WAL after a full checkpoint is an application connection, so the limit must be set here, not only on the service's connection).
+    /// </summary>
+    public long WalJournalSizeLimit { get; }
 
     /// <summary>The configured busy timeout in milliseconds; 0 leaves SQLite's own "fail at once" behaviour.</summary>
     public int BusyTimeoutMs { get; }
@@ -70,8 +78,14 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     /// The shared interceptor for a timeout. One instance per value keeps EF's internal service provider cache keyed on the same
     /// interceptor object across the many option builds a host makes.
     /// </summary>
-    public static SqliteConnectionPragmaInterceptor For(int busyTimeoutMs, int writeTimeoutMs = 0, SqliteSynchronousMode synchronous = SqliteSynchronousMode.Full, ILogger? logger = null)
+    public static SqliteConnectionPragmaInterceptor For(int busyTimeoutMs, int writeTimeoutMs = 0, SqliteSynchronousMode synchronous = SqliteSynchronousMode.Full, ILogger? logger = null, long walJournalSizeLimit = -1)
     {
+        if (walJournalSizeLimit > SqliteCheckpointOptions.MaxBytes)
+        {
+            throw new InvalidOperationException(
+                $"Database:Sqlite:Checkpoint:JournalSizeLimitBytes must be between 0 and {SqliteCheckpointOptions.MaxBytes}, not {walJournalSizeLimit}.");
+        }
+
         if (busyTimeoutMs is < 0 or > MaxBusyTimeoutMs)
         {
             throw new InvalidOperationException(
@@ -89,7 +103,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
             throw new InvalidOperationException($"Database:SqliteSynchronous must be Full or Normal, not {synchronous}.");
         }
 
-        return Instances.GetOrAdd((busyTimeoutMs, writeTimeoutMs, synchronous, logger), static key => new SqliteConnectionPragmaInterceptor(key.Busy, key.Write, key.Synchronous, key.Logger));
+        return Instances.GetOrAdd((busyTimeoutMs, writeTimeoutMs, synchronous, Math.Max(walJournalSizeLimit, -1), logger), static key => new SqliteConnectionPragmaInterceptor(key.Busy, key.Write, key.Synchronous, key.WalLimit, key.Logger));
     }
 
     /// <summary>
@@ -146,9 +160,15 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         }
     }
 
+    private static readonly ConcurrentDictionary<string, bool> FileBacked = new();
+
+    /// <summary>Whether the connection is a plain read-write file database; cached per connection string, because it runs on every open.</summary>
     private static bool IsFileBacked(SqliteConnection connection)
-        => !string.IsNullOrEmpty(connection.DataSource) && connection.DataSource != ":memory:"
-            && new SqliteConnectionStringBuilder(connection.ConnectionString).Mode is not (SqliteOpenMode.Memory or SqliteOpenMode.ReadOnly);
+        => FileBacked.GetOrAdd(connection.ConnectionString, static connectionString =>
+        {
+            var builder = new SqliteConnectionStringBuilder(connectionString);
+            return !string.IsNullOrEmpty(builder.DataSource) && builder.DataSource != ":memory:" && builder.Mode is not (SqliteOpenMode.Memory or SqliteOpenMode.ReadOnly);
+        });
 
     /// <summary>
     /// Sets <c>PRAGMA synchronous</c> for a just-opened connection. Fails closed: Normal is applied only when <paramref name="journalMode"/> is "wal" (SQLite documents that NORMAL
@@ -184,7 +204,11 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         // Never wait inside SQLite longer than the connection's own timeout: that loop checks the clock only between attempts.
         int milliseconds = (int)Math.Min(BusyTimeoutMs, connection.DefaultTimeout * 1000L);
         SqliteCommand command = connection.CreateCommand();
-        command.CommandText = FormattableString.Invariant($"PRAGMA busy_timeout = {milliseconds};");
+        // When SqliteCheckpointService owns checkpointing, a commit on this connection must not run one (wal_autocheckpoint is per connection and not persistent), and the writer that restarts the WAL
+        // after a full checkpoint is an application connection, so journal_size_limit is set here too. Folded into this command so an open costs no extra round trip.
+        command.CommandText = WalJournalSizeLimit >= 0 && IsFileBacked(connection)
+            ? FormattableString.Invariant($"PRAGMA busy_timeout = {milliseconds}; PRAGMA wal_autocheckpoint = 0; PRAGMA journal_size_limit = {WalJournalSizeLimit};")
+            : FormattableString.Invariant($"PRAGMA busy_timeout = {milliseconds};");
         return command;
     }
 }

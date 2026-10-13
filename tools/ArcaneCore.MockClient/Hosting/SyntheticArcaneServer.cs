@@ -306,6 +306,8 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
             ["World:Motd"] = "ArcaneCore synthetic mock client fixture.",
             ["Quests:OrdinaryRewardQuestIds:0"] = RewardQuestId.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
+        // This fixture starts WorldHost only, not the other hosted services, so nothing would run the WAL checkpointer: keep SQLite's own auto-checkpoint.
+        values["Database:Sqlite:Checkpoint:Enabled"] = "false";
         foreach (string component in new[] { "Auth", "Characters", "World" })
         {
             values[$"Database:{component}:Provider"] = nameof(DatabaseProvider.Sqlite);

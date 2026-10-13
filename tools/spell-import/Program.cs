@@ -35,6 +35,8 @@ catch (Exception ex) when (ex is IOException or InvalidDataException or Unauthor
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args[1..]);
 builder.Services.AddWorldDatabase(builder.Configuration);
+// The host is built but never started, so no hosted service would checkpoint: keep SQLite's own auto-checkpoint.
+builder.Services.PostConfigure<ArcaneCore.Data.DatabaseOptions>(options => options.Sqlite.Checkpoint.Enabled = false);
 using IHost host = builder.Build();
 
 await host.Services.GetRequiredService<WorldDbInitializer>().InitializeAsync().ConfigureAwait(false);
