@@ -66,6 +66,9 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     /// <summary>The instance manager (world thread only; available after <see cref="Attach"/>).</summary>
     public InstanceManager Instances => _manager ?? throw new InvalidOperationException("the instance feature is not attached");
 
+    /// <summary>The write queue backing instance and character bind persistence (null before <see cref="Attach"/>).</summary>
+    public InstanceWriteQueue? Writes => _writes;
+
     /// <summary>
     /// Raised on the world thread for every instance that is deleted, including the saves dropped at load (see <see cref="InstanceWriteQueue.InstanceRemoved"/>).
     /// Subscribe from a world command, after <see cref="Attach"/> ran and before the load command does.
@@ -93,6 +96,12 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     /// <summary>Wait until every queued write has been attempted (tests).</summary>
     public Task FlushAsync() => _writes?.FlushAsync() ?? Task.CompletedTask;
 
+    /// <summary><see cref="FlushAsync"/> plus one more attempt at this character's retained writes; faults while they are not durable.</summary>
+    public Task FlushCharacterAsync(int characterId) => _writes?.FlushCharacterAsync(characterId) ?? Task.CompletedTask;
+
+    /// <summary>True while the character has instance writes that failed all attempts and are retained.</summary>
+    public bool HasRetainedFailure(int characterId) => _writes?.HasRetainedFailure(characterId) ?? false;
+
     /// <summary>The number of instance writes queued so far (world thread: read it when an operation starts).</summary>
     public long WriteWatermark => _writes?.Enqueued ?? 0;
 
@@ -114,6 +123,11 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         }
 
         _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>());
+        _writes.FatalFailure += error =>
+        {
+            _logger.LogCritical(error, "Instance write queue entered terminal failure; requesting world shutdown");
+            services.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>()?.StopApplication();
+        };
         _writes.Start();
         // vmangos DungeonResetScheduler::ScheduleAllDungeonResets/Update
         // (Maps/MapPersistentStateMgr.cpp:448-528,570-619) use Unix time for global raid resets.
@@ -135,6 +149,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
         _manager.Install();
         world.PlayerLoggedIn += OnPlayerLoggedIn;
+        world.PlayerLoggingOut += OnPlayerLoggingOut;
 
         // Features attach in type-name order: the map registry (TeleportFeature) and the groups
         // (SocialFeature) are ready once the world thread runs its first commands.
@@ -220,6 +235,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         if (_world is not null)
         {
             _world.PlayerLoggedIn -= OnPlayerLoggedIn;
+            _world.PlayerLoggingOut -= OnPlayerLoggingOut;
         }
 
         if (_scheduleTimer is not null)
@@ -240,6 +256,15 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         if (_manager is { } manager && manager.GetPlayerBinds(player.Guid).Any(b => b.Permanent))
         {
             manager.SendRaidInfo(player);
+        }
+    }
+
+    private void OnPlayerLoggingOut(Player player)
+    {
+        int characterId = (int)player.Guid.Low;
+        if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+        {
+            writes.RequestRetry(characterId);
         }
     }
 }

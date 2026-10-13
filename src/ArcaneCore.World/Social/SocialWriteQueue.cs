@@ -2,9 +2,11 @@ using System.Threading.Channels;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Social;
@@ -69,6 +71,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     private readonly Dictionary<int, int> _rowsPerCharacter = [];
     private int _rowsTotal;
     private long _epoch;
+    private Exception? _terminalFailure;
 
     private Task? _consumer;
     private Task? _stop;
@@ -129,6 +132,21 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
     }
 
+    /// <summary>Terminal failure that halted the queue (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
+
+    /// <summary>Raised once when the queue enters terminal failure (for example on <see cref="CharacterOwnershipRejectedException"/>).</summary>
+    public event Action<Exception>? FatalFailure;
+
     /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per key, stopping at the first locked one; tests shorten it).</summary>
     public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
 
@@ -151,7 +169,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     {
         lock (_gate)
         {
-            return _retained.Count > 0;
+            return _terminalFailure is null && _retained.Count > 0;
         }
     }
 
@@ -350,7 +368,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     /// <summary>Queue a fire-and-forget retry of the character's retained rows (logout).</summary>
     public void RequestRetry(int characterId)
     {
-        if (_consumer is not null)
+        if (_consumer is not null && !_stopped)
         {
             _channel.Writer.TryWrite(new Work(WorkKind.Retry, default, default, 0, characterId, null));
         }
@@ -390,8 +408,10 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
         string[] left;
         Exception? first;
+        Exception? terminal;
         lock (_gate)
         {
+            terminal = _terminalFailure;
             KeyValuePair<Key, Retained>[] failures = [.. _retained.OrderBy(r => r.Key.Kind).ThenBy(r => r.Key.A).ThenBy(r => r.Key.B)];
             left =
             [
@@ -404,12 +424,17 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                     _ => $"purge of character {f.Key.A}",
                 }).Distinct(),
             ];
-            first = failures.Length > 0 ? failures[0].Value.Failure : null;
+            first = failures.Length > 0 ? failures[0].Value.Failure : terminal;
         }
 
         if (left.Length > 0)
         {
             throw new InvalidOperationException($"social writes did not drain for {string.Join(", ", left)}", first);
+        }
+
+        if (terminal is not null)
+        {
+            throw new InvalidOperationException("social write queue stopped after terminal ownership rejection", terminal);
         }
     }
 
@@ -516,7 +541,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             return _retainedByCharacter.TryGetValue(characterId, out HashSet<Key>? keys) && keys.Count > 0
                 ? _retained[keys.First()].Failure
-                : null;
+                : _terminalFailure;
         }
     }
 
@@ -525,6 +550,36 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
     private static InvalidOperationException NotDurable(int characterId, Exception failure)
         => new($"social writes for character {characterId} are not durable", failure);
+
+    private void FailTerminal(CharacterOwnershipRejectedException ex, IServiceProvider? scopedServices)
+    {
+        bool first = false;
+        lock (_gate)
+        {
+            if (_terminalFailure is null)
+            {
+                _terminalFailure = ex;
+                _stopped = true;
+                first = true;
+            }
+        }
+
+        if (!first)
+        {
+            return;
+        }
+
+        _logger.LogCritical(ex, "social write queue entered terminal failure after character ownership rejection");
+        try
+        {
+            scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        FatalFailure?.Invoke(ex);
+    }
 
     // --- consumer ----------------------------------------------------------------------------
 
@@ -737,9 +792,9 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         Payload value;
         lock (_gate)
         {
-            if (!_retained.TryGetValue(key, out Retained? current) || !ReferenceEquals(current, retained))
+            if (_terminalFailure is not null || !_retained.TryGetValue(key, out Retained? current) || !ReferenceEquals(current, retained))
             {
-                return null; // superseded or discarded meanwhile
+                return _terminalFailure; // superseded, discarded, or terminal failure meanwhile
             }
 
             value = retained.Value;
@@ -770,11 +825,19 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     /// <summary>Apply one key's value to the store. Null on success; otherwise the last failure.</summary>
     private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts)
     {
+        lock (_gate)
+        {
+            if (_terminalFailure is { } terminal)
+            {
+                return terminal;
+            }
+        }
+
         for (int attempt = 1; ; attempt++)
         {
+            await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
             try
             {
-                await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
                 if (key.Kind is KeyKind.Petition or KeyKind.PetitionPurge)
                 {
                     if (scope.ServiceProvider.GetService<IPetitionStore>() is not { } petitions)
@@ -818,6 +881,11 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                 }
 
                 return null;
+            }
+            catch (CharacterOwnershipRejectedException ex)
+            {
+                FailTerminal(ex, scope.ServiceProvider);
+                return ex;
             }
             catch (Exception ex) when (attempt < attempts)
             {

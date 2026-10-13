@@ -77,6 +77,8 @@ public sealed class ExploredZonesPersistence(IServiceScopeFactory scopes, ILogge
 
     public Task FlushAsync() => _writes.FlushAsync();
 
+    public Task FlushCharacterAsync(int characterId) => _writes.FlushCharacterAsync(characterId);
+
     public Task StopAsync() => _writes.StopAsync();
 }
 

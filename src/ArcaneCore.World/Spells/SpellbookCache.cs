@@ -1,7 +1,9 @@
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Characters;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Spells;
@@ -28,6 +30,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
     private readonly Lock _writesLock = new();
     private readonly SemaphoreSlim _writesSignal = new(0);
     private bool _writesCompleted;
+    private Exception? _terminalFailure;
 
     private Task? _writer;
     private bool _warnedNoStore;
@@ -38,6 +41,21 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         _scopes = scopes;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
+
+    /// <summary>Terminal failure that halted the spellbook writer (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
+
+    /// <summary>Raised once when the spellbook writer enters terminal failure (for example on <see cref="CharacterOwnershipRejectedException"/>).</summary>
+    public event Action<Exception>? FatalFailure;
 
     /// <summary>
     /// A spell was added to a player's book by <see cref="LearnSpell"/> (any thread that learns: the session task
@@ -281,6 +299,11 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         {
             await _writer.ConfigureAwait(false);
         }
+
+        if (_terminalFailure is { } terminal)
+        {
+            throw new InvalidOperationException("SpellbookCache stopped with a terminal ownership failure", terminal);
+        }
     }
 
     private HashSet<uint> Book(int characterId)
@@ -375,6 +398,11 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         HashSet<uint>? desired;
         lock (_lock)
         {
+            if (_terminalFailure is { } terminal)
+            {
+                throw new InvalidOperationException($"spellbook writes for character {characterId} are not durable", terminal);
+            }
+
             if (!_failedCharacters.Contains(characterId))
             {
                 return;
@@ -438,6 +466,35 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         }
     }
 
+    private void FailTerminal(CharacterOwnershipRejectedException ex, IServiceProvider? scopedServices)
+    {
+        bool first = false;
+        lock (_lock)
+        {
+            if (_terminalFailure is null)
+            {
+                _terminalFailure = ex;
+                first = true;
+            }
+        }
+
+        if (!first)
+        {
+            return;
+        }
+
+        _logger.LogCritical(ex, "spellbook cache entered terminal failure after character ownership rejection");
+        try
+        {
+            scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        FatalFailure?.Invoke(ex);
+    }
+
     private async Task WriteLoopAsync()
     {
         while (true)
@@ -455,9 +512,17 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             }
 
             PendingWrite pending = next;
+            await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
             try
             {
-                await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
+                lock (_lock)
+                {
+                    if (_terminalFailure is { } terminal && pending.CharacterId is not null)
+                    {
+                        throw new InvalidOperationException($"spellbook writes for character {pending.CharacterId.Value} are not durable", terminal);
+                    }
+                }
+
                 ICharacterSpellStore? store = scope.ServiceProvider.GetService<ICharacterSpellStore>();
                 if (store is null)
                 {
@@ -474,6 +539,19 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
 
                 await pending.Write(store).ConfigureAwait(false);
                 pending.Done?.TrySetResult();
+            }
+            catch (CharacterOwnershipRejectedException ex)
+            {
+                if (pending.CharacterId is { } characterId)
+                {
+                    lock (_lock)
+                    {
+                        _failedCharacters.Add(characterId);
+                    }
+                }
+
+                FailTerminal(ex, scope.ServiceProvider);
+                pending.Done?.TrySetException(ex);
             }
             catch (Exception ex)
             {
