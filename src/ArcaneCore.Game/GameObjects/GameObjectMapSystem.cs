@@ -147,6 +147,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// </summary>
     public Action<Player>? Dismount { get; set; }
 
+    /// <summary>
+    /// Drops auras whose AuraInterruptFlags include <c>AURA_INTERRUPT_LOOTING_CANCELS</c> (0x800) before a direct use
+    /// (vmangos <c>WorldSession::HandleGameObjectUseOpcode</c>, SpellHandler.cpp:241-258: once the object is spawned, not generic,
+    /// interactable and in reach, and <c>PlayerCanUse</c>, <c>RemoveAurasWithInterruptFlags</c> then <c>GameObject::Use</c>). Stealth,
+    /// Vanish and Shadowmeld carry this bit. The world wires it to the spell system; null (tests without spells) leaves the auras.
+    /// </summary>
+    public Action<Player>? BreakLootingAuras { get; set; }
+
     /// <summary>Raised after a successful use (scripts, events, the spells area's linked traps/spells).</summary>
     public event Action<Player, GameObject>? Used;
 
@@ -294,6 +302,15 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         if (DirectUseRefused?.Invoke(player, go!) == true)
         {
             return GameObjectUseResult.Locked;
+        }
+
+        // HandleGameObjectUseOpcode (SpellHandler.cpp:241-258) strips AURA_INTERRUPT_LOOTING_CANCELS before GameObject::Use, once the
+        // object is spawned, not generic, interactable and in reach. A cast aimed at the object already does this (Spell::prepare); a
+        // click did not, so Stealth survived an unlocked chest or a door. CheckUsable is that gate here (it also refuses a dead user,
+        // which the opcode does not). A use that Use then refuses (lock, quest, immunity) has already broken the auras.
+        if (go!.Type != GameObjectType.Generic)
+        {
+            BreakLootingAuras?.Invoke(player);
         }
 
         // GameObject::Use (GameObject.cpp:1405-1407): the object's script may take the use over, before anything else (and then nothing
