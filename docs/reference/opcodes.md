@@ -257,8 +257,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_TRIGGER_CINEMATIC_CHEAT` | `0x00F8` | unhandled | — | — |
 | `CMSG_OPENING_CINEMATIC` | `0x00F9` | unhandled | — | — |
 | `SMSG_TRIGGER_CINEMATIC` | `0x00FA` | — | 3 | decoded |
-| `CMSG_NEXT_CINEMATIC_CAMERA` | `0x00FB` | unhandled | — | — |
-| `CMSG_COMPLETE_CINEMATIC` | `0x00FC` | unhandled | — | — |
+| `CMSG_NEXT_CINEMATIC_CAMERA` | `0x00FB` | handled | — | — |
+| `CMSG_COMPLETE_CINEMATIC` | `0x00FC` | handled | — | — |
 | `SMSG_TUTORIAL_FLAGS` | `0x00FD` | — | 1961 | decoded |
 | `CMSG_TUTORIAL_FLAG` | `0x00FE` | handled | — | — |
 | `CMSG_TUTORIAL_CLEAR` | `0x00FF` | handled | — | — |
@@ -373,7 +373,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_MOUNTRESULT` | `0x016E` | — | 0 | — |
 | `SMSG_DISMOUNTRESULT` | `0x016F` | — | 0 | — |
 | `SMSG_PUREMOUNT_CANCELLED_OBSOLETE` | `0x0170` | — | 0 | — |
-| `CMSG_MOUNTSPECIAL_ANIM` | `0x0171` | unhandled | — | — |
+| `CMSG_MOUNTSPECIAL_ANIM` | `0x0171` | handled | — | — |
 | `SMSG_MOUNTSPECIAL_ANIM` | `0x0172` | — | 0 | — |
 | `SMSG_PET_TAME_FAILURE` | `0x0173` | — | 0 | — |
 | `CMSG_PET_SET_ACTION` | `0x0174` | handled | — | — |
@@ -671,7 +671,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_MEETINGSTONE_IN_PROGRESS` | `0x0298` | — | 0 | — |
 | `SMSG_MEETINGSTONE_MEMBER_ADDED` | `0x0299` | — | 2 | decoded |
 | `CMSG_GMTICKETSYSTEM_TOGGLE` | `0x029A` | unhandled | — | — |
-| `CMSG_CANCEL_GROWTH_AURA` | `0x029B` | unhandled | — | — |
+| `CMSG_CANCEL_GROWTH_AURA` | `0x029B` | handled | — | — |
 | `SMSG_CANCEL_AUTO_REPEAT` | `0x029C` | — | 3 | decoded |
 | `SMSG_STANDSTATE_UPDATE` | `0x029D` | — | 35 | decoded |
 | `SMSG_LOOT_ALL_PASSED` | `0x029E` | — | 2 | decoded |
@@ -701,8 +701,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_SCRIPT_MESSAGE` | `0x02B6` | — | 0 | — |
 | `SMSG_DUEL_COUNTDOWN` | `0x02B7` | — | 26 | decoded |
 | `SMSG_AREA_TRIGGER_MESSAGE` | `0x02B8` | — | 14 | decoded |
-| `CMSG_TOGGLE_HELM` | `0x02B9` | unhandled | — | — |
-| `CMSG_TOGGLE_CLOAK` | `0x02BA` | unhandled | — | — |
+| `CMSG_TOGGLE_HELM` | `0x02B9` | handled | — | — |
+| `CMSG_TOGGLE_CLOAK` | `0x02BA` | handled | — | — |
 | `SMSG_MEETINGSTONE_JOINFAILED` | `0x02BB` | — | 2 | decoded |
 | `SMSG_PLAYER_SKINNED` | `0x02BC` | — | 0 | — |
 | `SMSG_DURABILITY_DAMAGE_DEATH` | `0x02BD` | — | 17 | decoded |
