@@ -246,6 +246,50 @@ public sealed class PlayerLifeTests
         Assert.Equal(1u, player.Health);
     }
 
+    [Fact]
+    public void Reapply_DoesNotUndoTheHalfResurrectionOfAGhostWithoutABody()
+    {
+        // LoadCorpse's ResurrectPlayer(0.5f) runs after the auras (Player.cpp:15434-15439, 4638-4655):
+        // half health, mana and energy of the post-aura maximums, rage 0. The saved vitals of the
+        // ghost (health 1, whatever rage and mana it still held) must not replace that.
+        Player player = NewPlayer();
+        player.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Energy, 100);
+        var life = new CharacterLife(1, [800, 40, 90, 100, 7], 0, 0, true, null);
+        LoadedLife loaded = PlayerLife.ApplyVitals(player, life);
+        Assert.Equal((500u, 250u, 0u, 50u), (player.Health, Power(player, PowerType.Mana), Power(player, PowerType.Rage), Power(player, PowerType.Energy)));
+        Assert.Equal(0u, Power(player, PowerType.Focus));
+
+        player.MaxHealth = 2000; // a stamina aura arrived after the half restore
+        player.SetUInt32(UpdateFields.UnitFieldMaxpower1, 1000);
+        PlayerLife.ReapplyAfterAuras(player, loaded);
+
+        Assert.Equal(1000u, player.Health); // half of the new maximum, not the saved 1 and not the old 500
+        Assert.Equal(500u, Power(player, PowerType.Mana)); // half of 1000, not the saved 800
+        Assert.Equal(0u, Power(player, PowerType.Rage)); // the resurrection cleared it
+        Assert.Equal(50u, Power(player, PowerType.Energy)); // half of 100, not the saved 100
+        Assert.Equal(90u, Power(player, PowerType.Focus)); // ResurrectPlayer does not touch focus
+        Assert.Equal(7u, Power(player, PowerType.Happiness));
+    }
+
+    [Fact]
+    public void Reapply_LeavesAHalfRestoreThePlayerAlreadySpent()
+    {
+        Player player = NewPlayer();
+        var life = new CharacterLife(1, [800, 40, 0, 0, 0], 0, 0, true, null);
+        LoadedLife loaded = PlayerLife.ApplyVitals(player, life);
+        player.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Mana, 10); // spent before the aura tick
+        player.MaxHealth = 2000;
+        player.SetUInt32(UpdateFields.UnitFieldMaxpower1, 1000);
+
+        PlayerLife.ReapplyAfterAuras(player, loaded);
+
+        Assert.Equal(1000u, player.Health);
+        Assert.Equal(10u, Power(player, PowerType.Mana));
+        Assert.Equal(0u, Power(player, PowerType.Rage));
+    }
+
+    private static uint Power(Player player, PowerType power) => player.GetUInt32(UpdateFields.UnitFieldPower1 + (int)power);
+
     [Theory]
     [InlineData(ClockStart + 10, ClockStart + 10)]                    // inside the window: kept
     [InlineData(ClockStart + 900, ClockStart + 899)]                    // 3 steps would be 900: capped one second short (Player.cpp:14915-14917)
