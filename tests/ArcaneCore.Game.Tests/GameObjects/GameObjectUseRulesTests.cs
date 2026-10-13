@@ -33,7 +33,7 @@ public sealed class GameObjectUseRulesTests
 
         Assert.Equal(GameObjectUseResult.Immune, rig.System.Use(player, chest.Guid));
         Assert.Equal(GameObjectUseResult.Immune, rig.System.OpenLock(player, herb.Guid, LockType.Herbalism));
-        Assert.Empty(Packets(session, WorldOpcode.SmsgLootResponse));
+        Assert.Empty(GameObjectTestKit.Packets(session, WorldOpcode.SmsgLootResponse));
 
         player.UnitFlags &= ~UnitFlags.Immune;
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, chest.Guid));
@@ -65,12 +65,12 @@ public sealed class GameObjectUseRulesTests
         session.Clear();
 
         Assert.Equal(GameObjectUseResult.NeedsQuest, rig.System.OpenLock(player, herb.Guid, LockType.Herbalism));
-        Assert.Empty(Packets(session, WorldOpcode.SmsgLootResponse));
+        Assert.Empty(GameObjectTestKit.Packets(session, WorldOpcode.SmsgLootResponse));
         Assert.Null(herb.Loot);
 
         rig.Quests.Incomplete.Add((player.Guid, QuestId));
         Assert.Equal(GameObjectUseResult.Ok, rig.System.OpenLock(player, herb.Guid, LockType.Herbalism));
-        Assert.Single(Packets(session, WorldOpcode.SmsgLootResponse));
+        Assert.Single(GameObjectTestKit.Packets(session, WorldOpcode.SmsgLootResponse));
     }
 
     /// <summary>

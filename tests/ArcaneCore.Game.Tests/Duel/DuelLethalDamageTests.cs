@@ -215,7 +215,7 @@ public sealed class DuelLethalDamageTests
         var summon = new SummonedUnit();
         summon.SetOwnerGuid(rig.A.Guid);
         summon.Spawn(rig.Map, 13, 10);
-        Assert.False(summon is IPlayerControlledUnit);
+        Assert.IsNotAssignableFrom<IPlayerControlledUnit>(summon);
         Assert.True(DuelRules.IsOpponentHostile(summon, rig.B));
 
         rig.Map.Combat.DealDamage(summon, rig.B, 5000);

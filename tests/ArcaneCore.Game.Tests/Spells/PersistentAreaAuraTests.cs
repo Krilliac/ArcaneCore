@@ -343,6 +343,4 @@ public sealed class PersistentAreaAuraTests : IDisposable
         Assert.Equal(synced == 0 ? period : synced, dot.PeriodicTimer);
         Assert.NotEqual(timerBefore, dot.PeriodicTimer);
     }
-
-    public void Dispose() => _kit.Dispose();
 }

@@ -72,7 +72,7 @@ public sealed class GossipDbScriptTests
         // vmangos SendPreparedQuest looks up the default menu text only when the list has more than one quest
         // (Player.cpp:12450-12465). That lookup is GetGossipTextId, so the text's script starts. Hello on a
         // quest giver with no gossip flag never reaches SendPreparedGossip's own lookup.
-        using var kit = QuestListKit(quests: 2, menuId: 1405, scriptId: 1405);
+        using var kit = NewQuestListKit(quests: 2, menuId: 1405, scriptId: 1405);
         var started = new List<(ObjectGuid Npc, uint Script, bool PlayerIsSource)>();
         kit.Services.GossipScriptStarted += (_, npc, script, playerIsSource) => started.Add((npc, script, playerIsSource));
 
@@ -85,7 +85,7 @@ public sealed class GossipDbScriptTests
     [Fact]
     public void OneQuest_OpensDetails_AndDoesNotStartTheMenuTextScript()
     {
-        using var kit = QuestListKit(quests: 1, menuId: 1405, scriptId: 1405);
+        using var kit = NewQuestListKit(quests: 1, menuId: 1405, scriptId: 1405);
         var started = new List<uint>();
         kit.Services.GossipScriptStarted += (_, _, script, _) => started.Add(script);
 
@@ -95,7 +95,7 @@ public sealed class GossipDbScriptTests
         Assert.Contains(kit.Session.Sent, p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestDetails);
     }
 
-    private static QuestListKit QuestListKit(int quests, uint menuId, uint scriptId) => new(quests, menuId, scriptId);
+    private static QuestListKit NewQuestListKit(int quests, uint menuId, uint scriptId) => new(quests, menuId, scriptId);
 
     private sealed class QuestListKit : IDisposable
     {
