@@ -60,6 +60,9 @@ internal sealed class PlayerbotDruidRotation : PlayerbotClassRotation
 
     private static bool Feral(Form form) => form is Form.Cat or Form.Bear or Form.DireBear;
 
+    /// <summary>A druid alone, still classed as a healer because it has no Moonkin or Leader of the Pack, heals only below this.</summary>
+    internal const float SoloEmergencyHealth = 30f;
+
     /// <summary>Cat and bear fight in melee; a caster druid (balance, restoration, or one without forms yet) casts from range.</summary>
     public override float PreferredRange(RotationState state)
         => Feral(state.Form) || state.Role is PlayerbotRole.MeleeDps or PlayerbotRole.Tank ? MeleeRange : CasterRange;
@@ -96,16 +99,21 @@ internal sealed class PlayerbotDruidRotation : PlayerbotClassRotation
 
         if (s.Form == Form.None)
         {
+            // Every druid without Moonkin Form or Leader of the Pack is a healer, including level 1-10 druids whose only
+            // damage spell is Wrath. Healing whenever they were under 60% meant the whole fight was Healing Touch and the
+            // quarry never died (bot QA combat stalls: Palemane #372, #443, Prairie Wolf #363, Gnarlpine #323).
+            // Alone, only an emergency is a heal. A group still heals before it damages.
+            bool heal = s.InGroup || s.Self.HealthPercent < SoloEmergencyHealth;
             RotationAction? support = (FirstAttackerOtherThan(s, null) is { } attacker && s.Role != PlayerbotRole.Tank && s.InGroup
                     ? Do(s, Hibernate, attacker, attacker.CreatureType is 1 or 2 && !attacker.HasAura(Hibernate)) : null)
-                ?? (SelectPeriodicHealTarget(s, 80f, 90f) is { } scratched && (s.Role == PlayerbotRole.Healer || scratched.IsSelf && s.Self.HealthPercent < 50f)
+                ?? (heal && SelectPeriodicHealTarget(s, 80f, 90f) is { } scratched && (s.Role == PlayerbotRole.Healer || scratched.IsSelf && s.Self.HealthPercent < 50f)
                     ? HealPeriodic(s, scratched) : null)
-                ?? (SelectHealTarget(s, 60f, 70f) is { } wounded && (s.Role == PlayerbotRole.Healer || wounded.IsSelf && s.Self.HealthPercent < 40f)
+                ?? (heal && SelectHealTarget(s, 60f, 70f) is { } wounded && (s.Role == PlayerbotRole.Healer || wounded.IsSelf && s.Self.HealthPercent < 40f)
                     ? HealDirect(s, wounded) : null)
                 ?? Do(s, Innervate, s.Self, s.InCombat && s.Self.HealthPercent > 40f && s.PowerPercent < 10f)
                 ?? EnterCombatForm(s);
             if (support is not null) return support;
-            if (s.Role == PlayerbotRole.Healer && !HealerMayFight(s)) return null;
+            if (s.InGroup && s.Role == PlayerbotRole.Healer && !HealerMayFight(s)) return null;
         }
 
         return s.Form switch
