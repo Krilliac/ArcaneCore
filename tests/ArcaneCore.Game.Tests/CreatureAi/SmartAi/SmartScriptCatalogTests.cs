@@ -41,7 +41,7 @@ public sealed class SmartScriptCatalogTests
         { "area trigger target 1 SELF", [Make(100, 2, 0, 46, 1, 1, a1: 9001)], "target 1 is not supported for source type 2" },
         { "area trigger target 9 CREATURE_RANGE", [Make(100, 2, 0, 46, 1, 9, a1: 9001)], "range targets search around a base object" },
         { "area trigger event 4", [Make(100, 2, 0, 4, 1, 7, a1: 9001)], "forbids event 4 for source type 2" },
-        { "creature action 41", [Make(Wolf, 0, 0, 4, 41)], "action 41 is not supported for source type 0" },
+        { "creature action 43", [Make(Wolf, 0, 0, 4, 43)], "action 43 is not supported for source type 0" },
         { "creature target 13", [Make(Wolf, 0, 0, 4, 11, 13, a1: 5)], "target 13 is not supported for source type 0" },
         { "GOSSIP_HELLO filter 2", [Make(Wolf, 1, 0, 64, 22, e1: 2, a1: 1)], "GOSSIP_HELLO filter 2" },
         { "GOSSIP_HELLO filter 3", [Make(Wolf, 1, 0, 64, 22, e1: 3, a1: 1)], "GOSSIP_HELLO filter 3 is not 0 or 1" },
@@ -158,15 +158,15 @@ public sealed class SmartScriptCatalogTests
     [Fact]
     public void Catalog_ACallToAListWhoseOnlyRowIsRefused_IsRefusedToo()
     {
-        // The list row's action 41 is refused, so the list has no usable row and the 80 that calls it is refused with it.
+        // The list row's action 43 is refused, so the list has no usable row and the 80 that calls it is refused with it.
         var catalog = new SmartScriptCatalog(
         [
-            Make(50, 9, 0, 0, 41),
+            Make(50, 9, 0, 0, 43),
             CreatureRow(Wolf, 0, SmartEvent.Aggro, SmartAction.CallTimedActionList, SmartTarget.Self, a1: 50),
             CreatureRow(Wolf, 1, SmartEvent.Evade, SmartAction.SetEventPhase, a1: 1),
         ]);
         Assert.Equal(2, catalog.Rejected.Count);
-        Assert.Contains(catalog.Rejected, r => r.SourceType == 9 && r.Reason.Contains("action 41", StringComparison.Ordinal));
+        Assert.Contains(catalog.Rejected, r => r.SourceType == 9 && r.Reason.Contains("action 43", StringComparison.Ordinal));
         Assert.Contains(catalog.Rejected, r => r.SourceType == 0 && r.Id == 0 && r.Reason.Contains("list 50", StringComparison.Ordinal));
         Assert.Equal(1u, Assert.Single(catalog.For(Wolf, 0)).ActionParam1);
         Assert.False(catalog.HasTimedActionList(50));
