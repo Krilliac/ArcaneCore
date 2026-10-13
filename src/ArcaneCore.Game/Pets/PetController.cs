@@ -16,7 +16,7 @@ namespace ArcaneCore.Game.Pets;
 /// handlers stay thin and these rules run (and are tested) without a socket.
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class PetController
+public sealed partial class PetController
 {
     private readonly SummonService _summons;
     private readonly Func<SpellSystem?> _spells;

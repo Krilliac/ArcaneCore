@@ -108,6 +108,12 @@ public sealed class CharmInfo
     /// <summary>vmangos Pet::m_trainingPoints: minus the training points spent, plus those earned (shown through UNIT_TRAINING_POINTS).</summary>
     public int TrainingPoints { get; internal set; }
 
+    /// <summary>vmangos Pet::m_resetTalentsCost: the copper the last untraining cost (0 before the first). Kept in memory only.</summary>
+    public uint ResetTalentsCost { get; internal set; }
+
+    /// <summary>vmangos Pet::m_resetTalentsTime: unix seconds of the last untraining (0 before the first). Kept in memory only.</summary>
+    public long ResetTalentsTime { get; internal set; }
+
     /// <summary>vmangos m_commandState: a new pet follows (CharmInfo constructor).</summary>
     public CommandState CommandState { get; internal set; } = CommandState.Follow;
 

@@ -96,6 +96,32 @@ public static class PetLoyalty
         return true;
     }
 
+    /// <summary>
+    /// vmangos Pet::GivePetLevel (Pet.cpp): a hunter pet that reaches <paramref name="level"/> earns its loyalty level minus one in training
+    /// points (SetTP(m_TrainingPoints + (GetLoyaltyLevel() - 1))), its experience restarts and the next-level experience is set by the caller's
+    /// table (<paramref name="nextLevelXp"/>, 0 keeps the current field). Nothing happens for level 0 or the pet's current level.
+    /// </summary>
+    public static void GivePetLevel(Creature pet, int level, uint nextLevelXp = 0)
+    {
+        ArgumentNullException.ThrowIfNull(pet);
+        if (level <= 0 || level == pet.Level || pet.Summon?.Charm is not { } charm)
+        {
+            return;
+        }
+
+        pet.Level = (byte)Math.Clamp(level, 1, byte.MaxValue);
+        if (pet.Summon.Kind == SummonKind.Pet)
+        {
+            pet.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
+            if (nextLevelXp != 0)
+            {
+                pet.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, nextLevelXp);
+            }
+        }
+
+        SetTrainingPoints(pet, charm.TrainingPoints + (Level(pet) - 1));
+    }
+
     /// <summary>Spell::EffectTameCreature (SpellEffects.cpp:3151-3154): raise a new pet to the configured default loyalty.</summary>
     public static void RaiseTo(Creature pet, byte target)
     {
