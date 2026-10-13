@@ -92,6 +92,44 @@ public sealed class PlayerbotDeathLoopTests
     }
 
     /// <summary>
+    /// Bot QA #271: a drowning is remembered as a wide place, not the ordinary 25-yard death mark, so the walk back into the cove is refused.
+    /// </summary>
+    [Fact]
+    public async Task Drowning_IsRememberedWiderThanAnOrdinaryDeath()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                Vector3 at = new(player.X, player.Y, player.Z);
+                player.Health = 1;
+                EnvironmentalDamage.Apply(host.World, player, EnvironmentalDamageType.Drowning, 1);
+                Assert.False(player.IsAlive);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+
+                var shore = new Vector3(at.X + 60f, at.Y, at.Z);
+                Assert.Contains(brain.Risk.Hazards.Active(player.MapId, session.World.NowMs),
+                    hazard => hazard.Kind == "drowning" && hazard.Covers(at) && hazard.Covers(shore));
+                Assert.Contains("source=Drowning", brain.QaReportContext(player, "death loop: attackers=none"), StringComparison.Ordinal);
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
+    /// <summary>
     /// A fall while the brain is not running (party AI, a scripted controller) is never recorded; the flag it left must not label
     /// the bot's next brain-recorded death once it has been resurrected.
     /// </summary>
