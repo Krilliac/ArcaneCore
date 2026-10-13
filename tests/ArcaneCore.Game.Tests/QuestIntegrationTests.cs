@@ -96,6 +96,49 @@ public sealed class QuestIntegrationTests
     }
 
     [Fact]
+    public void Reload_FailedTimedQuest_RestoresExpiredSlotTimer()
+    {
+        // FailQuest writes slot timer 1 and stores deadline 0. Login must put 1 back; it must not
+        // re-arm the quest or send the timer-failed packet again.
+        var quest = new QuestTemplate { Entry = 18, Method = 2, LimitTime = 30 };
+        var kit = new Kit([quest], [Row(18) with { Status = (byte)QuestStatus.Failed }]);
+        Assert.Equal(QuestStatus.Failed, kit.State.Quests.GetStatus(18));
+        Assert.Equal(0, kit.State.Quests.Get(18)!.TimerEndUnix);
+        Assert.DoesNotContain(18u, kit.State.Quests.TimedQuests);
+        Assert.Equal(18u, kit.Player.GetUInt32(UpdateFields.PlayerQuestLog11));
+        Assert.Equal(1u, kit.Player.GetUInt32(UpdateFields.PlayerQuestLog11 + 2));
+        Assert.Equal(QuestConstants.SlotStateFail, kit.Player.GetByte(UpdateFields.PlayerQuestLog11 + 1, 3));
+        Assert.Empty(kit.Sink.Quests);
+        Assert.DoesNotContain(kit.Session.Sent, packet => packet.Opcode == WorldOpcode.SmsgQuestupdateFailedtimer);
+        kit.Services.CheckTimers(kit.Player);
+        Assert.Empty(kit.Sink.Quests);
+        Assert.DoesNotContain(18u, kit.State.Quests.TimedQuests);
+    }
+
+    [Fact]
+    public void Reload_FailedUntimedQuest_DoesNotInventATimer()
+    {
+        var quest = new QuestTemplate { Entry = 19, Method = 2 };
+        var kit = new Kit([quest], [Row(19) with { Status = (byte)QuestStatus.Failed }]);
+        Assert.Equal(QuestStatus.Failed, kit.State.Quests.GetStatus(19));
+        Assert.Equal(0u, kit.Player.GetUInt32(UpdateFields.PlayerQuestLog11 + 2));
+        Assert.Equal(QuestConstants.SlotStateFail, kit.Player.GetByte(UpdateFields.PlayerQuestLog11 + 1, 3));
+        Assert.Empty(kit.State.Quests.TimedQuests);
+    }
+
+    [Fact]
+    public void Reload_RunningTimedQuest_KeepsAbsoluteDeadline()
+    {
+        var quest = new QuestTemplate { Entry = 20, Method = 2, LimitTime = 30 };
+        var kit = new Kit([quest], [Row(20) with { Timer = 500 }]);
+        Assert.Equal(QuestStatus.Incomplete, kit.State.Quests.GetStatus(20));
+        Assert.Contains(20u, kit.State.Quests.TimedQuests);
+        Assert.Equal(500, kit.State.Quests.Get(20)!.TimerEndUnix);
+        Assert.Equal(500u, kit.Player.GetUInt32(UpdateFields.PlayerQuestLog11 + 2));
+        Assert.Equal((byte)0, kit.Player.GetByte(UpdateFields.PlayerQuestLog11 + 1, 3));
+    }
+
+    [Fact]
     public void Relog_DropsStaleLoadCreditAndUntrack()
     {
         var quest = new QuestTemplate { Entry = 14, Method = 2, ReqCreatureOrGOId1 = 123, ReqCreatureOrGOCount1 = 1 };
