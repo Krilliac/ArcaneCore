@@ -52,7 +52,16 @@ internal sealed class SyntheticNavWorld : IAsyncDisposable
             Vector3 probe = new(5, 5, 0);
             var nonBlocking = new PathOptions { LoadTiles = true, NonBlockingTiles = true };
             while (nav.FindPath(0, probe, probe, nonBlocking).Type == PathType.TilesPending)
-                await nav.PendingTileRead(0, 31, 31)!;
+            {
+                // Pending with this tile already gone from the table (installed, or known missing) has nothing to await.
+                // A read that is still in flight is held and waited out, so the first plan is not answered "pending".
+                if (nav.PendingTileRead(0, 31, 31) is not { } read)
+                {
+                    break;
+                }
+
+                await read;
+            }
         }
         foreach ((int x, int y, _) in tiles)
             Assert.True(nav.LoadTile(0, x, y));
