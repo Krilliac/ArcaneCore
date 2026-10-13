@@ -14,10 +14,10 @@ namespace ArcaneCore.Game.Npc;
 /// <remarks>
 /// With the skill system active (<paramref name="skills"/> returns its catalog) the trainer reads the player's
 /// real skills (<see cref="Player.Skills"/>), the primary-profession state is derived like vmangos
-/// Player::GetTrainerSpellState, skills a SkillRaceClassInfo row marks not trainable are not offered, and
-/// buying casts the teaching spell through the spell system so its effects (LEARN_SPELL, SKILL_STEP) run. Without
-/// it every skill value reads 0 and no primary-profession points exist. spell_chain "req_spell" requirements
-/// (talent-dependent ranks) are not modelled.
+/// Player::GetTrainerSpellState, a skill a SkillRaceClassInfo row marks not trainable or above the player's
+/// level is not offered, and buying casts the teaching spell through the spell system so its effects
+/// (LEARN_SPELL, SKILL_STEP) run. Without it every skill value reads 0 and no primary-profession points exist.
+/// spell_chain "req_spell" requirements (talent-dependent ranks) are not modelled.
 /// </remarks>
 /// <param name="spells">The spell system (resolved lazily: features attach in name order).</param>
 /// <param name="abilities">SkillLineAbility.dbc data (empty: no rank chain, every spell fits).</param>
@@ -75,10 +75,11 @@ public sealed class SpellSystemLearner(Func<SpellSystem?> spells, SkillLineAbili
             return abilities.FitsClassAndRace(spellId, raceMask, classMask);
         }
 
-        // vmangos Player::IsSpellFitByClassAndRace (Player.cpp:19522-19575), the NONTRAINABLE rule: the first ability
-        // that fits the race and class decides, and a skill whose race/class row is not trainable is not taught.
-        // The row's minimum level is not applied here (the reference applies it only when training, while the trainer
-        // list asks the same question without a level; the spell level gate stays in the trainer service).
+        // vmangos Player::IsSpellFitByClassAndRace (Player.cpp:19522-19575). The first ability that fits the
+        // race and class decides. A matching SkillRaceClassInfo row that is not trainable is not taught. Every
+        // caller passes no out-level, including the trainer list (NPCHandler.cpp:209) and GetTrainerSpellState
+        // (Player.cpp:4252), so the train branch applies: a row reqLevel above the player refuses the spell.
+        // A mask of zero does not match (the list case that only records the level is unused).
         IReadOnlyList<SkillLineAbilityRecord> list = catalog.AbilitiesOfSpell(spellId);
         if (list.Count == 0)
         {
@@ -94,7 +95,17 @@ public sealed class SpellSystemLearner(Func<SpellSystem?> spells, SkillLineAbili
 
             foreach (SkillRaceClassInfoRecord row in catalog.RaceClassInfos(ability.SkillId))
             {
-                if ((row.RaceMask & raceMask) != 0 && (row.ClassMask & classMask) != 0 && (row.Flags & SkillRaceClassFlags.NotTrainable) != 0)
+                if ((row.RaceMask & raceMask) == 0 || (row.ClassMask & classMask) == 0)
+                {
+                    continue;
+                }
+
+                if ((row.Flags & SkillRaceClassFlags.NotTrainable) != 0)
+                {
+                    return false;
+                }
+
+                if (row.MinLevel != 0 && player.Level < row.MinLevel)
                 {
                     return false;
                 }
