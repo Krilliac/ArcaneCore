@@ -48,6 +48,9 @@ public sealed class FormEngineTests
     private const uint Claw = 1082;             // Stances cat
     private const uint HealingTouch = 5185;     // NOT_SHAPESHIFT
     private const uint ShiftCancelled = 900810; // AuraInterruptFlags SHAPESHIFTING_CANCELS
+    private const uint Root = 900820;           // ModRoot, mechanic root: 9033 removes it
+    private const uint RootNoMechanic = 900821; // ModRoot, no mechanic: 9033 keeps it
+    private const uint Snare = 900822;          // ModDecreaseSpeed, mechanic snare: 9033 removes it
     private const uint WarriorBattle = 2457;
     private const uint WarriorBoost = 21156;
 
@@ -137,7 +140,19 @@ public sealed class FormEngineTests
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,
         };
+        yield return Impairment(Root, AuraType.ModRoot, mechanic: 7);
+        yield return Impairment(RootNoMechanic, AuraType.ModRoot, mechanic: 0);
+        yield return Impairment(Snare, AuraType.ModDecreaseSpeed, mechanic: 11);
     }
+
+    private static SpellInfo Impairment(uint id, AuraType aura, uint mechanic) => Spell(id, Effect(SpellEffectName.ApplyAura, aura == AuraType.ModDecreaseSpeed ? -50 : 0, aura: aura)) with
+    {
+        Mechanic = mechanic,
+        Duration = new SpellDuration(30000, 0, 30000),
+        StartRecoveryCategory = 0,
+        StartRecoveryTime = 0,
+        SpellVisual = 1,
+    };
 
     /// <summary>A Random whose Next(min, max) always answers <c>roll</c>.</summary>
     private sealed class FixedRandom(int roll) : Random
@@ -286,6 +301,28 @@ public sealed class FormEngineTests
         Assert.False(rig.Has(FelineSwiftness));     // IsRemovedOnShapeLost
         Assert.False(rig.Has(TigersFury));
         Assert.Equal([((byte)0, (byte)1), ((byte)1, (byte)0)], rig.Listener.Changes);
+    }
+
+    [Fact]
+    public void LeavingCat_CastsShapeshiftFormEffect_SoARootOrSnareThatLandedInFormBreaks()
+    {
+        // HandleAuraModShapeshift casts 9033 before the apply split (SpellAuras.cpp:2435-2448), so cancelling the form
+        // breaks roots and slows too. A mechanic-less root is not a shapeshift-removable spell (SpellEffects.cpp:4458-4462).
+        using var rig = new Rig();
+        rig.Cast(CatForm);
+        Assert.Equal(1, rig.Counter.Casts[FormEffect]);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.System.CastSpell(rig.Player, Root, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.Equal(SpellCastResult.CastOk, rig.System.CastSpell(rig.Player, RootNoMechanic, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.Equal(SpellCastResult.CastOk, rig.System.CastSpell(rig.Player, Snare, SpellCastTargets.ForSelf(), triggered: true));
+
+        rig.System.CancelAura(rig.Player, CatForm);
+
+        Assert.Equal(0, rig.Form);
+        Assert.Equal(2, rig.Counter.Casts[FormEffect]);
+        Assert.False(rig.Has(Root));
+        Assert.False(rig.Has(Snare));
+        Assert.True(rig.Has(RootNoMechanic));
     }
 
     [Fact]
