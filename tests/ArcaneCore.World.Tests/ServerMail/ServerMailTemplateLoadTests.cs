@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.ServerMail;
@@ -15,7 +16,9 @@ namespace ArcaneCore.World.Tests.ServerMail;
 
 /// <summary>
 /// Server mail validates reward rows when the templates load, which is at attach, before any login. The item catalog is filled on
-/// first use, so that validation used to see an empty catalog and skip every reward item for the life of the process.
+/// first use, so that validation used to see an empty catalog and skip every reward item for the life of the process. The check reads
+/// the item source without publishing into <see cref="ItemsFeature"/>: opening the shared catalog here is what
+/// <c>.reload item_template</c> uses to tell that nobody has needed items yet.
 /// </summary>
 public sealed class ServerMailTemplateLoadTests
 {
@@ -63,6 +66,10 @@ public sealed class ServerMailTemplateLoadTests
             ServerMailTemplate welcome = Assert.Single(feature.Templates);
             Assert.Equal([new ServerMailItem(Linen, 5)], welcome.ItemsAlliance);
             Assert.Empty(welcome.ItemsHorde);
+            // The shared catalog stays closed. Delivery opens it on login; this load must not.
+            ItemsFeature items = provider.GetRequiredService<ItemsFeature>();
+            Assert.Equal(0, items.Templates.Count);
+            Assert.True(ReferenceEquals(items.LoadedStore, ItemTemplateStore.Empty));
         }
         finally
         {
