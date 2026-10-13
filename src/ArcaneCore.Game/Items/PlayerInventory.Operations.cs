@@ -215,17 +215,10 @@ public sealed partial class PlayerInventory
         }
 
         var dest = new List<ItemPosCount>();
-        bool toBank = dstBag >= InventorySlots.BankBagStart && dstBag < InventorySlots.BankBagEnd;
-        InventoryResult msg;
-        byte bagSlot;
-        if (toBank)
-        {
-            msg = CanBankItem(dstBag, InventorySlots.NullSlot, dest, item, swap: false, out bagSlot);
-        }
-        else
-        {
-            msg = CanStoreItem(dstBag, InventorySlots.NullSlot, dest, item, swap: false, out bagSlot);
-        }
+        // vmangos HandleAutoStoreBagItemOpcode always uses CanStoreItem, including a bank bag
+        // (ItemHandler.cpp:827). CanBankItem would keep searching the main bank and the other
+        // bank bags after this bag is full, so the item would leave the bag the client named.
+        InventoryResult msg = CanStoreItem(dstBag, InventorySlots.NullSlot, dest, item, swap: false, out byte bagSlot);
 
         if (msg != InventoryResult.Ok)
         {
