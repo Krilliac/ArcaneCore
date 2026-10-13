@@ -48,6 +48,27 @@ public sealed class CreatureSmartAI : AggressorAI
         Script.ProcessEventsFor(SmartEvent.ReachedHome);
     }
 
+    /// <summary>AzerothCore SmartAI::KilledUnit: SMART_EVENT_KILL with the victim as invoker.</summary>
+    public override void OnKilledUnit(Unit victim)
+    {
+        base.OnKilledUnit(victim);
+        Script.ProcessEventsFor(SmartEvent.Kill, victim);
+    }
+
+    /// <summary>AzerothCore SmartAI::JustSummoned: SMART_EVENT_SUMMONED_UNIT with the summon as invoker.</summary>
+    public override void OnJustSummoned(Creature summoned)
+    {
+        base.OnJustSummoned(summoned);
+        Script.ProcessEventsFor(SmartEvent.SummonedUnit, summoned);
+    }
+
+    /// <summary>AzerothCore SmartAI::ReceiveEmote: SMART_EVENT_RECEIVE_EMOTE with the player as invoker and the text emote as var0.</summary>
+    public override void OnReceiveEmote(Player player, uint textEmote)
+    {
+        base.OnReceiveEmote(player, textEmote);
+        Script.ProcessEventsFor(SmartEvent.ReceiveEmote, player, textEmote);
+    }
+
     public override void OnSpellHit(Unit caster, SpellInfo spell) => Script.ProcessEventsFor(SmartEvent.SpellHit, caster, spell: spell);
 
     /// <summary>AzerothCore SmartAI::UpdateAI: the timers every update, then the aggressor's victim choice and melee.</summary>
