@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Pets;
 /// Hunter pet loyalty (vmangos Pet.cpp). The level (1 Rebellious … 6 Best Friend) is UNIT_FIELD_BYTES_1 byte 1 (Pet::SetLoyaltyLevel, :879-882);
 /// the points move between <see cref="StartPoints"/> and <see cref="LevelUpPoints"/> (Pet::ModifyLoyalty, :795-837), and each level gained or lost
 /// adds or takes the pet's level in training points. Training points show as UNIT_TRAINING_POINTS (Pet::SetTP / GetDispTP, :983-996).
-/// The loyalty ticks (happiness decay, kill bonus) belong to the pet happiness system, which ArcaneCore does not run yet.
+/// The loyalty ticks (happiness decay, kill bonus) are SummonService.Happiness.
 /// </summary>
 public static class PetLoyalty
 {
@@ -94,6 +94,32 @@ public static class PetLoyalty
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// vmangos Pet::GivePetLevel (Pet.cpp): a hunter pet that reaches <paramref name="level"/> earns its loyalty level minus one in training
+    /// points (SetTP(m_TrainingPoints + (GetLoyaltyLevel() - 1))), its experience restarts and the next-level experience is set by the caller's
+    /// table (<paramref name="nextLevelXp"/>, 0 keeps the current field). Nothing happens for level 0 or the pet's current level.
+    /// </summary>
+    public static void GivePetLevel(Creature pet, int level, uint nextLevelXp = 0)
+    {
+        ArgumentNullException.ThrowIfNull(pet);
+        if (level <= 0 || level == pet.Level || pet.Summon?.Charm is not { } charm)
+        {
+            return;
+        }
+
+        pet.Level = (byte)Math.Clamp(level, 1, byte.MaxValue);
+        if (pet.Summon.Kind == SummonKind.Pet)
+        {
+            pet.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
+            if (nextLevelXp != 0)
+            {
+                pet.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, nextLevelXp);
+            }
+        }
+
+        SetTrainingPoints(pet, charm.TrainingPoints + (Level(pet) - 1));
     }
 
     /// <summary>Spell::EffectTameCreature (SpellEffects.cpp:3151-3154): raise a new pet to the configured default loyalty.</summary>

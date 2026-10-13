@@ -41,6 +41,13 @@ public sealed partial class QuestNpcServices
     public Func<Player, NpcInfo, bool>? UnlearnTalentsOffered { get; set; }
 
     /// <summary>
+    /// Whether the "unlearn pet skills" option (GOSSIP_OPTION_UNLEARNPETSKILLS, 17) is offered (vmangos: a trainer that can reset the
+    /// a hunter pet trainer (trainer_type pets, trainer_class hunter) and a hunter beast pet with trained spells). The pets area supplies it; while unset the option stays hidden, and
+    /// selecting it closes the gossip and raises <see cref="ForeignOptionSelected"/>.
+    /// </summary>
+    public Func<Player, NpcInfo, bool>? UnlearnPetSkillsOffered { get; set; }
+
+    /// <summary>
     /// The time to a spirit guide's next resurrection wave, in milliseconds (vmangos Creature::SendAreaSpiritHealerQueryOpcode
     /// reads its current channel's cast time). The battleground area spirit-healer channel does not exist yet, so by default
     /// no wave is running and the answer is 0; the battleground lane supplies the real time.
@@ -245,6 +252,7 @@ public sealed partial class QuestNpcServices
                 GossipOption.SpiritGuide or GossipOption.Innkeeper or GossipOption.Banker or GossipOption.Petitioner
                     or GossipOption.TabardDesigner or GossipOption.Auctioneer => true,
                 GossipOption.UnlearnTalents => UnlearnTalentsOffered?.Invoke(p, npc) ?? false,
+                GossipOption.UnlearnPetSkills => UnlearnPetSkillsOffered?.Invoke(p, npc) ?? false,
 
                 // Battlemasters and pet-skill resets need owners outside this area (talents: UnlearnTalentsOffered);
                 // without them the option is hidden (fail closed). Unknown ids are hidden as in vmangos.
@@ -407,6 +415,7 @@ public sealed partial class QuestNpcServices
                 break;
             case GossipOption.Petitioner:
             case GossipOption.TabardDesigner:
+            case GossipOption.UnlearnPetSkills: // vmangos Player.cpp: CloseGossip, then SendPetSkillWipeConfirm
             case GossipOption.UnlearnTalents: // vmangos Player.cpp:12242-12245: CloseGossip, then the owner sends the wipe confirmation
                 CloseGossip(p);
                 ForeignOptionSelected?.Invoke(p, npc, item.OptionId);

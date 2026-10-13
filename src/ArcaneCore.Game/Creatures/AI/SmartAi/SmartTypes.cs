@@ -21,17 +21,22 @@ public enum SmartEvent : byte
     GossipHello = 64,
 }
 
-/// <summary>AzerothCore SMART_ACTION values that slice 1 runs.</summary>
+/// <summary>AzerothCore SMART_ACTION values that slices 1-3 run.</summary>
 public enum SmartAction : byte
 {
     None = 0,
     Talk = 1,
+    PlayEmote = 5,
     Cast = 11,
     SummonCreature = 12,
+    SetEmoteState = 17,
     SetEventPhase = 22,
     IncEventPhase = 23,
+    Evade = 24,
+    RemoveAurasFromSpell = 28,
     RandomPhase = 30,
     RandomPhaseRange = 31,
+    ForceDespawn = 41,
     CreateTimedEvent = 67,
     MoveToPos = 69,
     TriggerTimedEvent = 73,

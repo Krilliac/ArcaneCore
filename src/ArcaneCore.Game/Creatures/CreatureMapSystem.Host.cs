@@ -341,6 +341,7 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     private void TriggerHomeEvents(Creature creature)
     {
+        creature.RestoreTemporaryFactionAt(TemporaryFactionFlags.RestoreReachHome);
         creature.AI?.OnReachedHome();
         Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureReachedHome(creature);
         OnGroupMemberReachedHome(creature);

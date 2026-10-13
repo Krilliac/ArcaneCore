@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Npc;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
@@ -8,6 +9,7 @@ using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
@@ -85,6 +87,33 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
         {
             Service.Install(spells.System);
             Service.Training = BuildTraining(familySkillLines, spells.System);
+        }
+
+        // Pet untraining at a hunter trainer (GOSSIP_OPTION_UNLEARNPETSKILLS -> SMSG_PET_UNLEARN_CONFIRM -> CMSG_PET_UNLEARN).
+        if (_services.GetService<QuestNpcFeature>() is { } npcs)
+        {
+            npcs.Services.UnlearnPetSkillsOffered = (player, npc)
+                => npc.TrainerType == TrainerType.Pets && npc.TrainerClass == (byte)Class.Hunter && Controller.UntrainablePet(player) is not null;
+            npcs.Services.ForeignOptionSelected += (player, _, option) =>
+            {
+                if (option == GossipOption.UnlearnPetSkills)
+                {
+                    Controller.SendUnlearnConfirm(player);
+                }
+            };
+        }
+
+        Controller.PetSkillsUnlearned += world.SavePlayer;
+
+        // Hunter pet experience from kills (vmangos Pet::GivePetXP).
+        if (_services.GetService<global::ArcaneCore.World.Progression.ProgressionFeature>() is { } progression)
+        {
+            progression.KillExperienceAwarded += (recipients, _, victim, nonRaidDungeon) =>
+            {
+                var options = progression.Progression.Options;
+                Service.MaxPetLevel = options.MaxPlayerLevel;
+                Service.AwardKillExperience(recipients, victim, nonRaidDungeon, options.RateXpKill, options.RateXpKillElite);
+            };
         }
 
         world.MapCreated += ApplyOptions;

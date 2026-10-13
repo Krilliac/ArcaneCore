@@ -37,6 +37,7 @@ public sealed partial class SummonService
     private void InstallTaming(SpellSystem spells)
     {
         spells.RegisterEffectCheck(SpellEffectName.Tamecreature, CheckTame);
+        spells.SpellHit += (caster, _, spell) => CheckLearning(caster, spell.Id); // Pet::CheckLearning
         spells.RegisterEffect(SpellEffectName.Tamecreature, context =>
         {
             if (context.Caster is Player hunter && context.Target is Creature beast)
@@ -124,6 +125,8 @@ public sealed partial class SummonService
         {
             return null;
         }
+
+        InitTeachSpells(owner, pet, target.Entry); // Pet::InitPetCreateSpells AddTeachSpell
 
         // SpellEffects.cpp:3151-3154: new pets start Rebellious (Pet::CreateBaseAtCreature) and are raised to the configured default loyalty.
         PetLoyalty.InitNew(pet);
@@ -221,7 +224,7 @@ public sealed partial class SummonService
 
     /// <summary>
     /// Pet::InitPetCreateSpells (Pet.cpp:2051-2104) for a tame: the petcreateinfo_spell row of the tamed creature's entry, each "learn" spell
-    /// resolved to the spell it teaches. The owner's beast-training side (learning passives, AddTeachSpell) is not modelled; the training-point
+    /// resolved to the spell it teaches. The owner's teach spells are SummonService.Teaching (learning passives is not modelled); the training-point
     /// cost of these spells is charged by <see cref="TameCreature"/> through <see cref="Training"/>.
     /// </summary>
     internal PersistentPetSpell[] CreateSpellsFor(uint entry)

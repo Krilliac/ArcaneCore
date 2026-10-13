@@ -14,8 +14,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_QUERY_OBJECT_POSITION` | `0x0005` | — | 0 | — |
 | `CMSG_QUERY_OBJECT_ROTATION` | `0x0006` | unhandled | — | — |
 | `SMSG_QUERY_OBJECT_ROTATION` | `0x0007` | — | 0 | — |
-| `CMSG_WORLD_TELEPORT` | `0x0008` | unhandled | — | — |
-| `CMSG_TELEPORT_TO_UNIT` | `0x0009` | unhandled | — | — |
+| `CMSG_WORLD_TELEPORT` | `0x0008` | handled | — | — |
+| `CMSG_TELEPORT_TO_UNIT` | `0x0009` | handled | — | — |
 | `CMSG_ZONE_MAP` | `0x000A` | unhandled | — | — |
 | `SMSG_ZONE_MAP` | `0x000B` | — | 0 | — |
 | `CMSG_DEBUG_CHANGECELLZONE` | `0x000C` | unhandled | — | — |
@@ -80,7 +80,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_GAMESPEED_SET` | `0x0047` | — | 0 | — |
 | `CMSG_SERVERTIME` | `0x0048` | unhandled | — | — |
 | `SMSG_SERVERTIME` | `0x0049` | — | 0 | — |
-| `CMSG_PLAYER_LOGOUT` | `0x004A` | unhandled | — | — |
+| `CMSG_PLAYER_LOGOUT` | `0x004A` | handled | — | — |
 | `CMSG_LOGOUT_REQUEST` | `0x004B` | handled | — | — |
 | `SMSG_LOGOUT_RESPONSE` | `0x004C` | — | 45 | decoded |
 | `SMSG_LOGOUT_COMPLETE` | `0x004D` | — | 38 | decoded |
@@ -257,8 +257,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_TRIGGER_CINEMATIC_CHEAT` | `0x00F8` | unhandled | — | — |
 | `CMSG_OPENING_CINEMATIC` | `0x00F9` | unhandled | — | — |
 | `SMSG_TRIGGER_CINEMATIC` | `0x00FA` | — | 3 | decoded |
-| `CMSG_NEXT_CINEMATIC_CAMERA` | `0x00FB` | unhandled | — | — |
-| `CMSG_COMPLETE_CINEMATIC` | `0x00FC` | unhandled | — | — |
+| `CMSG_NEXT_CINEMATIC_CAMERA` | `0x00FB` | handled | — | — |
+| `CMSG_COMPLETE_CINEMATIC` | `0x00FC` | handled | — | — |
 | `SMSG_TUTORIAL_FLAGS` | `0x00FD` | — | 1961 | decoded |
 | `CMSG_TUTORIAL_FLAG` | `0x00FE` | handled | — | — |
 | `CMSG_TUTORIAL_CLEAR` | `0x00FF` | handled | — | — |
@@ -324,7 +324,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_CANCEL_CHANNELLING` | `0x013B` | handled | — | — |
 | `SMSG_AI_REACTION` | `0x013C` | — | 40 | decoded |
 | `CMSG_SET_SELECTION` | `0x013D` | handled | — | — |
-| `CMSG_SET_TARGET_OBSOLETE` | `0x013E` | unhandled | — | — |
+| `CMSG_SET_TARGET_OBSOLETE` | `0x013E` | handled | — | — |
 | `CMSG_ATTACKSWING` | `0x0141` | handled | — | — |
 | `CMSG_ATTACKSTOP` | `0x0142` | handled | — | — |
 | `SMSG_ATTACKSTART` | `0x0143` | — | 122 | decoded |
@@ -373,7 +373,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_MOUNTRESULT` | `0x016E` | — | 0 | — |
 | `SMSG_DISMOUNTRESULT` | `0x016F` | — | 0 | — |
 | `SMSG_PUREMOUNT_CANCELLED_OBSOLETE` | `0x0170` | — | 0 | — |
-| `CMSG_MOUNTSPECIAL_ANIM` | `0x0171` | unhandled | — | — |
+| `CMSG_MOUNTSPECIAL_ANIM` | `0x0171` | handled | — | — |
 | `SMSG_MOUNTSPECIAL_ANIM` | `0x0172` | — | 0 | — |
 | `SMSG_PET_TAME_FAILURE` | `0x0173` | — | 0 | — |
 | `CMSG_PET_SET_ACTION` | `0x0174` | handled | — | — |
@@ -395,7 +395,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_QUESTGIVER_HELLO` | `0x0184` | handled | — | — |
 | `SMSG_QUESTGIVER_QUEST_LIST` | `0x0185` | — | 0 | — |
 | `CMSG_QUESTGIVER_QUERY_QUEST` | `0x0186` | handled | — | — |
-| `CMSG_QUESTGIVER_QUEST_AUTOLAUNCH` | `0x0187` | unhandled | — | — |
+| `CMSG_QUESTGIVER_QUEST_AUTOLAUNCH` | `0x0187` | handled | — | — |
 | `SMSG_QUESTGIVER_QUEST_DETAILS` | `0x0188` | — | 18 | decoded |
 | `CMSG_QUESTGIVER_ACCEPT_QUEST` | `0x0189` | handled | — | — |
 | `CMSG_QUESTGIVER_COMPLETE_QUEST` | `0x018A` | handled | — | — |
@@ -462,7 +462,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_PETITION_QUERY_RESPONSE` | `0x01C7` | — | 0 | — |
 | `SMSG_FISH_NOT_HOOKED` | `0x01C8` | — | 0 | — |
 | `SMSG_FISH_ESCAPED` | `0x01C9` | — | 0 | — |
-| `CMSG_BUG` | `0x01CA` | unhandled | — | — |
+| `CMSG_BUG` | `0x01CA` | handled | — | — |
 | `SMSG_NOTIFICATION` | `0x01CB` | — | 56 | decoded |
 | `CMSG_PLAYED_TIME` | `0x01CC` | handled | — | — |
 | `SMSG_PLAYED_TIME` | `0x01CD` | — | 5 | decoded |
@@ -515,7 +515,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_ENVIRONMENTALDAMAGELOG` | `0x01FC` | — | 2 | decoded |
 | `CMSG_RWHOIS` | `0x01FD` | unhandled | — | — |
 | `SMSG_RWHOIS` | `0x01FE` | — | 0 | — |
-| `MSG_LOOKING_FOR_GROUP` | `0x01FF` | unhandled | 0 | — |
+| `MSG_LOOKING_FOR_GROUP` | `0x01FF` | handled | 0 | — |
 | `CMSG_SET_LOOKING_FOR_GROUP` | `0x0200` | unhandled | — | — |
 | `CMSG_UNLEARN_SPELL` | `0x0201` | unhandled | — | — |
 | `CMSG_UNLEARN_SKILL` | `0x0202` | handled | — | — |
@@ -671,7 +671,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_MEETINGSTONE_IN_PROGRESS` | `0x0298` | — | 0 | — |
 | `SMSG_MEETINGSTONE_MEMBER_ADDED` | `0x0299` | — | 2 | decoded |
 | `CMSG_GMTICKETSYSTEM_TOGGLE` | `0x029A` | unhandled | — | — |
-| `CMSG_CANCEL_GROWTH_AURA` | `0x029B` | unhandled | — | — |
+| `CMSG_CANCEL_GROWTH_AURA` | `0x029B` | handled | — | — |
 | `SMSG_CANCEL_AUTO_REPEAT` | `0x029C` | — | 3 | decoded |
 | `SMSG_STANDSTATE_UPDATE` | `0x029D` | — | 35 | decoded |
 | `SMSG_LOOT_ALL_PASSED` | `0x029E` | — | 2 | decoded |
@@ -701,8 +701,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_SCRIPT_MESSAGE` | `0x02B6` | — | 0 | — |
 | `SMSG_DUEL_COUNTDOWN` | `0x02B7` | — | 26 | decoded |
 | `SMSG_AREA_TRIGGER_MESSAGE` | `0x02B8` | — | 14 | decoded |
-| `CMSG_TOGGLE_HELM` | `0x02B9` | unhandled | — | — |
-| `CMSG_TOGGLE_CLOAK` | `0x02BA` | unhandled | — | — |
+| `CMSG_TOGGLE_HELM` | `0x02B9` | handled | — | — |
+| `CMSG_TOGGLE_CLOAK` | `0x02BA` | handled | — | — |
 | `SMSG_MEETINGSTONE_JOINFAILED` | `0x02BB` | — | 2 | decoded |
 | `SMSG_PLAYER_SKINNED` | `0x02BC` | — | 0 | — |
 | `SMSG_DURABILITY_DAMAGE_DEATH` | `0x02BD` | — | 17 | decoded |
@@ -756,7 +756,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_BATTLEGROUND_PLAYER_LEFT` | `0x02ED` | — | 0 | — |
 | `CMSG_BATTLEMASTER_JOIN` | `0x02EE` | handled | — | — |
 | `SMSG_ADDON_INFO` | `0x02EF` | — | 1577 | decoded |
-| `CMSG_PET_UNLEARN` | `0x02F0` | unhandled | — | — |
+| `CMSG_PET_UNLEARN` | `0x02F0` | handled | — | — |
 | `SMSG_PET_UNLEARN_CONFIRM` | `0x02F1` | — | 0 | — |
 | `SMSG_PARTY_MEMBER_STATS_FULL` | `0x02F2` | — | 0 | — |
 | `CMSG_PET_SPELL_AUTOCAST` | `0x02F3` | handled | — | — |
