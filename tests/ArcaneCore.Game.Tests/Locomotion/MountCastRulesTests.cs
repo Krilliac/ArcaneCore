@@ -1,5 +1,7 @@
+using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData;
@@ -133,5 +135,69 @@ public sealed class MountCastRulesTests
         kit.System.OnDamageTaken(player, attacker: null, damage: 1, periodic: false);
         kit.Advance(1499);
         Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+    }
+
+    [Fact]
+    public void SwimmingWhileMounted_RefusesAnotherMount_AndStaysInTheSaddle()
+    {
+        using var kit = Kit();
+        kit.System.RegisterCastCheck(new DismountOnCastCheck());
+        (Player player, _) = kit.AddPlayer(1);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, Mount, SpellCastTargets.ForSelf(), triggered: true));
+        player.AddMovementFlags(MovementFlags.Swimming);
+
+        Assert.Equal(SpellCastResult.OnlyAbovewater, kit.System.CastSpell(player, Mount, SpellCastTargets.ForSelf(), triggered: false));
+        Assert.Equal(14337u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+        Assert.True(kit.System.HasAura(player, Mount));
+    }
+
+    [Fact]
+    public void IndoorsWhileMounted_RefusesAnotherMount_AndStaysInTheSaddle()
+    {
+        using var kit = Kit();
+        kit.System.RegisterCastCheck(new DismountOnCastCheck());
+        (Player player, _) = kit.AddPlayer(1);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, Mount, SpellCastTargets.ForSelf(), triggered: true));
+        WorldCollision.Of(kit.World).Install(new Indoors());
+
+        Assert.Equal(SpellCastResult.OnlyOutdoors, kit.System.CastSpell(player, Mount, SpellCastTargets.ForSelf(), triggered: false));
+        Assert.Equal(14337u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+        Assert.True(kit.System.HasAura(player, Mount));
+    }
+
+    [Fact]
+    public void ACastOnATaxi_RefusesNotOnTaxi_AndDoesNotDismount()
+    {
+        using var kit = Kit();
+        kit.System.RegisterCastCheck(new DismountOnCastCheck());
+        (Player player, _) = kit.AddPlayer(1);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, Mount, SpellCastTargets.ForSelf(), triggered: true));
+        player.UnitFlags |= UnitFlags.TaxiFlight;
+
+        Assert.Equal(SpellCastResult.NotOnTaxi, kit.System.CastSpell(player, Other, SpellCastTargets.ForSelf(), triggered: false));
+        Assert.Equal(14337u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+        Assert.True(kit.System.HasAura(player, Mount));
+    }
+
+    /// <summary>A WMO interior at every point (vmangos TerrainInfo::IsOutdoors is false inside a non-exterior group).</summary>
+    private sealed class Indoors : ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => null;
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            info = new ModelAreaInfo(ModelAreaInfo.MogpInterior, 0, 0, 0, 0);
+            return true;
+        }
     }
 }
