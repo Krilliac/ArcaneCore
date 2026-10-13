@@ -1236,16 +1236,18 @@ public sealed class QuestRewardAsyncRecoveryTests
         public Task<CharacterReputationData> LoadAsync(int characterId, CancellationToken cancellationToken = default)
             => inner.LoadAsync(characterId, cancellationToken);
 
-        public Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts, CancellationToken cancellationToken = default)
+        public Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
         {
             Check();
-            return inner.SaveFactionsAsync(characterId, upserts, cancellationToken);
+            return inner.SaveFactionsAsync(characterId, upserts, cancellationToken, ownership);
         }
 
-        public Task SaveWatchedFactionAsync(int characterId, int watchedFaction, CancellationToken cancellationToken = default)
+        public Task SaveWatchedFactionAsync(int characterId, int watchedFaction,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
         {
             Check();
-            return inner.SaveWatchedFactionAsync(characterId, watchedFaction, cancellationToken);
+            return inner.SaveWatchedFactionAsync(characterId, watchedFaction, cancellationToken, ownership);
         }
 
         public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)

@@ -15,6 +15,7 @@ using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Reputation;
@@ -266,7 +267,7 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
                 _logger.LogWarning("Reputation content: {Warning}", warning);
             }
 
-            _writes = new ReputationWriteQueue(scopes, loggers.CreateLogger<ReputationWriteQueue>());
+            _writes = new ReputationWriteQueue(scopes, loggers.CreateLogger<ReputationWriteQueue>(), services.GetService<IHostApplicationLifetime>());
             var rates = new ReputationRates { Gain = Options.RateGain, LowLevelKill = Options.RateLowLevelKill };
             return _service = new ReputationService(factions, onKill, rates, new Sink(_writes))
             {
@@ -280,8 +281,8 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
 
     private sealed class Sink(ReputationWriteQueue writes) : IReputationSink
     {
-        public void FactionsChanged(Player player, IReadOnlyList<CharacterReputationRow> rows) => writes.SaveFactions((int)player.Guid.Low, rows);
+        public void FactionsChanged(Player player, IReadOnlyList<CharacterReputationRow> rows) => writes.SaveFactions((int)player.Guid.Low, rows, player.CharacterOwnership);
 
-        public void WatchedFactionChanged(Player player, int watchedFaction) => writes.SaveWatchedFaction((int)player.Guid.Low, watchedFaction);
+        public void WatchedFactionChanged(Player player, int watchedFaction) => writes.SaveWatchedFaction((int)player.Guid.Low, watchedFaction, player.CharacterOwnership);
     }
 }

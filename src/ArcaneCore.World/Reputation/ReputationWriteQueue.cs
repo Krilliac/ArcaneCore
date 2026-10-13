@@ -1,8 +1,10 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Reputation;
@@ -26,9 +28,12 @@ namespace ArcaneCore.World.Reputation;
 /// process only: a crash, or a store that is still down at exit, loses what is retained (loudly).
 /// </para>
 /// </summary>
-public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger logger)
+public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger logger, IHostApplicationLifetime? lifetime = null)
 {
     private const int MaxAttempts = 3;
+
+    /// <summary>Raised when a durable ownership fence rejects a reputation write.</summary>
+    public event Action<Exception>? FatalFailure;
 
     /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per character, stopping at the first locked one; tests shorten it).</summary>
     public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
@@ -56,7 +61,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     /// <summary>Writes queued or in progress.</summary>
     public int Pending => Volatile.Read(ref _pending);
 
-    /// <summary>Ids of characters whose last write failed and is still retained, ascending.</summary>
+    /// <summary>Ids of characters whose last write failed and is still retained, ascending (includes ones rejected by the ownership fence, which are never retried).</summary>
     public IReadOnlyList<int> RetainedCharacters
     {
         get
@@ -65,6 +70,15 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             {
                 return [.. _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).Order()];
             }
+        }
+    }
+
+    /// <summary>Ids whose retained write may succeed on a later attempt: failed, and not rejected by the ownership fence (a stale owner stays stale), ascending.</summary>
+    private int[] RetryableCharacters()
+    {
+        lock (_gate)
+        {
+            return [.. _characters.Where(c => c.Value.HasRetryableFailure).Select(c => c.Key).Order()];
         }
     }
 
@@ -78,32 +92,39 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             return;
         }
 
-        _retry = new RetainedRetryTimer(RetainedRetryInterval, () => RetainedCharacters.Count > 0, () => _channel.Writer.TryWrite(new Work(0, Kind.Sweep, null)));
+        _retry = new RetainedRetryTimer(RetainedRetryInterval, () => RetryableCharacters().Length > 0, () => _channel.Writer.TryWrite(new Work(0, Kind.Sweep, null)));
         _retry.Start();
         _consumer = Task.Run(ConsumeAsync);
     }
 
-    public void SaveFactions(int characterId, IReadOnlyList<CharacterReputationRow> rows)
+    /// <summary>
+    /// Merge changed faction rows. <paramref name="ownership"/> is the live character's ownership token (null with fencing off); the overlay
+    /// captures it at its first mutation, never coalesces across different tokens, and every write of that overlay carries the captured token.
+    /// </summary>
+    public void SaveFactions(int characterId, IReadOnlyList<CharacterReputationRow> rows, CharacterOwnershipToken? ownership = null)
     {
         ArgumentNullException.ThrowIfNull(rows);
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
+            Overlay overlay = unsaved.Target(ownership);
             foreach (CharacterReputationRow row in rows)
             {
-                unsaved.Rows[row.Faction] = row;
+                overlay.Rows[row.Faction] = row;
             }
 
             Changed(characterId, unsaved);
         }
     }
 
-    public void SaveWatchedFaction(int characterId, int watched)
+    /// <summary>Merge the watched slot; the ownership token is captured and isolated per token exactly as <see cref="SaveFactions"/> does.</summary>
+    public void SaveWatchedFaction(int characterId, int watched, CharacterOwnershipToken? ownership = null)
     {
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
-            unsaved.Watched = watched;
+            Overlay overlay = unsaved.Target(ownership);
+            overlay.Watched = watched;
             Changed(characterId, unsaved);
         }
     }
@@ -117,9 +138,8 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
-            unsaved.Rows.Clear();
-            unsaved.Watched = null;
-            unsaved.Failure = null;
+            unsaved.Overlays.Clear(); // the removal is token-independent, so an earlier ownership rejection or retained write must not block it
+            unsaved.DeleteFailure = null;
             unsaved.DeleteRequested++;
             Changed(characterId, unsaved);
         }
@@ -244,7 +264,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     {
         if (_stopped)
         {
-            unsaved.Failure = new InvalidOperationException("the reputation write queue is stopped; the change was not persisted");
+            unsaved.RecordQueueFailure(new InvalidOperationException("the reputation write queue is stopped; the change was not persisted"));
             logger.LogError("reputation change for character {Character} arrived after the queue stopped; not persisted", characterId);
             return;
         }
@@ -260,7 +280,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         {
             unsaved.Queued = false;
             Interlocked.Decrement(ref _pending);
-            unsaved.Failure = new InvalidOperationException("the reputation write queue is closed; the change was not persisted");
+            unsaved.RecordQueueFailure(new InvalidOperationException("the reputation write queue is closed; the change was not persisted"));
             logger.LogError("reputation change for character {Character} arrived after the queue closed; not persisted", characterId);
         }
     }
@@ -320,13 +340,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                         break;
                     case Kind.DrainAll:
-                        int[] retained;
-                        lock (_gate)
-                        {
-                            retained = [.. _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).Order()];
-                        }
-
-                        foreach (int id in retained)
+                        foreach (int id in RetryableCharacters())
                         {
                             await ExecuteAsync(id, onlyIfFailed: true, clearQueued: false).ConfigureAwait(false);
                         }
@@ -366,12 +380,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     /// </summary>
     private async Task SweepRetainedAsync()
     {
-        int[] retained;
-        lock (_gate)
-        {
-            retained = [.. _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).Order()];
-        }
-
+        int[] retained = RetryableCharacters();
         int failed = 0;
         bool locked = false;
         Exception? first = null;
@@ -401,7 +410,9 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     /// <summary>Persist the character's overlay (nothing if there is none, or it is not failed and <paramref name="onlyIfFailed"/>).</summary>
     private async Task<Exception?> ExecuteAsync(int characterId, bool onlyIfFailed, bool clearQueued, bool sweep = false)
     {
-        Snapshot snapshot;
+        long? deleteGen;
+        long deleteRequested;
+        Overlay[] candidates;
         lock (_gate)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
@@ -414,68 +425,130 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 unsaved.Queued = false;
             }
 
-            if ((onlyIfFailed && unsaved.Failure is null) || unsaved.IsEmpty)
+            deleteRequested = unsaved.DeleteRequested;
+            deleteGen = unsaved.DeleteRequested > unsaved.DeleteDone && (!onlyIfFailed || unsaved.DeleteFailure is not null)
+                ? unsaved.DeleteRequested
+                : null;
+            candidates = [.. unsaved.Overlays.Where(o => !o.Rejected && !o.IsEmpty && (!onlyIfFailed || o.Failure is not null))];
+
+            if (deleteGen is null && candidates.Length == 0)
             {
                 Release(characterId, unsaved);
                 return null;
             }
-
-            snapshot = new Snapshot(
-                unsaved.DeleteRequested > unsaved.DeleteDone ? unsaved.DeleteRequested : null,
-                [.. unsaved.Rows.Values],
-                unsaved.Watched);
         }
 
-        try
+        int steps = Math.Max(1, candidates.Length);
+        for (int i = 0; i < steps; i++)
         {
-            await WriteAsync(characterId, snapshot, sweep ? 1 : MaxAttempts).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
+            Overlay? candidate = i < candidates.Length ? candidates[i] : null;
+            Snapshot snapshot;
             lock (_gate)
             {
-                // Never recreate an entry that a delete or a creation removed while the write was in flight.
-                if (_characters.TryGetValue(characterId, out Unsaved? unsaved))
+                if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
                 {
-                    unsaved.Failure = ex;
+                    return null;
                 }
-            }
 
-            if (!sweep)
-            {
-                logger.LogError(ex, "reputation write for character {Character} failed; retained for retry", characterId);
-            }
+                long? stepDelete = i == 0 && deleteGen is { } gen && unsaved.DeleteDone < gen ? gen : null;
+                bool useCandidate = candidate is not null
+                    && unsaved.DeleteRequested == deleteRequested
+                    && !candidate.Rejected
+                    && !candidate.IsEmpty
+                    && (!onlyIfFailed || candidate.Failure is not null);
 
-            return ex;
-        }
-
-        lock (_gate)
-        {
-            if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
-            {
-                return null;
-            }
-
-            if (snapshot.DeleteGeneration is { } generation && unsaved.DeleteDone < generation)
-            {
-                unsaved.DeleteDone = generation;
-            }
-
-            foreach (CharacterReputationRow row in snapshot.Rows)
-            {
-                if (unsaved.Rows.TryGetValue(row.Faction, out CharacterReputationRow? current) && current == row)
+                if (stepDelete is null && !useCandidate)
                 {
-                    unsaved.Rows.Remove(row.Faction);
+                    Release(characterId, unsaved);
+                    continue;
                 }
+
+                snapshot = new Snapshot(
+                    stepDelete,
+                    useCandidate ? [.. candidate!.Rows.Values] : [],
+                    useCandidate ? candidate!.Watched : null,
+                    unsaved.DeleteRequested,
+                    useCandidate ? candidate!.Ownership : null,
+                    useCandidate ? candidate : null);
             }
 
-            if (snapshot.Watched is { } watched && unsaved.Watched == watched)
+            try
             {
-                unsaved.Watched = null;
+                await WriteAsync(characterId, snapshot, sweep ? 1 : MaxAttempts).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                bool rejected = IsOwnershipRejection(ex);
+                lock (_gate)
+                {
+                    // Never recreate an entry that a delete or a creation removed while the write was in flight.
+                    if (_characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.DeleteRequested == snapshot.DeleteRequested)
+                    {
+                        if (snapshot.Overlay is { } failedOverlay)
+                        {
+                            failedOverlay.Failure = ex;
+                            if (rejected)
+                            {
+                                failedOverlay.Rejected = true;
+                            }
+                        }
+                        else
+                        {
+                            unsaved.DeleteFailure = ex;
+                        }
+                    }
+                }
+
+                if (rejected)
+                {
+                    logger.LogCritical(ex, "reputation write for character {Character} was rejected by the character ownership fence; stopping application", characterId);
+                    StopHost(ex);
+                }
+                else if (!sweep)
+                {
+                    logger.LogError(ex, "reputation write for character {Character} failed; retained for retry", characterId);
+                }
+
+                return ex;
             }
 
-            unsaved.Failure = null;
-            Release(characterId, unsaved);
+            lock (_gate)
+            {
+                if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
+                {
+                    return null;
+                }
+
+                if (snapshot.DeleteGeneration is { } generation && unsaved.DeleteDone < generation)
+                {
+                    unsaved.DeleteDone = generation;
+                    unsaved.DeleteFailure = null;
+                }
+
+                if (snapshot.Overlay is { } writtenOverlay && unsaved.DeleteRequested == snapshot.DeleteRequested)
+                {
+                    foreach (CharacterReputationRow row in snapshot.Rows)
+                    {
+                        if (writtenOverlay.Rows.TryGetValue(row.Faction, out CharacterReputationRow? current) && current == row)
+                        {
+                            writtenOverlay.Rows.Remove(row.Faction);
+                        }
+                    }
+
+                    if (snapshot.Watched is { } watched && writtenOverlay.Watched == watched)
+                    {
+                        writtenOverlay.Watched = null;
+                    }
+
+                    writtenOverlay.Failure = null;
+                    if (writtenOverlay.IsEmpty)
+                    {
+                        unsaved.Overlays.Remove(writtenOverlay);
+                    }
+                }
+
+                Release(characterId, unsaved);
+            }
         }
 
         return null;
@@ -510,17 +583,17 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 if (snapshot.Rows.Length > 0)
                 {
-                    await store.SaveFactionsAsync(characterId, snapshot.Rows).ConfigureAwait(false);
+                    await store.SaveFactionsAsync(characterId, snapshot.Rows, ownership: snapshot.Ownership).ConfigureAwait(false);
                 }
 
                 if (snapshot.Watched is { } watched)
                 {
-                    await store.SaveWatchedFactionAsync(characterId, watched).ConfigureAwait(false);
+                    await store.SaveWatchedFactionAsync(characterId, watched, ownership: snapshot.Ownership).ConfigureAwait(false);
                 }
 
                 return;
             }
-            catch (Exception ex) when (attempt < attempts)
+            catch (Exception ex) when (attempt < attempts && !IsOwnershipRejection(ex))
             {
                 logger.LogWarning(ex, "reputation write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
@@ -528,20 +601,98 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
+    private void StopHost(Exception ex)
+    {
+        try
+        {
+            FatalFailure?.Invoke(ex);
+        }
+        catch (Exception callbackError) when (callbackError is not OutOfMemoryException)
+        {
+            logger.LogError(callbackError, "reputation write queue fatal-failure callback failed");
+        }
+
+        if (lifetime is not null)
+        {
+            lifetime.StopApplication();
+            return;
+        }
+
+        using IServiceScope scope = scopes.CreateScope();
+        scope.ServiceProvider.GetService<IHostApplicationLifetime>()?.StopApplication();
+    }
+
     private sealed record Work(int CharacterId, Kind Kind, TaskCompletionSource? Done);
 
-    private sealed record Snapshot(long? DeleteGeneration, CharacterReputationRow[] Rows, int? Watched);
+    /// <summary><paramref name="DeleteRequested"/> is the overlay's delete count when the snapshot was taken; <paramref name="Ownership"/> is the token captured at the overlay's first mutation.</summary>
+    private sealed record Snapshot(long? DeleteGeneration, CharacterReputationRow[] Rows, int? Watched, long DeleteRequested, CharacterOwnershipToken? Ownership, Overlay? Overlay);
+
+    /// <summary>True when <paramref name="ex"/>, or any inner exception (EF may wrap what an interceptor throws), is an ownership-fence rejection.</summary>
+    private static bool IsOwnershipRejection(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is CharacterOwnershipRejectedException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>One token-scoped overlay of reputation mutations for a character. Never coalesced across different ownership tokens.</summary>
+    private sealed class Overlay(CharacterOwnershipToken? ownership)
+    {
+        public CharacterOwnershipToken? Ownership { get; } = ownership;
+        public Dictionary<uint, CharacterReputationRow> Rows { get; } = [];
+        public int? Watched { get; set; }
+        public Exception? Failure { get; set; }
+
+        /// <summary>The fence rejected this overlay's token: terminal, never retried (a stale owner stays stale). Cleared only by a delete.</summary>
+        public bool Rejected { get; set; }
+
+        public bool IsEmpty => Rows.Count == 0 && Watched is null;
+    }
 
     /// <summary>One character's not-yet-durable state. Every member is guarded by the queue's gate.</summary>
     private sealed class Unsaved
     {
-        public Dictionary<uint, CharacterReputationRow> Rows { get; } = [];
-        public int? Watched { get; set; }
+        public List<Overlay> Overlays { get; } = [];
         public long DeleteRequested { get; set; }
         public long DeleteDone { get; set; }
+        public Exception? DeleteFailure { get; set; }
         public bool Queued { get; set; }
-        public Exception? Failure { get; set; }
 
-        public bool IsEmpty => Rows.Count == 0 && Watched is null && DeleteRequested <= DeleteDone;
+        public Exception? Failure => DeleteFailure ?? Overlays.FirstOrDefault(o => o.Failure is not null)?.Failure;
+
+        public bool HasRetryableFailure => DeleteFailure is not null || Overlays.Any(o => o.Failure is not null && !o.Rejected);
+
+        public bool IsEmpty => DeleteRequested <= DeleteDone && Overlays.All(o => o.IsEmpty);
+
+        /// <summary>Return the tail overlay when its captured token matches <paramref name="ownership"/>; otherwise start a new token-isolated overlay.</summary>
+        public Overlay Target(CharacterOwnershipToken? ownership)
+        {
+            if (Overlays.Count > 0 && Equals(Overlays[^1].Ownership, ownership))
+            {
+                return Overlays[^1];
+            }
+
+            var overlay = new Overlay(ownership);
+            Overlays.Add(overlay);
+            return overlay;
+        }
+
+        public void RecordQueueFailure(Exception ex)
+        {
+            if (Overlays.Count > 0)
+            {
+                Overlays[^1].Failure = ex;
+            }
+            else
+            {
+                DeleteFailure = ex;
+            }
+        }
     }
 }

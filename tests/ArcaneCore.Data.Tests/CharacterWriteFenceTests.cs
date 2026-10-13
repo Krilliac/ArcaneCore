@@ -161,7 +161,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
             var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
             await new EfSocialStore(db).SetSocialAsync(id, 900, SocialFlags.Friend);
             await new EfInstanceStore(db).SaveInstanceAsync(new InstanceRecord(5, 33, 1000));
-            await new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 500, 1)]);
+            await new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 500, 1)], ownership: first);
             await new EfItemStore(db).SaveInventoryAsync(id, new InventorySnapshot([new(0, 19, Item(100, 4496))]));
         }
 
@@ -188,7 +188,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         await using (AsyncServiceScope scope = services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
-            await AssertRejectedAsync(() => new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 9000, 2)]));
+            await AssertRejectedAsync(() => new EfCharacterReputationStore(db).DeleteCharacterAsync(id));
         }
 
         await using (AsyncServiceScope scope = services.CreateAsyncScope())
@@ -388,7 +388,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
                 CharacterDbContext db = direct ?? scope!.Value.ServiceProvider.GetRequiredService<CharacterDbContext>();
                 await new EfSocialStore(db).SetSocialAsync(id, 5, SocialFlags.Friend);
                 await new EfInstanceStore(db).SaveInstanceAsync(new InstanceRecord(8, 33, 10));
-                await new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 500, 1)]);
+                await new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 500, 1)], ownership: token);
                 await new EfItemStore(db).SaveInventoryAsync(id, new InventorySnapshot([new(0, 19, Item(300, 25))]));
                 await new EfCharacterStore(db).SaveStateAsync(State(id, 3, token));
                 await new EfInstanceStore(db).SaveBindAsync(new CharacterInstanceBindRecord(id, 8, true));
@@ -499,8 +499,14 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         log.Clear();
         await new EfCharacterQuestStore(db).SaveTaxiMaskAsync(id, [1u], ownership: null);
         IReadOnlyList<string> taxi = log.Texts;
+        log.Clear();
+        await new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 500, 1)], ownership: null);
+        IReadOnlyList<string> repInsert = log.Texts;
+        log.Clear();
+        await new EfCharacterReputationStore(db).SaveWatchedFactionAsync(id, 3, ownership: null);
+        IReadOnlyList<string> watchInsert = log.Texts;
 
-        foreach (IReadOnlyList<string> statements in new[] { state, quests, questInsert, questUpdate, taxi })
+        foreach (IReadOnlyList<string> statements in new[] { state, quests, questInsert, questUpdate, taxi, repInsert, watchInsert })
         {
             Assert.DoesNotContain(statements, t => t.Contains(CharacterOwnershipDataModule.Table, StringComparison.Ordinal));
             // The only transaction is SaveChanges' own, begun after the last read: nothing precedes the reads.
@@ -513,7 +519,7 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         }
 
         // The same statement kinds, in order (the Train 16 list): SaveState reads then writes; quests with no upserts only read;
-        // the taxi mask reads then writes.
+        // the taxi mask and reputation saves read then write.
         // MariaDB prefixes a write batch with session-variable statements (a leading "SET ...;"); they are not statements the stores issue, so the
         // kind is that of the first statement of the command that is not a SET. A command that is only SET keeps the kind SET and fails the comparison.
         static string Kind(string text)
@@ -529,6 +535,8 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         Assert.Equal(ExpectedQuestInsertKinds, Kinds(questInsert));
         Assert.Equal(ExpectedQuestUpdateKinds, Kinds(questUpdate));
         Assert.Equal(ExpectedTaxiKinds, Kinds(taxi));
+        Assert.Equal(ExpectedTaxiKinds, Kinds(repInsert));
+        Assert.Equal(ExpectedTaxiKinds, Kinds(watchInsert));
     }
 
     private const string ExpectedStateKinds = "SELECT,UPDATE";
@@ -555,10 +563,14 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         // The interceptor would pass this transaction on the ambient token; only the store's own check of the snapshot's (null) token refuses it.
         uint before = await ReadMapAsync(connection, id);
         await AssertRejectedAsync(() => new EfCharacterStore(db).SaveStateAsync(State(id, 9, null)));
+        await AssertRejectedAsync(() => new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 500, 1)], ownership: null));
+        await AssertRejectedAsync(() => new EfCharacterReputationStore(db).SaveWatchedFactionAsync(id, 4, ownership: null));
         Assert.Equal(before, await ReadMapAsync(connection, id));
 
         // The same write with the claim it was taken under is accepted, so the refusal above is about the missing token.
         await new EfCharacterStore(db).SaveStateAsync(State(id, 9, token));
+        await new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 500, 1)], ownership: token);
+        await new EfCharacterReputationStore(db).SaveWatchedFactionAsync(id, 4, ownership: token);
         Assert.Equal(9u, await ReadMapAsync(connection, id));
     }
 
@@ -587,6 +599,8 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
         await new EfCharacterStore(db).SaveStateAsync(State(id, 4, token));
         await new EfCharacterQuestStore(db).SaveQuestsAsync(id, [], ownership: token);
         await new EfCharacterQuestStore(db).SaveTaxiMaskAsync(id, [1u], ownership: token);
+        await new EfCharacterReputationStore(db).SaveFactionsAsync(id, [new CharacterReputationRow(id, 72, 500, 1)], ownership: token);
+        await new EfCharacterReputationStore(db).SaveWatchedFactionAsync(id, 2, ownership: token);
         return log.Texts.Count(t => t.Contains(CharacterOwnershipDataModule.Table, StringComparison.Ordinal));
     }
 

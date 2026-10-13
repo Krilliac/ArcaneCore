@@ -305,10 +305,12 @@ public sealed class PostDeleteDrainTests
         public Task<CharacterReputationData> LoadAsync(int characterId, CancellationToken cancellationToken = default)
             => Task.FromResult(CharacterReputationData.Empty);
 
-        public Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts, CancellationToken cancellationToken = default)
+        public Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
             => Task.CompletedTask;
 
-        public Task SaveWatchedFactionAsync(int characterId, int watchedFaction, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SaveWatchedFactionAsync(int characterId, int watchedFaction,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null) => Task.CompletedTask;
 
         public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
