@@ -303,6 +303,11 @@ public sealed class PlayerbotClassRotationTests
             more: s => { s.Form = Form.Bear; s.Party.Add(Member(7, 8)); }))));
         Assert.Equal("Moonfire", Next(Druid.InCombat(State(Druid, DruidBook, Self(11), Victim(25f), PlayerbotRole.Healer))));
         Assert.Equal("Wrath", Next(Druid.InCombat(State(Druid, DruidBook, Self(11), Victim(25f, auras: "Moonfire"), PlayerbotRole.Healer))));
+        // Alone and hurt, Wrath. The old rule healed under 60% and the mob never died (bot QA, level 1-7 druids).
+        Assert.Equal("Wrath", Next(Druid.InCombat(State(Druid, DruidBook, Self(11, 40f), Victim(25f, auras: "Moonfire"), PlayerbotRole.Healer))));
+        Assert.Equal("Healing Touch", Next(Druid.InCombat(State(Druid, DruidBook, Self(11, 20f), Victim(25f), PlayerbotRole.Healer))));
+        Assert.Equal("Healing Touch", Next(Druid.InCombat(State(Druid, DruidBook, Self(11, 40f), Victim(25f), PlayerbotRole.Healer,
+            more: s => s.Party.Add(Member(7, 1, 100f))))));
         Assert.Equal(PlayerbotClassRotation.MeleeRange, Druid.PreferredRange(State(Druid, DruidBook, Self(11), null, PlayerbotRole.MeleeDps,
             more: s => s.Form = Form.Cat)));
         Assert.Equal(PlayerbotClassRotation.CasterRange, Druid.PreferredRange(State(Druid, DruidBook, Self(11), null, PlayerbotRole.Healer)));
