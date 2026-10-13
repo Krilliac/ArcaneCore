@@ -13,6 +13,12 @@ public interface IPlayerSession
 {
     int AccountId { get; }
 
+    /// <summary>
+    /// Monotonic per-account session generation assigned when the session authenticated and claimed the account
+    /// (<c>0</c> for unauthenticated or synthetic test doubles).
+    /// </summary>
+    long SessionGeneration => 0;
+
     /// <summary>The account's GM level.</summary>
     AccountSecurity Security { get; }
 

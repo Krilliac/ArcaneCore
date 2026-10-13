@@ -221,7 +221,31 @@ public sealed partial class WorldSession : IPlayerSession
     /// <summary>Payload bytes of <see cref="QueuedWorldPackets"/>.</summary>
     public long QueuedWorldBytes => Interlocked.Read(ref _queuedBytes);
 
+    private long _sessionGeneration;
+    private AccountSessionClaim? _sessionClaim;
+
     public int AccountId { get; private set; }
+
+    /// <summary>
+    /// Monotonic per-account generation assigned when this session was registered in <see cref="SessionRegistry"/>
+    /// (<c>0</c> before authentication or on the synthetic server-console session).
+    /// </summary>
+    public long SessionGeneration => Volatile.Read(ref _sessionGeneration);
+
+    /// <summary>The claim token assigned when this session was registered, or <c>null</c> before authentication.</summary>
+    public AccountSessionClaim? SessionClaim => Volatile.Read(ref _sessionClaim);
+
+    /// <summary>
+    /// True while this session still holds the active claim for its account (or is the unauthenticated server-console session).
+    /// Once another session supersedes or invalidates this account's claim, late packets and login transitions are fenced off.
+    /// </summary>
+    public bool IsCurrentSession => AccountId == 0 || _registry.IsCurrent(this);
+
+    internal void BindClaim(AccountSessionClaim claim)
+    {
+        Volatile.Write(ref _sessionClaim, claim);
+        Volatile.Write(ref _sessionGeneration, claim.Generation);
+    }
 
     public string AccountName { get; private set; } = string.Empty;
 
@@ -340,7 +364,7 @@ public sealed partial class WorldSession : IPlayerSession
         for (int budget = _options.MaxWorldPacketsPerTick; budget > 0 && _worldQueue.TryDequeue(out QueuedPacket packet); budget--)
         {
             Release(packet);
-            if (_kick.IsCancellationRequested)
+            if (_kick.IsCancellationRequested || !IsCurrentSession)
             {
                 return;
             }
@@ -430,12 +454,12 @@ public sealed partial class WorldSession : IPlayerSession
 
     // --- world-thread state transitions (called by handlers) ------------------------
 
-    /// <summary>Character screen → loading. Fails if the session is no longer at the character screen.</summary>
+    /// <summary>Character screen → loading. Fails if the session is no longer at the character screen or has been superseded.</summary>
     public bool TryBeginLogin()
     {
         lock (_sendLock)
         {
-            if (_state != SessionState.CharacterSelect)
+            if (_state != SessionState.CharacterSelect || _kick.IsCancellationRequested || !IsCurrentSession)
             {
                 return false;
             }
@@ -468,13 +492,13 @@ public sealed partial class WorldSession : IPlayerSession
         Send(WorldOpcode.SmsgLogoutComplete, []);
     }
 
-    /// <summary>Loading → in world (world thread). False if the client went away meanwhile.</summary>
+    /// <summary>Loading → in world (world thread). False if the client went away or was superseded meanwhile.</summary>
     public bool TryEnterWorld(Player player)
     {
         Invariant.Assert(World.IsWorldThread, "a player enters the world on the world thread");
         lock (_sendLock)
         {
-            if (_state != SessionState.LoggingIn)
+            if (_state != SessionState.LoggingIn || _kick.IsCancellationRequested || !IsCurrentSession)
             {
                 return false;
             }
@@ -607,6 +631,12 @@ public sealed partial class WorldSession : IPlayerSession
 
                 _logger.LogWarning("[{Endpoint}] {Opcode} before authentication; disconnecting",
                     RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+                return false;
+            }
+
+            if (!IsCurrentSession)
+            {
+                Kick();
                 return false;
             }
 
@@ -864,11 +894,12 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         // Only now does the session become usable: header encryption on and the character screen reachable.
-        // It may have been kicked (a live ban event) while it was registered but not yet authenticated: Kick() only
-        // cancels the kick token (the state becomes Closed later, in Close()), so the token is what must be tested.
+        // It may have been kicked (a live ban event) or superseded by a newer login while it was registered
+        // but not yet authenticated: Kick() only cancels the kick token (the state becomes Closed later, in Close()),
+        // so the token and claim currency are what must be tested.
         lock (_sendLock)
         {
-            if (_state == SessionState.Closed || _kick.IsCancellationRequested)
+            if (_state == SessionState.Closed || _kick.IsCancellationRequested || !_registry.IsCurrent(this))
             {
                 return false;
             }
