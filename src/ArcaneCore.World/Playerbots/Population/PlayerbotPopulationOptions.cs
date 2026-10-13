@@ -200,6 +200,52 @@ public sealed class PlayerbotPopulationOptions
     public bool FreshLaunch { get; set; }
 
     /// <summary>
+    /// Fresh launch: give each new bot its race's start area as a home (live, on by default). The home is a circle of
+    /// FreshStartHomeRadius yards round the race's start position, clipped to the start zone, so a level 1 bot works the quests and
+    /// creatures of its own valley and does not wander into the next zone's mobs or onto the Deeprun Tram. It graduates with the
+    /// level: from FreshGraduateLevel the circle widens to FreshZoneHomeRadius (still clipped to the start zone), from
+    /// FreshReleaseLevel the home is removed and the bot travels on by its own goals. Off: new bots get no home and no
+    /// start-zone cap applies. The population's sweep also gives a running fresh-launch bot that has no home one for its level.
+    /// </summary>
+    public bool FreshStartHome { get; set; } = true;
+
+    /// <summary>
+    /// The radius in yards of the start home of a bot below FreshGraduateLevel (50..5000), zone-clipped. 1100 reaches the farthest turn-in
+    /// of the class quests of the start areas (the dwarf priest's, 1078 yards from Coldridge Valley). Quests of everyone else are held to
+    /// the start valley itself (400 to 540 yards, per area), which keeps the level 5 breadcrumbs to the next town for the graduated home.
+    /// </summary>
+    public int FreshStartHomeRadius { get; set; } = 1100;
+
+    /// <summary>The level at which a start home widens to FreshZoneHomeRadius (2..60). A leave-home quest (see LeaveHomeLevelMargin) is allowed only from here.</summary>
+    public int FreshGraduateLevel { get; set; } = 6;
+
+    /// <summary>The radius in yards of the graduated home, between FreshGraduateLevel and FreshReleaseLevel (50..5000). It is clipped to the start zone, so it never reaches the next one.</summary>
+    public int FreshZoneHomeRadius { get; set; } = 1500;
+
+    /// <summary>The level at which a graduated home is removed (2..60; at least FreshGraduateLevel, equal skips the widened home).</summary>
+    public int FreshReleaseLevel { get; set; } = 12;
+
+    /// <summary>
+    /// The most bots one start area (Northshire, Coldridge Valley, Shadowglen, Valley of Trials, Camp Narache, Deathknell; the dwarf and
+    /// gnome share one, as do the orc and troll) may hold under a start home (0..1000; 0 = no cap). A fresh-launch creation picks
+    /// the least crowded area the chosen faction and class can start in; when every area is at the cap creation is deferred (the rush
+    /// waits and says so) until bots graduate.
+    /// </summary>
+    public int FreshStartZoneCap { get; set; } = 40;
+
+    /// <summary>
+    /// A quest whose turn-in NPC is outside a graduated home (a leave-home quest) needs the bot to be at least its QuestLevel minus this
+    /// many levels (0..10), and never below its MinLevel. A bot under a start home takes none; a bot with no home is not affected.
+    /// </summary>
+    public int LeaveHomeLevelMargin { get; set; }
+
+    /// <summary>
+    /// A bot below this level that has no home takes no Deeprun Tram or lift trip (0..60; 0 = no limit). The live fresh launch sent about
+    /// 76 level 1 bots to Stormwind quests by the tram.
+    /// </summary>
+    public int TramMinLevel { get; set; } = 10;
+
+    /// <summary>
     /// The safety brake of <c>.playerbot population rush</c>: the rush pauses while the world tick p95 is above this many milliseconds
     /// in RushBrakeWindows consecutive windows of RushBrakeWindowSeconds seconds (50..10000). 0 (the default) means 1.5 times
     /// TickP95BudgetMs, so the brake follows the budget the population itself keeps.
@@ -214,6 +260,10 @@ public sealed class PlayerbotPopulationOptions
 
     /// <summary>The ceiling of the rush brake in milliseconds: RushBrakeP95Ms, or 1.5 times TickP95BudgetMs when that is 0.</summary>
     internal int RushCeilingMs() => RushBrakeP95Ms > 0 ? RushBrakeP95Ms : TickP95BudgetMs * 3 / 2;
+
+    internal const int PlayerbotHomeRadiusMin = (int)ArcaneCore.Kernel.Characters.PlayerbotHomeBounds.MinRadius;
+
+    internal const int PlayerbotHomeRadiusMax = (int)ArcaneCore.Kernel.Characters.PlayerbotHomeBounds.MaxRadius;
 
     internal static string? CheckRushCeiling(int value) => value == 0 ? null : CheckRange(value, 50, 10000);
 
@@ -306,6 +356,14 @@ public sealed class PlayerbotPopulationOptions
             : CheckRushCeiling(RushBrakeP95Ms) is { } rb ? $"RushBrakeP95Ms {rb}"
             : CheckRange(RushBrakeWindows, 1, 20) is { } rw ? $"RushBrakeWindows {rw}"
             : CheckRange(RushBrakeWindowSeconds, 1, 60) is { } rs ? $"RushBrakeWindowSeconds {rs}"
+            : CheckRange(FreshStartHomeRadius, PlayerbotHomeRadiusMin, PlayerbotHomeRadiusMax) is { } hr ? $"FreshStartHomeRadius {hr}"
+            : CheckRange(FreshGraduateLevel, 2, MaxLevel) is { } gl ? $"FreshGraduateLevel {gl}"
+            : CheckRange(FreshZoneHomeRadius, PlayerbotHomeRadiusMin, PlayerbotHomeRadiusMax) is { } zr ? $"FreshZoneHomeRadius {zr}"
+            : CheckRange(FreshReleaseLevel, 2, MaxLevel) is { } rl ? $"FreshReleaseLevel {rl}"
+            : FreshReleaseLevel < FreshGraduateLevel ? "FreshReleaseLevel must be at least FreshGraduateLevel"
+            : CheckRange(FreshStartZoneCap, 0, 1000) is { } sc ? $"FreshStartZoneCap {sc}"
+            : CheckRange(LeaveHomeLevelMargin, 0, 10) is { } lm ? $"LeaveHomeLevelMargin {lm}"
+            : CheckRange(TramMinLevel, 0, MaxLevel) is { } tl ? $"TramMinLevel {tl}"
             : null;
         if (problem is not null) throw new InvalidOperationException($"{SectionName}: {problem}.");
     }

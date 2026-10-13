@@ -119,6 +119,18 @@ public static class WorldConfigKeys
         LiveNonNegative("Maps:VisibilityRelocationLowerLimit", o => o.Maps.VisibilityRelocationLowerLimit, (o, v) => o.Maps.VisibilityRelocationLowerLimit = v),
         LiveNonNegative("Maps:GridPrefetchDistance", o => o.Maps.GridPrefetchDistance, (o, v) => o.Maps.GridPrefetchDistance = v),
 
+        // Population-scaled respawn: CreatureMapSystem.OnCreatureDied and GameObjectMapSystem.Despawn read the shared options at each death
+        // and despawn (docs/areas/creature-movement-spawns.md, "Population-scaled respawn"); a respawn already scheduled keeps its time.
+        Live("Respawn:Dynamic:Enabled", o => o.Respawn.Dynamic.Enabled, (o, v) => o.Respawn.Dynamic.Enabled = v),
+        Live("Respawn:Dynamic:PlayerThreshold", o => o.Respawn.Dynamic.PlayerThreshold, (o, v) => o.Respawn.Dynamic.PlayerThreshold = v, DynamicRespawnOptions.CheckPlayerThreshold),
+        Live("Respawn:Dynamic:ScalePerPlayer", o => o.Respawn.Dynamic.ScalePerPlayer, (o, v) => o.Respawn.Dynamic.ScalePerPlayer = v, DynamicRespawnOptions.CheckScalePerPlayer),
+        Live("Respawn:Dynamic:MinimumSeconds", o => o.Respawn.Dynamic.MinimumSeconds, (o, v) => o.Respawn.Dynamic.MinimumSeconds = v, DynamicRespawnOptions.CheckMinimumSeconds),
+        Live("Respawn:Dynamic:MaxReduction", o => o.Respawn.Dynamic.MaxReduction, (o, v) => o.Respawn.Dynamic.MaxReduction = v, DynamicRespawnOptions.CheckMaxReduction),
+        Live("Respawn:Dynamic:CountBots", o => o.Respawn.Dynamic.CountBots, (o, v) => o.Respawn.Dynamic.CountBots = v),
+        Live("Respawn:Dynamic:Radius", o => o.Respawn.Dynamic.Radius, (o, v) => o.Respawn.Dynamic.Radius = v, DynamicRespawnOptions.CheckRadius),
+        Live("Respawn:Dynamic:IncludeElitesAndRares", o => o.Respawn.Dynamic.IncludeElitesAndRares, (o, v) => o.Respawn.Dynamic.IncludeElitesAndRares = v),
+        Live("Respawn:Dynamic:IncludeGameObjects", o => o.Respawn.Dynamic.IncludeGameObjects, (o, v) => o.Respawn.Dynamic.IncludeGameObjects = v),
+
         // The cross-faction rules, read from the shared SocialOptions at each use. Keys map to vmangos
         // AllowTwoSide.Interaction.Group / .Guild / .Channel (World.cpp:610-613) and AllowTwoSide.AddFriend (:618).
         LiveSocial("AllowTwoSideAddFriend", o => o.AllowTwoSideAddFriend, (o, v) => o.AllowTwoSideAddFriend = v),
@@ -251,6 +263,24 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Home:DangerLevelMargin", o => o.Home.DangerLevelMargin, (o, v) => o.Home.DangerLevelMargin = v,
             PlayerbotHomeOptions.CheckLevelMargin),
 
+        // How bots share the mobs of one place (docs/areas/playbots.md, Contention): each bot reads the shared object at its next think.
+        LivePlayerbotsValue("Contention:HelpChance", o => o.Contention.HelpChance, (o, v) => o.Contention.HelpChance = v,
+            PlayerbotContentionOptions.CheckChance),
+        LivePlayerbotsValue("Contention:ClaimPenaltyYards", o => o.Contention.ClaimPenaltyYards, (o, v) => o.Contention.ClaimPenaltyYards = v,
+            PlayerbotContentionOptions.CheckPenalty),
+        LivePlayerbotsValue("Contention:SomeoneElsesMemorySeconds", o => o.Contention.SomeoneElsesMemorySeconds,
+            (o, v) => o.Contention.SomeoneElsesMemorySeconds = v, PlayerbotContentionOptions.CheckMemory),
+        LivePlayerbotsValue("Contention:ContentionSuspendMinutes", o => o.Contention.ContentionSuspendMinutes,
+            (o, v) => o.Contention.ContentionSuspendMinutes = v, PlayerbotContentionOptions.CheckSuspend),
+
+        // Not vmangos keys: autonomous flight-path use by bots (docs/areas/playbots.md, Flight paths). PlayerbotTaxi reads the shared
+        // PlayerbotOptions.Taxi at each decision.
+        LivePlayerbots("Taxi:Enabled", o => o.Taxi.Enabled, (o, v) => o.Taxi.Enabled = v),
+        LivePlayerbotsValue("Taxi:MinRouteYards", o => o.Taxi.MinRouteYards, (o, v) => o.Taxi.MinRouteYards = v, PlayerbotTaxiOptions.CheckMinRoute),
+        LivePlayerbotsValue("Taxi:MaxWalkToMasterYards", o => o.Taxi.MaxWalkToMasterYards, (o, v) => o.Taxi.MaxWalkToMasterYards = v,
+            PlayerbotTaxiOptions.CheckMaxWalk),
+        LivePlayerbotsValue("Taxi:BackoffMinutes", o => o.Taxi.BackoffMinutes, (o, v) => o.Taxi.BackoffMinutes = v, PlayerbotTaxiOptions.CheckBackoff),
+
         // Not vmangos keys: the population manager (docs/areas/playbots-population.md). PlayerbotPopulationFeature reads the shared
         // PlayerbotOptions.Population at every pass; the lists are compared and replaced as one value.
         LivePlayerbots("Population:Enabled", o => o.Population.Enabled, (o, v) => o.Population.Enabled = v),
@@ -283,6 +313,14 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Population:RushBrakeP95Ms", o => o.Population.RushBrakeP95Ms, (o, v) => o.Population.RushBrakeP95Ms = v, Playerbots.Population.PlayerbotPopulationOptions.CheckRushCeiling),
         LivePlayerbotsValue("Population:RushBrakeWindows", o => o.Population.RushBrakeWindows, (o, v) => o.Population.RushBrakeWindows = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 20)),
         LivePlayerbotsValue("Population:RushBrakeWindowSeconds", o => o.Population.RushBrakeWindowSeconds, (o, v) => o.Population.RushBrakeWindowSeconds = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 60)),
+        LivePlayerbots("Population:FreshStartHome", o => o.Population.FreshStartHome, (o, v) => o.Population.FreshStartHome = v),
+        LivePlayerbotsValue("Population:FreshStartHomeRadius", o => o.Population.FreshStartHomeRadius, (o, v) => o.Population.FreshStartHomeRadius = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 50, 5000)),
+        LivePlayerbotsValue("Population:FreshGraduateLevel", o => o.Population.FreshGraduateLevel, (o, v) => o.Population.FreshGraduateLevel = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 2, 60)),
+        LivePlayerbotsValue("Population:FreshZoneHomeRadius", o => o.Population.FreshZoneHomeRadius, (o, v) => o.Population.FreshZoneHomeRadius = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 50, 5000)),
+        LivePlayerbotsValue("Population:FreshReleaseLevel", o => o.Population.FreshReleaseLevel, (o, v) => o.Population.FreshReleaseLevel = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 2, 60)),
+        LivePlayerbotsValue("Population:FreshStartZoneCap", o => o.Population.FreshStartZoneCap, (o, v) => o.Population.FreshStartZoneCap = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 1000)),
+        LivePlayerbotsValue("Population:LeaveHomeLevelMargin", o => o.Population.LeaveHomeLevelMargin, (o, v) => o.Population.LeaveHomeLevelMargin = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 10)),
+        LivePlayerbotsValue("Population:TramMinLevel", o => o.Population.TramMinLevel, (o, v) => o.Population.TramMinLevel = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 60)),
         LivePlayerbotsValue("Population:ExcludedZones", o => new Playerbots.Population.PopulationIdList([.. o.Population.ExcludedZones]),
             (o, v) => o.Population.ExcludedZones = [.. v.Items], v => Playerbots.Population.PlayerbotPopulationOptions.CheckZones(v.Items)),
 
@@ -314,6 +352,22 @@ public static class WorldConfigKeys
             v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
         LivePlayerbotsValue("Economy:VisitIntervalMinutes", o => o.Economy.VisitIntervalMinutes, (o, v) => o.Economy.VisitIntervalMinutes = v,
             v => v is >= 1 and <= PlayerbotEconomyOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotEconomyOptions.MaxVisitIntervalMinutes}"),
+        // Not vmangos keys: how bots plan their money and ride (docs/areas/playbots-economy.md). PlayerbotBudget and PlayerbotMount read the
+        // shared PlayerbotOptions.Budget / Mounts at every decision.
+        LivePlayerbots("Budget:Enabled", o => o.Budget.Enabled, (o, v) => o.Budget.Enabled = v),
+        LivePlayerbotsValue("Budget:ClassLevelsAhead", o => o.Budget.ClassLevelsAhead, (o, v) => o.Budget.ClassLevelsAhead = v,
+            v => v is >= 0 and <= PlayerbotBudgetOptions.MaxClassLevelsAhead ? null : $"must be 0..{PlayerbotBudgetOptions.MaxClassLevelsAhead}"),
+        LivePlayerbotsValue("Budget:EssentialsAllowanceCopper", o => o.Budget.EssentialsAllowanceCopper, (o, v) => o.Budget.EssentialsAllowanceCopper = v,
+            v => v <= 100_000_000u ? null : "must be 0..100000000"),
+        LivePlayerbotsValue("Budget:RefreshSeconds", o => o.Budget.RefreshSeconds, (o, v) => o.Budget.RefreshSeconds = v,
+            v => v is >= 1 and <= 3600 ? null : "must be 1..3600"),
+        LivePlayerbotsValue("Budget:DiscretionaryFloorFraction", o => o.Budget.DiscretionaryFloorFraction, (o, v) => o.Budget.DiscretionaryFloorFraction = v,
+            v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
+        LivePlayerbots("Mounts:Enabled", o => o.Mounts.Enabled, (o, v) => o.Mounts.Enabled = v),
+        LivePlayerbotsValue("Mounts:SaveLevelsAhead", o => o.Mounts.SaveLevelsAhead, (o, v) => o.Mounts.SaveLevelsAhead = v,
+            v => v is >= 0 and <= PlayerbotMountOptions.MaxSaveLevelsAhead ? null : $"must be 0..{PlayerbotMountOptions.MaxSaveLevelsAhead}"),
+        LivePlayerbotsValue("Mounts:MountMinTravelYards", o => o.Mounts.MountMinTravelYards, (o, v) => o.Mounts.MountMinTravelYards = v,
+            v => float.IsFinite(v) && v is >= 1f and <= 100000f ? null : "must be 1..100000"),
         // Not vmangos keys: autonomous bots in battlegrounds (docs/areas/playbots-battlegrounds.md). PlayerbotBattlegroundCoordinator
         // reads the shared PlayerbotOptions.Battlegrounds at every decision.
         LivePlayerbots("Battlegrounds:Enabled", o => o.Battlegrounds.Enabled, (o, v) => o.Battlegrounds.Enabled = v),

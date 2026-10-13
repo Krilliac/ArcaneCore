@@ -123,6 +123,15 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
 
     internal PlayerbotGoalKind Goal { get; private set; } = PlayerbotGoalKind.Vendor;
 
+    /// <summary>
+    /// What the bot saves for (<see cref="PlayerbotBudget"/>): a visit spends only the money left after the class spells, the riding
+    /// training and the mount the bot is saving for. Null (a bare controller in a test) spends from all the bot's money.
+    /// </summary>
+    internal PlayerbotBudget? SpendBudget { get; set; }
+
+    /// <summary>The money a visit may spend on purchases: what the budget reserves for higher priorities is kept aside (listing deposits are not purchases).</summary>
+    private uint Spendable(Player player) => SpendBudget?.Spendable(PlayerbotSpendKind.Discretionary, player) ?? player.Money;
+
     internal uint TargetEntry { get; private set; }
 
     internal PlayerbotEconomyPhase Phase => _phase;
@@ -219,7 +228,7 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
         var random = RandomSource?.Invoke() ?? new Random(unchecked((int)(player.Guid.Low * 2654435761u) ^ (int)(_visitNumber * 40503u)));
         IReadOnlyList<PlayerbotBagItem> listables = PlayerbotEconomyPlanner.Listables(BagItems(player), item => PlayerbotGearScoreSeam.Gain(player, item), _relist);
         bool list = listables.Count > 0 && PlayerbotEconomyPlanner.RollsToList(config, random);
-        bool buy = PlayerbotEconomyPlanner.VisitBudget(player.Money, config.BuyUpgradeBudgetFraction) >= PlayerbotEconomyPlanner.MinimumUpgradeBudget
+        bool buy = Math.Min(PlayerbotEconomyPlanner.VisitBudget(player.Money, config.BuyUpgradeBudgetFraction), Spendable(player)) >= PlayerbotEconomyPlanner.MinimumUpgradeBudget
             && PlayerbotTownGoals.FreeBagSlots(player) > 0;
         if (!list && !buy && !(Reached(now, _nextMailTriggerAt) && HasUnreadMail(out bool known) && known))
         {
@@ -233,7 +242,7 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
         _random = random;
         _visitStartedAt = now;
         _mapId = player.Map!.MapId;
-        _startMoney = player.Money;
+        _startMoney = player.Money; // listing deposits are bounded by the bot's money, never by a reserve; only purchases are (Spendable)
         _spent = 0;
         _wantList = list;
         _wantBuy = buy;
@@ -451,7 +460,7 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
             return true;
         }
 
-        PlayerbotUpgradeChoice? choice = PlayerbotEconomyPlanner.ChooseUpgrade(_scan.DistinctBy(row => row.Id), player.Guid.Value, _startMoney, player.Money,
+        PlayerbotUpgradeChoice? choice = PlayerbotEconomyPlanner.ChooseUpgrade(_scan.DistinctBy(row => row.Id), player.Guid.Value, _startMoney, Math.Min(player.Money, Spendable(player)),
             _spent, config.BuyUpgradeBudgetFraction, entry => player.Inventory.Templates.Find(entry), template => PlayerbotGearScoreSeam.Gain(player, template),
             IsRefused);
         if (choice is null)

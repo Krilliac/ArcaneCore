@@ -65,6 +65,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private WorldRuntime? _world;
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
+    private readonly PlayerbotCadenceStats _cadence = new();
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
     private readonly PlayerbotThinkProbe _probe = new();
     private PlayerbotSlowThinkLog? _slowThinks;
@@ -74,6 +75,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// during the call.
     /// </summary>
     internal Action<Guid, PlayerbotThinkProbe>? ThinkObserver { get; set; }
+
+    /// <summary>
+    /// The wall time a tick spends on the bots' thinks (<see cref="PlayerbotThinkRotation.TickBudgetMs"/> in production). A test world on a
+    /// manual clock sets it to infinity: with a real-time budget the bots visited per simulated tick depend on how loaded the machine is.
+    /// </summary>
+    internal double ThinkBudgetMs { get; set; } = PlayerbotThinkRotation.TickBudgetMs;
 
     /// <summary>The slow-think log (null before the first think).</summary>
     internal PlayerbotSlowThinkLog? SlowThinks => _slowThinks;
@@ -271,13 +278,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // A refusal of the character handler names its reason; any other failure names the exception and its message (the reason
             // used to be the exception type alone, so "InvalidOperationException" was all an operator saw of a name with a digit).
             string reason = ex is PlayerbotCreateRefusedException refused ? refused.Reason : $"{ex.GetType().Name}: {ex.Message}";
-            logger.LogWarning("Managed playerbot creation of '{Name}' failed: {Reason}", name, reason);
+            // A refusal names its own reason and a cancellation is a shutdown: both expected (Warning). Anything else is a server bug (Error).
+            logger.Log(ex is PlayerbotCreateRefusedException or OperationCanceledException ? LogLevel.Warning : LogLevel.Error, ex,
+                "Managed playerbot creation of '{Name}' failed: {Reason}", name, reason);
             // A reused account has no provisioning journal, so what this attempt put on it is removed here (cancellation included).
             if (spare is not null) await RetireOrRequeueSpareAsync(spare).ConfigureAwait(false);
             await using AsyncServiceScope repair = scopes.CreateAsyncScope();
             try { await ReconcileProvisioningAsync(repair.ServiceProvider, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception failure) when (failure is not OutOfMemoryException)
-            { logger.LogError("Playerbot provisioning retained for reconciliation ({Type}: {Message})", failure.GetType().Name, failure.Message); }
+            { logger.LogError(failure, "Playerbot provisioning retained for reconciliation ({Type}: {Message})", failure.GetType().Name, failure.Message); }
             if (ex is OperationCanceledException) throw;
             return new(false, ex is PlayerbotCreateRefusedException ? $"character-create-refused: {reason}" : $"create-failed: {reason}", null, name);
         }
@@ -314,7 +323,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 {
                     session.Kick();
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
-                    catch (TimeoutException) { logger.LogWarning("Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username); }
+                    catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot cleanup session of '{Account}' did not close within 10 s", spare.Username); }
                 }
 
                 if ((await provider.GetRequiredService<ICharacterStore>().GetByAccountAsync(spare.Id, CancellationToken.None).ConfigureAwait(false)).Count != 0)
@@ -418,6 +427,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (!_active.TryGetValue(botId, out ActiveBot? active) || active.Paused) return false;
             IPlayerbotController? previous = active.Controller;
             active.Controller = controller;
+            // A controller attaching or detaching changes who walks the bot: the route of the one before is stopped, not left to its lease.
+            if (!ReferenceEquals(previous, controller) && active.Session.Player is { } walker) ReleaseMotion(active.Session, walker);
             if (controller is not null && active.GroupDriven)
             {
                 // A controller takes over a member of a bot-led group: it leaves the group (and the brain resumes when it detaches).
@@ -436,6 +447,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     active.Brain.ResumeAfterGroup();
                 }
             }
+            if (controller is not null && active.Session.Player is { } taken) PlayerbotTaxi.Cancel(taken);
             active.Session.ManagedBudget = null;
             if (controller is not null && active.Session.Player is { } player && (active.PartyDriven || active.Party.IsEngaged))
             {
@@ -581,7 +593,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// radius is out of bounds. <paramref name="zoneClipped"/> clips each home to the zone of its centre (the command's default).
     /// </summary>
     internal async Task<HomeOutcome> SetHomesAsync(IReadOnlyList<HomeTarget> targets, float radius, string? place,
-        CancellationToken cancellationToken = default, bool zoneClipped = true)
+        CancellationToken cancellationToken = default, bool zoneClipped = true, bool logFailures = true)
     {
         ArgumentNullException.ThrowIfNull(targets);
         if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
@@ -608,7 +620,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
             {
                 failed++;
-                logger.LogWarning(ex, "Playerbot home of {BotId} was not stored ({Type}: {Message})", target.BotId, ex.GetType().Name, ex.Message);
+                if (logFailures) logger.LogWarning(ex, "Playerbot home of {BotId} was not stored ({Type}: {Message})", target.BotId, ex.GetType().Name, ex.Message);
             }
         }
 
@@ -627,10 +639,22 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return new(saved.Count, failed);
     }
 
-    /// <summary>Remove the homes of these bots (store and running brains); returns how many bots had one.</summary>
-    internal async Task<int> ClearHomesAsync(IReadOnlyList<Guid> botIds, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Raised before an operator's <see cref="ClearHomesAsync"/> removes homes, with the bots whose home is a population start home
+    /// (<see cref="Population.PopulationStartAreas"/>): the population must not give those bots one again.
+    /// </summary>
+    internal event Action<IReadOnlyList<Guid>>? HomesClearedByOperator;
+
+    /// <summary>Remove the homes of these bots (store and running brains); returns how many bots had one. <paramref name="byOperator"/>: the command, as opposed to the population's own graduation.</summary>
+    internal async Task<int> ClearHomesAsync(IReadOnlyList<Guid> botIds, CancellationToken cancellationToken = default, bool byOperator = true)
     {
         ArgumentNullException.ThrowIfNull(botIds);
+        if (byOperator && HomesClearedByOperator is { } handler)
+        {
+            Guid[] start = [.. botIds.Where(id => _homes.TryGetValue(id, out PlayerbotHome? h) && Population.PopulationStartAreas.TryParse(h.Place, out _, out _))];
+            if (start.Length != 0) handler(start);
+        }
+
         if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
         await using AsyncServiceScope scope = scopes.CreateAsyncScope();
         IManagedPlayerbotHomeStore store = scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>()
@@ -698,6 +722,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
 
         bot.Session.ManagedBudget = null;
+        ReleaseMotion(bot.Session, player); // the brain's route is not the party AI's
         bot.Party.Leash(player, master, stay);
         bot.PartyDriven = true;
         return new(true, stay ? "staying" : "following", botId, player.Name);
@@ -823,9 +848,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             await saves.FlushCharacterAsync(characterId, cancellationToken).WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException timeout)
         {
-            logger.LogWarning("Managed playerbot character {CharacterId}: the save barrier did not complete in 15 s (database busy?); continuing, the snapshot stays queued", characterId);
+            logger.LogWarning(timeout, "Managed playerbot character {CharacterId}: the save barrier did not complete in 15 s (database busy?); continuing, the snapshot stays queued", characterId);
         }
     }
 
@@ -881,7 +906,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     session.Kick();
                     // A close that is slow after a committed deletion must not skip the cleanup below.
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
-                    catch (TimeoutException) { logger.LogWarning("Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
+                    catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
                 }
             }
 
@@ -942,7 +967,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
     {
-        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides) { Home = AreaOf(botId) };
+        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides, _claims) { Home = AreaOf(botId) };
         if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
         if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
@@ -962,11 +987,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     botId, area.MapId, area.Centre.X, area.Centre.Y))
             {
                 AreaLevels = AreaLevelLookupOf(home.MapId),
+                AllowsLeaveQuests = Population.PopulationStartAreas.StageOfPlace(home.Place) == Population.StartHomeStage.Zone,
+                ValleyRadius = Population.PopulationStartAreas.ValleyRadiusOfPlace(home.Place),
+                LeavePolicy = _options.Population,
             }
             : null;
 
     // What every bot sets aside after several of them stalled on it (PlayerbotSharedSetAsides).
     private readonly PlayerbotSharedSetAsides _sharedSetAsides = new();
+
+    // The soft claims of the fleet on untagged mobs (PlayerbotClaims): one table for every bot, touched on the world thread only.
+    private readonly PlayerbotClaims _claims = new();
 
     /// <summary>The goals set aside for every bot (inspection and tests).</summary>
     internal PlayerbotSharedSetAsides SharedSetAsides => _sharedSetAsides;
@@ -1060,7 +1091,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         ErrorCode = "stop-incomplete" }, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception failure) when (failure is not OutOfMemoryException)
-                { logger.LogError("Playerbot {BotId} retains an incomplete stop ({Type})", bot.BotId, failure.GetType().Name); }
+                { logger.LogError(failure, "Playerbot {BotId} retains an incomplete stop ({Type})", bot.BotId, failure.GetType().Name); }
                 PublishStopped(active.Record, active.Name, active.MapId);
                 throw;
             }
@@ -1137,12 +1168,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for, and a tick thinks
         // for no more bots once PlayerbotThinkRotation.TickBudgetMs went by (one think itself is bounded by MaxThinkSearchNodes).
-        _rotation.TickWithin(bots.Length, PlayerbotThinkRotation.TickBudgetMs, index =>
+        int thinks = 0;
+        bool actionLimited = false;
+        _rotation.TickWithin(bots.Length, ThinkBudgetMs, index =>
         {
-            if (budget.Remaining <= 0) return false;
+            if (budget.Remaining <= 0) { actionLimited = true; return false; }
             Think(bots[index], budget);
+            thinks++;
             return true;
         });
+        // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
+        _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited);
+        if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
+            logger.LogInformation(
+                "Playerbot cadence over the last minute: {Bots} bots, think gap p50 {GapP50Ms} ms, p95 {GapP95Ms} ms, max {GapMaxMs} ms; "
+                + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
+                cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapMaxMs, cadence.ThinksPerTick, cadence.Ticks,
+                cadence.TimeLimitedPct, cadence.ActionLimitedPct);
         PublishSnapshot(bots);
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
@@ -1185,10 +1227,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private string ThinkCore(ActiveBot active, ManagedActionBudget budget)
     {
         string driver = "idle";
+        if (active.Paused || active.Session.State != SessionState.InWorld) active.GapPrimed = false;
         if (!active.Paused && active.Session.State == SessionState.InWorld)
         {
             uint sinceLast = unchecked(_world!.NowMs - active.LastUpdateMs);
             active.LastUpdateMs = _world.NowMs;
+            // The first think after login or unpause measures the time since the record was made (or the pause), not a think gap.
+            if (active.GapPrimed)
+            {
+                _cadence.RecordGap(sinceLast);
+                if (active.Session.Player is { } measured) PlayerbotMotion.NoteThinkGap(measured, sinceLast);
+            }
+
+            active.GapPrimed = true;
             try
             {
                 if (active.Session.Player is { IsInWorld: true } observed) active.Brain.ObserveKillingBlows(observed);
@@ -1213,6 +1264,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
+                        if (!active.BattlegroundDriven) PlayerbotTaxi.Cancel(driven);
                         active.BattlegroundDriven = true;
                         driver = "battleground";
                         PlayerbotThinkProbe.Phase("battleground");
@@ -1228,6 +1280,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
+                        if (!active.GroupDriven) PlayerbotTaxi.Cancel(driven);
                         active.GroupDriven = true;
                         driver = "group";
                         PlayerbotThinkProbe.Phase("group");
@@ -1257,18 +1310,48 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return driver;
     }
 
+    /// <summary>
+    /// The party AI takes the bot or gives it back, or a controller attaches or detaches: the route of the one before is not the next
+    /// one's, and the motion would walk it for its lease, seconds long (<see cref="PlayerbotMotion"/>). Stops the bot if it moves along
+    /// one. Party AI and controllers only: a bot-led group and the battleground coordinator are not stopped at takeover (stopping there
+    /// broke group formation); their drivers stop the bot themselves when they have nothing to walk: the group leader's Hold states
+    /// (PlayerbotGroupAI.Hold), a member whose leader is missing, Release, and the battleground coordinator's idle phases.
+    /// </summary>
+    private static void ReleaseMotion(WorldSession session, Player player)
+    {
+        if (PlayerbotMotion.IsActive(player)) PlayerbotMovementControl.Stop(session, player);
+    }
+
+    /// <summary>
+    /// After a brain's think: a route the brain gave up (<see cref="PlayerbotBrain.TakeRouteAbandoned"/>), or a goal it changed, with no
+    /// route kept or started by the think, stops the bot. The motion walks a route for its lease, as long as twice the bot's think gap
+    /// (<see cref="PlayerbotMotion.NoteThinkGap"/>), and left to it a bot would run a stale route for seconds. A think that kept or started
+    /// a route (a chase that waits for a tile keeps and renews the route it has) is not stopped.
+    /// </summary>
+    internal static void SettleMotion(WorldSession session, PlayerbotBrain brain, Player player, PlayerbotGoalKind goalBefore, uint renewals, uint sinceLast)
+    {
+        bool abandoned = brain.TakeRouteAbandoned();
+        PlayerbotMotion.SettleAfterThink(session, player, abandoned || brain.Goal != goalBefore, renewals, sinceLast);
+    }
+
     /// <summary>One tick of an autonomous bot outside a bot-led group: its party AI in a real player's group, its brain otherwise.</summary>
     private string UpdateAutonomous(ActiveBot active, Player driven, uint sinceLast)
     {
         // A bot in a real player's group follows its party AI; out of it (or after its master's timeout) the
         // brain takes over again, a fresh one: the old one's routes and targets belong to another place.
         bool party = active.Party.Drives(driven);
-        if (active.PartyDriven && !party) ReplaceBrain(active);
+        if (active.PartyDriven && !party)
+        {
+            ReleaseMotion(active.Session, driven);
+            ReplaceBrain(active);
+        }
         // The party AI follows its master: a tram trip of the brain ends (its entrance consent with it); off the tram map again under the
         // brain, a bot left there takes the nearest exit (PlayerbotTram.Drive).
         if (party && !active.PartyDriven)
         {
+            ReleaseMotion(active.Session, driven);
             PlayerbotTram.Cancel(driven);
+            PlayerbotTaxi.Cancel(driven);
             // A bot aboard a lift is never moved off the car mid-shaft: its ride ends at the next stop (PlayerbotElevator.Cancel), and the
             // party AI takes it only once it stands on the landing. Meanwhile the ride is driven here (PartyDriven stays false).
             PlayerbotElevator.Cancel(driven);
@@ -1288,7 +1371,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         else
         {
+            PlayerbotGoalKind goalBefore = active.Brain.Goal;
+            uint renewals = PlayerbotMotion.RenewalsOf(driven);
             active.Brain.Update(sinceLast);
+            SettleMotion(active.Session, active.Brain, driven, goalBefore, renewals, sinceLast);
             string? report = active.Brain.StallReport;
             bool awaitRelease = report?.StartsWith("death loop:", StringComparison.Ordinal) == true && !driven.IsAlive
                 && !driven.RepopDestinationResolved;
@@ -1667,12 +1753,33 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     private void Fault(ActiveBot active, string what, Exception ex)
     {
-        // Counted in the fault ledger (.server faults); logged below on every occurrence (not throttled): the QA log tap reads these lines as action faults.
-        FaultLedger.Shared.Record("playerbot", ex);
-        logger.LogWarning(ex, "Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+        // Counted in the fault ledger (.server faults). Every occurrence is logged, because the QA log tap reads these lines as action faults,
+        // but only the first FaultLogLimit of one signature carry the exception (Error, with the stack trace): a storm of one fault is then a
+        // short Warning line per bot instead of a stack trace per bot, so it cannot flood the console.
+        FaultRecording recording = FaultLedger.Shared.Record("playerbot", ex);
+        // Error, not Warning: an action fault is an exception the server did not expect, and Error is what the console colours red. The
+        // line text ("Playerbot {BotId} {What} failed ({Type}: {Message})") is what PlayerbotQaSignalParser matches; the level is not part of it.
+        if (recording.ShouldLog && recording.Suppressed > 0)
+        {
+            // like FaultLedger.Log: a repeat after held-back occurrences says how many it stands for (the QA parser accepts the suffix)
+            logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message}) ({Suppressed} more since)", active.Record.BotId, what, ex.GetType().Name, ex.Message, recording.Suppressed);
+        }
+        else if (recording.ShouldLog)
+        {
+            logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+        }
+        else
+        {
+            logger.LogWarning("Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+        }
+
         Interlocked.CompareExchange(ref active.FaultCode, $"{what}: {ex.Message}", null);
         active.Session.Kick();
     }
+
+    /// <summary>Log and count an exception a fire-and-forget operator command caught (<c>.playerbot</c> subcommands answer the GM with the type only).</summary>
+    internal void ReportCommandFault(string command, Exception error)
+        => logger.LogFault("playerbot-command", error, "Playerbot command {Command} failed", command);
 
     /// <summary>
     /// Count one fault of a bot and schedule its retry: whether the bot stays desired, and the error code to store. The
@@ -1848,6 +1955,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public string Name = session.Player!.Name;
         public uint MapId = session.Player!.Map!.MapId;
         public uint LastUpdateMs = session.World.NowMs;
+        /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>
+        public bool GapPrimed;
         public volatile bool Paused;
         public IPlayerbotController? Controller;
         public string? FaultCode;

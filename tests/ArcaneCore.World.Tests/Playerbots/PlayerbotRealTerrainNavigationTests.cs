@@ -340,20 +340,47 @@ public sealed partial class PlayerbotRealTerrainNavigationTests(ITestOutputHelpe
             return await FollowAsync(route, goal, maxMs);
         }
 
-        /// <summary>Follow routes from <see cref="PlayerbotNavigation.TryPlanToward"/> until within <paramref name="reach"/> of the goal.</summary>
+        /// <summary>
+        /// Follow routes from <see cref="PlayerbotNavigation.PlanToward"/> until within <paramref name="reach"/> of the goal. A
+        /// <see cref="PlanOutcome.Pending"/> answer (a navigation tile is being read in the background) is waited out as the brain does:
+        /// the world clock moves on and the plan is asked again, until <see cref="TileWait.MaxMs"/> turns it into a refusal.
+        /// </summary>
         public async Task<float> WalkTowardAsync(Vector3 goal, float reach, uint maxMs, ITestOutputHelper log, PlayerbotOptions? with = null)
         {
             PlayerbotOptions options = with ?? new PlayerbotOptions();
             float left = float.PositiveInfinity;
+            TileWait[] wait = [new TileWait()]; // boxed: a ref local cannot be captured by the world-thread lambda
+            const int MaxLegs = 2000;
+            int legs = 0;
             for (uint spent = 0; spent < maxMs;)
             {
-                PlayerbotRoute? route = await Host.OnWorldAsync(() => PlayerbotNavigation.TryPlanToward(Player, goal, options, out PlayerbotRoute? planned) ? planned : null);
-                Assert.True(route is not null, $"no route towards {goal} from {await Host.OnWorldAsync(() => new Vector3(Player.X, Player.Y, Player.Z))}");
+                Vector3 legStart = await Host.OnWorldAsync(() => new Vector3(Player.X, Player.Y, Player.Z));
+                Assert.True(++legs <= MaxLegs,
+                    $"walk towards {goal}: still {left:F1} yards away after {MaxLegs} legs, last at {legStart}");
+                PlayerbotRoute? route = null;
+                PlanOutcome outcome = PlanOutcome.Pending;
+                while (outcome == PlanOutcome.Pending)
+                {
+                    outcome = await Host.OnWorldAsync(() => PlayerbotNavigation.PlanToward(Player, goal, options, ref wait[0], Host.World.NowMs, out route));
+                    if (outcome != PlanOutcome.Pending) break;
+                    await Task.Delay(20); // the tile is read on a background thread: real time, not game time
+                    await Host.World.AdvanceClockAsync(100);
+                }
+
+                Assert.True(outcome == PlanOutcome.Route && route is not null,
+                    $"no route towards {goal} from {await Host.OnWorldAsync(() => new Vector3(Player.X, Player.Y, Player.Z))} ({outcome})");
                 log.WriteLine($"leg to {route!.Points[^1]}");
                 uint started = Host.World.NowMs;
                 left = await FollowAsync(route, goal, maxMs - spent);
-                spent += unchecked(Host.World.NowMs - started);
+                uint used = unchecked(Host.World.NowMs - started);
+                spent += used;
                 if (left < reach) return left;
+
+                // A leg that used no game time and moved the bot nowhere would be planned again forever (the clock the cap counts
+                // never advances): that is a stall, and fails here instead of hanging the run.
+                Vector3 legEnd = await Host.OnWorldAsync(() => new Vector3(Player.X, Player.Y, Player.Z));
+                Assert.False(used == 0 && Vector3.Distance(legStart, legEnd) < 0.5f,
+                    $"walk towards {goal}: the leg to {route.Points[^1]} made no progress, stalled at {legEnd} ({left:F1} yards away)");
             }
 
             return left;

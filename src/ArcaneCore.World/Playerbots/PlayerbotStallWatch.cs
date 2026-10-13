@@ -218,6 +218,18 @@ internal sealed class PlayerbotSuspensions
     private readonly Dictionary<uint, uint> _entries = [];
     private readonly Dictionary<uint, uint> _quests = [];
     private readonly HashSet<uint> _unreachableQuests = [];
+    private readonly Dictionary<uint, int> _questSetAsides = [];
+
+    /// <summary>
+    /// The set-asides of one quest after which a completed quest that is held against the usual rules (a graduated home's leave-home quest,
+    /// or a quest across the tram for a bot too low for it) is abandoned instead of set aside again: three stalled return trips, about half
+    /// an hour of world time with the 10 minute set-aside.
+    /// </summary>
+    internal const int MaxReturnSetAsides = 3;
+
+    /// <summary>How many times this bot has set the quest aside (kept in memory; a restart starts the count again).</summary>
+    internal int QuestSetAsideCount(uint quest) => _questSetAsides.GetValueOrDefault(quest);
+
     private readonly Queue<uint> _unreachableOrder = [];
     private int _version;
     internal int Version => Volatile.Read(ref _version);
@@ -266,7 +278,11 @@ internal sealed class PlayerbotSuspensions
 
     internal void SuspendQuest(uint quest, uint nowMs)
     {
-        if (quest != 0) { Add(_quests, quest, nowMs); Interlocked.Increment(ref _version); }
+        if (quest == 0) return;
+        Add(_quests, quest, nowMs);
+        if (_questSetAsides.Count >= 256 && !_questSetAsides.ContainsKey(quest)) _questSetAsides.Clear();
+        _questSetAsides[quest] = _questSetAsides.GetValueOrDefault(quest) + 1;
+        Interlocked.Increment(ref _version);
     }
 
     internal PlayerbotSetAside[] Export(Guid botId, int characterId, uint nowMs, long unixNowMs)
@@ -389,7 +405,7 @@ internal sealed class PlayerbotSharedSetAsides
         (bool Quest, uint Id) key = goal switch
         {
             PlayerbotGoalKind.Quest when quest != 0 => (true, quest),
-            PlayerbotGoalKind.Quest or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train when entry != 0 => (false, entry),
+            PlayerbotGoalKind.Quest or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount when entry != 0 => (false, entry),
             _ => default,
         };
         if (key.Id == 0) return null;

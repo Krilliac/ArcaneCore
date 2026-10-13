@@ -27,7 +27,7 @@
 # SECTIONS
 #
 #   AUTH                        15 keys
-#   DATABASE                    13 keys
+#   DATABASE                    16 keys
 #   DIAGNOSTICS                 8 keys
 #   LOGGING                     16 keys
 #   NET                         16 keys
@@ -361,6 +361,61 @@ Database.SlowCommandWarnMs = 2000
 #        Docs: docs/reference/configuration.md#database
 #
 Database.SlowTransactionWarnMs = 2000
+
+#
+#    Database.Sqlite.Checkpoint.Enabled
+#        Description: Whether the background checkpointer owns checkpointing (default true). False
+#                     leaves SQLite's own auto-checkpoint (1000 pages, inside the committing
+#                     connection) untouched.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Sqlite.Checkpoint.Enabled = true
+
+#
+#    Database.Sqlite.Checkpoint.IntervalMs
+#        Description: How often (milliseconds, 100..3600000, default 2000) the background service
+#                     runs PRAGMA wal_checkpoint(PASSIVE) on each database. PASSIVE takes no writer
+#                     lock and waits on no lock, but its I/O still competes for the same disk; a
+#                     shorter interval keeps the WAL smaller at the cost of more wake-ups.
+#        Type: int
+#        Default: 2000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Sqlite.Checkpoint.IntervalMs = 2000
+
+#
+#    Database.Sqlite.Checkpoint.JournalSizeLimitBytes
+#        Description: PRAGMA journal_size_limit in bytes (0..1099511627776, default 33554432 = 32
+#                     MiB), set on every connection to the database: once a checkpoint has copied
+#                     the whole WAL into the database and the next writer restarts it, SQLite
+#                     truncates the file down to this size instead of leaving it at its high-water
+#                     mark. This is the only thing that shrinks the -wal file while the server runs,
+#                     and only when the log restarts (continuous overlapping readers can postpone
+#                     that; a warning is logged when the file stays above 4 x max(this limit, 1 MiB)
+#                     for 30 s while commits keep arriving or the copy is incomplete): the service
+#                     never runs a TRUNCATE checkpoint during operation, because TRUNCATE takes the
+#                     exclusive writer lock and holds it through the copy of the frames written
+#                     since the last PASSIVE, the WAL fsync and the database fsync (which on Windows
+#                     flushes every page earlier PASSIVE runs wrote), which would put the stall this
+#                     feature removes back in front of a game save. Only the final checkpoint at
+#                     host stop, after the world has drained its saves, is a TRUNCATE; it waits at
+#                     most about 250 ms for readers and writers, and holds the writer lock through
+#                     its copy and syncs. If the Auth database is one file shared by the world and
+#                     realm daemons, either daemon's shutdown TRUNCATE can briefly stall the other's
+#                     auth writes.
+#        Type: long
+#        Default: 33554432
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Sqlite.Checkpoint.JournalSizeLimitBytes = 33554432
 
 #
 #    Database.SqliteBusyTimeoutMs

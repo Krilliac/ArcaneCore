@@ -1,10 +1,12 @@
 using System.Globalization;
 using System.Reflection;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Ops.Cli;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -276,7 +278,7 @@ public sealed class WiringAudit
 /// category when not. A failure of the audit itself is a Warning too (never silent, never fatal). Registered by
 /// <see cref="WorldProductionServices.AddWorldProductionServices"/>, last, so it is the last hosted service to start.
 /// </summary>
-internal sealed class WiringAuditReporter(WiringAudit audit, IHostApplicationLifetime lifetime, ILogger<WiringAuditReporter> logger) : IHostedService
+internal sealed class WiringAuditReporter(WiringAudit audit, IHostApplicationLifetime lifetime, ILogger<WiringAuditReporter> logger, IOpsAnnouncer? announcer = null) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -305,6 +307,15 @@ internal sealed class WiringAuditReporter(WiringAudit audit, IHostApplicationLif
             else
             {
                 logger.LogWarning("{Summary}", report.Summary);
+
+                // Staff only (World:Announce:Wiring); at start-up usually nobody is online, so the log line above is the record.
+                announcer?.Announce(
+                    AnnounceCategory.Wiring,
+                    AnnounceSeverity.Warning,
+                    string.Create(CultureInfo.InvariantCulture, $"Start-up wiring audit found {report.Findings.Count} problem(s)"),
+                    report.Summary,
+                    gmOnly: true,
+                    dedupKey: "wiring-findings");
             }
         }
         catch (Exception ex)
@@ -312,6 +323,13 @@ internal sealed class WiringAuditReporter(WiringAudit audit, IHostApplicationLif
             try
             {
                 logger.LogWarning(ex, "wiring audit could not run");
+                announcer?.Announce(
+                    AnnounceCategory.Wiring,
+                    AnnounceSeverity.Error,
+                    "The start-up wiring audit could not run",
+                    ex.GetType().Name + ": " + ex.Message,
+                    gmOnly: true,
+                    dedupKey: "wiring-failed");
             }
             catch (Exception)
             {

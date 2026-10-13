@@ -3,7 +3,9 @@ using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using ArcaneCore.Kernel.Ops.Watchdog.Counters;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Ops.Watchdog;
+using ArcaneCore.World.Tests.HotCode;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -229,5 +231,105 @@ public sealed class TickWatchdogFeatureTests
         TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
         Assert.Empty(host.World.Stats.SlowTicks(TimeSpan.FromSeconds(60)));
         Assert.Contains("the stall was outside the tick body", monitor.HangDetail!(false));
+    }
+
+    /// <summary>Forwards to the real announcer and remembers what the feature asked for (the delivery alone does not carry severity or key).</summary>
+    private sealed class RecordingAnnouncer(IOpsAnnouncer inner) : IOpsAnnouncer
+    {
+        public sealed record Call(AnnounceCategory Category, AnnounceSeverity Severity, string Text, bool GmOnly, string? DedupKey);
+
+        private readonly List<Call> _calls = [];
+
+        public IReadOnlyList<Call> Calls
+        {
+            get
+            {
+                lock (_calls)
+                {
+                    return [.. _calls];
+                }
+            }
+        }
+
+        public void Announce(AnnounceCategory category, AnnounceSeverity severity, string shortText, string? gmDetail = null, IReadOnlyList<AnnounceField>? fields = null,
+            string? shortTextWithNames = null, bool gmOnly = false, string? dedupKey = null, bool staffHandled = false)
+        {
+            lock (_calls)
+            {
+                _calls.Add(new Call(category, severity, shortText, gmOnly, dedupKey));
+            }
+
+            inner.Announce(category, severity, shortText, gmDetail, fields, shortTextWithNames, gmOnly, dedupKey, staffHandled);
+        }
+    }
+
+    [Fact]
+    public async Task WithAnAnnouncer_AHangInProgress_ItsCompletion_AndAnOverrun_ReachStaffOnly_EachWithItsOwnDedupKey()
+    {
+        var clock = new ManualClock();
+        var sink = new RecordingSink();
+        // The announcer's clock never moves, so the 300 s Faults dedup window stays open for the whole test: a repeated key is suppressed.
+        var announcer = new RecordingAnnouncer(new OpsAnnouncer(new AnnounceOptions(), sink, NullLogger.Instance, () => 5_000_000));
+        WatchdogOptions options = Options(o =>
+        {
+            o.HangMs = 100;
+            o.BudgetMs = 50;
+        });
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s =>
+        {
+            Register(s, options, clock);
+            s.AddSingleton<IOpsAnnouncer>(announcer);
+        });
+        TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
+        Assert.NotNull(monitor.Alerted);
+        await WorldTestHost.WaitForAsync(() => monitor.Ring.Count >= 5, "frames");
+
+        using var release = new ManualResetEventSlim(false);
+        using var entered = new ManualResetEventSlim(false);
+        host.World.Post(() =>
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+        });
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+        clock.AdvanceMs(300);
+        monitor.Check(clock.NowMicros); // the tick is still running past the hang threshold
+
+        RecordingAnnouncer.Call running = Assert.Single(announcer.Calls);
+        Assert.Equal(AnnounceCategory.Faults, running.Category);
+        Assert.Equal(AnnounceSeverity.Critical, running.Severity);
+        Assert.True(running.GmOnly);
+        Assert.Contains("is hung", running.Text);
+        Assert.Equal("tick-Hang-running", running.DedupKey);
+
+        release.Set();
+        await WorldTestHost.WaitForAsync(() => monitor.HangsCompleted >= 1, "the completed hang");
+        monitor.Check(clock.NowMicros); // the hang completed (and, being over the budget, is an overrun too)
+
+        // The completed hang is not swallowed by the "is hung" line of the same window, and the overrun is a Warning of its own.
+        Assert.Equal(3, announcer.Calls.Count);
+        RecordingAnnouncer.Call done = Assert.Single(announcer.Calls, c => c.DedupKey == "tick-Hang-done");
+        Assert.Equal(AnnounceSeverity.Critical, done.Severity);
+        Assert.True(done.GmOnly);
+        Assert.Contains("stalled", done.Text);
+        RecordingAnnouncer.Call overrun = Assert.Single(announcer.Calls, c => c.DedupKey == "tick-Overrun");
+        Assert.Equal(AnnounceSeverity.Warning, overrun.Severity);
+        Assert.True(overrun.GmOnly);
+
+        // Delivered to staff with the category tag, and to nobody else.
+        Assert.Equal(3, sink.Sent.Count);
+        Assert.All(sink.Sent, delivery =>
+        {
+            Assert.Contains("[Faults]", delivery.StaffChat);
+            Assert.Null(delivery.WorldChat);
+        });
+        Assert.Contains("is hung", sink.Sent[0].StaffChat);
+    }
+
+    [Fact]
+    public async Task WithoutAnAnnouncer_TheMonitorHasNoAlertSubscriber()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
+        Assert.Null(host.WorldServices.GetRequiredService<TickMonitor>().Alerted);
     }
 }

@@ -39,6 +39,8 @@ public static class DbUpgradeCli
           migrate-codex find databases the Codex line created (before the 2026-10-07 merge renumbered its schema steps) and
                         report their one-shot migration to this build's numbering; --apply runs only that migration
           backup-info   print how to back each database up
+          export-updates  write the SQL update files (sql/updates: a baseline per component and provider, then one file per schema step)
+                        and the schema snapshots with --out <directory>; no database is contacted
           dbc           check the client DBC directory (each file against the vmangos layout) and the world database's
                         references into it (spell, map, area, faction, display ... ids no DBC row has); read-only
           dbc dump <File> [--id N] [--json]   print named fields from a build-5875 DBC with WoWDBDefs signedness (no database connection)
@@ -54,6 +56,7 @@ public static class DbUpgradeCli
           --allow-active-sessions                 upgrade, migrate-codex: do not refuse when other sessions are connected
           --lock-timeout <seconds>                upgrade, migrate-codex: how long to wait for another process's schema lock (default 60)
           --dbc-dir <directory>                   dbc: the build-5875 DBC directory (default ClientData:DbcDirectory)
+          --out <directory>                       export-updates: the update root to write (normally sql/updates)
 
         configuration: the Database section (appsettings.json, environment variables such as
         Database__Characters__ConnectionString); a host option --config <file> names another JSON file.
@@ -110,6 +113,7 @@ public static class DbUpgradeCli
                 "upgrade" => await run.UpgradeAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "migrate-codex" => await run.MigrateCodexAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "backup-info" => run.BackupInfo(arguments),
+                "export-updates" => await run.ExportUpdatesAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "dbc" => await run.DbcAsync(arguments, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
@@ -553,6 +557,31 @@ public static class DbUpgradeCli
                 dbc = r.Reference.Dbc, table = r.Reference.Table, column = r.Reference.Column, status = r.Status.ToString(),
                 referencedIds = r.ReferencedIds, danglingIds = r.DanglingIds, danglingRows = r.DanglingRows, samples = r.Samples, reason = r.Reason,
             };
+        }
+
+        /// <summary>
+        /// <c>export-updates --out &lt;directory&gt;</c>: write the SQL update files and schema snapshots (no database is contacted).
+        /// A first export writes each component's baseline; later exports add one file per new schema step.
+        /// </summary>
+        public async Task<int> ExportUpdatesAsync(DbUpgradeArguments a, CancellationToken ct)
+        {
+            string root = a.Value("--out") ?? throw new UsageException("export-updates needs --out <directory> (the update root, normally sql/updates)");
+            UpdateComponent[] components = [.. a.Components().Select(UpdateComponent.For)];
+            try
+            {
+                IReadOnlyList<string> written = await UpdateScriptWriter.WriteAsync(root, components, ct).ConfigureAwait(false);
+                foreach (string path in written)
+                {
+                    await _out.WriteLineAsync($"wrote {path}").ConfigureAwait(false);
+                }
+
+                return DbUpgradeExitCodes.Ok;
+            }
+            catch (UpdateExportException ex)
+            {
+                await _err.WriteLineAsync($"refused: {ex.Message}").ConfigureAwait(false);
+                return DbUpgradeExitCodes.Refused;
+            }
         }
 
         public int BackupInfo(DbUpgradeArguments a)

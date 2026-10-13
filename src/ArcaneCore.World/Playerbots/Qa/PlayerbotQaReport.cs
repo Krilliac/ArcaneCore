@@ -8,7 +8,7 @@ namespace ArcaneCore.World.Playerbots.Qa;
 /// <summary>One finding as the JSON export shows it (no bot hashes, redacted text).</summary>
 internal sealed record QaReportEntry(int Rank, string Id, string ShortId, string Kind, string Cause, string CauseDetail, double Severity, long Count,
     int DistinctBots, DateTime FirstSeenUtc, DateTime LastSeenUtc, string Subject, string? QuestTitle, string Publication, IReadOnlyList<QaReportSample> Samples,
-    string Goal = "", bool QuestIsGoal = true);
+    string Goal = "", bool QuestIsGoal = true, bool Stale = false);
 
 /// <summary>One evidence sample of the JSON export.</summary>
 internal sealed record QaReportSample(DateTime AtUtc, uint Map, float? X, float? Y, float? Z, IReadOnlyList<uint> Attackers, string Message);
@@ -35,24 +35,60 @@ internal static class PlayerbotQaReport
 
     private const int MaxChatLine = 220;
 
+    /// <summary>The most stale findings the markdown report lists.</summary>
+    private const int MaxStaleRows = 200;
+
     internal static IReadOnlyList<QaFindingView> Rank(IEnumerable<QaFindingView> findings)
         => [.. findings.OrderByDescending(f => f.Severity).ThenByDescending(f => f.Count).ThenByDescending(f => f.LastSeenUtc).ThenBy(f => f.Id, StringComparer.Ordinal)];
 
-    /// <summary>The top <paramref name="n"/> (1..<see cref="MaxChatFindings"/>) as bounded chat lines.</summary>
-    internal static IReadOnlyList<string> ChatTop(IEnumerable<QaFindingView> findings, int n, PlayerbotQaRedactor redactor)
+    /// <summary>
+    /// A finding last seen before <paramref name="since"/> (when this process started) was not met by the running build: it may well be fixed already.
+    /// Null <paramref name="since"/> means nothing is stale.
+    /// </summary>
+    internal static bool IsStale(QaFindingView f, DateTime? since) => since is { } start && f.LastSeenUtc < start;
+
+    /// <summary>Stale and not worth the default list: a stale finding whose issue is open (Published) is still shown.</summary>
+    internal static bool IsHidden(QaFindingView f, DateTime? since) => IsStale(f, since) && f.Publication.State != QaPublicationState.Published;
+
+    /// <summary>How long ago, as a short word: <c>&lt;1m ago</c>, <c>5m ago</c>, <c>2h ago</c>, <c>1d ago</c>.</summary>
+    internal static string Age(DateTime lastSeenUtc, DateTime nowUtc)
+    {
+        TimeSpan span = nowUtc - lastSeenUtc;
+        if (span < TimeSpan.FromMinutes(1)) return "<1m ago";
+        if (span < TimeSpan.FromHours(1)) return string.Create(CultureInfo.InvariantCulture, $"{(int)span.TotalMinutes}m ago");
+        if (span < TimeSpan.FromDays(1)) return string.Create(CultureInfo.InvariantCulture, $"{(int)span.TotalHours}h ago");
+        return string.Create(CultureInfo.InvariantCulture, $"{(int)Math.Min(span.TotalDays, 99999)}d ago");
+    }
+
+    /// <summary>
+    /// The top <paramref name="n"/> (1..<see cref="MaxChatFindings"/>) as bounded chat lines. With <paramref name="since"/> the findings not seen since then
+    /// (stale) are hidden behind one hint line, unless <paramref name="all"/>, which lists them after every current one. With <paramref name="now"/> each line shows its last-seen age.
+    /// </summary>
+    internal static IReadOnlyList<string> ChatTop(IEnumerable<QaFindingView> findings, int n, PlayerbotQaRedactor redactor, DateTime? now = null, DateTime? since = null, bool all = false)
     {
         n = Math.Clamp(n, 1, MaxChatFindings);
         // A spell gap no bot met yet (Count 0, listed by the start-up coverage) is not a seen problem: `.playerbot qa spells` lists those.
         IReadOnlyList<QaFindingView> ranked = Rank(findings.Where(f => f.Count > 0));
         if (ranked.Count == 0) return ["Bot QA: no findings."];
-        var lines = new List<string> { string.Create(CultureInfo.InvariantCulture, $"Bot QA: top {Math.Min(n, ranked.Count)} of {ranked.Count} findings (.playerbot qa show <id> for the evidence)") };
-        for (int i = 0; i < Math.Min(n, ranked.Count); i++)
+        // A stale finding with an open issue stays in the list (marked): its issue is live work, whatever this build has met.
+        QaFindingView[] current = [.. ranked.Where(f => !IsHidden(f, since))];
+        QaFindingView[] stale = [.. ranked.Where(f => IsHidden(f, since))];
+        QaFindingView[] shown = all ? [.. current, .. stale] : current;
+        const string HintTail = "hidden; .playerbot qa top all lists them. .playerbot qa prune [#hours] [closed] [dry] forgets old ones; a finding with a GitHub issue is always kept.";
+        string hint = !all && stale.Length > 0
+            ? string.Create(CultureInfo.InvariantCulture, $"{stale.Length} stale findings (not seen since this server started) {HintTail}")
+            : string.Empty;
+        if (shown.Length == 0) return [string.Create(CultureInfo.InvariantCulture, $"Bot QA: no findings seen since start; {stale.Length} stale {HintTail}")];
+        var lines = new List<string> { string.Create(CultureInfo.InvariantCulture, $"Bot QA: top {Math.Min(n, shown.Length)} of {shown.Length} findings (.playerbot qa show <id> for the evidence)") };
+        for (int i = 0; i < Math.Min(n, shown.Length); i++)
         {
-            QaFindingView f = ranked[i];
+            QaFindingView f = shown[i];
+            string seen = now is { } at ? " " + Age(f.LastSeenUtc, at) + (IsStale(f, since) ? " (stale)" : string.Empty) : string.Empty;
             lines.Add(Cut(string.Create(CultureInfo.InvariantCulture,
-                $"#{i + 1} {f.ShortId} sev {f.Severity:F0} x{f.Count} bots {f.DistinctBots} {f.Cause} {f.KindLabel}: {redactor.Redact(f.Subject)}")));
+                $"#{i + 1} {f.ShortId} sev {f.Severity:F0} x{f.Count} bots {f.DistinctBots}{seen} {f.Cause} {f.KindLabel}: {redactor.Redact(f.Subject)}")));
         }
 
+        if (hint.Length != 0) lines.Add(Cut(hint));
         return lines;
     }
 
@@ -153,32 +189,44 @@ internal static class PlayerbotQaReport
     }
 
     internal static string RenderMarkdown(IEnumerable<QaFindingView> findings, DateTime generatedUtc, string build, PlayerbotQaRedactor redactor,
-        QaSpellCoverageReport? coverage = null)
+        QaSpellCoverageReport? coverage = null, DateTime? since = null)
     {
         QaFindingView[] all = [.. findings];
-        IReadOnlyList<QaFindingView> ranked = Rank(all.Where(f => f.Count > 0));
-        int listedOnly = all.Length - ranked.Count;
+        IReadOnlyList<QaFindingView> seen = Rank(all.Where(f => f.Count > 0));
+        // The same split as the chat list: a stale finding whose issue is open stays in the main table.
+        QaFindingView[] ranked = [.. seen.Where(f => !IsHidden(f, since))];
+        QaFindingView[] stale = [.. seen.Where(f => IsHidden(f, since))];
+        int listedOnly = all.Length - seen.Count;
         var sb = new StringBuilder();
         sb.Append("# Playerbot QA report\n\n");
-        sb.Append(CultureInfo.InvariantCulture, $"Generated {generatedUtc:u} by ArcaneCore {Escape(build)}. {ranked.Count} findings, ranked by severity, count and last seen.");
+        sb.Append(CultureInfo.InvariantCulture, $"Generated {generatedUtc:u} by ArcaneCore {Escape(build)}. {ranked.Length} findings, ranked by severity, count and last seen.");
+        if (stale.Length > 0) sb.Append(CultureInfo.InvariantCulture, $" {stale.Length} more were not seen since {since:u} (this server's start) and are listed last under Stale.");
         if (listedOnly > 0) sb.Append(CultureInfo.InvariantCulture, $" {listedOnly} spell gaps no bot met yet are listed under Spell coverage.");
         sb.Append("\n\n");
-        if (ranked.Count == 0)
+        if (seen.Count == 0)
         {
             sb.Append("No findings.\n");
             if (coverage is not null) sb.Append('\n').Append(coverage.RenderMarkdown());
             return sb.ToString();
         }
 
-        sb.Append("| # | Id | Severity | Seen | Bots | Cause | Kind | Subject | GitHub |\n|---|---|---|---|---|---|---|---|---|\n");
-        for (int i = 0; i < ranked.Count; i++)
+        if (ranked.Length == 0)
         {
-            QaFindingView f = ranked[i];
-            sb.Append(CultureInfo.InvariantCulture, $"| {i + 1} | `{f.ShortId}` | {f.Severity:F1} | {f.Count} | {f.DistinctBots} | {f.Cause} | {f.KindLabel} | {Escape(redactor.Redact(f.Subject))} | {f.Publication} |\n");
+            sb.Append("No finding was seen since this server started.\n\n");
+        }
+        else
+        {
+            sb.Append("| # | Id | Severity | Seen | Last seen | Bots | Cause | Kind | Subject | GitHub |\n|---|---|---|---|---|---|---|---|---|---|\n");
+            for (int i = 0; i < ranked.Length; i++)
+            {
+                QaFindingView f = ranked[i];
+                sb.Append(CultureInfo.InvariantCulture, $"| {i + 1} | `{f.ShortId}` | {f.Severity:F1} | {f.Count} | {Age(f.LastSeenUtc, generatedUtc)} | {f.DistinctBots} | {f.Cause} | {f.KindLabel} | {Escape(redactor.Redact(f.Subject))} | {f.Publication} |\n");
+            }
+
+            sb.Append('\n');
         }
 
-        sb.Append('\n');
-        for (int i = 0; i < ranked.Count; i++)
+        for (int i = 0; i < ranked.Length; i++)
         {
             QaFindingView f = ranked[i];
             sb.Append(CultureInfo.InvariantCulture, $"## {i + 1}. {f.KindLabel}: {Escape(redactor.Redact(f.Subject))}\n\n");
@@ -196,12 +244,26 @@ internal static class PlayerbotQaReport
             sb.Append('\n');
         }
 
+        if (stale.Length > 0)
+        {
+            sb.Append(CultureInfo.InvariantCulture, $"## Stale (not seen since {since:u})\n\n");
+            sb.Append("Last seen before this server started: possibly fixed by the running build. `.playerbot qa prune` forgets them (the evidence stays in report.json until then).\n\n");
+            sb.Append("| Id | Severity | Seen | Last seen | Kind | Subject | GitHub |\n|---|---|---|---|---|---|---|\n");
+            foreach (QaFindingView f in stale.Take(MaxStaleRows))
+            {
+                sb.Append(CultureInfo.InvariantCulture, $"| `{f.ShortId}` | {f.Severity:F1} | {f.Count} | {Age(f.LastSeenUtc, generatedUtc)} | {f.KindLabel} | {Escape(redactor.Redact(f.Subject))} | {f.Publication} |\n");
+            }
+
+            if (stale.Length > MaxStaleRows) sb.Append(CultureInfo.InvariantCulture, $"\n{stale.Length - MaxStaleRows} more stale findings are not listed.\n");
+            sb.Append('\n');
+        }
+
         if (coverage is not null) sb.Append(coverage.RenderMarkdown());
         return sb.ToString();
     }
 
     internal static string RenderJson(IEnumerable<QaFindingView> findings, DateTime generatedUtc, string build, PlayerbotQaRedactor redactor,
-        QaSpellCoverageReport? coverage = null)
+        QaSpellCoverageReport? coverage = null, DateTime? since = null)
     {
         IReadOnlyList<QaFindingView> ranked = Rank(findings);
         var entries = new List<QaReportEntry>(ranked.Count);
@@ -211,7 +273,7 @@ internal static class PlayerbotQaReport
             entries.Add(new QaReportEntry(i + 1, f.Id, f.ShortId, f.KindLabel, f.Cause.ToString(), redactor.Redact(f.CauseDetail), f.Severity, f.Count, f.DistinctBots,
                 f.FirstSeenUtc, f.LastSeenUtc, redactor.Redact(f.Subject), f.QuestTitle is null ? null : redactor.Redact(f.QuestTitle), f.Publication.ToString(),
                 [.. f.Samples.Select(s => new QaReportSample(s.AtUtc, s.Map, s.HasPosition ? s.X : null, s.HasPosition ? s.Y : null, s.HasPosition ? s.Z : null,
-                    s.Attackers, redactor.Redact(s.Message)))], f.Goal, f.QuestIsGoal));
+                    s.Attackers, redactor.Redact(s.Message)))], f.Goal, f.QuestIsGoal, IsStale(f, since)));
         }
 
         return JsonSerializer.Serialize(new QaReportFile(generatedUtc, build, entries.Count, entries, coverage), QaReportJsonContext.Default.QaReportFile);

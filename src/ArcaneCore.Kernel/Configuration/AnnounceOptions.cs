@@ -32,6 +32,24 @@ public sealed class AnnounceOptions
 
     /// <summary>Live-change announcements: data reloads, hot modules and code hot reload (docs/areas/hot-swap-announcements.md).</summary>
     public HotSwapAnnounceOptions HotSwap { get; set; } = new();
+
+    /// <summary>Anti-cheat detections, kicks and autobans (docs/areas/hot-swap-announcements.md). Staff only by default.</summary>
+    public AntiCheatAnnounceOptions AntiCheat { get; set; } = new();
+
+    /// <summary>Server faults the ledger caught, slow or hung world ticks and crashes. Staff only, deduplicated.</summary>
+    public FaultsAnnounceOptions Faults { get; set; } = new();
+
+    /// <summary>Start-up wiring audit findings and a failed audit. Staff only.</summary>
+    public WiringAnnounceOptions Wiring { get; set; } = new();
+
+    /// <summary>Scheduled shutdown and restart: the request and its cancellation.</summary>
+    public ShutdownAnnounceOptions Shutdown { get; set; } = new();
+
+    /// <summary>Character save queue trouble: a backlog, a busy database, a retained snapshot, a refused snapshot, a drain that failed. Staff only.</summary>
+    public SavesAnnounceOptions Saves { get; set; } = new();
+
+    /// <summary>A new playerbot QA finding. Staff only, deduplicated by finding.</summary>
+    public BotQaAnnounceOptions BotQa { get; set; } = new();
 }
 
 /// <summary>Switches every announcement category has.</summary>
@@ -73,4 +91,67 @@ public sealed class HotSwapAnnounceOptions : AnnounceCategoryOptions
 
     /// <summary>Put the free-text reason the staff member gave (<c>.reload creature_template fixed drop rates</c>) into the world message. The reason is shown to players as typed.</summary>
     public bool WorldMessageIncludeReason { get; set; } = true;
+}
+
+/// <summary>Anti-cheat category: staff are told, players are not (World:Announce:AntiCheat). Names reach the world line only with <see cref="AnnounceCategoryOptions.AllowNamesInWorldMessage"/>.</summary>
+public sealed class AntiCheatAnnounceOptions : AnnounceCategoryOptions
+{
+    public AntiCheatAnnounceOptions()
+    {
+        DedupSeconds = 30;
+    }
+}
+
+/// <summary>Faults category: caught exceptions (one line per distinct fault), tick hangs and overruns, crashes. Staff only.</summary>
+public sealed class FaultsAnnounceOptions : AnnounceCategoryOptions
+{
+    public FaultsAnnounceOptions()
+    {
+        MinimumSeverity = AnnounceSeverity.Warning;
+        RateBurst = 5;
+        RatePerMinute = 6;
+        DedupSeconds = 300;
+    }
+}
+
+/// <summary>Wiring category: what the start-up wiring audit found.</summary>
+public sealed class WiringAnnounceOptions : AnnounceCategoryOptions
+{
+    public WiringAnnounceOptions()
+    {
+        MinimumSeverity = AnnounceSeverity.Warning;
+        DedupSeconds = 300;
+    }
+}
+
+/// <summary>
+/// Shutdown category: a scheduled shutdown or restart was requested or cancelled. The countdown itself already reaches every player as the
+/// client's own server message (SMSG_SERVER_MESSAGE), so <see cref="AnnounceCategoryOptions.WorldMessage"/> is off by default: turning it on adds a chat line for the
+/// request and the cancel, not for each countdown step.
+/// </summary>
+public sealed class ShutdownAnnounceOptions : AnnounceCategoryOptions
+{
+}
+
+/// <summary>Saves category: the character save queue.</summary>
+public sealed class SavesAnnounceOptions : AnnounceCategoryOptions
+{
+    public SavesAnnounceOptions()
+    {
+        MinimumSeverity = AnnounceSeverity.Warning;
+        RateBurst = 5;
+        RatePerMinute = 6;
+        DedupSeconds = 120;
+    }
+}
+
+/// <summary>Bot QA category: a finding the playerbot QA aggregator has not seen before. The text names no player or bot.</summary>
+public sealed class BotQaAnnounceOptions : AnnounceCategoryOptions
+{
+    public BotQaAnnounceOptions()
+    {
+        RateBurst = 5;
+        RatePerMinute = 6;
+        DedupSeconds = 3600;
+    }
 }

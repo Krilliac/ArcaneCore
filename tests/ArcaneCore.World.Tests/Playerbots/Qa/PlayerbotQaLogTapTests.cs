@@ -43,6 +43,43 @@ public sealed class PlayerbotQaLogTapTests
     }
 
     [Fact]
+    public void BotActionFault_LoggedAtError_WithItsException_IsStillClassifiedAsAnActionFault()
+    {
+        var bus = new PlayerbotQaSignalBus(16);
+        using var tap = new PlayerbotQaLogTap(bus, true, null, null);
+        ILogger bots = tap.CreateLogger(PlayerbotQaLogTap.BotCategory);
+        var error = new InvalidOperationException("playerbot-recovery-spirit-healer-failed");
+
+        // exactly the call ManagedPlayerbotFeature.Fault makes
+        bots.LogError(error, "Playerbot {BotId} {What} failed ({Type}: {Message})", QaData.Bot1, "action", error.GetType().Name, error.Message);
+
+        var drained = new List<QaSignal>();
+        Assert.Equal(1, bus.Drain(drained, 10));
+        QaSignal signal = Assert.Single(drained);
+        Assert.Equal(QaSignalKind.ActionFault, signal.Kind);
+        Assert.Equal(QaData.Bot1, signal.BotKey);
+        Assert.Equal("InvalidOperationException", signal.ExceptionType);
+        Assert.Equal("action", signal.Goal);
+    }
+
+    [Fact]
+    public void BotActionFault_RepeatLineWithAMoreSinceSuffix_IsStillAnActionFault_WithoutTheSuffixInItsDetail()
+    {
+        var bus = new PlayerbotQaSignalBus(16);
+        using var tap = new PlayerbotQaLogTap(bus, true, null, null);
+        ILogger bots = tap.CreateLogger(PlayerbotQaLogTap.BotCategory);
+
+        bots.LogError(new InvalidOperationException("x"), "Playerbot {BotId} {What} failed ({Type}: {Message}) ({Suppressed} more since)",
+            QaData.Bot1, "action", "InvalidOperationException", "playerbot-recovery-spirit-healer-failed", 37L);
+
+        var drained = new List<QaSignal>();
+        Assert.Equal(1, bus.Drain(drained, 10));
+        QaSignal signal = Assert.Single(drained);
+        Assert.Equal(QaSignalKind.ActionFault, signal.Kind);
+        Assert.Equal("playerbot-recovery-spirit-healer-failed", signal.Detail);
+    }
+
+    [Fact]
     public void CreatureCategory_IsTheLoggerTheCreatureFeatureReallyUses()
     {
         // The map systems log through the CreatureWorldFeature logger; if that category moves, relay lines would silently stop reaching QA.

@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 197 |
-| `Administrator` | 6 | 300 |
+| `GameMaster` | 3 | 199 |
+| `Administrator` | 6 | 302 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -203,12 +203,12 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.goname` | 2 | GameMaster | declared retail level | Syntax: .goname [$charactername] Teleport to the given character, or the selected one. |
 | `.namego` | 2 | GameMaster | declared retail level | Syntax: .namego [$charactername] Teleport the given character, or the selected one, to you. |
 | `.gocorpse` | 3 | GameMaster | stored level through the map | Syntax: .gocorpse [$playername] Teleport to the corpse of the selected player (or the named one, or yourself). |
-| `.commands` | 0 | Player | stored level through the map | Syntax: .commands Display a list of the commands available to you. |
+| `.commands` | 0 | Player | stored level through the map | Syntax: .commands [page \| text [page]] Display an overview of the commands available to you, one page at a time; with text, list the commands whose name contains it (e.g. .commands npc). |
 | `.die` | 3 | GameMaster | declared retail level | Syntax: .die Kill the selected unit or yourself without kill credit. |
 | `.revive` | 3 | GameMaster | stored level through the map | Syntax: .revive [$playername] Revive the selected player (or the named one, or yourself): half health and mana, the corpse gone. |
 | `.gps` | 1 | Moderator | stored level through the map | Syntax: .gps Display the position of the selected player, or yours. |
 | `.guid` | 2 | GameMaster | declared retail level | Syntax: .guid Show the GUID of the selected object. |
-| `.help` | 0 | Player | stored level through the map | Syntax: .help [command] Display usage instructions for the given command; without a command, the commands you can use. |
+| `.help` | 0 | Player | stored level through the map | Syntax: .help [command [page]] Display usage instructions for the given command or group (a group lists its subcommands, paged); without a command, an overview of the commands you can use. |
 | `.cooldown` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself. |
 | `.unlearn` ... | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .unlearn #spell — make the selected player or yourself forget a spell. |
 | `.unlearn all_gm` | 3 | GameMaster | declared retail level | Forget the reference GM spell list. |
@@ -305,6 +305,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
+| `.spawninfo dynamic` | 2 | GameMaster | declared retail level | Syntax: .spawninfo dynamic Show the population-scaled respawn (World:Respawn:Dynamic) at your position: whether it is on, the players counted within its radius, the multiplier and example respawn delays. Read-only. |
 | `.spawninfo summary` | 2 | GameMaster | declared retail level | Syntax: .spawninfo summary Count the creatures and game objects of this map by state, including the respawn times kept for unloaded grids. |
 | `.spawngroup` ... | 3 | GameMaster | declared retail level | Syntax: .spawngroup $subcommand Type .spawngroup to see the list of possible subcommands or .help spawngroup $subcommand to see info on subcommands. |
 | `.spawngroup list` | 3 | GameMaster | declared retail level | Syntax: .spawngroup list [creature\|gameobject] List the spawn groups of your map: id, type, members in the world / maximum, name. |
@@ -347,11 +348,12 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot population disable` | 6 | Administrator | stored level through the map | Syntax: .playerbot population disable Turn the population manager off until the next .reload config or restart. Bots it started keep running. |
 | `.playerbot population target` | 6 | Administrator | stored level through the map | Syntax: .playerbot population target #count Set the number of bots to keep online (0..1000) until the next .reload config or restart (World:Playerbots:Population:TargetOnline). The effective target is also capped by MaxBots. |
 | `.playerbot population rush` | 6 | Administrator | stored level through the map | Syntax: .playerbot population rush $count [$perSecond] .playerbot population rush stop Create and start $count new population bots at $perSecond per second (default 5; at most 50), bypassing the add-budget windows. A brake pauses it while the tick p95 stays over World:Playerbots:Population:RushBrakeP95Ms. The existing bot, account and character limits apply. Progress is in .playerbot population status. |
-| `.playerbot qa` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa [top [#n]\|show $id\|spells [#n]\|reset [$id]] The playerbot QA findings: stalls, death loops, faults, missing data and spells that do not work, ranked, and the GitHub reporter's state. |
-| `.playerbot qa top` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa top [#n] List the n (default 10, at most 25) highest-ranked findings with their short ids. |
+| `.playerbot qa` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa [top [#n] [all]\|show $id\|spells [#n]\|reset [$id]\|prune [#hours] [closed] [dry]] The playerbot QA findings: stalls, death loops, faults, missing data and spells that do not work, ranked, and the GitHub reporter's state. |
+| `.playerbot qa top` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa top [#n] [all] List the n (default 10, at most 25) highest-ranked findings with their short ids and when each was last seen. Findings not seen since this server started (stale: possibly fixed by this build) are hidden behind one hint line; 'all' lists them too, after every current one. |
 | `.playerbot qa show` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa show $id Show one finding's cause, counts, evidence samples and a .go xyz command to the place (the id is at least 4 characters of the short id). |
 | `.playerbot qa spells` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa spells [#n] The spell coverage of the bots (how many of the spells they can cast are fully handled, the gaps shared by the most spells) and the n (default 10, at most 25) highest-ranked spell findings bots met. |
 | `.playerbot qa reset` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa reset [$id] Forget one finding, or all of them. Local only: GitHub issues are not touched. |
+| `.playerbot qa prune` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa prune [#hours] [closed] [dry] Forget the findings not seen for #hours (default 12, 1..720). 'closed' also forgets those whose GitHub issue is known closed, whatever their age; 'dry' only lists what would go. Findings that hold a GitHub issue are never forgotten by age; 'closed' forgets the closed ones and remembers their issue number, so a recurrence stays closed. Local only: GitHub is not touched. Takes effect on disk at the next save. |
 | `.rates` ... | 3 | GameMaster | stored level through the map | Live server rates. Syntax: .rates [show\|set\|reset] |
 | `.rates show` | 3 | GameMaster | stored level through the map | Syntax: .rates [show] [$filter] Show the live-tunable server rates: the value in force, the configured value and whether it is overridden. $filter: part of a name (xp, drop, creature...). |
 | `.rates set` | 6 | Administrator | stored level through the map | Syntax: .rates set $name $value [$reason] Change a server rate for everyone until .rates reset, .reload config or restart (not saved to any file). $name: a vmangos name such as Rate.XP.Kill or a short form (xp, xp.quest, drop.money, money, drop.epic...), any case. $value: 0 to 100 (1 is retail), some rates have their own bounds; .rates show lists them. $reason is logged with the change. |

@@ -59,7 +59,7 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
     /// <param name="shaftFloor">The floor inside the cars' footprints (null, the default: none, as on the real data, where a car is a
     /// dynamic object in no collision data and nothing lies under it but the bottom of the shaft).</param>
     public static async Task<ElevatorTestWorld> StartAsync(TransportAnimationCatalog? animation = null, CreatureContent? creatures = null,
-        float? shaftFloor = null)
+        float? shaftFloor = null, Action<IServiceCollection>? configure = null)
     {
         WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
@@ -68,6 +68,7 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
             services.AddSingleton(animation ?? ElevatorTestData.Animation());
             services.AddSingleton<IWorldFeature, ManualClockFeature>();
             if (creatures is not null) services.AddSingleton<ICreatureDataStore>(new CreatureStore(creatures));
+            configure?.Invoke(services);
         });
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         await host.OnWorldAsync(() =>

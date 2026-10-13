@@ -312,8 +312,9 @@ public sealed partial class ManagedPlayerbotFeature
                 else
                 {
                     failed++;
-                    logger.LogWarning("Playerbot fleet reset: bot {BotId} did not stop cleanly ({Type})", active.Record.BotId,
-                        stop.Exception?.GetBaseException().GetType().Name ?? "canceled");
+                    Exception? cause = stop.Exception?.GetBaseException();
+                    logger.LogWarning(cause, "Playerbot fleet reset: bot {BotId} did not stop cleanly ({Type})", active.Record.BotId,
+                        cause?.GetType().Name ?? "canceled");
                 }
             }
 
@@ -385,7 +386,7 @@ public sealed partial class ManagedPlayerbotFeature
                 {
                     session.Kick();
                     try { await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
-                    catch (TimeoutException) { logger.LogWarning("Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
+                    catch (TimeoutException timeout) { logger.LogWarning(timeout, "Playerbot {BotId}: the deletion session did not close within 10 s", bot.BotId); }
                 }
             }
 

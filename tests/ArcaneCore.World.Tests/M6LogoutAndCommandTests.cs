@@ -176,15 +176,13 @@ public sealed class M6LogoutAndCommandTests
         await using WorldTestClient listener = await host.EnterWorldAsync("LISTENER", "Listener");
         await Drain(player, listener);
 
-        // The vertical list in retail table order (Chat.cpp:2081-2116), "..." marking a group; ".help" shows
-        // the help of ".help" first and then the same list. Commands above the caller are not listed.
+        // The packed list in retail table order (Chat.cpp:2081-2116 order), "(n)" counting a group's usable subcommands;
+        // ".help" shows the same overview. Commands above the caller are not listed.
         // "modify ..." is listed for its player-level "xprate" (vmangos Chat.cpp:630, SEC_PLAYER).
-        string[] list = ["Commands available to you:", "    modify ...", "    server ...", "    commands", "    help", "    save"];
         await player.SendChatAsync(ChatType.Say, Language.Common, "!commands");
-        foreach (string line in list)
-        {
-            Assert.Equal(line, (await player.ReadChatAsync()).Text);
-        }
+        Assert.Equal("Commands (page 1/1)", (await player.ReadChatAsync()).Text);
+        Assert.Equal("modify (1), server (2), commands, help, save", (await player.ReadChatAsync()).Text);
+        Assert.StartsWith("Search: .commands <text>", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
 
         // Known but above the caller: "not available" (resolve first, then authorise); unknown: "no such command".
         Assert.Equal("This command is not available to you.", await CommandAsync(player, ".gm on"));

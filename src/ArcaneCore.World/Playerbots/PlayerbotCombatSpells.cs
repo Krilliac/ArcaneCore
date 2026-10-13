@@ -113,9 +113,11 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             return false;
         }
 
-        if (player.Movement.HasFlag(MovementFlags.MaskMoving))
+        // The bot stops (an unbudgeted report, as a client's own) and casts in this same think: a stop that waited for the next think
+        // cost a gap of seconds with a thousand bots. Only a stop the server did not take leaves the cast to the next think.
+        if (player.Movement.HasFlag(MovementFlags.MaskMoving)
+            && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
         {
-            PlayerbotMovementControl.Stop(session, player);
             return true;
         }
 
@@ -224,6 +226,24 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         return unit is not null && view.CanCast(spell, unit);
     }
 
+    /// <summary>
+    /// The first of <paramref name="spells"/> the bot can cast at <paramref name="target"/> now (not refused lately, in range, affordable),
+    /// judged on one combat view built for the whole list; null when none can be cast or the target is not in the view.
+    /// </summary>
+    internal SpellInfo? FirstCastable(Player player, IReadOnlyList<SpellInfo> spells, Unit target, Func<SpellInfo, bool>? accept = null)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(spells);
+        ArgumentNullException.ThrowIfNull(target);
+        if (spells.Count == 0 || session.Services.GetService<SpellFeature>() is not { } feature) return null;
+        RotationState view = View(player, feature, ReferenceEquals(target, player) ? null : target);
+        RotationUnit? unit = ReferenceEquals(target, player) ? view.Self : view.Victim;
+        if (unit is null) return null;
+        for (int index = 0; index < spells.Count; index++)
+            if ((accept is null || accept(spells[index])) && !IsRefused(spells[index]) && view.CanCast(spells[index], unit)) return spells[index];
+        return null;
+    }
+
     /// <summary>Submit <paramref name="spell"/> at <paramref name="target"/> through CMSG_CAST_SPELL; true when the server took it.</summary>
     internal bool CastAt(Player player, SpellInfo spell, Unit target)
     {
@@ -279,7 +299,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
         PlayerbotClassRotation? rotation = PlayerbotRotations.For(player.Class);
         SpellInfo[] known = [.. feature.Spellbook.GetSpells(player).Select(feature.System.Store.Get).OfType<SpellInfo>()];
-        _abilities = PlayerbotAbilities.Resolve(known, rotation?.Abilities ?? []);
+        _abilities = PlayerbotAbilities.Resolve(known, rotation?.Abilities ?? [], feature.System.Store);
         PlayerbotAbilities abilities = _abilities;
         _role = PlayerbotRoles.Assign(player.Class, id => abilities.HasSpellOrRank(id, feature.System.Store.Get));
         return _abilities;
@@ -358,7 +378,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
     private static bool IsExplicitUnit(SpellInfo spell) => spell.Effects[0].TargetA is SpellImplicitTarget.UnitFriend
         or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitFriendAndParty or SpellImplicitTarget.UnitParty
-        or SpellImplicitTarget.UnitCasterPet;
+        or SpellImplicitTarget.UnitFriendChainHeal or SpellImplicitTarget.UnitCasterPet;
 
     /// <summary>The server took the request: its SMSG_SPELL_START / GO, or the cast, next-swing or auto-repeat slot now holds it.</summary>
     private bool Accepted(SpellFeature feature, Player player, SpellInfo spell)

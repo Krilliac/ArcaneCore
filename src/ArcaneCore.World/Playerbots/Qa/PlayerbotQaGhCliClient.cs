@@ -324,6 +324,7 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // best-effort removal of a temporary body file; a leftover file is harmless
         }
     }
 

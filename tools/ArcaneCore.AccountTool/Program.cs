@@ -27,6 +27,8 @@ if (string.Equals(args[0], "db", StringComparison.OrdinalIgnoreCase))
 }
 
 builder.Services.AddAuthDatabase(builder.Configuration);
+// The host is built but never started, so no hosted service would checkpoint: keep SQLite's own auto-checkpoint.
+builder.Services.PostConfigure<DatabaseOptions>(options => options.Sqlite.Checkpoint.Enabled = false);
 using IHost host = builder.Build();
 
 int startup = await DatabaseStartup.InitializeAsync(

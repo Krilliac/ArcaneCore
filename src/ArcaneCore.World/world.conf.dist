@@ -26,7 +26,7 @@
 
 # SECTIONS
 #
-#   ANTICHEAT                   43 keys
+#   ANTICHEAT                   44 keys
 #   AUCTIONHOUSEBOT             39 keys
 #   AURAS                       4 keys
 #   AUTOBROADCAST               3 keys
@@ -38,7 +38,7 @@
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
 #   CREATURES                   64 keys
-#   DATABASE                    21 keys
+#   DATABASE                    24 keys
 #   DIAGNOSTICS                 11 keys
 #   ECONOMY                     29 keys
 #   ENCHANTING                  3 keys
@@ -74,8 +74,8 @@
 #   STATS                       1 keys
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
-#   WARDEN                      14 keys
-#   WORLD                       362 keys
+#   WARDEN                      15 keys
+#   WORLD                       445 keys
 #
 ###############################################################################
 
@@ -568,6 +568,20 @@ AntiCheat.SpeedSlackYards = 2
 #        Docs: docs/reference/configuration.md#anticheat
 #
 AntiCheat.SpeedTolerancePercent = 10
+
+#
+#    AntiCheat.StaffNoticeCooldownSeconds
+#        Description: The staff line for a kick, an autoban or a failed autoban is sent at most once
+#                     per account and kind per this many seconds; repeats inside the window are
+#                     counted and reported as one "N more suppressed" line. Independent of
+#                     World:Announce. 0 sends every line. 0-3600, default 30.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#anticheat
+#
+AntiCheat.StaffNoticeCooldownSeconds = 30
 
 #
 #    AntiCheat.TeleportDistance
@@ -2863,6 +2877,61 @@ Database.SlowCommandWarnMs = 2000
 #        Docs: docs/reference/configuration.md#database
 #
 Database.SlowTransactionWarnMs = 2000
+
+#
+#    Database.Sqlite.Checkpoint.Enabled
+#        Description: Whether the background checkpointer owns checkpointing (default true). False
+#                     leaves SQLite's own auto-checkpoint (1000 pages, inside the committing
+#                     connection) untouched.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Sqlite.Checkpoint.Enabled = true
+
+#
+#    Database.Sqlite.Checkpoint.IntervalMs
+#        Description: How often (milliseconds, 100..3600000, default 2000) the background service
+#                     runs PRAGMA wal_checkpoint(PASSIVE) on each database. PASSIVE takes no writer
+#                     lock and waits on no lock, but its I/O still competes for the same disk; a
+#                     shorter interval keeps the WAL smaller at the cost of more wake-ups.
+#        Type: int
+#        Default: 2000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Sqlite.Checkpoint.IntervalMs = 2000
+
+#
+#    Database.Sqlite.Checkpoint.JournalSizeLimitBytes
+#        Description: PRAGMA journal_size_limit in bytes (0..1099511627776, default 33554432 = 32
+#                     MiB), set on every connection to the database: once a checkpoint has copied
+#                     the whole WAL into the database and the next writer restarts it, SQLite
+#                     truncates the file down to this size instead of leaving it at its high-water
+#                     mark. This is the only thing that shrinks the -wal file while the server runs,
+#                     and only when the log restarts (continuous overlapping readers can postpone
+#                     that; a warning is logged when the file stays above 4 x max(this limit, 1 MiB)
+#                     for 30 s while commits keep arriving or the copy is incomplete): the service
+#                     never runs a TRUNCATE checkpoint during operation, because TRUNCATE takes the
+#                     exclusive writer lock and holds it through the copy of the frames written
+#                     since the last PASSIVE, the WAL fsync and the database fsync (which on Windows
+#                     flushes every page earlier PASSIVE runs wrote), which would put the stall this
+#                     feature removes back in front of a game save. Only the final checkpoint at
+#                     host stop, after the world has drained its saves, is a TRUNCATE; it waits at
+#                     most about 250 ms for readers and writers, and holds the writer lock through
+#                     its copy and syncs. If the Auth database is one file shared by the world and
+#                     realm daemons, either daemon's shutdown TRUNCATE can briefly stall the other's
+#                     auth writes.
+#        Type: long
+#        Default: 33554432
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Sqlite.Checkpoint.JournalSizeLimitBytes = 33554432
 
 #
 #    Database.SqliteBusyTimeoutMs
@@ -7584,6 +7653,20 @@ Warden.ScanIntervalMinSeconds = 30
 #
 Warden.ScansPerRequest = 3
 
+#
+#    Warden.StaffNoticeCooldownSeconds
+#        Description: Warden:StaffNoticeCooldownSeconds: the staff line for a Kick or Ban verdict is
+#                     sent at most once per account and action per this many seconds; repeats inside
+#                     the window are counted and reported as one "N more suppressed" line.
+#                     Independent of World:Announce. 0 sends every line. 0-3600, default 30.
+#        Type: uint
+#        Default: 30
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#warden
+#
+Warden.StaffNoticeCooldownSeconds = 30
+
 ###############################################################################
 # WORLD
 ###############################################################################
@@ -7999,6 +8082,129 @@ World.Port = 8085
 World.PreAuthTimeout = 00:00:10
 
 #
+#    World.Respawn.Dynamic.CountBots
+#        Description: World:Respawn:Dynamic:CountBots: count playerbots as players (default true).
+#                     False counts only human players, so bots neither shorten nor take part in the
+#                     scaling.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Respawn.Dynamic.CountBots = true
+
+#
+#    World.Respawn.Dynamic.Enabled
+#        Description: World:Respawn:Dynamic:Enabled: scale respawn delays with the players around
+#                     the spawn. False (the default) leaves every delay as the database says, which
+#                     is retail. When true this replaces Creatures:Respawn:DynamicRate
+#                     (TrinityCore's zone-rate scaling, off by default) rather than compounding with
+#                     it.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Respawn.Dynamic.Enabled = false
+
+#
+#    World.Respawn.Dynamic.IncludeElitesAndRares
+#        Description: World:Respawn:Dynamic:IncludeElitesAndRares: also scale elite, rare and
+#                     rare-elite creatures (default false: only normal creatures scale). World
+#                     bosses never scale, whatever this says.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Respawn.Dynamic.IncludeElitesAndRares = false
+
+#
+#    World.Respawn.Dynamic.IncludeGameObjects
+#        Description: World:Respawn:Dynamic:IncludeGameObjects: scale the respawn delay of gathering
+#                     nodes (herbs, mineral veins) and quest objects too (default true). Other game
+#                     objects never scale.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Respawn.Dynamic.IncludeGameObjects = true
+
+#
+#    World.Respawn.Dynamic.MaxReduction
+#        Description: World:Respawn:Dynamic:MaxReduction: the share of the base delay that scaling
+#                     may take off, so the delay is never below base * (1 - MaxReduction) (0..1,
+#                     default 0.9: at most a tenth of the base delay remains). 0 never scales.
+#        Type: float
+#        Default: 0.9
+#        Allowed: a number from 0 to 1 ('.' is the decimal point); 0 never scales
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Respawn.Dynamic.MaxReduction = 0.9
+
+#
+#    World.Respawn.Dynamic.MinimumSeconds
+#        Description: World:Respawn:Dynamic:MinimumSeconds: the delay is never scaled below this
+#                     many seconds, and a delay already at or under it is left alone (1..86400,
+#                     default 30). A corpse is removed when its respawn time is reached, so a value
+#                     under the time players need to loot cuts loot short. The code has no separate
+#                     corpse minimum, so this floor is it: the default 30 keeps a corpse lootable
+#                     for at least 30 s.
+#        Type: uint
+#        Default: 30
+#        Allowed: a whole number of seconds from 1 to 86400
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Respawn.Dynamic.MinimumSeconds = 30
+
+#
+#    World.Respawn.Dynamic.PlayerThreshold
+#        Description: World:Respawn:Dynamic:PlayerThreshold: players within Radius that are free;
+#                     only the players above this many shorten the delay (0..10000, default 5).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number from 0 to 10000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Respawn.Dynamic.PlayerThreshold = 5
+
+#
+#    World.Respawn.Dynamic.Radius
+#        Description: World:Respawn:Dynamic:Radius: players are counted within this many yards (2D)
+#                     of the spawn's home position (5..500, default 100). A radius is local to the
+#                     contested spot, where a zone count is not, and is answered by the map's grid
+#                     cells at the cost of the few cells it touches.
+#        Type: float
+#        Default: 100
+#        Allowed: a number of yards from 5 to 500 ('.' is the decimal point)
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Respawn.Dynamic.Radius = 100
+
+#
+#    World.Respawn.Dynamic.ScalePerPlayer
+#        Description: World:Respawn:Dynamic:ScalePerPlayer: each player above PlayerThreshold adds
+#                     this to the divisor, so the delay is base / (1 + ScalePerPlayer * max(0,
+#                     players - PlayerThreshold)) (0..10, default 0.1: 15 players over the threshold
+#                     divide the delay by 2.5). 0 never scales.
+#        Type: float
+#        Default: 0.1
+#        Allowed: a number from 0 to 10 ('.' is the decimal point); 0 never scales
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.Respawn.Dynamic.ScalePerPlayer = 0.1
+
+#
 #    World.SaveQueueWarnAgeMs
 #        Description: The character save queue warns while its oldest waiting snapshot has waited
 #                     this many milliseconds. 0 disables the age check. Default 5000, the quest
@@ -8113,6 +8319,200 @@ World.WriterDrainGrace = 00:00:00
 #----------------------------------------------------------------------------
 
 #
+#    World.Announce.AntiCheat.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.AntiCheat.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.DedupSeconds = 30
+
+#
+#    World.Announce.AntiCheat.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.GmNotify = true
+
+#
+#    World.Announce.AntiCheat.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.IncludeDetails = true
+
+#
+#    World.Announce.AntiCheat.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Info
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.MinimumSeverity = Info
+
+#
+#    World.Announce.AntiCheat.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.RateBurst = 10
+
+#
+#    World.Announce.AntiCheat.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.RatePerMinute = 20
+
+#
+#    World.Announce.AntiCheat.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.AntiCheat.WorldMessage = false
+
+#
+#    World.Announce.BotQa.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.BotQa.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 3600
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.DedupSeconds = 3600
+
+#
+#    World.Announce.BotQa.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.GmNotify = true
+
+#
+#    World.Announce.BotQa.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.IncludeDetails = true
+
+#
+#    World.Announce.BotQa.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Info
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.MinimumSeverity = Info
+
+#
+#    World.Announce.BotQa.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.RateBurst = 5
+
+#
+#    World.Announce.BotQa.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.RatePerMinute = 6
+
+#
+#    World.Announce.BotQa.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.BotQa.WorldMessage = false
+
+#
 #    World.Announce.Enabled
 #        Description: Master switch for delivery to players and staff. When false announcements are
 #                     still logged and counted.
@@ -8123,6 +8523,103 @@ World.WriterDrainGrace = 00:00:00
 #        Docs: docs/reference/configuration.md#worldannounce
 #
 World.Announce.Enabled = true
+
+#
+#    World.Announce.Faults.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.Faults.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.DedupSeconds = 300
+
+#
+#    World.Announce.Faults.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.GmNotify = true
+
+#
+#    World.Announce.Faults.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.IncludeDetails = true
+
+#
+#    World.Announce.Faults.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Warning
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.MinimumSeverity = Warning
+
+#
+#    World.Announce.Faults.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.RateBurst = 5
+
+#
+#    World.Announce.Faults.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.RatePerMinute = 6
+
+#
+#    World.Announce.Faults.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Faults.WorldMessage = false
 
 #
 #    World.Announce.HotSwap.AllowNamesInWorldMessage
@@ -8258,6 +8755,297 @@ World.Announce.HotSwap.WorldMessageIncludeReason = true
 #        Docs: docs/reference/configuration.md#worldannounce
 #
 World.Announce.HotSwap.WorldMessageOnFailure = false
+
+#
+#    World.Announce.Saves.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.Saves.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.DedupSeconds = 120
+
+#
+#    World.Announce.Saves.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.GmNotify = true
+
+#
+#    World.Announce.Saves.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.IncludeDetails = true
+
+#
+#    World.Announce.Saves.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Warning
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.MinimumSeverity = Warning
+
+#
+#    World.Announce.Saves.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.RateBurst = 5
+
+#
+#    World.Announce.Saves.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.RatePerMinute = 6
+
+#
+#    World.Announce.Saves.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Saves.WorldMessage = false
+
+#
+#    World.Announce.Shutdown.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.Shutdown.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.DedupSeconds = 0
+
+#
+#    World.Announce.Shutdown.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.GmNotify = true
+
+#
+#    World.Announce.Shutdown.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.IncludeDetails = true
+
+#
+#    World.Announce.Shutdown.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Info
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.MinimumSeverity = Info
+
+#
+#    World.Announce.Shutdown.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.RateBurst = 10
+
+#
+#    World.Announce.Shutdown.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.RatePerMinute = 20
+
+#
+#    World.Announce.Shutdown.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Shutdown.WorldMessage = false
+
+#
+#    World.Announce.Wiring.AllowNamesInWorldMessage
+#        Description: Let the world message carry character names when the announcing code supplies
+#                     a text for it. Off by default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.AllowNamesInWorldMessage = false
+
+#
+#    World.Announce.Wiring.DedupSeconds
+#        Description: An announcement identical to one delivered this many seconds ago is
+#                     suppressed. 0 disables the window.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.DedupSeconds = 300
+
+#
+#    World.Announce.Wiring.GmNotify
+#        Description: Send the announcement to every online account above Player (an on-screen
+#                     notification and a chat line). Staff only.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.GmNotify = true
+
+#
+#    World.Announce.Wiring.IncludeDetails
+#        Description: Add the staff-only detail (who, how long, counts, hashes) to the staff chat
+#                     line. Players never see it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.IncludeDetails = true
+
+#
+#    World.Announce.Wiring.MinimumSeverity
+#        Description: Announcements below this severity are logged and counted but not delivered.
+#                     Values: Info, Warning, Error, Critical.
+#        Type: AnnounceSeverity
+#        Default: Warning
+#        Allowed: Info | Warning | Error | Critical
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.MinimumSeverity = Warning
+
+#
+#    World.Announce.Wiring.RateBurst
+#        Description: Rate limit: how many announcements of this category may go out back to back
+#                     before the limit applies. 0 disables the limit.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.RateBurst = 10
+
+#
+#    World.Announce.Wiring.RatePerMinute
+#        Description: Rate limit: announcements of this category refilled per minute once the burst
+#                     is used. Suppressed ones are counted and reported on the next delivered
+#                     announcement.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.RatePerMinute = 20
+
+#
+#    World.Announce.Wiring.WorldMessage
+#        Description: Send a short system chat line to every online player. Never carries account
+#                     names; never carries character names unless AllowNamesInWorldMessage.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldannounce
+#
+World.Announce.Wiring.WorldMessage = false
 
 #----------------------------------------------------------------------------
 # World:Chat
@@ -9841,6 +10629,89 @@ World.Playerbots.Battlegrounds.PreferFillingRealPlayerQueues = true
 World.Playerbots.Battlegrounds.QueueChancePerMinute = 0.05
 
 #
+#    World.Playerbots.Budget.ClassLevelsAhead
+#        Description: How many levels ahead of its own the bot saves for class spells (0..10): the
+#                     spells its class trainer teaches at levels up to this many above the bot's,
+#                     plus the ones it can learn now, are reserved at the trainer's prices, so
+#                     lower-priority spending (riding, the auction house) cannot eat the money they
+#                     cost. 0 reserves only what can be learned now.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.ClassLevelsAhead = 2
+
+#
+#    World.Playerbots.Budget.DiscretionaryFloorFraction
+#        Description: The share of its current money (0..1) a bot may always spend on discretionary
+#                     purchases (auction upgrades), even when the reserves leave nothing over: a
+#                     reserve the bot may never reach (a tier far above its means) does not stop its
+#                     optional buying for good. 0 lets the reserves take everything. Auction listing
+#                     deposits are never limited by the reserves.
+#        Type: float
+#        Default: 0.1
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.DiscretionaryFloorFraction = 0.1
+
+#
+#    World.Playerbots.Budget.Enabled
+#        Description: Let bots save for what they will need (on by default). Off: nothing is
+#                     reserved and every spend site may spend all the bot's money.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.Enabled = true
+
+#
+#    World.Playerbots.Budget.EssentialsAllowanceCopper
+#        Description: Copper a bot may always spend on food, drink and ammunition (0..100000000),
+#                     whatever it saves for: the part of a purchase that the reserves would
+#                     otherwise forbid is allowed up to this price, so a saving bot never starves.
+#        Type: uint
+#        Default: 10000
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.EssentialsAllowanceCopper = 10000
+
+#
+#    World.Playerbots.Budget.RefreshSeconds
+#        Description: Seconds between two recomputations of a bot's reserves (1..3600); a level, a
+#                     learned spell or a new map recompute them at once.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Budget.RefreshSeconds = 30
+
+#
+#    World.Playerbots.ChaseReplanYards
+#        Description: How far (flat yards, 0.5..100) the target of a chase may move from the place
+#                     the chase route was planned to before the route is planned again, in the same
+#                     think that sees it. A route cut short of its target by the route bounds
+#                     (MaxRouteYards, MaxPathPoints) is planned again only once the bot has walked
+#                     75% of it. A chase route walked to its end is planned again at once, whatever
+#                     this says.
+#        Type: float
+#        Default: 5
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ChaseReplanYards = 5
+
+#
 #    World.Playerbots.Chat.Channels
 #        Description: The lines a bot answers: Whisper, Party and Say (comma-separated; all three by
 #                     default). Values: None, Whisper, Party, Say.
@@ -10206,6 +11077,62 @@ World.Playerbots.Chat.TimeoutSeconds = 10
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ClientFidelity = Lean
+
+#
+#    World.Playerbots.Contention.ClaimPenaltyYards
+#        Description: Yards a mob counts as farther away for each other bot already walking to it
+#                     (0..200), when a bot picks among untagged mobs. 0 turns the soft claims off,
+#                     so every bot goes for the nearest mob again.
+#        Type: float
+#        Default: 25
+#        Allowed: a number from 0 to 200 ('.' is the decimal point); 0 turns the soft claims off
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.ClaimPenaltyYards = 25
+
+#
+#    World.Playerbots.Contention.ContentionSuspendMinutes
+#        Description: Minutes a bot leaves a quest creature alone after three minutes of contested
+#                     hunting without credit (1..120; see PlayerbotContention.ObserveObjective): it
+#                     hunts its next unfinished objective or quest meanwhile, and asks for a group
+#                     when none is left.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number from 1 to 120 (minutes)
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.ContentionSuspendMinutes = 5
+
+#
+#    World.Playerbots.Contention.HelpChance
+#        Description: Base chance (0..1) that a bot walking to a mob another player has tagged
+#                     decides to help that player instead of leaving the mob alone. It is scaled by
+#                     the bot's own sociability (a stable 0..1 from its guid), doubled for a real
+#                     player's tag and raised by half when both share the kill quest, and only asked
+#                     when the tagger is within 30 yards and losing and the bot is healthy. 0 never
+#                     helps.
+#        Type: float
+#        Default: 0.35
+#        Allowed: a number from 0 to 1 ('.' is the decimal point); 0 never helps, 1 helps whenever
+#                 the other conditions hold
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.HelpChance = 0.35
+
+#
+#    World.Playerbots.Contention.SomeoneElsesMemorySeconds
+#        Description: Seconds a bot leaves a mob alone after it found it to be someone else's
+#                     (1..600), and the least between two decisions about the same mob.
+#        Type: int
+#        Default: 15
+#        Allowed: a whole number from 1 to 600 (seconds)
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 
 #
 #    World.Playerbots.Economy.BuyUpgradeBudgetFraction
@@ -10799,13 +11726,17 @@ World.Playerbots.LocalLlmTimeoutMs = 5000
 #
 #    World.Playerbots.MaxActionsPerTick
 #        Description: The most managed client actions all bots may send in one world tick (1..64).
+#                     The tick's think time is bounded separately, by the 8 ms
+#                     PlayerbotThinkRotation.TickBudgetMs: with about 1000 bots the action budget
+#                     must not be the first limit a tick meets, or each bot waits more ticks for its
+#                     share of actions and its movement lease runs out between thinks.
 #        Type: int
-#        Default: 4
+#        Default: 48
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.MaxActionsPerTick = 4
+World.Playerbots.MaxActionsPerTick = 48
 
 #
 #    World.Playerbots.MaxBots
@@ -10914,6 +11845,43 @@ World.Playerbots.MaxRouteYards = 2000
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.MaxThinkSearchNodes = 98304
+
+#
+#    World.Playerbots.Mounts.Enabled
+#        Description: Let bots save for, train, buy and ride mounts (on by default). Off: no riding
+#                     reserve, no trips, and a mounted bot is left as it is.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Mounts.Enabled = true
+
+#
+#    World.Playerbots.Mounts.MountMinTravelYards
+#        Description: A bot rides on a walk of at least this many yards (1..100000); shorter legs
+#                     are walked.
+#        Type: float
+#        Default: 80
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Mounts.MountMinTravelYards = 80
+
+#
+#    World.Playerbots.Mounts.SaveLevelsAhead
+#        Description: Within this many levels of the level a riding tier needs (the trainer's
+#                     required level, read from the world data), a bot starts to reserve that tier's
+#                     riding training and the cheapest mount it can use (0..20).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Mounts.SaveLevelsAhead = 4
 
 #
 #    World.Playerbots.MoveSpeed
@@ -11184,6 +12152,18 @@ World.Playerbots.Population.Enabled = false
 World.Playerbots.Population.Factions = Both
 
 #
+#    World.Playerbots.Population.FreshGraduateLevel
+#        Description: The level at which a start home widens to FreshZoneHomeRadius (2..60). A
+#                     leave-home quest (see LeaveHomeLevelMargin) is allowed only from here.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.FreshGraduateLevel = 6
+
+#
 #    World.Playerbots.Population.FreshLaunch
 #        Description: Fresh-launch mode (off by default; live): new bots the population creates stay
 #                     level 1 with their default starting kit at their race's native start location
@@ -11199,6 +12179,83 @@ World.Playerbots.Population.Factions = Both
 World.Playerbots.Population.FreshLaunch = false
 
 #
+#    World.Playerbots.Population.FreshReleaseLevel
+#        Description: The level at which a graduated home is removed (2..60; at least
+#                     FreshGraduateLevel, equal skips the widened home).
+#        Type: int
+#        Default: 12
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.FreshReleaseLevel = 12
+
+#
+#    World.Playerbots.Population.FreshStartHome
+#        Description: Fresh launch: give each new bot its race's start area as a home (live, on by
+#                     default). The home is a circle of FreshStartHomeRadius yards round the race's
+#                     start position, clipped to the start zone, so a level 1 bot works the quests
+#                     and creatures of its own valley and does not wander into the next zone's mobs
+#                     or onto the Deeprun Tram. It graduates with the level: from FreshGraduateLevel
+#                     the circle widens to FreshZoneHomeRadius (still clipped to the start zone),
+#                     from FreshReleaseLevel the home is removed and the bot travels on by its own
+#                     goals. Off: new bots get no home and no start-zone cap applies. The
+#                     population's sweep also gives a running fresh-launch bot that has no home one
+#                     for its level.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.FreshStartHome = true
+
+#
+#    World.Playerbots.Population.FreshStartHomeRadius
+#        Description: The radius in yards of the start home of a bot below FreshGraduateLevel
+#                     (50..5000), zone-clipped. 1100 reaches the farthest turn-in of the class
+#                     quests of the start areas (the dwarf priest's, 1078 yards from Coldridge
+#                     Valley). Quests of everyone else are held to the start valley itself (400 to
+#                     540 yards, per area), which keeps the level 5 breadcrumbs to the next town for
+#                     the graduated home.
+#        Type: int
+#        Default: 1100
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.FreshStartHomeRadius = 1100
+
+#
+#    World.Playerbots.Population.FreshStartZoneCap
+#        Description: The most bots one start area (Northshire, Coldridge Valley, Shadowglen, Valley
+#                     of Trials, Camp Narache, Deathknell; the dwarf and gnome share one, as do the
+#                     orc and troll) may hold under a start home (0..1000; 0 = no cap). A
+#                     fresh-launch creation picks the least crowded area the chosen faction and
+#                     class can start in; when every area is at the cap creation is deferred (the
+#                     rush waits and says so) until bots graduate.
+#        Type: int
+#        Default: 40
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.FreshStartZoneCap = 40
+
+#
+#    World.Playerbots.Population.FreshZoneHomeRadius
+#        Description: The radius in yards of the graduated home, between FreshGraduateLevel and
+#                     FreshReleaseLevel (50..5000). It is clipped to the start zone, so it never
+#                     reaches the next one.
+#        Type: int
+#        Default: 1500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.FreshZoneHomeRadius = 1500
+
+#
 #    World.Playerbots.Population.IntervalSeconds
 #        Description: Seconds of world time between two passes of the control loop (2..600).
 #        Type: int
@@ -11208,6 +12265,20 @@ World.Playerbots.Population.FreshLaunch = false
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Population.IntervalSeconds = 10
+
+#
+#    World.Playerbots.Population.LeaveHomeLevelMargin
+#        Description: A quest whose turn-in NPC is outside a graduated home (a leave-home quest)
+#                     needs the bot to be at least its QuestLevel minus this many levels (0..10),
+#                     and never below its MinLevel. A bot under a start home takes none; a bot with
+#                     no home is not affected.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.LeaveHomeLevelMargin = 0
 
 #
 #    World.Playerbots.Population.MaxCreatePerMinute
@@ -11385,6 +12456,19 @@ World.Playerbots.Population.TargetOnline = 0
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Population.TickP95BudgetMs = 60
+
+#
+#    World.Playerbots.Population.TramMinLevel
+#        Description: A bot below this level that has no home takes no Deeprun Tram or lift trip
+#                     (0..60; 0 = no limit). The live fresh launch sent about 76 level 1 bots to
+#                     Stormwind quests by the tram.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TramMinLevel = 10
 
 #
 #    World.Playerbots.Population.WindowTicks
@@ -11713,6 +12797,58 @@ World.Playerbots.Social.Guilds.TargetSize = 25
 World.Playerbots.StallSeconds = 120
 
 #
+#    World.Playerbots.Taxi.BackoffMinutes
+#        Description: Minutes a bot does not try to fly after a flight attempt failed (the server
+#                     refused the flight, the flight master could not be reached, or none stood
+#                     where the node is): it walks meanwhile (1..1440; default 10).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Taxi.BackoffMinutes = 10
+
+#
+#    World.Playerbots.Taxi.Enabled
+#        Description: Let bots discover flight masters they pass and fly between known nodes (on by
+#                     default). Off: bots never talk to a flight master.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Taxi.Enabled = true
+
+#
+#    World.Playerbots.Taxi.MaxWalkToMasterYards
+#        Description: The farthest, in yards, the bot's own position may lie from the flight path
+#                     node it departs from, and the node it lands at from the trip's end, in a
+#                     straight line (10..2000; default 300). The two walks together must also be at
+#                     most half of the straight line.
+#        Type: float
+#        Default: 300
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Taxi.MaxWalkToMasterYards = 300
+
+#
+#    World.Playerbots.Taxi.MinRouteYards
+#        Description: A trip is flown only when the straight line from the bot to where it is going
+#                     is at least this many yards (100..20000; default 600). Shorter trips are
+#                     walked.
+#        Type: float
+#        Default: 600
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Taxi.MinRouteYards = 600
+
+#
 #    World.Playerbots.ThinkIntervalMs
 #        Description: Milliseconds between two decisions of a bot (50..60000).
 #        Type: int
@@ -11726,6 +12862,21 @@ World.Playerbots.ThinkIntervalMs = 500
 #----------------------------------------------------------------------------
 # World:Playerbots:Qa
 #----------------------------------------------------------------------------
+
+#
+#    World.Playerbots.Qa.AutoPruneHours
+#        Description: Hours after which a finding not seen again is forgotten on every pass, counted
+#                     from the later of its last sighting and the server start (so a restart prunes
+#                     nothing at once). A finding that holds a GitHub issue is never forgotten, and
+#                     GitHub is never touched. 0 (default) is off; the same as .playerbot qa prune
+#                     #hours (0..8760).
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.AutoPruneHours = 0
 
 #
 #    World.Playerbots.Qa.Directory

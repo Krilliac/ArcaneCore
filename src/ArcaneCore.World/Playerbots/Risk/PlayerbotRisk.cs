@@ -242,35 +242,58 @@ internal sealed class PlayerbotRisk
     /// The first candidate (quest objectives first, then nearest) whose reward justifies its risk; null when none does. A candidate
     /// fine at full health and mana starts a wait to recover (<see cref="Waiting"/>) when nothing else is worth it.
     /// </summary>
-    internal Creature? ChooseTarget(Player player, uint preferredEntry, Func<Creature, bool> skip, bool questObjective)
+    internal Creature? ChooseTarget(Player player, uint preferredEntry, Func<Creature, bool> skip, bool questObjective,
+        PlayerbotContention? contention = null)
     {
         PlayerbotEngagement? first = null, rest = null;
-        foreach (Creature candidate in PlayerbotBrain.FindTargets(player, preferredEntry,
-                     creature => skip(creature) || IsRemembered(creature)
-                         || Enabled && Hazards.CoversDeathLoop(creature.MapId,
-                             new Vector3(creature.X, creature.Y, creature.Z), _session.World.NowMs), MaxLevelsAbove).Take(MaxCandidates))
+        // One pass keeps the best few (the soft claims of the other bots weigh into the order, PlayerbotContention.Weigh); the filter
+        // delegate is built once and reads the caller's skip from a field, so a choice allocates nothing.
+        _chooseSkip = skip;
+        _chooseFilter ??= creature => _chooseSkip!(creature) || IsRemembered(creature)
+            || Enabled && Hazards.CoversDeathLoop(creature.MapId, new Vector3(creature.X, creature.Y, creature.Z), _session.World.NowMs);
+        int found = PlayerbotBrain.CollectTargets(player, preferredEntry, _chooseFilter, MaxLevelsAbove, contention, _candidates);
+        try
         {
-            PlayerbotEngagement verdict = Assess(player, candidate, questObjective && candidate.Entry == preferredEntry, out PlayerbotRoute? detour);
-            first ??= verdict;
-            switch (verdict.Decision)
+            for (int index = 0; index < found; index++)
             {
-                case PlayerbotEngageDecision.Engage:
-                    LastEngagement = verdict;
-                    return candidate;
-                case PlayerbotEngageDecision.Detour when detour is not null:
-                    LastEngagement = verdict;
-                    Detour = detour;
-                    return candidate;
-                case PlayerbotEngageDecision.Rest:
-                    rest ??= verdict;
-                    break;
+                Creature candidate = _candidates[index].Creature!;
+                PlayerbotEngagement verdict = Assess(player, candidate, questObjective && candidate.Entry == preferredEntry, out PlayerbotRoute? detour);
+                first ??= verdict;
+                switch (verdict.Decision)
+                {
+                    case PlayerbotEngageDecision.Engage:
+                        LastEngagement = verdict;
+                        return candidate;
+                    case PlayerbotEngageDecision.Detour when detour is not null:
+                        LastEngagement = verdict;
+                        Detour = detour;
+                        return candidate;
+                    case PlayerbotEngageDecision.Rest:
+                        rest ??= verdict;
+                        break;
+                }
             }
+        }
+        finally
+        {
+            Array.Clear(_candidates);
+            _chooseSkip = null;
         }
 
         LastEngagement = rest ?? first ?? LastEngagement;
         if (rest is not null) BeginWait(player);
         return null;
     }
+
+    private Func<Creature, bool>? _chooseSkip;
+    private Func<Creature, bool>? _chooseFilter;
+    private readonly PlayerbotWeighedTarget[] _candidates = new PlayerbotWeighedTarget[MaxCandidates];
+
+    /// <summary>
+    /// Raise a group signal from outside the pull verdict (<see cref="PlayerbotContention"/>: a mob another player tagged for the same
+    /// quest, or a quest creature the bot gains no credit on); the coordinator takes it like any other.
+    /// </summary>
+    internal void RaiseGroupSignal(PlayerbotGroupSignal signal) => GroupSignal = signal;
 
     /// <summary>
     /// Start waiting to recover (at most <see cref="MaxWaitMs"/>), unless the last wait recovered nothing (<see cref="FruitlessWaitMs"/>)
@@ -1071,5 +1094,14 @@ internal sealed class PlayerbotRisk
     }
 }
 
-/// <summary>A quest objective too strong for the bot alone, feasible for <paramref name="Size"/> players (<see cref="PlayerbotRisk.GroupSignal"/>).</summary>
-internal readonly record struct PlayerbotGroupSignal(uint Entry, int Size, uint MapId, Vector3 At, uint AtMs);
+/// <summary>
+/// A quest objective too strong for the bot alone, feasible for <paramref name="Size"/> players (<see cref="PlayerbotRisk.GroupSignal"/>).
+/// <paramref name="Source"/> says who raised it: "risk" (the pull verdict) or "contention" (another player's tag on the same quest creature, or
+/// no credit on it, <see cref="PlayerbotContention"/>); the group goal carries it.
+/// </summary>
+internal readonly record struct PlayerbotGroupSignal(uint Entry, int Size, uint MapId, Vector3 At, uint AtMs, string Source = PlayerbotGroupSignal.RiskSource, uint QuestId = 0)
+{
+    internal const string RiskSource = "risk";
+
+    internal const string ContentionSource = "contention";
+}

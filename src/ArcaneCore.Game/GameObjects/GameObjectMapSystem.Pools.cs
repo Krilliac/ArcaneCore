@@ -135,7 +135,7 @@ public sealed partial class GameObjectMapSystem : IPoolHost
         if (!instantly && spawn.SpawnTimeSeconds >= 0)
         {
             // cmangos Spawn1Object: a replacement is created with a fresh respawn time (in place of the one that just despawned).
-            _respawnAt[spawnGuid] = _clockMs + Math.Max(1000L, RollRespawnSeconds(spawn) * 1000L);
+            _respawnAt[spawnGuid] = _clockMs + ScaleRespawnDelayMs(spawn, Math.Max(1000L, RollRespawnSeconds(spawn) * 1000L)); // population-scaled like a despawn
         }
 
         if (FindBySpawn(spawnGuid) is null && _grids.TryGetValue(CreatureMapSystem.ComputeGrid(spawn.X, spawn.Y), out List<GameObject>? list))

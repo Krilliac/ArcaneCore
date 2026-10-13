@@ -60,6 +60,9 @@ public sealed record PlayerbotInspection(string Name, PlayerbotGoalKind Goal, ui
 
     /// <summary>The bot's home area (place, map, centre, radius, distance, state; <see cref="PlayerbotHomeReturn.Describe"/>), else null.</summary>
     public string? Home { get; init; }
+
+    /// <summary>The money the bot saves for and what it may spend (<see cref="PlayerbotBudget.Report"/>: reserved lines with their costs, the riding plan, the next step).</summary>
+    public string? Budget { get; init; }
 }
 
 internal static class PlayerbotInspector
@@ -119,6 +122,7 @@ internal static class PlayerbotInspector
             PartyMode = partyDriven ? party!.Mode : null,
             Risk = partyDriven ? party!.RiskReport : brain.RiskReport,
             Home = brain.HomeDescription,
+            Budget = brain.BudgetReport(player),
         };
     }
 

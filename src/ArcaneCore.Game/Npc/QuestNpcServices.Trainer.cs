@@ -38,9 +38,10 @@ public sealed partial class QuestNpcServices
     /// <summary>
     /// Returns the first affordable, currently learnable offer from a matching class trainer.
     /// This is advisory only: it does not interact with the NPC, teach a spell, or change money.
-    /// When <paramref name="teachingSpell"/> is supplied, only that teaching spell is considered.
+    /// When <paramref name="teachingSpell"/> is supplied, only that teaching spell is considered; with <paramref name="maxCost"/>
+    /// an offer dearer than that (the part of the bot's money its budget lets it spend) is skipped.
     /// </summary>
-    public ClassTrainerQuote? GetClassTrainerQuote(Player player, NpcInfo npc, uint teachingSpell = 0)
+    public ClassTrainerQuote? GetClassTrainerQuote(Player player, NpcInfo npc, uint teachingSpell = 0, uint? maxCost = null)
     {
         if (npc is null || Ready(player) is not { } state || npc.IsGameObject
             || npc.TrainerType != TrainerType.Class || !IsTrainerOf(state, npc, false)
@@ -63,7 +64,7 @@ public sealed partial class QuestNpcServices
             }
 
             uint cost = Discounted(trainerSpell.SpellCost, discount);
-            if (player.Money < cost)
+            if (player.Money < cost || cost > (maxCost ?? uint.MaxValue))
             {
                 continue;
             }

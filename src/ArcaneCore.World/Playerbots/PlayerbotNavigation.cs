@@ -73,8 +73,41 @@ internal sealed class PlayerbotRoute
         return true;
     }
 
+    /// <summary>A route to a moving target (a chase): re-planned as the target moves, so the loop watch does not count its ends.</summary>
+    internal bool Chase { get; set; }
+
     internal int NextPoint { get; set; } = 1;
     internal bool Complete => NextPoint >= Points.Count;
+
+    /// <summary>Whether the leg ending at point <paramref name="point"/> (1-based) came from the navigation mesh.</summary>
+    internal bool LegNavigatedAt(int point) => _legs is null ? Navigated : _legs[Math.Clamp(point, 1, Points.Count - 1) - 1];
+
+    /// <summary>
+    /// This route's unwalked rest, from <paramref name="here"/>, joined to <paramref name="next"/> (a route planned from this one's end):
+    /// one route the motion switches to without stopping. Each leg keeps its own navigation proof (<see cref="LegsNavigated"/>).
+    /// </summary>
+    internal PlayerbotRoute Then(Vector3 here, PlayerbotRoute next)
+    {
+        int first = Math.Clamp(NextPoint, 1, Math.Max(1, Points.Count - 1));
+        var points = new List<Vector3>(Points.Count - first + next.Points.Count + 1) { here };
+        var legs = new List<bool>(points.Capacity);
+        float distance = 0;
+        for (int i = first; i < Points.Count; i++)
+        {
+            distance += Vector3.Distance(points[^1], Points[i]);
+            points.Add(Points[i]);
+            legs.Add(LegNavigatedAt(i));
+        }
+
+        for (int i = 1; i < next.Points.Count; i++)
+        {
+            distance += Vector3.Distance(points[^1], next.Points[i]);
+            points.Add(next.Points[i]);
+            legs.Add(next.LegNavigatedAt(i));
+        }
+
+        return new PlayerbotRoute(points, distance, legs) { CompletedQuestReturn = CompletedQuestReturn };
+    }
 }
 
 /// <summary>The answer of a planning call that may wait for navigation tiles read in the background (<see cref="PlayerbotNavigation.PlanToward"/>).</summary>
@@ -432,7 +465,7 @@ internal static class PlayerbotNavigation
 
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
     private static bool PlanDirect(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
-        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null)
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null)
     {
         straightRefused = false;
         route = null;
@@ -449,7 +482,7 @@ internal static class PlayerbotNavigation
             return false;
 
         // A moving bot plans from where it is now, not from its last heartbeat.
-        Vector3 start = PlayerbotMotion.CurrentPosition(player);
+        Vector3 start = from ?? PlayerbotMotion.CurrentPosition(player);
         // The search budget is vmangos' own (navMeshQuery->init(navMesh, 2048), MoveMap.cpp:350) for a near destination, more for a far
         // one (SearchNodes). The old 512 polygons ran out on the real Dun Morogh mesh well inside the route bound: 200 yards from
         // Coldridge Valley to the Rockjaw Raiders (quest 179) answered no path with 512 and an 18-corner path with 2048.
@@ -477,6 +510,8 @@ internal static class PlayerbotNavigation
             return true;
         }
 
+        // A leg planned from the end of a route (TryChain) has no fallbacks: the next think plans it from the bot as ever.
+        if (from is not null) return false;
         // The way up indoors is a fallback too, held to the think's search budget (PlayerbotThinkProbe.Fallback).
         using (PlayerbotThinkProbe.Fallback())
         {
@@ -938,7 +973,7 @@ internal static class PlayerbotNavigation
     /// followed (the caller drops it).
     /// </summary>
     internal static bool TryAdvance(WorldSession session, PlayerbotRoute route, PlayerbotOptions options,
-        uint elapsedMs, uint serverTimeMs)
+        uint elapsedMs, uint serverTimeMs, bool keepMotion = false)
     {
         if (session.Player is not { } player)
             return false;
@@ -949,6 +984,8 @@ internal static class PlayerbotNavigation
             PlayerbotMovementControl.Stop(session, player);
             return false;
         }
+        // A stun, fear or confusion pauses the walk: the route is kept, nothing is sent and nothing is refused.
+        if (PlayerbotMotion.ControlLost(player)) return true;
         if (player.StandState != StandState.Stand)
             return session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u));
         if (!PlayerbotMapPolicy.MayMoveOn(player, options)) return false;
@@ -966,7 +1003,31 @@ internal static class PlayerbotNavigation
             }
         }
 
-        return PlayerbotMotion.Follow(session, player, route, options, serverTimeMs);
+        // A long walk is ridden when the bot has a mount (PlayerbotMount): it stops to cast the mount, then walks on mounted.
+        if (PlayerbotMount.BeforeStep(session, player, route, options)) return true;
+        return PlayerbotMotion.Follow(session, player, route, options, serverTimeMs, keepMotion);
+    }
+
+    /// <summary>
+    /// The next leg of a walk, planned from the end of the route the bot is moving along now and joined to what is left of it
+    /// (<see cref="PlayerbotRoute.Then"/>), so a think that expects to be the last before the bot arrives can hand the motion its
+    /// next leg and the bot does not stand until the following think. One path query to <paramref name="destination"/>, the very one the
+    /// next think would make from the end of the route; none of the fallbacks of <see cref="PlanToward"/> (the climb, the steep escape,
+    /// the starts beside the bot, the hazard detours): a leg that needs one is planned by the next think as before. False (no change)
+    /// when the query is not a usable route, waits for a tile, or the leg crosses a hazard.
+    /// </summary>
+    internal static bool TryChain(Player player, PlayerbotRoute current, Vector3 destination, PlayerbotOptions options,
+        out PlayerbotRoute? chained)
+    {
+        chained = null;
+        if (current.Complete || current.Points.Count < 2 || !PlayerbotMotion.IsActive(player) || !Finite(destination)) return false;
+        Vector3 here = PlayerbotMotion.CurrentPosition(player);
+        if (!PlanDirect(player, destination, destination, options, partial: true, out PlayerbotRoute? leg, out _, null, current.Points[^1])
+            || leg is null) return false;
+        if (Guards.TryGetValue(player, out PlayerbotRisk? risk) && risk.Blocking(player, leg.Points, completedReturn: false) is not null)
+            return false;
+        chained = current.Then(here, leg);
+        return true;
     }
 
     /// <summary>Propose a step without changing the route; the caller commits after normal admission.</summary>

@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Data.Content.Names;
@@ -345,7 +346,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            logger.LogWarning("Playerbot social: the bot registry could not be read ({Type}); the last one stays", error.GetType().Name);
+            logger.LogFault("playerbot-social", error, "Playerbot social: the bot registry could not be read ({Type}); the last one stays", error.GetType().Name);
         }
         finally
         {

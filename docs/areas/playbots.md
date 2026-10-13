@@ -13,7 +13,7 @@ password-less Player accounts and logs them in through an ordinary socketless `W
 (`Net/ManagedWorldSession.cs`): every bot action is a real CMSG run through the real world
 handler (`TryManagedAction`), and server replies are captured into a bounded outbound queue.
 Configuration is `World:Playerbots` (`Enabled`, `MaxBots` 8, `MaxRegisteredBots` 1000, `ThinkIntervalMs` 500,
-`MaxActionsPerTick` 4, `AllowedMaps` [0, 1], `FaultBackoffSeconds` 30, `MaxFaults` 3,
+`MaxActionsPerTick` 48, `AllowedMaps` [0, 1], `FaultBackoffSeconds` 30, `MaxFaults` 3,
 `FaultWindowSeconds` 3600, `AllowLocalLlm`, ...; off by default).
 
 **Caps.** `MaxBots` (0..1000) bounds the bots **running** at once: a stopped, faulted or quarantined bot holds no slot, and a
@@ -120,7 +120,7 @@ In the read-only schema-53 world snapshot, 484 of 3,221 quests with creature giv
 (15.03%) have a nearest pair beyond 1200 yards. All six reported delivery stalls (120, 118, 1420, 6384, 164, 165)
 fall beyond it; the shortest is quest 165 at 1312.7 yards. The default retains those six exclusions while allowing
 local hand-ins after long objective travel. It can exclude other legitimate long deliveries, and 0 opts out of the
-same-map distance limit. Terrain, hostile pockets and autonomous taxi travel have separate limits.
+same-map distance limit. Terrain and hostile pockets have separate limits; long trips may be flown (see Flight paths).
 
 A far goal (a quest giver or ender, a corpse) is approached a leg at a time (`PlayerbotNavigation.TryPlanToward`). Beyond
 `MaxPathPoints - 2` yards the map's region graph leads (`NavRegionGraph`, [collision-pathing](collision-pathing.md); built off the world
@@ -503,6 +503,77 @@ and the shared action budget does not apply; the controller's `Tick` runs on the
 every tick with a `PlayerbotControllerContext` (`TryAction`, `AcknowledgeServerOrders`).
 Stopping a bot detaches its controller; `IsScripted(botId)` reports the mode. Switching back
 to autonomous mode resumes the brain with whatever state it had before.
+
+### Contention
+
+Hundreds of bots with the same quests used to hunt the same mob: the target sort was "quest creature, then nearest" with no tie-break, so
+every bot picked one creature. `World:Playerbots:Contention` (all keys live, `.reload config`) spreads them out and lets a bot decide
+whether to help someone who tagged a mob first. Code: `PlayerbotContention.cs`, `PlayerbotBrain.DropIfSomeoneElses`,
+`PlayerbotBrain.CollectTargets`, `PlayerbotQuestGoals.RefreshObjectiveEntry`.
+
+* **Soft claims on untagged mobs.** A bot claims the mob it walks to in one world-wide table (`PlayerbotClaims`: mob guid to first claimant,
+  claimant count and an 8-second expiry, refreshed at each think, ended when the bot tags the mob, drops it or dies; one dictionary sized
+  once, expired claims dropped lazily). Choosing a target is one pass keeping the lowest weight: distance, plus `ClaimPenaltyYards` (25) per
+  other bot claiming the mob, plus a stable per-(bot, mob) hash offset of up to 10 yards. The bot's own claim costs nothing and a tagged mob
+  carries no claim penalty. No LINQ and no allocation on this path.
+* **Someone else's mob.** The held target is re-checked every think: when another player tagged it (or fights it) and the bot is not on its
+  threat list, the bot drops it, leaves it alone for `SomeoneElsesMemorySeconds` (15) and chooses again in the same think. It never waits on it.
+* **Helping instead.** At most once per mob per memory window the bot may help, when the tagger is within 30 yards and losing (under 40% health
+  or two enemies on them), the bot is above 60% health with no turn-in walk or retreat pending, and a roll passes: `HelpChance` (0.35) times the
+  bot's sociability (a stable 0..1 from its guid), times 2 for a real player, times 1.5 when both are on the same kill quest. A helper attacks the
+  mob (a priest, paladin, druid or shaman with a direct heal tops the tagger up first), skips the loot, and stops when the mob dies or the tagger
+  leaves combat.
+* **Group request.** When both are ungrouped and share the kill quest, the bot raises a group signal with source `contention`
+  (`PlayerbotRisk.GroupSignal`); the coordinator matches by objective and, with `World:Playerbots:Groups:InvitePlayers`, invites a nearby real player.
+* **Stolen kills.** A corpse that is not the bot's to loot (another player's tap, or no credit) gets no loot request and no 10-second wait; the
+  spawn is left alone for the memory window.
+* **No credit.** A quest creature that gained no credit (kill or quest item) in three minutes of *contested hunting* is set aside for the bot for
+  `ContentionSuspendMinutes` (5). Only time at the spawns with every creature in sight taken by others counts (a lost or stolen mob adds 20 seconds); resting, dying and town trips add nothing, a gap of over five seconds pauses the clock, and walking around the spawns while every creature of the entry is taken does count. The bot then moves on: the bot hunts its next unfinished objective, or raises a `contention` group signal when none is left. Among
+  its objectives a bot takes the one a hash of its guid ranks first, so bots with the same quests do not all take the first. A quest item
+  objective is hunted at the creatures that drop the item (read once from the loot tables; items with more than 24 droppers, elites and
+  creatures that do not spawn on the bot's map are left out).
+* **Empty camps.** With nothing of the quest's entry in sight the bot walks to its spawn points (`PlayerbotWorldDestinations`). A spawn
+  point it reaches (within 8 yards) with no live creature of the entry in sight is marked visited, with the spawns of the entry within 10
+  yards of it (one camp), for the spawn's respawn delay (the mean of its min and max, clamped to 30 s to 10 min; at most 128 visits,
+  only expired ones are dropped to make room, and none is marked while 128 are live). "Alive in sight" counts only a creature the bot would
+  take (the grind filter: not unreachable, entry not set aside, inside the home, not tapped by or fighting someone else, not left alone as
+  someone else's, attackable), so a tapped kobold does not keep the camp from being left; the walk then goes to the nearest spawn not visited. When every known spawn of the entry is visited (or
+  unreachable) the bot has no destination for it until the earliest visit ends and explores meanwhile. Before, the nearest spawn was
+  picked again on arrival: live 2026-10-12 (bot QA #368, "stall: goal Grind target 80") 54 bots stalled 177 times at the empty kobold camp of
+  quest 21, some nine times each. A stall of a Grind goal that has no target creature also sets the entry aside for that bot for 10 minutes
+  (`PlayerbotSuspensions`, as for a quest goal), so the quest's objective is passed over instead of planned again; it is the bot's own
+  set-aside, not shared with other bots (an entry set aside for everyone would also stop bots killing it where it stands in sight).
+
+### Flight paths
+
+Bots discover flight masters and fly between known taxi nodes on long trips (`PlayerbotTaxi`; `World:Playerbots:Taxi`, every key live).
+Every request goes through the real handlers (`WorldSession.TryManagedAction`); a bot never writes its taxi mask or starts a flight.
+
+- **Discovery.** At most every 2 seconds a bot looks at the objects it sees. A living flight master it may talk to (the server's own
+  `InteractableNpc` check: range, faction reaction) whose node (the nearest network node with a mount for the bot's team, as the server maps
+  it) the bot does not know gets CMSG_TAXIQUERYAVAILABLENODES. The server learns the node (SMSG_NEW_TAXI_PATH). A master that did not teach its
+  node is asked again after a minute. Known nodes are never asked for. Discovery only happens within interaction range; bots do not detour to
+  unknown masters.
+- **Planning.** `TryTravelByTaxi(session, player, mapId, destination, options)` is called by `PlayerbotWorldDestinations` for a quest
+  destination after the tram and lift checks (a lift's own walk is kept). The estimate of the walk is the straight line (no path query). Taxi
+  is used when it is at least `MinRouteYards` (default 600), the bot knows a node within `MaxWalkToMasterYards` (default 300) of itself, a
+  Dijkstra over known nodes of the map (fare = path price) reaches a known landing node within `MaxWalkToMasterYards` of the destination, the
+  two walks together are at most half the straight line, a flight master of the departure node that the bot may approach exists (found in the
+  creature content, so one out of sight counts), and the bot can pay the whole fare now. The fare used is the undiscounted path price, an
+  upper bound of what the server charges after reputation and honor discounts. Otherwise the goal walks as before.
+- **The trip.** The brain drives it before anything else (`PlayerbotTaxi.Drive`): walk to the master, stop, send CMSG_ACTIVATETAXI (one hop) or
+  CMSG_ACTIVATETAXIEXPRESS (several hops), read SMSG_ACTIVATETAXIREPLY, then wait. In the air (UNIT_FLAG_TAXI_FLIGHT) the bot neither thinks nor
+  moves and the stall watch does not judge it. After the landing the goal that asked for the trip plans again from there (usually a short walk).
+- **Failure.** A refusing reply (for example combat or money; a bot already flying gets no reply at all; a mounted bot is dismounted by the managed action before either request), no reply, no way to the master, no master where the node is, or a
+  budget that never accepts the request ends the trip and backs taxi use off for `BackoffMinutes` (default 10); the goal walks meanwhile. A
+  fight on the way to the master cancels the trip without a backoff. Death cancels it.
+- **Config** (`World:Playerbots:Taxi`): `Enabled` (true), `MinRouteYards` (600, 100..20000), `MaxWalkToMasterYards` (300, 10..2000),
+  `BackoffMinutes` (10, 1..1440).
+
+Deviations from retail 1.12 and vmangos: the client picks its own route and fare; the bot computes both from the same node and path data. It
+sends CMSG_ACTIVATETAXI for a single hop and the express opcode for several (which opcode a 1.12.1 client sends for a single hop is
+UNVERIFIED). Intermediate legs are charged by the server when each starts, as for a player. Cross-map paths and scripted (SEND_TAXI) paths are
+not used.
 
 ### Home area
 

@@ -51,16 +51,22 @@ internal sealed class SyntheticNavWorld : IAsyncDisposable
             // background read now, so a bot's first plan is not answered "pending" while the pool finds that out.
             Vector3 probe = new(5, 5, 0);
             var nonBlocking = new PathOptions { LoadTiles = true, NonBlockingTiles = true };
+            // The read can finish between the query and the lookup, leaving no pending task to await: query again then.
+            int emptyPolls = 0;
             while (nav.FindPath(0, probe, probe, nonBlocking).Type == PathType.TilesPending)
             {
-                // Pending with this tile already gone from the table (installed, or known missing) has nothing to await.
                 // A read that is still in flight is held and waited out, so the first plan is not answered "pending".
-                if (nav.PendingTileRead(0, 31, 31) is not { } read)
+                if (nav.PendingTileRead(0, 31, 31) is { } read)
                 {
-                    break;
+                    await read;
+                    continue;
                 }
 
-                await read;
+                // Pending with no read to await: another read (a prefetch) still holds the tile or the pending-read table is full, so
+                // query again. A tile known missing goes to _noTile and stops reporting pending (NavMeshPathfinder), so the retries are only a bound.
+                if (++emptyPolls > 200)
+                    Assert.Fail("the probe tile still reports pending after 200 polls with no read in flight");
+                await Task.Yield();
             }
         }
         foreach ((int x, int y, _) in tiles)

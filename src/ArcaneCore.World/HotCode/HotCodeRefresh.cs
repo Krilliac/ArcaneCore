@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
@@ -251,6 +252,7 @@ public sealed class HotCodeRefresh
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            _logger.LogFault("hotcode-build", ex, "code hot reload (generation {Generation}): building the candidate failed", generation);
             return Reject(generation, $"candidate rejected: {ex.Message}");
         }
 

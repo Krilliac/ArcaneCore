@@ -131,16 +131,23 @@ public sealed class PlayerbotStrongHazardCostTests(ITestOutputHelper output)
         }
 
         for (int i = 0; i < 20; i++) hazards.TryFindGap(0, from, 2_000, 0, out _, out _); // warm-up
-        const int Calls = 200;
+        const int Calls = 200, Windows = 10;
         var watch = new Stopwatch();
         int found = 0;
         long before = GC.GetAllocatedBytesForCurrentThread();
-        watch.Start();
-        for (int i = 0; i < Calls; i++)
-            if (hazards.TryFindGap(0, from, 2_000, 0, out _, out _)) found++;
-        watch.Stop();
+        // The cost is the least of ten windows of Calls / Windows calls: a preemption on a loaded machine lands in some windows, not in all
+        // (one wall-clock average over every call was reported at 4-7 ms on loaded lanes against about 0.2 ms alone; a preemption cause is inferred, not shown). Allocation is the total over all calls.
+        double micros = double.PositiveInfinity;
+        for (int window = 0; window < Windows; window++)
+        {
+            watch.Restart();
+            for (int i = 0; i < Calls / Windows; i++)
+                if (hazards.TryFindGap(0, from, 2_000, 0, out _, out _)) found++;
+            watch.Stop();
+            micros = Math.Min(micros, watch.Elapsed.TotalMicroseconds / (Calls / Windows));
+        }
+
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        double micros = watch.Elapsed.TotalMicroseconds / Calls;
         output.WriteLine($"escape fan: {micros:F1} us per call, {allocated} bytes over {Calls} calls, gap found {found}/{Calls}");
         Console.WriteLine($"escape fan: {micros:F1} us per call, {allocated} bytes over {Calls} calls, gap found {found}/{Calls}");
         Assert.Equal(0L, allocated);

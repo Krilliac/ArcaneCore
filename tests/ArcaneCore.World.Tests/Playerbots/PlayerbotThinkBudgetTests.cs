@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Tests.Playerbots.Risk;
+using ArcaneCore.World.Tests.Playerbots.Scenarios;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
@@ -15,6 +16,14 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// </summary>
 public sealed class PlayerbotThinkBudgetTests
 {
+    /// <summary>The wall-time think budget that the group test worlds override defaults to the production constant.</summary>
+    [Fact]
+    public async Task ADefaultFeature_ThinksWithinTheProductionTickBudget()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
+        Assert.Equal(PlayerbotThinkRotation.TickBudgetMs, world.Bots.ThinkBudgetMs);
+    }
+
     /// <summary>
     /// Within a think, the fallback queries (<see cref="PlayerbotThinkProbe.Fallback"/>) share
     /// <see cref="PlayerbotOptions.MaxThinkSearchNodes"/>: past it a fallback runs only with what is left, and with less than

@@ -8,6 +8,22 @@ namespace ArcaneCore.Kernel.Ops.Watchdog;
 /// <summary>The tick-body statistics of the simulation's own recorder, when one exists. <see cref="Samples"/> == 0: not available.</summary>
 public readonly record struct TickBodySummary(int Samples, long P50Micros, long P99Micros, long MaxMicros, long Overruns);
 
+/// <summary>What <see cref="TickMonitor.Alerted"/> reports.</summary>
+public enum TickAlertKind
+{
+    /// <summary>Frames over the budget (a slow tick).</summary>
+    Overrun,
+
+    /// <summary>A tick is running (or ran) past the hang threshold.</summary>
+    Hang,
+}
+
+/// <summary>
+/// One slow-tick report: the same facts as the log line it accompanies. <see cref="InProgress"/> is true for a hang report made while the
+/// tick is still running (as opposed to the after-the-fact report of a completed hang), so a subscriber can dedup the two separately.
+/// </summary>
+public readonly record struct TickAlert(TickAlertKind Kind, string Text, string Detail, bool InProgress = false);
+
 /// <summary>
 /// The world-tick frame monitor. The tick thread calls <see cref="OnTick"/> once at the start of
 /// every tick (it is the <c>WorldRuntime.WorldTick</c> handler); the frame time is the interval
@@ -89,6 +105,12 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     /// collector or the code was to blame (docs/ops/observability.md). Null: the lines carry no host-load text.
     /// </summary>
     public HostLoadSampler? HostLoad { get; set; }
+
+    /// <summary>
+    /// Set by the host to be told of each hang and overrun report right after its log line (same rate limits as the log). Called on the watchdog
+    /// thread; it must be quick and must not throw (a throwing callback is ignored).
+    /// </summary>
+    public Action<TickAlert>? Alerted { get; set; }
 
     /// <summary>The frame ring (for diagnostics and tests).</summary>
     public TickRing Ring => _ring;
@@ -182,8 +204,11 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
             if (_hangLimiter.TryAcquire(nowMicros, out _))
             {
+                string running = DetailText(inProgress: true);
+                string host = HostText(nowMicros - last);
                 _logger.LogCritical(WatchdogEvents.TickHang, "world tick has been running for {RunningMs} ms (hang threshold {HangMs} ms, interval {IntervalMs} ms){Detail}{Host}",
-                    Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros), DetailText(inProgress: true), HostText(nowMicros - last));
+                    Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros), running, host);
+                Alert(TickAlertKind.Hang, $"The world tick is hung (running {Micros.ToMillis(nowMicros - last)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms{running}{host}", inProgress: true);
             }
         }
 
@@ -192,8 +217,11 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         if (hangs > _hangsReported)
         {
             RingStats stats = Stats(out long[] buffer);
+            string after = DetailText(inProgress: false);
+            string host = HostText(stats.Max);
             _logger.LogCritical(WatchdogEvents.TickHang, "world tick exceeded the hang threshold {HangMs} ms: slowest recent frame {SlowestMs} ms, {New} new hang(s), {Total} since start{Detail}{Host}",
-                Micros.ToMillis(_hangMicros), Micros.ToMillis(stats.Max), hangs - _hangsReported, hangs, DetailText(inProgress: false), HostText(stats.Max));
+                Micros.ToMillis(_hangMicros), Micros.ToMillis(stats.Max), hangs - _hangsReported, hangs, after, host);
+            Alert(TickAlertKind.Hang, $"The world tick stalled ({Micros.ToMillis(stats.Max)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms, {hangs - _hangsReported} new hang(s), {hangs} since start{after}{host}");
             ArrayPool<long>.Shared.Return(buffer);
             _hangCounter.Add(hangs - _hangsReported);
             _hangsReported = hangs;
@@ -205,9 +233,12 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         {
             RingStats stats = Stats(out long[] buffer);
             long sinceMs = _lastOverrunReportMicros == NoTick ? 0 : Micros.ToMillis(nowMicros - _lastOverrunReportMicros);
+            string slowest = DetailText(inProgress: false);
+            string host = HostText(stats.Max);
             _logger.LogWarning(WatchdogEvents.TickOverrun, "world tick overran its {BudgetMs} ms budget {New} time(s){Window}: frame p50 {P50Ms} ms, p99 {P99Ms} ms, slowest {MaxMs} ms over {Samples} frames{Body}{Detail}{Host}",
                 Micros.ToMillis(_budgetMicros), overruns - _overrunsReported, sinceMs > 0 ? $" in the last {sinceMs / 1000} s" : string.Empty,
-                Micros.ToMillis(stats.P50), Micros.ToMillis(stats.P99), Micros.ToMillis(stats.Max), stats.Samples, BodyText(), DetailText(inProgress: false), HostText(stats.Max));
+                Micros.ToMillis(stats.P50), Micros.ToMillis(stats.P99), Micros.ToMillis(stats.Max), stats.Samples, BodyText(), slowest, host);
+            Alert(TickAlertKind.Overrun, $"Slow world ticks: p99 {Micros.ToMillis(stats.P99)} ms", $"{overruns - _overrunsReported} frame(s) over the {Micros.ToMillis(_budgetMicros)} ms budget, slowest {Micros.ToMillis(stats.Max)} ms over {stats.Samples} frames{slowest}{host}");
             ArrayPool<long>.Shared.Return(buffer);
             _overrunCounter.Add(overruns - _overrunsReported);
             _overrunsReported = overruns;
@@ -271,6 +302,23 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         _frameP99.Set(stats.P99);
         _frameMax.Set(stats.Max);
         return stats;
+    }
+
+    private void Alert(TickAlertKind kind, string text, string detail, bool inProgress = false)
+    {
+        if (Alerted is not { } alerted)
+        {
+            return;
+        }
+
+        try
+        {
+            alerted(new TickAlert(kind, text, detail, inProgress));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // The watchdog thread must keep checking whatever a subscriber does.
+        }
     }
 
     private string DetailText(bool inProgress)

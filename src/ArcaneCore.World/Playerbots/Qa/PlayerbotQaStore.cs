@@ -21,6 +21,9 @@ internal sealed record QaStoreFile
     /// <summary>The ids of findings merged into another (and the issue of each that had one): never reused, and the absorbed issue is closed as a duplicate.</summary>
     public IReadOnlyList<QaAbsorbed> Absorbed { get; init; } = [];
 
+    /// <summary>The findings <c>prune closed</c> forgot (and their merge aliases), bounded: a recurrence takes its closed issue number back.</summary>
+    public IReadOnlyList<QaTombstone> Tombstones { get; init; } = [];
+
     public QaLedgerState Ledger { get; init; } = new([], []);
 }
 
@@ -96,7 +99,7 @@ internal sealed class PlayerbotQaStore(string directory, ILogger logger)
             if (!_failedWriteLogged)
             {
                 _failedWriteLogged = true;
-                logger.LogError("Bot QA could not save {Path} ({Type}); it retries on the next pass", FilePath, ex.GetType().Name);
+                logger.LogError(ex, "Bot QA could not save {Path} ({Type}); it retries on the next pass", FilePath, ex.GetType().Name);
             }
 
             return false;

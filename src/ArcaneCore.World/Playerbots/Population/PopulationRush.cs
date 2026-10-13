@@ -100,6 +100,12 @@ internal sealed class PopulationRush
     /// <summary>Why a pass stopped creating because the brake paused the rush; not a reason for the rush to end.</summary>
     public const string PausedNote = "rush paused";
 
+    /// <summary>
+    /// What a pass says when every start area is at <c>FreshStartZoneCap</c>: creation is deferred, not failed. The rush stays running
+    /// (its reason says so) and goes on as bots graduate; an operator stops it with <c>.playerbot population rush stop</c>.
+    /// </summary>
+    public const string StartZonesFullNote = "start zones full";
+
     /// <summary>The most passes in a row that create nothing for a reason no cap explains before the rush gives up.</summary>
     public const int MaxFruitlessPasses = 3;
 
@@ -207,7 +213,19 @@ internal sealed class PopulationRush
                 return true;
             }
 
-            if (created >= wanted) { _fruitless = 0; return false; }
+            if (created >= wanted)
+            {
+                _fruitless = 0;
+                if (_reason.StartsWith("deferred: ", StringComparison.Ordinal)) _reason = "creating bots";
+                return false;
+            }
+
+            if (note is not null && note.StartsWith(StartZonesFullNote, StringComparison.Ordinal))
+            {
+                (_reason, _fruitless) = ("deferred: " + note, 0);
+                return false;
+            }
+
             if (note is not null && note != PausedNote && !note.StartsWith("waiting for the graveyard", StringComparison.Ordinal))
             {
                 (_state, _reason, _endedMs) = ("halted", note, nowMs);

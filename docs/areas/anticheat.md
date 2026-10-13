@@ -100,6 +100,7 @@ across a relog until it has decayed (pruned every minute).
   `HistoryDays` (180). The step therefore survives a restart; the kick points do not (they are memory only, so a restart
   forgives at most two kicks). The ban goes through the normal ban path, so the live enforcement kicks every session of the
   account. The fork's 30-point threshold could only be reached by a fourth kick once any decay applied.
+* **Staff lines for kicks and autobans** go to staff online directly (not through World:Announce), at most once per account and kind (kick, autoban, autoban failure) per `StaffNoticeCooldownSeconds` (default 30, 0 off); repeats are counted and reported as one `N more suppressed in the last 30 s` line.
 
 ## Violation log
 

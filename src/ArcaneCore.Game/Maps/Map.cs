@@ -601,6 +601,39 @@ public sealed class Map
         }
     }
 
+    // Reused by CountPlayersWithin: world thread only, and the collect it holds the list for calls nothing back, so it is never re-entered.
+    private readonly List<Player> _countScratch = [];
+
+    /// <summary>
+    /// The number of players of this map within <paramref name="radius"/> yards (2D, centre to centre) of a point. One grid query over the
+    /// few cells the circle touches (<see cref="GridContainer.CollectPlayers"/>) plus an exact distance test on the players it returns:
+    /// no walk over every player of the map, and no allocation once the scratch list has grown. A playerbot is skipped when
+    /// <paramref name="includeBots"/> is false (<see cref="IPlayerSession.IsPlayerbot"/>), and so is a player in GM mode (ArcaneCore has no GM invisibility state); ghosts count. World thread.
+    /// </summary>
+    public int CountPlayersWithin(float x, float y, float radius, bool includeBots)
+    {
+        List<Player> found = _countScratch;
+        found.Clear();
+        _grid.CollectPlayers(x, y, radius, found);
+        float limit = radius * radius;
+        int count = 0;
+        foreach (Player player in found)
+        {
+            float dx = player.X - x;
+            float dy = player.Y - y;
+            // Written as a negation so a player at a non-finite position (which every grid query returns) is never counted.
+            if (!ReferenceEquals(player.Map, this) || player.IsGameMaster || !((dx * dx) + (dy * dy) <= limit) || (!includeBots && player.Session.IsPlayerbot))
+            {
+                continue;
+            }
+
+            count++;
+        }
+
+        found.Clear();
+        return count;
+    }
+
     private MapUpdateDiagnostics? _diagnostics;
 
     /// <summary>The map's diagnostics record, cleared for the next update (one per map; world thread).</summary>

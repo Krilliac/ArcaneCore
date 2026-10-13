@@ -73,7 +73,9 @@ public sealed class WiringAuditTests
             ContentRootPath = directory,
             EnvironmentName = Environments.Production,
         });
+        // An operator asking for concurrent stop must not win: the WAL checkpointer's final checkpoint has to run after WorldHost has drained the saves.
         builder.Configuration.AddInMemoryCollection(ProductionValues(directory));
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["HostOptions:ServicesStopConcurrently"] = "true" });
         builder.Services.AddWorldProductionServices(builder.Configuration, ClientDataReport.Empty);
         builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true }));
         return builder.Build();
@@ -109,6 +111,10 @@ public sealed class WiringAuditTests
             Assert.Contains("MetricsHost", hosted);
             Assert.Contains("WorldHost", hosted);
             Assert.Contains("WorldServer", hosted);
+            // Hosted services stop in reverse order: the WAL checkpointer (registered by AddAuthDatabase) must stop, and run its final checkpoint, after WorldHost has drained the save queue.
+            Assert.False(services.GetRequiredService<IOptions<HostOptions>>().Value.ServicesStopConcurrently, "concurrent stop would run the WAL checkpointer's final checkpoint before the save queue drains");
+            Assert.Contains("SqliteCheckpointService", hosted);
+            Assert.True(Array.IndexOf(hosted, "SqliteCheckpointService") < Array.IndexOf(hosted, "WorldHost"), "the WAL checkpointer must be registered before WorldHost so it stops after it");
             Assert.Equal("WiringAuditReporter", hosted[^1]);
 
             WiringReport report = services.GetRequiredService<WiringAudit>().Run();

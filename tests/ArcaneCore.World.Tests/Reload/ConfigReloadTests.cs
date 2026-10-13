@@ -143,6 +143,46 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal("original", _options.Motd);
     }
 
+    [Theory]
+    [InlineData("PlayerThreshold", "-1")]
+    [InlineData("PlayerThreshold", "10001")]
+    [InlineData("ScalePerPlayer", "-0.5")]
+    [InlineData("ScalePerPlayer", "11")]
+    [InlineData("MinimumSeconds", "0")]
+    [InlineData("MinimumSeconds", "86401")]
+    [InlineData("MaxReduction", "1.5")]
+    [InlineData("MaxReduction", "-0.1")]
+    [InlineData("Radius", "4")]
+    [InlineData("Radius", "501")]
+    public async Task DynamicRespawn_OutOfRangeValue_RejectsTheWholeReload(string key, string value)
+    {
+        string path = Write($$"""{ "World": { "Motd": "Rejected", "Respawn": { "Dynamic": { "Enabled": true, "{{key}}": {{value}} } } } }""");
+        ReloadCoordinator coordinator = Reloader(FromFile(path));
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Rejected, result.Status);
+        Assert.Equal("original", _options.Motd);
+        Assert.False(_options.Respawn.Dynamic.Enabled);
+        Assert.Empty(_options.Respawn.Dynamic.Problems());
+    }
+
+    [Fact]
+    public async Task DynamicRespawn_ValidValues_AreAppliedLive()
+    {
+        string path = Write("""{ "World": { "Respawn": { "Dynamic": { "Enabled": true, "PlayerThreshold": 3, "MinimumSeconds": 45, "Radius": 80, "CountBots": false } } } }""");
+        ReloadCoordinator coordinator = Reloader(FromFile(path));
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.True(_options.Respawn.Dynamic.Active);
+        Assert.Equal(3, _options.Respawn.Dynamic.PlayerThreshold);
+        Assert.Equal(45u, _options.Respawn.Dynamic.MinimumSeconds);
+        Assert.Equal(80f, _options.Respawn.Dynamic.Radius);
+        Assert.False(_options.Respawn.Dynamic.CountBots);
+    }
+
     [Fact]
     public async Task ARestartOnlyOption_ThatDidNotChange_IsNotMentioned()
     {
@@ -533,7 +573,7 @@ public sealed class ConfigReloadTests : IDisposable
     public void EveryWorldOption_IsClassified_LiveOrRestartOnly()
     {
         var expected = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (PropertyInfo property in typeof(WorldRuntimeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(MapOptions) && p.PropertyType != typeof(PerformanceLogOptions))) // Perf is bound from the top-level PerformanceLog section (ops lane), not World:*
+        foreach (PropertyInfo property in typeof(WorldRuntimeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(MapOptions) && p.PropertyType != typeof(WorldRespawnOptions) && p.PropertyType != typeof(PerformanceLogOptions))) // Perf is bound from the top-level PerformanceLog section (ops lane), not World:*
         {
             expected.Add($"World:{property.Name}");
         }
@@ -541,6 +581,11 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(MapOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"World:Maps:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(DynamicRespawnOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"World:Respawn:Dynamic:{property.Name}");
         }
 
         foreach (PropertyInfo property in typeof(WorldOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
@@ -606,6 +651,18 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Home)}:{property.Name}");
         }
 
+        // How bots share the mobs of one place is live key by key (docs/areas/playbots.md, Contention).
+        foreach (PropertyInfo property in typeof(PlayerbotContentionOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Contention)}:{property.Name}");
+        }
+
+        // Autonomous flight-path use is live key by key (docs/areas/playbots.md, Flight paths).
+        foreach (PropertyInfo property in typeof(PlayerbotTaxiOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Taxi)}:{property.Name}");
+        }
+
         // The population section is live key by key (docs/areas/playbots-population.md).
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Population.PlayerbotPopulationOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
@@ -630,6 +687,16 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(PlayerbotEconomyOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Economy)}:{property.Name}");
+        }
+
+        // The bot budget and mounts sections are live key by key (docs/areas/playbots-economy.md).
+        foreach (PropertyInfo property in typeof(PlayerbotBudgetOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Budget)}:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(PlayerbotMountOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Mounts)}:{property.Name}");
         }
 
         // The chat safety section is live key by key (docs/areas/playbots.md, Safety and provider policies).

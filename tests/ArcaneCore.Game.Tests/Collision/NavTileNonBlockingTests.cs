@@ -88,11 +88,13 @@ public sealed class NavTileNonBlockingTests : IDisposable
         // legitimately pick the read up afterwards (the assertion below was flaky when the two shared a thread).
         int callThread = 0;
         var answer = new TaskCompletionSource<PathResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        new Thread(() =>
+        // The thread stays alive until the test ends, pass or fail: an exited thread's ManagedThreadId can be reused by a new pool thread.
+        using var pinned = new PinnedThread(() =>
         {
             callThread = Environment.CurrentManagedThreadId;
-            answer.SetResult(nav.FindPath(0, From, To, NonBlocking));
-        }).Start();
+            try { answer.SetResult(nav.FindPath(0, From, To, NonBlocking)); }
+            catch (Exception ex) { answer.SetException(ex); }
+        });
         Assert.Same(answer.Task, await Task.WhenAny(answer.Task, Task.Delay(TimeSpan.FromSeconds(10))));
         PathResult pending = await answer.Task;
         Assert.Equal(PathType.TilesPending, pending.Type);
@@ -111,6 +113,32 @@ public sealed class NavTileNonBlockingTests : IDisposable
         Assert.Equal(1, nav.TileReadsStarted);
         Assert.Equal(nav.MaxConcurrentTileReads, nav.FreeTileReadSlots);
         Assert.NotEqual(callThread, Volatile.Read(ref _lastReadThread)); // read on the pool, not here
+    }
+
+    /// <summary>
+    /// Runs <c>body</c> on a dedicated thread that then stays alive until <see cref="Dispose"/>, which releases it and joins it (bounded)
+    /// before the release event is disposed, so the thread never touches a disposed event and a failing test cannot leak it.
+    /// </summary>
+    private sealed class PinnedThread : IDisposable
+    {
+        private readonly ManualResetEventSlim _release = new();
+        private readonly Thread _thread;
+
+        public PinnedThread(Action body)
+        {
+            _thread = new Thread(() =>
+            {
+                body();
+                _release.Wait();
+            }) { IsBackground = true };
+            _thread.Start();
+        }
+
+        public void Dispose()
+        {
+            _release.Set();
+            if (_thread.Join(TimeSpan.FromSeconds(10))) _release.Dispose(); // a thread that did not exit would still wait on it
+        }
     }
 
     [Fact]

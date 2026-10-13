@@ -33,7 +33,7 @@ public static class ServerLifecycleCommands
 
     private static bool Cancel(CommandContext context, string args)
     {
-        Feature(context).Cancel();
+        Feature(context).Cancel(context.InvokerName);
         return true;
     }
 
@@ -57,7 +57,7 @@ public static class ServerLifecycleCommands
             return false;
         }
 
-        Feature(context).Request(delay, mask, (byte)exitCode);
+        Feature(context).Request(delay, mask, (byte)exitCode, context.InvokerName);
         return true;
     }
 

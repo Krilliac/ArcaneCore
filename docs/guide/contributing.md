@@ -69,6 +69,7 @@ fails at startup). The seam table is [docs/integration/seams.md](../integration/
 - Keep the version in **one named constant**. Tests refer to that constant or to `<Context>.Schema.CurrentVersion`, never to a literal.
 - Every characters module implements or registers an `ICharacterDataCleanup`, so deleting a character removes its rows ([schema reference](../reference/schema.md) shows which modules do).
 - Schema steps are additive (`CreateTableChange`, `AddColumnChange`); a `CreateTableChange` also creates the indexes the model declares.
+- **Every schema step ships its SQL update files in the same PR.** After adding or renumbering a step run `ARCANECORE_UPDATE_SQL=1 dotnet test tests/ArcaneCore.Data.Tests --filter SqlUpdateGoldenTests` (or `arcane-db export-updates --out sql/updates`) and commit the new `sql/updates/<component>/<provider>/NNNN_*.sql` files and the changed `schema-snapshot.json` ([sql/updates/README.md](../../sql/updates/README.md)). Only additive changes can be exported; released files are never edited.
 
 ## Tests that touch a database
 

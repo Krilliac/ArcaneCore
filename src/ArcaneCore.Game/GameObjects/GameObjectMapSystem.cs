@@ -68,11 +68,16 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private long _nextQuestRefreshMs;
     private uint _nextTemporaryCounter;
 
-    public GameObjectMapSystem(Map map, GameObjectContent content, LootService? loot = null, ILootQuestJournal? quests = null, ILogger? logger = null)
+    public GameObjectMapSystem(Map map, GameObjectContent content, LootService? loot = null, ILootQuestJournal? quests = null, ILogger? logger = null, Random? random = null)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(content);
         Map = map;
+        if (random is not null)
+        {
+            Random = random; // before InitializePools, which hands it to the pool state
+        }
+
         _content = content;
         Loot = loot;
         Quests = quests;
@@ -1095,7 +1100,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         _questFlagsSent.Remove(go.Guid);
         go.LootState = GameObjectLootState.JustDeactivated;
-        go.RespawnAtMs = go.Spawn.SpawnTimeSeconds >= 0 ? _clockMs + RespawnDelayMs(go) : 0;
+        go.RespawnAtMs = go.Spawn.SpawnTimeSeconds >= 0 ? _clockMs + (DurableKeyOf(go) is null ? ScaleRespawnDelayMs(go.Spawn, RespawnDelayMs(go)) : RespawnDelayMs(go)) : 0;
         OnPoolMemberDespawned(go); // cmangos GameObject.cpp GO_JUST_DEACTIVATED: a pooled object lets its pool choose what comes back
     }
 
@@ -1367,16 +1372,15 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
     // --- quest dynamic flags -----------------------------------------------------------------
 
-    private void ConfigureQuestFlags(GameObject go)
+    private void ConfigureQuestFlags(GameObject go) => go.ViewerFieldFilter = IsQuestRelated(go.Template) ? this : null;
+
+    /// <summary>A chest with a quest or quest loot, or a goober with a quest: what the quest dynamic flags apply to.</summary>
+    private bool IsQuestRelated(GameObjectTemplate template) => (GameObjectType)template.Type switch
     {
-        bool questRelated = go.Type switch
-        {
-            GameObjectType.Chest => go.Template.GetData(8) != 0 || QuestLootItems(go.Template.GetData(1)).Length > 0,
-            GameObjectType.Goober => go.Template.GetData(1) != 0,
-            _ => false,
-        };
-        go.ViewerFieldFilter = questRelated ? this : null;
-    }
+        GameObjectType.Chest => template.GetData(8) != 0 || QuestLootItems(template.GetData(1)).Length > 0,
+        GameObjectType.Goober => template.GetData(1) != 0,
+        _ => false,
+    };
 
     /// <summary>Quest items (negative chance) a chest's loot template can drop, including one level of references.</summary>
     private uint[] QuestLootItems(uint lootId)

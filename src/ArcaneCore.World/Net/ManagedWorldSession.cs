@@ -35,6 +35,8 @@ public sealed partial class WorldSession
 
     /// <summary>A managed session of a playerbot: managed and not the server console's (account 0, WorldSession.Console.cs). Bot QA reports only these.</summary>
     internal bool IsPlayerbot => _managed && AccountId != 0;
+
+    bool IPlayerSession.IsPlayerbot => IsPlayerbot;
     internal ManagedActionBudget? ManagedBudget { get; set; }
 
     /// <summary>
@@ -99,6 +101,7 @@ public sealed partial class WorldSession
             || !handler.AllowsState(_state)
             || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck)) return false;
         if (ManagedBudget is { } budget && !budget.TryTake()) return false;
+        ArcaneCore.World.Playerbots.PlayerbotMount.DismountForAction(this, player, opcode);
         CapturePacket(true, opcode, payload);
         ManagedDispatchObserver?.Invoke(opcode);
         _currentPacketReceivedMs = (uint)Kernel.Logging.Clock.Milliseconds();

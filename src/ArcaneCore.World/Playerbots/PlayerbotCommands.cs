@@ -295,7 +295,10 @@ public sealed class PlayerbotCommands : ICommandGroup
             {
                 try { context.Reply($"Playerbot home: {await service.ClearHomesAsync(ids).ConfigureAwait(false)} cleared."); }
                 catch (Exception error) when (error is not OutOfMemoryException)
-                { context.Reply($"Playerbot home failed: {error.GetType().Name}."); }
+                {
+                    service.ReportCommandFault("home clear", error);
+                    context.Reply($"Playerbot home failed: {error.GetType().Name}.");
+                }
             });
             return true;
         }
@@ -397,7 +400,10 @@ public sealed class PlayerbotCommands : ICommandGroup
                     + Unzoned(unzoned) + (outcome.Failed != 0 ? $", {outcome.Failed} failed." : "."));
             }
             catch (Exception error) when (error is not OutOfMemoryException)
-            { context.Reply($"Playerbot home failed: {error.GetType().Name}."); }
+            {
+                service.ReportCommandFault("home set", error);
+                context.Reply($"Playerbot home failed: {error.GetType().Name}.");
+            }
         });
         return true;
     }
@@ -437,6 +443,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         context.Reply($"BOTINSPECT {value.Risk ?? "decision=none"}");
         context.Reply($"BOTINSPECT {value.Group ?? "group=none"}");
         context.Reply($"BOTINSPECT home={value.Home ?? "none"}");
+        context.Reply($"BOTINSPECT budget={value.Budget ?? "none"}");
         context.Reply(value.Master is null ? "BOTINSPECT party=none"
             : $"BOTINSPECT party=master:{value.Master} mode:{value.PartyMode?.ToString().ToLowerInvariant()}");
         if (value.Corpse is { } corpse)
@@ -495,6 +502,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            if (service is ManagedPlayerbotFeature managed) managed.ReportCommandFault("operation", error);
             context.Reply($"Playerbot failed: {error.GetType().Name}.");
         }
     }

@@ -171,6 +171,19 @@ public sealed class ChairCameraTests
     }
 
     [Fact]
+    public void UsingAChair_EndsAStateEmote()
+    {
+        var rig = new Rig(GoSpawn(1, ChairEntry, 10, 0, orientation: 1.25f));
+        (Player player, FakeSession _) = rig.Join(1, 10.4f, 0.8f);
+        player.SetUInt32(UpdateFields.UnitNpcEmotestate, 14); // /dance
+
+        // vmangos sits a chair user down with a near TeleportTo, which ends the state emote (Unit.cpp:9855 / :1856).
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, rig.Single(ChairEntry).Guid));
+
+        Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitNpcEmotestate));
+    }
+
+    [Fact]
     public void TheChairHeightSelectsTheSittingPose_AndABadHeightFallsBackToLow()
     {
         var rig = new Rig(GoSpawn(1, HighChairEntry, 10, 0), GoSpawn(2, BadHeightEntry, 30, 0));

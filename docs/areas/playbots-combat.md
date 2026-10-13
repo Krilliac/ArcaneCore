@@ -7,7 +7,7 @@ How a managed playerbot fights like its class. The rest of the bot (goals, movem
 
 | File (`src/ArcaneCore.World/Playerbots/`) | vmangos | What it does |
 |---|---|---|
-| `Combat/PlayerbotAbilities.cs` | `PopulateSpellData` (:136-1827) | Each class ability by its exact Spell.dbc name at the highest known rank ("Rank N", else the higher id); passive and hidden spells skipped; direct and periodic single-target heal lists, strongest first. |
+| `Combat/PlayerbotAbilities.cs` | `PopulateSpellData` (:136-1827) | Each class ability by its exact Spell.dbc name at the highest known rank ("Rank N", else the higher id); passive and hidden spells skipped; direct and periodic heal lists, strongest first. A direct heal is an effect Heal, or a ScriptEffect (Holy Light, Flash of Light) whose heal is another spell (read from a per-store index of the spell store: the lowest-id rank-less Heal spell of the same name, family and icon); its reach (self-only, friend, chain friend, party) comes from the effect's TargetA, so Healing Wave and Chain Heal (target 45) count. Deviation from vmangos, which lists every Heal-effect spell: group heals (Prayer of Healing, Holy Nova: target 20 with a radius) stay out of the single-target list, and a heal that lands on its caster is never picked for a friend. |
 | `Combat/PlayerbotRole.cs` | `AutoAssignRole` (:58-118) | Tank / melee / ranged / healer from the talent spell the bot knows: Shield Slam, Holy Shield, Sanctity Aura, Shadowform, Elemental Mastery, Stormstrike, Moonkin Form, Leader of the Pack. A later rank of the same spell counts. |
 | `Combat/PlayerbotRotationState.cs` | | A plain snapshot of one decision: the bot, its victim (or pull target), its group, attackers, pet, totems, power, combo points, form and consumables, plus a `CanCast(spell, unit)` check. |
 | `Combat/PlayerbotCombatView.cs` | `CanTryToCastSpell` (:2807-2860) | Builds the snapshot on the world thread. `CanCast`: spell and category cooldowns, global cooldown, caster/target aura state, power cost, shapeshift gate, reagents, equipped item class/subclass, ammunition for a bow/gun/crossbow, and range (the `SpellSystem.CheckRange` formula). It only avoids pointless requests; the ordinary handlers still decide. |
@@ -115,6 +115,7 @@ It also skips grey creatures (level at or below `ExperienceFormulas.GrayLevel`);
 - `Playerbots/Combat/PlayerbotClassRotationTests.cs`: per class, a synthetic book and a state give the expected next action.
 - `Playerbots/Combat/PlayerbotCombatSupportTests.cs`: the role table, rank resolution, heal and buff target selection, the most
   efficient heal, the distancing decision.
+- `Playerbots/Combat/PlayerbotHealerSpellsTests.cs`: heal classification over spell rows modelled on the real ones (Holy Light 635/19968, Flash of Light, Healing Wave, Chain Heal, Desperate Prayer, Prayer of Healing, Renew), and a paladin or shaman bot healing a party member, itself and a tagger through the server.
 - `Playerbots/Combat/PlayerbotTargetEtiquetteTests.cs`: the tap, engaged and grey filters (RED on 08ea5ff6).
 - `Playerbots/PlayerbotCombatSpellsTests.cs`: the spell data rebuild on SMSG_LEARNED_SPELL and the role change; the stance taken
   through the ordinary cast handler.

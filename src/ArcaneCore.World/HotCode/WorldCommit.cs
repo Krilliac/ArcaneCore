@@ -33,6 +33,8 @@ internal static class WorldCommit
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                // The caller logs the detail; the ledger keeps the type, the site and the stack for .server faults.
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("hotcode-commit", ex);
                 done.SetResult($"commit threw: {ex.Message}");
             }
         });

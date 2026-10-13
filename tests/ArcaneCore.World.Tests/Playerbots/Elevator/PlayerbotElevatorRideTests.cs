@@ -22,9 +22,27 @@ namespace ArcaneCore.World.Tests.Playerbots.Elevator;
 /// </summary>
 public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
 {
-    private static PlayerbotOptions Options() => new() { Enabled = true, ThinkIntervalMs = 100 };
+    private static PlayerbotOptions Options() => new() { Enabled = true, ThinkIntervalMs = 100, Population = { TramMinLevel = 0 } };
 
     private const uint Dizzywig = 3453;
+
+    /// <summary>The lift is a transit like the tram: a bot with no home below <c>Population:TramMinLevel</c> begins no ride.</summary>
+    [Fact]
+    public async Task AHomelessLevelOneBot_BeginsNoLiftRide()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync(creatures: RatchetEnder());
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        await world.OnWorldAsync(() => world.Player.Level = 1);
+        var destinations = new PlayerbotWorldDestinations(world.Session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 100 });
+        await world.OnWorldAsync(() => destinations.Update(world.Player, Dizzywig, 100));
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+
+        // Control: the same bot at the tram level does begin it.
+        await world.OnWorldAsync(() => world.Player.Level = 10);
+        var grown = new PlayerbotWorldDestinations(world.Session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 100 });
+        await world.OnWorldAsync(() => grown.Update(world.Player, Dizzywig, 100));
+        Assert.NotNull(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+    }
 
     private static CreatureContent RatchetEnder() => new(
         [new CreatureTemplate { Entry = Dizzywig, Name = "Wharfmaster Dizzywig", DisplayIds = [49] }],

@@ -35,6 +35,9 @@ public enum MovementFlags : uint
     SafeFall = 0x20000000,
     Hover = 0x40000000,
 
+    /// <summary>Horizontal walking flags (vmangos MOVEFLAG_MASK_XZ, MovementInfo.h:73).</summary>
+    MaskXz = Forward | Backward | StrafeLeft | StrafeRight,
+
     /// <summary>Translation/pitch/jump flags (vmangos MOVEFLAG_MASK_MOVING).</summary>
     MaskMoving = Forward | Backward | StrafeLeft | StrafeRight | PitchUp | PitchDown | Jumping
         | FallingFar | SplineElevation,

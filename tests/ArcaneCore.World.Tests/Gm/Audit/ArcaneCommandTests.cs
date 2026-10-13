@@ -67,10 +67,9 @@ public sealed class ArcaneCommandTests
         string[] lines = await LinesAsync(admin, ".arcane");
 
         Assert.Equal("There is no such subcommand", lines[0]);
-        Assert.Contains("    bancheck", lines);
-        Assert.Contains("    mutes", lines);
-        Assert.Contains("    gmlog", lines);
-        Assert.Contains("    queues", lines);
+        // The sub-commands are listed packed, several per line (CommandListing).
+        string listing = string.Join('\n', lines);
+        Assert.Contains("bancheck, mutes, gmlog, queues", listing);
     }
 
     // ---- bancheck ----
