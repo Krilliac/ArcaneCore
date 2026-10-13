@@ -14,8 +14,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_QUERY_OBJECT_POSITION` | `0x0005` | — | 0 | — |
 | `CMSG_QUERY_OBJECT_ROTATION` | `0x0006` | unhandled | — | — |
 | `SMSG_QUERY_OBJECT_ROTATION` | `0x0007` | — | 0 | — |
-| `CMSG_WORLD_TELEPORT` | `0x0008` | unhandled | — | — |
-| `CMSG_TELEPORT_TO_UNIT` | `0x0009` | unhandled | — | — |
+| `CMSG_WORLD_TELEPORT` | `0x0008` | handled | — | — |
+| `CMSG_TELEPORT_TO_UNIT` | `0x0009` | handled | — | — |
 | `CMSG_ZONE_MAP` | `0x000A` | unhandled | — | — |
 | `SMSG_ZONE_MAP` | `0x000B` | — | 0 | — |
 | `CMSG_DEBUG_CHANGECELLZONE` | `0x000C` | unhandled | — | — |
@@ -742,8 +742,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_FORCE_TURN_RATE_CHANGE_ACK` | `0x02DF` | handled | — | — |
 | `MSG_PVP_LOG_DATA` | `0x02E0` | handled | 4 | decoded |
 | `CMSG_LEAVE_BATTLEFIELD` | `0x02E1` | handled | — | — |
-| `CMSG_AREA_SPIRIT_HEALER_QUERY` | `0x02E2` | unhandled | — | — |
-| `CMSG_AREA_SPIRIT_HEALER_QUEUE` | `0x02E3` | unhandled | — | — |
+| `CMSG_AREA_SPIRIT_HEALER_QUERY` | `0x02E2` | handled | — | — |
+| `CMSG_AREA_SPIRIT_HEALER_QUEUE` | `0x02E3` | handled | — | — |
 | `SMSG_AREA_SPIRIT_HEALER_TIME` | `0x02E4` | — | 0 | — |
 | `CMSG_GM_UNTEACH` | `0x02E5` | unhandled | — | — |
 | `SMSG_WARDEN_DATA` | `0x02E6` | — | 0 | — |
