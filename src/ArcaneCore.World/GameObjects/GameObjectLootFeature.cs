@@ -248,6 +248,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             FallbackAi = new SmartGameObjectAi(() => services.GetService<CreatureWorldFeature>()?.Content.Ai.SmartScripts ?? SmartScriptCatalog.Empty),
             // GameObject::Use (GameObject.cpp:1414-1415): RemoveSpellsCausingAura(SPELL_AURA_MOUNTED), the spell system resolved at use time.
             Dismount = player => services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System.RemoveSpellsCausingAura(player, Game.Spells.AuraType.Mounted),
+            // HandleGameObjectUseOpcode (SpellHandler.cpp:257): RemoveAurasWithInterruptFlags(AURA_INTERRUPT_LOOTING_CANCELS) before Use.
+            BreakLootingAuras = player => services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System.RemoveAurasWithInterruptFlags(player, Game.Spells.AuraInterruptMask.Looting),
         };
         map.AddUpdater(system);
         map.AddUpdater(loot.Rolls); // the need/greed roll timers of this map's loot (LootRollManager)
