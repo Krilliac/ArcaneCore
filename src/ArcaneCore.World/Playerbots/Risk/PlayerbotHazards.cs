@@ -87,10 +87,14 @@ internal sealed class PlayerbotHazards
         return repeated;
     }
 
+    /// <summary>
+    /// A place target choice must not pull in: a death-loop zone, or the mark of one death or retreat (no creature of its own).
+    /// A creature already standing on the corpse never needs a route, so the route check alone did not keep the bot off it.
+    /// </summary>
     internal bool CoversDeathLoop(uint mapId, Vector3 point, uint nowMs)
     {
         Expire(nowMs);
-        return _hazards.Any(h => h.Kind == DeathLoopKind && h.MapId == mapId && h.Covers(point));
+        return _hazards.Any(h => h.MapId == mapId && h.Creature.IsEmpty && h.Covers(point));
     }
 
     /// <summary>Start a look over the visible creatures (<see cref="SetStrong"/> for each strong one, then <see cref="EndStrongScan"/>).</summary>
@@ -130,8 +134,8 @@ internal sealed class PlayerbotHazards
 
     /// <summary>
     /// The first hazard <paramref name="points"/> pass through, sampled every 2 yards, or null. A hazard the walk starts in is not
-    /// held against it (the bot may always walk out of one), except a death-loop zone the walk also ends in: a route that stays in
-    /// the zone is refused. Without <paramref name="strong"/> the strong creatures are not held
+    /// held against it (the bot may always walk out of one), except a place mark (a death, a retreat, a death-loop zone: no creature)
+    /// the walk also ends in: a route that stays in the place is refused. Without <paramref name="strong"/> the strong creatures are not held
     /// against it either (the escape route's own walk, <see cref="PlayerbotRisk.EscapeRoute"/>). A completed return keeps
     /// individually strong and over-level creatures but may cross pack-only hazards marked <see cref="PlayerbotHazard.ReturnPassable"/>.
     /// Copies nothing.
@@ -144,10 +148,13 @@ internal sealed class PlayerbotHazards
         strong &= _strong.Count > 0;
         if (_hazards.Count == 0 && !strong) return null;
         Vector3 start = points[0];
-        // A bot revived inside the zone may leave it, but an errand ending inside the zone is not an escape.
+        // A bot revived inside a place may leave it. An errand that also ends there is not an escape. Death-loop zones already
+        // refused that; a single death or retreat mark did not, so a bot that reclaimed its corpse (the centre of the mark) could
+        // path to the next creature of the same camp, still inside the mark, and die there again (bot QA #446 Northshire 94/525,
+        // #454 Balnir Farmstead 1529/1554/10358). Place marks have no creature; a lethal or fled creature stays its own reach.
         foreach (PlayerbotHazard hazard in _hazards)
-            if (hazard.Kind == DeathLoopKind && hazard.MapId == mapId
-                && hazard.Covers(start) && hazard.Covers(points[^1])) return hazard;
+            if (hazard.MapId == mapId && hazard.Creature.IsEmpty && hazard.Covers(start) && hazard.Covers(points[^1]))
+                return hazard;
         for (int index = 1; index < points.Count; index++)
         {
             Vector3 a = points[index - 1], b = points[index];
