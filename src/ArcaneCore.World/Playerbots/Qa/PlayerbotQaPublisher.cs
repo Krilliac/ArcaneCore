@@ -114,6 +114,7 @@ internal sealed class PlayerbotQaPublisher
     private readonly TimeProvider _time;
     private readonly string _build;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _cappedRegressions = new(StringComparer.Ordinal);
     private int _warnedToken;
     private int _warnedGh;
     private int _warnedDirectory;
@@ -264,13 +265,16 @@ internal sealed class PlayerbotQaPublisher
     /// Whether <paramref name="f"/> recurs on the running build after its issue was closed on another one (<see cref="PlayerbotQaGitHubOptions.ReopenOnRegression"/>).
     /// A KnownClosed finding is compared with the build it was first observed closed on; a finding that was not KnownClosed yet (its issue was closed behind our back and is
     /// found closed just now) with the build its issue was last known open on (the last create, reopen or comment). With no such build recorded, or a recurrence on that same
-    /// build (a person closed it while it was still happening), it is not a regression. The running build must have met the finding.
+    /// build (a person closed it while it was still happening), it is not a regression. The running build must have met the finding at least as often as a new finding is
+    /// reported (<see cref="PlayerbotQaGitHubOptions.MinOccurrences"/>; one occurrence for a single-occurrence kind), and must be NEWER than the reference build: first run by this store
+    /// after it (<see cref="IQaPublicationState.IsBuildNewer"/>). A rollback to an older build, or a build the registry does not know, is not a regression.
     /// </summary>
     private bool IsRegression(QaFindingView f)
     {
-        if (!_options.GitHub.ReopenOnRegression || f.CountOnBuild(_build) <= 0) return false;
+        PlayerbotQaGitHubOptions git = _options.GitHub;
+        if (!git.ReopenOnRegression || f.CountOnBuild(_build) < (QaKinds.Of(f.Kind).SingleOccurrence ? 1 : git.MinOccurrences)) return false;
         string? reference = f.Publication.State == QaPublicationState.KnownClosed ? f.ClosedBuild : f.ReportedBuild;
-        return reference is not null && !string.Equals(reference, _build, StringComparison.Ordinal);
+        return reference is not null && !string.Equals(reference, _build, StringComparison.Ordinal) && _state.IsBuildNewer(_build, reference);
     }
 
     /// <summary>Publish one finding; false when the pass should stop (a transient failure: the rest would fail the same way).</summary>
@@ -369,7 +373,8 @@ internal sealed class PlayerbotQaPublisher
             bool regressionComment = false;
             if (!found.Open)
             {
-                bool regression = IsRegression(current);
+                // An issue closed as not planned is a decision, not a fix: a newer build does not undo it (ReopenClosed, which reopens whatever its reason, still does).
+                bool regression = IsRegression(current) && !found.NotPlanned;
                 if (!git.ReopenClosed && !regression)
                 {
                     _state.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.KnownClosed, found.Number), null, current.Count));
@@ -381,7 +386,11 @@ internal sealed class PlayerbotQaPublisher
                 regressionComment = regression && Ledger.CanComment(now, git.MaxCommentsPerHour);
                 if (!git.ReopenClosed && !regressionComment)
                 {
-                    _logger.LogInformation("Bot QA: the hourly comment cap ({Cap}) is reached; the regression of {Id} (issue #{Number}) is reported on a later pass", git.MaxCommentsPerHour, current.ShortId, found.Number);
+                    if (_cappedRegressions.TryAdd(id, 0)) // once per finding per process: the pass repeats every few minutes until the budget is back
+                    {
+                        _logger.LogInformation("Bot QA: the hourly comment cap ({Cap}) is reached; the regression of {Id} (issue #{Number}) is reported on a later pass", git.MaxCommentsPerHour, current.ShortId, found.Number);
+                    }
+
                     return true;
                 }
 

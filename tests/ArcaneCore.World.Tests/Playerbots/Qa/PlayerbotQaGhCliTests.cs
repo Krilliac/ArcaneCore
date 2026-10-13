@@ -30,6 +30,11 @@ internal sealed class FakeGh : IQaProcessRunner
 
     public int Count(string verb) => Requests.Count(r => r.Arguments.Count >= 2 && r.Arguments[0] == "issue" && r.Arguments[1] == verb);
 
+    public void SetReason(int number, string reason)
+    {
+        lock (_gate) _issues.Single(i => (int)i["number"]! == number)["stateReason"] = reason;
+    }
+
     public int Add(string body, bool open = true)
     {
         lock (_gate)
@@ -162,13 +167,28 @@ public sealed class PlayerbotQaGhCliTests : IDisposable
 
         QaProcessRequest request = Assert.Single(gh.Requests);
         Assert.Equal(Exe, request.FileName);
-        Assert.Equal(["issue", "list", "--repo", QaData.Repo, "--label", "bot-qa", "--state", "all", "--json", "number,state,body,url", "--limit", "1000"], request.Arguments);
+        Assert.Equal(["issue", "list", "--repo", QaData.Repo, "--label", "bot-qa", "--state", "all", "--json", "number,state,stateReason,body,url", "--limit", "1000"], request.Arguments);
         Assert.True(index.ByMarker(A)!.Open);
         Assert.Equal(open, index.ByMarker(A)!.Number);
         Assert.False(index.ByMarker(B)!.Open);
         Assert.Equal(closed, index.ByMarker(B)!.Number);
         Assert.Null(index.ByMarker(C));
         Assert.True(index.Complete);
+    }
+
+    [Fact]
+    public async Task List_CarriesGitHubsStateReason_SoANotPlannedIssueIsRecognised()
+    {
+        var gh = new FakeGh();
+        int notPlanned = gh.Add(PlayerbotQaIssueComposer.MarkerOf(A) + "\nx", open: false);
+        gh.SetReason(notPlanned, "NOT_PLANNED");
+        gh.Add(PlayerbotQaIssueComposer.MarkerOf(B) + "\nx", open: false);
+        using PlayerbotQaGhCliClient client = NewClient(gh);
+
+        QaIssueIndex index = await client.ListIndexAsync(CancellationToken.None);
+
+        Assert.True(index.ByMarker(A)!.NotPlanned);
+        Assert.False(index.ByMarker(B)!.NotPlanned);
     }
 
     [Fact]

@@ -199,7 +199,7 @@ internal static class PlayerbotQaIssueComposer
         string was = closedBuild is null ? string.Empty : $" The issue was closed while build `{PlayerbotQaRedactor.RedactSecrets(closedBuild)}` was running.";
         string sample = latest is null || f.Kind == QaSignalKind.ServerFault ? string.Empty : $"\n\nSample: `{Code(redactor.Redact(latest.Message))}`";
         string text = string.Create(CultureInfo.InvariantCulture,
-            $"Regression: this finding occurred again on build `{PlayerbotQaRedactor.RedactSecrets(build)}`, a different build from the one it was closed on.{was} {f.CountOnBuild(build)} occurrences on this build (total {f.Count}), distinct bots {f.DistinctBots}, latest at {at} ({f.LastSeenUtc:u}). Reopening.{sample}\n\n_{Footer}_");
+            $"Regression: this finding occurred again on build `{PlayerbotQaRedactor.RedactSecrets(build)}`, a different build from the one it was closed on.{was} {f.CountOnBuild(build)} occurrences on this build (total {f.Count}){(f.Kind == QaSignalKind.ServerFault ? string.Empty : $", distinct bots {f.DistinctBots}")}, latest at {at} ({f.LastSeenUtc:u}). Reopening.{sample}\n\n_{Footer}_");
         return redactor.Body(text, string.Empty);
     }
 

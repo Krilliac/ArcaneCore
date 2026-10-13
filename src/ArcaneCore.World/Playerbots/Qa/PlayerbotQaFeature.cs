@@ -117,7 +117,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time, Build);
         if (saved is not null)
         {
-            int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed, saved.Tombstones), Now);
+            int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed, saved.Tombstones, saved.Builds), Now);
             _publisher.Ledger.Restore(saved.Ledger);
             _log.LogInformation("Bot QA restored {Count} findings from {Path} ({Dropped} invalid or over the cap, {Aged} aged out, {Merged} merged into another, {Issues} issues of merged findings to close as duplicates)",
                 aggregator.Count, _store.FilePath, dropped, aggregator.AgedOut, aggregator.Merged, aggregator.PendingDuplicates().Count);
@@ -385,7 +385,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             QaAggregatorState state = Aggregator.Export();
             _store.Save(new QaStoreFile
             {
-                SaltBase64 = Convert.ToBase64String(Aggregator.Salt), Findings = state.Findings, Bots = state.Bots, Absorbed = state.Absorbed ?? [], Tombstones = state.Tombstones ?? [], Ledger = _publisher.Ledger.Export(),
+                SaltBase64 = Convert.ToBase64String(Aggregator.Salt), Findings = state.Findings, Bots = state.Bots, Absorbed = state.Absorbed ?? [], Tombstones = state.Tombstones ?? [], Builds = state.Builds ?? [], Ledger = _publisher.Ledger.Export(),
             });
         }
     }

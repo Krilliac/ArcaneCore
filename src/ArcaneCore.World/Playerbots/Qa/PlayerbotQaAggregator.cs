@@ -16,6 +16,12 @@ internal interface IQaPublicationState
     {
     }
 
+    /// <summary>
+    /// Whether <paramref name="build"/> was first run by this store AFTER <paramref name="reference"/> (build strings do not order, so a rollback is not "newer"). False when either is
+    /// unknown: nothing is reopened on doubt.
+    /// </summary>
+    bool IsBuildNewer(string build, string reference) => false;
+
     void Unpin(string id)
     {
     }
@@ -43,7 +49,7 @@ internal sealed record QaAbsorbed(string Id, string Survivor, int Issue = 0, boo
 
 /// <summary>The aggregator's persisted state: the findings, per finding the salted hashes of the bots that met it, and the merged-away ids.</summary>
 internal sealed record QaAggregatorState(IReadOnlyList<QaFindingView> Findings, IReadOnlyDictionary<string, ulong[]> Bots, IReadOnlyList<QaAbsorbed>? Absorbed = null,
-    IReadOnlyList<QaTombstone>? Tombstones = null);
+    IReadOnlyList<QaTombstone>? Tombstones = null, IReadOnlyList<QaBuildSeen>? Builds = null);
 
 /// <summary>
 /// What <see cref="PlayerbotQaAggregator.Prune"/> removed (or, for a dry run, would remove): how many (<see cref="Count"/>), by kind label, the first
@@ -78,6 +84,30 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 {
     /// <summary>The build every occurrence is stamped with (<see cref="PlayerbotQaIssueComposer.BuildVersion"/> unless a test or the feature gave one).</summary>
     internal string Build { get; } = QaFinding.CleanBuild(build) ?? PlayerbotQaIssueComposer.BuildVersion();
+
+    /// <summary>The builds the registry remembers (the most recent by first sighting).</summary>
+    internal const int MaxKnownBuilds = 32;
+
+    private readonly Dictionary<string, DateTime> _buildSeen = new(StringComparer.Ordinal);
+    private bool _buildRegistered;
+
+    /// <summary>Remember the running build with the time it was first seen, unless the registry already knows it; trim to the newest <see cref="MaxKnownBuilds"/>. Call under the lock.</summary>
+    private void RegisterBuild(DateTime at)
+    {
+        if (_buildRegistered) return;
+        _buildRegistered = true;
+        if (!_buildSeen.TryAdd(Build, at)) return;
+        while (_buildSeen.Count > MaxKnownBuilds)
+        {
+            string oldest = _buildSeen.Where(p => !string.Equals(p.Key, Build, StringComparison.Ordinal)).OrderBy(p => p.Value).ThenBy(p => p.Key, StringComparer.Ordinal).First().Key;
+            _buildSeen.Remove(oldest);
+        }
+    }
+
+    public bool IsBuildNewer(string build, string reference)
+    {
+        lock (_gate) return _buildSeen.TryGetValue(build, out DateTime now) && _buildSeen.TryGetValue(reference, out DateTime before) && now > before;
+    }
 
     /// <summary>How far from a finding's anchor (its first sample, in yards, measured on the ground plane) a signal still folds into it across a zone cell border.</summary>
     internal const float AnchorYards = 160f;
@@ -142,6 +172,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         string? ingested;
         lock (_gate)
         {
+            RegisterBuild(now);
             QaFinding? finding;
             if (probe is { } wanted)
             {
@@ -723,7 +754,8 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             return new QaAggregatorState([.. _byId.Values.Select(f => f.ToView())],
                 _byId.Values.Where(f => f.Bots.Count > 0).ToDictionary(f => f.Id, f => f.Bots.Order().ToArray(), StringComparer.Ordinal),
                 [.. _absorbed.Values.OrderBy(a => a.Id, StringComparer.Ordinal)],
-                [.. _tombs.Values.OrderBy(t => t.Id, StringComparer.Ordinal)]);
+                [.. _tombs.Values.OrderBy(t => t.Id, StringComparer.Ordinal)],
+                [.. _buildSeen.OrderBy(p => p.Value).ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => new QaBuildSeen(p.Key, p.Value))]);
         }
     }
 
@@ -808,6 +840,15 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             ClearFindings();
             _absorbed.Clear();
             _tombs.Clear();
+            // The build registry: as saved (a file without one, from before it, knows no build), then this build joins it with the time of this start-up.
+            _buildSeen.Clear();
+            foreach (QaBuildSeen seen in (state.Builds ?? []).Where(static b => b is not null && QaFinding.CleanBuild(b.Build) is not null).Take(MaxKnownBuilds))
+            {
+                _buildSeen[QaFinding.CleanBuild(seen.Build)!] = seen.FirstSeenUtc;
+            }
+
+            _buildRegistered = false;
+            RegisterBuild(at);
             foreach (QaTombstone t in (state.Tombstones ?? []).Where(static t => t?.Id is { Length: PlayerbotQaFingerprint.FullChars } && t.Issue > 0 && Enum.IsDefined(t.Kind)).Take(TombstoneCap))
             {
                 _tombs[t.Id] = t with { Attackers = [.. (t.Attackers ?? []).Take(QaFinding.MaxLoopAttackers)], DeathSource = t.DeathSource ?? string.Empty };
@@ -858,7 +899,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     Anchor = view.Anchor ?? (view.Samples ?? []).Where(sm => sm.HasPosition).Select(sm => new QaAnchor(sm.Map, sm.X, sm.Y)).FirstOrDefault()
                         ?? PlayerbotQaFingerprint.CellCentreOfKey(view.Key),
                 };
-                foreach (QaBuildCount entry in (view.BuildCounts ?? []).Where(e => e is not null && QaFinding.CleanBuild(e.Build) is not null && e.Count > 0)
+                foreach (QaBuildCount entry in (view.BuildCounts ?? []).Where(e => QaFinding.CleanBuild(e.Build) is not null && e.Count > 0)
                     .DistinctBy(e => QaFinding.CleanBuild(e.Build), StringComparer.Ordinal).Take(QaFinding.MaxTrackedBuilds))
                 {
                     finding.BuildCounts.Add(new QaBuildCount(QaFinding.CleanBuild(entry.Build)!, entry.Count));

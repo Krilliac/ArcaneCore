@@ -166,9 +166,7 @@ process (so at least that build) started. An external tool can say "published is
 process started). `ClosedBuild` (the build the finding was first observed `KnownClosed` on) and `ReportedBuild` (the build of the issue's last create, reopen or comment) are
 exported too.
 
-`findings.json` is at **format version 2** (the build stamps). A build reads versions 1 and 2: a version 1 file loads with every build unknown (null, no counts) and the first
-occurrence on the running build stamps it; a file of a newer version is still refused and kept untouched. An older build refuses a version 2 file, so roll a rollback by
-restoring the version 1 backup of `findings.json`.
+`findings.json` stays at format version 1: the build stamps and the build registry (`Builds`: each build this store has run, with the time it was first seen, the newest 32) are additive and nullable. A file from before them loads with every build unknown (null, no counts) and the first occurrence on the running build stamps it; an older build ignores the new members, so a rollback keeps its ledger and its known-closed memory. The registry is what orders builds: build strings do not order, so "newer" means first run by this store after the reference build.
 
 **Pruning.** `.playerbot qa prune [#hours] [closed] [dry]` forgets the findings not seen for `#hours` (default 12, 1..720); `dry` lists what
 would go (at most ten lines) and changes nothing. The reply gives the count by kind, how many remain, and how many old findings were kept.
@@ -220,7 +218,7 @@ Off by default. It is a three-step ladder; each step needs an explicit setting.
   killed), stdin closed and `GH_PROMPT_DISABLED=1`. `GITHUB_TOKEN` and `GH_TOKEN` are removed from the child so `gh` uses its own login;
   set `World:Playerbots:Qa:GitHub:GhPassToken` = true to hand it the token from `TokenEnvironmentVariable` as `GH_TOKEN` instead. Issue and
   comment bodies go through a temp file (`--body-file`, deleted afterwards) and never on the command line. The calls are
-  `gh issue list --repo R --label L --state all --json number,state,body,url --limit N` (N = `MaxListPages` x 100), `gh issue view N`,
+  `gh issue list --repo R --label L --state all --json number,state,stateReason,body,url --limit N` (N = `MaxListPages` x 100), `gh issue view N`,
   `gh issue create --repo R --title T --body-file F --label L`, `gh issue comment N --repo R --body-file F` and `gh issue reopen N`.
   There is no search: an issue whose label was removed by hand is not found, and if the list was cut at its limit a finding with no known
   issue stays pending (a warning says so) instead of risking a duplicate. A dry run starts no process and does not look for `gh`.
@@ -260,9 +258,9 @@ back from its key on load (only a key that rebuilds to itself), and keeps its id
 * **Open issue**: add a comment with the new occurrences, at most once per `CommentIntervalHours` (default 24) per finding.
 * **Closed issue**: left closed and remembered as known-closed (no API call on later passes). With `World:Playerbots:Qa:GitHub:ReopenClosed` = true it is
   reopened and commented instead.
-* **Regression** (`World:Playerbots:Qa:GitHub:ReopenOnRegression`, default true): a finding whose issue is known closed that **recurs on a different build than the one it was
-  first observed closed on** (`ClosedBuild`; for a finding closed behind our back, the build of the issue's last create, reopen or comment; for a file from before format 2 or a
-  tombstone, the build that last met it, else the running one) is a regression. The issue is reopened and gets **one** comment: the new build, the occurrences on it, the total, the
+* **Regression** (`World:Playerbots:Qa:GitHub:ReopenOnRegression`, default true): a finding whose issue is known closed that **recurs on a NEWER build than the one it was
+  first observed closed on** (`ClosedBuild`; for a finding closed behind our back, the build of the issue's last create, reopen or comment; for a file from before build stamps or a
+  tombstone, the build that last met it, else the running one) is a regression, provided the running build met it at least `MinOccurrences` times (one for a single-occurrence kind) and is newer than that reference by the registry: a rollback to an older build, or a build the registry does not know, never reopens (nothing reopens on doubt), and neither does an issue GitHub shows as closed `not_planned` (a decision; `ReopenClosed` still does). The issue is reopened and gets **one** comment: the new build, the occurrences on it, the total, the
   distinct bots and the latest sample. A recurrence on the **same** build is a person's won't-fix and is left closed (and counted nowhere else). The reopen and its comment
   are one step under `MaxCommentsPerHour`: with no budget the issue stays closed and the next pass retries, and the comment ignores `CommentIntervalHours` (it is not a routine
   occurrence note). The option only acts while publishing is on, and it never closes anything: the lane has no auto-close.

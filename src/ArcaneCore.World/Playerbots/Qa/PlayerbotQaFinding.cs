@@ -72,7 +72,10 @@ internal sealed record QaPublication(QaPublicationState State, int Issue = 0, st
 }
 
 /// <summary>How many occurrences of a finding the server saw on one build (<see cref="QaFindingView.BuildCounts"/>).</summary>
-internal sealed record QaBuildCount(string Build, long Count);
+internal readonly record struct QaBuildCount(string Build, long Count);
+
+/// <summary>A build this store has run and when it first saw it (UTC): what makes one build "newer" than another, since build strings do not order.</summary>
+internal sealed record QaBuildSeen(string Build, DateTime FirstSeenUtc);
 
 /// <summary>One piece of evidence: where and when, who attacked, and the redacted log line.</summary>
 internal sealed record QaSample(DateTime AtUtc, bool HasPosition, uint Map, float X, float Y, float Z, uint[] Attackers, string Message)
@@ -297,6 +300,13 @@ internal sealed class QaFinding
     {
         FirstBuild ??= build;
         LastBuild = build;
+        if (BuildCounts.Count > 0 && string.Equals(BuildCounts[0].Build, build, StringComparison.Ordinal))
+        {
+            // The common case: the current build is already first. A struct replaced in place, no allocation.
+            BuildCounts[0] = new QaBuildCount(build, Math.Max(0, BuildCounts[0].Count) + occurrences);
+            return;
+        }
+
         long total = occurrences;
         int at = BuildCounts.FindIndex(entry => string.Equals(entry.Build, build, StringComparison.Ordinal));
         if (at >= 0)

@@ -25,6 +25,9 @@ internal sealed record QaStoreFile
     public IReadOnlyList<QaTombstone> Tombstones { get; init; } = [];
 
     public QaLedgerState Ledger { get; init; } = new([], []);
+
+    /// <summary>The builds this store has run and when each was first seen (at most <see cref="PlayerbotQaAggregator.MaxKnownBuilds"/>): what orders builds. Absent in files from before it.</summary>
+    public IReadOnlyList<QaBuildSeen> Builds { get; init; } = [];
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, UseStringEnumConverter = true, DefaultIgnoreCondition = JsonIgnoreCondition.Never)]
@@ -40,13 +43,10 @@ internal sealed partial class QaStoreJsonContext : JsonSerializerContext;
 internal sealed class PlayerbotQaStore(string directory, ILogger logger)
 {
     /// <summary>
-    /// 2 adds the per-finding build stamps (first and last build, per-build counts, closed and reported build). The reader still accepts
-    /// <see cref="OldestReadableFormat"/>: those fields are simply absent, so their builds load as unknown.
+    /// Still 1: the build stamps (per finding) and the build registry are additive and nullable, a file without them loads with every build unknown, and an older
+    /// build ignores the members it does not know. A bump would make a rolled-back build disable persistence and lose its hourly-cap ledger and its KnownClosed memory.
     /// </summary>
-    internal const int CurrentFormat = 2;
-
-    /// <summary>The oldest format this build still reads.</summary>
-    internal const int OldestReadableFormat = 1;
+    internal const int CurrentFormat = 1;
 
     private bool _failedWriteLogged;
 
@@ -80,7 +80,7 @@ internal sealed class PlayerbotQaStore(string directory, ILogger logger)
         }
 
         if (file is null) return Disable($"{FilePath} is empty or null; it is kept untouched");
-        if (file.FormatVersion is < OldestReadableFormat or > CurrentFormat)
+        if (file.FormatVersion != CurrentFormat)
         {
             return Disable($"{FilePath} has format version {file.FormatVersion}, this build reads {CurrentFormat}; it is kept untouched");
         }
