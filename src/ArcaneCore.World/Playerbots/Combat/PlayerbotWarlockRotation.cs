@@ -63,7 +63,7 @@ internal sealed class PlayerbotWarlockRotation : PlayerbotClassRotation
 
     /// <summary>Standing on a live pull target with a cast ready: the think is that cast (the pet goes beside it, <see cref="PetCompanion"/>).</summary>
     private static bool YieldsToCast(RotationState s)
-        => s.Victim is { IsAlive: true } pull && !s.IsMoving && Casts(s, pull) is not null;
+        => s.Victim is { IsAlive: true, IsCrowdControlled: false } pull && !s.IsMoving && Casts(s, pull) is not null;
 
     /// <summary>
     /// A demon by role (vmangos picks one of the known summons at random): alone, the Voidwalker tanks for the warlock; in a group

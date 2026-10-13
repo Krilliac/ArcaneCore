@@ -102,7 +102,7 @@ internal abstract class PlayerbotClassRotation
     protected static int AttackersWithin(RotationState s, float range) => s.Attackers.Count(a => a.IsAlive && a.Distance <= range);
 
     protected static RotationUnit? FirstAttackerOtherThan(RotationState s, RotationUnit? except)
-        => s.Attackers.FirstOrDefault(a => a.IsAlive && a.Guid != except?.Guid);
+        => s.Attackers.FirstOrDefault(a => a.IsAlive && !a.IsCrowdControlled && a.Guid != except?.Guid);
 
     /// <summary>Whether a class fights with weapons (vmangos CombatBotBaseAI::IsPhysicalDamageClass).</summary>
     protected static bool IsPhysicalClass(byte playerClass) => (Class)playerClass is Class.Warrior or Class.Paladin or Class.Rogue
@@ -268,20 +268,26 @@ internal abstract class PlayerbotClassRotation
 
     /// <summary>
     /// The pet joins the bot's fight (vmangos PartyBotAI: SetIsCommandAttack + AttackStart on the bot's victim) once the bot is
-    /// fighting or the pull target is within 30 yards; between fights a pet still fighting is called back to follow.
+    /// fighting or the pull target is within 30 yards, unless the victim is under breakable crowd control; a pet fighting a
+    /// crowd-controlled unit is redirected to the bot's non-CC victim or called back to follow, as is a pet still fighting between fights.
     /// </summary>
     protected static RotationAction? CommandPet(RotationState s)
     {
         if (s.Pet != RotationPetStatus.Alive) return null;
-        // A pet with a victim of its own is left to it (vmangos :2208-2216 commands a pet only when !pPet->GetVictim()).
-        if (s.Victim is { IsAlive: true } victim && !s.PetFighting && (s.InCombat || victim.Distance <= FriendlyRange))
+        // A pet with a non-CC victim of its own is left to it (vmangos :2208-2216 commands a pet only when !pPet->GetVictim());
+        // a pet on a crowd-controlled target is redirected to the bot's non-CC victim or called back to follow.
+        if (s.Victim is { IsAlive: true, IsCrowdControlled: false } victim
+            && (!s.PetFighting || s.PetFightingCrowdControlled)
+            && (s.InCombat || victim.Distance <= FriendlyRange))
             return RotationAction.PetAttack(victim);
-        return !s.InCombat && s.Victim is null && s.PetFighting ? RotationAction.PetFollow() : null;
+        return s.PetFightingCrowdControlled || (!s.InCombat && s.Victim is null && s.PetFighting)
+            ? RotationAction.PetFollow() : null;
     }
 
     /// <summary>
-    /// The pet attack to send beside <paramref name="chosen"/>: only an idle pet (no victim), and only beside a cast or an empty
-    /// think, never beside a cast aimed at the pet itself (Health Funnel, Mend Pet, a heal), which the command would interrupt.
+    /// The pet command to send beside <paramref name="chosen"/>: an idle pet is sent to attack (or a pet on a crowd-controlled
+    /// target is redirected or called back to follow) beside a cast or an empty think, never beside a cast aimed at the pet itself
+    /// (Health Funnel, Mend Pet, a heal), which the command would interrupt.
     /// </summary>
     protected static RotationAction? SendIdlePet(RotationState s, RotationAction? chosen)
     {
@@ -291,7 +297,8 @@ internal abstract class PlayerbotClassRotation
             if (s.PetUnit is { } pet && action.Target == pet.Guid) return null;
         }
         RotationAction? command = CommandPet(s);
-        return command is { Kind: RotationActionKind.PetAttack } ? command : null;
+        return command is { Kind: RotationActionKind.PetAttack }
+            || command is { Kind: RotationActionKind.PetFollow } && s.PetFightingCrowdControlled ? command : null;
     }
 
     // --- shared rotations -------------------------------------------------------------------------------------------------

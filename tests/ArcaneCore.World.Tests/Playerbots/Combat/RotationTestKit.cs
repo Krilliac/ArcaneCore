@@ -74,11 +74,11 @@ internal static class RotationTestKit
     };
 
     internal static RotationUnit Victim(float distance = 20f, float healthPercent = 100f, bool casting = false, bool moving = false,
-        bool targetsBot = true, uint creatureType = 1, params string[] auras) => new()
+        bool targetsBot = true, uint creatureType = 1, bool crowdControlled = false, params string[] auras) => new()
     {
         Guid = VictimGuid, Distance = distance, InMeleeRange = distance <= 4f, Health = (uint)healthPercent, MaxHealth = 100,
         IsCasting = casting, IsMoving = moving, TargetsBot = targetsBot, InCombat = true, CreatureType = creatureType,
-        PowerType = PowerType.Mana, Auras = new HashSet<string>(auras, StringComparer.OrdinalIgnoreCase),
+        IsCrowdControlled = crowdControlled, PowerType = PowerType.Mana, Auras = new HashSet<string>(auras, StringComparer.OrdinalIgnoreCase),
     };
 
     internal static RotationUnit Member(ulong low, byte playerClass, float healthPercent = 100f, float distance = 10f, uint harmfulDispel = 0,
@@ -136,8 +136,8 @@ internal sealed class RotationStateBuilder
     public bool IsMoving { get; set; }
     public RotationPetStatus Pet { get; set; }
     public RotationUnit? PetUnit { get; set; }
-    public bool PetOnVictim { get; set; }
     public bool PetFighting { get; set; }
+    public bool PetFightingCrowdControlled { get; set; }
     public bool CanCallPet { get; set; }
     public bool AutoRepeatActive { get; set; }
     public bool HasRangedWeapon { get; set; }
@@ -151,7 +151,8 @@ internal sealed class RotationStateBuilder
     {
         Spells = Spells, Self = Self, Victim = Victim, Role = Role, InCombat = InCombat, PowerType = PowerType, Power = Power, MaxPower = MaxPower,
         Party = Party, Attackers = Attackers, ComboPoints = ComboPoints, Form = Form, IsStealthed = IsStealthed, WearsShield = WearsShield,
-        IsMoving = IsMoving, Pet = Pet, PetUnit = PetUnit, PetOnVictim = PetOnVictim, PetFighting = PetFighting, CanCallPet = CanCallPet, AutoRepeatActive = AutoRepeatActive,
+        IsMoving = IsMoving, Pet = Pet, PetUnit = PetUnit, PetFighting = PetFighting, PetFightingCrowdControlled = PetFightingCrowdControlled,
+        CanCallPet = CanCallPet, AutoRepeatActive = AutoRepeatActive,
         HasRangedWeapon = HasRangedWeapon, HasWand = HasWand, HealingPotion = HealingPotion, Bandage = Bandage, Totems = Totems,
         InGroup = Party.Count > 0, CanCast = CanCast,
     };

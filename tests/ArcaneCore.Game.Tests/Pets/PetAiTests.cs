@@ -306,5 +306,52 @@ public sealed class PetAiTests
         }
     }
 
+    [Fact]
+    public void CrowdControlledTarget_StopsAttackingPet_AndIsSkippedUnlessExplicitlyCommanded()
+    {
+        (PetTestKit kit, Player owner, _, Creature pet) = Summoned();
+        using (kit)
+        {
+            CharmInfo charm = pet.Summon!.Charm!;
+            charm.LearnSpell(PetBiteSpell, autocast: true);
+            Creature first = Enemy(kit, 8, 5);
+            Creature second = Enemy(kit, 9, 6);
+
+            // 1. A pet fighting a target stops attacking when a breakable crowd-control aura lands on it (Spell.cpp:1566-1577).
+            kit.Controller.HandleCommand(pet, CommandState.Attack, first);
+            Assert.Same(first, pet.Combat.Victim);
+            Assert.True(charm.IsCommandAttack);
+
+            Assert.Equal(SpellCastResult.CastOk, kit.Cast(owner, PolymorphSpell, SpellCastTargets.ForUnit(first.Guid)));
+            Assert.True(kit.Spells.System.HasAuraPetShouldAvoidBreaking(first));
+            Assert.Null(pet.Combat.Victim);
+            Assert.False(charm.IsCommandAttack);
+
+            // Without an explicit command, CanAttack is false on the sheeped target and the pet does not re-engage or autocast on it.
+            Assert.False(Ai(pet).CanAttack(first, charm));
+            kit.Run(300);
+            Assert.Null(pet.Combat.Victim);
+            Assert.True(kit.Spells.System.HasAura(first, PolymorphSpell));
+
+            // 2. SelectNextTarget after killing another enemy skips the crowd-controlled enemy even while IsCommandAttack is set.
+            kit.Map.Combat.Attack(owner, first);
+            kit.Map.Combat.SetInCombatState(owner, 0);
+            kit.Map.Combat.SetInCombatState(first, 0);
+            kit.Controller.HandleCommand(pet, CommandState.Attack, second);
+            Assert.Same(second, pet.Combat.Victim);
+            Assert.True(charm.IsCommandAttack);
+
+            kit.Map.Combat.Kill(pet, second);
+            Assert.Null(pet.Combat.Victim);
+            Assert.True( kit.Spells.System.HasAura(first, PolymorphSpell));
+
+            // 3. An explicit owner Attack command overrides the crowd-control check (PetAI.cpp:729-731).
+            kit.Controller.HandleCommand(pet, CommandState.Attack, first);
+            Assert.True(charm.IsCommandAttack);
+            Assert.True(Ai(pet).CanAttack(first, charm));
+            Assert.Same(first, pet.Combat.Victim);
+        }
+    }
+
     private static List<byte[]> Packets(FakeSession session, WorldOpcode opcode) => Spells.SpellTestKit.Packets(session, opcode);
 }

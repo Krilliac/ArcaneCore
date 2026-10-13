@@ -52,6 +52,11 @@ public sealed partial class SpellSystem
         }
 
         AddAuraHolder(holder);
+        if (!holder.IsRemoved && (spell.AuraInterruptFlags & SpellAuraInterruptFlags.Damage) != 0)
+        {
+            StopPetsAttackingCrowdControlledTarget(target, caster);
+        }
+
         return !holder.IsRemoved && HasAura(target, spellId);
     }
 }

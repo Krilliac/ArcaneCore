@@ -137,11 +137,17 @@ public sealed class PlayerbotClassRotationTests
         RotationAction? shot = Hunter.InCombat(shooting);
         Assert.Equal("Auto Shot", Next(shot));
         Assert.Equal("pet attack", Next(Hunter.PetCompanion(shooting, shot)));
-        // A pet that already has a victim of its own is not pulled off it.
+        // A pet that already has a victim of its own is not pulled off it, unless that victim is crowd-controlled.
         RotationState busyPet = State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), Victim(20f), PlayerbotRole.RangeDps,
             more: s => { s.Pet = RotationPetStatus.Alive; s.PetUnit = pet with { IsAlive = true, Health = 100 }; s.HasRangedWeapon = true; s.PetFighting = true; });
         Assert.Equal("Auto Shot", Next(Hunter.InCombat(busyPet)));
         Assert.Null(Hunter.PetCompanion(busyPet, Hunter.InCombat(busyPet)));
+        RotationState ccVictim = State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), Victim(20f, crowdControlled: true), PlayerbotRole.RangeDps,
+            more: s => { s.Pet = RotationPetStatus.Alive; s.PetUnit = pet with { IsAlive = true, Health = 100 }; s.HasRangedWeapon = true; });
+        Assert.Null(Hunter.PetCompanion(ccVictim, Hunter.InCombat(ccVictim)));
+        RotationState petOnCc = State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), Victim(20f, crowdControlled: true), PlayerbotRole.RangeDps,
+            more: s => { s.Pet = RotationPetStatus.Alive; s.PetUnit = pet with { IsAlive = true, Health = 100 }; s.HasRangedWeapon = true; s.PetFighting = true; s.PetFightingCrowdControlled = true; });
+        Assert.Equal("pet follow", Next(Hunter.PetCompanion(petOnCc, Hunter.InCombat(petOnCc))));
         Assert.Equal("pet follow", Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps,
             inCombat: false, more: s => { s.Pet = RotationPetStatus.Alive; s.PetUnit = pet with { IsAlive = true, Health = 100 }; s.PetFighting = true; }))));
     }

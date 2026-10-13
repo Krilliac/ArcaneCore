@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -451,6 +452,106 @@ public sealed class PlayerbotCombatSpellsTests
             session.Kick();
             await session.ManagedClosed;
         }
+        }
+    }
+
+    [Fact]
+    public async Task PetAvoidsCrowdControl_AndRedirectsOrFollowsWhenTargetIsPolymorphed()
+    {
+        var template = new CreatureTemplate { Entry = Pets.PetTestServices.Entry, Name = "Test Imp", MinLevel = 1, MaxLevel = 1,
+            DisplayIds = [903], MinLevelHealth = Pets.PetTestServices.Health, MaxLevelHealth = Pets.PetTestServices.Health, Faction = 35 };
+        Creatures.CreatureTestStore.Current.Value = new Creatures.CreatureTestContext(new CreatureContent([template], [], [], [], []));
+        WorldTestHost host;
+        try { host = WorldTestHost.Start(); }
+        finally { Creatures.CreatureTestStore.Current.Value = null; }
+
+        await using (host)
+        {
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                Creature sheeped = await AddTargetAsync(host, session, 7, 41);
+                Creature liveTarget = await AddTargetAsync(host, session, 8, 42);
+                const uint polymorphId = 9103;
+                Creature pet = await host.World.InvokeAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+                    SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                    SpellInfo bolt = feature.System.Store.Get(SpellTestServices.Bolt)!;
+                    var polymorph = new SpellInfo
+                    {
+                        Id = polymorphId, Name = "Polymorph", Rank = "Rank 1",
+                        AuraInterruptFlags = SpellAuraInterruptFlags.Damage,
+                        Duration = new SpellDuration(20_000, 0, 20_000),
+                        Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Transform, TargetA = SpellImplicitTarget.UnitEnemy }],
+                    };
+                    feature.System.Store = new SpellStore(
+                        feature.System.Store.All.Append(bolt with { Id = 9101, Name = "Shadow Bolt", Rank = "Rank 1" }).Append(polymorph), [], []);
+                    Assert.True(feature.Spellbook.LearnSpell(player, 9101));
+                    var snapshot = new ArcaneCore.Kernel.Characters.Pets.PersistentPetSnapshot((int)player.Guid.Low, 9102, Pets.PetTestServices.Entry, 1, 0,
+                        50, 30, 0, 1, [], [], Name: "Imp", NameTimestamp: 1, RenameAllowed: false);
+                    Creature restored = session.Services.GetRequiredService<ArcaneCore.World.Pets.PetsFeature>().Service.RestoreCurrentPet(player, snapshot)!;
+                    player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+                    restored.Map!.Combat.Attack(restored, sheeped);
+                    Assert.Same(sheeped, restored.Combat.Victim);
+                    Assert.True(feature.System.AddAura(sheeped, polymorphId));
+                    // Applying a breakable CC aura immediately stops any pet attacking that target (Spell.cpp:1566-1577).
+                    Assert.Null(restored.Combat.Victim);
+                    return restored;
+                });
+
+                var helper = new PlayerbotCombatSpells(session);
+                var sent = new List<WorldOpcode>();
+
+                // 1. An idle pet is not commanded onto a Polymorphed target.
+                await host.World.InvokeAsync(() =>
+                {
+                    SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    session.ManagedDispatchObserver = sent.Add;
+                    helper.Update(session.Player!, sheeped, 0);
+                    feature.System.InterruptCurrentCast(session.Player!);
+                    return true;
+                });
+                Assert.DoesNotContain(WorldOpcode.CmsgPetAction, sent);
+                Assert.Null(await host.World.InvokeAsync(() => pet.Combat.Victim));
+
+                // 2. If the pet is fighting a Polymorphed unit while the bot fights a non-CC target, it redirects to the non-CC target.
+                sent.Clear();
+                await host.World.InvokeAsync(() =>
+                {
+                    SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                    pet.Map!.Combat.Attack(pet, sheeped);
+                    Assert.Same(sheeped, pet.Combat.Victim);
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    helper.Update(session.Player!, liveTarget, 1600);
+                    feature.System.InterruptCurrentCast(session.Player!);
+                    return true;
+                });
+                Assert.Contains(WorldOpcode.CmsgPetAction, sent);
+                Assert.Same(liveTarget, await host.World.InvokeAsync(() => pet.Combat.Victim));
+
+                // 3. If the pet is fighting a Polymorphed unit and the bot's victim is also Polymorphed, the pet is recalled to follow.
+                sent.Clear();
+                await host.World.InvokeAsync(() =>
+                {
+                    SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                    pet.Map!.Combat.Attack(pet, sheeped);
+                    Assert.Same(sheeped, pet.Combat.Victim);
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    helper.Update(session.Player!, sheeped, 3200);
+                    feature.System.InterruptCurrentCast(session.Player!);
+                    return true;
+                });
+                Assert.Contains(WorldOpcode.CmsgPetAction, sent);
+                Assert.Null(await host.World.InvokeAsync(() => pet.Combat.Victim));
+            }
+            finally
+            {
+                session.Kick();
+                await session.ManagedClosed;
+            }
         }
     }
 

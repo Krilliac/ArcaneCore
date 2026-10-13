@@ -83,14 +83,14 @@ internal static class PlayerbotCombatView
 
         RotationPetStatus petStatus = RotationPetStatus.None;
         RotationUnit? petView = null;
-        bool petOnVictim = false, petFighting = false;
+        bool petFighting = false, petFightingCrowdControlled = false;
         if (!player.PetGuid.IsEmpty && map?.FindObject(player.PetGuid) is Creature pet)
         {
             units[pet.Guid] = pet;
             petStatus = pet.IsAlive ? RotationPetStatus.Alive : RotationPetStatus.Dead;
             petView = Describe(system, player, pet, groups);
-            petOnVictim = victim is not null && ReferenceEquals(pet.Combat.Victim, victim);
             petFighting = pet.Combat.Victim is not null;
+            petFightingCrowdControlled = pet.Combat.Victim is { } petVictim && system.HasAuraPetShouldAvoidBreaking(petVictim, pet);
         }
 
         bool canCallPet = player.Class == Class.Hunter && player.PetGuid.IsEmpty
@@ -155,8 +155,8 @@ internal static class PlayerbotCombatView
             WearsShield = offHand?.Template is { Class: ItemClassArmor, SubClass: SubClassShield },
             Pet = petStatus,
             PetUnit = petView,
-            PetOnVictim = petOnVictim,
             PetFighting = petFighting,
+            PetFightingCrowdControlled = petFightingCrowdControlled,
             CanCallPet = canCallPet,
             AutoRepeatActive = system.HasAutoRepeat(player),
             HasRangedWeapon = ranged?.Template is { Class: ItemClassWeapon } rangedTemplate && rangedTemplate.SubClass != SubClassWand,
@@ -213,6 +213,7 @@ internal static class PlayerbotCombatView
             HasPeriodicHeal = periodicHeal,
             HarmfulDispelMask = harmful,
             HelpfulDispelMask = helpful,
+            IsCrowdControlled = !self && system.HasBreakableByDamageCrowdControlAura(unit, bot),
             Auras = auras,
         };
     }
