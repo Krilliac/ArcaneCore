@@ -72,27 +72,35 @@ public sealed partial class SummonService
     }
 
     /// <summary>
-    /// The pet share of a kill. Alone (RewardSinglePlayerAtKill) the pet gets MaNGOS::XP::Gain for its own level; in a group
-    /// (RewardGroupAtKill) each member's pet gets half of what the member was given (itr_xp / 2). <paramref name="granted"/> is
-    /// <see cref="KillRewards.AwardExperience"/>'s result; a member given nothing (a totem, a PvP or grey kill) gives his pet nothing.
+    /// The pet share of a kill. Alone (RewardSinglePlayerAtKill) the pet gets MaNGOS::XP::Gain for its own level when the kill is worth
+    /// experience to the owner; in a group (RewardGroupAtKill) each member's pet gets half the member's share before rested bonus
+    /// (itr_xp / 2). Shares come from <see cref="KillExperience.Distribute"/> with the inputs <see cref="KillRewards.AwardExperience"/> uses,
+    /// so an owner at the maximum level (who is given nothing himself) still levels his pet. Totems and PvP victims give nothing.
     /// </summary>
-    public void AwardKillExperience(IReadOnlyList<Player> recipients, IReadOnlyList<uint> granted, Creature victim, bool nonRaidDungeon,
-        float killRate, float eliteRate)
+    public void AwardKillExperience(IReadOnlyList<Player> recipients, Creature victim, bool nonRaidDungeon, float killRate, float eliteRate)
     {
         ArgumentNullException.ThrowIfNull(recipients);
-        ArgumentNullException.ThrowIfNull(granted);
         ArgumentNullException.ThrowIfNull(victim);
-        for (int i = 0; i < recipients.Count && i < granted.Count; i++)
+        if (recipients.Count == 0 || Totems.TotemQuery.IsTotem(victim) || KillRewards.IsPvpVictim(victim))
         {
-            Player member = recipients[i];
-            if (granted[i] == 0 || member.Map?.FindObject(member.PetGuid) is not Creature pet || pet.OwnerGuid != member.Guid)
+            return;
+        }
+
+        KillCandidate[] candidates = recipients
+            .Select(p => new KillCandidate(p.Level, p.IsAlive, (p.Flags & PlayerFlags.Ghost) != 0)).ToArray();
+        bool elite = KillRewards.IsElite(victim);
+        float rate = killRate * victim.KillXpModifier;
+        foreach (KillShare share in KillExperience.Distribute(candidates, victim.Level, elite, nonRaidDungeon, rate, eliteRate))
+        {
+            Player member = recipients[share.MemberIndex];
+            if (share.Experience == 0 || member.Map?.FindObject(member.PetGuid) is not Creature pet || pet.OwnerGuid != member.Guid)
             {
                 continue;
             }
 
             uint xp = recipients.Count == 1
-                ? ExperienceFormulas.KillGain(pet.Level, victim.Level, KillRewards.IsElite(victim), nonRaidDungeon, killRate * victim.KillXpModifier, eliteRate)
-                : granted[i] / 2;
+                ? ExperienceFormulas.KillGain(pet.Level, victim.Level, elite, nonRaidDungeon, rate, eliteRate)
+                : share.Experience / 2;
             GivePetXp(pet, xp);
         }
     }
