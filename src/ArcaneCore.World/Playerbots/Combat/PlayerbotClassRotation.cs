@@ -231,7 +231,8 @@ internal abstract class PlayerbotClassRotation
 
     /// <summary>
     /// vmangos SelectMostEfficientHealingSpell (:1891-1932): over the castable heals, strongest first, the one whose amount is
-    /// nearest the missing health; the scan stops at the first heal smaller than the wound.
+    /// nearest the missing health; the scan stops at the first heal smaller than the wound. A heal that only lands on its caster is
+    /// left out for any target but the bot.
     /// </summary>
     internal static SpellInfo? MostEfficient(RotationState s, RotationUnit target, IReadOnlyList<SpellInfo> heals)
     {
@@ -239,8 +240,10 @@ internal abstract class PlayerbotClassRotation
         long bestDiff = long.MaxValue;
         foreach (SpellInfo heal in heals)
         {
+            // A heal that lands on its caster (Desperate Prayer) is no heal for a friend: it would fill the bot, not the friend.
+            if (!target.IsSelf && s.Spells.HealReachOf(heal) == PlayerbotHealReach.SelfOnly) continue;
             if (!s.CanCast(heal, target)) continue;
-            long diff = (long)PlayerbotAbilities.HealAmount(heal) - target.MissingHealth;
+            long diff = (long)s.Spells.HealAmountOf(heal) - target.MissingHealth;
             if (Math.Abs(diff) < bestDiff)
             {
                 bestDiff = Math.Abs(diff);
