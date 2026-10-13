@@ -5,6 +5,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -259,9 +260,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
             PlayerbotRoute? route = walk;
             PlanOutcome planned = PlanOutcome.Route;
+            bool returning = returnQuestId != 0 && returnQuestId == questId;
+            bool friendlyTown = returning && FriendlyTownEnder(player, entry.Entry);
             if (route is null)
                 planned = PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out route,
-                    completedQuestReturn: returnQuestId != 0 && returnQuestId == questId);
+                    completedQuestReturn: returning, friendlyTownEnder: friendlyTown);
             if (planned == PlanOutcome.Pending)
             {
                 // A tile on the way is still being read: not a verdict on this spawn. Keep the goal, try again next think.
@@ -283,7 +286,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 // spot. Leave quests with alternative enders to the ordinary spawn rotation. The set-aside is local to this bot.
                 // Both the near and the far branch count: far failures arrive once per backoff and still confirm.
                 if (returnQuestId == questId && questId != 0 && _entries.Count == 1)
-                    ConfirmUnclimbable(player, destination, questId, entry.Entry, now);
+                    ConfirmUnclimbable(player, destination, questId, entry.Entry, now, friendlyTown);
                 return false; // Nearby alternatives rotate next think; far failures wait for backoff.
             }
             _tileWait.Reset();
@@ -376,14 +379,15 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// ender aside for this bot; the <see cref="AbandonAfterSetAsides"/>th set-aside of a quest abandons it through the client's
     /// abandon packet instead (the ender cannot be reached from where this bot keeps ending up). A completed quest refused for a hazard
     /// is held instead (<see cref="TeleportToBind"/> when the bind point is beside the ender), until <see cref="MaxHeldSetAsides"/>
-    /// set-asides pass with no level gained.
+    /// set-asides pass with no level gained. A death or retreat mark beside the road is not that hazard when
+    /// <paramref name="friendlyTownEnder"/>: it must not set a friendly town turn-in aside.
     /// <para>
     /// With the brain's distant-quest abandon (<c>PlayerbotQuestGoals.AbandonDistantCompletedQuest</c>, which runs first and
     /// drops a completed quest with no ender in the home or within 600 yards), this only meets quests whose ender is near on the map
     /// but behind steep ground or guarded by mobs it cannot fight.
     /// </para>
     /// </summary>
-    private void ConfirmUnclimbable(Player player, Vector3 destination, uint questId, uint entry, uint now)
+    private void ConfirmUnclimbable(Player player, Vector3 destination, uint questId, uint entry, uint now, bool friendlyTownEnder)
     {
         Vector3 spot = new(player.X, player.Y, player.Z);
         if (questId != _failQuest || Vector3.DistanceSquared(spot, _failSpot) > SpotYards * SpotYards)
@@ -398,7 +402,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _failDiagnosed = true;
         bool steep = PlayerbotNavigation.RequiresSteepAscent(player, destination, _options, out float ascent);
         PlayerbotHazard hazard = default;
-        if (!steep && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard)) return;
+        if (!steep && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard, friendlyTownEnder)) return;
         string reason = steep ? $"the mesh route climbs {ascent:F1} yards of steep ground"
             : $"the route crosses a {hazard.Kind} hazard";
         _failCount = 0;
@@ -462,6 +466,18 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         log?.LogWarning(
             "Playerbot {Bot} sets aside quest {Quest} target {Entry} (set-aside {Times}): no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; {Reason}",
             player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, reason);
+    }
+
+    /// <summary>
+    /// The ender of a completed return is a friendly town NPC (Innkeeper Renee, Tannok Frosthammer): neither faction template is
+    /// hostile and one is friendly. An unresolved or neutral template is not, so a mark beside the road still blocks that walk.
+    /// </summary>
+    private bool FriendlyTownEnder(Player player, uint entry)
+    {
+        uint faction = _content?.FindTemplate(entry)?.Faction ?? 0;
+        FactionTemplateCatalog? factions = _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates
+            ?? _session.Services.GetService<FactionTemplateCatalog>();
+        return PlayerbotNavigation.IsFriendlyTownNpc(factions, player.FactionTemplate, faction);
     }
 
     internal static bool IsDestinationEntry(CreatureContent content, QuestStore quests, CreatureSpawn spawn, uint preferredEntry)
