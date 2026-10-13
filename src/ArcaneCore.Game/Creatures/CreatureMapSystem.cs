@@ -261,6 +261,33 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     float? ICreatureMover.GetHeight(uint mapId, float x, float y, float z) => _height.GetHeight(mapId, x, y, z);
 
+    /// <summary>Wander, flee and fear choose their points with steep slopes excluded (vmangos RandomMovementGenerator.cpp:52, FleeingMovementGenerator.cpp:54).</summary>
+    private static readonly PathOptions MeshPointOptions = new() { ExcludeFlags = NavTerrain.SteepSlopes };
+
+    bool ICreatureMover.TryGetRandomMeshPoint(Creature creature, Vector3 center, float radius, out Vector3 point)
+    {
+        point = center;
+        return Map.Collision.MeshPoints is { } mesh && mesh.TryGetRandomPointAround(creature.MapId, center, radius, _random, MeshPointOptions, out point);
+    }
+
+    bool ICreatureMover.TryRaycastMesh(Creature creature, Vector3 from, Vector3 to, out Vector3 reached)
+    {
+        reached = to;
+        if (Map.Collision.MeshPoints is not { } mesh)
+        {
+            return false;
+        }
+
+        MeshRaycastResult ray = mesh.Raycast(creature.MapId, from, to, MeshPointOptions);
+        if (!ray.Available)
+        {
+            return false;
+        }
+
+        reached = ray.Point;
+        return true;
+    }
+
     /// <summary>Launch a spline from the creature's current position and tell its observers.</summary>
     public void MoveTo(Creature creature, float x, float y, float z, bool run, float? finalOrientation)
     {
