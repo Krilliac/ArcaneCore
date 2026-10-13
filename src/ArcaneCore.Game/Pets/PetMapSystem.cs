@@ -277,6 +277,13 @@ public sealed class PetMapSystem : IMapUpdater
             return;
         }
 
+        // vmangos Pet::Update (HUNTER_PET): happiness loss and the loyalty tick; a Rebellious pet whose loyalty runs out leaves.
+        if (links.Kind == SummonKind.Pet && owner is Player { Class: Class.Hunter } hunter && _service is { } happiness
+            && !happiness.TickHappiness(pet, hunter, diffMs))
+        {
+            return;
+        }
+
         if (links.RemainingMs > 0)
         {
             if (links.RemainingMs > (int)diffMs)

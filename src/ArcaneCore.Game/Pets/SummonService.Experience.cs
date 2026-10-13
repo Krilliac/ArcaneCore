@@ -102,6 +102,7 @@ public sealed partial class SummonService
                 ? ExperienceFormulas.KillGain(pet.Level, victim.Level, elite, nonRaidDungeon, rate, eliteRate)
                 : share.Experience / 2;
             GivePetXp(pet, xp);
+            GrantKillLoyalty(pet, member, victim.Level); // Pet::KillLoyaltyBonus
         }
     }
 }
