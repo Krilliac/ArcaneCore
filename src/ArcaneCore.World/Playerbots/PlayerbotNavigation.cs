@@ -286,10 +286,12 @@ internal static class PlayerbotNavigation
     internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
         bool completedQuestReturn = false, bool friendlyTownEnder = false, uint? nowMs = null)
     {
+        long pending = PendingMark;
         bool planned = PlanTowardSteps(player, goal, options, out route, completedQuestReturn, friendlyTownEnder);
         // A far goal that got no route, or only a few yards of one, may mean the bot stands on a fragment of mesh no walk leaves: the
-        // one straight move off it, when the ground beside it is the mesh's large part (TryFragmentHop). Asked only then, never per tick.
-        if (nowMs is { } hopNow && (!planned || route is { Distance: < FragmentRouteYards }) && Finite(goal)
+        // one straight move off it, when the ground beside it is the mesh's large part (TryFragmentHop). Asked only then (never on a
+        // pending tile read, which is no verdict on the route), never per tick.
+        if (nowMs is { } hopNow && !PendingSince(pending) && (!planned || route is { Distance: < FragmentRouteYards }) && Finite(goal)
             && Vector2.Distance(new(player.X, player.Y), new(goal.X, goal.Y)) > FragmentGoalYards
             && TryFragmentHop(player, options, hopNow, out PlayerbotRoute? hop))
         {
@@ -421,7 +423,7 @@ internal static class PlayerbotNavigation
                 int region = nav.RegionAt(graph, target, WalkingLocate);
                 if (region < 0 || IsFragment(graph, region)) continue;
                 if (TryTerrainRoute(here, target, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
-                        (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out PlayerbotRoute? hop) && hop is not null)
+                        (a, b) => PlayerbotMoveCheck.LineClear(map.Collision, a, b), out PlayerbotRoute? hop) && hop is not null)
                 {
                     route = hop;
                     retry.Value = now;

@@ -334,7 +334,17 @@ public sealed partial class PlayerbotRealTerrainNavigationTests(ITestOutputHelpe
         public async Task<float> WalkAsync(Vector3 goal, uint maxMs, ITestOutputHelper log)
         {
             var options = new PlayerbotOptions();
-            PlayerbotRoute? route = await Host.OnWorldAsync(() => PlayerbotNavigation.TryPlan(Player, goal, options, out PlayerbotRoute? planned) ? planned : null);
+            TileWait[] wait = [new TileWait()];
+            PlayerbotRoute? route = null;
+            PlanOutcome outcome = PlanOutcome.Pending;
+            while (outcome == PlanOutcome.Pending)
+            {
+                outcome = await Host.OnWorldAsync(() => PlayerbotNavigation.PlanExact(Player, goal, options, ref wait[0], Host.World.NowMs, out route));
+                if (outcome != PlanOutcome.Pending) break;
+                await Task.Delay(20);
+                await Host.World.AdvanceClockAsync(100);
+            }
+
             Assert.NotNull(route);
             log.WriteLine($"route: {string.Join(" ", route!.Points)}");
             return await FollowAsync(route, goal, maxMs);

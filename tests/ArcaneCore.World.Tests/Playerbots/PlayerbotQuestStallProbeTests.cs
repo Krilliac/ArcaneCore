@@ -33,14 +33,25 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         var options = new PlayerbotOptions();
         Vector3 at = new(x, y, z);
         string reason = "leg limit";
+        TileWait[] wait = [new TileWait()];
         for (int leg = 0; leg < 40; leg++)
         {
-            (PlayerbotRoute? route, Vector3 position) = await terrain.Host.OnWorldAsync(() =>
+            PlayerbotRoute? route = null;
+            Vector3 position = default;
+            PlanOutcome outcome = PlanOutcome.Pending;
+            while (outcome == PlanOutcome.Pending)
             {
-                Vector3 current = new(terrain.Player.X, terrain.Player.Y, terrain.Player.Z);
-                bool planned = PlayerbotNavigation.TryPlanToward(terrain.Player, ender, options, out PlayerbotRoute? next);
-                return (planned ? next : null, current);
-            });
+                (outcome, route, position) = await terrain.Host.OnWorldAsync(() =>
+                {
+                    Vector3 current = new(terrain.Player.X, terrain.Player.Y, terrain.Player.Z);
+                    PlanOutcome res = PlayerbotNavigation.PlanToward(terrain.Player, ender, options, ref wait[0], terrain.Host.World.NowMs, out PlayerbotRoute? next);
+                    return (res, next, current);
+                });
+                if (outcome != PlanOutcome.Pending) break;
+                await Task.Delay(20);
+                await terrain.Host.World.AdvanceClockAsync(100);
+            }
+
             at = position;
             if (Vector3.Distance(at, ender) < reach) break;
             if (route is null) { reason = $"no route at leg {leg}"; break; }
