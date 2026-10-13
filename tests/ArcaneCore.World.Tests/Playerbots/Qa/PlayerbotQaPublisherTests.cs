@@ -725,4 +725,31 @@ public sealed class PlayerbotQaPublisherTests : IDisposable
         Assert.Equal(3, github.Comments);
         Assert.Equal(1, github.Gets); // the list only
     }
+
+    [Fact]
+    public async Task SharedSetAside_IsNotPublishedAsDuplicateIssue_WhenCorrespondingStallFindingIsTracked()
+    {
+        QaFindingView stall = QaData.View(A, count: 5, bots: 3) with
+        {
+            Kind = QaSignalKind.Stall,
+            Goal = "Quest",
+            Quest = 95,
+            Target = 0,
+        };
+        QaFindingView setAside = QaData.View(B, count: 3, bots: 3) with
+        {
+            Kind = QaSignalKind.SharedSetAside,
+            Goal = "Quest",
+            Quest = 95,
+            Target = 0,
+            Severity = stall.Severity + 20, // even with higher severity weight, it yields to the stall finding
+        };
+        Rig rig = NewRig(findings: [stall, setAside]);
+
+        await rig.Run();
+
+        Assert.Equal(1, rig.GitHub.Creates);
+        Assert.Equal(QaPublicationState.Published, rig.State.Get(A)!.Publication.State);
+        Assert.Equal(QaPublicationState.Pending, rig.State.Get(B)!.Publication.State);
+    }
 }

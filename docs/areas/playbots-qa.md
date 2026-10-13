@@ -244,7 +244,9 @@ A finding is eligible once seen `MinOccurrences` (3) times by `MinDistinctBots` 
 set-aside line carries no bot ids: its bot count is the `BotsToShare` (3) the line names, so it always meets the bot threshold, and its
 occurrences are the set-aside's repeats (30, 60, 120 min): three of them mean three separate windows in which three bots stalled. Its subject
 reads `quest Q (title) set aside for every bot after 3 stalled` (before 2026-10-11: `set aside by every bot`, which read as if every bot had
-stalled; the fingerprint, and so the issue marker, is unchanged).
+stalled; the fingerprint, and so the issue marker, is unchanged). When a stall finding for the same quest or target entry is already tracked,
+the set-aside stays in the local report and is not opened as a second GitHub issue (the stall finding carries the per-bot samples and
+positions).
 
 A stall's subject always names its goal: `goal Explore map 0 near -10350,1400`, and only for a Quest goal also the quest:
 `goal Quest, quest 109 (Report to Gryan Stoutmantle) target 6747 map 0 near ...`. The issue body has a `Goal` row; the quest row is `Quest`

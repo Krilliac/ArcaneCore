@@ -377,6 +377,53 @@ public sealed class PlayerbotGroupStallTests
         });
     }
 
+    [Fact]
+    public async Task GatheringAndRegroupingWaitStates_DoNotReportGroupStallsWhileLeaderHoldsForMembers()
+    {
+        var logs = new LogCapture();
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([BruteQuest], options =>
+        {
+            options.Risk.Tolerance = 0.25f;
+            options.StallSeconds = 30;
+        }, services: logs.Register);
+        var leaderBot = await world.AddBotAsync("Gatherwar", Human, Warrior, 1, []);
+        var farBot = await world.AddBotAsync("Gathermage", Human, Mage, 1, [Fireball]);
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+
+        // Keep the group in Gathering with a member far away and no path, so the leader holds at the meeting point past two StallSeconds bounds.
+        await world.OnWorldAsync(() =>
+        {
+            WorldCollision.Of(world.World.Host.World).Install(pathfinder: new NoPath());
+            world.Player(farBot.Id).Relocate(-9200f, 300f, 70f, 0f, world.World.Host.World.NowMs);
+            group.State = PlayerbotGroupState.Gathering;
+            group.StateSinceMs = world.World.Host.World.NowMs;
+            return true;
+        });
+
+        await world.RunAsync(2 * 30_000 + 20_000);
+        Assert.Equal(PlayerbotGroupState.Gathering, group.State);
+        Assert.Equal(0, world.Coordinator.StallCount);
+        Assert.DoesNotContain(logs.Lines, line => line.Contains("goal=Group", StringComparison.Ordinal));
+
+        // Now place the group in Regrouping (e.g. after a wipe while a dead member has not yet recovered) past two StallSeconds bounds.
+        await world.OnWorldAsync(() =>
+        {
+            Player far = world.Player(farBot.Id);
+            far.Health = 0;
+            far.Combat.DeathState = ArcaneCore.Game.Combat.DeathState.Corpse;
+            group.Find(farBot.Id)!.AI = null;
+            group.State = PlayerbotGroupState.Regrouping;
+            group.StateSinceMs = world.World.Host.World.NowMs;
+            return true;
+        });
+
+        await world.RunAsync(2 * 30_000 + 20_000);
+        Assert.Equal(PlayerbotGroupState.Regrouping, group.State);
+        Assert.Equal(0, world.Coordinator.StallCount);
+        Assert.DoesNotContain(logs.Lines, line => line.Contains("goal=Group", StringComparison.Ordinal));
+    }
+
     /// <summary>No path leads anywhere.</summary>
     private sealed class NoPath : IPathfinder
     {
