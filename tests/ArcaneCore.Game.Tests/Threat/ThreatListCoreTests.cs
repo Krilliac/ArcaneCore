@@ -331,6 +331,28 @@ public sealed class ThreatListCoreTests
         Assert.False(mob2.Combat.Threat.Contains(master));
     }
 
+    [Fact]
+    public void APetThatAttacks_DoesNotPullAnOwnerTheMobCannotTarget()
+    {
+        // vmangos HostileReference::addThreat (ThreatManager.cpp:117-121): the owner is added only when
+        // IsTargetableBy(the threat list's owner). An NPC cannot target a player immune to NPCs.
+        var (world, map, _, _) = CombatTestKit.CreateWorld();
+        using WorldRuntime runtime = world;
+        Player master = CombatTestKit.AddPlayer(runtime, 1, 0, 0, new FakeSession(1));
+        master.UnitFlags |= UnitFlags.ImmuneToNpc;
+        var pet = new CombatTestUnit();
+        pet.Spawn(map, 1, 0);
+        pet.SetOwnerGuid(master.Guid);
+        var mob = new CombatTestUnit();
+        mob.Spawn(map, 3, 0);
+
+        mob.Combat.Threat.AddThreat(pet, 30);
+
+        Assert.Equal(30f, mob.Combat.Threat.GetThreat(pet));
+        Assert.False(mob.Combat.Threat.Contains(master));
+        Assert.DoesNotContain(mob, master.Combat.ThreatenedBy);
+    }
+
     // --- assist threat (ThreatManager.cpp:414-421) -------------------------------------------
 
     [Fact]

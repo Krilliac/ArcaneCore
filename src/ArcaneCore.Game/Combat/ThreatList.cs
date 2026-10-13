@@ -79,8 +79,8 @@ public sealed class ThreatList
     /// Add threat (vmangos Unit::AddThreat → ThreatManager::addThreat, Objects/Unit.cpp:7424-7432, Threat/ThreatManager.cpp:391-447):
     /// ignored for units that cannot hold a list (<see cref="ThreatRules.CanHaveThreatList"/>), for the owner itself, dead
     /// targets and game masters; a new target is inserted, an existing one accumulates (online entry first, then offline).
-    /// Threat never drops below zero. A non-negative change also gives the target's owner an entry (a pet that attacks pulls
-    /// its master onto the list, ThreatManager.cpp:117-122).
+    /// Threat never drops below zero. A non-negative change also gives the target's owner an entry when that owner is a
+    /// valid target for this unit (a pet that attacks pulls its master onto the list, ThreatManager.cpp:117-122).
     /// </summary>
     public void AddThreat(Unit target, float threat) => AddThreat(target, threat, ThreatContext.Default);
 
@@ -140,7 +140,8 @@ public sealed class ThreatList
             _dirty = true;
         }
 
-        if (change >= 0f && entry.IsOnline && entry.Target.GetOwner() is { } owner && !ReferenceEquals(owner, _owner))
+        if (change >= 0f && entry.IsOnline && entry.Target.GetOwner() is { } owner && !ReferenceEquals(owner, _owner)
+            && ThreatRules.CanPullPetOwner(owner, _owner))
         {
             AddThreat(owner, 0f);
         }
