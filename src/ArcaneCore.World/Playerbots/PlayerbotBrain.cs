@@ -281,6 +281,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         return lines;
     }
 
+    /// <summary>The last turn-in refusal recorded by the quest controller (inspection and tests).</summary>
+    internal (uint QuestId, uint EnderEntry, string Reason, string Code)? LastTurnInRefusal => _quests.LastTurnInRefusal;
+
     /// <summary>Context for the warning the QA log tap parses; no bot identity or issue-key fields are added.</summary>
     internal string QaReportContext(Player player, string report)
     {
@@ -294,14 +297,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         float? distance = graveyard is not null && graveyard.MapId == _lastQaDeathMap
             ? System.Numerics.Vector3.Distance(_lastQaDeathPosition,
                 new System.Numerics.Vector3(graveyard.X, graveyard.Y, graveyard.Z)) : null;
+        uint reportQuest = death ? _lastQaDeathQuest : QuestFromReport(report) ?? QuestId;
+        string? turnInRefusal = !death && reportQuest != 0 && _quests.LastTurnInRefusal is { } refusal && refusal.QuestId == reportQuest
+            ? refusal.Code : null;
         var observation = new QaBotObservation(player.Level, player.Race.ToString(), player.Team.ToString(), player.Class.ToString(),
             death ? _lastQaDeathGoal : GoalFromReport(report) ?? _goal.ToString(),
-            death ? _lastQaDeathQuest : QuestFromReport(report) ?? QuestId,
+            reportQuest,
             graveyard?.Id ?? 0, distance, death ? _lastQaDeathSource : "None",
             death ? [.. _recentDeathAttackerFacts.Values.Where(f => entries.Contains(f.Entry)).OrderBy(f => f.Entry)] : [],
             death ? [.. _recentDeathSources.Where(d => d.Map == _lastQaDeathMap
                 && System.Numerics.Vector3.Distance(d.Position, _lastQaDeathPosition) <= PlayerbotStallWatch.DeathLoopYards)
-                .Select(d => d.Source)] : null);
+                .Select(d => d.Source)] : null,
+            turnInRefusal);
         // A stall of the walk home to a completed quest's ender, as captured at its give-up (StallReturnQuest): the report names the quest
         // that was being returned. A stall on the way to take a quest from an NPC that also ends it is not marked
         // (PlayerbotQaSignalParser.ReturnTripToken).
@@ -695,7 +702,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (_quests.ReturnQuest != completedReturn)
         {
             _quests.ReturnQuest = completedReturn;
-            if (completedReturn != 0) TargetEntry = 0;
+            TargetEntry = 0;
+            if (completedReturn == 0) QuestId = 0;
         }
         if (completedReturn != 0)
         {
@@ -714,18 +722,36 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
             if (!player.Combat.IsInCombat && _quests.Update(player, interval))
             { QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
-            _target = null;
-            AbandonRoute();
-            PlayerbotThinkProbe.Phase("quest destinations");
-            // The trip's target is the ender the destinations chose for this quest, or none yet: never the entry of an earlier goal. A
-            // failed plan leaves both TargetEntry values as they were, and the stall watch then reported, and GiveUpStalledGoal set aside,
-            // a creature this trip has nothing to do with (GitHub #186: quest 1111's return stalled with target 4147, a Saltstone Basilisk
-            // the bot had been fighting, and 11259, the ender of quest 5361 it had been walking to before).
-            _destinations.Update(player, 0, interval, completedReturn);
-            TargetEntry = _destinations.QuestId == completedReturn ? _destinations.TargetEntry : 0u;
-            // Wait/retry at the real giver while combat or a normal interaction
-            // refusal remains. A completed quest must not reopen opportunistic grind.
-            return;
+            if (_quests.IsRefused(completedReturn))
+            {
+                _quests.ReturnQuest = 0;
+                QuestId = 0;
+                TargetEntry = 0;
+            }
+            else
+            {
+                _target = null;
+                AbandonRoute();
+                PlayerbotThinkProbe.Phase("quest destinations");
+                // The trip's target is the ender the destinations chose for this quest, or none yet: never the entry of an earlier goal. A
+                // failed plan leaves both TargetEntry values as they were, and the stall watch then reported, and GiveUpStalledGoal set aside,
+                // a creature this trip has nothing to do with (GitHub #186: quest 1111's return stalled with target 4147, a Saltstone Basilisk
+                // the bot had been fighting, and 11259, the ender of quest 5361 it had been walking to before).
+                _destinations.Update(player, 0, interval, completedReturn);
+                if (_quests.IsRefused(completedReturn))
+                {
+                    _quests.ReturnQuest = 0;
+                    QuestId = 0;
+                    TargetEntry = 0;
+                }
+                else
+                {
+                    TargetEntry = _destinations.QuestId == completedReturn ? _destinations.TargetEntry : 0u;
+                    // Wait/retry at the real giver while combat or a normal interaction
+                    // refusal remains. A completed quest must not reopen opportunistic grind.
+                    return;
+                }
+            }
         }
 
         // A bot with no target holds no claim (the paths below that clear the target and wander, travel or explore leave it here).

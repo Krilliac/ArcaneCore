@@ -169,4 +169,76 @@ public sealed partial class QuestNpcServices
                 break;
         }
     }
+
+    /// <summary>
+    /// Explains why a turn-in of <paramref name="questId"/> at <paramref name="guid"/> cannot complete right now, or returns null when every
+    /// turn-in and reward-staging rule passes. Used by playerbots to log the exact refusal and set the quest aside instead of stalling at the ender.
+    /// </summary>
+    public string? DiagnoseTurnInRefusal(Player player, ObjectGuid guid, uint questId, uint choice = 0)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (Ready(player) is not { } state) return "journal not loaded";
+        if (Quests.Get(questId) is not { } quest) return "quest template missing";
+        if (!SupportedRewardQuest(quest)) return "quest reward adapter unsupported";
+        if (!player.Inventory.IsLoaded || player.Inventory.GuidAllocator is null) return "inventory not loaded";
+        if (!quest.IsAutoComplete && state.Quests.FindSlot(questId) >= QuestConstants.MaxQuestLogSize) return "quest not in journal slot";
+        if (InteractableNpc(player, guid, NpcFlags.QuestGiver, out string? interactRefusal) is not { } npc)
+            return interactRefusal ?? "ender not interactable";
+        if (!EndersOf(npc).Contains(questId)) return "NPC does not end this quest";
+        if (state.Quests.RewardStatus(quest)) return "quest already rewarded";
+        if (quest.IsAutoComplete)
+        {
+            if (RefuseTakeQuest(state, quest, [], skipStatusCheck: true) is { } takeRefusal && !player.IsGameMaster)
+                return $"autocomplete requirement not met ({takeRefusal})";
+        }
+        else if (state.Quests.Get(questId) is not { Status: QuestStatus.Complete } data)
+        {
+            return "quest status is not Complete";
+        }
+        else if (!Pending(quest, data))
+        {
+            return "quest timer expired";
+        }
+        else if (!ObjectivesComplete(player, quest, data))
+        {
+            return "quest objectives incomplete";
+        }
+
+        if (quest.HasSpecialFlag(QuestSpecialFlags.Deliver))
+        {
+            for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
+            {
+                if (quest.ReqItemCount[i] != 0 && InventoryCount(player, quest.ReqItemId[i]) < quest.ReqItemCount[i])
+                    return $"missing required delivery item {quest.ReqItemId[i]} ({InventoryCount(player, quest.ReqItemId[i])}/{quest.ReqItemCount[i]})";
+            }
+        }
+
+        if (quest.Template.RewOrReqMoney < 0 && player.Money < (uint)-(long)quest.Template.RewOrReqMoney)
+            return "not enough money";
+        if (!TryRewardGrants(quest, choice, out List<ArcaneCore.Game.Items.InventoryRewardGrant> grants, out _))
+            return "invalid reward item or choice";
+        if (!TryRewardMoney(player, quest, out _, out _))
+            return "money cap exceeded";
+        if (!TryRewardExperience(player, quest, out _, out _))
+            return "experience reward unavailable";
+        if (!TryRewardSpell(player, guid, quest, out var spellGrant))
+            return "reward spell preflight refused";
+        if (!TryRewardReputation(player, quest, out _))
+            return "reputation reward preflight refused";
+
+        grants.AddRange(spellGrant.CreatedItems.Select(item => new ArcaneCore.Game.Items.InventoryRewardGrant(item.Entry, item.Count, Created: true)));
+        ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, RequiredItemRemovals(quest),
+            out ArcaneCore.Game.Items.InventoryRewardStage? stage, out uint failedEntry);
+        if (result != ItemInventoryResult.Ok || stage is null)
+        {
+            return result switch
+            {
+                ItemInventoryResult.InventoryFull => "inventory full",
+                ItemInventoryResult.CantCarryMoreOfThis => $"duplicate unique reward item {failedEntry}",
+                _ => $"reward item {failedEntry} refused ({result})",
+            };
+        }
+
+        return null;
+    }
 }

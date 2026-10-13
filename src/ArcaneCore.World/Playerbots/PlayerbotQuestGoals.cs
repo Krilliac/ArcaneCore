@@ -58,6 +58,16 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     internal uint PreferredCreatureEntry { get; private set; }
     internal string StageName => _stage.ToString();
 
+    /// <summary>The last turn-in refusal recorded for a completed quest at its ender (quest, ender entry, human reason, compact QA code).</summary>
+    internal (uint QuestId, uint EnderEntry, string Reason, string Code)? LastTurnInRefusal { get; private set; }
+
+    private uint _approachFailQuest;
+    private uint _approachFailEntry;
+    private System.Numerics.Vector3 _approachFailSpot;
+    private int _approachFailCount;
+    private const int ApproachConfirmFailures = 3;
+    private const float ApproachSpotYards = 3f;
+
     /// <summary>The bot's home area, or null. New quests are taken only inside it; distant completed returns may be abandoned.</summary>
     internal PlayerbotHomeArea? Home { get; set; }
 
@@ -190,15 +200,21 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             return false;
         if (_backoffUntil != 0)
             _backoffUntil = 0;
+        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         if (_stage != Stage.None && _stageDeadline != 0 && unchecked(now - _stageDeadline) <= int.MaxValue)
         {
+            if (_stage is Stage.CompleteResponse or Stage.RewardRequest or Stage.RewardOffer or Stage.RewardChoice or Stage.RewardConfirmation)
+            {
+                string reason = services?.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? $"turn-in timed out in stage {_stage}";
+                RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
+                return false;
+            }
             Refuse(_stageQuest, now);
             ClearStage();
             _backoffUntil = unchecked(now + 2_000);
             return false;
         }
 
-        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         if (services?.StateOf(player) is not { Loaded: true } state)
             return false;
         RefreshObjectiveEntry(player, services, state);
@@ -224,7 +240,16 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (_stage == Stage.AcceptDetails && packet.Opcode == WorldOpcode.SmsgQuestgiverQuestDetails)
                 { _stage = Stage.Accept; confirmed = true; }
                 else if (_stage == Stage.CompleteResponse && packet.Opcode == WorldOpcode.SmsgQuestgiverRequestItems)
-                { _stage = Stage.RewardRequest; confirmed = true; }
+                {
+                    if (!QuestPackets.IsRequestItemsCompletable(packet.Payload))
+                    {
+                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? "quest requirements not met at ender";
+                        RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "IncompleteAtEnder"), now);
+                        return false;
+                    }
+                    _stage = Stage.RewardRequest;
+                    confirmed = true;
+                }
                 else if ((_stage is Stage.CompleteResponse or Stage.RewardOffer) && packet.Opcode == WorldOpcode.SmsgQuestgiverOfferReward)
                 { _stage = Stage.RewardChoice; confirmed = true; }
             }
@@ -257,19 +282,44 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             }
             if (planned == PlanOutcome.Refused)
             {
+                if (returning && NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now))
+                    return false;
                 Backoff(now);
                 return false;
             }
 
             Goal = PlayerbotGoalKind.Quest;
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
+            {
                 _route = null;
+                if (returning && NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now))
+                    return false;
+            }
+            else if (returning && System.Numerics.Vector3.DistanceSquared(
+                new System.Numerics.Vector3(player.X, player.Y, player.Z), _approachFailSpot) > ApproachSpotYards * ApproachSpotYards)
+            {
+                _approachFailCount = 0;
+            }
             return true;
         }
 
         _route = null;
+        _approachFailCount = 0;
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
+
+        if (target.Action >= QuestAction.Complete
+            && services.InteractableNpc(player, target.Npc.Guid, NpcFlags.QuestGiver, out string? interactRefusal) is null)
+        {
+            if (target.Npc.IsInCombat)
+            {
+                Backoff(now);
+                return false;
+            }
+            RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, interactRefusal ?? "ender not interactable",
+                TurnInRefusalCode(interactRefusal, "EnderNotInteractable"), now, suspendEntry: true);
+            return false;
+        }
 
         byte[] questRequest = QuestPayload(target.Npc.Guid.Value, target.Quest.Id);
         switch (target.Action)
@@ -300,9 +350,21 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 }
                 return true;
             case QuestAction.RewardChoice:
+                uint choice = RewardChoice(player, target.Quest);
                 if (_session.TryManagedAction(WorldOpcode.CmsgQuestgiverChooseReward,
-                        QuestChoicePayload(target.Npc.Guid.Value, target.Quest.Id, RewardChoice(player, target.Quest))))
-                { _stage = Stage.RewardConfirmation; ArmStage(target); }
+                        QuestChoicePayload(target.Npc.Guid.Value, target.Quest.Id, choice)))
+                {
+                    if (!player.IsQuestSettlementPending && state.Quests.Get(target.Quest.Id)?.Rewarded != true)
+                    {
+                        _ = _session.DrainManagedPackets(WorldOpcode.SmsgQuestgiverOfferReward,
+                            WorldOpcode.SmsgQuestgiverQuestFailed, WorldOpcode.SmsgQuestgiverQuestInvalid);
+                        string reason = services.DiagnoseTurnInRefusal(player, target.Npc.Guid, target.Quest.Id, choice) ?? "reward choice refused";
+                        RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, reason, TurnInRefusalCode(reason, "RewardRefused"), now);
+                        return false;
+                    }
+                    _stage = Stage.RewardConfirmation;
+                    ArmStage(target);
+                }
                 return true;
             default:
                 return false;
@@ -657,6 +719,64 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     /// <summary>Sets <paramref name="questId"/> aside for <see cref="RefusedQuestMs"/>: neither this controller nor quest travel (<see cref="IsRefused"/>) takes it up.</summary>
     internal void SetAside(uint questId) => Refuse(questId, _session.World.NowMs);
+
+    internal void RecordTurnInRefusal(Player player, uint questId, uint enderEntry, string reason, string code, uint now, bool suspendEntry = false)
+        => RefuseTurnIn(player, questId, enderEntry, reason, code, now, suspendEntry);
+
+    private bool NoteCloseApproachFailure(Player player, uint questId, uint enderEntry, uint now)
+    {
+        var spot = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        if (questId != _approachFailQuest || enderEntry != _approachFailEntry
+            || System.Numerics.Vector3.DistanceSquared(spot, _approachFailSpot) > ApproachSpotYards * ApproachSpotYards)
+        {
+            _approachFailQuest = questId;
+            _approachFailEntry = enderEntry;
+            _approachFailSpot = spot;
+            _approachFailCount = 0;
+        }
+        if (++_approachFailCount < ApproachConfirmFailures) return false;
+        _approachFailCount = 0;
+        RefuseTurnIn(player, questId, enderEntry, "no exact route to visible ender", "NoRouteToVisibleEnder", now, suspendEntry: true);
+        return true;
+    }
+
+    private void RefuseTurnIn(Player player, uint questId, uint enderEntry, string reason, string code, uint now, bool suspendEntry = false)
+    {
+        LastTurnInRefusal = (questId, enderEntry, reason, code);
+        Refuse(questId, now);
+        Suspensions?.SuspendQuest(questId, now);
+        if (suspendEntry && enderEntry != 0) Suspensions?.SuspendEntry(enderEntry, now);
+        if (ReturnQuest == questId) ReturnQuest = 0;
+        QuestId = 0;
+        TargetEntry = 0;
+        Backoff(now);
+        if (_session.Services.GetService<Microsoft.Extensions.Logging.ILogger<PlayerbotQuestGoals>>() is { } log)
+        {
+            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(log,
+                "Playerbot {Bot} sets aside completed quest {Quest} at ender {Entry} ({X:F1},{Y:F1},{Z:F1} map {Map}): turn-in refused ({Reason})",
+                player.Name, questId, enderEntry, player.X, player.Y, player.Z, player.MapId, reason);
+        }
+    }
+
+    internal static string TurnInRefusalCode(string? reason, string fallback)
+    {
+        if (string.IsNullOrEmpty(reason)) return fallback;
+        if (reason.Contains("inventory full", StringComparison.OrdinalIgnoreCase)) return "InventoryFull";
+        if (reason.Contains("missing required delivery item", StringComparison.OrdinalIgnoreCase)) return "MissingDeliveryItem";
+        if (reason.Contains("not enough money", StringComparison.OrdinalIgnoreCase)) return "NotEnoughMoney";
+        if (reason.Contains("duplicate unique", StringComparison.OrdinalIgnoreCase)) return "DuplicateUniqueItem";
+        if (reason.Contains("reputation", StringComparison.OrdinalIgnoreCase)) return "ReputationRefused";
+        if (reason.Contains("out of interaction range", StringComparison.OrdinalIgnoreCase)) return "OutOfRange";
+        if (reason.Contains("no exact route", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("no walkable close approach", StringComparison.OrdinalIgnoreCase)) return "NoRouteToVisibleEnder";
+        if (reason.Contains("objectives incomplete", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("status is not Complete", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("requirements not met", StringComparison.OrdinalIgnoreCase)) return "IncompleteAtEnder";
+        if (reason.Contains("dead", StringComparison.OrdinalIgnoreCase)) return "EnderDead";
+        if (reason.Contains("hostile", StringComparison.OrdinalIgnoreCase)) return "EnderHostile";
+        if (reason.Contains("combat", StringComparison.OrdinalIgnoreCase)) return "EnderInCombat";
+        return fallback;
+    }
 
     private void Refuse(uint questId, uint now)
     {

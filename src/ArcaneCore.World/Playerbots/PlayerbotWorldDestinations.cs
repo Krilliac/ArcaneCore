@@ -295,6 +295,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (Seen(player, _routeTarget, returnQuestId, hunting))
             {
                 if (returnQuestId == 0 && preferredCreatureEntry == 0) SettleArrival(player, _routeTarget);
+                else if (returnQuestId != 0) ConfirmArrivedEnderUnserved(player, returnQuestId, _routeTarget, now);
                 ClearRoute();
                 return false;
             }
@@ -357,6 +358,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (Seen(player, entry.Entry, returnQuestId, hunting))
             {
                 if (returnQuestId == 0 && preferredCreatureEntry == 0) SettleArrival(player, entry.Entry);
+                else if (returnQuestId != 0) ConfirmArrivedEnderUnserved(player, returnQuestId, entry.Entry, now);
                 return false;
             }
             bool attemptedBefore = attempted;
@@ -640,6 +642,37 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// but behind steep ground or guarded by mobs it cannot fight.
     /// </para>
     /// </summary>
+    private uint _arrivedQuest;
+    private Vector3 _arrivedSpot;
+    private int _arrivedCount;
+
+    private void ConfirmArrivedEnderUnserved(Player player, uint questId, uint entry, uint now)
+    {
+        TargetEntry = entry;
+        QuestId = questId;
+        if (player.Combat.IsInCombat) return;
+        Vector3 spot = new(player.X, player.Y, player.Z);
+        if (questId != _arrivedQuest || Vector3.DistanceSquared(spot, _arrivedSpot) > SpotYards * SpotYards)
+        {
+            _arrivedQuest = questId;
+            _arrivedSpot = spot;
+            _arrivedCount = 0;
+        }
+        if (++_arrivedCount < ConfirmFailures) return;
+        _arrivedCount = 0;
+        Suspensions?.SuspendQuest(questId, now);
+        Suspensions?.SuspendEntry(entry, now);
+        SetQuestAside?.Invoke(questId);
+        ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
+        log?.LogWarning(
+            "Playerbot {Bot} sets aside completed quest {Quest} at arrived ender {Entry} ({X:F1},{Y:F1},{Z:F1} map {Map}): ender in sight within 4 yd but turn-in did not start",
+            player.Name, questId, entry, player.X, player.Y, player.Z, player.MapId);
+    }
+
+    private static bool HasVisibleEnder(Player player, uint entry)
+        => player.VisibleObjects.Any(guid => player.Map?.FindObject(guid) is Creature creature
+            && creature.Entry == entry && creature.IsInWorld && creature.IsAlive);
+
     private void ConfirmUnclimbable(Player player, Vector3 destination, uint questId, uint entry, uint now, bool friendlyTownEnder)
     {
         Vector3 spot = new(player.X, player.Y, player.Z);
@@ -655,7 +688,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _failDiagnosed = true;
         bool steep = PlayerbotNavigation.RequiresSteepAscent(player, destination, _options, out float ascent);
         PlayerbotHazard hazard = default;
-        if (!steep && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard, friendlyTownEnder))
+        bool hazardBlocked = !steep && PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard, friendlyTownEnder);
+        float dx = destination.X - player.X, dy = destination.Y - player.Y;
+        bool closeOrVisible = !steep && !hazardBlocked
+            && (dx * dx + dy * dy <= ArrivalYards * ArrivalYards || HasVisibleEnder(player, entry));
+        if (!steep && !hazardBlocked && !closeOrVisible)
         {
             // No steep ground or hazard: for a bot that may not take the tram or a lift the ender across it is the reason, but only
             // when the tram or a lift really is the way there (any other failed plan is not a transit block, and is never set aside here).
@@ -664,7 +701,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             return;
         }
         string reason = steep ? $"the mesh route climbs {ascent:F1} yards of steep ground"
-            : $"the route crosses a {hazard.Kind} hazard";
+            : hazardBlocked ? $"the route crosses a {hazard.Kind} hazard"
+            : "no walkable close approach to the ender";
         _failCount = 0;
         _failDiagnosed = false;
         int times = _setAsides.GetValueOrDefault(questId) + 1;
@@ -674,7 +712,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
         bool finished = _session.Services.GetService<QuestNpcFeature>()?.Services.StateOf(player)?.Quests.Get(questId)
             is { Status: QuestStatus.Complete, Rewarded: false };
-        bool hold = finished && !steep;
+        bool hold = finished && hazardBlocked;
         if (hold)
         {
             // A level gained since the first hold restarts the count (the pack that blocked the bot may be crossable now); with none, the
