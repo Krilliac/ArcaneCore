@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Transports;
+using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -167,6 +169,45 @@ public sealed class SpellSystemTests
         Assert.Equal((byte)SpellCastResult.Interrupted, Packets(session, WorldOpcode.SmsgCastResult).Single()[5]);
         Assert.Equal(100u, SpellSystem.GetPower(caster, PowerType.Rage));
         Assert.True(kit.System.IsSpellReady(caster, kit.Store.Get(CastBolt)!)); // GCD reset on cancel
+        Assert.Equal(60u, target.Health);
+    }
+
+    [Fact]
+    public void ShipCarryingAStillCaster_DoesNotInterruptHearth_WalkingTheDeckDoes()
+    {
+        // Hearthstone (8690) is a 10s cast with SPELL_INTERRUPT_FLAG_MOVEMENT. vmangos Spell::update compares
+        // GetTransOffsetX/Y/Z while GetTransport() is set (Spell.cpp:4013-4028), so the ship sailing under a
+        // still passenger is not movement. Walking the deck (offset change > 0.5 yd) still cancels.
+        using var kit = new SpellTestKit();
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        kit.Spellbook.Teach(caster, CastBolt);
+        SpellSystem.SetPower(caster, PowerType.Rage, 100);
+        ShipTransport ferry = TransportTestKit.Install(kit.World, TransportTestKit.Ferry).FindByEntry(TransportTestKit.Ferry)!;
+        Assert.True(ferry.AddPassenger(caster));
+        float deckX = caster.Movement.TransportX;
+        float deckY = caster.Movement.TransportY;
+        float deckZ = caster.Movement.TransportZ;
+        float deckO = caster.Movement.TransportOrientation;
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid)));
+        session.Clear();
+
+        caster.RelocateOnTransport(caster.X + 40f, caster.Y - 15f, caster.Z + 3f, caster.Orientation + 1f);
+        kit.Advance(100);
+
+        Assert.Equal(SpellCastState.Preparing, kit.System.GetState(caster.Guid)!.CurrentCast!.State);
+        Assert.Equal(deckX, caster.Movement.TransportX);
+        Assert.DoesNotContain(WorldOpcode.SmsgSpellFailedOther, Opcodes(session));
+        Assert.Equal(60u, target.Health);
+
+        caster.SetTransportData(ferry.Guid, deckX + 1f, deckY, deckZ, deckO);
+        kit.Advance(100);
+
+        Assert.Null(kit.System.GetState(caster.Guid)?.CurrentCast);
+        Assert.Contains(WorldOpcode.SmsgSpellFailedOther, Opcodes(session));
+        Assert.Equal((byte)SpellCastResult.Interrupted, Packets(session, WorldOpcode.SmsgCastResult).Single()[5]);
+        Assert.Equal(100u, SpellSystem.GetPower(caster, PowerType.Rage));
         Assert.Equal(60u, target.Health);
     }
 
