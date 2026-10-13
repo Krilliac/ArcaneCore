@@ -282,6 +282,10 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         }
 
         Objects?.FindSystem(player.Map!)?.Loot?.OpenSkinning(player, creature);
+        // SpellEffects.cpp:5378 removes UNIT_FLAG_SKINNABLE after SendLoot, whether or not skinning loot was
+        // generated. OpenSkinning only clears the flag when a skinning table exists, so a corpse with no
+        // table would stay skinnable and every later cast would grant another skill-up.
+        creature.UnitFlags &= ~UnitFlags.Skinnable;
         int reqValue = GatheringRules.SkinningSkillUpLevel(creature.Level);
         uint multiplicator = IsElite(creature) ? 2u : 1u;
         playerSkills.UpdateGather(SkillIds.Skinning, playerSkills.GetValuePure(SkillIds.Skinning), (uint)reqValue, multiplicator);
