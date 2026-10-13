@@ -58,7 +58,7 @@ public sealed class SchemaAuthorityTests : IAsyncLifetime
         }
 
         const int concurrency = 4;
-        var barrier = new StartupBarrier(concurrency, TimeSpan.FromSeconds(15));
+        var barrier = new StartupBarrier(concurrency, TimeSpan.FromMilliseconds(250));
         var taps = Enumerable.Range(0, concurrency).Select(_ => new CommandTap(barrier: barrier)).ToArray();
         CharacterDbContext[] contexts = [.. taps.Select(tap => SchemaProbe.CreateWith<CharacterDbContext>(connection, tap))];
         try
