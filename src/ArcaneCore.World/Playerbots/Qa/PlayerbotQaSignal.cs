@@ -45,6 +45,13 @@ internal enum QaSignalKind
     /// Bot-independent: counted in occurrences only, so a fault no bot caused is still reported.
     /// </summary>
     ServerFault,
+
+    /// <summary>
+    /// A bot skipped a goal whose place no walk reaches from where it stands (the map's walking region graph puts the two in different
+    /// components, <c>PlayerbotNavigation.IsUnreachableOnFoot</c>) instead of walking toward it. One line per entry and bot per window,
+    /// so a spawn on ground the navigation mesh does not join to the rest (an island platform, a mesh gap) surfaces as content or mesh work.
+    /// </summary>
+    UnreachableGoal,
 }
 
 /// <summary>

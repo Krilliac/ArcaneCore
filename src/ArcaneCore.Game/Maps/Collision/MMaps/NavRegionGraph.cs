@@ -59,7 +59,7 @@ public sealed class NavRegionGraph
         _firstLink = firstLink;
         _links = links;
         PolygonCount = polygons;
-        _components = new Lazy<(int[], int[])>(LabelComponents, LazyThreadSafetyMode.ExecutionAndPublication);
+        _components = new Lazy<(int[], int[], int[])>(LabelComponents, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <summary>One way out of a region: into region <c>To</c> across the portal <c>At</c> (world position).</summary>
@@ -212,9 +212,9 @@ public sealed class NavRegionGraph
         return seen.Count;
     }
 
-    private readonly Lazy<(int[] Id, int[] Size)> _components;
+    private readonly Lazy<(int[] Id, int[] Size, int[] Polygons)> _components;
 
-    private (int[] Id, int[] Size) LabelComponents()
+    private (int[] Id, int[] Size, int[] Polygons) LabelComponents()
     {
         int count = RegionCount;
         int[] id = new int[count];
@@ -248,7 +248,19 @@ public sealed class NavRegionGraph
             sizes.Add(tail);
         }
 
-        return (id, [.. sizes]);
+        int[] polygons = new int[sizes.Count];
+        foreach (int[] regions in _polyRegions.Values)
+        {
+            foreach (int region in regions)
+            {
+                if ((uint)region < (uint)count)
+                {
+                    polygons[id[region]]++;
+                }
+            }
+        }
+
+        return (id, [.. sizes], polygons);
     }
 
     /// <summary>
@@ -257,6 +269,9 @@ public sealed class NavRegionGraph
     /// later call is an array read. Safe from any thread.
     /// </summary>
     public int ComponentOf(int region) => (uint)region < (uint)RegionCount ? _components.Value.Id[region] : -1;
+
+    /// <summary>How many polygons the component of <paramref name="region"/> holds (0 for no region): its area, for telling a small fragment from a large plaza of few regions.</summary>
+    public int ComponentPolygons(int region) => (uint)region < (uint)RegionCount ? _components.Value.Polygons[_components.Value.Id[region]] : 0;
 
     /// <summary>How many regions the component of <paramref name="region"/> holds (0 for no region): a few mean a fragment of mesh.</summary>
     public int ComponentSize(int region) => (uint)region < (uint)RegionCount ? _components.Value.Size[_components.Value.Id[region]] : 0;

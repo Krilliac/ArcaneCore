@@ -49,7 +49,7 @@ public sealed class PlayerbotMeshFragmentTests : IDisposable
         (13, 10, new CellTile(3, 0, 0, 120, 8, 8, Size: 5) { LinkedSides = [4] }),
     ];
     private static Task<PlayerbotRoute?> PlanAsync(SyntheticNavWorld world, Vector3 goal)
-        => world.Host.OnWorldAsync(() => PlayerbotNavigation.TryPlanToward(world.Player, goal, Options, out PlayerbotRoute? planned) ? planned : null);
+        => world.Host.OnWorldAsync(() => PlayerbotNavigation.TryPlanToward(world.Player, goal, Options, out PlayerbotRoute? planned, nowMs: world.Host.World.NowMs) ? planned : null);
 
     /// <summary>Retried like a bot thinking again: a tile still being read answers "pending" for the first thinks.</summary>
     private static async Task<PlayerbotRoute?> PlanSettledAsync(SyntheticNavWorld world, Vector3 goal)
@@ -146,7 +146,7 @@ public sealed class PlayerbotMeshFragmentTests : IDisposable
             (unreachable, reachable, long searches) = await world.Host.OnWorldAsync(() =>
             {
                 long before = PathSearchCounters.Current.Searches;
-                bool far = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, Goal), near = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, north);
+                bool far = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, Goal, out _, out _), near = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, north, out _, out _);
                 return (far, near, PathSearchCounters.Current.Searches - before);
             });
             Assert.Equal(0, searches);
@@ -165,7 +165,7 @@ public sealed class PlayerbotMeshFragmentTests : IDisposable
         await world.PlaceAsync(InThePocket);
         for (int think = 0; think < 10; think++)
         {
-            Assert.False(await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsUnreachableOnFoot(world.Player, Goal)));
+            Assert.False(await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsUnreachableOnFoot(world.Player, Goal, out _, out _)));
             await world.Host.World.AdvanceClockAsync(50);
         }
     }
@@ -182,6 +182,83 @@ public sealed class PlayerbotMeshFragmentTests : IDisposable
         PlayerbotRoute? route = await PlanSettledAsync(world, Goal);
         Assert.NotNull(route);
         Assert.True(route!.Navigated);
+        Assert.False(await OnFragmentAsync(world));
+    }
+
+    private static async Task<bool> UnreachableAsync(SyntheticNavWorld world, Vector3 goal)
+        => await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsUnreachableOnFoot(world.Player, goal, out _, out _));
+
+    /// <summary>
+    /// Only a bot on a large walkable part may call a goal unreachable: the same outdoor goal, no walk joining it, is told unreachable from
+    /// the large part (the control: it answers true once the graph and the tiles are ready) and never from a fragment, so PlanToward's
+    /// escapes (the hop, the bind-point stall path) run for the fragment bot instead of the goal being dropped.
+    /// </summary>
+    [Fact]
+    public async Task AFragmentBot_IsNeverToldAnOutdoorGoalIsUnreachable()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Fragment(4), new FloorLineOfSight());
+        await world.PlaceAsync(OnTheLargePart);
+        bool control = false;
+        for (int think = 0; think < 40 && !control; think++)
+        {
+            control = await UnreachableAsync(world, InThePocket); // the pocket is joined to nothing the large part walks to
+            if (!control) await world.Host.World.AdvanceClockAsync(50);
+        }
+
+        Assert.True(control, "from the large part the pocket is unreachable (control)");
+        await world.PlaceAsync(InThePocket);
+        Assert.True(await OnFragmentAsync(world));
+        for (int think = 0; think < 10; think++)
+        {
+            Assert.False(await UnreachableAsync(world, Goal), "a fragment bot is not told its goal is unreachable");
+            await world.Host.World.AdvanceClockAsync(50);
+        }
+    }
+
+    /// <summary>A bot on a floor of a building (indoors) is not told an outdoor goal is unreachable: its own part says nothing about the map.</summary>
+    [Fact]
+    public async Task AnIndoorBot_IsNeverToldAnOutdoorGoalIsUnreachable()
+    {
+        bool botIndoors = false;
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Unjoined,
+            new IndoorsWhere(at => Volatile.Read(ref botIndoors) && at.X < 40));
+        await world.PlaceAsync(InThePocket);
+        bool control = false;
+        for (int think = 0; think < 40 && !control; think++)
+        {
+            control = await UnreachableAsync(world, Goal);
+            if (!control) await world.Host.World.AdvanceClockAsync(50);
+        }
+
+        Assert.True(control, "outdoors, the same bot and goal are unreachable (control)");
+        Volatile.Write(ref botIndoors, true);
+        for (int think = 0; think < 10; think++)
+        {
+            Assert.False(await UnreachableAsync(world, Goal));
+            await world.Host.World.AdvanceClockAsync(50);
+        }
+    }
+
+    /// <summary>A plaza of a few regions but many polygons is a real place, not a fragment (<see cref="PlayerbotNavigation.FragmentPolygons"/>).</summary>
+    [Fact]
+    public async Task APlazaOfFewRegionsAndManyPolygons_IsNotAFragment()
+    {
+        (int X, int Y, CellTile Tile)[] plaza = [(10, 10, new CellTile(0, 0, 0, 0, 30, 30, Size: 1.3f))];
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, plaza, new FloorLineOfSight());
+        Vector3 middle = new(20, 20, 0);
+        await world.PlaceAsync(middle);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true };
+        int region = -1;
+        for (int think = 0; think < 40 && region < 0; think++)
+        {
+            region = world.Nav.RegionAt(graph, middle, locate);
+            if (region < 0) await world.Host.World.AdvanceClockAsync(50);
+        }
+
+        Assert.True(region >= 0);
+        Assert.True(graph.ComponentSize(region) <= PlayerbotNavigation.FragmentRegions, $"{graph.ComponentSize(region)} regions");
+        Assert.True(graph.ComponentPolygons(region) > PlayerbotNavigation.FragmentPolygons, $"{graph.ComponentPolygons(region)} polygons");
         Assert.False(await OnFragmentAsync(world));
     }
 

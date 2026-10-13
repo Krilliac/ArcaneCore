@@ -266,6 +266,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>Stalls reported so far.</summary>
     internal int StallCount => _stall.Count;
 
+    /// <summary>Skips of a goal no walk reaches reported so far (<see cref="PlayerbotWorldDestinations.SkipUnreachable"/>, one per entry per window).</summary>
+    internal int UnreachableCount => _destinations.UnreachableReports;
+
+    /// <summary>
+    /// The latest reported skip as the log line bot QA parses (<see cref="PlayerbotQaSignalParser"/>): the goal, what it names, where the bot
+    /// stood and the two region-graph components. Null before the first.
+    /// </summary>
+    internal string? UnreachableReport => _destinations.LastUnreachable is { } skip
+        ? string.Create(CultureInfo.InvariantCulture,
+            $"goal unreachable on foot: goal={_goal} target={skip.Entry} quest={skip.Quest} at {skip.At.X:F1},{skip.At.Y:F1},{skip.At.Z:F1} map {skip.Map} components={skip.FromComponent}/{skip.ToComponent}")
+        : null;
+
     /// <summary>Context for the warning the QA log tap parses; no bot identity or issue-key fields are added.</summary>
     internal string QaReportContext(Player player, string report)
     {

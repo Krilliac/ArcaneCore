@@ -153,6 +153,67 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         return false;
     }
 
+    /// <summary>How long one entry's skip stays unreported after it was reported (a bot meets the same unjoined spawn every think).</summary>
+    internal const uint UnreachableReportMs = 600_000;
+
+    private const int MaxReportedEntries = 256;
+    private readonly Dictionary<uint, uint> _unreachableReportedAt = [];
+
+    /// <summary>Skips reported so far (<see cref="UnreachableReportMs"/> apart per entry): the brain logs a line when it moves.</summary>
+    internal int UnreachableReports { get; private set; }
+
+    /// <summary>The latest reported skip, for the brain's QA line.</summary>
+    internal UnreachableSkip? LastUnreachable { get; private set; }
+
+    /// <summary>A goal skipped for lying where no walk reaches: what, from where, and the two region-graph components.</summary>
+    internal readonly record struct UnreachableSkip(uint Entry, uint Quest, uint Map, Vector3 At, int FromComponent, int ToComponent);
+
+    /// <summary>
+    /// Skips the spawn when its place is on a part of the map no walk joins to the bot's (<see cref="PlayerbotNavigation.IsUnreachableOnFoot"/>,
+    /// which answers false for a bot on a fragment, indoors or on a steep patch: PlanToward's escapes run first): no path search, no
+    /// step toward it, the spawn blocked for this bot. Never for a completed quest's return (<paramref name="returning"/>: its hazard and
+    /// set-aside rules are its own). When no other present spawn of the entry is left to try, the entry is set aside
+    /// (<paramref name="entrySetAside"/>); the caller sets the quest aside only when no other objective of it is left
+    /// (<see cref="QuestHasOtherObjective"/>), neither counting towards abandoning a quest (<see cref="PlayerbotSuspensions.SuspendQuest"/>).
+    /// Reported once per entry per <see cref="UnreachableReportMs"/> (<see cref="LastUnreachable"/>). World thread.
+    /// </summary>
+    internal bool SkipUnreachable(Player player, uint entry, uint spawnGuid, Vector3 destination, uint questId, uint now, bool returning,
+        out bool entrySetAside)
+    {
+        entrySetAside = false;
+        if (returning || !PlayerbotNavigation.IsUnreachableOnFoot(player, destination, out int from, out int to)) return false;
+        _blockedSpawns.Add(spawnGuid);
+        if (!_entries.Any(other => other.Entry == entry && !IsBlocked(other.Spawn.Guid, now) && IsPresent(player, other.Spawn)))
+        {
+            entrySetAside = true;
+            Suspensions?.SuspendEntry(entry, now);
+        }
+
+        if (_unreachableReportedAt.TryGetValue(entry, out uint last) && unchecked(now - last) < UnreachableReportMs) return true;
+        if (_unreachableReportedAt.Count >= MaxReportedEntries) _unreachableReportedAt.Clear();
+        _unreachableReportedAt[entry] = now;
+        UnreachableReports++;
+        LastUnreachable = new UnreachableSkip(entry, questId, player.MapId, PlayerbotMotion.CurrentPosition(player), from, to);
+        return true;
+    }
+
+    /// <summary>The quest of an entry just set aside as unreachable follows it when nothing else of the quest is left; not counted towards abandoning it.</summary>
+    internal void SetQuestAsideUnreachable(uint questId, uint now, bool questHasOtherObjective)
+    {
+        if (!questHasOtherObjective) Suspensions?.SuspendQuest(questId, now, countsAsSetAside: false);
+    }
+
+    private bool QuestHasOtherObjective(uint entry, uint questId, uint preferred, Player player, QuestNpcServices? services,
+        PlayerNpcState? state, uint returnQuestId, LootContent? loot)
+    {
+        foreach (DestinationEntry other in _entries)
+            if (other.Entry != entry && !Suspended(other.Entry)
+                && Eligible(other.Entry, preferred, player, services, state, returnQuestId, SkipQuest, loot, Home, _content, GiverInHome(other.Spawn),
+                    out uint otherQuest) && otherQuest == questId)
+                return true;
+        return false;
+    }
+
     /// <summary>
     /// The last <see cref="Update"/> found no route only because a navigation tile on the way was still being read in the background
     /// (<see cref="PathOptions.NonBlockingTiles"/>): the destination was not judged, nothing was blacklisted or backed off, and the
@@ -315,17 +376,12 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // return (the hazard and set-aside rules there are their own). The skip costs no path search, so the next spawn is judged in
             // this think; when no other spawn of the entry is left to try, the entry and the quest are set aside at once without
             // counting towards abandoning the quest (PlayerbotSuspensions.SuspendQuest).
-            if (route is null && !returning && PlayerbotNavigation.IsUnreachableOnFoot(player, destination))
+            if (route is null && SkipUnreachable(player, entry.Entry, entry.Spawn.Guid, destination, questId, now, returning, out bool entrySetAside))
             {
+                // Only when every objective of the quest is set aside too is the quest: another creature of it may still be reachable.
+                if (entrySetAside && questId != 0)
+                    SetQuestAsideUnreachable(questId, now, QuestHasOtherObjective(entry.Entry, questId, preferredCreatureEntry, player, services, state, returnQuestId, loot));
                 attempted = attemptedBefore;
-                _blockedSpawns.Add(entry.Spawn.Guid);
-                if (Suspensions is { } unreachable
-                    && !_entries.Any(other => other.Entry == entry.Entry && !IsBlocked(other.Spawn.Guid, now)))
-                {
-                    unreachable.SuspendEntry(entry.Entry, now);
-                    if (questId != 0) unreachable.SuspendQuest(questId, now, countsAsSetAside: false);
-                }
-
                 continue;
             }
 

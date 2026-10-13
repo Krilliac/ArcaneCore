@@ -1039,6 +1039,8 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 + QaSpellGaps.Describe(s.Reason, s.Detail),
             QaSignalKind.SpellRefused => SpellOf(s) + " refused: " + (s.Reason.Length != 0 ? s.Reason : "unknown result"),
             QaSignalKind.SpellNoEffect => SpellOf(s) + " lands with no damage, healing or aura",
+            QaSignalKind.UnreachableGoal => $"goal {s.Goal}" + (s.Quest != 0 && QaFindingView.QuestIsGoalOf(s.Kind, s.Goal) ? ", " + quest : string.Empty)
+                + (s.Target != 0 ? string.Create(CultureInfo.InvariantCulture, $" target {s.Target}") : string.Empty) + " unreachable on foot",
             QaSignalKind.ServerFault => (s.Goal.Length != 0 ? s.Goal : "server") + ": " + (s.ExceptionType.Length != 0 ? s.ExceptionType : "exception"),
             _ => s.Kind.ToString(),
         };

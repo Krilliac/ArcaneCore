@@ -139,20 +139,30 @@ Fragments of mesh and goals no walk reaches (bot QA cluster C3: the same stall p
 (-137.6,-4265.7 map 1; issues #379, #402; 3 regions, a Detour search exhausts after 26 nodes) and the sliver inside Ironforge
 (-4715.7,-871.2 map 0; #381, #537; 1 region, 2 nodes): nothing on the mesh is reachable from them, so a bot there was given the fragment's
 own few yards or a refusal for every goal. A *goal no walk reaches*: Chief Hawkwind's platform in Mulgore from the Durotar ridge, 4,900
-yards away in a region of its own, drew an 847-yard leg and a 3,349-yard walk toward a goal that can never be reached. Both are read from
+yards away. The platform is reachable in the game (a player gets there); the bots' *walking* mesh, which excludes steep slopes, does not
+join it to Durotar, so it is a region of its own there. A bot was given an 847-yard leg and a 3,349-yard walk toward it that no walk on
+that mesh ends. Both are read from
 the region graph's connected components (`NavRegionGraph.ComponentOf`/`ComponentSize`, labelled once per graph, then an array read),
 which is exact and needs no path search.
 
 - **Unreachable goal skip** (`PlayerbotNavigation.IsUnreachableOnFoot`, used by `PlayerbotWorldDestinations` only, not for a completed
   quest's return): after the tram, lift and taxi trips were tried, a spawn whose region is in another component than the bot's (walking
   graph, steep slopes excluded) and that stands outdoors (an indoor goal may be climbed to over steep stairs, `TryClimbIndoors`) is skipped
-  without a path query, and the next spawn is judged in the same think. With no other spawn of the entry left, the entry and the quest are
-  set aside at once, without counting towards abandoning the quest (`SuspendQuest(..., countsAsSetAside: false)`). Every other planner
-  caller plans as before.
+  without a path query, and the next spawn is judged in the same think. The answer is true only for a bot on a large part (its own
+  component has more than `FragmentRegions` regions), outdoors, and on a walking region; a fragment bot, an indoor bot or one on steep
+  ground gets false, so `PlanToward`'s own escapes (`TryLeaveSteepGround`, `FromBeside`, the fragment hop, the stall path) run. With no
+  other spawn of the entry left, the entry is set aside; the quest follows only when no other objective of it is left, and neither counts
+  towards abandoning the quest (`SuspendQuest(..., countsAsSetAside: false)`). Every other planner caller plans as before.
+- **The skip is reported**: one warning per entry and bot per 600 seconds, `Playerbot <id> (<name>) goal unreachable on foot: goal=G
+  target=T quest=Q at x,y,z map M components=a/b` (`ManagedPlayerbotFeature.LogUnreachable`). Bot QA parses it as its own kind,
+  `UnreachableGoal` (label `unreachable goal`, cause `MissingData`), keyed by goal, quest and target, never by the bot's place; the stall
+  detector and its bounds are untouched.
 - **Fragment escape** (every `TryPlanToward` caller, asked only when a plan toward a goal farther than 60 yards is refused or only a route
   under 30 yards, never per tick): a bot whose component has at most `FragmentRegions` (3) regions takes one straight hop, a stepped
   terrain leg (`TryTerrainRoute`: floor within a yard per yard, in sight) to the nearest point within 20 yards on a larger component, tried
-  at most once per 5 seconds. When the ground beside the fragment is a cliff or too far, as at both live pins, the stall path takes over:
+  at most once per 5 seconds of the world clock (a miss caused by a navigation tile still being read does not spend the window; callers
+  that pass no clock never hop). A fragment is also small in area: a component of three regions with more than `FragmentPolygons` (500)
+  polygons is a plaza, not a fragment. When the ground beside the fragment is a cliff or too far, as at both live pins, the stall path takes over:
   the brain's island escape (`EscapeIsland`) treats a fragment bot as an island bot and teleports it home or to its bind point.
 
 Still open, not explained by this: the Explore stalls at -1.0,-4188.3 (map 1), -6494.1,324.9 (Coldridge) and -1173,-3285 (Barrens). The

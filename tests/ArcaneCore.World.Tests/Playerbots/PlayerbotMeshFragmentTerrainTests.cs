@@ -61,7 +61,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         PlayerbotRoute? first = null;
         for (int think = 0; think < 40 && first is null; think++)
         {
-            first = await terrain.Host.OnWorldAsync(() => PlayerbotNavigation.TryPlanToward(terrain.Player, goal, options, out PlayerbotRoute? planned) ? planned : null);
+            first = await terrain.Host.OnWorldAsync(() => PlayerbotNavigation.TryPlanToward(terrain.Player, goal, options, out PlayerbotRoute? planned, nowMs: terrain.Host.World.NowMs) ? planned : null);
             if (first is null) await terrain.Host.World.AdvanceClockAsync(50);
         }
 
@@ -129,8 +129,8 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
             (hawkwind, razor, jenshan, searches) = await terrain.Host.OnWorldAsync(() =>
             {
                 long before = PathSearchCounters.Current.Searches;
-                bool a = PlayerbotNavigation.IsUnreachableOnFoot(terrain.Player, ChiefHawkwind);
-                bool b = PlayerbotNavigation.IsUnreachableOnFoot(terrain.Player, RazorHillInn), c = PlayerbotNavigation.IsUnreachableOnFoot(terrain.Player, JenshanSpot);
+                bool a = PlayerbotNavigation.IsUnreachableOnFoot(terrain.Player, ChiefHawkwind, out _, out _);
+                bool b = PlayerbotNavigation.IsUnreachableOnFoot(terrain.Player, RazorHillInn, out _, out _), c = PlayerbotNavigation.IsUnreachableOnFoot(terrain.Player, JenshanSpot, out _, out _);
                 return (a, b, c, PathSearchCounters.Current.Searches - before);
             });
             Assert.Equal(0, searches);

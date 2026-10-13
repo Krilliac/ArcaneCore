@@ -62,6 +62,10 @@ internal static class PlayerbotQaClassifier
                 return new QaClassification(QaCause.ServerFault, "the server caught " + (s.ExceptionType.Length != 0 ? s.ExceptionType : "an exception") + " at its '"
                     + s.Goal + "' catch site and recovered; the frames below are where it was thrown", title);
 
+            case QaSignalKind.UnreachableGoal:
+                return new QaClassification(QaCause.MissingData, string.Create(CultureInfo.InvariantCulture,
+                    $"bots skipped target {s.Target} without walking: the walking navigation mesh (steep slopes excluded) does not join the ground they stood on to the goal's ({s.Detail}). A spawn on an island platform or beyond a mesh gap: check the spawn and the mesh there"), title);
+
             case QaSignalKind.SpellRefused:
                 return Refusal(s, title);
 
