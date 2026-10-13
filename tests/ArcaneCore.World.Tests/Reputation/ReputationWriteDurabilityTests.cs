@@ -351,17 +351,19 @@ public sealed class ReputationWriteDurabilityTests
         public Task<CharacterReputationData> LoadAsync(int characterId, CancellationToken cancellationToken = default)
             => inner.LoadAsync(characterId, cancellationToken);
 
-        public async Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts, CancellationToken cancellationToken = default)
+        public async Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
         {
             await control.BeforeAsync(characterId);
-            await inner.SaveFactionsAsync(characterId, upserts, cancellationToken);
+            await inner.SaveFactionsAsync(characterId, upserts, cancellationToken, ownership);
             LoseAcknowledgementOnce();
         }
 
-        public async Task SaveWatchedFactionAsync(int characterId, int watchedFaction, CancellationToken cancellationToken = default)
+        public async Task SaveWatchedFactionAsync(int characterId, int watchedFaction,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
         {
             await control.BeforeAsync(characterId);
-            await inner.SaveWatchedFactionAsync(characterId, watchedFaction, cancellationToken);
+            await inner.SaveWatchedFactionAsync(characterId, watchedFaction, cancellationToken, ownership);
             LoseAcknowledgementOnce();
         }
 

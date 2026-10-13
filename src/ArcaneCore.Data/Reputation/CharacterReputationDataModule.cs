@@ -1,8 +1,10 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Reputation;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.Data.Reputation;
@@ -97,68 +99,108 @@ public sealed class EfCharacterReputationStore(CharacterDbContext db) : ICharact
         return new CharacterReputationData(rows, watch?.WatchedFaction ?? -1);
     }
 
-    public async Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts, CancellationToken cancellationToken = default)
+    public async Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts,
+        CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
     {
         ArgumentNullException.ThrowIfNull(upserts);
-        if (upserts.Count == 0 || !await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
+        if (upserts.Count == 0)
         {
             return;
         }
 
-        // Last write per faction wins; a List (not an array) keeps Contains translatable by EF.
-        Dictionary<uint, CharacterReputationRow> latest = [];
-        foreach (CharacterReputationRow row in upserts)
+        // Fence off and untokened (the live default): no transaction and no ownership statement, exactly the SQL this save always issued.
+        bool unfenced = ownership is null && !CharacterWrites.IsFenced(db);
+        bool own = !unfenced && db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
+        await using IDbContextTransaction? transaction = own
+            ? await CharacterWriteFence.BeginTransactionAsync(db, ownership, cancellationToken).ConfigureAwait(false)
+            : null;
+        try
         {
-            if (row.CharacterId != characterId)
+            await CharacterOwnershipGuard.VerifyUnlessFencedAsync(db, ownership, own, cancellationToken).ConfigureAwait(false);
+            if (!await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
             {
-                throw new ArgumentException("every row must belong to the saved character", nameof(upserts));
+                return;
             }
 
-            latest[row.Faction] = row;
-        }
-
-        List<uint> touched = [.. latest.Keys];
-        DbSet<CharacterReputationEntity> set = db.Set<CharacterReputationEntity>();
-        Dictionary<uint, CharacterReputationEntity> existing = await set
-            .Where(r => r.CharacterId == characterId && touched.Contains(r.Faction))
-            .ToDictionaryAsync(r => r.Faction, cancellationToken).ConfigureAwait(false);
-        foreach (CharacterReputationRow row in latest.Values)
-        {
-            if (existing.TryGetValue(row.Faction, out CharacterReputationEntity? entity))
+            // Last write per faction wins; a List (not an array) keeps Contains translatable by EF.
+            Dictionary<uint, CharacterReputationRow> latest = [];
+            foreach (CharacterReputationRow row in upserts)
             {
-                entity.Standing = row.Standing;
-                entity.Flags = row.Flags;
+                if (row.CharacterId != characterId)
+                {
+                    throw new ArgumentException("every row must belong to the saved character", nameof(upserts));
+                }
+
+                latest[row.Faction] = row;
+            }
+
+            List<uint> touched = [.. latest.Keys];
+            DbSet<CharacterReputationEntity> set = db.Set<CharacterReputationEntity>();
+            Dictionary<uint, CharacterReputationEntity> existing = await set
+                .Where(r => r.CharacterId == characterId && touched.Contains(r.Faction))
+                .ToDictionaryAsync(r => r.Faction, cancellationToken).ConfigureAwait(false);
+            foreach (CharacterReputationRow row in latest.Values)
+            {
+                if (existing.TryGetValue(row.Faction, out CharacterReputationEntity? entity))
+                {
+                    entity.Standing = row.Standing;
+                    entity.Flags = row.Flags;
+                }
+                else
+                {
+                    set.Add(new CharacterReputationEntity { CharacterId = characterId, Faction = row.Faction, Standing = row.Standing, Flags = row.Flags });
+                }
+            }
+
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            db.ChangeTracker.Clear();
+        }
+    }
+
+    public async Task SaveWatchedFactionAsync(int characterId, int watchedFaction,
+        CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
+    {
+        bool unfenced = ownership is null && !CharacterWrites.IsFenced(db);
+        bool own = !unfenced && db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
+        await using IDbContextTransaction? transaction = own
+            ? await CharacterWriteFence.BeginTransactionAsync(db, ownership, cancellationToken).ConfigureAwait(false)
+            : null;
+        try
+        {
+            await CharacterOwnershipGuard.VerifyUnlessFencedAsync(db, ownership, own, cancellationToken).ConfigureAwait(false);
+            if (!await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            DbSet<CharacterReputationWatchEntity> set = db.Set<CharacterReputationWatchEntity>();
+            CharacterReputationWatchEntity? entity = await set.FirstOrDefaultAsync(r => r.CharacterId == characterId, cancellationToken).ConfigureAwait(false);
+            if (entity is null)
+            {
+                set.Add(new CharacterReputationWatchEntity { CharacterId = characterId, WatchedFaction = watchedFaction });
             }
             else
             {
-                set.Add(new CharacterReputationEntity { CharacterId = characterId, Faction = row.Faction, Standing = row.Standing, Flags = row.Flags });
+                entity.WatchedFaction = watchedFaction;
+            }
+
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
         }
-
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        db.ChangeTracker.Clear();
-    }
-
-    public async Task SaveWatchedFactionAsync(int characterId, int watchedFaction, CancellationToken cancellationToken = default)
-    {
-        if (!await CharacterExistsAsync(characterId, cancellationToken).ConfigureAwait(false))
+        finally
         {
-            return;
+            db.ChangeTracker.Clear();
         }
-
-        DbSet<CharacterReputationWatchEntity> set = db.Set<CharacterReputationWatchEntity>();
-        CharacterReputationWatchEntity? entity = await set.FirstOrDefaultAsync(r => r.CharacterId == characterId, cancellationToken).ConfigureAwait(false);
-        if (entity is null)
-        {
-            set.Add(new CharacterReputationWatchEntity { CharacterId = characterId, WatchedFaction = watchedFaction });
-        }
-        else
-        {
-            entity.WatchedFaction = watchedFaction;
-        }
-
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        db.ChangeTracker.Clear();
     }
 
     public async Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
