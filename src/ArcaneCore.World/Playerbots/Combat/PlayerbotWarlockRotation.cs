@@ -45,11 +45,9 @@ internal sealed class PlayerbotWarlockRotation : PlayerbotClassRotation
     /// <summary>
     /// A standing warlock casts back to back (Shadow Bolt is ready every think and a cast in progress ends the think early), so the
     /// pet command that yields to the cast was never sent when the Imp came out after the bot stopped walking: the Imp stood by
-    /// while the wolf died to three bolts. The command goes out alongside a cast, or when the think has no action, until the demon
-    /// is on the victim.
+    /// while the wolf died to three bolts. An idle demon is sent alongside a cast, or when the think has no action.
     /// </summary>
-    public override RotationAction? PetCompanion(RotationState state, RotationAction? chosen)
-        => chosen is null || chosen.Value.Kind == RotationActionKind.Cast ? CommandPet(state) is { Kind: RotationActionKind.PetAttack } attack ? attack : null : null;
+    public override RotationAction? PetCompanion(RotationState state, RotationAction? chosen) => SendIdlePet(state, chosen);
 
     protected override RotationAction? Upkeep(RotationState s)
         => (s.Spells.Has(DemonArmor) ? Do(s, DemonArmor, s.Self) : Do(s, DemonSkin, s.Self))
@@ -61,7 +59,11 @@ internal sealed class PlayerbotWarlockRotation : PlayerbotClassRotation
             // leaves the warlock standing on a pull. Goal stays Combat and nothing ever hits the creature. Send the demon while
             // still closing in (a cast-time nuke cannot finish on the move). Once the bot is standing and a cast is ready,
             // yield so that cast is the think.
-            ?? (s.Victim is { IsAlive: true } pull && !s.IsMoving && Casts(s, pull) is not null ? null : CommandPet(s));
+            ?? (YieldsToCast(s) ? null : CommandPet(s));
+
+    /// <summary>Standing on a live pull target with a cast ready: the think is that cast (the pet goes beside it, <see cref="PetCompanion"/>).</summary>
+    private static bool YieldsToCast(RotationState s)
+        => s.Victim is { IsAlive: true } pull && !s.IsMoving && Casts(s, pull) is not null;
 
     /// <summary>
     /// A demon by role (vmangos picks one of the known summons at random): alone, the Voidwalker tanks for the warlock; in a group

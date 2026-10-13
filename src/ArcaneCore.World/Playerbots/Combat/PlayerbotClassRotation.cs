@@ -60,9 +60,11 @@ internal abstract class PlayerbotClassRotation
     }
 
     /// <summary>
-    /// A pet command to send in the same think as <paramref name="chosen"/> (null: nothing, or the think chose no action). vmangos
-    /// PartyBotAI commands the pet and still casts in one update; a rotation returns one action, so a class whose pet must be sent
-    /// while the bot keeps casting overrides this. Default: none.
+    /// A pet command to send in the same think as <paramref name="chosen"/> (null: nothing, or the think chose no action). A
+    /// rotation returns one action and a cast in progress ends the think, so a pet command that yields to a cast is never sent
+    /// by a bot that stands and casts back to back. A class that sends its pet overrides this with <see cref="SendIdlePet"/>.
+    /// (vmangos PartyBotAI does not do this in combat: it commands the pet out of combat when the pet has no victim, :2208-2216.
+    /// This is a deliberate, narrower departure for bots whose think can only hold one action.) Default: none.
     /// </summary>
     public virtual RotationAction? PetCompanion(RotationState state, RotationAction? chosen) => null;
 
@@ -271,9 +273,25 @@ internal abstract class PlayerbotClassRotation
     protected static RotationAction? CommandPet(RotationState s)
     {
         if (s.Pet != RotationPetStatus.Alive) return null;
-        if (s.Victim is { IsAlive: true } victim && !s.PetOnVictim && (s.InCombat || victim.Distance <= FriendlyRange))
+        // A pet with a victim of its own is left to it (vmangos :2208-2216 commands a pet only when !pPet->GetVictim()).
+        if (s.Victim is { IsAlive: true } victim && !s.PetFighting && (s.InCombat || victim.Distance <= FriendlyRange))
             return RotationAction.PetAttack(victim);
         return !s.InCombat && s.Victim is null && s.PetFighting ? RotationAction.PetFollow() : null;
+    }
+
+    /// <summary>
+    /// The pet attack to send beside <paramref name="chosen"/>: only an idle pet (no victim), and only beside a cast or an empty
+    /// think, never beside a cast aimed at the pet itself (Health Funnel, Mend Pet, a heal), which the command would interrupt.
+    /// </summary>
+    protected static RotationAction? SendIdlePet(RotationState s, RotationAction? chosen)
+    {
+        if (chosen is { } action)
+        {
+            if (action.Kind != RotationActionKind.Cast) return null;
+            if (s.PetUnit is { } pet && action.Target == pet.Guid) return null;
+        }
+        RotationAction? command = CommandPet(s);
+        return command is { Kind: RotationActionKind.PetAttack } ? command : null;
     }
 
     // --- shared rotations -------------------------------------------------------------------------------------------------

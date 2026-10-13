@@ -58,12 +58,17 @@ internal sealed class PlayerbotHunterRotation : PlayerbotClassRotation
         _ => null,
     };
 
+    /// <summary>
+    /// The shots come first and an idle pet is sent beside them (<see cref="PlayerbotClassRotation.SendIdlePet"/>): a pet command
+    /// that leads the think and does not stick would take every think and no shot would fire.
+    /// </summary>
+    public override RotationAction? PetCompanion(RotationState state, RotationAction? chosen) => SendIdlePet(state, chosen);
+
     protected override RotationAction? Fight(RotationState s, RotationUnit v)
     {
         bool outside = v.Distance >= HunterDeadZone;
         RotationUnit? close = s.Attackers.FirstOrDefault(a => a.IsAlive && a.Distance < HunterDeadZone);
-        return CommandPet(s)
-            ?? Do(s, DistractingShot, v, NeedsTaunt(s, v))
+        return Do(s, DistractingShot, v, NeedsTaunt(s, v))
             ?? Do(s, AutoShot, v, outside && !s.AutoRepeatActive && !s.IsMoving)
             ?? Do(s, ConcussiveShot, v, outside && v.IsMoving && v.TargetsBot)
             ?? Do(s, AimedShot, v, outside)
