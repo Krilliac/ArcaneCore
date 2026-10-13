@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.Game.Stealth;
@@ -10,7 +11,8 @@ namespace ArcaneCore.Game.Stealth;
 /// The stealth part of vmangos Unit::IsVisibleForOrDetect (Unit.cpp:6321-6461), in the same order: a unit that is not stealthed,
 /// the viewer itself, the unit's owner or charmer, a game master, the Hunter's Mark caster and a non-hostile group member are always allowed; a unit in the
 /// NO_DETECT group is hidden; an ordinary (movement-driven) evaluation keeps only units the viewer already sees; a detection
-/// evaluation runs the distance formula (<see cref="StealthDetection"/>) and then line of sight. A dead viewer never detects.
+/// evaluation runs the distance formula (<see cref="StealthDetection"/>) and then line of sight, both from the viewer's
+/// camera (vmangos <c>viewPoint</c>: far sight, Mind Vision, possession), not from the body. A dead viewer never detects.
 /// Invisibility uses the same per-viewer rule, with matching type masks and detection aura levels
 /// (vmangos Unit.cpp:6401-6435,6502-6541).
 /// </summary>
@@ -105,15 +107,18 @@ public sealed class StealthVisibilityRule : IVisibilityRule
             return alreadyVisible;
         }
 
-        float dx = viewer.X - unit.X;
-        float dy = viewer.Y - unit.Y;
-        float dz = viewer.Z - unit.Z;
+        // vmangos Unit.cpp:6455-6460: CanDetectStealthOf gets GetDistance3dToCenter(viewPoint), then LOS is from that
+        // same camera. The body's position is only the facing arc inside the formula.
+        WorldObject eye = viewer.ViewPoint;
+        float dx = eye.X - unit.X;
+        float dy = eye.Y - unit.Y;
+        float dz = eye.Z - unit.Z;
         float distance = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
         if (!StealthDetection.CanDetectStealthOf(_spells, viewer, unit, distance, _options).Detected)
         {
             return false;
         }
 
-        return viewer.Map is not { } map || map.Collision.IsWithinLineOfSight(viewer, unit);
+        return viewer.Map is not { } map || map.Collision.IsWithinLineOfSight(eye, unit);
     }
 }
