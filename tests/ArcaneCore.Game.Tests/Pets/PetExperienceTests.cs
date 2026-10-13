@@ -73,18 +73,40 @@ public sealed class PetExperienceTests
     public void AwardKillExperience_Solo_GivesThePetItsOwnGain_Group_HalfTheMemberShare()
     {
         using PetTestKit kit = Kit();
-        (Player hunter, Creature pet) = Tame(kit);
+        (Player hunter, Creature pet) = Tame(kit, ownerLevel: 24);
         Creature victim = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(VictimEntry)!, 5, 0, 0, 0);
 
-        kit.Service.AwardKillExperience([hunter], [1u], victim, false, 1f, 1f);
+        kit.Service.AwardKillExperience([hunter], victim, false, 1f, 1f);
         uint solo = ExperienceFormulas.KillGain(20, 22, false, false);
         Assert.Equal(solo, pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
 
         (Player other, _) = kit.AddPlayer(2);
-        kit.Service.AwardKillExperience([hunter, other], [100u, 100u], victim, false, 1f, 1f);
-        Assert.Equal(solo + 50, pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
+        other.Level = 24;
+        IReadOnlyList<KillShare> shares = KillExperience.Distribute([new KillCandidate(24, true, false), new KillCandidate(24, true, false)], 22, false, false);
+        kit.Service.AwardKillExperience([hunter, other], victim, false, 1f, 1f);
+        Assert.Equal(solo + (shares[0].Experience / 2), pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
+    }
 
-        kit.Service.AwardKillExperience([hunter], [0u], victim, false, 1f, 1f); // the owner got nothing: neither does the pet
-        Assert.Equal(solo + 50, pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
+    [Fact]
+    public void AwardKillExperience_GreyForTheOwner_GivesNothing_MaxLevelOwner_StillLevelsThePet()
+    {
+        using PetTestKit kit = Kit();
+        (Player hunter, Creature pet) = Tame(kit, ownerLevel: 60);
+        Creature victim = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(VictimEntry)!, 5, 0, 0, 0);
+
+        kit.Service.AwardKillExperience([hunter], victim, false, 1f, 1f); // level 22 is grey to a level 60 owner
+        Assert.Equal(0u, pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
+
+        hunter.Level = 25;
+        kit.Service.AwardKillExperience([hunter], victim, false, 1f, 1f);
+        Assert.Equal(ExperienceFormulas.KillGain(20, 22, false, false), pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
+    }
+
+    [Fact]
+    public void SummonedHunterPet_StartsWithTheRealNextLevelExperience()
+    {
+        using PetTestKit kit = Kit();
+        (_, Creature pet) = Tame(kit);
+        Assert.Equal(SummonService.PetXpForLevel(pet.Level), pet.GetUInt32(UpdateFields.UnitFieldPetnextlevelexp));
     }
 }

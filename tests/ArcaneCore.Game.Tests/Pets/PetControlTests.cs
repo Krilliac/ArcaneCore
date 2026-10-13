@@ -65,7 +65,7 @@ public sealed class PetControlTests
             CharmInfo charm = pet.Summon!.Charm!;
             Assert.Equal(pet.Guid.Entry, charm.PetNumber);            // Pet::Create: the pet number is in the GUID
             Assert.Equal(0u, pet.GetUInt32(UpdateFields.UnitFieldPetnumber)); // SetPetNumber(n, false)
-            Assert.Equal(1000u, pet.GetUInt32(UpdateFields.UnitFieldPetnextlevelexp));
+            Assert.Equal(SummonService.PetXpForLevel(pet.Level), pet.GetUInt32(UpdateFields.UnitFieldPetnextlevelexp));
 
             session.Clear();
             kit.Controller.HandleAction(owner, PetPackets.ReadAction(Action(pet.Guid, (uint)CommandState.Dismiss, ActionType.Command)));
