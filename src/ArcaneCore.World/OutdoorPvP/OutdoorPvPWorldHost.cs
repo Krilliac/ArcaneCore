@@ -57,15 +57,26 @@ internal sealed class OutdoorPvPWorldHost(OutdoorPvPFeature feature) : IOutdoorP
             yield break;
         }
 
-        float r2 = radius * radius;
         foreach (Player player in map.Players.ToArray())
         {
-            float dx = player.X - x, dy = player.Y - y, dz = player.Z - z;
-            if ((dx * dx) + (dy * dy) + (dz * dz) <= r2 && feature.IsOutdoorPvPActive(player))
+            if (InCaptureRange(player.X - x, player.Y - y, player.Z - z, radius, player.BoundingRadius) && feature.IsOutdoorPvPActive(player))
             {
                 yield return new OutdoorPvPPlayer(player.Guid, player.Team);
             }
         }
+    }
+
+    /// <summary>vmangos DEFAULT_WORLD_OBJECT_SIZE, a game object's bounding radius (GameObject::GetObjectBoundingRadius, GameObject.cpp:2268-2272).</summary>
+    internal const float GameObjectBoundingRadius = 0.388999998569489f;
+
+    /// <summary>
+    /// vmangos AnyPlayerInObjectRangeCheck → IsWithinDistInMap(player, radius, 3d) (GridNotifiers.h:1228-1236, Object.cpp:1660-1666): the 3D
+    /// distance less both bounding radii (the capture point's and the player's) within the template radius.
+    /// </summary>
+    internal static bool InCaptureRange(float dx, float dy, float dz, float radius, float playerBoundingRadius)
+    {
+        float reach = radius + GameObjectBoundingRadius + playerBoundingRadius;
+        return (dx * dx) + (dy * dy) + (dz * dz) <= reach * reach;
     }
 
     /// <summary>The type-29 template's data (vmangos GameObjectDefines.h:488-511); null without a usable template.</summary>

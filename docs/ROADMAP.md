@@ -248,7 +248,6 @@ order, four PR defects fixed, local full gate green. Merges, fixes, gate and bra
 - **Warden:** API-hook/EndScene/login checks, a live 1.12.1 client test, Mac.
 - **Metrics:** done (realm/logon packet counters, per-opcode labels). Docker is untested.
 - **AH bot:** gaps listed in `docs/areas/auction-house-bot.md`.
-- **Outdoor PvP:** verify capture radius and time against the type-29 templates.
 - **Script hooks:** DuelReset pet cooldowns, addon chat.
 - **Multi-version:** S1 after #81 (build info on sessions, expansion columns, the gate, build-column migrations); S2 movement codec and typed serializers. Still undecided: which TBC/WotLK content DBs to use, and cross-version characters (decisions 4 and 6 on #61).
 - **Autopatcher:** done (off by default).
