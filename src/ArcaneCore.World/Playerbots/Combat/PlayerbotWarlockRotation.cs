@@ -42,6 +42,15 @@ internal sealed class PlayerbotWarlockRotation : PlayerbotClassRotation
 
     public override float PreferredRange(RotationState state) => CasterRange;
 
+    /// <summary>
+    /// A standing warlock casts back to back (Shadow Bolt is ready every think and a cast in progress ends the think early), so the
+    /// pet command that yields to the cast was never sent when the Imp came out after the bot stopped walking: the Imp stood by
+    /// while the wolf died to three bolts. The command goes out alongside a cast, or when the think has no action, until the demon
+    /// is on the victim.
+    /// </summary>
+    public override RotationAction? PetCompanion(RotationState state, RotationAction? chosen)
+        => chosen is null || chosen.Value.Kind == RotationActionKind.Cast ? CommandPet(state) is { Kind: RotationActionKind.PetAttack } attack ? attack : null : null;
+
     protected override RotationAction? Upkeep(RotationState s)
         => (s.Spells.Has(DemonArmor) ? Do(s, DemonArmor, s.Self) : Do(s, DemonSkin, s.Self))
             ?? SummonDemon(s)

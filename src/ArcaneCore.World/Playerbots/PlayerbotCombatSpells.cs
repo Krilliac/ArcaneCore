@@ -104,7 +104,10 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         if (Rotation(player, feature) is { } rotation)
         {
             RotationState view = View(player, feature, target);
-            return rotation.InCombat(view) is { } action && Execute(player, feature, action);
+            RotationAction? action = rotation.InCombat(view);
+            bool acted = action is { } taken && Execute(player, feature, taken);
+            CommandCompanionPet(player, feature, rotation, view, action);
+            return acted;
         }
 
         SpellInfo? spell = Select(feature, player, target);
@@ -170,7 +173,17 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         if (Rotation(player, feature) is not { } rotation) return false;
         Unit? pull = PullTarget is { IsInWorld: true, IsAlive: true } target && ReferenceEquals(target.Map, player.Map)
             && player.Map.Combat.Hooks.CanAttack(player, target) ? target : null;
-        return rotation.OutOfCombat(View(player, feature, pull)) is { } action && Execute(player, feature, action);
+        RotationState view = View(player, feature, pull);
+        RotationAction? action = rotation.OutOfCombat(view);
+        bool acted = action is { } taken && Execute(player, feature, taken);
+        CommandCompanionPet(player, feature, rotation, view, action);
+        return acted;
+    }
+
+    /// <summary>The pet command a class sends beside its chosen action (<see cref="PlayerbotClassRotation.PetCompanion"/>).</summary>
+    private void CommandCompanionPet(Player player, SpellFeature feature, PlayerbotClassRotation rotation, RotationState view, RotationAction? chosen)
+    {
+        if (rotation.PetCompanion(view, chosen) is { } pet) Execute(player, feature, pet);
     }
 
     /// <summary>Where the bot fights from: melee distance, or a caster's or hunter's range (yards).</summary>

@@ -59,6 +59,13 @@ internal abstract class PlayerbotClassRotation
         return DispelFriends(state) ?? Upkeep(state);
     }
 
+    /// <summary>
+    /// A pet command to send in the same think as <paramref name="chosen"/> (null: nothing, or the think chose no action). vmangos
+    /// PartyBotAI commands the pet and still casts in one update; a rotation returns one action, so a class whose pet must be sent
+    /// while the bot keeps casting overrides this. Default: none.
+    /// </summary>
+    public virtual RotationAction? PetCompanion(RotationState state, RotationAction? chosen) => null;
+
     /// <summary>Where the bot fights from (yards from its victim).</summary>
     public virtual float PreferredRange(RotationState state) => MeleeRange;
 
