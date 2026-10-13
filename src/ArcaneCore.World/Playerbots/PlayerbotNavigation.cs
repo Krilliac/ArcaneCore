@@ -224,10 +224,10 @@ internal static class PlayerbotNavigation
 
     /// <summary><see cref="TryPlanToward"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
     internal static PlanOutcome PlanToward(Player player, Vector3 goal, PlayerbotOptions options, ref TileWait wait, uint now,
-        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false, bool deadEnds = false)
     {
         long mark = PendingMark;
-        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder), mark, ref wait, now, ref route);
+        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, deadEnds), mark, ref wait, now, ref route);
     }
 
     private static PlanOutcome Outcome(bool planned, long mark, ref TileWait wait, uint now, ref PlayerbotRoute? route)
@@ -282,24 +282,57 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
-        bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        bool completedQuestReturn = false, bool friendlyTownEnder = false, bool deadEnds = false)
     {
         t_deadEnd = default;
         t_deadEndRefusal = false;
-        long pending = PendingMark;
-        if (PlanTowardSteps(player, goal, options, out route, completedQuestReturn, friendlyTownEnder)) return true;
-        // Refused at the walkable point nearest a goal the bot's region does not join, with every query answered (no tile still being
-        // read): the walk is proven impossible. Remembered for every bot of the map, and told to the caller (TakeDeadEndRefusal).
-        if (t_deadEnd.Memory is { } memory && !PendingSince(pending))
+        // Opt-in (the world-destination caller handles the refusal), and never for a completed quest's return: its refusal is the hazard
+        // and set-aside logic's, and a set-aside there counts towards abandoning the quest.
+        bool use = deadEnds && !completedQuestReturn;
+        if (PlanTowardSteps(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, use))
         {
-            if (!t_deadEnd.Known) memory.Record(t_deadEnd.From, t_deadEnd.To, Environment.TickCount64);
-            t_deadEndRefusal = true;
+            t_deadEnd = default;
+            return true;
         }
 
+        // Refused towards a goal the bot's region does not join: told to the caller (TakeDeadEndRefusal) when the pair was proven by
+        // another bot, or when the mesh itself proves the bot stands at the nearest walkable point (ProvesDeadEnd, which no hazard, no
+        // blacklist and no map policy of this bot can fake); the proof is remembered for every bot of the map.
+        DeadEndNote note = t_deadEnd;
         t_deadEnd = default;
+        if (note.Memory is { } memory)
+        {
+            if (note.Known) t_deadEndRefusal = true;
+            else if (note.Clean && ProvesDeadEnd(player, goal, options))
+            {
+                memory.Record(note.From, note.To, Environment.TickCount64);
+                t_deadEndRefusal = true;
+            }
+        }
+
         return false;
     }
 
+    /// <summary>
+    /// Whether the mesh alone says the bot stands at the walkable point nearest <paramref name="goal"/>: one uncapped partial query from the
+    /// bot to the goal that the search settled completely (not capped, not cut by the think's budget, no tile still being read) ends
+    /// within <see cref="DeadEndYards"/> of the bot without reaching the goal. Not asked for a bot the map policy keeps off the map or a goal
+    /// the bot blacklisted: those refusals are the bot's own. A held fallback (<see cref="PlayerbotThinkProbe.Fallback"/>), asked only after
+    /// every plan was refused and never again once the pair is remembered.
+    /// </summary>
+    private static bool ProvesDeadEnd(Player player, Vector3 goal, PlayerbotOptions options)
+    {
+        if (player.Map is not { } map || !PlayerbotMapPolicy.MayMoveOn(player, options) || PlayerbotMotion.IsBlacklisted(player, goal)) return false;
+        Vector3 start = PlayerbotMotion.CurrentPosition(player);
+        if (!Finite(start) || !Finite(goal)) return false;
+        long pending = PendingMark;
+        using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
+        int cutBefore = PlayerbotThinkProbe.Active?.Clamped ?? 0;
+        PathResult path = Query(map, start, goal, options, partial: true, steep: false, out bool capped, MaxSearchNodes);
+        if (capped || PendingSince(pending) || (PlayerbotThinkProbe.Active?.Clamped ?? 0) != cutBefore) return false;
+        return path.HasPath && (path.Type & PathType.Incomplete) != 0 && (path.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.Short)) == 0
+            && Finite(path.End) && Vector2.Distance(Flat(path.End), Flat(start)) <= DeadEndYards;
+    }
     /// <summary>
     /// What <see cref="RegionLeg"/> found about the walk the current <see cref="TryPlanToward"/> call is planning: the bot stands at the
     /// walkable point nearest a goal whose region the bot's region does not join (or the pair was proven by another bot, <c>Known</c>).
@@ -308,7 +341,7 @@ internal static class PlayerbotNavigation
     {
         public PlayerbotDeadEnds? Memory;
         public int From, To;
-        public bool Known;
+        public bool Known, Clean;
     }
 
     [ThreadStatic] private static DeadEndNote t_deadEnd;
@@ -330,7 +363,7 @@ internal static class PlayerbotNavigation
     internal const float DeadEndYards = 6f;
 
     private static bool PlanTowardSteps(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
-        bool completedQuestReturn, bool friendlyTownEnder)
+        bool completedQuestReturn, bool friendlyTownEnder, bool deadEnds)
     {
         route = null;
         Vector3 origin = new(player.X, player.Y, player.Z);
@@ -346,7 +379,7 @@ internal static class PlayerbotNavigation
         // Beyond the first step the map's region graph knows the way, round mountains and out of dead ends: the leg goes to a portal
         // of that way (RegionLeg). Only when the graph does not decide (none, still being built, both ends in one region) do the
         // goal-first query and the straight-line steps below plan.
-        if (distance > chunk && RegionLeg(player, goal, options, out route, completedQuestReturn, friendlyTownEnder) is { } planned) return planned;
+        if (distance > chunk && RegionLeg(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, deadEnds) is { } planned) return planned;
         // A tile the plan needs is still being read: nothing below could decide either (each would meet the same tile).
         if (PendingSince(pending)) return false;
         // When the mesh had a corridor to judge (no path, a blacklisted end), the shorter straight-line points below would only repeat
@@ -401,7 +434,7 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     private static bool? RegionLeg(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
-        bool completedQuestReturn, bool friendlyTownEnder)
+        bool completedQuestReturn, bool friendlyTownEnder, bool deadEnds)
     {
         route = null;
         if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
@@ -411,21 +444,19 @@ internal static class PlayerbotNavigation
         var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
         int from = nav.RegionAt(graph, start, locate), to = nav.RegionAt(graph, goal, locate);
         if (from < 0 || to < 0) return null;
-        PlayerbotDeadEnds deadEnds = PlayerbotDeadEnds.For(graph);
-        if (from != to && deadEnds.Known(from, to, Environment.TickCount64))
+        PlayerbotDeadEnds memory = PlayerbotDeadEnds.For(graph);
+        if (deadEnds && from != to && memory.Known(from, to, Environment.TickCount64))
         {
             // Another bot (or this one) stood at the nearest point and found no way on: not a step towards a goal that cannot be walked to.
-            t_deadEnd = new DeadEndNote { Memory = deadEnds, From = from, To = to, Known = true };
+            t_deadEnd = new DeadEndNote { Memory = memory, From = from, To = to, Known = true };
             return false;
         }
 
         NavRegionRouteStatus status = graph.FindRoute(from, start, to, goal, RegionSearchNodes, out List<Vector3> portals);
-        // Not joined (the search ran to its end) and the bot already stands at the nearest portal, or none is nearer than the bot: the
-        // fallbacks below still get their turn (the mesh may reach a point nearer than any portal); when they all refuse, the caller
-        // records the dead end (TryPlanToward).
-        if (status == NavRegionRouteStatus.Unreachable
-            && (portals.Count == 0 || Vector3.Distance(start, portals[^1]) <= DeadEndYards))
-            t_deadEnd = new DeadEndNote { Memory = deadEnds, From = from, To = to };
+        // Not joined (the search ran to its end): the fallbacks below still get their turn (the mesh may reach a point nearer than any
+        // portal); when they all refuse, TryPlanToward asks the mesh whether the bot stands at its dead end (ProvesDeadEnd).
+        if (deadEnds && status == NavRegionRouteStatus.Unreachable)
+            t_deadEnd = new DeadEndNote { Memory = memory, From = from, To = to, Clean = graph.SkippedTiles.Count == 0 };
         if (portals.Count == 0) return null;
         if (status == NavRegionRouteStatus.Found) portals.Add(goal);
 

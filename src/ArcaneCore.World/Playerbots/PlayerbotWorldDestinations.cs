@@ -311,7 +311,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             bool friendlyTown = returning && FriendlyTownEnder(player, entry.Entry);
             if (route is null)
                 planned = PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out route,
-                    completedQuestReturn: returning, friendlyTownEnder: friendlyTown);
+                    completedQuestReturn: returning, friendlyTownEnder: friendlyTown, deadEnds: true);
             if (planned == PlanOutcome.Pending)
             {
                 // A tile on the way is still being read: not a verdict on this spawn. Keep the goal, try again next think.
@@ -336,7 +336,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                     && !_entries.Any(other => other.Entry == entry.Entry && other.Spawn.Guid != entry.Spawn.Guid && !IsBlocked(other.Spawn.Guid, now)))
                 {
                     deadEnd.SuspendEntry(entry.Entry, now);
-                    if (questId != 0) deadEnd.SuspendQuest(questId, now);
+                    if (questId != 0) deadEnd.SuspendQuest(questId, now, countsAsSetAside: false);
                 }
                 // A completed quest with just one indexed ender cannot be reached by retrying a plan that keeps failing from the same
                 // spot. Leave quests with alternative enders to the ordinary spawn rotation. The set-aside is local to this bot.

@@ -5,9 +5,10 @@ namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
 /// Which walks a map's region graph (<see cref="NavRegionGraph"/>) cannot make, as bots proved them: a bot that stood at the walkable point
-/// nearest a goal whose region is not joined to its own and found no route closer (<see cref="PlayerbotNavigation.TryPlanToward"/>) records
-/// the pair (the bot's region, the goal's region). Every later walk between the pair is refused at once, so no bot walks to the same dead
-/// end again (bot QA cluster C3: the same point to 0.1 yard for 205 bots).
+/// nearest a goal whose region is not joined to its own and found no route closer (<see cref="PlayerbotNavigation.TryPlanToward"/>, proved
+/// by the mesh alone) records the pair (the bot's region, the goal's region). Every later walk between the pair, of a caller that opted
+/// in, is refused at once, so no bot walks to the same dead end again (bot QA cluster C3: identical coordinates across bots and goals at
+/// several spots, e.g. -1.0,-4188.3 map 1: issues #418, #461, #552).
 /// <para>
 /// One memory per graph instance (a rebuilt graph renumbers its regions, so its memory starts empty); bounded to
 /// <see cref="MaxPairs"/> pairs (the earliest expiry goes first) and each pair is forgotten after <see cref="ExpireMs"/>. Thread-safe:

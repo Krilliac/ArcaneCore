@@ -134,14 +134,18 @@ itself was tried too: it reaches Grish, but from the swamp it ends at the point 
 while the way leads west and north by Deadwind Pass, Redridge, the Burning Steppes and Blackrock Mountain. Now every stall point's legs
 reach the ender: 9 to 13 legs of 6,500 to 9,400 yards, each plan 5 to 80 ms (`FromAnIssueStallPoint_...`, real terrain).
 
-A dead end is refused, not retried (bot QA cluster C3: the same point to 0.1 yard for 205 bots, because the goal's region is not joined to the
-bot's, every bot walked to the same nearest point, stalled there, set the goal aside for 10 minutes and came back). When the region search
-ends `Unreachable` and the bot already stands within `DeadEndYards` (6) of the nearest portal (or no portal is nearer than the bot), and the
-fallback steps all refuse too, `TryPlanToward` refuses and records the pair (bot region, goal region) in `PlayerbotDeadEnds`, one bounded
-(256 pairs, 30 minutes) lock-guarded memory per region graph. A recorded pair is refused at once for every bot of the map, so none walks to
-that point again. The refusal is told to the caller (`PlayerbotNavigation.TakeDeadEndRefusal`): `PlayerbotWorldDestinations` then sets the
-entry and quest aside immediately when no other spawn of the entry is left to try (the brain picks another goal instead of idling until the
-stall bound), and the wander in `Explore` turns anywhere at once. The stall detector and its bounds are unchanged.
+A dead end is refused, not retried (bot QA cluster C3: identical stall coordinates across bots and goals at several spots, e.g.
+-1.0,-4188.3 map 1, issues #418, #461, #552; the hypothesis is that the goal's region is not joined to the bot's, so every bot walked to
+the same nearest point, stalled there, set the goal aside for 10 minutes and came back). Opt-in: only `PlayerbotWorldDestinations` (quest
+and goal destinations, not a completed quest's return) asks (`deadEnds: true`); every other `TryPlanToward` caller behaves as before. When
+the region search ends `Unreachable` and every plan is refused, one uncapped partial mesh query (`ProvesDeadEnd`, held to the think's
+budget, not asked for a bot the map policy keeps off the map or for a blacklisted goal) must end within `DeadEndYards` (6) of the bot, with
+no tile pending and no skipped tile in the graph; only then is the pair (bot region, goal region) recorded in `PlayerbotDeadEnds`, one
+bounded (256 pairs, 30 minutes) lock-guarded memory per region graph. A recorded pair is refused at once for every opted-in walk of the map.
+The refusal is told to the caller (`PlayerbotNavigation.TakeDeadEndRefusal`): `PlayerbotWorldDestinations` then sets the entry and quest
+aside immediately when no other spawn of the entry is left to try, without counting towards abandoning the quest (`SuspendQuest(...,
+countsAsSetAside: false)`), so the brain picks another goal instead of idling until the stall bound. Explore's wander legs are shorter
+than the region graph's reach and are not affected. The stall detector and its bounds are unchanged.
 
 Neeka Bloodscar, #194's ender, stands at the top of the Kargath tower, whose upper flight of stairs the mesh flags steep: the walkable mesh
 ends 13 yards below her. A destination indoors (inside a model's group, `MapCollision.IsOutdoors`) is reached over steep polygons when the

@@ -2239,9 +2239,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         else
         {
-            // A leg into a region the bot's does not join cannot be walked from here (TakeDeadEndRefusal): the next leg turns anywhere
-            // at once instead of fanning round the same facing for three refusals.
-            _exploreRefusals = PlayerbotNavigation.TakeDeadEndRefusal() ? Math.Max(_exploreRefusals + 1, 3) : _exploreRefusals + 1;
+            _exploreRefusals++;
             PlayerbotMovementControl.Stop(_session, player);
         }
     }
