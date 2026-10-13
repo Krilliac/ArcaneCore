@@ -47,8 +47,11 @@ public static class HonorRanks
         {
             rank = positive ? firstRank : NegativeRankCount;
         }
-        else if (rankPoints > (rankCount - 1) * 5000f)
+        else if (rankPoints >= (rankCount - 1) * 5000f)
         {
+            // Inclusive: the division branch at this exact total is the top positive rank (60000 → 18) but
+            // 0 for a negative total (15000 → unranked, between two Pariah values). The cap keeps that total
+            // on the worst dishonor rank.
             rank = positive ? RankCount - 1 : firstRank;
         }
         else
