@@ -29,6 +29,8 @@ public static class GameObjectLocks
     /// skill case that needs no profession (Open, Treasure, Quick open …). A profession lock
     /// (herbalism, mining, lockpicking, fishing) needs the open-lock spell:
     /// <see cref="GameObjectUseResult.Locked"/>; a missing key: <see cref="GameObjectUseResult.MissingKey"/>.
+    /// Blasting has no profession either, but it is still a skill case (Seaforium charges,
+    /// <c>Spell::CanOpenLock</c>): a click does not satisfy it.
     /// </summary>
     public static GameObjectUseResult CheckDirectUse(LockEntry? entry, Player player) => CheckDirectUse(entry, player, out _);
 
@@ -63,6 +65,14 @@ public static class GameObjectLocks
                     break;
 
                 case LockKeyType.Skill:
+                    // LOCKTYPE_BLASTING has no profession (SkillByLockType is SKILL_NONE) but CanOpenLock still
+                    // requires the spell bonus. Treating it as a free click opens a Seaforium lock with no charge.
+                    if (entry.Indexes[i] == (uint)LockType.Blasting)
+                    {
+                        needsProfession = true;
+                        break;
+                    }
+
                     if (LockSkills.ForLockType((LockType)entry.Indexes[i]) == 0)
                     {
                         return GameObjectUseResult.Ok;
@@ -83,6 +93,9 @@ public static class GameObjectLocks
     /// <paramref name="lockType"/> opens when the player's skill reaches the case's required
     /// value (professionless lock types always open); a key case opens with
     /// <paramref name="keyItemId"/>. Nothing matching: <see cref="GameObjectUseResult.Locked"/>.
+    /// The first skill case of <paramref name="lockType"/> decides, including a failure
+    /// (a later easier case is not tried). Blasting has no profession but still compares the
+    /// spell bonus with the case's required skill.
     /// </summary>
     public static GameObjectUseResult CheckOpenLock(LockEntry? entry, Player player, LockType lockType, uint keyItemId, Func<Player, uint, uint> skillValue, uint skillBonus = 0)
     {
@@ -93,7 +106,6 @@ public static class GameObjectLocks
             return GameObjectUseResult.Ok;
         }
 
-        GameObjectUseResult result = GameObjectUseResult.Locked;
         for (int i = 0; i < LockEntry.Cases && i < entry.Types.Count; i++)
         {
             switch ((LockKeyType)entry.Types[i])
@@ -102,17 +114,21 @@ public static class GameObjectLocks
                     return GameObjectUseResult.Ok;
 
                 case LockKeyType.Skill when entry.Indexes[i] == (uint)lockType:
+                    // Spell::CanOpenLock: the first skill case of this lock type decides. Blasting is
+                    // skill-less but still checked (Seaforium); every other skill-less type opens.
                     uint skill = LockSkills.ForLockType(lockType);
-                    if (skill == 0 || skillValue(player, skill) + skillBonus >= entry.Skills[i])
+                    if (skill != 0 || lockType == LockType.Blasting)
                     {
-                        return GameObjectUseResult.Ok;
+                        if (skillValue(player, skill) + skillBonus < entry.Skills[i])
+                        {
+                            return GameObjectUseResult.SkillTooLow;
+                        }
                     }
 
-                    result = GameObjectUseResult.SkillTooLow;
-                    break;
+                    return GameObjectUseResult.Ok;
             }
         }
 
-        return result;
+        return GameObjectUseResult.Locked;
     }
 }
