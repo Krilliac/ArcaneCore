@@ -1009,13 +1009,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (position is PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee)
             {
                 PlayerbotThinkProbe.Phase("chase");
+                // An enemy already fighting the bot (or holding it on its threat list) has been weighed by ObserveFight: no hazard mark
+                // may refuse or stop the chase and leave the bot standing in combat without a target.
+                if (fightingBot) PlayerbotNavigation.Guard(player, null);
                 var chaseGoal = new System.Numerics.Vector3(target.X, target.Y, target.Z);
                 // A route walked to its end, or whose end the target has left by more than ChaseReplanYards, is planned again in
                 // this think (it was dropped here at the next think, and planned at the one after: two think gaps per re-chase).
                 if (_route is null || ChaseRouteStale(player, _route, chaseGoal))
                 {
                     PlanOutcome chase = PlayerbotNavigation.PlanExact(player, chaseGoal, _options, ref _tileWait,
-                        _session.World.NowMs, out PlayerbotRoute? fresh);
+                        _session.World.NowMs, out PlayerbotRoute? fresh, chase: true);
                     if (chase == PlanOutcome.Pending)
                     {
                         // A tile of the way is being read: keep the target, ask again next think, and keep walking the route still in
@@ -1032,6 +1035,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                         _target = null;
                         AbandonRoute();
                         PlayerbotMovementControl.Stop(_session, player);
+                        if (fightingBot) _goal = PlayerbotGoalKind.Combat;
                         return;
                     }
 
@@ -1190,7 +1194,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 // A grind walk with no creature in sight (the destinations' spawn walk) has no target to set aside: set the entry it
                 // was walking to aside, or the next decision plans the same camp again (live 2026-10-12, bot QA #368: 177 stalls
                 // at the empty kobold camp of quest 21). The quest's objective is then not hunted until the set-aside ends.
-                else if (_goal == PlayerbotGoalKind.Grind && TargetEntry != 0) _suspensions.SuspendEntry(TargetEntry, now);
+                else if (_goal is PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat && TargetEntry != 0) _suspensions.SuspendEntry(TargetEntry, now);
                 break;
             case PlayerbotGoalKind.Home:
                 _homeReturn.MarkBlocked(now);
@@ -1711,15 +1715,25 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private static bool IsStranger(Player player, Player other, GroupManager? groups)
         => other.Guid != player.Guid && groups?.AreInSameGroup(player.Guid, other.Guid) != true;
 
-    private static Creature? FindDefensiveAttacker(Player player)
+    private Creature? FindDefensiveAttacker(Player player)
     {
         if (player.Map is not { } map) return null;
-        return player.Combat.Attackers
+        // A creature swinging at the bot comes first; if none is, any living creature that still holds the bot on its
+        // threat list (fighting a pet, a party/camp fellow, or held at range) is the fight keeping Combat.IsInCombat on.
+        return FirstDefensiveCandidate(player, map, player.Combat.Attackers)
+            ?? FirstDefensiveCandidate(player, map, player.Combat.ThreatenedBy);
+    }
+
+    private Creature? FirstDefensiveCandidate(Player player, Map map, IEnumerable<Unit> units)
+    {
+        return units
             .OfType<Creature>()
-            .Where(creature => creature.IsInWorld && creature.IsAlive
+            .Where(creature => creature.IsInWorld && creature.IsAlive && !creature.IsInEvadeMode
                 && ReferenceEquals(creature.Map, map)
                 && map.Combat.Hooks.CanAttack(player, creature))
-            .OrderBy(creature => Distance(player, creature))
+            .OrderBy(IsUnreachable)
+            .ThenBy(creature => ReferenceEquals(creature, _target) ? 0 : 1)
+            .ThenBy(creature => Distance(player, creature))
             .FirstOrDefault();
     }
 

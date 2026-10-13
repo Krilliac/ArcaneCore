@@ -172,7 +172,10 @@ Each leg of such a route keeps its own proof (`PlayerbotRoute.LegsNavigated`): t
 on the mesh's legs, never on a stepped one that follows a mesh leg (it used to take the first leg's proof for the whole route). The goal then does what it does with any route it
 cannot get: a trainer destination tries the next trainer (`PlayerbotTrainerDestinations` blocks that spawn), a vendor, quest giver
 or travel goal another one or nothing, and a goal that keeps failing is given up by the stall watch. A route being walked is
-checked again at each step and given up when a hazard turned up on the rest of it. A retreat walks where it must; a party bot
+checked again at each step and given up when a hazard turned up on the rest of it. An errand route that starts and ends inside a
+single death or retreat place mark is refused so a revived bot leaves the spot, whereas a combat chase (`PlayerbotRoute.Chase`)
+to a chosen or engaged creature inside that single mark is not refused unless the place is a three-death loop zone (`CoversDeathLoop`;
+`PlayerbotPlaceHazardRouteTests`, `PlayerbotDefensiveTargetTests`). A retreat walks where it must; a party bot
 follows its master and has no hazards.
 
 A ghost's revive spot keeps out of the creature hazards too (`PlayerbotRecovery.Hazards`): reclaiming at the body inside a lethal

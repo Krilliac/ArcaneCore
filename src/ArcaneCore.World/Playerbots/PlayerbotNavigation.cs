@@ -208,11 +208,11 @@ internal static class PlayerbotNavigation
     /// <paramref name="wait"/> (<see cref="TileWait.MaxMs"/>): past it a pending answer is returned as <see cref="PlanOutcome.Refused"/>.
     /// </summary>
     internal static PlanOutcome PlanExact(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
-        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false, bool chase = false)
     {
         long mark = PendingMark;
         return Outcome(TryPlan(player, destination, options, out route, completedQuestReturn: completedQuestReturn,
-            friendlyTownEnder: friendlyTownEnder), mark, ref wait, now, ref route);
+            friendlyTownEnder: friendlyTownEnder, chase: chase), mark, ref wait, now, ref route);
     }
 
     /// <summary><see cref="TryPlanFar"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
@@ -246,9 +246,10 @@ internal static class PlayerbotNavigation
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
-        out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false, bool friendlyTownEnder = false,
+        bool chase = false)
         => Plan(player, destination, destination, options, partial: false, trial, out route, out _,
-            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder);
+            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder, chase: chase);
 
     /// <summary>
     /// A route to <paramref name="destination"/> with no hazard check at all: only the escape from a ring of strong creatures
@@ -536,14 +537,15 @@ internal static class PlayerbotNavigation
     /// stepper refused that line.</param>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial, bool trial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false,
-        bool friendlyTownEnder = false)
+        bool friendlyTownEnder = false, bool chase = false)
     {
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes) || route is null) return false;
         bool crossBeside = completedQuestReturn && friendlyTownEnder;
         route.CompletedQuestReturn = completedQuestReturn;
         route.CrossBesidePlaceMarks = crossBeside;
+        route.Chase = chase;
         if (!Guards.TryGetValue(player, out PlayerbotRisk? risk)
-            || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside) is not { } hazard) return true;
+            || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not { } hazard) return true;
 
         // The way passes through a hazard: walk round it (by a corner before it and one past it, on either side), or not at all.
         PlayerbotRoute direct = route;
@@ -576,9 +578,10 @@ internal static class PlayerbotNavigation
                 bool[] legs = [.. Enumerable.Repeat(first.Navigated, first.Points.Count - 1),
                     .. Enumerable.Repeat(middle.Navigated, middle.Points.Count - 1), .. Enumerable.Repeat(last.Navigated, last.Points.Count - 1)];
                 var detour = new PlayerbotRoute(points, length, legs);
-                if (risk.Blocking(player, detour.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside) is not null) continue;
+                if (risk.Blocking(player, detour.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not null) continue;
                 detour.CompletedQuestReturn = completedQuestReturn;
                 detour.CrossBesidePlaceMarks = crossBeside;
+                detour.Chase = chase;
                 route = detour;
                 return true;
             }
@@ -1135,7 +1138,8 @@ internal static class PlayerbotNavigation
             List<Vector3> rest = [PlayerbotMotion.CurrentPosition(player), .. route.Points.Skip(route.NextPoint)];
             if (risk.Blocking(player, rest, strong: !risk.IsEscape(route),
                 completedReturn: route.CompletedQuestReturn,
-                crossBesidePlaceMarks: route.CrossBesidePlaceMarks) is not null)
+                crossBesidePlaceMarks: route.CrossBesidePlaceMarks,
+                chase: route.Chase) is not null)
             {
                 PlayerbotMovementControl.Stop(session, player);
                 return false;

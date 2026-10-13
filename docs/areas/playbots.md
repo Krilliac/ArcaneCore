@@ -595,8 +595,9 @@ whether to help someone who tagged a mob first. Code: `PlayerbotContention.cs`, 
   someone else's, attackable), so a tapped kobold does not keep the camp from being left; the walk then goes to the nearest spawn not visited. When every known spawn of the entry is visited (or
   unreachable) the bot has no destination for it until the earliest visit ends and explores meanwhile. Before, the nearest spawn was
   picked again on arrival: live 2026-10-12 (bot QA #368, "stall: goal Grind target 80") 54 bots stalled 177 times at the empty kobold camp of
-  quest 21, some nine times each. A stall of a Grind goal that has no target creature also sets the entry aside for that bot for 10 minutes
-  (`PlayerbotSuspensions`, as for a quest goal), so the quest's objective is passed over instead of planned again; it is the bot's own
+  quest 21, some nine times each. A stall of a Grind or Combat goal that has no target creature also sets the entry aside for that bot for 10 minutes
+  (`PlayerbotSuspensions`, as for a quest goal; defensive target selection also falls back from `Combat.Attackers` to `Combat.ThreatenedBy`,
+  `docs/areas/playbots-combat.md`), so the quest's objective is passed over instead of planned again; it is the bot's own
   set-aside, not shared with other bots (an entry set aside for everyone would also stop bots killing it where it stands in sight).
 
 ### Flight paths
