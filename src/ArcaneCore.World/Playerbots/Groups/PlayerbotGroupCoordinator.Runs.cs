@@ -15,6 +15,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -493,8 +494,42 @@ public sealed partial class PlayerbotGroupCoordinator
     {
         if (group.Run is not { } run) return;
         if (group.Succeeded && run.Step == PlayerbotRunStep.Leave) run.Apply(PlayerbotRunSignal.Left);
+        string? reason = run.Complete ? null : run.Reason ?? group.Reason ?? "disbanded";
+        PlayerbotRunMeters.Count(PlayerbotRunMeters.OutcomeOf(run.Complete, reason));
         if (run.Complete) _runsCompleted++;
-        else _runsGivenUp++;
+        else
+        {
+            _runsGivenUp++;
+            ReportRunFailed(group, run, reason!);
+        }
+    }
+
+    /// <summary>
+    /// Report a run that ended without finishing to bot QA, straight to the sink (docs/areas/playbots-qa.md): the instance map and wing, the stage it failed at, the
+    /// boss it was heading for and the reason. No group, bot or character is named. Once per run (the disband that calls this happens once), never per tick, and
+    /// nothing is built while QA is off; a failure of the report is swallowed so it cannot reach the world tick.
+    /// </summary>
+    private void ReportRunFailed(BotGroup group, PlayerbotRunMachine run, string reason)
+    {
+        try
+        {
+            if (services.GetService<IPlayerbotQaSink>() is not { Enabled: true } sink) return;
+            PlayerbotRunStep stage = run.Step == PlayerbotRunStep.GiveUp ? run.FailedStep : run.Step;
+            string stageName = stage.ToString().ToLowerInvariant();
+            uint boss = stage is PlayerbotRunStep.Clear or PlayerbotRunStep.Boss ? run.CurrentBoss?.Entry ?? 0 : 0;
+            PlayerbotRunPlan plan = run.Plan;
+            sink.Report(new QaSignal
+            {
+                Kind = QaSignalKind.RunFailed, AtUtc = DateTime.UtcNow, Map = plan.MapId, Segment = plan.Segment, Stage = stageName, Target = boss, Reason = reason,
+                Detail = plan.MapName,
+                Message = string.Create(CultureInfo.InvariantCulture,
+                    $"{(plan.Raid ? "raid" : "dungeon")} run ended: {reason} in {plan.MapName} (map {plan.MapId} wing {plan.Segment}) at {stageName}, {run.Killed}/{run.BossCount} bosses dead, {run.Wipes} wipes"),
+            });
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogDebug(ex, "Playerbot group {Group}: the run failure could not be reported to bot QA", group.Id);
+        }
     }
 
     /// <summary>

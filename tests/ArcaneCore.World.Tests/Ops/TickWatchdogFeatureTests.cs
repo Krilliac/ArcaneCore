@@ -5,7 +5,9 @@ using ArcaneCore.Kernel.Ops.Watchdog.Counters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Ops.Watchdog;
+using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Tests.HotCode;
+using ArcaneCore.World.Tests.Playerbots.Qa;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -119,6 +121,65 @@ public sealed class TickWatchdogFeatureTests
         monitor.Check(clock.NowMicros);
         Assert.True(monitor.IsAlive(clock.NowMicros, out _));
         Assert.True(monitor.Overruns >= 1);
+    }
+
+    [Fact]
+    public async Task AHang_IsReportedToBotQaOnce_ByPhaseAndWork_NotByDuration_AndItsCompletionIsNotCountedTwice()
+    {
+        var clock = new ManualClock();
+        WatchdogOptions options = Options(o =>
+        {
+            o.HangMs = 100;
+            o.BudgetMs = 50;
+        });
+        var bus = new PlayerbotQaSignalBus(64);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s =>
+        {
+            Register(s, options, clock);
+            s.AddSingleton<IPlayerbotQaSink>(new PlayerbotQaSink(bus));
+        });
+        TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
+        await WorldTestHost.WaitForAsync(() => monitor.Ring.Count >= 5, "frames");
+
+        using var release = new ManualResetEventSlim(false);
+        using var entered = new ManualResetEventSlim(false);
+        host.World.Post(() =>
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+        });
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+        clock.AdvanceMs(300);
+        monitor.Check(clock.NowMicros);
+
+        var first = new List<QaSignal>();
+        bus.Drain(first, 16);
+        QaSignal running = Assert.Single(first);
+        Assert.Equal(QaSignalKind.TickHang, running.Kind);
+        Assert.Equal(nameof(TickPhase.Commands), running.Stage);
+        Assert.False(string.IsNullOrEmpty(running.Reason));
+        Assert.Null(running.BotKey);
+        Assert.StartsWith("v1|tickhang|phase=Commands|item=", PlayerbotQaFingerprint.Key(running), StringComparison.Ordinal);
+
+        // The same hang, a second later and longer, is the same finding; and once it completes, the completion is not a second occurrence of it.
+        clock.AdvanceMs(60_000);
+        monitor.Check(clock.NowMicros);
+        var again = new List<QaSignal>();
+        bus.Drain(again, 16);
+        Assert.Empty(again);
+
+        release.Set();
+        await WorldTestHost.WaitForAsync(() => monitor.HangsCompleted >= 1, "the completed hang");
+        monitor.Check(clock.NowMicros);
+        var done = new List<QaSignal>();
+        bus.Drain(done, 16);
+        Assert.Empty(done);
+
+        var aggregator = new PlayerbotQaAggregator(100, 5);
+        Assert.NotNull(aggregator.Ingest(running, new FakeFacts(), QaData.T0));
+        QaFindingView view = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(QaSignalKind.TickHang, view.Kind);
+        Assert.True(view.BotIndependent);
     }
 
     [Fact]

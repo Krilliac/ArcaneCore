@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
@@ -15,6 +16,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Groups;
+using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.GroupTestWorld;
@@ -560,6 +562,122 @@ public sealed class PlayerbotRunWorldTests
             Assert.Equal(1, world.Coordinator.Totals.Failed);
             return true;
         });
+    }
+
+    // --- bot QA and metrics ------------------------------------------------------------------------------------------
+
+    private static (List<string> Outcomes, MeterListener Listener) ListenToRuns()
+    {
+        var outcomes = new List<string>();
+        var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Meter.Name == "ArcaneCore.Playerbots.Runs" && instrument.Name == "arcanecore.playerbot.runs") l.EnableMeasurementEvents(instrument);
+            },
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (KeyValuePair<string, object?> tag in tags)
+                if (tag.Key == "outcome") lock (outcomes) outcomes.Add((string)tag.Value!);
+        });
+        listener.Start();
+        return (outcomes, listener);
+    }
+
+    private static Task<GroupTestWorld> StartWithQaAsync(PlayerbotQaSignalBus bus, Action<PlayerbotOptions>? configure = null)
+        => GroupTestWorld.StartAsync([], configure, dungeon: true, services =>
+        {
+            Register(services);
+            services.AddSingleton<IPlayerbotQaSink>(new PlayerbotQaSink(bus));
+        }, Bosses());
+
+    [Fact]
+    public async Task AGivenUpRun_ReportsOneRunFailedSignalToBotQa_ByContentIds_WithNoBotOrGroupIdentity_AndCountsItAsGivenUp()
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        (List<string> outcomes, MeterListener listener) = ListenToRuns();
+        using MeterListener _ = listener;
+        await using GroupTestWorld world = await StartWithQaAsync(bus);
+        (Guid Id, string Name)[] members = await AddPartyAsync(world, "Qaz");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+
+        await world.OnWorldAsync(() =>
+        {
+            world.Coordinator.Forget(group.LeaderBotId);
+            return true;
+        });
+
+        var signals = new List<QaSignal>();
+        bus.Drain(signals, 16);
+        QaSignal signal = Assert.Single(signals);
+        Assert.Equal(QaSignalKind.RunFailed, signal.Kind);
+        Assert.Equal("leader-stopped", signal.Reason);
+        Assert.Equal(DungeonEntry.Deadmines, signal.Map);
+        Assert.False(string.IsNullOrEmpty(signal.Stage));
+        Assert.Null(signal.BotKey);
+        Assert.Equal(0, signal.BotClass);
+        string everything = signal.Message + "|" + signal.Detail + "|" + signal.Stage + "|" + signal.Reason + "|" + PlayerbotQaFingerprint.Key(signal);
+        Assert.All(members, m => Assert.DoesNotContain(m.Name, everything, StringComparison.Ordinal));
+        Assert.Equal($"leader-stopped in {signal.Detail} at {signal.Stage}", PlayerbotQaAggregator.Subject(signal, null));
+        Assert.Equal(1, world.Coordinator.RunTotals.GivenUp);
+        lock (outcomes) Assert.Contains("given_up", outcomes);
+    }
+
+    [Fact]
+    public async Task ARunThatTimesOut_ReportsARunFailedSignalWithTheTimeoutReason_AndCountsItAsATimeout()
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        (List<string> outcomes, MeterListener listener) = ListenToRuns();
+        using MeterListener _ = listener;
+        await using GroupTestWorld world = await StartWithQaAsync(bus);
+        await AddPartyAsync(world, "Qat");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+        // A run lasts under a minute here and MaxRunMinutes cannot go below 10 (validated), so the step timeout the group AI raises is injected the way its own
+        // faults are (RunFault, applied by Advance): the same Finish, disband and report path as a real gather or travel timeout.
+        await world.OnWorldAsync(() =>
+        {
+            group.RunFault = "travel-timeout";
+            return true;
+        });
+
+        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+
+        var signals = new List<QaSignal>();
+        bus.Drain(signals, 16);
+        Assert.True(signals.Count == 1, world.Trace());
+        QaSignal signal = Assert.Single(signals);
+        Assert.Equal(QaSignalKind.RunFailed, signal.Kind);
+        Assert.Equal("travel-timeout", signal.Reason);
+        Assert.Equal(DungeonEntry.Deadmines, signal.Map);
+        Assert.Equal(1, world.Coordinator.RunTotals.GivenUp);
+        lock (outcomes) Assert.Contains("timeout", outcomes);
+    }
+
+    [Fact]
+    public async Task AGivenUpRun_WithBotQaOff_ChangesNothing()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        await AddPartyAsync(world, "Qao");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+
+        await world.OnWorldAsync(() =>
+        {
+            world.Coordinator.Forget(group.LeaderBotId);
+            return true;
+        });
+
+        Assert.Empty(world.Coordinator.Groups);
+        Assert.Equal((0, 1), world.Coordinator.RunTotals);
     }
 
     // --- the world ---------------------------------------------------------------------------------------------------

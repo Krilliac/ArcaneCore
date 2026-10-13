@@ -1040,6 +1040,9 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             QaSignalKind.SpellRefused => SpellOf(s) + " refused: " + (s.Reason.Length != 0 ? s.Reason : "unknown result"),
             QaSignalKind.SpellNoEffect => SpellOf(s) + " lands with no damage, healing or aura",
             QaSignalKind.ServerFault => (s.Goal.Length != 0 ? s.Goal : "server") + ": " + (s.ExceptionType.Length != 0 ? s.ExceptionType : "exception"),
+            QaSignalKind.RunFailed => (s.Reason.Length != 0 ? s.Reason : "failed") + " in " + (s.Detail.Length != 0 ? s.Detail : string.Create(CultureInfo.InvariantCulture, $"map {s.Map}"))
+                + " at " + (s.Stage.Length != 0 ? s.Stage : "unknown stage"),
+            QaSignalKind.TickHang => "world tick hung in " + (s.Stage.Length != 0 ? s.Stage : "unknown phase") + ": " + (s.Reason.Length != 0 ? s.Reason : "unknown work"),
             _ => s.Kind.ToString(),
         };
     }
