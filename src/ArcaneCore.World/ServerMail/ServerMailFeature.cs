@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.ServerMail;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Economy;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Items;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Reputation;
 using Microsoft.Extensions.Configuration;
@@ -59,6 +60,14 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
     {
         try
         {
+            // item_template is loaded on first use, not at attach (ItemsFeature.Attach only remembers the world). This load runs at
+            // attach, before any login, so the catalog is still empty. A lookup miss is "the item does not exist" and the row is
+            // skipped for the rest of the process; the sent record then omits it forever. Load the catalog first.
+            if (services.GetService<ItemsFeature>() is { } items)
+            {
+                await items.EnsureLoadedAsync().ConfigureAwait(false);
+            }
+
             using IServiceScope scope = scopes.CreateScope();
             if (scope.ServiceProvider.GetService<IServerMailStore>() is not { } store) return;
             ServerMailContent content = await store.LoadAsync().ConfigureAwait(false);
