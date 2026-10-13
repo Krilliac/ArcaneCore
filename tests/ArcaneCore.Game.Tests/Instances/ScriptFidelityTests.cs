@@ -734,6 +734,10 @@ public sealed class ScriptFidelityTests
         Creature mograine = run.Creature(3976);
         var ai = Assert.IsType<MograineAi>(mograine.AI);
         run.Player.Relocate(mograine.X + 1, mograine.Y, mograine.Z, 0, 0);
+        // The fixture player has 60 health. Mograine's white swings kill him before the 40 s shield, he drops combat, and
+        // the shield never goes out (and the next regen tick can push him back over half). He has to stay alive.
+        run.Player.MaxHealth = 10_000;
+        run.Player.Health = run.Player.MaxHealth;
         run.Map.Combat.DealDamage(run.Player, mograine, mograine.MaxHealth * 6 / 10, direct: false);
         mograine.Combat.Threat.AddThreat(run.Player, 100);
 
