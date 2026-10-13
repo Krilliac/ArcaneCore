@@ -582,6 +582,13 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         var entries = new List<WhoEntry>();
         foreach (Player other in session.World.OnlinePlayers)
         {
+            // A far teleport takes the player off the map until the client acks. vmangos
+            // WhoListClientQueryTask skips anyone who is not in the world (MiscHandler.cpp).
+            if (!other.IsInWorld)
+            {
+                continue;
+            }
+
             if (session.Security == AccountSecurity.Player
                 && ((other.Team != player.Team && !options.AllowTwoSideWhoList) || other.Security > options.GmLevelInWhoList))
             {

@@ -78,6 +78,37 @@ public sealed class GuildParityTests
         Assert.Equal(0x41u, guild.Ranks[1].Rights); // only the first rank is forced
     }
 
+    [Fact] // RED-FIRST: Guild::CheckGuildStructure (Guild.cpp:328-350)
+    public void Load_PutsTheLeaderOnTheGuildMasterRank_AndDemotesEveryOtherGuildMaster()
+    {
+        using var f = new SocialFixture();
+        f.AddOffline(1);
+        f.AddOffline(2);
+        f.AddOffline(3);
+        var data = new GuildData(
+            1, "Arcane", 1, "m", "i", 0, -1, -1, -1, -1, -1,
+            [new(0, "Guild Master", GuildRights.All), new(1, "Officer", GuildRights.All), new(2, "Veteran", 0x43), new(3, "Member", 0x43), new(4, "Initiate", 0x43)],
+            [
+                new(1, 3, string.Empty, string.Empty, 60, 0, 0), // the leader, stored as a member
+                new(2, 0, string.Empty, string.Empty, 10, 0, 0), // a second guild master
+                new(3, 2, string.Empty, string.Empty, 20, 0, 0),
+            ]);
+
+        f.Context.Guilds.Load([data]);
+
+        Guild guild = f.Context.Guilds.Get(1)!;
+        Assert.Equal(1u, guild.LeaderId);
+        Assert.Equal(Guild.GuildMasterRank, guild.Find(1)!.Rank);
+        Assert.Equal(Guild.OfficerRank, guild.Find(2)!.Rank);
+        Assert.Equal(2, guild.Find(3)!.Rank);
+
+        GuildData saved = f.Persistence.Guilds[1];
+        Assert.Equal(1, saved.LeaderId);
+        Assert.Equal(Guild.GuildMasterRank, saved.Members.Single(m => m.CharacterId == 1).Rank);
+        Assert.Equal(Guild.OfficerRank, saved.Members.Single(m => m.CharacterId == 2).Rank);
+        Assert.Equal((byte)2, saved.Members.Single(m => m.CharacterId == 3).Rank);
+    }
+
     // --- rank deletion (Guild.cpp:696-723) ----------------------------------------------------------
 
     [Fact] // RED-FIRST

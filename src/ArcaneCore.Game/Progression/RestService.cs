@@ -128,13 +128,16 @@ public sealed class RestService
     }
 
     /// <summary>
-    /// The capital-city half of vmangos Player::UpdateZone (PlayerZone.cpp:343-349): a capital zone is a city rest; leaving it
-    /// (any other zone) ends the rest unless it is an inn's.
+    /// The capital-city half of vmangos Player::UpdateZone: a capital zone is a city rest only when PvP is not enforced
+    /// there (<c>AREA_FLAG_CAPITAL &amp;&amp; !pvpInfo.inPvPEnforcedArea</c> — an enemy capital is hostile even on a PvE realm).
+    /// The PvP tracker publishes <see cref="PvpAreaState.IsInEnforcedArea"/> for the zone being entered before this runs.
+    /// Any other zone, including an enforced capital, ends a rest that is not an inn's.
     /// </summary>
     public void OnZoneEntered(Player player, AreaTemplate? zoneEntry, uint nowMs)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (zoneEntry is not null && (zoneEntry.Flags & (uint)AreaFlags.Capital) != 0)
+        bool capital = zoneEntry is not null && (zoneEntry.Flags & (uint)AreaFlags.Capital) != 0;
+        if (capital && !PvpAreaState.IsInEnforcedArea(player))
         {
             SetRestType(player, RestType.InCity, 0, nowMs);
         }

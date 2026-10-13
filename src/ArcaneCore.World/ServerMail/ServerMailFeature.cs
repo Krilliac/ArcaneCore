@@ -1,12 +1,15 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Reputation;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.ServerMail;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Economy;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Items;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Reputation;
 using Microsoft.Extensions.Configuration;
@@ -59,12 +62,18 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
     {
         try
         {
+            // item_template is loaded on first use, not at attach (ItemsFeature.Attach only remembers the world). This load runs at
+            // attach, before any login, so the shared catalog is still empty. A lookup miss is "the item does not exist" and the row is
+            // skipped for the rest of the process; the sent record then omits it forever. Read the source for this check only. Publishing
+            // into ItemsFeature here would make .reload item_template, before anyone needed items, see a catalog that is already open.
+            IItemTemplateStore? unopened = await ItemCatalogBeforeItOpensAsync().ConfigureAwait(false);
+
             using IServiceScope scope = scopes.CreateScope();
             if (scope.ServiceProvider.GetService<IServerMailStore>() is not { } store) return;
             ServerMailContent content = await store.LoadAsync().ConfigureAwait(false);
             _world?.Post(() =>
             {
-                Templates = ServerMailRules.Load(content, new Validation(services), message => logger.LogError("{Message}", message));
+                Templates = ServerMailRules.Load(content, new Validation(services, unopened), message => logger.LogError("{Message}", message));
                 logger.LogInformation("Loaded {Count} server mail templates", Templates.Count);
             });
         }
@@ -73,6 +82,35 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
             logger.LogError(ex, "could not load the server mail templates");
         }
     }
+
+    /// <summary>
+    /// Item rows to judge reward items against when <see cref="ItemsFeature"/> has not opened the catalog yet. Null when that catalog is
+    /// already open (its live store is the authority) or no item source is registered.
+    /// </summary>
+    private async Task<IItemTemplateStore?> ItemCatalogBeforeItOpensAsync()
+    {
+        if (CatalogOpened(services.GetService<ItemsFeature>()))
+        {
+            return null;
+        }
+
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<IItemTemplateSource>() is not { } source)
+        {
+            return null;
+        }
+
+        // The same store the item feature would publish, including load-time stack and bag corrections, but not published.
+        return new ItemTemplateStore(await source.LoadTemplatesAsync().ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// <see cref="ItemsFeature.LoadedStore"/> is the <see cref="ItemTemplateStore.Empty"/> singleton until
+    /// <see cref="ItemsFeature.EnsureLoadedAsync"/> or a reload publishes a store. A published empty table is a different instance, so a
+    /// missing item stays missing instead of being filled back in from the source.
+    /// </summary>
+    private static bool CatalogOpened(ItemsFeature? items)
+        => items is not null && !ReferenceEquals(items.LoadedStore, ItemTemplateStore.Empty);
 
     private void OnLoggedIn(Player player)
     {
@@ -136,14 +174,21 @@ public sealed class ServerMailFeature(IServiceProvider services, IServiceScopeFa
         public ReputationRank? Rank(uint factionId) => services.GetService<ReputationFeature>()?.Reputation.GetRank(player, factionId);
     }
 
-    private sealed class Validation(IServiceProvider services) : IServerMailValidation
+    private sealed class Validation(IServiceProvider services, IItemTemplateStore? unopenedCatalog) : IServerMailValidation
     {
         public uint MaxLevel => 60;
 
         public bool CreatureExists(uint entry) => services.GetService<CreatureContent>() is not { } creatures || creatures.FindTemplate(entry) is not null;
 
         public (uint Stackable, uint MaxCount)? Item(uint entry)
-            => services.GetService<EconomyFeature>()?.Templates.Find(entry) is { } t ? (Math.Max(1u, t.Stackable), t.MaxCount) : null;
+        {
+            // Once the shared catalog is open it is what delivery will create items from. Before that, the source snapshot is the only
+            // copy of item_template; the live store is still the empty singleton and would skip every reward.
+            ItemTemplate? template = CatalogOpened(services.GetService<ItemsFeature>())
+                ? services.GetService<EconomyFeature>()?.Templates.Find(entry)
+                : unopenedCatalog?.Find(entry);
+            return template is { } found ? (Math.Max(1u, found.Stackable), found.MaxCount) : null;
+        }
 
         // The quest catalogue is not reachable here; an unknown quest simply never matches.
         public bool QuestExists(uint questId) => questId != 0;

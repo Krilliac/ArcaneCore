@@ -160,6 +160,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// CMSG_GROUP_INVITE (vmangos HandleGroupInviteOpcode): target online; same faction unless
     /// the inviter is a GM or two-side groups are allowed; target not ignoring the inviter;
     /// target not grouped or invited; inviter leads or assists a group that is not full.
+    /// A battleground raid is not that group (GroupHandler.cpp:90-96): the parked original party is.
     /// </summary>
     public void Invite(Player inviter, string name)
     {
@@ -170,10 +171,15 @@ public sealed partial class GroupManager(SocialContext context)
             return;
         }
 
+        // vmangos HandleGroupInviteOpcode replaces a battleground raid with GetOriginalGroup before
+        // every membership check. The raid is filled by the battleground, never by an invite.
+        Group? inviterGroup = GroupForPartyRules(inviter.Guid);
+        Group? targetGroup = GroupForPartyRules(target.Guid);
+
         // D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:120-143:
         // AddLeaderInvite succeeds, then AddInvite(self)
         // fails because the inviter already has an invite; the temporary group is discarded.
-        if (target.Guid == inviter.Guid && GetGroup(inviter.Guid) is null && GetInvite(inviter.Guid) is null)
+        if (target.Guid == inviter.Guid && inviterGroup is null && GetInvite(inviter.Guid) is null)
         {
             return;
         }
@@ -190,19 +196,13 @@ public sealed partial class GroupManager(SocialContext context)
             return;
         }
 
-        if (GetGroup(target.Guid) is not null || GetInvite(target.Guid) is not null)
+        if (targetGroup is not null || GetInvite(target.Guid) is not null)
         {
             SendResult(inviter, PartyOperation.Invite, name, PartyResult.AlreadyInGroup);
             return;
         }
 
-        Group? group = GetGroup(inviter.Guid);
-        if (group is { IsBattlegroundGroup: true })
-        {
-            // The battleground fills its own raid; nobody is invited into it (1.12 has no ERR_INVITE_RESTRICTED, so silent).
-            return;
-        }
-
+        Group? group = inviterGroup;
         if (group is not null)
         {
             if (!group.IsLeaderOrAssistant(inviter.Guid))
@@ -846,7 +846,18 @@ public sealed partial class GroupManager(SocialContext context)
             return false;
         }
 
-        _memberOf[guid] = group;
+        // vmangos Group::_addMember (Group.cpp:1581-1590): a player who is in a battleground raid
+        // keeps that raid. A normal group joined from there is the original group, not the one
+        // the client is showing.
+        if (!group.IsBattlegroundGroup && _memberOf.TryGetValue(guid, out Group? current) && current.IsBattlegroundGroup)
+        {
+            _originalOf[guid] = group;
+        }
+        else
+        {
+            _memberOf[guid] = group;
+        }
+
         SendUpdate(group);
         if (context.World.FindOnlinePlayer(guid) is { } player)
         {
@@ -858,6 +869,16 @@ public sealed partial class GroupManager(SocialContext context)
 
         MemberAdded?.Invoke(group, guid);
         return true;
+    }
+
+    /// <summary>
+    /// The party the invite and accept rules see (vmangos HandleGroupInviteOpcode, GroupHandler.cpp:90-96).
+    /// A battleground raid yields to the parked original group, which is null when there is none.
+    /// </summary>
+    private Group? GroupForPartyRules(ObjectGuid guid)
+    {
+        Group? group = GetGroup(guid);
+        return group is { IsBattlegroundGroup: true } ? GetOriginalGroup(guid) : group;
     }
 
     /// <summary>

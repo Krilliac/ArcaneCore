@@ -183,6 +183,14 @@ public sealed partial class QuestNpcServices
 
         if (state.Menu.QuestItems.Count > 1)
         {
+            // vmangos Player::SendPreparedQuest (Player.cpp:12450-12465) greets a creature's quest list with
+            // GetGossipTextId(default menu), which starts that text's script. One quest opens its window and does not.
+            // A game object is not a creature, so it has no such lookup.
+            if (!npc.IsGameObject && npc.GossipMenuId != 0)
+            {
+                _ = GossipTextId(state, npc.GossipMenuId, npc);
+            }
+
             Send(state.Quests.Player, WorldOpcode.SmsgQuestgiverQuestList,
                 QuestPackets.List(npc.Guid, state.Menu.QuestItems.Select(i => (Quests.Get(i.QuestId)!, i.Icon)).ToArray()));
             return;

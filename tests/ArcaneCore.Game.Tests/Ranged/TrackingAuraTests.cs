@@ -25,6 +25,7 @@ public sealed class TrackingAuraTests
     private const uint MindVision = 920008;
     private const uint WarlockLookalike = 920009;
     private const uint MountedTracker = 920010;
+    private const uint BeastFood = 920011;
 
     private const uint DynTrackUnit = 0x2;
 
@@ -56,6 +57,7 @@ public sealed class TrackingAuraTests
         Tracker(FindMinerals, AuraType.TrackResources, 2),
         Tracker(TrackHidden, AuraType.TrackStealthed, 0),
         Tracker(WellFed, AuraType.TrackCreatures, 3) with { Attributes = SpellAttributes.None }, // a tracking aura on a non-tracker spell (food, elixir)
+        Tracker(BeastFood, AuraType.TrackCreatures, 1) with { Attributes = SpellAttributes.None }, // same beast bit as Track Beasts, but not a tracker
         Tracker(MountedTracker, AuraType.TrackCreatures, 4) with { Attributes = SpellAttributes.None, AttributesEx = SpellAttributesEx.NoAutocastAi },
         StalkedSpell(MindVision, 6, 1UL << 26),         // SPELLFAMILY_PRIEST, CF_PRIEST_MIND_VISION
         StalkedSpell(WarlockLookalike, 5, 1UL << 26),   // the same flag bit in another family
@@ -94,6 +96,26 @@ public sealed class TrackingAuraTests
 
         Track(kit, player, TrackHumanoids);
         Assert.Equal((1u << 20) | (1u << 6), player.GetUInt32(UpdateFields.PlayerTrackCreatures));
+    }
+
+    [Fact]
+    public void RemovingTrackBeasts_LeavesTheBeastBit_WhileAnotherAuraStillTracksBeasts()
+    {
+        using var kit = WithHandlers();
+        (Player player, _) = kit.AddPlayer(1);
+
+        // SpellEntry.cpp:153-157: a tracking aura without the tracker attributes coexists with Track Beasts.
+        Track(kit, player, BeastFood);
+        Track(kit, player, TrackBeasts);
+        Assert.True(kit.System.HasAura(player, BeastFood));
+        Assert.Equal(0b1u, player.GetUInt32(UpdateFields.PlayerTrackCreatures));
+
+        kit.System.RemoveAuras(player, TrackBeasts);
+        Assert.True(kit.System.HasAura(player, BeastFood));
+        Assert.Equal(0b1u, player.GetUInt32(UpdateFields.PlayerTrackCreatures));
+
+        kit.System.RemoveAuras(player, BeastFood);
+        Assert.Equal(0u, player.GetUInt32(UpdateFields.PlayerTrackCreatures));
     }
 
     [Fact]

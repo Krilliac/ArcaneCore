@@ -271,6 +271,7 @@ public sealed partial class CharmService
         UpdateControl(player);
         SetView(player, null);
         RemovePetActionBar(player);
+        ResummonAfterPossessedMinion(player, controlled);
     }
 
     /// <summary>

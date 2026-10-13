@@ -68,8 +68,18 @@ public sealed class TrainerSkillsTests
     private sealed class Rig : IDisposable
     {
         public Rig(byte freeSlots = 2, params (uint Spell, uint ReqSkill, uint ReqSkillValue)[] rows)
+            : this(TrainerSkillsTests.Catalog(), freeSlots, rows)
         {
-            Catalog = TrainerSkillsTests.Catalog();
+        }
+
+        public Rig(SkillCatalog catalog, params (uint Spell, uint ReqSkill, uint ReqSkillValue)[] rows)
+            : this(catalog, 2, rows)
+        {
+        }
+
+        private Rig(SkillCatalog catalog, byte freeSlots, (uint Spell, uint ReqSkill, uint ReqSkillValue)[] rows)
+        {
+            Catalog = catalog;
             System = new SpellSystem(new SpellStore(Spells, [], []), () => 0u, spellbook: Book);
             var learner = new SpellSystemLearner(() => System, new SkillLineAbilityCatalog([]), () => Catalog);
             Learner = learner;
@@ -186,6 +196,50 @@ public sealed class TrainerSkillsTests
         Assert.False(rig.Learner.IsSpellFitByClassAndRace(rig.Kit.Player, 9401));
         Assert.True(rig.Learner.IsSpellFitByClassAndRace(rig.Kit.Player, SkillTestKit.CookingSpell));
         Assert.True(rig.Learner.IsSpellFitByClassAndRace(rig.Kit.Player, 123456));   // no ability: fits everyone
+    }
+
+    [Fact]
+    public void SkillMinLevel_AMatchingRaceAndClass_HidesTheLessonUntilThePlayerReachesIt()
+    {
+        // vmangos Player::IsSpellFitByClassAndRace (Player.cpp:19555-19568), the branch both the trainer list
+        // (NPCHandler.cpp:209) and GetTrainerSpellState (Player.cpp:4252) take: a SkillRaceClassInfo row whose
+        // race and class masks match refuses the spell while the player is under its reqLevel. A zero mask does
+        // not match, so it does not impose that level. The spell's own level stays 0, so only this gate applies.
+        const uint All = uint.MaxValue;
+        using (Rig low = new(MiningGate(All, All, minLevel: 10), (TeachMining, 0, 0)))
+        {
+            Assert.DoesNotContain(TeachMining, low.States().Keys);
+            Assert.False(low.Learner.IsSpellFitByClassAndRace(low.Kit.Player, SkillTestKit.MiningApprentice));
+
+            low.Kit.Player.Money = 100;
+            low.Kit.Services.BuyTrainerSpell(low.Kit.Player, low.Kit.Npc.Guid, TeachMining);
+            byte[] failed = low.Kit.Single(WorldOpcode.SmsgTrainerBuyFailed);
+            Assert.Equal(TeachMining, BitConverter.ToUInt32(failed, 8));
+            Assert.Equal(2u, BitConverter.ToUInt32(failed, 12));
+            Assert.False(low.Book.HasSpell(low.Kit.Player, SkillTestKit.MiningApprentice));
+            Assert.Equal(100u, low.Kit.Player.Money);
+
+            low.Kit.Player.Level = 10;
+            Assert.Equal((byte)TrainerSpellState.Green, low.States()[TeachMining]);
+            low.Kit.Services.BuyTrainerSpell(low.Kit.Player, low.Kit.Npc.Guid, TeachMining);
+            Assert.True(low.Book.HasSpell(low.Kit.Player, SkillTestKit.MiningApprentice));
+            Assert.Equal(90u, low.Kit.Player.Money);
+        }
+
+        using Rig anyone = new(MiningGate(0, 0, minLevel: 40), (TeachMining, 0, 0));
+        Assert.Equal((byte)TrainerSpellState.Green, anyone.States()[TeachMining]);
+    }
+
+    /// <summary>Mining, with one SkillRaceClassInfo row so the trainer fit check has a level to apply.</summary>
+    private static SkillCatalog MiningGate(uint raceMask, uint classMask, uint minLevel)
+    {
+        SkillCatalog source = Catalog();
+        return new SkillCatalog(
+            source.Lines,
+            [new SkillRaceClassInfoRecord(SkillIds.Mining, raceMask, classMask, 0, minLevel, 0)],
+            [],
+            source.AbilitiesOfSkill(SkillIds.Mining),
+            source.LearnSkills);
     }
 
     [Fact]

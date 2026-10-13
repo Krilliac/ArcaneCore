@@ -349,8 +349,11 @@ public sealed partial class PlayerInventory
             return true;
         }
 
+        // Backpack only, so the second pass can move the stack into a quiver and select it
+        // (vmangos CanStoreNewItem(INVENTORY_SLOT_BAG_0, NULL_SLOT), Player.cpp:633-635). Any bag
+        // here drops arrows into an already-worn quiver and never writes PLAYER_AMMO_ID.
         var dest = new List<ItemPosCount>();
-        if (CanStoreItem(InventorySlots.NullBag, InventorySlots.NullSlot, dest, template, amount, null, swap: false, out _, out _) == InventoryResult.Ok)
+        if (CanStoreItem(InventorySlots.Bag0, InventorySlots.NullSlot, dest, template, amount, null, swap: false, out _, out _) == InventoryResult.Ok)
         {
             StoreNewItem(dest, template, amount);
             return true;
@@ -481,6 +484,33 @@ public sealed partial class PlayerInventory
         }
 
         return existing;
+    }
+
+    /// <summary>
+    /// vmangos Player::_LoadInventory binds as it places rows: equipment through QuickEquipItem →
+    /// VisualizeItem (bind on equip, plus bind-on-pickup and quest items a GM left unbound), and
+    /// bags, the backpack, the keyring and the bank through StoreItem / BankItem (bind on pickup
+    /// and quest items, and a bind-on-equip bag in a bag slot). Shadow inventories skip this so
+    /// their plan still matches the flags they were copied from.
+    /// </summary>
+    private void ApplyLoadBinding(Item item, byte bag, byte slot)
+    {
+        if (Player is null)
+        {
+            return;
+        }
+
+        if (bag == InventorySlots.Bag0 && InventorySlots.IsEquipmentPos(bag, slot))
+        {
+            if ((ItemBonding)item.Template.Bonding is ItemBonding.WhenEquipped or ItemBonding.WhenPickedUp or ItemBonding.QuestItem)
+            {
+                item.SetBinding(true);
+            }
+
+            return;
+        }
+
+        BindOnStore(item, bag, slot);
     }
 
     private static void BindOnStore(Item item, byte bag, byte slot)

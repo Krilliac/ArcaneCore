@@ -344,6 +344,29 @@ public sealed class NpcVendorServiceTests
         Assert.Equal(13 * 75u, kit.Player.Money);
     }
 
+    [Fact]
+    public void Buyback_AfterAnEarlierSlotIsBoughtBack_TheNextSaleLeavesThatHole()
+    {
+        // vmangos Player::AddItemToBuyBackSlot (Player.cpp:11429-11473): sales advance m_currentBuybackSlot.
+        // Buying back an earlier slot does not rewind the cursor while it points at an empty slot, so the
+        // next sale does not fill the hole.
+        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        Item first = kit.Give(Lantern);
+        Item second = kit.Give(Lantern);
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, first.Guid, 0);
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, second.Guid, 0);
+        kit.Player.Money = 1000;
+        kit.Services.BuybackItem(kit.Player, kit.Npc.Guid, InventorySlots.BuybackStart);
+        Assert.Same(first, kit.Player.Inventory.GetItemByGuid(first.Guid));
+
+        Item third = kit.Give(Lantern);
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, third.Guid, 0);
+
+        Assert.Null(kit.Player.Inventory.GetBuybackItem(InventorySlots.BuybackStart));
+        Assert.Same(second, kit.Player.Inventory.GetBuybackItem((byte)(InventorySlots.BuybackStart + 1)));
+        Assert.Same(third, kit.Player.Inventory.GetBuybackItem((byte)(InventorySlots.BuybackStart + 2)));
+    }
+
     private static RepairCostTable Repair()
     {
         uint[] multipliers = new uint[RepairCostTable.MultiplierCount];

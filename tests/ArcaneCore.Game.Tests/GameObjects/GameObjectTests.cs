@@ -222,6 +222,53 @@ public sealed class GameObjectTests
         Assert.Equal(0u, GameObjectLocks.LockIdOf(GoTemplate(MailboxEntry, GameObjectType.Mailbox, (0, 5))));
     }
 
+    [Fact]
+    public void BlastingLock_IsNotAFreeClick_AndTheFirstSkillCaseDecides()
+    {
+        // Spell::CanOpenLock (Spell.cpp:7896-7916): LOCKTYPE_BLASTING has no profession, but the case's required
+        // skill is still checked, and that first matching skill case decides. A click must not open it.
+        (Player player, _) = Player(1);
+        LockEntry seaforium = new(16,
+            [2, 2, 0, 0, 0, 0, 0, 0],
+            [(uint)LockType.Blasting, (uint)LockType.Blasting, 0, 0, 0, 0, 0, 0],
+            [50, 1, 0, 0, 0, 0, 0, 0]);
+
+        Assert.Equal(GameObjectUseResult.Locked, GameObjectLocks.CheckDirectUse(seaforium, player));
+        Assert.Equal(GameObjectUseResult.SkillTooLow, GameObjectLocks.CheckOpenLock(seaforium, player, LockType.Blasting, 0, (_, _) => 0, skillBonus: 1));
+        Assert.Equal(GameObjectUseResult.Ok, GameObjectLocks.CheckOpenLock(seaforium, player, LockType.Blasting, 0, (_, _) => 0, skillBonus: 50));
+
+        const uint BlastLock = 16;
+        const uint BlastChest = 910;
+        const uint BlastDoor = 911;
+        var content = new GameObjectContent(
+            [
+                GoTemplate(BlastChest, GameObjectType.Chest, (0, BlastLock), (1, ChestLoot)),
+                GoTemplate(BlastDoor, GameObjectType.Door, (1, BlastLock)),
+            ],
+            [GoSpawn(1, BlastChest, 3, 0), GoSpawn(2, BlastDoor, 3, 0)],
+            [seaforium], [], []);
+        WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0);
+        var quests = new FakeQuestJournal();
+        var loot = new LootService(new LootContent([(LootTableKind.GameObject, Row(ChestLoot, Hide, 100))], []))
+            { Items = ItemStore, Quests = quests };
+        var system = new GameObjectMapSystem(map, content, loot, quests);
+        map.AddUpdater(system);
+        world.AddPlayer(player);
+        world.RunTick(50);
+        GameObject chest = system.GameObjects.Single(go => go.Entry == BlastChest);
+        GameObject door = system.GameObjects.Single(go => go.Entry == BlastDoor);
+
+        Assert.Equal(GameObjectUseResult.Locked, system.Use(player, chest.Guid));
+        Assert.Equal(GameObjectUseResult.Locked, system.Use(player, door.Guid));
+        Assert.Equal(GameObjectState.Ready, door.State);
+        Assert.Null(chest.Loot);
+        Assert.Equal(GameObjectUseResult.SkillTooLow, system.OpenLock(player, chest.Guid, LockType.Blasting, skillBonus: 1));
+        Assert.Null(chest.Loot);
+        Assert.Equal(GameObjectUseResult.Ok, system.OpenLock(player, chest.Guid, LockType.Blasting, skillBonus: 50));
+        Assert.NotNull(chest.Loot);
+    }
+
     [Theory]
     [InlineData(GameObjectType.Door)]
     [InlineData(GameObjectType.Button)]

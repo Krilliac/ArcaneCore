@@ -224,7 +224,10 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
 
     private void RefreshCreatures(byte event1, byte event2) => _creatures?.RefreshSpawns(_feature.Events.CreaturesOf(event1, event2));
 
-    /// <summary>The object as the rules see it: its entry, its event pair and whether the player is within 10 yards.</summary>
+    /// <summary>
+    /// The object as the rules see it: its entry, its event pair and whether the player is within 10 yards of it
+    /// (vmangos <c>IsWithinDistInMap(go, 10)</c>, BattleGroundWS.cpp:404 and 439).
+    /// </summary>
     private BattlegroundObjectUse UseOf(Player player, GameObject go)
     {
         (byte e1, byte e2) = go.Spawn is { } spawn && _feature.Events.ObjectEvents(spawn.Guid) is { Count: > 0 } events
@@ -233,7 +236,21 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
         float dx = go.X - player.X;
         float dy = go.Y - player.Y;
         float dz = go.Z - player.Z;
-        return new BattlegroundObjectUse(go.Entry, e1, e2, (dx * dx) + (dy * dy) + (dz * dz) <= 10f * 10f);
+        // GameObject::GetObjectBoundingRadius is DEFAULT_WORLD_OBJECT_SIZE, not the template size (GameObject.cpp:2268-2272:
+        // 1.12 display info has no size). The player's radius is UNIT_FIELD_BOUNDINGRADIUS.
+        return new BattlegroundObjectUse(go.Entry, e1, e2,
+            IsWithinDist(dx, dy, dz, 10f, player.BoundingRadius, Player.DefaultBoundingRadius));
+    }
+
+    /// <summary>
+    /// vmangos <c>WorldObject::IsWithinDist</c> (Object.cpp:1738-1751), the distance half of <c>IsWithinDistInMap</c>: the 3D center
+    /// distance is strictly inside <paramref name="dist"/> plus both bounding radii (<c>SizeFactor::BoundingRadius</c>).
+    /// </summary>
+    internal static bool IsWithinDist(float dx, float dy, float dz, float dist, float sourceRadius, float targetRadius)
+    {
+        float maxDist = dist + sourceRadius + targetRadius;
+        float distSq = (dx * dx) + (dy * dy) + (dz * dz);
+        return distSq < maxDist * maxDist;
     }
 
     /// <summary>

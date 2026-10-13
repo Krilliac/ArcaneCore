@@ -12,7 +12,9 @@ namespace ArcaneCore.Game.Spells;
 /// value (mangos-classic divides as a float: 57 gives 5 in vmangos and 5.7 there; vmangos is followed and the difference is an
 /// open question).</item>
 /// <item>Player pull: toward the caster, by the target''s 2D distance to it capped at the effect value, as the negative horizontal speed, with
-/// <c>misc value / 10</c> as the vertical speed. vmangos itself notes the implementation "seems very wrong".</item>
+/// <c>misc value / 10</c> as the vertical speed. The distance is vmangos <c>GetDistance2d</c> (<c>SizeFactor::BoundingRadius</c>): the center
+/// distance minus both bounding radii, never negative. A negative gap would negate into a knock away. vmangos itself notes the implementation
+/// "seems very wrong".</item>
 /// </list>
 /// Both go through <see cref="KnockbackService"/>.
 /// </summary>
@@ -52,8 +54,11 @@ public sealed class KnockbackEffects : ISpellHandlerModule
 
     private static float Distance2d(Entities.Unit a, Entities.Unit b)
     {
+        // WorldObject::GetDistance2d (Object.cpp) with SizeFactor::BoundingRadius. Unit::GetObjectBoundingRadius is
+        // UNIT_FIELD_BOUNDINGRADIUS. The result is clamped at 0, same as vmangos (dist > 0 ? dist : 0).
         float dx = a.X - b.X;
         float dy = a.Y - b.Y;
-        return MathF.Sqrt((dx * dx) + (dy * dy));
+        float dist = MathF.Sqrt((dx * dx) + (dy * dy)) - a.BoundingRadius - b.BoundingRadius;
+        return dist > 0 ? dist : 0;
     }
 }

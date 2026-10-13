@@ -81,3 +81,132 @@ public sealed class SmartAiSlice3Tests
         Assert.Equal(5, catalog.For(WolfEntry, 0).Count);
     }
 }
+
+/// <summary>SmartAI slice 3b: SET_FACTION (2), MORPH_TO_ENTRY_OR_MODEL (3), AUTO_ATTACK (20), ALLOW_COMBAT_MOVEMENT (21), DIE (37).</summary>
+public sealed class SmartAiSlice3bTests
+{
+    private static void Pull(SmartRig rig) => rig.Map.Combat.DealDamage(rig.Player, rig.Wolf, 1, direct: false);
+
+    [Fact]
+    public void SetFaction_ChangesTheFaction_AndZeroRestoresTheTemplates()
+    {
+        using var rig = SmartRig.Start(
+        [
+            CreatureRow(WolfEntry, 0, SmartEvent.Aggro, SmartAction.SetFaction, a1: 35),
+            CreatureRow(WolfEntry, 1, SmartEvent.Evade, SmartAction.SetFaction),
+        ]);
+        uint original = rig.Wolf.FactionTemplate;
+        Pull(rig);
+        Assert.Equal(35u, rig.Wolf.FactionTemplate);
+        rig.Script.ProcessEventsFor(SmartEvent.Evade);
+        Assert.Equal(original, rig.Wolf.FactionTemplate);
+    }
+
+    [Fact]
+    public void Morph_AModelIdIsWorn_AndZeroGivesTheNativeModelBack()
+    {
+        using var rig = SmartRig.Start(
+        [
+            CreatureRow(WolfEntry, 0, SmartEvent.Aggro, SmartAction.MorphToEntryOrModel, a2: 4321),
+            CreatureRow(WolfEntry, 1, SmartEvent.Evade, SmartAction.MorphToEntryOrModel),
+        ]);
+        Pull(rig);
+        Assert.Equal(4321u, rig.Wolf.DisplayId);
+        rig.Script.ProcessEventsFor(SmartEvent.Evade);
+        Assert.Equal(rig.Wolf.NativeDisplayId, rig.Wolf.DisplayId);
+    }
+
+    [Fact]
+    public void AutoAttack_AndCombatMovement_SwitchTheCreaturesMeleeAndChase()
+    {
+        using var rig = SmartRig.Start(
+        [
+            CreatureRow(WolfEntry, 0, SmartEvent.Aggro, SmartAction.AutoAttack, link: 1),
+            CreatureRow(WolfEntry, 1, SmartEvent.Link, SmartAction.AllowCombatMovement),
+        ]);
+        Pull(rig);
+        Assert.False(rig.WolfAi.MeleeEnabled);
+        Assert.False(rig.WolfAi.CombatMovement);
+    }
+
+    [Fact]
+    public void Die_KillsTheCreature()
+    {
+        using var rig = SmartRig.Start([CreatureRow(WolfEntry, 0, SmartEvent.Aggro, SmartAction.Die)]);
+        Pull(rig);
+        Assert.False(rig.Wolf.IsAlive);
+    }
+
+    [Fact]
+    public void Catalog_GameObjectRowsOfTheOwnCreatureActionsAreRefused()
+    {
+        var catalog = new SmartScriptCatalog([Make(50000, 1, 0, 64, 20), Make(50000, 1, 1, 64, 21), Make(50000, 1, 2, 64, 37), Make((int)WolfEntry, 0, 0, 4, 2, a1: 35)]);
+        Assert.Equal(3, catalog.Rejected.Count);
+        Assert.All(catalog.Rejected, r => Assert.Contains("own creature", r.Reason, StringComparison.Ordinal));
+        Assert.Single(catalog.For(WolfEntry, 0));
+    }
+}
+
+/// <summary>SmartAI slice 3c: events KILL (5), SUMMONED_UNIT (17), RECEIVE_EMOTE (22); actions SOUND (4), CALL_FOR_HELP (39).</summary>
+public sealed class SmartAiSlice3cTests
+{
+    private static void Pull(SmartRig rig, Creature wolf) => rig.Map.Combat.DealDamage(rig.Player, wolf, 1, direct: false);
+
+    [Fact]
+    public void Kill_RunsForAMatchingVictim_AndPlayerOnlySkipsCreatures()
+    {
+        using var rig = SmartRig.Start(
+        [
+            CreatureRow(WolfEntry, 0, SmartEvent.Kill, SmartAction.SetEventPhase, e3: 1, a1: 3),
+        ], creatureSpawns: [Spawn(2, SmartRig.Speaker, 6, 0)]);
+        Creature speaker = rig.Creatures.Creatures.Single(c => c.Entry == SmartRig.Speaker);
+        rig.WolfAi.OnKilledUnit(speaker);
+        Assert.Equal(0u, rig.Script.Phase);
+        rig.WolfAi.OnKilledUnit(rig.Player);
+        Assert.Equal(3u, rig.Script.Phase);
+    }
+
+    [Fact]
+    public void SummonedUnit_FiltersByEntry()
+    {
+        using var rig = SmartRig.Start(
+        [
+            CreatureRow(WolfEntry, 0, SmartEvent.SummonedUnit, SmartAction.SetEventPhase, e1: SmartRig.Other, a1: 2),
+        ], creatureSpawns: [Spawn(2, SmartRig.Speaker, 6, 0), Spawn(3, SmartRig.Other, 7, 0)]);
+        rig.WolfAi.OnJustSummoned(rig.Creatures.Creatures.Single(c => c.Entry == SmartRig.Speaker));
+        Assert.Equal(0u, rig.Script.Phase);
+        rig.WolfAi.OnJustSummoned(rig.Creatures.Creatures.Single(c => c.Entry == SmartRig.Other));
+        Assert.Equal(2u, rig.Script.Phase);
+    }
+
+    [Fact]
+    public void ReceiveEmote_MatchesTheTextEmote_WithThePlayerAsInvoker()
+    {
+        using var rig = SmartRig.Start([CreatureRow(WolfEntry, 0, SmartEvent.ReceiveEmote, SmartAction.SetEventPhase, e1: 101, a1: 4)]);
+        rig.WolfAi.OnReceiveEmote(rig.Player, 102);
+        Assert.Equal(0u, rig.Script.Phase);
+        rig.WolfAi.OnReceiveEmote(rig.Player, 101);
+        Assert.Equal(4u, rig.Script.Phase);
+        Assert.Same(rig.Player, rig.Script.LastInvoker);
+    }
+
+    [Fact]
+    public void Sound_IsSentToThePlayersThatSeeTheCreature()
+    {
+        using var rig = SmartRig.Start([CreatureRow(WolfEntry, 0, SmartEvent.Aggro, SmartAction.Sound, a1: 6789)]);
+        Pull(rig, rig.Wolf);
+        Assert.Contains(Packets(rig.Session, WorldOpcode.SmsgPlaySound), p => BitConverter.ToUInt32(p, 0) == 6789);
+    }
+
+    [Fact]
+    public void CallForHelp_BringsAFarSameFactionCreatureIntoTheFight()
+    {
+        using var rig = SmartRig.Start(
+            [CreatureRow(WolfEntry, 0, SmartEvent.Aggro, SmartAction.CallForHelp, a1: 40)],
+            creatureSpawns: [Spawn(2, WolfEntry, 30, 0)]);
+        Creature first = rig.Creatures.Creatures.Single(c => c.Spawn?.Guid == 1);
+        Creature second = rig.Creatures.Creatures.Single(c => c.Spawn?.Guid == 2);
+        Pull(rig, first);
+        Assert.True(second.Combat.IsInCombat);
+    }
+}

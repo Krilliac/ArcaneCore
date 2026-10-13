@@ -481,6 +481,41 @@ public sealed class ItemInventoryTests
     }
 
     [Fact]
+    public void AutoStoreBag_IntoAFullBankBag_DoesNotSpillIntoTheMainBank()
+    {
+        // vmangos HandleAutoStoreBagItemOpcode stores with CanStoreItem even when the destination
+        // is a bank bag (ItemHandler.cpp:803-827). A full bag must not keep searching the bank.
+        (Player player, FakeSession session) = CreatePlayer();
+        PlayerInventory inv = player.Inventory;
+        inv.BankBagSlotCount = 1;
+        var pouch = (Container)Give(inv, SmallBrownPouch);
+        inv.SwapItem(pouch.BagSlot, pouch.Slot, InventorySlots.Bag0, InventorySlots.BankBagStart);
+        Assert.Same(pouch, inv.GetItem(InventorySlots.Bag0, InventorySlots.BankBagStart));
+
+        Item shirt = Give(inv, RecruitsShirt);
+        inv.AutoStoreBagItem(shirt.BagSlot, shirt.Slot, InventorySlots.BankBagStart);
+        Assert.Same(pouch, shirt.Container);
+
+        while (pouch.FreeSlots > 0)
+        {
+            Item boots = Give(inv, RecruitsBoots);
+            inv.SwapItem(boots.BagSlot, boots.Slot, InventorySlots.BankBagStart, (byte)(pouch.Size - pouch.FreeSlots));
+        }
+
+        Assert.Equal(0, pouch.FreeSlots);
+        Item pants = Give(inv, RecruitsPants);
+        byte pantsSlot = pants.Slot;
+        session.Clear();
+        inv.AutoStoreBagItem(pants.BagSlot, pants.Slot, InventorySlots.BankBagStart);
+
+        Assert.Equal([InventoryResult.None], EquipErrors(session));
+        Assert.Same(pants, inv.GetItem(InventorySlots.Bag0, pantsSlot));
+        Assert.Equal(1u, inv.GetItemCount(RecruitsPants));
+        Assert.Null(inv.GetItem(InventorySlots.Bag0, InventorySlots.BankItemStart));
+        Assert.DoesNotContain(pouch.Items, item => item.Entry == RecruitsPants);
+    }
+
+    [Fact]
     public void SnapshotRoundTrip_RestoresPositionsBagsAndState()
     {
         (Player player, _) = CreatePlayer();

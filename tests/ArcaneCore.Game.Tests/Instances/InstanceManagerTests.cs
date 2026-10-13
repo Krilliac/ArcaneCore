@@ -512,6 +512,38 @@ public sealed class InstanceManagerTests
         Assert.Same(f.World.FindMap(Dungeon, inside), d.Map);
     }
 
+    /// <summary>
+    /// vmangos <c>DungeonMap::BindPlayerOrGroupOnEnter</c> only returns early for a permanent bind. A player who accepted
+    /// a group invite while inside their own dungeon keeps that non-permanent save (the join cannot reset the instance
+    /// they are in, and leaving does not either: the group has no bind to replace it). The next entry binds the group to
+    /// that save and drops the personal one, so a party member enters the same instance.
+    /// </summary>
+    [Fact]
+    public void ReEnteringASoloDungeonAfterJoiningAGroupInside_BindsTheGroupToIt()
+    {
+        using var f = new InstanceFixture();
+        Player a = f.AddPlayer(1), b = f.AddPlayer(2);
+        Assert.True(f.EnterDungeon(a));
+        uint id = a.Map!.InstanceId;
+
+        Group group = f.Party(b, a); // a joins while still inside; b has no dungeon bind
+        Assert.Null(f.Manager.GetGroupBind(group, Dungeon));
+        Assert.Equal(id, f.Manager.GetPlayerBind(a.Guid, Dungeon)!.Value.Save.InstanceId);
+
+        Assert.True(f.LeaveToContinent(a));
+        Assert.Equal(id, f.Manager.GetPlayerBind(a.Guid, Dungeon)!.Value.Save.InstanceId);
+        Assert.Null(f.Manager.GetGroupBind(group, Dungeon));
+
+        Assert.True(f.EnterDungeon(a));
+        Assert.Equal(id, a.Map!.InstanceId);
+        Assert.Equal(id, f.Manager.GetGroupBind(group, Dungeon)!.Value.Save.InstanceId);
+        Assert.False(f.Manager.GetGroupBind(group, Dungeon)!.Value.Permanent);
+        Assert.Null(f.Manager.GetPlayerBind(a.Guid, Dungeon));
+
+        Assert.True(f.EnterDungeon(b));
+        Assert.Equal(id, b.Map!.InstanceId);
+    }
+
     [Fact]
     public void Login_InTheBoundInstance_ReentersIt_ElseAtTheEntrance()
     {

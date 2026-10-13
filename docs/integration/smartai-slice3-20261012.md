@@ -24,7 +24,32 @@ action 24 (it needs a creature owner, like 12 and 69).
   target with param1 0 keeps its auras. The `onlyOwnedAuras` param is ignored.
 - **FORCE_DESPAWN respawn param.** AzerothCore's param2 (forced respawn timer) is ignored; a database spawn respawns after its own delay.
 
-## Still open (slice 3b and later)
+## Slice 3b (branch `grok/w37-smartai-slice3b`)
 
-The remaining rejected events, actions and targets in the slice-2 tables, AIName for game objects, and ending the area-trigger handler when a
+| Action | Name | Behaviour here |
+|---|---|---|
+| 2 | SET_FACTION | Every creature target takes faction param1; 0 restores its template faction. |
+| 3 | MORPH_TO_ENTRY_OR_MODEL | Every creature target wears a model of template param1, else model param2, else its native model. |
+| 20 | AUTO_ATTACK | `me` starts (param1 1) or stops (0) its melee swing. |
+| 21 | ALLOW_COMBAT_MOVEMENT | `me` chases its victim (1) or stands (0); no change when already so. |
+| 37 | DIE | `me` dies without a killer (`CreatureMapSystem.KillCreature`). |
+
+Actions 20, 21 and 37 act on the script's own creature, so a game object row with them is refused, and a game-object-run timed list skips them.
+The creature action set is now `1, 2, 3, 5, 11, 12, 17, 20, 21, 22, 23, 24, 28, 30, 31, 37, 41, 67, 69, 73, 74, 80, 87, 88`.
+
+## Slice 3c (branch `grok/w37-smartai-slice3c`)
+
+Creature events now run: `0, 1, 2, 4, 5, 6, 7, 8, 17, 21, 22, 25, 59, 60, 61`.
+
+| Id | Name | Behaviour here |
+|---|---|---|
+| event 5 | KILL | `me` killed a unit (`OnKilledUnit`); param3 player victims only, param4 victim entry (0 any); cooldown param1..param2. |
+| event 17 | SUMMONED_UNIT | `me` summoned a creature (`OnJustSummoned`); param1 its entry (0 any); cooldown param2..param3. |
+| event 22 | RECEIVE_EMOTE | a player aimed text emote param1 at `me` (`OnReceiveEmote`); the player is the invoker; cooldown param2..param3. |
+| action 4 | SOUND | each creature target plays sound param1 to the players that see it (players as targets are skipped; `onlySelf` ignored). |
+| action 39 | CALL_FOR_HELP | idle same-faction creatures within param1 yards join `me`'s fight (`CreatureMapSystem.CallForHelp`); the emote param is ignored. Refused for game objects. |
+
+## Still open (slice 3d and later)
+
+MOVEMENTINFORM (34, needs the AC motion-type numbering mapped), the remaining rejected events, actions and targets in the slice-2 tables, AIName for game objects, and ending the area-trigger handler when a
 script ran.

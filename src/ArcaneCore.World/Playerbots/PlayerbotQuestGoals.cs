@@ -216,11 +216,12 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (!WithinReach(player, target.Npc))
         {
             PlanOutcome planned = PlanOutcome.Route;
+            bool returning = target.Action >= QuestAction.Complete
+                && state.Quests.Get(target.Quest.Id) is { Status: QuestStatus.Complete, Rewarded: false };
             if (_route is null)
                 planned = PlayerbotNavigation.PlanExact(player,
                     new System.Numerics.Vector3(target.Npc.X, target.Npc.Y, target.Npc.Z), _options, ref _tileWait, now, out _route,
-                    completedQuestReturn: target.Action >= QuestAction.Complete
-                        && state.Quests.Get(target.Quest.Id) is { Status: QuestStatus.Complete, Rewarded: false });
+                    completedQuestReturn: returning, friendlyTownEnder: returning && FriendlyTownEnder(player, target.Npc));
             if (planned == PlanOutcome.Pending)
             {
                 // A tile of the way is still being read: no backoff, the same giver is planned to again next think.
@@ -352,6 +353,19 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// A visible completed-quest ender the return may cross a death or retreat mark beside the road to reach: not a game object,
+    /// not hostile, and a friendly faction template (<see cref="PlayerbotNavigation.IsFriendlyTownNpc"/>).
+    /// </summary>
+    private bool FriendlyTownEnder(Player player, NpcInfo npc)
+    {
+        if (npc.IsGameObject || npc.IsHostile) return false;
+        uint faction = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content.FindTemplate(npc.Entry)?.Faction ?? 0;
+        FactionTemplateCatalog? factions = _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates
+            ?? _session.Services.GetService<FactionTemplateCatalog>();
+        return PlayerbotNavigation.IsFriendlyTownNpc(factions, player.FactionTemplate, faction);
     }
 
     /// <summary>

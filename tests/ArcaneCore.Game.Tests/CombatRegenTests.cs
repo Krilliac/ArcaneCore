@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
 
@@ -121,6 +122,46 @@ public sealed class CombatRegenTests
         world.RunTick(50);
 
         Assert.NotEqual(0u, (uint)(a.UnitFlags & UnitFlags.Pvp));
+    }
+
+    [Fact]
+    public void AHitThatDoesNotStartCombat_RefreshesThePvpFlag_WithoutEnteringPvpCombat()
+    {
+        // vmangos Spell.cpp:1650: a hunter trap on a player does not start combat. The else at :1688-1692
+        // still SetOutOfCombatWithVictim, which UpdatePvP(true)s the attacker without inPvPCombat (Unit.cpp:6049).
+        (WorldRuntime world, Map map, _, _) = CombatTestKit.CreateWorld();
+        using WorldRuntime w = world;
+        Player attacker = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
+        Player victim = CombatTestKit.AddPlayer(world, 2, 2, 0, new FakeSession(2), Race.Orc);
+        Player calm = CombatTestKit.AddPlayer(world, 3, 4, 0, new FakeSession(3), Race.Orc);
+        victim.UnitFlags |= UnitFlags.Pvp;
+        victim.Combat.PvpFlagTimer = CombatConstants.PvpFlagTimerMs;
+        attacker.UnitFlags |= UnitFlags.Pvp;
+        attacker.Combat.PvpFlagTimer = 1_000;
+
+        map.Combat.DealDamage(attacker, calm, 10, meleeDamage: false, startsCombat: false);
+        Assert.Equal(1_000u, attacker.Combat.PvpFlagTimer); // an unflagged victim does not pulse
+        Assert.False(attacker.Combat.InPvpCombat);
+
+        map.Combat.DealDamage(attacker, victim, 10, meleeDamage: false, startsCombat: false);
+
+        Assert.NotEqual(0u, (uint)(attacker.UnitFlags & UnitFlags.Pvp));
+        Assert.Equal(CombatConstants.PvpFlagTimerMs, attacker.Combat.PvpFlagTimer);
+        Assert.False(attacker.Combat.InPvpCombat);
+        Assert.False(attacker.Combat.IsInCombat);
+        Assert.False(victim.Combat.InPvpCombat);
+        Assert.False(victim.Combat.IsInCombat);
+        Assert.Equal(CombatConstants.PvpFlagTimerMs, victim.Combat.PvpFlagTimer);
+
+        // Unit.cpp:704: a damage shield is not that pulse. The shielded player stays unflagged.
+        Player shielded = CombatTestKit.AddPlayer(world, 4, 6, 0, new FakeSession(4));
+        SpellInfo shield = new()
+        {
+            Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.DamageShield }],
+        };
+        map.Combat.DealDamage(shielded, victim, 10, meleeDamage: false, startsCombat: false, threatSpell: shield);
+        Assert.Equal(0u, (uint)(shielded.UnitFlags & UnitFlags.Pvp));
+        Assert.Equal(0u, shielded.Combat.PvpFlagTimer);
     }
 
     [Fact]

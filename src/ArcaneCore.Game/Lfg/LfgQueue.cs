@@ -408,6 +408,8 @@ public sealed class LfgQueue(ILfgGroups groups)
             }
         }
 
+        LfgRoles openRoles = queued.AvailableRoles;
+        uint openDps = queued.DpsCount;
         switch (role)
         {
             case LfgRoles.Tank:
@@ -431,14 +433,27 @@ public sealed class LfgQueue(ILfgGroups groups)
                 return false;
         }
 
-        RemovePlayer(playerGuid, systemLeave: true);
-        queued.PlayerCount++;
-        if (groups.FindOnlinePlayer(playerGuid) is { } player)
+        // The role is only taken when the player actually joins. A pending invite or an existing
+        // party makes AddMember fail (Group::AddMember / GROUP_LFG); committing the slot anyway
+        // counted a member the party does not have and could complete it one short.
+        if (groups.FindOnlinePlayer(playerGuid) is not { } player)
         {
-            groups.Broadcast(queued.Group, WorldOpcode.SmsgMeetingstoneMemberAdded, MeetingStonePackets.MemberAdded(playerGuid));
-            groups.AddMember(queued.Group, player);
+            queued.AvailableRoles = openRoles;
+            queued.DpsCount = openDps;
+            return false;
         }
 
+        queued.PlayerCount++;
+        if (!groups.AddMember(queued.Group, player))
+        {
+            queued.AvailableRoles = openRoles;
+            queued.DpsCount = openDps;
+            queued.PlayerCount--;
+            return false;
+        }
+
+        RemovePlayer(playerGuid, systemLeave: true);
+        groups.Broadcast(queued.Group, WorldOpcode.SmsgMeetingstoneMemberAdded, MeetingStonePackets.MemberAdded(playerGuid));
         return true;
     }
 

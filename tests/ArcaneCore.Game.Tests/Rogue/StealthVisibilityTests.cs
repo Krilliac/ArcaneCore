@@ -77,6 +77,22 @@ public sealed class StealthVisibilityTests
         public void Dispose() => Kit.Dispose();
     }
 
+    /// <summary>Records detect-mode visibility checks. Returns true so it never hides a call from a later rule.</summary>
+    private sealed class DetectionPassSpy : IVisibilityRule
+    {
+        public List<(ObjectGuid Viewer, ObjectGuid Target)> Calls { get; } = [];
+
+        public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect)
+        {
+            if (detect)
+            {
+                Calls.Add((viewer.Guid, target.Guid));
+            }
+
+            return true;
+        }
+    }
+
     [Fact]
     public void ApplyingStealth_RaisesTheCreepAndPlayerStealthBytes_RemovingTheLastOneClearsThem()
     {
@@ -260,6 +276,50 @@ public sealed class StealthVisibilityTests
 
         rig.Kit.World.RunTick(2000); // the next detection pass drops it
         Assert.False(rig.ViewerSeesRogue);
+    }
+
+    [Fact]
+    public void AFarNotVisibleStealthedUnit_IsNotPassedToTheVisibilityUpdate_AUnitInsideThirtyYardsIs()
+    {
+        // The cap is inclusive (CanDetectStealthOf rejects distance > MaxPlayerDetectRange). 20 yards is inside the cap but
+        // outside the level-1 detection distance of 9, so the unit stays hidden: only a detect-mode call proves it was passed.
+        // A unit already in the visible list and past the cap is still passed, and that pass is what drops it.
+        float cap = StealthOptions.Default.MaxPlayerDetectRange;
+        Assert.Equal(30f, cap);
+        using var rig = new Rig(viewerDistance: cap - 10f, attachRules: false);
+        var spy = new DetectionPassSpy();
+        rig.Map.AddVisibilityRule(spy); // first, so a rejecting stealth rule cannot swallow the call
+        rig.Kit.System.RegisterAura(AuraType.ModStealth, StealthAuras.Handler(rig.Registry));
+        rig.Map.AddVisibilityRule(new StealthVisibilityRule(rig.Kit.System, rig.Registry));
+        rig.Map.AddUpdater(rig.Updater);
+
+        (Player edge, _) = rig.Kit.AddPlayer(3, cap);
+        edge.Relocate(cap, 0f, 83.5f, 0f, 0);
+        (Player far, _) = rig.Kit.AddPlayer(4, cap + 15f);
+        far.Relocate(cap + 15f, 0f, 83.5f, 0f, 0);
+        (Player seen, _) = rig.Kit.AddPlayer(5, cap + 50f);
+        seen.Relocate(cap + 50f, 0f, 83.5f, 0f, 0);
+
+        void EnterStealth(Unit unit) => rig.Kit.System.CastSpell(unit, Stealth, SpellCastTargets.ForSelf(), triggered: true);
+        EnterStealth(rig.Rogue);
+        EnterStealth(edge);
+        EnterStealth(far);
+        EnterStealth(seen);
+        Assert.DoesNotContain(rig.Rogue.Guid, rig.Viewer.VisibleObjects);
+        Assert.DoesNotContain(edge.Guid, rig.Viewer.VisibleObjects);
+        Assert.DoesNotContain(far.Guid, rig.Viewer.VisibleObjects);
+        Assert.DoesNotContain(seen.Guid, rig.Viewer.VisibleObjects);
+        Assert.True(rig.Viewer.VisibleObjects.Add(seen.Guid));
+
+        spy.Calls.Clear();
+        rig.Kit.World.RunTick((uint)StealthDetectionUpdater.FirstPassMs);
+        Assert.True(rig.Updater.PassesRun > 0);
+
+        Assert.Contains((rig.Viewer.Guid, rig.Rogue.Guid), spy.Calls);
+        Assert.Contains((rig.Viewer.Guid, edge.Guid), spy.Calls);
+        Assert.Contains((rig.Viewer.Guid, seen.Guid), spy.Calls);
+        Assert.DoesNotContain((rig.Viewer.Guid, far.Guid), spy.Calls);
+        Assert.DoesNotContain(seen.Guid, rig.Viewer.VisibleObjects); // the recheck past the cap dropped it
     }
 
     [Fact]

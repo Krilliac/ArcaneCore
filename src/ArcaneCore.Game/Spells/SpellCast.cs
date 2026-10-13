@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -44,10 +45,7 @@ public sealed class SpellCast
         Timer = castTime;
         PowerCost = powerCost;
         Duration = duration;
-        CastX = caster.X;
-        CastY = caster.Y;
-        CastZ = caster.Z;
-        CastO = caster.Orientation;
+        RememberCastPosition();
     }
 
     public SpellInfo Spell { get; }
@@ -162,11 +160,58 @@ public sealed class SpellCast
     /// <summary>The caster's orientation when the cast (or the channel) started (vmangos m_castPosition.o, compared for the turning interrupt).</summary>
     internal float CastO { get; set; }
 
+    /// <summary>
+    /// vmangos <c>Spell::UpdateCastStartPosition</c>: a passenger's cast position is the offset on the transport
+    /// (<c>GetTransOffsetX/Y/Z/O</c>), not the world position the ship carries them through.
+    /// </summary>
+    internal void RememberCastPosition()
+    {
+        if (Caster.Transport is not null)
+        {
+            MovementInfo aboard = Caster.Movement;
+            CastX = aboard.TransportX;
+            CastY = aboard.TransportY;
+            CastZ = aboard.TransportZ;
+            CastO = aboard.TransportOrientation;
+            return;
+        }
+
+        CastX = Caster.X;
+        CastY = Caster.Y;
+        CastZ = Caster.Z;
+        CastO = Caster.Orientation;
+    }
+
+    /// <summary>vmangos <c>Spell::update</c> <c>nowO</c>: transport offset facing while aboard, otherwise world facing.</summary>
+    internal float FacingNow => Caster.Transport is not null ? Caster.Movement.TransportOrientation : Caster.Orientation;
+
     /// <summary>Whether the caster moved more than 0.5 yd on any axis since the cast started (vmangos Spell::update).</summary>
     internal bool HasMoved
-        => Math.Abs(Caster.X - CastX) > SpellConstants.MovementCancelThreshold
-            || Math.Abs(Caster.Y - CastY) > SpellConstants.MovementCancelThreshold
-            || Math.Abs(Caster.Z - CastZ) > SpellConstants.MovementCancelThreshold;
+    {
+        get
+        {
+            float x;
+            float y;
+            float z;
+            if (Caster.Transport is not null)
+            {
+                MovementInfo aboard = Caster.Movement;
+                x = aboard.TransportX;
+                y = aboard.TransportY;
+                z = aboard.TransportZ;
+            }
+            else
+            {
+                x = Caster.X;
+                y = Caster.Y;
+                z = Caster.Z;
+            }
+
+            return Math.Abs(x - CastX) > SpellConstants.MovementCancelThreshold
+                || Math.Abs(y - CastY) > SpellConstants.MovementCancelThreshold
+                || Math.Abs(z - CastZ) > SpellConstants.MovementCancelThreshold;
+        }
+    }
 }
 
 /// <summary>Per-unit spell state kept by <see cref="SpellSystem"/> (world thread).</summary>

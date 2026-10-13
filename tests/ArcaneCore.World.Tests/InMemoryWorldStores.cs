@@ -124,9 +124,9 @@ internal sealed class InMemoryWorldDataStore : IWorldDataStore
     public Task<bool> IsValidRaceClassAsync(byte race, byte cls, CancellationToken cancellationToken = default)
         => Task.FromResult(IsValid(race, cls));
 
-    // Human and orc warriors (one per faction), both starting at the same spot so tests can
-    // put the factions side by side.
-    private static bool IsValid(byte race, byte cls) => race is 1 or 2 && cls == 1;
+    // Human and orc warriors (one per faction), plus dwarf warriors (a second Alliance race for racial-language tests),
+    // all starting at the same spot so tests can put the factions side by side.
+    private static bool IsValid(byte race, byte cls) => race is 1 or 2 or 3 && cls == 1;
 }
 
 internal sealed class InMemoryAccountDataStore : IAccountDataStore

@@ -180,6 +180,30 @@ public sealed class NavTileNonBlockingTests : IDisposable
     }
 
     [Fact]
+    public async Task AMissingTile_IsNeverPendingWithNothingLeftToAwait()
+    {
+        // No .mmtile for the probe. The read can finish inside FindPath, between the two endpoint checks, and used to answer
+        // TilesPending after that read had already left the table (the indoor-climb world setup then awaited null).
+        using NavMeshFixture bare = new();
+        bare.WriteParams(0);
+        for (int i = 0; i < 40; i++)
+        {
+            var nav = new NavMeshPathfinder(bare.Directory);
+            PathResult path = nav.FindPath(0, From, To, NonBlocking);
+            if (path.Type == PathType.TilesPending)
+            {
+                Task? read = nav.PendingTileRead(0, 31, 31);
+                Assert.NotNull(read);
+                await read!;
+                path = nav.FindPath(0, From, To, NonBlocking);
+            }
+
+            Assert.Equal(PathType.Normal | PathType.NotUsingPath, path.Type);
+            Assert.Null(nav.PendingTileRead(0, 31, 31));
+        }
+    }
+
+    [Fact]
     public void WithoutTheOption_TheReadStaysOnTheCallingThread()
     {
         NavMeshPathfinder nav = Gated();

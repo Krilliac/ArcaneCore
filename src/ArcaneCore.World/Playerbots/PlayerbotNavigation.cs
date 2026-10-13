@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 
@@ -17,6 +18,12 @@ internal sealed class PlayerbotRoute
 {
     /// <summary>A completed quest's ender route may cross only individually manageable pack hazards.</summary>
     internal bool CompletedQuestReturn { get; set; }
+
+    /// <summary>
+    /// Set with <see cref="CompletedQuestReturn"/> when the ender is a friendly town NPC. A death or retreat mark beside the
+    /// road then does not take this walk away (<see cref="PlayerbotRisk.Blocking"/>).
+    /// </summary>
+    internal bool CrossBesidePlaceMarks { get; set; }
     internal PlayerbotRoute(IReadOnlyList<Vector3> points, float distance, bool navigated = false)
     {
         Points = points;
@@ -167,10 +174,11 @@ internal static class PlayerbotNavigation
     /// <paramref name="wait"/> (<see cref="TileWait.MaxMs"/>): past it a pending answer is returned as <see cref="PlanOutcome.Refused"/>.
     /// </summary>
     internal static PlanOutcome PlanExact(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
-        out PlayerbotRoute? route, bool completedQuestReturn = false)
+        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
     {
         long mark = PendingMark;
-        return Outcome(TryPlan(player, destination, options, out route, completedQuestReturn: completedQuestReturn), mark, ref wait, now, ref route);
+        return Outcome(TryPlan(player, destination, options, out route, completedQuestReturn: completedQuestReturn,
+            friendlyTownEnder: friendlyTownEnder), mark, ref wait, now, ref route);
     }
 
     /// <summary><see cref="TryPlanFar"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
@@ -183,10 +191,10 @@ internal static class PlayerbotNavigation
 
     /// <summary><see cref="TryPlanToward"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
     internal static PlanOutcome PlanToward(Player player, Vector3 goal, PlayerbotOptions options, ref TileWait wait, uint now,
-        out PlayerbotRoute? route, bool completedQuestReturn = false)
+        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
     {
         long mark = PendingMark;
-        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn), mark, ref wait, now, ref route);
+        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder), mark, ref wait, now, ref route);
     }
 
     private static PlanOutcome Outcome(bool planned, long mark, ref TileWait wait, uint now, ref PlayerbotRoute? route)
@@ -204,9 +212,9 @@ internal static class PlayerbotNavigation
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
-        out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false)
+        out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false, bool friendlyTownEnder = false)
         => Plan(player, destination, destination, options, partial: false, trial, out route, out _,
-            completedQuestReturn: completedQuestReturn);
+            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder);
 
     /// <summary>
     /// A route to <paramref name="destination"/> with no hazard check at all: only the escape from a ring of strong creatures
@@ -241,7 +249,7 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
-        bool completedQuestReturn = false)
+        bool completedQuestReturn = false, bool friendlyTownEnder = false)
     {
         route = null;
         Vector3 origin = new(player.X, player.Y, player.Z);
@@ -257,7 +265,7 @@ internal static class PlayerbotNavigation
         // Beyond the first step the map's region graph knows the way, round mountains and out of dead ends: the leg goes to a portal
         // of that way (RegionLeg). Only when the graph does not decide (none, still being built, both ends in one region) do the
         // goal-first query and the straight-line steps below plan.
-        if (distance > chunk && RegionLeg(player, goal, options, out route, completedQuestReturn) is { } planned) return planned;
+        if (distance > chunk && RegionLeg(player, goal, options, out route, completedQuestReturn, friendlyTownEnder) is { } planned) return planned;
         // A tile the plan needs is still being read: nothing below could decide either (each would meet the same tile).
         if (PendingSince(pending)) return false;
         // When the mesh had a corridor to judge (no path, a blacklisted end), the shorter straight-line points below would only repeat
@@ -265,7 +273,7 @@ internal static class PlayerbotNavigation
         if (distance > chunk && distance <= options.MaxRouteYards)
         {
             if (Plan(player, goal, goal, options, partial: true, trial: false, out route, out bool goalStraightRefused,
-                completedQuestReturn: completedQuestReturn)) return true;
+                completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
             if (!goalStraightRefused || PendingSince(pending)) return false;
         }
         // A point that far may lie on a navigation-mesh tile not loaded yet (tiles load with the map's grids, around the players):
@@ -277,7 +285,7 @@ internal static class PlayerbotNavigation
         {
             Vector3 destination = distance > chunk ? origin + ((goal - origin) * (chunk / distance)) : goal;
             if (Plan(player, destination, goal, options, partial: true, trial: false, out route, out bool straightRefused,
-                completedQuestReturn: completedQuestReturn)) return true;
+                completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
             if (!straightRefused || PendingSince(pending) || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
         }
     }
@@ -312,7 +320,7 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     private static bool? RegionLeg(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
-        bool completedQuestReturn)
+        bool completedQuestReturn, bool friendlyTownEnder)
     {
         route = null;
         if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
@@ -340,10 +348,10 @@ internal static class PlayerbotNavigation
         // straight-line steps still get their turn.
         long pending = PendingMark;
         if (Plan(player, portals[pick], portals[pick], options, partial: true, trial: false, out route, out _,
-            completedQuestReturn: completedQuestReturn)) return true;
+            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
         if (PendingSince(pending)) { route = null; return null; }
         if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, trial: false, out route, out _,
-            completedQuestReturn: completedQuestReturn)) return true;
+            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
         route = null;
         return null;
     }
@@ -355,12 +363,15 @@ internal static class PlayerbotNavigation
     /// <param name="straightRefused">The mesh had no corridor to offer, only a straight line (an unloaded tile, or no mesh), and the terrain
     /// stepper refused that line.</param>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial, bool trial,
-        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false)
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false,
+        bool friendlyTownEnder = false)
     {
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes) || route is null) return false;
+        bool crossBeside = completedQuestReturn && friendlyTownEnder;
         route.CompletedQuestReturn = completedQuestReturn;
+        route.CrossBesidePlaceMarks = crossBeside;
         if (!Guards.TryGetValue(player, out PlayerbotRisk? risk)
-            || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn) is not { } hazard) return true;
+            || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside) is not { } hazard) return true;
 
         // The way passes through a hazard: walk round it (by a corner before it and one past it, on either side), or not at all.
         PlayerbotRoute direct = route;
@@ -393,8 +404,9 @@ internal static class PlayerbotNavigation
                 bool[] legs = [.. Enumerable.Repeat(first.Navigated, first.Points.Count - 1),
                     .. Enumerable.Repeat(middle.Navigated, middle.Points.Count - 1), .. Enumerable.Repeat(last.Navigated, last.Points.Count - 1)];
                 var detour = new PlayerbotRoute(points, length, legs);
-                if (risk.Blocking(player, detour.Points, completedReturn: completedQuestReturn) is not null) continue;
+                if (risk.Blocking(player, detour.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside) is not null) continue;
                 detour.CompletedQuestReturn = completedQuestReturn;
+                detour.CrossBesidePlaceMarks = crossBeside;
                 route = detour;
                 return true;
             }
@@ -769,18 +781,35 @@ internal static class PlayerbotNavigation
         return true;
     }
 
-    /// <summary>A connected ordinary route still crosses a hazard the completed-return rule keeps in force.</summary>
+    /// <summary>
+    /// A connected ordinary route still crosses a hazard the completed-return rule keeps in force. A death or retreat mark
+    /// beside the road is not one of those when <paramref name="friendlyTownEnder"/> (the only walk to a friendly quest ender
+    /// in town).
+    /// </summary>
     internal static bool HasBlockingReturnHazard(Player player, Vector3 goal, PlayerbotOptions options,
-        out PlayerbotHazard hazard)
+        out PlayerbotHazard hazard, bool friendlyTownEnder = false)
     {
         hazard = default;
         if (!Guards.TryGetValue(player, out PlayerbotRisk? risk) || risk.Hazards.Count == 0
             || !PlanDirect(player, goal, goal, options, partial: false, out PlayerbotRoute? route, out _,
                 DiagnosisSearchNodes) || route is null
-            || risk.Blocking(player, route.Points, completedReturn: true) is not { } blocked)
+            || risk.Blocking(player, route.Points, completedReturn: true, crossBesidePlaceMarks: friendlyTownEnder) is not { } blocked)
             return false;
         hazard = blocked;
         return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="npcTemplate"/> is a friendly town NPC to <paramref name="playerTemplate"/>: neither direction is
+    /// hostile, and at least one is friendly (the same template reaction <see cref="ArcaneCore.Game.Combat.FactionCombatHooks"/>
+    /// uses). Unresolved templates are not. A neutral quest giver is not this case.
+    /// </summary>
+    internal static bool IsFriendlyTownNpc(FactionTemplateCatalog? factions, uint playerTemplate, uint npcTemplate)
+    {
+        if (factions is not { } catalog) return false;
+        if (catalog.Find(npcTemplate) is not { } npc || catalog.Find(playerTemplate) is not { } self) return false;
+        if (npc.IsHostileTo(self) || self.IsHostileTo(npc)) return false;
+        return npc.IsFriendlyTo(self) || self.IsFriendlyTo(npc);
     }
 
     /// <summary>The corners of a way off steep ground tried as the place where the ordinary routes begin again.</summary>
@@ -929,7 +958,8 @@ internal static class PlayerbotNavigation
         {
             List<Vector3> rest = [PlayerbotMotion.CurrentPosition(player), .. route.Points.Skip(route.NextPoint)];
             if (risk.Blocking(player, rest, strong: !risk.IsEscape(route),
-                completedReturn: route.CompletedQuestReturn) is not null)
+                completedReturn: route.CompletedQuestReturn,
+                crossBesidePlaceMarks: route.CrossBesidePlaceMarks) is not null)
             {
                 PlayerbotMovementControl.Stop(session, player);
                 return false;

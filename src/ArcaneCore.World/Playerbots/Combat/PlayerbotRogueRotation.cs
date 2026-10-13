@@ -43,11 +43,23 @@ internal sealed class PlayerbotRogueRotation : PlayerbotClassRotation
     ];
 
     /// <summary>
+    /// Closer than this, Stealth is not an opener. A creature this near detects it before the next think, the aura never
+    /// sticks, and the out-of-combat upkeep recasts it every think: the brain returns before the swing or the chase, so the
+    /// bot stands on goal Grind. Issue #433: level 14-15 rogues grinding Young Goretusks (entry 454) in Westfall.
+    /// </summary>
+    internal const float StealthOpenYards = 10f;
+
+    /// <summary>
     /// vmangos ShouldEnterStealth (:2669-2689): with a victim to open on (here: the creature the bot is closing in on), or
-    /// nearly dead.
+    /// nearly dead. A victim already inside <see cref="StealthOpenYards"/> is fought instead; recasting Stealth on top of it
+    /// never lands.
     /// </summary>
     internal static bool ShouldEnterStealth(RotationState s)
-        => !s.InCombat && (s.Victim is { IsAlive: true } || s.Self.HealthPercent < 10f);
+    {
+        if (s.InCombat) return false;
+        if (s.Self.HealthPercent < 10f) return true;
+        return s.Victim is { IsAlive: true } victim && victim.Distance > StealthOpenYards;
+    }
 
     protected override RotationAction? Upkeep(RotationState s)
         => ShouldEnterStealth(s) && !s.IsStealthed ? Do(s, Stealth, s.Self) : null;
@@ -56,25 +68,28 @@ internal sealed class PlayerbotRogueRotation : PlayerbotClassRotation
     {
         if (s.IsStealthed && (s.Spells.Has(Garrote) || s.Spells.Has(Ambush) || s.Spells.Has(CheapShot)))
         {
-            // Openers (vmangos :2741-2770): Garrote on a caster, else Ambush or Cheap Shot. A rogue that knows none yet
-            // opens with its ordinary strikes below (which break the stealth).
-            return Do(s, Premeditation, v)
+            // Openers (vmangos :2741-2770): Garrote on a caster, else Ambush or Cheap Shot. A cast that cannot be made does
+            // not end the decision: vmangos falls through to Sinister Strike while still stealthed (the strike breaks it).
+            // Vanish and the defensive cooldowns stay in the not-stealthed branch (:2775, :2873).
+            RotationAction? opener = Do(s, Premeditation, v)
                 ?? Do(s, Garrote, v, UsesMana(v))
                 ?? Do(s, Ambush, v, !UsesMana(v))
                 ?? Do(s, CheapShot, v, !UsesMana(v))
                 ?? Do(s, Garrote, v);
+            if (opener is not null) return opener;
         }
 
-        return Do(s, Vanish, s.Self, s.InCombat && s.Self.HealthPercent < 10f)
-            ?? Do(s, Preparation, s.Self, s.InCombat && s.Self.HealthPercent < 10f && s.Spells.Has(Vanish) && !s.CanCast(s.Spells[Vanish]!, s.Self))
+        bool hidden = s.IsStealthed;
+        return (hidden ? null : Do(s, Vanish, s.Self, s.InCombat && s.Self.HealthPercent < 10f))
+            ?? (hidden ? null : Do(s, Preparation, s.Self, s.InCombat && s.Self.HealthPercent < 10f && s.Spells.Has(Vanish) && !s.CanCast(s.Spells[Vanish]!, s.Self)))
             ?? Finisher(s, v)
             ?? Do(s, Blind, FirstAttackerOtherThan(s, v), s.InGroup)
             ?? Do(s, AdrenalineRush, s.Self, s.InCombat && s.Power == 0)
             ?? Do(s, Gouge, v, v.IsCasting)
             ?? Do(s, Kick, v, v.IsCasting)
-            ?? Do(s, Evasion, s.Self, s.InCombat && s.Self.HealthPercent < 80f && (AttackersWithin(s, 10f) > 2 || !UsesMana(v)))
-            ?? Do(s, ColdBlood, s.Self, s.InCombat && s.ComboPoints >= FinisherPoints - 1)
-            ?? Do(s, BladeFlurry, s.Self, s.InCombat && AttackersWithin(s, 10f) > 1)
+            ?? (hidden ? null : Do(s, Evasion, s.Self, s.InCombat && s.Self.HealthPercent < 80f && (AttackersWithin(s, 10f) > 2 || !UsesMana(v))))
+            ?? (hidden ? null : Do(s, ColdBlood, s.Self, s.InCombat && s.ComboPoints >= FinisherPoints - 1))
+            ?? (hidden ? null : Do(s, BladeFlurry, s.Self, s.InCombat && AttackersWithin(s, 10f) > 1))
             ?? Do(s, Backstab, v)
             ?? Do(s, GhostlyStrike, v)
             ?? Do(s, Hemorrhage, v)

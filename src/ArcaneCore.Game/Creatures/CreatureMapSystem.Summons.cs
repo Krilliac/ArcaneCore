@@ -220,22 +220,70 @@ public sealed partial class CreatureMapSystem
 
     /// <summary>
     /// A player's possessed minion (vmangos Player::SummonPossessedMinion, TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN): a temporary creature that
-    /// goes after <paramref name="lifetimeMs"/> (0: no timer). Null when the template is missing.
+    /// goes after <paramref name="lifetimeMs"/> (0: no timer). Null when the template is missing or <paramref name="summoner"/> already has
+    /// <see cref="GetCreatureSummonLimit"/> live summons on this map (vmangos IncrementSummonCounter / DecrementSummonCounter).
     /// </summary>
-    public Creature? SummonPossessedMinion(uint entry, float x, float y, float z, float orientation, uint lifetimeMs)
+    public Creature? SummonPossessedMinion(uint entry, float x, float y, float z, float orientation, uint lifetimeMs, ObjectGuid summoner = default)
     {
         if (_content.FindTemplate(entry) is not { } template)
         {
             return null;
         }
 
+        if (!summoner.IsEmpty && GetCreatureSummonCount(summoner) >= GetCreatureSummonLimit(summoner))
+        {
+            _logger.LogInformation("{Summoner} attempted to summon creature {Entry} but already has {Count} active summons", summoner, entry,
+                GetCreatureSummonCount(summoner));
+            return null;
+        }
+
         Creature creature = SpawnTemporary(template, x, y, z, orientation);
+        if (!summoner.IsEmpty)
+        {
+            (_counted.TryGetValue(summoner, out List<Creature>? list) ? list : _counted[summoner] = []).Add(creature);
+        }
+
         if (lifetimeMs > 0)
         {
             AddTimedSummon(creature, lifetimeMs, SummonTimer.Absolute);
         }
 
         return creature;
+    }
+
+    /// <summary>vmangos CONFIG_UINT32_CREATURE_SUMMON_LIMIT (MaxCreatureSummonLimit, default 100): live summons one summoner may have.</summary>
+    public const uint DefaultCreatureSummonLimit = 100;
+
+    private readonly Dictionary<ObjectGuid, List<Creature>> _counted = [];
+    private readonly Dictionary<ObjectGuid, uint> _summonLimits = [];
+
+    /// <summary>The world-wide limit (vmangos MaxCreatureSummonLimit); a per-summoner override wins (<see cref="SetCreatureSummonLimit"/>).</summary>
+    public uint CreatureSummonLimit { get; set; } = DefaultCreatureSummonLimit;
+
+    /// <summary>vmangos Map::GetSummonLimitForObject.</summary>
+    public uint GetCreatureSummonLimit(ObjectGuid summoner) => _summonLimits.TryGetValue(summoner, out uint limit) ? limit : CreatureSummonLimit;
+
+    /// <summary>vmangos Map::SetSummonLimitForObject.</summary>
+    public void SetCreatureSummonLimit(ObjectGuid summoner, uint limit) => _summonLimits[summoner] = limit;
+
+    /// <summary>
+    /// vmangos Map::GetSummonCountForObject: the counted summons of <paramref name="summoner"/> still on this map (a despawned one is the
+    /// DecrementSummonCounter of TemporarySummon::UnSummon). Only possessed minions are counted here.
+    /// </summary>
+    public uint GetCreatureSummonCount(ObjectGuid summoner)
+    {
+        if (!_counted.TryGetValue(summoner, out List<Creature>? list))
+        {
+            return 0;
+        }
+
+        list.RemoveAll(c => !_creatures.ContainsKey(c.Guid) || !ReferenceEquals(_creatures[c.Guid], c));
+        if (list.Count == 0)
+        {
+            _counted.Remove(summoner);
+        }
+
+        return (uint)list.Count;
     }
 
     /// <summary>ScriptDev2 GameObject::SummonCreature with TEMPSPAWN_TIMED_DESPAWN, used by Maraudon's larva spewer;

@@ -53,7 +53,7 @@ internal static class TrackingAuras
                     system.RemoveOtherHolders(target, holder, TrackerTypes);
                 }
 
-                SetTrackBit(target, aura.Type == AuraType.TrackCreatures ? UpdateFields.PlayerTrackCreatures : UpdateFields.PlayerTrackResources, aura.MiscValue, apply);
+                SetTrackBit(system, target, aura.Type == AuraType.TrackCreatures ? UpdateFields.PlayerTrackCreatures : UpdateFields.PlayerTrackResources, aura.Type, aura.MiscValue, apply);
                 break;
 
             case AuraType.TrackStealthed:
@@ -86,7 +86,12 @@ internal static class TrackingAuras
         }
     }
 
-    private static void SetTrackBit(Unit target, int field, int miscValue, bool apply)
+    /// <summary>
+    /// Bit (misc value - 1). Removal clears it only when no other live aura of this type still
+    /// names that misc value. A non-tracker (Well Fed and the other always-allowed cases) may share
+    /// the bit with a real tracker; the holder being removed is already off the list.
+    /// </summary>
+    private static void SetTrackBit(SpellSystem system, Unit target, int field, AuraType type, int miscValue, bool apply)
     {
         if (miscValue is < 1 or > 32)
         {
@@ -98,9 +103,30 @@ internal static class TrackingAuras
         {
             target.SetFlag(field, bit);
         }
-        else
+        else if (!AnotherAuraKeepsBit(system, target, type, miscValue))
         {
             target.RemoveFlag(field, bit);
         }
+    }
+
+    private static bool AnotherAuraKeepsBit(SpellSystem system, Unit target, AuraType type, int miscValue)
+    {
+        foreach (SpellAuraHolder holder in system.GetAuras(target))
+        {
+            if (holder.IsRemoved)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.AuraSpan)
+            {
+                if (aura is { } kept && kept.Type == type && kept.MiscValue == miscValue)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }

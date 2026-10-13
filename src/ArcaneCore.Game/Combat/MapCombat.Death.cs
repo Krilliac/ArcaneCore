@@ -650,7 +650,11 @@ public sealed partial class MapCombat
     }
 
     /// <summary>vmangos Unit::TogglePlayerPvPFlagOnAttackVictim: attacking a PvP-flagged unit flags the attacker.</summary>
-    private static void TogglePlayerPvpFlagOnAttackVictim(Player attacker, Unit victim)
+    /// <remarks>
+    /// <paramref name="touchOnly"/> is SetOutOfCombatWithVictim (Unit.h:1131): the flag and its 5-minute timer refresh,
+    /// but inPvPCombat stays as it was (Unit.cpp:6049) and the caller does not enter combat.
+    /// </remarks>
+    private static void TogglePlayerPvpFlagOnAttackVictim(Player attacker, Unit victim, bool touchOnly = false)
     {
         // Duel opponents do not pulse each other (vmangos Unit.cpp:6047, !IsInDuelWith).
         if (DuelRules.ControllingPlayer(victim) is { } victimPlayer && DuelRules.IsInDuelWith(attacker, victimPlayer))
@@ -660,7 +664,7 @@ public sealed partial class MapCombat
 
         if ((victim.UnitFlags & UnitFlags.Pvp) != 0 && !ReferenceEquals(attacker, victim))
         {
-            attacker.Combat.InPvpCombat = true;
+            attacker.Combat.InPvpCombat = attacker.Combat.InPvpCombat || !touchOnly;
             UpdatePvp(attacker, true);
         }
     }

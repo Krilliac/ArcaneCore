@@ -85,6 +85,24 @@ public sealed class FallDamageTests
     private static uint DamageOf(byte[] log) => BitConverter.ToUInt32(log, 9);
 
     [Fact]
+    public void AFallThatBeginsAtHeightZero_KeepsThatHeight_AndHurtsForTheWholeDrop()
+    {
+        var scene = new Scene();
+
+        scene.Send(WorldOpcode.MsgMoveJump, MovementFlags.Jumping, 0f);
+        scene.Send(WorldOpcode.MsgMoveHeartbeat, MovementFlags.Jumping | MovementFlags.FallingFar, -20f);
+        Assert.Equal(0f, scene.Player.Locomotion.FallStartZ);
+        Assert.True(scene.Player.Locomotion.IsFalling);
+
+        scene.Send(WorldOpcode.MsgMoveFallLand, MovementFlags.None, -40f, 3000);
+
+        // The same 40-yard fall as 100 -> 60. A start height of 0 used to be "not falling", so the
+        // heartbeat re-anchored the start at -20 and this landing hurt for 20 yards (352) instead.
+        Assert.Equal(1432u, DamageOf(Assert.Single(scene.Logs)));
+        Assert.False(scene.Player.Locomotion.IsFalling);
+    }
+
+    [Fact]
     public void AFortyYardFall_HurtsByTheFormula_AndLogsOneFallDamage()
     {
         var scene = new Scene();

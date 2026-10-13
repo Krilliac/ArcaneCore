@@ -44,6 +44,55 @@ public static class ThreatRules
     }
 
     /// <summary>
+    /// vmangos HostileReference::addThreat (Threat/ThreatManager.cpp:117-121): a pet's owner is added only when
+    /// <c>pVictimOwner->IsTargetableBy(getSource()->getOwner())</c>. That check's flag and immunity half: a spawning,
+    /// taxi, non-attackable or non-selectable owner is not a target, an owner immune to the attacker's side is not, and an
+    /// attacker immune to the owner's side is not. Feign death and stealth detection are not read here.
+    /// </summary>
+    public static bool CanPullPetOwner(Unit owner, Unit attacker)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(attacker);
+        if (!owner.IsInWorld || !owner.IsAlive || owner is Player { IsGameMaster: true })
+        {
+            return false;
+        }
+
+        const UnitFlags notAttackable = UnitFlags.NonAttackable2 | UnitFlags.Spawning | UnitFlags.TaxiFlight
+            | UnitFlags.NotAttackable1 | UnitFlags.NotSelectable;
+        if ((owner.UnitFlags & notAttackable) != 0)
+        {
+            return false;
+        }
+
+        if (attacker.IsCharmerOrOwnerPlayerOrPlayerItself)
+        {
+            if ((owner.UnitFlags & UnitFlags.ImmuneToPlayer) != 0)
+            {
+                return false;
+            }
+        }
+        else if ((owner.UnitFlags & UnitFlags.ImmuneToNpc) != 0)
+        {
+            return false;
+        }
+
+        if (owner.IsCharmerOrOwnerPlayerOrPlayerItself)
+        {
+            if ((attacker.UnitFlags & UnitFlags.ImmuneToPlayer) != 0)
+            {
+                return false;
+            }
+        }
+        else if ((attacker.UnitFlags & UnitFlags.ImmuneToNpc) != 0)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// vmangos HostileReference::updateOnlineStatus (Threat/ThreatManager.cpp:142-146): a game master target is offline. The
     /// "taxi flying" clause waits for a taxi primitive on <see cref="Player"/> (documented limit).
     /// </summary>

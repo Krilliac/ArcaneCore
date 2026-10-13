@@ -201,7 +201,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         return Rules.MagicHitChance.Finish(chance, binary, resistChance);
     }
 
-    /// <summary>Melee spell table: miss, then dodge, then parry from the front (percent rolls out of 10000).</summary>
+    /// <summary>Melee spell table: miss, then dodge, then parry from the front, each after the white-swing skill term (percent rolls out of 10000).</summary>
     protected virtual SpellMissInfo MeleeSpellHitResult(SpellSystem system, Unit caster, Unit target, SpellInfo spell)
     {
         ArgumentNullException.ThrowIfNull(system);
@@ -217,8 +217,8 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
             + WeaponAuraModifiers.Get(system, caster, attack, AuraType.ModHitChance);
         int victimHitBonus = system.GetTotalAuraModifier(target, attack == WeaponAttackType.RangedAttack ? AuraType.ModAttackerRangedHitChance : AuraType.ModAttackerMeleeHitChance);
         float miss;
-        float dodge = 0;
-        float parry = 0;
+        int dodgePoints = 0;
+        int parryPoints = 0;
         if (combat is not null)
         {
             MeleeRollInput input = combat.BuildRollInput(caster, target, attack) with
@@ -232,8 +232,10 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
             miss = MeleeHitTable.MissChance(input, input.AttackerWeaponSkill - input.VictimDefenseSkill);
             if (attack != WeaponAttackType.RangedAttack)
             {
-                dodge = input.DodgeChance;
-                parry = input.FromBehind ? 0 : input.ParryChance;
+                // The same skill and low-level terms as the white swing (RollMeleeOutcomeAgainst, SpellCaster.cpp:585-615).
+                // A raw 5% is wrong once defense and weapon skill differ: a level-63 mob dodges at 6.5% and parries at 14%.
+                dodgePoints = DodgePoints(input);
+                parryPoints = input.FromBehind ? 0 : ParryPoints(input);
             }
         }
         else
@@ -253,14 +255,54 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
             return SpellMissInfo.Miss;
         }
 
-        bound += (int)(Math.Max(0f, dodge) * 100);
+        bound += dodgePoints;
         if (roll < bound)
         {
             return SpellMissInfo.Dodge;
         }
 
-        bound += (int)(Math.Max(0f, parry) * 100);
+        bound += parryPoints;
         return roll < bound ? SpellMissInfo.Parry : SpellMissInfo.None;
+    }
+
+    /// <summary>
+    /// Dodge chance in hundredths of a percent after the weapon-skill term (SpellCaster.cpp:585-592): 0.04 per point against a
+    /// player, 0.1 otherwise, then the level-10 scale for a creature. A zero base can still dodge when the attacker is under-skilled.
+    /// </summary>
+    private static int DodgePoints(in MeleeRollInput input)
+    {
+        int chance = (int)(input.DodgeChance * 100f);
+        int skillDiff = input.AttackerWeaponSkill - input.VictimMaxSkill;
+        chance -= input.VictimIsPlayer ? 4 * skillDiff : 10 * skillDiff;
+        if (!input.VictimIsPlayer && input.VictimLevel < 10)
+        {
+            chance = (int)(chance * (input.VictimLevel / 10.0f));
+        }
+
+        return Math.Max(chance, 0);
+    }
+
+    /// <summary>
+    /// Parry chance in hundredths of a percent (SpellCaster.cpp:607-613). The skill term is skipped when the base chance is not
+    /// positive. Against a creature it is 0.2 per point, or 0.6 once the capped skill difference is below -10.
+    /// </summary>
+    private static int ParryPoints(in MeleeRollInput input)
+    {
+        int chance = (int)(input.ParryChance * 100f);
+        if (chance <= 0)
+        {
+            return 0;
+        }
+
+        int skillDiff = input.AttackerWeaponSkill - input.VictimMaxSkill;
+        int cappedSkillDiff = Math.Min(input.AttackerMaxSkill, input.AttackerWeaponSkill) - input.VictimMaxSkill;
+        chance -= input.VictimIsPlayer ? 4 * skillDiff : cappedSkillDiff < -10 ? 60 * cappedSkillDiff : 20 * cappedSkillDiff;
+        if (!input.VictimIsPlayer && input.VictimLevel < 10)
+        {
+            chance = (int)(chance * (input.VictimLevel / 10.0f));
+        }
+
+        return Math.Max(chance, 0);
     }
 
     /// <summary>
