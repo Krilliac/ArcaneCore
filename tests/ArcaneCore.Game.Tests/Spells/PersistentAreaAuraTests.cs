@@ -17,6 +17,7 @@ public sealed class PersistentAreaAuraTests : IDisposable
     private const uint Consecration = 26573;
     private const uint Snapshot = 990_501;   // the same ground aura without the Consecration recalculation
     private const uint Channel = 990_502;    // a channelled ground aura (Blizzard-like)
+    private const uint PushbackChannel = 990_506; // the same, with the channel-delay flag and a 3 s tick
     private const uint Heal = 990_503;       // a positive ground aura
     private const uint BlizzardTarget = 990_504; // build-5875 Blizzard uses target 28 on its ground aura
     private const uint GroundBurst = 990_505; // target 28 on a non-ground effect selects enemies at the destination
@@ -71,6 +72,14 @@ public sealed class PersistentAreaAuraTests : IDisposable
                 SpellFamilyFlags = 0,
                 AttributesEx = SpellAttributesEx.IsChanneled,
                 Effects = [ground.Effects[0] with { TargetA = SpellImplicitTarget.LocationCasterDest }],
+            },
+            ground with
+            {
+                Id = PushbackChannel,
+                SpellFamilyFlags = 0,
+                AttributesEx = SpellAttributesEx.IsChanneled,
+                ChannelInterruptFlags = (SpellAuraInterruptFlags)SpellChannelInterruptFlags.Delay,
+                Effects = [ground.Effects[0] with { Amplitude = 3000, TargetA = SpellImplicitTarget.LocationCasterDest }],
             },
             Spell(Heal, Effect(SpellEffectName.PersistentAreaAura, 5, SpellImplicitTarget.LocationCasterDest, AuraType.PeriodicHeal, amplitude: 1000,
                 targetB: SpellImplicitTarget.EnumUnitsFriendAoeAtDestLoc) with { Radius = 8 }) with
@@ -306,4 +315,34 @@ public sealed class PersistentAreaAuraTests : IDisposable
 
         Assert.Empty(_kit.System.DynamicObjects);
     }
+
+    [Fact]
+    public void ChannelPushback_ShortensTheGroundAurasDuration_AndRealignsItsTicks()
+    {
+        // vmangos Spell::DelayedChannel calls DynamicObject::Delay (DynamicObject.cpp:242-275): the units standing in the
+        // channel's ground effect lose the same time as the channel bar, and the tick timer follows the new duration
+        // (DelaySpellAuraHolder → RefreshAuraPeriodicTimers) so the pushback does not leave them a full set of ticks.
+        Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_paladin, PushbackChannel, SpellCastTargets.ForSelf(), triggered: false));
+        _kit.Advance(500);
+
+        SpellAuraHolder holder = Assert.Single(_kit.System.GetAuras(_enemy));
+        SpellAura dot = holder.Auras[0]!;
+        DynamicObject ground = Assert.Single(_kit.System.DynamicObjects);
+        SpellCast channel = _kit.System.GetState(_paladin.Guid)!.CurrentCast!;
+        int durationBefore = holder.Duration;
+        int timerBefore = dot.PeriodicTimer;
+        int remainingBefore = ground.RemainingMs;
+
+        _kit.System.OnDamageTaken(_paladin, _enemy, 5, periodic: false);
+
+        Assert.Equal(channel.Timer + 1000, durationBefore); // the holder was counting with the channel
+        Assert.Equal(durationBefore - 1000, holder.Duration);
+        Assert.Equal(remainingBefore - 1000, ground.RemainingMs);
+        int period = (int)dot.Period;
+        int synced = holder.Duration > period ? holder.Duration % period : holder.Duration;
+        Assert.Equal(synced == 0 ? period : synced, dot.PeriodicTimer);
+        Assert.NotEqual(timerBefore, dot.PeriodicTimer);
+    }
+
+    public void Dispose() => _kit.Dispose();
 }

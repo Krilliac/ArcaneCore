@@ -102,8 +102,10 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// vmangos Spell::DelayedChannel (Spell.cpp:7502-7545): the channel loses the same decaying delay (at most what
-    /// is left), its auras on the caster and target are shortened by it, and the channel stops when nothing is left;
-    /// otherwise MSG_CHANNEL_UPDATE tells the caster.
+    /// is left), its auras on the caster and target are shortened by it, and each persistent area object of the
+    /// channel is delayed the same way (DynamicObject::Delay, DynamicObject.cpp:242-275) so units standing in it
+    /// lose the time and the ticks too. The channel stops when nothing is left; otherwise MSG_CHANNEL_UPDATE tells
+    /// the caster.
     /// </summary>
     private void DelayChannel(SpellCast cast)
     {
@@ -123,6 +125,7 @@ public sealed partial class SpellSystem
             cast.Timer -= delay;
         }
 
+        var shortened = new List<SpellAuraHolder>();
         Unit? target = ResolveUnitTarget(cast.Caster, cast.Targets);
         foreach (Unit unit in target is null || ReferenceEquals(target, cast.Caster) ? [cast.Caster] : new[] { cast.Caster, target })
         {
@@ -135,21 +138,12 @@ public sealed partial class SpellSystem
             foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == cast.Spell.Id
                 && h.CasterGuid == cast.Caster.Guid && ReferenceEquals(ResolveAuraCaster(h), cast.Caster) && !h.IsPermanent))
             {
-                holder.Duration = Math.Max(0, holder.Duration - delay);
-
-                // vmangos Unit::DelaySpellAuraHolder: "push down the tick timer with the delay, otherwise we can still get max
-                // ticks even with pushback" (RefreshAuraPeriodicTimers).
-                foreach (SpellAura? aura in holder.AuraSpan)
-                {
-                    if (aura is not null)
-                    {
-                        PeriodicTiming.SyncToDuration(aura, holder.Duration);
-                    }
-                }
-
-                SendAuraDuration(holder);
+                ShortenHolderForPushback(holder, delay);
+                shortened.Add(holder);
             }
         }
+
+        DelayPersistentAreaAuras(cast, delay, shortened);
 
         if (cast.Timer == 0)
         {
@@ -159,6 +153,24 @@ public sealed partial class SpellSystem
         {
             player.Session.Send(WorldOpcode.MsgChannelUpdate, SpellPackets.BuildChannelUpdate((uint)cast.Timer));
         }
+    }
+
+    /// <summary>
+    /// vmangos Unit::DelaySpellAuraHolder (Unit.cpp:4004-4023): the remaining time loses the pushback, and the tick
+    /// timer follows the new duration (RefreshAuraPeriodicTimers) so a shortened channel does not keep its full ticks.
+    /// </summary>
+    private void ShortenHolderForPushback(SpellAuraHolder holder, int delay)
+    {
+        holder.Duration = Math.Max(0, holder.Duration - delay);
+        foreach (SpellAura? aura in holder.AuraSpan)
+        {
+            if (aura is not null)
+            {
+                PeriodicTiming.SyncToDuration(aura, holder.Duration);
+            }
+        }
+
+        SendAuraDuration(holder);
     }
 
     /// <summary>
