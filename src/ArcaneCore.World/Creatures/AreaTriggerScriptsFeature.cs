@@ -17,8 +17,7 @@ namespace ArcaneCore.World.Creatures;
 /// player summon. Bound by the cmangos <c>scripted_areatrigger</c> ids (scriptdev2.sql) rather than a table, since the imported world has none.
 /// Runs on CMSG_AREATRIGGER after the volume check (<see cref="IAreaTriggerListener"/>); like the smart trigger seam it cannot end the
 /// handler, which matches these scripts: each of them returns false in cmangos, or true only after it did nothing further.
-/// Not yet ported: at_murkdeep and at_hive_tower (map script data), at_huldar_miran (temporary faction), at_wondervolt (trap use) and
-/// at_stormwind_recruiter (EventAI custom event).
+/// The other five scripts, which needed engine pieces first, are <see cref="AreaTriggerEngineScriptsFeature"/>.
 /// </summary>
 public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorldFeature, IAreaTriggerListener
 {
