@@ -1,10 +1,11 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 
 namespace ArcaneCore.Game.Combat;
 
 /// <summary>
 /// The pure duel predicates the combat hooks, the damage path and the spell checks share. They read only
-/// <see cref="Player.Duel"/>, so they work without a duel service. World thread.
+/// <see cref="Player.Duel"/> and who a unit acts for, so they work without a duel service. World thread.
 /// </summary>
 public static class DuelRules
 {
@@ -19,7 +20,7 @@ public static class DuelRules
     /// <summary>
     /// vmangos <c>WorldObject::GetReactionTo</c> duel clause (Object.cpp:3650-3652): a started, unfinished duel makes the two
     /// players' units always hostile to each other, before any faction or group rule. A pet, totem or charmed unit counts
-    /// through its controlling player (<see cref="IPlayerControlledUnit"/>).
+    /// through its controlling player (<see cref="ControllingPlayer"/>).
     /// </summary>
     public static bool IsOpponentHostile(Unit a, Unit b)
     {
@@ -31,7 +32,11 @@ public static class DuelRules
         return !ReferenceEquals(owner, other) && ReferenceEquals(duel.Opponent, other) && duel.StartTimeSeconds != 0 && !duel.Finished;
     }
 
-    /// <summary>The player a unit acts for: itself, or what <see cref="IPlayerControlledUnit"/> says (vmangos Unit::GetAffectingPlayer).</summary>
+    /// <summary>
+    /// The player a unit acts for (vmangos <c>Unit::GetAffectingPlayer</c>, Unit.cpp:4824-4833). A player with no charmer is
+    /// itself; a pet, guardian, totem or charmed unit is the player behind <c>UNIT_FIELD_SUMMONEDBY</c> / <c>UNIT_FIELD_CHARMEDBY</c>.
+    /// <see cref="IPlayerControlledUnit"/> is only the stand-in for a unit that does not publish those fields.
+    /// </summary>
     public static Player? ControllingPlayer(Unit unit)
-        => unit as Player ?? (unit as IPlayerControlledUnit)?.ControllingPlayer;
+        => unit.GetAffectingPlayer() ?? (unit as IPlayerControlledUnit)?.ControllingPlayer;
 }

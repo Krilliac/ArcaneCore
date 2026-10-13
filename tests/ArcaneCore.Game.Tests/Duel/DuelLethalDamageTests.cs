@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.Duel.DuelRig;
@@ -202,5 +204,47 @@ public sealed class DuelLethalDamageTests
         map.Combat.DealDamage(a, b, 5000);
 
         Assert.False(b.IsAlive);
+    }
+
+    [Fact]
+    public void ASummonedUnit_ThatOnlyPublishesItsOwner_IsClampedAsTheOpponent()
+    {
+        // Production pets set UNIT_FIELD_SUMMONEDBY and do not implement IPlayerControlledUnit. vmangos DealDamage
+        // (Unit.cpp:768-769) still treats that owner as the duel opponent, so the hit ends at 1 hp instead of killing.
+        using DuelRig rig = StartedDuel(out var kills);
+        var summon = new SummonedUnit();
+        summon.SetOwnerGuid(rig.A.Guid);
+        summon.Spawn(rig.Map, 13, 10);
+        Assert.False(summon is IPlayerControlledUnit);
+        Assert.True(DuelRules.IsOpponentHostile(summon, rig.B));
+
+        rig.Map.Combat.DealDamage(summon, rig.B, 5000);
+
+        Assert.Equal(1u, rig.B.Health);
+        Assert.True(rig.B.IsAlive);
+        Assert.Empty(kills);
+        Assert.Single(Packets(rig.SessionB, WorldOpcode.SmsgDuelWinner));
+    }
+
+    private sealed class SummonedUnit : Unit
+    {
+        private static uint s_counter = 8000;
+
+        public SummonedUnit()
+            : base(ObjectGuid.WithEntry(HighGuid.Unit, 1, Interlocked.Increment(ref s_counter)), Game.TypeId.Unit,
+                TypeMask.Object | TypeMask.Unit, UpdateFields.UnitEnd)
+        {
+            Level = 60;
+            MaxHealth = 500;
+            Health = 500;
+        }
+
+        public void Spawn(Map map, float x, float y)
+        {
+            Relocate(x, y, 83.5f, 0f, 0);
+            MapId = map.MapId;
+            Map = map;
+            map.Combat.Track(this);
+        }
     }
 }
