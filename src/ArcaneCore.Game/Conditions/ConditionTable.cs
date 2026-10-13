@@ -45,6 +45,9 @@ public sealed class ConditionTable
     private const uint ClassMaskAllPlayable = 0x5DF;
     private const int MaxReputationRank = 8;
 
+    /// <summary>SpellEffectIndex::MAX_EFFECT_INDEX (effects 0..2). IsValid drops an aura row at or above this.</summary>
+    private const uint MaxAuraEffectIndex = 3;
+
     private readonly Dictionary<uint, ConditionEntry> _entries;
 
     private ConditionTable(Dictionary<uint, ConditionEntry> entries, List<ConditionRejection> rejected)
@@ -124,6 +127,12 @@ public sealed class ConditionTable
                     ?? (r.Value4 != 0 ? CheckReference(r, r.Value4, accepted) : null);
             case ConditionType.Item or ConditionType.ItemWithBank:
                 return r.Value2 < 1 ? "item condition useless with count < 1" : null;
+            case ConditionType.Aura:
+                // Conditions.cpp IsValid: m_value2 >= MAX_EFFECT_INDEX skips the row. A later byte cast of
+                // 256 would otherwise ask HasAura for effect 0.
+                return r.Value2 >= MaxAuraEffectIndex
+                    ? $"aura effect index {r.Value2} must be 0..{MaxAuraEffectIndex - 1}"
+                    : null;
             case ConditionType.AreaId:
                 return r.Value2 > 1 ? $"area mode {r.Value2} must be 0..1" : null;
             case ConditionType.ReputationRankMin or ConditionType.ReputationRankMax:

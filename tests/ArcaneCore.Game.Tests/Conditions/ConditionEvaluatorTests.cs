@@ -467,4 +467,33 @@ public sealed class ConditionEvaluatorTests
         Assert.True(e.EvaluateOnMap(3, map));
         Assert.Null(e.EvaluateOnMap(3, other));
     }
+
+    [Fact]
+    public void Aura_EffectIndexAtOrAboveThree_IsDropped_AndDoesNotWrapToEffectZero()
+    {
+        // Conditions.cpp IsValid: m_value2 >= MAX_EFFECT_INDEX (3) erases the row. Casting the index to a
+        // byte would turn 256 into effect 0, so a player who only has effect 0 would pass a row that
+        // cmangos never loads. NOT of that row is dropped with it (the reference is no longer valid),
+        // rather than negating a false into a pass.
+        var ctx = new ConditionContext { HasAura = (_, spell, effect) => spell == 100 && effect == 0 };
+        ConditionTable table = ConditionTable.Build(
+        [
+            Row(1, ConditionType.Aura, 100, 3),
+            Row(2, ConditionType.Aura, 100, 256),
+            Row(3, ConditionType.Not, 2),
+            Row(4, ConditionType.Aura, 100, 0),
+            Row(5, ConditionType.Aura, 100, 2),
+        ]);
+        Assert.Equal([1u, 2u, 3u], table.Rejected.Select(r => r.Entry).OrderBy(id => id).ToArray());
+        Assert.Equal([4u, 5u], table.Entries.Select(e => e.Entry).OrderBy(id => id).ToArray());
+        Assert.Contains(table.Rejected, r => r.Entry == 2 && r.Reason.Contains("effect index"));
+
+        var evaluator = new ConditionEvaluator(table, ctx);
+        Player player = CreatePlayer();
+        Assert.False(evaluator.IsSatisfied(1, player, null));
+        Assert.False(evaluator.IsSatisfied(2, player, null));
+        Assert.False(evaluator.IsSatisfied(3, player, null));
+        Assert.True(evaluator.IsSatisfied(4, player, null));
+        Assert.False(evaluator.IsSatisfied(5, player, null));
+    }
 }
