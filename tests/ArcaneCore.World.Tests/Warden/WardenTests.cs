@@ -799,6 +799,7 @@ public sealed class WardenTests
         WorldSession session = Assert.Single(host.Registry.Sessions);
         var warden = new Client(key);
         await connection.SendAsync(WorldOpcode.CmsgWardenData, warden.Write(0xFF)); // reported at once
+        await WorldTestHost.WaitForAsync(() => feature.Find(session) is not null, "Warden attached to the session");
         WardenSession scanner = feature.Find(session)!;
         await WorldTestHost.WaitForAsync(() => !verdicts.IsEmpty, "the first failure to be reported");
         await connection.DisposeAsync();
@@ -846,6 +847,8 @@ public sealed class WardenTests
         await client.AuthenticateAsync("wardenkick", key);
         WorldSession session = Assert.Single(host.Registry.Sessions);
         WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
+        // OnAuthenticated runs on the session task after AUTH_OK is sent, so the client can see AUTH_OK before Warden is attached.
+        await WorldTestHost.WaitForAsync(() => feature.Find(session) is not null, "Warden attached to the session");
         Assert.Equal(WardenState.AwaitingModuleStatus, feature.Find(session)!.State);
 
         await client.SendAsync(WorldOpcode.CmsgWardenData, new Client(key).Write(0xFF));
@@ -1147,6 +1150,8 @@ public sealed class WardenTests
             {
                 await client.SendAsync(WorldOpcode.CmsgWardenData, warden.Write(0xFF)); // an unknown command while the module status is due
             }
+
+            await WorldTestHost.WaitForAsync(() => feature.Find(session) is not null, "Warden attached to the session");
 
             WardenSession scanner = feature.Find(session)!;
             await WorldTestHost.WaitForAsync(() => scanner.HeldVerdicts == 19, "the flood to be held");
