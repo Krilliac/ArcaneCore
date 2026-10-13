@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.WorldData.Loot;
 
 namespace ArcaneCore.Game.Loot;
@@ -48,15 +50,50 @@ public sealed partial class LootService
     }
 
     /// <summary>
-    /// vmangos Creature::IsSkinnableBy (Creature.h:308): the head start of the tapper has run out, or <paramref name="player"/> is a tapper. Combat
-    /// keeps no tap list yet, so the recipients of the corpse loot (the killer and their group at the time) stand in for <c>IsTappedBy</c>.
+    /// vmangos Creature::IsSkinnableBy (Creature.h:308) via IsTappedBy (Creature.cpp:1615-1632): the head start has run out, or
+    /// <paramref name="player"/> is the tapper, their pet is, they share <see cref="Creature.LootTapGroup"/>, or they are in a
+    /// battleground raid (a BG group counts as tapped). A kill that recorded no tap still treats the corpse loot's recipients as
+    /// the tappers: those are the credited killer and their group when damage never called <see cref="LootService.OnCreatureDamaged"/>.
     /// </summary>
     public bool IsSkinnableBy(Player player, Creature creature)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(creature);
-        return creature.SkinningForOthersMs == 0
-            || (_bags.TryGetValue(creature.Guid, out var entry) && entry.Bag.Recipients.Contains(player.Guid));
+        if (creature.SkinningForOthersMs == 0)
+        {
+            return true;
+        }
+
+        if (IsTappedBy(player, creature))
+        {
+            return true;
+        }
+
+        // No tap was stored (a scripted kill, or a test that only publishes UnitKilled). The corpse recipients are that killer.
+        return creature.LootTapPlayerGuid.IsEmpty && creature.LootTapGroup is null
+            && _bags.TryGetValue(creature.Guid, out var entry) && entry.Bag.Recipients.Contains(player.Guid);
+    }
+
+    /// <summary>vmangos Creature::IsTappedBy (Creature.cpp:1615-1632).</summary>
+    private bool IsTappedBy(Player player, Creature creature)
+    {
+        if (creature.LootTapPlayerGuid == player.Guid)
+        {
+            return true;
+        }
+
+        if (!creature.LootTapPlayerGuid.IsEmpty && player.PetGuid == creature.LootTapPlayerGuid)
+        {
+            return true;
+        }
+
+        Group? playerGroup = Groups?.GroupOf(player);
+        if (playerGroup is { IsBattlegroundGroup: true })
+        {
+            return true;
+        }
+
+        return playerGroup is not null && ReferenceEquals(playerGroup, creature.LootTapGroup);
     }
 
     /// <summary>vmangos <c>loot.isLooted()</c> of a corpse: nothing (money or items) is left to take. A corpse without loot counts as looted.</summary>
