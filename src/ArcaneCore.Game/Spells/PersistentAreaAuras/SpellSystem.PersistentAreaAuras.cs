@@ -256,6 +256,56 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// vmangos DynamicObject::Delay (DynamicObject.cpp:242-275), the persistent-area half of Spell::DelayedChannel: each
+    /// object of the channel loses the pushback, and so does every holder it has applied, once. A holder that also
+    /// carries a later persistent-area or far-sight effect waits for that effect's object, so a multi-effect spell is
+    /// not shortened once per effect. Holders already shortened on the caster or the channel target are left as they are.
+    /// </summary>
+    private void DelayPersistentAreaAuras(SpellCast cast, int delay, List<SpellAuraHolder> alreadyShortened)
+    {
+        foreach (DynamicObject dynamic in _dynamicObjects.Where(d => !d.IsDeleted && ReferenceEquals(d.Caster, cast.Caster) && d.Spell.Id == cast.Spell.Id).ToArray())
+        {
+            dynamic.RemainingMs = Math.Max(0, dynamic.RemainingMs - delay);
+            foreach (ObjectGuid guid in dynamic.Affected.Keys.ToArray())
+            {
+                if (Units.Find(cast.Caster, guid) is not { } unit || IsQuestSettlementPending(unit)
+                    || GetState(unit.Guid) is not { } state || !ReferenceEquals(state.Unit, unit))
+                {
+                    continue;
+                }
+
+                foreach (SpellAuraHolder holder in state.Auras.Where(h => !h.IsRemoved && !h.IsPermanent && h.Spell.Id == cast.Spell.Id
+                    && h.CasterGuid == cast.Caster.Guid).ToArray())
+                {
+                    if (alreadyShortened.Exists(other => ReferenceEquals(other, holder)) || LaterGroundEffectOwns(holder, dynamic.EffectIndex))
+                    {
+                        continue;
+                    }
+
+                    ShortenHolderForPushback(holder, delay);
+                    alreadyShortened.Add(holder);
+                }
+            }
+        }
+    }
+
+    /// <summary>vmangos DynamicObject::Delay: a later persistent-area or far-sight aura on the same holder owns the single shortening.</summary>
+    private static bool LaterGroundEffectOwns(SpellAuraHolder holder, int effectIndex)
+    {
+        SpellInfo spell = holder.Spell;
+        for (int i = effectIndex + 1; i < spell.Effects.Count && i < SpellConstants.MaxEffects; i++)
+        {
+            SpellEffectName effect = spell.Effects[i].Effect;
+            if ((effect == SpellEffectName.PersistentAreaAura || effect == SpellEffectName.AddFarsight) && holder.Auras[i] is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// vmangos CreateSpellAuraHolder + PersistentAreaAura: the spell's duration (a channel's remaining time), the effect value rolled for the caster
     /// through the value modifiers and, for a periodic damage or heal effect, the caster side of its bonus (Aura::HandlePeriodicDamage on apply).
     /// </summary>
