@@ -168,6 +168,39 @@ public sealed class PlayerbotCadenceTests
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>Leaving a mob that is another player's drops the route to it through <c>AbandonRoute</c>: with no other target, the settle stops the bot.</summary>
+    [Fact]
+    public async Task LeavingSomeoneElsesMob_StopsABotWalkingToIt()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } });
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                var leave = typeof(PlayerbotBrain).GetMethod("LeaveSomeoneElses", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                var routeField = typeof(PlayerbotBrain).GetField("_route", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                var mob = new ArcaneCore.Game.Creatures.Creature(993903, new ArcaneCore.Kernel.WorldData.Creatures.CreatureTemplate
+                {
+                    Entry = 993903, Name = "tagged mob", CreatureType = 1, MinLevel = 20, MaxLevel = 20,
+                    MinLevelHealth = 2000, MaxLevelHealth = 2000,
+                }, null, ArcaneCore.Kernel.WorldData.Creatures.CreatureContent.Empty, new Random(993903));
+
+                PlayerbotRoute route = StartWalk(host, session, 5000, 4);
+                routeField.SetValue(brain, route);
+                uint renewals = PlayerbotMotion.RenewalsOf(player);
+                leave.Invoke(brain, [player, mob, host.World.NowMs]);
+                Assert.Null(routeField.GetValue(brain));
+                ManagedPlayerbotFeature.SettleMotion(session, brain, player, brain.Goal, renewals, 5000);
+                Assert.False(player.Movement.HasFlag(MovementFlags.Forward), "kept walking to a mob it left");
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
     /// <summary>A stun or a fear takes the bot's control: the walk stops at the next pump, whatever the lease says.</summary>
     [Theory]
     [InlineData(UnitFlags.Stunned)]

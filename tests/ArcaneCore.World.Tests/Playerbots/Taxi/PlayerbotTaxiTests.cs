@@ -266,6 +266,28 @@ public sealed partial class PlayerbotTaxiTests
     }
 
     [Fact]
+    public async Task AMountedBot_IsDismountedByTheExpressFlightRequest_AndFlies()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            Rig.Know(state, 1, 2, 3);
+            player.Money = 1000;
+            PlayerbotOptions options = Options();
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(3), options));
+            Assert.Equal([1u, 2u, 3u], Assert.IsType<TaxiTrip>(PlayerbotTaxi.TripOf(player)).Nodes);
+
+            // More than two nodes go by the express request, which the server refuses a mounted rider just the same.
+            player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, TaxiFixture.GryphonDisplay);
+            rig.Session.ManagedBudget = new ManagedActionBudget(2);
+            Assert.Equal(TaxiStep.Traveling, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out string? failure));
+            Assert.Null(failure);
+            Assert.True(PlayerbotTaxi.IsFlying(player));
+            return 0;
+        });
+    }
+
+    [Fact]
     public async Task TheBrain_NeitherThinksNorMoves_WhileTheBotIsInTheAir_AndContinuesAfterTheLanding()
     {
         await using Rig rig = await Rig.StartAsync();

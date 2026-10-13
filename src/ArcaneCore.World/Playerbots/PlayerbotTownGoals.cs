@@ -39,7 +39,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// <summary>How long a class trainer that had nothing for the bot is not asked again (unless its level changes or it has more money).</summary>
     internal const uint TrainerQuoteMemoMs = 5_000;
 
-    private readonly Dictionary<ObjectGuid, (uint Until, uint Level, uint Money)> _noTrainerOffer = [];
+    private readonly Dictionary<ObjectGuid, (uint Until, uint Level, uint Money, uint Limit)> _noTrainerOffer = [];
 
     /// <summary>How many times a class trainer's offer was worked out rather than read from the memo (tests).</summary>
     internal int TrainerQuotesAsked { get; private set; }
@@ -943,18 +943,20 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     {
         uint now = session.World.NowMs;
         uint level = player.Level, money = player.Money;
-        if (_noTrainerOffer.TryGetValue(npc.Guid, out (uint Until, uint Level, uint Money) memo)
-            && memo.Level == level && money <= memo.Money && unchecked((int)(memo.Until - now)) > 0)
+        uint? spendable = ClassTrainingLimit(player);
+        uint limit = spendable ?? uint.MaxValue; // the quote is weighed against this limit: a larger one can make a spell affordable
+        if (_noTrainerOffer.TryGetValue(npc.Guid, out (uint Until, uint Level, uint Money, uint Limit) memo)
+            && memo.Level == level && money <= memo.Money && limit <= memo.Limit && unchecked((int)(memo.Until - now)) > 0)
             return false;
         TrainerQuotesAsked++;
-        if (services.GetClassTrainerQuote(player, npc, 0, ClassTrainingLimit(player)) is not null)
+        if (services.GetClassTrainerQuote(player, npc, 0, spendable) is not null)
         {
             _noTrainerOffer.Remove(npc.Guid);
             return true;
         }
 
         if (_noTrainerOffer.Count >= MaxRefusals) _noTrainerOffer.Clear();
-        _noTrainerOffer[npc.Guid] = (unchecked(now + TrainerQuoteMemoMs), level, money);
+        _noTrainerOffer[npc.Guid] = (unchecked(now + TrainerQuoteMemoMs), level, money, limit);
         return false;
     }
 

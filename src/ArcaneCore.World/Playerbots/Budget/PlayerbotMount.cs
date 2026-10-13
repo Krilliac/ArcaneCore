@@ -195,7 +195,8 @@ internal sealed class PlayerbotMount
         or WorldOpcode.CmsgQuestgiverHello or WorldOpcode.CmsgQuestgiverQueryQuest or WorldOpcode.CmsgQuestgiverAcceptQuest
         or WorldOpcode.CmsgQuestgiverCompleteQuest or WorldOpcode.CmsgQuestgiverChooseReward or WorldOpcode.CmsgAuctionListItems
         or WorldOpcode.CmsgAuctionPlaceBid or WorldOpcode.CmsgAuctionSellItem or WorldOpcode.CmsgBankerActivate
-        or WorldOpcode.CmsgSpiritHealerActivate or WorldOpcode.CmsgActivatetaxi;
+        or WorldOpcode.CmsgSpiritHealerActivate or WorldOpcode.CmsgActivatetaxi
+        or WorldOpcode.CmsgActivatetaxiexpress;
 
     /// <summary>Takes the bot's mount off when <paramref name="opcode"/> is one a rider cannot send. Called on the world thread by <c>TryManagedAction</c>.</summary>
     internal static void DismountForAction(WorldSession session, Player player, WorldOpcode opcode)

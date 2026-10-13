@@ -865,12 +865,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (_attacking || player.Combat.Victim is not null)
                 {
                     if (_session.TryManagedAction(WorldOpcode.CmsgAttackstop, []))
-                    { _attacking = false; _target = null; _route = null; }
+                    { _attacking = false; _target = null; AbandonRoute(); }
                     _goal = PlayerbotGoalKind.Mount;
                     return;
                 }
                 _target = null;
-                _route = null;
+                AbandonRoute();
                 if (_riding.Update(player, interval))
                 { _goal = PlayerbotGoalKind.Mount; TargetEntry = _riding.TargetEntry; return; }
             }
@@ -1067,7 +1067,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _contention.MarkSomeoneElses(target.Guid.Value, _session.World.NowMs);
             _contention.NoteLostMob(target.Entry);
             _target = null;
-            _route = null;
+            AbandonRoute();
             _attacking = false;
             _lootOpened = false;
             TargetEntry = 0;
@@ -1812,7 +1812,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _contention.ReleaseClaim();
         if (_attacking || ReferenceEquals(player.Combat.Victim, mob)) _session.TryManagedAction(WorldOpcode.CmsgAttackstop, []);
         _target = null;
-        _route = null;
+        AbandonRoute();
         _attacking = false;
         _lootOpened = false;
         TargetEntry = 0;
