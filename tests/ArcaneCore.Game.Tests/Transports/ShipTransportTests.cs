@@ -120,6 +120,35 @@ public sealed class ShipTransportTests
     }
 
     [Fact]
+    public void WrappedWorldClock_DoesNotFreezeTheShipOrItsPassenger()
+    {
+        WorldRuntime world = ManualWorld();
+        ShipTransport ferry = Install(world, Ferry).FindByEntry(Ferry)!;
+        Player player = TestWorld.CreatePlayer(1, 100, 0, new FakeSession(1));
+        world.AddPlayer(player);
+        player.ApplyMovement(Aboard(ferry, 3f, 0f, 0f), world.NowMs);
+        Assert.True(ferry.AddPassenger(player));
+
+        Advance(world, 30000); // mid-route: x=250 facing pi, offset +3 is world x=247
+        Assert.Equal(30000u, ferry.PathProgress);
+        Assert.Equal(250f, ferry.X, 1);
+        Assert.Equal(247f, player.X, 1);
+
+        // Path time counts from creation, so this step — the uint32 distance from 30 s back to 1 s —
+        // is what a world-clock wrap looks like. The old >= comparison treated the smaller timestamp
+        // as time running backwards and left the ship, and the passenger, where they were.
+        world.RunTick(unchecked(1000u - 30000u));
+        world.RunTick(50); // the teleport frame returns before the stop; the next tick settles on it
+
+        Assert.Equal(1050u, ferry.PathProgress);
+        Assert.Equal(100f, ferry.X, 1);
+        Assert.False(ferry.IsMoving);
+        Assert.Same(ferry, player.Transport);
+        Assert.Equal(97f, player.X, 1); // facing pi: offset +3 is world -3
+        Assert.Equal(0f, player.Y, 1);
+    }
+
+    [Fact]
     public void Boarding_FromAnotherShipOrLand_ComputesTheOffsetFromTheWorldPosition()
     {
         WorldRuntime world = ManualWorld();

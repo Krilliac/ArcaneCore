@@ -242,12 +242,17 @@ public sealed class ShipTransport : WorldObject
         }
 
         uint currentMsTime = unchecked(nowMs - _creationMs + _startProgress);
-        if (_pathProgress >= currentMsTime)
+        // Same-tick re-entry after a map change (vmangos: the path progress already equals this timestamp).
+        // The step is unsigned: NowMs is a uint32 and wraps after 49.7 days, and a numerically smaller
+        // timestamp is that wrap, not time running backwards. Comparing the raw timestamps froze the ship
+        // there — and everyone aboard it — for the rest of the uptime.
+        uint elapsed = unchecked(currentMsTime - _pathProgress);
+        if (elapsed == 0)
         {
-            return; // map transition and update in the same tick
+            return;
         }
 
-        uint diff = currentMsTime - _pathProgress;
+        uint diff = elapsed;
         _pathProgress = currentMsTime; // vmangos: unless a stop is pending, which nothing sets
 
         uint pathProgress = _pathProgress % Period;
