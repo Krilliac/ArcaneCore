@@ -196,14 +196,14 @@ internal static class PlayerbotQaClassifier
         string who = string.Create(CultureInfo.InvariantCulture, $"ender {target}{(spawns[0].Name.Length == 0 ? string.Empty : " (" + spawns[0].Name + ")")}");
         string subject = string.Create(CultureInfo.InvariantCulture, $"quest {s.Quest}{(title is null ? string.Empty : " (" + title + ")")}");
         string where;
+        QaEnderFact? best = null;
+        float bestSquared = float.MaxValue;
         if (!s.HasPosition)
         {
             where = "its distance from the bot is unknown (the stall has no position)";
         }
         else
         {
-            QaEnderFact? best = null;
-            float bestSquared = float.MaxValue;
             foreach (QaEnderFact e in spawns)
             {
                 if (e.Map != s.Map) continue;
@@ -217,9 +217,34 @@ internal static class PlayerbotQaClassifier
                 : string.Create(CultureInfo.InvariantCulture, $"on another map ({string.Join('/', spawns.Select(e => e.Map).Distinct())}; the bot is on map {s.Map}), where the bot cannot walk");
         }
 
+        string action = s.Bot?.TurnInRefusal is { Length: > 0 } refusal
+            ? $"the bot reached its {who} and turn-in was refused ({FormatTurnInRefusal(refusal)})"
+            : best is not null && bestSquared <= 10f * 10f
+                ? $"the bot reached its {who} but could not complete the turn-in"
+                : $"the bot was walking to its {who}";
+
         return new QaClassification(QaCause.Unknown, string.Create(CultureInfo.InvariantCulture,
-            $"no missing content found for {subject}: the bot was walking to its {who}, {where}"), title);
+            $"no missing content found for {subject}: {action}, {where}"), title);
     }
+
+    private static string FormatTurnInRefusal(string code) => code switch
+    {
+        "InventoryFull" => "inventory full",
+        "MissingDeliveryItem" => "missing required delivery item",
+        "NotEnoughMoney" => "not enough money",
+        "DuplicateUniqueItem" => "duplicate unique reward item",
+        "ReputationRefused" => "reputation Unfriendly or worse",
+        "OutOfRange" => "out of interaction range",
+        "NoRouteToVisibleEnder" => "no exact route to visible ender",
+        "IncompleteAtEnder" => "quest requirements not met at ender",
+        "EnderDead" => "ender is dead",
+        "EnderHostile" => "ender is hostile",
+        "EnderInCombat" => "ender is in combat",
+        "EnderNotInteractable" => "ender is not interactable",
+        "RewardRefused" => "reward choice refused",
+        "StageTimeout" => "turn-in stage timed out",
+        _ => code,
+    };
 
     private static int Spawns(QaSignal s, IQaContentFacts facts, uint entry)
         => OnItsMap(s) ? facts.SpawnCount(s.Map, entry) : facts.SpawnCountAnyMap(entry);

@@ -92,6 +92,12 @@ public static partial class QuestPackets
     }
 
     /// <summary>
+    /// Whether an <see cref="RequestItems"/> payload has the completable flag set (<c>3u</c> vs <c>0u</c> at the fourth-from-last UInt32).
+    /// </summary>
+    public static bool IsRequestItemsCompletable(ReadOnlySpan<byte> payload)
+        => payload.Length >= 16 && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(payload.Length - 12, 4)) != 0;
+
+    /// <summary>
     /// SMSG_QUESTGIVER_QUEST_COMPLETE (5875): quest, 3, XP (0 at the maximum level), configured
     /// money (plus RewMoneyMaxLevel at the maximum level), then fixed item/count pairs. Choice
     /// rewards are excluded.

@@ -8,7 +8,7 @@ internal sealed record QaAttackerFact(uint Entry, byte Level, byte MinLevel, byt
 /// <summary>Per occurrence context. It is evidence, never part of the finding fingerprint or publication threshold.</summary>
 internal sealed record QaBotObservation(int Level, string Race, string Team, string Class, string Goal, uint Quest,
     uint Graveyard, float? GraveyardDistance, string Source, IReadOnlyList<QaAttackerFact> AttackerFacts,
-    IReadOnlyList<string>? DeathSources = null)
+    IReadOnlyList<string>? DeathSources = null, string? TurnInRefusal = null)
 {
     internal string ToLogSuffix()
     {
@@ -16,8 +16,9 @@ internal sealed record QaBotObservation(int Level, string Race, string Team, str
             string.Create(CultureInfo.InvariantCulture, $"{a.Entry}:{a.Level}:{a.MinLevel}:{a.MaxLevel}:{a.Rank}:{(a.Guard ? 1 : 0)}:{(a.Hostile ? 1 : 0)}")));
         string distance = GraveyardDistance is { } yards ? yards.ToString("F1", CultureInfo.InvariantCulture) : "unknown";
         string sources = DeathSources is { Count: > 0 } ? ",deathSources=" + string.Join('/', DeathSources) : string.Empty;
+        string refusal = TurnInRefusal is { Length: > 0 } && Word(TurnInRefusal) ? ",turnInRefusal=" + TurnInRefusal : string.Empty;
         return string.Create(CultureInfo.InvariantCulture,
-            $" qa[level={Level},race={Race},team={Team},class={Class},goal={Goal},quest={Quest},graveyard={Graveyard},distance={distance},source={Source},attackerFacts={facts}{sources}]");
+            $" qa[level={Level},race={Race},team={Team},class={Class},goal={Goal},quest={Quest},graveyard={Graveyard},distance={distance},source={Source},attackerFacts={facts}{sources}{refusal}]");
     }
 
     internal static QaBotObservation? FromLog(string message)
@@ -27,7 +28,7 @@ internal sealed record QaBotObservation(int Level, string Race, string Team, str
         int end = message.IndexOf(']', start + 4);
         if (end < 0 || end - start > 1024) return null;
         string[] fields = message[(start + 4)..end].Split(',');
-        if (fields.Length is not (10 or 11) || !Field(fields[0], "level", out string? levelText)
+        if (fields.Length is < 10 or > 12 || !Field(fields[0], "level", out string? levelText)
             || !Field(fields[1], "race", out string? race) || !Word(race)
             || !Field(fields[2], "team", out string? team) || team is not ("Alliance" or "Horde")
             || !Field(fields[3], "class", out string? @class) || !Word(@class)
@@ -66,14 +67,27 @@ internal sealed record QaBotObservation(int Level, string Race, string Team, str
         }
 
         List<string>? sources = null;
-        if (fields.Length == 11)
+        string? turnInRefusal = null;
+        for (int i = 10; i < fields.Length; i++)
         {
-            if (!Field(fields[10], "deathSources", out string? sourceList, 512)) return null;
-            sources = [.. sourceList.Split('/')];
-            if (sources.Count is < 1 or > 16 || sources.Any(s => !Word(s))) return null;
+            if (Field(fields[i], "deathSources", out string? sourceList, 512))
+            {
+                if (sources is not null) return null;
+                sources = [.. sourceList.Split('/')];
+                if (sources.Count is < 1 or > 16 || sources.Any(s => !Word(s))) return null;
+            }
+            else if (Field(fields[i], "turnInRefusal", out string? refusalText, 32))
+            {
+                if (turnInRefusal is not null || !Word(refusalText)) return null;
+                turnInRefusal = refusalText;
+            }
+            else
+            {
+                return null;
+            }
         }
 
-        return new QaBotObservation(level, race, team, @class, goal, quest, graveyard, distance, source, facts, sources);
+        return new QaBotObservation(level, race, team, @class, goal, quest, graveyard, distance, source, facts, sources, turnInRefusal);
     }
 
     private static bool Field(string text, string name, out string value, int maxLength = 32)
