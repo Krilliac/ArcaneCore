@@ -304,6 +304,21 @@ public class Item : WorldObject
         clone.SetUInt32(UpdateFields.ItemFieldFlags, GetUInt32(UpdateFields.ItemFieldFlags));
         clone.SetUInt32(UpdateFields.ItemFieldDuration, GetUInt32(UpdateFields.ItemFieldDuration));
         clone.SetInt32(UpdateFields.ItemFieldRandomPropertiesId, RandomPropertyId);
+        // vmangos Item::CloneItem calls SetItemRandomProperties (Item.cpp:1134-1146, 816-833). A positive
+        // property id also writes PROP_ENCHANTMENT_SLOT_0..2. Copying the id alone leaves a split stack
+        // (and any other cloned portion of a move) showing the property with none of its enchantments.
+        // Permanent and temporary enchants are not part of that call and stay on the original stack.
+        if (RandomPropertyId > 0)
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                int field = UpdateFields.ItemFieldEnchantment + ((Crafting.Enchanting.EnchantSlots.Property0 + i) * 3);
+                clone.SetUInt32(field, GetUInt32(field));
+                clone.SetUInt32(field + 1, GetUInt32(field + 1));
+                clone.SetUInt32(field + 2, GetUInt32(field + 2));
+            }
+        }
+
         return clone;
     }
 
