@@ -756,7 +756,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_BATTLEGROUND_PLAYER_LEFT` | `0x02ED` | — | 0 | — |
 | `CMSG_BATTLEMASTER_JOIN` | `0x02EE` | handled | — | — |
 | `SMSG_ADDON_INFO` | `0x02EF` | — | 1577 | decoded |
-| `CMSG_PET_UNLEARN` | `0x02F0` | unhandled | — | — |
+| `CMSG_PET_UNLEARN` | `0x02F0` | handled | — | — |
 | `SMSG_PET_UNLEARN_CONFIRM` | `0x02F1` | — | 0 | — |
 | `SMSG_PARTY_MEMBER_STATS_FULL` | `0x02F2` | — | 0 | — |
 | `CMSG_PET_SPELL_AUTOCAST` | `0x02F3` | handled | — | — |
