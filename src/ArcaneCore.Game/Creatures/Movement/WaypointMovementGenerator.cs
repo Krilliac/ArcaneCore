@@ -50,6 +50,7 @@ internal sealed class WaypointMovementGenerator(
     private bool _arrivalDone;
     private int _waitMs;
     private uint _lastReachedPoint;
+    private bool _retryStart;
 
     public MovementGeneratorType Type => MovementGeneratorType.Waypoint;
 
@@ -74,6 +75,7 @@ internal sealed class WaypointMovementGenerator(
         _arrivalDone = false;
         _waitMs = 0;
         _lastReachedPoint = 0;
+        _retryStart = false;
         StartMove(creature, mover);
     }
 
@@ -85,6 +87,7 @@ internal sealed class WaypointMovementGenerator(
         }
 
         _arrivalDone = false;
+        _retryStart = false;
         StartMove(creature, mover);
     }
 
@@ -106,6 +109,12 @@ internal sealed class WaypointMovementGenerator(
                 _arrivalDone = false; // the same leg again once the cast is over
             }
 
+            return true;
+        }
+
+        if (_retryStart && _waitMs <= 0)
+        {
+            StartMove(creature, mover); // the last attempt found the path budget spent
             return true;
         }
 
@@ -222,6 +231,11 @@ internal sealed class WaypointMovementGenerator(
         SplineFacing facing = node.Orientation != NoOrientation && node.WaitTimeMs != 0 ? SplineFacing.ToAngle(node.Orientation) : SplineFacing.None;
         bool run = (creature.Template.Behaviour & CreatureBehaviourFlags.AlwaysRun) != 0
             || (node.Run && mover.MovementOptions.HonorWaypointRunColumn);
-        mover.MovePath(creature, mover.FindPath(creature, new Vector3(node.X, node.Y, node.Z)), run, facing);
+        IReadOnlyList<Vector3> route = mover.FindPath(creature, new Vector3(node.X, node.Y, node.Z));
+        _retryStart = route.Count == 0; // empty: the search budget is spent, the same leg is started again on the next update
+        if (!_retryStart)
+        {
+            mover.MovePath(creature, route, run, facing);
+        }
     }
 }

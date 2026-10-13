@@ -14,9 +14,9 @@ namespace ArcaneCore.Game.Creatures;
 internal interface ICreaturePathQuery
 {
     /// <summary>
-    /// The path to <paramref name="destination"/> as <see cref="ICreatureMover.FindPath"/> gives it; <paramref name="reachable"/> is false
-    /// when the pathfinder found no path (<see cref="Maps.Collision.PathType.NoPath"/>, the creature then goes straight) or only a partial
-    /// one (<see cref="Maps.Collision.PathType.Incomplete"/>). Without navigation data everything is reachable.
+    /// The path to <paramref name="destination"/>; <paramref name="reachable"/> is false when the pathfinder found no path
+    /// (<see cref="Maps.Collision.PathType.NoPath"/>: the result is EMPTY and the creature does not move) or only a partial
+    /// one (<see cref="Maps.Collision.PathType.Incomplete"/>: the creature walks it). Without navigation data everything is reachable.
     /// </summary>
     IReadOnlyList<Vector3> FindPath(Creature creature, Vector3 destination, out bool reachable);
 
@@ -192,14 +192,19 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
             ? query.FindPath(creature, destination, out reachable)
             : mover.FindPath(creature, destination);
 
-        // A stuck chaser's partial path ends where it already stands: no zero-length spline (and no SMSG_MONSTER_MOVE) every recheck.
-        if (path.Count > 0 && Vector3.DistanceSquared(path[^1], new Vector3(creature.X, creature.Y, creature.Z)) > ArrivedEpsilon * ArrivedEpsilon)
+        // PATHFIND_NOPATH (path is empty, TargetedMovementGenerator.cpp:188-189): no move. The creature stands (or runs out the spline it
+        // has) and the re-check in RecheckMs asks again; meanwhile IsReachable is false, which feeds the unreachable-target evade.
+        if (path.Count > 0)
         {
-            mover.MovePath(creature, path, Run(creature), SplineFacing.None);
-        }
-        else if (creature.IsMoving)
-        {
-            mover.StopMoving(creature);
+            // A stuck chaser's partial path ends where it already stands: no zero-length spline (and no SMSG_MONSTER_MOVE) every recheck.
+            if (Vector3.DistanceSquared(path[^1], new Vector3(creature.X, creature.Y, creature.Z)) > ArrivedEpsilon * ArrivedEpsilon)
+            {
+                mover.MovePath(creature, path, Run(creature), SplineFacing.None);
+            }
+            else if (creature.IsMoving)
+            {
+                mover.StopMoving(creature);
+            }
         }
 
         _aimedAt = targetPos;
@@ -460,9 +465,27 @@ internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : 
             z = mover.GetHeight(creature.MapId, x, y, creature.Z) ?? creature.Z;
         }
 
-        mover.MovePath(creature, mover.FindPath(creature, new Vector3(x, y, z)), run: true, SplineFacing.None);
-        _pauseMs = mover.URand(500, 1000);
+        PlannedPath plan = mover.PlanPath(creature, new Vector3(x, y, z));
+        switch (plan.Outcome)
+        {
+            case PathOutcome.NoPath:
+                // vmangos (:60-62): no path, wait 1-1.5 s and pick another point; the creature does not run through the wall.
+                _pauseMs = mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
+                return;
+            case PathOutcome.Deferred:
+                _pauseMs = 0; // the search budget is spent: ask again on the next update
+                return;
+            default:
+                mover.MovePath(creature, plan.Corners, run: true, SplineFacing.None);
+                _pauseMs = mover.URand(500, 1000);
+                return;
+        }
     }
+
+    /// <summary>How long a flight with no path waits before it picks another point (vmangos urand(1000, 1500), FleeingMovementGenerator.cpp:62).</summary>
+    public const int NoPathRetryMinMs = 1000;
+
+    public const int NoPathRetryMaxMs = 1500;
 
     private static float Sq(float v) => v * v;
 
@@ -475,7 +498,12 @@ internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : 
 /// </summary>
 internal sealed class HomeMovementGenerator(CreatureHome home) : ICreatureMovementGenerator
 {
+    /// <summary>How long a return home may wait for path budget before the creature is teleported home instead.</summary>
+    public const int DeferredTeleportMs = 3000;
+
     private bool _arrived;
+    private bool _waitingForBudget;
+    private int _waitedMs;
 
     public MovementGeneratorType Type => MovementGeneratorType.Home;
 
@@ -484,16 +512,54 @@ internal sealed class HomeMovementGenerator(CreatureHome home) : ICreatureMoveme
     public void Initialize(Creature creature, ICreatureMover mover)
     {
         _arrived = false;
+        _waitingForBudget = false;
+        _waitedMs = 0;
+        Start(creature, mover);
+    }
+
+    /// <summary>
+    /// vmangos HomeMovementGenerator::Initialize (HomeMovementGenerator.cpp:58-71): run home when the path is a NORMAL one (a whole mesh
+    /// path, or the straight line of a map with no mesh data); with no path or only a partial one (<c>too far away or no path</c>) the
+    /// creature is teleported home, never walked through the geometry. A spent search budget waits for a later update, and past
+    /// <see cref="DeferredTeleportMs"/> teleports too. Either way the generator ends the same way a run does, so the reset and the AI's
+    /// JustReachedHome happen as usual.
+    /// </summary>
+    private void Start(Creature creature, ICreatureMover mover)
+    {
         var destination = new Vector3(home.X, home.Y, home.Z);
 
         // vmangos sets the final facing only when the spawn point is the target (HomeMovementGenerator.cpp:54-56, 64-65); a position a
         // movement generator supplied (GetResetPosition) carries no orientation (NaN here) and the creature faces its travel direction.
-        SplineFacing facing = float.IsNaN(home.Orientation) ? SplineFacing.None : SplineFacing.ToAngle(home.Orientation);
-        mover.MovePath(creature, mover.FindPath(creature, destination), run: true, facing);
+        PlannedPath plan = mover.PlanPath(creature, destination);
+        switch (plan.Outcome)
+        {
+            case PathOutcome.Deferred when _waitedMs < DeferredTeleportMs:
+                _waitingForBudget = true;
+                return;
+            case PathOutcome.Mesh or PathOutcome.Direct:
+                _waitingForBudget = false;
+                SplineFacing facing = float.IsNaN(home.Orientation) ? SplineFacing.None : SplineFacing.ToAngle(home.Orientation);
+                mover.MovePath(creature, plan.Corners, run: true, facing);
+                return;
+            default:
+                _waitingForBudget = false;
+                mover.TeleportHome(creature, home.X, home.Y, home.Z, float.IsNaN(home.Orientation) ? creature.Orientation : home.Orientation);
+                return;
+        }
     }
 
     public bool Update(Creature creature, ICreatureMover mover, uint diffMs)
     {
+        if (_waitingForBudget)
+        {
+            _waitedMs += (int)Math.Min(diffMs, int.MaxValue);
+            Start(creature, mover);
+            if (_waitingForBudget)
+            {
+                return true;
+            }
+        }
+
         if (creature.IsMoving)
         {
             return true;
@@ -524,11 +590,30 @@ internal sealed class PointMovementGenerator(uint id, Vector3 point, bool run) :
     public void Initialize(Creature creature, ICreatureMover mover)
     {
         _arrived = false;
-        mover.MovePath(creature, mover.FindPath(creature, point), run, SplineFacing.None);
+        Start(creature, mover);
     }
+
+    /// <summary>The point is authored: the mesh path, the straight line when the mesh has none; an empty path (budget spent) waits for a later update.</summary>
+    private void Start(Creature creature, ICreatureMover mover)
+    {
+        IReadOnlyList<Vector3> path = mover.FindPath(creature, point);
+        _waitingForBudget = path.Count == 0;
+        if (!_waitingForBudget)
+        {
+            mover.MovePath(creature, path, run, SplineFacing.None);
+        }
+    }
+
+    private bool _waitingForBudget;
 
     public bool Update(Creature creature, ICreatureMover mover, uint diffMs)
     {
+        if (_waitingForBudget)
+        {
+            Start(creature, mover);
+            return true;
+        }
+
         if (creature.IsMoving)
         {
             return true;

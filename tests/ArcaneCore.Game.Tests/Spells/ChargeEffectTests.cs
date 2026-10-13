@@ -260,7 +260,7 @@ public sealed class ChargeEffectTests
     }
 
     [Fact]
-    public void Charge_WithNoPathAtAll_GoesStraight()
+    public void Charge_WithNoPathAtAll_MakesNoMove()
     {
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1, 0, 0);
@@ -269,7 +269,7 @@ public sealed class ChargeEffectTests
 
         kit.System.CastSpell(caster, Charge, SpellCastTargets.ForUnit(target.Guid), triggered: true);
 
-        Assert.Equal(20f - Gap(caster, target), caster.X, 3);
+        Assert.Equal(0f, caster.X, 3); // vmangos ChargeMovementGenerator::Initialize returns on PATHFIND_NOPATH: no straight line through the geometry
     }
 
     [Fact]

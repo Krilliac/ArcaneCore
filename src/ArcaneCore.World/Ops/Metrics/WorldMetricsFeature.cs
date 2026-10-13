@@ -60,6 +60,14 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
             "Navigation mesh tiles installed on the thread that needed them (on-demand path-query reads and grid tile loads; the world thread makes nearly all).");
         _meter.CreateObservableCounter("arcanecore.nav.tile_install_time", () => PathSearchCounters.ProcessTileReads.Ticks * 1000.0 / Stopwatch.Frequency, "ms",
             "Time those installations took.");
+        _meter.CreateObservableCounter("arcanecore.creature.path.straight_fallbacks", () => CreaturePathStats.DirectFallbacks, "{path}",
+            "Authored creature routes (waypoint, point, formation, scripted move) walked along a straight line because the navmesh had no path.");
+        _meter.CreateObservableCounter("arcanecore.creature.path.no_path", () => CreaturePathStats.NoPath, "{path}",
+            "Creature path searches that found no path (chase stands, flee and wander wait, home teleports).");
+        _meter.CreateObservableCounter("arcanecore.creature.path.deferred", () => CreaturePathStats.Deferred, "{path}",
+            "Creature path requests put off to a later update because the per-update search budget was spent.");
+        _meter.CreateObservableCounter("arcanecore.creature.path.home_teleports", () => CreaturePathStats.HomeTeleports, "{creature}",
+            "Evade returns done by teleport because no whole mesh path led home.");
         _meter.CreateObservableGauge("arcanecore.world.sessions", () => sessions?.Count ?? 0, "{session}", "Authenticated world sessions.");
         _meter.CreateObservableGauge("arcanecore.world.players_online", () => world.OnlinePlayerCount, "{player}", "Characters in the world.");
         _meter.CreateObservableGauge("arcanecore.db.save_queue_depth", () => saves?.Pending ?? 0, "{snapshot}", "Character snapshots queued or being written.");

@@ -176,6 +176,9 @@ public static class ForcedMovement
     /// <summary>
     /// The way a charge goes: the navigation path from the unit to <paramref name="destination"/> when the map has one that reaches it, else
     /// the straight line (<c>generatePath = true</c>, <c>forceDestination = true</c>: the path always ends on the destination). Points after the start.
+    /// EMPTY when the mesh answers <see cref="PathType.NoPath"/> (an endpoint off the mesh): the charge makes no move, as vmangos
+    /// <c>ChargeMovementGenerator::Initialize</c> returns on <c>PATHFIND_NOPATH</c> (PointMovementGenerator.cpp:237-238). A map or tile
+    /// without mesh data still answers the straight line.
     /// </summary>
     public static IReadOnlyList<Vector3> ChargePath(Unit unit, Vector3 destination)
     {
@@ -183,6 +186,11 @@ public static class ForcedMovement
         if (unit.Map?.Collision is { } collision)
         {
             PathResult path = collision.FindPath(new Vector3(unit.X, unit.Y, unit.Z), destination);
+            if ((path.Type & PathType.NoPath) != 0)
+            {
+                return [];
+            }
+
             if (path.HasPath && (path.Type & PathType.Incomplete) == 0 && Vector3.Distance(path.End, destination) < 0.5f)
             {
                 var corners = new List<Vector3>(path.Points.Count - 1);

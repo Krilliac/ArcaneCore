@@ -81,15 +81,15 @@ public sealed class UnreachableTargetTests
     }
 
     [Fact]
-    public void NoPath_IsUnreachable_ButTheCreatureStillGoesStraight()
+    public void NoPath_IsUnreachable_AndTheCreatureDoesNotMove()
     {
-        // vmangos chase with PATHFIND_NOPATH outside instances: the straight line is walked, the generator still says unreachable.
+        // vmangos TargetedMovementGenerator.cpp:188-189: PATHFIND_NOPATH returns before any spline is launched; the generator says unreachable.
         using Fight f = Start(pathfinder: new NoPathPathfinder());
         Pull(f, f.Player);
 
         Assert.False(f.Wolf.Motion.IsReachable);
-        Assert.True(f.Wolf.IsMoving);
-        Assert.True(f.Wolf.Spline!.Points[^1].X < WolfX); // towards the player
+        Assert.False(f.Wolf.IsMoving);
+        Assert.Equal(WolfX, f.Wolf.X, 3);
     }
 
     [Fact]
@@ -98,8 +98,10 @@ public sealed class UnreachableTargetTests
         using Fight f = Start(pathfinder: new NoPathPathfinder());
         Pull(f, f.Player);
         Assert.False(f.Wolf.Motion.IsReachable);
+        Assert.False(f.Wolf.IsMoving); // no path: it stands
+        WorldCollision.Of(f.World).Install(pathfinder: StraightLinePathfinder.Instance); // the way opens
 
-        Run(f.World, 3000); // the straight line brings it into melee reach
+        Run(f.World, 3000); // the next re-check brings it into melee reach
 
         Assert.True(MapCombat.CanReachWithMeleeAutoAttack(f.Wolf, f.Player));
         Assert.True(f.Wolf.Motion.IsReachable);

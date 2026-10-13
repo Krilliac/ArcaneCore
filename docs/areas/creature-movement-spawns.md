@@ -61,7 +61,7 @@ live spline inside the create block (`packet_builder.cpp:152-200`).
   leg with `ICreatureMover.TryRaycastMesh`, capped at 30 yd (`MeshFleeCap`), so it ends where the mesh ends or a steep slope or wall begins
   (`FleeingMovementGenerator.cpp:54-63`). When the query is unavailable both keep the previous choice exactly (terrain-height point,
   straight `MoveTo`), including the order of the random draws, so meshless maps and unloaded tiles behave as before. What a creature does
-  when `FindPath` finds no path is unchanged (see the pathing notes: that is the no-path lane). Tests:
+  when the mesh has no path is in "No path, no straight line" below. Tests:
   `Collision/NavMeshPointQueryTests.cs` (synthetic tiles; the raycast is compared with DotRecast on seeded mazes),
   `Collision/NavMeshPointQueryRealTerrainTests.cs` (Goldshire inn, `ARCANECORE_TEST_TERRAIN_DIR`), `Creatures/MeshPointMovementTests.cs`
   (a wander circle and a flee line that contain a house-sized hole).
@@ -129,8 +129,7 @@ needs a Characters schema module).
   to the maximum at once.
 * `Creatures:Movement:EvadeRestoresFullHealth=true` restores the old instant reset (not retail).
 
-Limits: the Home leg still goes straight when the pathfinder finds no path (vmangos teleports with `NearTeleportTo`,
-`HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse); `RemoveAurasAtReset`, the low-health aura-state
+Limits: a Home leg whose mesh path is missing or partial teleports home (see "No path, no straight line" below); `RemoveAurasAtReset`, the low-health aura-state
 reset (`:39-42`) and `LoadCreatureAddon(true)` on arrival (`:94`) are not done (aura lane / addon reload).
 
 ### 5. Waypoint paths by entry, and the waypoint generator (slice `waypoint-path-data` + `waypoint-generator-core`)
@@ -286,6 +285,31 @@ formula or the count) is TrinityCore's/AzerothCore's dynamic respawn rate. `Crea
 - **GM:** `.spawninfo dynamic` (GameMaster) prints whether it is on, the players counted at your position, the multiplier, and example delays.
 - **Not done:** a respawn already scheduled is not re-evaluated when more players arrive later (the count is taken once, at death).
 
+### 9. No path, no straight line (lane `w44-path-no-straight`)
+
+Every creature path is `CreatureMapSystem.PlanPath`, which says how the search ended (`PathOutcome`: `Mesh`, `Direct`, `Partial`, `NoPath`,
+`Deferred`) instead of quietly substituting a straight line. `Direct` is the pathfinder's answer for a map with no mesh, an endpoint on a tile
+that is not loaded, or pathing off (vmangos `PathFinder.cpp:86-105`, `NORMAL | NOT_USING_PATH`); that straight line is legitimate. The old
+comment that "vmangos goes straight on NOPATH" described only the authored-route case below.
+
+| Motion | `NoPath` | `Deferred` (per-update search budget spent) |
+|---|---|---|
+| Chase, follow, pet follow | no move; `IsReachable` false; re-asked every 100 ms; the unreachable-target timer evades (3 s soft, 24 s home) (`TargetedMovementGenerator.cpp:188-189`) | keeps its spline, re-paths next update (as before) |
+| Partial path (`Incomplete`) | walked to the point nearest the target, then stands; unreachable as before | - |
+| Flee / fear, confused | waits 1-1.5 s, then a new point (`FleeingMovementGenerator.cpp:60-63`, `FearMovementGenerator.cpp:43-46`) | retries next update |
+| Home / evade | teleport home (`NearTeleportTo`, `HomeMovementGenerator.cpp:58-71`); a partial path teleports too; `Direct` runs | retries; teleports after 3 s |
+| Random wander | the leg is skipped, a new point 1-1.5 s later | retries next update |
+| Waypoint, point, formation, scripted `MoveTo` (authored) | straight line, as vmangos (`MoveSplineInit::Move(PathFinder*)` takes the shortcut of a NOPATH finder); counted in `DirectFallbackPaths` | retries next update (scripted moves wait in a per-map queue served first in the next update) |
+| Charge (spell) | no move (`PointMovementGenerator.cpp:237-238`) | not budgeted |
+
+A spent budget never walks a creature straight. `CreatureMapSystem.MoveTo` (scripts) now paths; `MoveStraight` is the raw spline.
+Observability: `CreatureMapSystem.NoPathPaths / DirectFallbackPaths / DeferredPathSearches / HomePathTeleports` and the process-wide
+`CreaturePathStats` (the slow-map-update line prints the per-map counts; metrics `arcanecore.creature.path.*`, docs/ops/metrics.md).
+Not copied: vmangos' pet closed-door `CutPathWithDynamicLoS` and `UNIT_STATE_ALLOW_INCOMPLETE_PATH`; the in-LOS stop of a partial chase
+(the creature keeps walking the partial path). Maps without a mesh: `WorldCollision.InstallFallback` has no terrain-step `IPathfinder` to
+install (only the seam exists), so they keep the straight line.
+Tests: `Creatures/NoStraightPathTests.cs`, plus the updated `UnreachableTargetTests`, `CreaturePathBudgetTests`, `ChargeEffectTests`.
+
 ## Not done in this lane (recorded, not stubbed)
 
 * **Spawn flags** (`RANDOM_RESPAWN_TIME` x urand(90,110)/100, `DYNAMIC_RESPAWN_TIME`, `DEAD`, `DISABLED`, `ACTIVE`, `EVADE_OUT_HOME_AREA`, ...; `ObjectDefines.h:127-134`) and
@@ -297,7 +321,7 @@ formula or the count) is TrinityCore's/AzerothCore's dynamic respawn rate. `Crea
 * **Interaction pause** (`Creature::PauseOutOfCombatMovement`) touches the NPC and quest handlers owned by other lanes.
 * **Stuck/unreachable evade** belongs to the threat-and-aggro lane (`Creature.cpp:~998-1043` sits beside its leash code); leash radius, 3 s leash checks and
   `NO_LEASH_EVADE` already exist on the base.
-* **Home-leg teleport fallback** when no path exists (`HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse), `RemoveAurasAtReset`,
+* ~~Home-leg teleport fallback~~ (done, see "No path" below); `RemoveAurasAtReset`,
   addon reload on arrival.
 * **Wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`; node scripts run since world 45), flying
   wander circles, the spline in the create block (`packet_builder.cpp:152-200`), a GM `.wp show`/`.creature movement` inspection command.
