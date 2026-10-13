@@ -146,5 +146,29 @@
         "positions": [[-6738.47, -1876.91, 244.17, 0], [-6753.47, -1861.91, 244.17, 0], [-6768.47, -1876.91, 244.17, 0], [-6753.47, -1891.91, 244.17, 0]] }] },
       { "point": 34, "actions": [{ "type": "quest_complete", "id": 3367 }, { "type": "stand_state", "id": 7 }] }
     ]
+  },
+  {
+    "entry": 349, "questId": 219, "faction": 231, "startText": 25,
+    "startTextToPlayer": true, "startTextBeforeFaction": true, "instantRespawn": true,
+    "source": "src/game/AI/ScriptDevAI/scripts/eastern_kingdoms/redridge_mountains.cpp:npc_corporal_keeshan_escortAI,QuestAccept_npc_corporal_keeshan (path 349 = entry; broadcast texts 25/26/27/30)",
+    "waypoints": [
+      { "point": 25, "actions": [{ "type": "stand_state", "id": 1 }, { "type": "say", "id": 26, "toPlayer": true }] },
+      { "point": 26, "actions": [{ "type": "stand_state", "id": 0 }, { "type": "say", "id": 27, "toPlayer": true }] },
+      { "point": 69, "actions": [{ "type": "quest_complete", "id": 219 }, { "type": "say", "id": 30, "toPlayer": true }] }
+    ]
+  },
+  {
+    "entry": 2713, "questId": 660, "faction": 0, "startText": -1000948, "clearImmuneToNpc": true, "instantRespawn": true,
+    "aggro": { "chanceDenominator": 10, "textIds": [-1000950] },
+    "combatSpells": [{ "spell": 4948, "self": true, "initialMs": 6000, "repeatMs": 27500 }],
+    "source": "src/game/AI/ScriptDevAI/scripts/eastern_kingdoms/arathi_highlands.cpp:npc_kineloryAI (not modelled: Jorell's aggro line, Rejuvenation on the lowest friendly, facing at 19 and 34, immune-to-NPC and the hand-pack emote to Quae at 34; bear form timer is the midpoint of 5-7 s / 25-30 s)",
+    "waypoints": [
+      { "point": 10, "actions": [{ "type": "say", "id": -1000949 }] },
+      { "point": 17, "actions": [{ "type": "say", "id": -1000952 }, { "type": "say", "id": -1000953 }] },
+      { "point": 18, "actions": [{ "type": "say", "id": -1000954 }] },
+      { "point": 19, "actions": [{ "type": "say", "id": -1000955 }, { "type": "set_run", "id": 1 }] },
+      { "point": 34, "actions": [{ "type": "say", "id": -1000956 }] },
+      { "point": 35, "actions": [{ "type": "quest_complete", "id": 660 }] }
+    ]
   }
 ]
