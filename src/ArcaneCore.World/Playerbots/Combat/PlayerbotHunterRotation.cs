@@ -63,7 +63,6 @@ internal sealed class PlayerbotHunterRotation : PlayerbotClassRotation
         bool outside = v.Distance >= HunterDeadZone;
         RotationUnit? close = s.Attackers.FirstOrDefault(a => a.IsAlive && a.Distance < HunterDeadZone);
         return CommandPet(s)
-            ?? Do(s, HuntersMark, v, !s.InCombat)
             ?? Do(s, DistractingShot, v, NeedsTaunt(s, v))
             ?? Do(s, AutoShot, v, outside && !s.AutoRepeatActive && !s.IsMoving)
             ?? Do(s, ConcussiveShot, v, outside && v.IsMoving && v.TargetsBot)
@@ -80,6 +79,13 @@ internal sealed class PlayerbotHunterRotation : PlayerbotClassRotation
             ?? (v.InMeleeRange
                 ? Do(s, WingClip, v, !v.HasAura(WingClip)) ?? Do(s, MongooseBite, v) ?? Do(s, RaptorStrike, v)
                 : Do(s, AspectOfTheHawk, s.Self, s.Self.HasAura(AspectOfTheMonkey) || !s.InCombat))
+            // vmangos marks and then still runs UpdateInCombatAI_Hunter in the same call (PartyBotAI.cpp:1521-1537). One action per
+            // think meant a hunter who was not in combat — every level 6-8 bot, Mark is known and a pet is not — returned only
+            // Hunter's Mark. Update then returned true, so the brain never stopped for Auto Shot and never swung. Bot QA #398:
+            // those hunters stood on Rockjaw Bonesnapper (1115) for 120s, attackerFacts=none, and never got a kill. Mark is the
+            // pull only when no damaging shot or strike is ready, and not while still walking (a moving cast keeps the think and
+            // Auto Shot, which requires standing, never becomes the action).
+            ?? Do(s, HuntersMark, v, !s.InCombat && !s.IsMoving)
             ?? (s.Pet == RotationPetStatus.Alive && s.PetUnit is { } pet && pet.HealthPercent < 40f
                 ? Do(s, MendPet, pet, !pet.HasAura(MendPet)) : null);
     }
