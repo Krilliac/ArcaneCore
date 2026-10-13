@@ -181,11 +181,13 @@ public sealed class PlayerbotClassRotationTests
     ];
 
     [Fact]
-    public void PriestHealer_HealsItselfBelowSixtyPercent_TheMostInjuredMember_AndFightsWhenNobodyIsHurt()
+    public void PriestHealer_SmitesWhileHurtAlone_HealsInAnEmergency_AndHealsItsGroup()
     {
-        RotationAction self = Priest.InCombat(State(Priest, PriestBook, Self(5, 40f), Victim(25f), PlayerbotRole.Healer))!.Value;
-        Assert.Equal(BotGuid, self.Target);
-        Assert.Equal("Lesser Heal", self.Spell!.Name); // 60 missing: Lesser Heal (50) fits better than Heal (300)
+        // Alone under 60% used to be Lesser Heal every think, so the mob never died (bot QA combat stalls).
+        Assert.Equal("Smite", Next(Priest.InCombat(State(Priest, PriestBook, Self(5, 40f), Victim(25f), PlayerbotRole.Healer))));
+        RotationAction emergency = Priest.InCombat(State(Priest, PriestBook, Self(5, 20f), Victim(25f), PlayerbotRole.Healer))!.Value;
+        Assert.Equal(BotGuid, emergency.Target);
+        Assert.Equal("Lesser Heal", emergency.Spell!.Name);
         RotationAction member = Priest.InCombat(State(Priest, PriestBook, Self(5), Victim(25f), PlayerbotRole.Healer,
             more: s => { s.Party.Add(Member(7, 1, 70f)); s.Party.Add(Member(8, 4, 30f)); }))!.Value;
         Assert.Equal(new ObjectGuid(8), member.Target);
