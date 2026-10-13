@@ -66,6 +66,63 @@ public sealed class TickMonitorTests
     }
 
     [Fact]
+    public void Alerted_AHangStillInProgress_IsReportedAsHung_AndTheCompletedHangAsStalled()
+    {
+        TickMonitor monitor = Create(o => o.HangMs = 2000);
+        var alerts = new List<TickAlert>();
+        monitor.Alerted = alerts.Add;
+        Tick(monitor, 5, 50);
+        monitor.OnTick(_clock.NowMicros); // this tick never ends
+        _clock.AdvanceMs(1_500);
+        monitor.Check(_clock.NowMicros);
+        Assert.Empty(alerts); // under the threshold
+
+        _clock.AdvanceMs(1_000); // 2.5 s into the tick, no OnTick since
+        monitor.Check(_clock.NowMicros);
+        TickAlert running = Assert.Single(alerts);
+        Assert.Equal(TickAlertKind.Hang, running.Kind);
+        Assert.True(running.InProgress);
+        Assert.Contains("is hung", running.Text);
+        Assert.Contains("2500 ms", running.Text);
+        Assert.Contains("hang threshold 2000 ms", running.Detail);
+        Assert.Single(_log.Of(WatchdogEvents.TickHang));
+
+        // The tick ends: the same hang is reported again, as a completed one, and says so.
+        monitor.OnTick(_clock.NowMicros);
+        monitor.Check(_clock.NowMicros);
+        TickAlert completed = Assert.Single(alerts, a => a.Kind == TickAlertKind.Hang && !a.InProgress);
+        Assert.Contains("stalled", completed.Text);
+        Assert.DoesNotContain("is hung", completed.Text);
+    }
+
+    [Fact]
+    public void Alerted_AHangInProgress_WithAThrowingSubscriber_StillWritesTheCriticalLine_AndKeepsChecking()
+    {
+        TickMonitor monitor = Create(o => o.HangMs = 2000);
+        int calls = 0;
+        monitor.Alerted = _ =>
+        {
+            calls++;
+            throw new InvalidOperationException("subscriber failed");
+        };
+        Tick(monitor, 3, 50);
+        monitor.OnTick(_clock.NowMicros);
+        _clock.AdvanceMs(2_500);
+
+        monitor.Check(_clock.NowMicros); // must not throw
+
+        LogLine line = Assert.Single(_log.Of(WatchdogEvents.TickHang));
+        Assert.Equal(LogLevel.Critical, line.Level);
+        Assert.Contains("running for 2500 ms", line.Message);
+        Assert.Equal(1, calls);
+
+        // The watchdog thread is intact: the completed hang is still reported afterwards.
+        monitor.OnTick(_clock.NowMicros);
+        monitor.Check(_clock.NowMicros);
+        Assert.Equal(2, _log.CountOf(WatchdogEvents.TickHang));
+    }
+
+    [Fact]
     public void Budget_DefaultsToTwiceTheTickInterval_AndHangToTheOption()
     {
         TickMonitor monitor = Create(tickMs: 50);

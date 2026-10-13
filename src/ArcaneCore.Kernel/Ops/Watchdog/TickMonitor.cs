@@ -18,8 +18,11 @@ public enum TickAlertKind
     Hang,
 }
 
-/// <summary>One slow-tick report: the same facts as the log line it accompanies.</summary>
-public readonly record struct TickAlert(TickAlertKind Kind, string Text, string Detail);
+/// <summary>
+/// One slow-tick report: the same facts as the log line it accompanies. <see cref="InProgress"/> is true for a hang report made while the
+/// tick is still running (as opposed to the after-the-fact report of a completed hang), so a subscriber can dedup the two separately.
+/// </summary>
+public readonly record struct TickAlert(TickAlertKind Kind, string Text, string Detail, bool InProgress = false);
 
 /// <summary>
 /// The world-tick frame monitor. The tick thread calls <see cref="OnTick"/> once at the start of
@@ -205,7 +208,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
                 string host = HostText(nowMicros - last);
                 _logger.LogCritical(WatchdogEvents.TickHang, "world tick has been running for {RunningMs} ms (hang threshold {HangMs} ms, interval {IntervalMs} ms){Detail}{Host}",
                     Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros), running, host);
-                Alert(TickAlertKind.Hang, $"The world tick is hung (running {Micros.ToMillis(nowMicros - last)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms{running}{host}");
+                Alert(TickAlertKind.Hang, $"The world tick is hung (running {Micros.ToMillis(nowMicros - last)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms{running}{host}", inProgress: true);
             }
         }
 
@@ -301,7 +304,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         return stats;
     }
 
-    private void Alert(TickAlertKind kind, string text, string detail)
+    private void Alert(TickAlertKind kind, string text, string detail, bool inProgress = false)
     {
         if (Alerted is not { } alerted)
         {
@@ -310,7 +313,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
         try
         {
-            alerted(new TickAlert(kind, text, detail));
+            alerted(new TickAlert(kind, text, detail, inProgress));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

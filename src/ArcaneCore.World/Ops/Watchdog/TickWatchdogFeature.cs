@@ -61,14 +61,15 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
 
         if (services.GetService<IOpsAnnouncer>() is { } announcer)
         {
-            // Staff only (World:Announce:Faults), one per kind per dedup window. Runs on the watchdog thread; a hung world thread delays only the delivery.
+            // Staff only (World:Announce:Faults), one per kind per dedup window. A hang still running and the same hang completed have keys of
+            // their own, so the final-duration line is not swallowed by the "is hung" line sent a moment before. Runs on the watchdog thread; a hung world thread delays only the delivery.
             monitor.Alerted = alert => announcer.Announce(
                 AnnounceCategory.Faults,
                 alert.Kind == TickAlertKind.Hang ? AnnounceSeverity.Critical : AnnounceSeverity.Warning,
                 alert.Text,
                 alert.Detail,
                 gmOnly: true,
-                dedupKey: "tick-" + alert.Kind);
+                dedupKey: alert.Kind == TickAlertKind.Hang ? (alert.InProgress ? "tick-Hang-running" : "tick-Hang-done") : "tick-" + alert.Kind);
         }
 
         world.WorldTick += OnTick;
