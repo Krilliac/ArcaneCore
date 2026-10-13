@@ -120,6 +120,9 @@ public sealed class CharmInfo
     /// <summary>vmangos Pet::m_resetTalentsTime: unix seconds of the last untraining (0 before the first). Kept in memory only.</summary>
     public long ResetTalentsTime { get; internal set; }
 
+    /// <summary>vmangos Pet::m_teachspells: pet ability → the spell that teaches it to the owner (see SummonService.Teaching).</summary>
+    internal Dictionary<uint, uint> TeachSpells { get; } = [];
+
     /// <summary>vmangos m_commandState: a new pet follows (CharmInfo constructor).</summary>
     public CommandState CommandState { get; internal set; } = CommandState.Follow;
 
