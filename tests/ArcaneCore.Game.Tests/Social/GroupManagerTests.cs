@@ -156,6 +156,69 @@ public sealed class GroupManagerTests
     }
 
     [Fact]
+    public void Invite_DuringABattleground_UsesTheOriginalParty()
+    {
+        using var f = new SocialFixture();
+        Player leader = f.AddPlayer(1);
+        Player mate = f.AddPlayer(2);
+        Player recruit = f.AddPlayer(3);
+        GroupManager groups = f.Context.Groups;
+        Group party = MakeParty(f, leader, mate);
+        Group raid = groups.AddToBattlegroundRaid(leader, null)!;
+        groups.AddToBattlegroundRaid(mate, raid);
+        f.ClearAll();
+
+        // The mate is in the raid but does not lead the party: vmangos reports NOT_LEADER, it does not drop the invite.
+        groups.Invite(mate, recruit.Name);
+        Assert.Equal((uint)PartyResult.NotLeader, ReadResult(f.Single(mate, WorldOpcode.SmsgPartyCommandResult)).Result);
+        Assert.Empty(f.Sent(recruit, WorldOpcode.SmsgGroupInvite));
+
+        groups.Invite(leader, recruit.Name);
+        Assert.Equal("P1", new PacketReader(f.Single(recruit, WorldOpcode.SmsgGroupInvite)).ReadCString());
+        Assert.Equal((uint)PartyResult.Ok, ReadResult(f.Single(leader, WorldOpcode.SmsgPartyCommandResult)).Result);
+        groups.Accept(recruit);
+
+        Assert.Same(party, groups.GetGroup(recruit.Guid));
+        Assert.Equal([leader.Guid, mate.Guid, recruit.Guid], party.Members.Select(m => m.Guid));
+        Assert.Same(raid, groups.GetGroup(leader.Guid));
+        Assert.Same(raid, groups.GetGroup(mate.Guid));
+        Assert.Same(party, groups.GetOriginalGroup(leader.Guid));
+        Assert.Same(party, groups.GetOriginalGroup(mate.Guid));
+        Assert.Equal([leader.Guid, mate.Guid], raid.Members.Select(m => m.Guid));
+    }
+
+    [Fact]
+    public void Invite_OfABattlegroundPlayerWithNoParty_ParksTheNewParty()
+    {
+        using var f = new SocialFixture();
+        Player leader = f.AddPlayer(1);
+        Player recruit = f.AddPlayer(2);
+        GroupManager groups = f.Context.Groups;
+        Group raid = groups.AddToBattlegroundRaid(recruit, null)!;
+        f.ClearAll();
+
+        groups.Invite(recruit, recruit.Name);
+        Assert.Null(groups.GetInvite(recruit.Guid));
+        Assert.Empty(f.Sent(recruit, WorldOpcode.SmsgPartyCommandResult));
+
+        groups.Invite(leader, recruit.Name);
+        Assert.Equal((uint)PartyResult.Ok, ReadResult(f.Single(leader, WorldOpcode.SmsgPartyCommandResult)).Result);
+        groups.Accept(recruit);
+
+        Group party = groups.GetGroup(leader.Guid)!;
+        Assert.Same(party, groups.GetOriginalGroup(recruit.Guid));
+        Assert.Same(raid, groups.GetGroup(recruit.Guid));
+        Assert.Equal([leader.Guid, recruit.Guid], party.Members.Select(m => m.Guid));
+        Assert.Equal(leader.Guid, party.LeaderGuid);
+        Assert.True(raid.IsMember(recruit.Guid));
+        Assert.True((leader.Flags & PlayerFlags.GroupLeader) != 0);
+
+        groups.RemoveFromBattlegroundRaid(recruit.Guid);
+        Assert.Same(party, groups.GetGroup(recruit.Guid));
+        Assert.Null(groups.GetOriginalGroup(recruit.Guid));
+    }
+
+    [Fact]
     public void Decline_TellsTheLeader_AndDropsTheUncreatedGroup()
     {
         using var f = new SocialFixture();
