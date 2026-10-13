@@ -2,7 +2,9 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -17,8 +19,9 @@ namespace ArcaneCore.World.Battlegrounds;
 /// <summary>
 /// The battleground opcodes (vmangos Handlers/BattleGroundHandler.cpp): the battlemaster hello and join, the battlefield list and port, leaving
 /// a battlefield, the scoreboard and the map positions. CMSG_BATTLEFIELD_STATUS stays registered by <see cref="InactiveQueueHandlers"/>, which
-/// answers through <see cref="BattlegroundFeature.SendStatusReports"/>. The portal join (CMSG_BATTLEFIELD_JOIN) and the area spirit healer
-/// opcodes are not registered: vmangos' portal join passes an empty battlemaster and is refused, and there is no spirit healer wave here.
+/// answers through <see cref="BattlegroundFeature.SendStatusReports"/>. The portal join (CMSG_BATTLEFIELD_JOIN) is not registered: vmangos'
+/// portal join passes an empty battlemaster and is refused. The area spirit healer query and queue answer from the spirit guide's wave
+/// (<see cref="MatchRuntime"/> keeps it channelling Spirit Heal Channel).
 /// </summary>
 public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
 {
@@ -31,9 +34,48 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgLeaveBattlefield, LeaveBattlefield);
         table.OnWorld(WorldOpcode.MsgPvpLogData, PvpLogData);
         table.OnWorld(WorldOpcode.MsgBattlegroundPlayerPositions, PlayerPositions);
+        table.OnWorld(WorldOpcode.CmsgAreaSpiritHealerQuery, AreaSpiritHealerQuery);
+        table.OnWorld(WorldOpcode.CmsgAreaSpiritHealerQueue, AreaSpiritHealerQueue);
     }
 
     private static BattlegroundFeature? Feature(WorldSession session) => session.Services.GetService<BattlegroundFeature>();
+
+    /// <summary>
+    /// The spirit service the area spirit healer opcodes name (vmangos BattleGroundHandler.cpp:579-612): the player is in a battleground and the
+    /// guid is a creature on its map with a spirit healer or spirit guide flag (<c>IsSpiritService</c>).
+    /// </summary>
+    private static Creature? SpiritService(WorldSession session, Player player, byte[] payload)
+        => BattlegroundPackets.TryParseGuid(payload, out ObjectGuid guid) && Feature(session)?.BattlegroundOf(player.Guid) is not null
+            && player.Map?.FindObject(guid) is Creature unit && (unit.NpcFlags & (uint)(NpcFlags.SpiritHealer | NpcFlags.SpiritGuide)) != 0
+                ? unit
+                : null;
+
+    /// <summary>
+    /// vmangos HandleAreaSpiritHealerQueryOpcode → Creature::SendAreaSpiritHealerQueryOpcode (Creature.cpp:3553-3564): the time left on the
+    /// guide's channel, 0 when it is not channelling.
+    /// </summary>
+    private static void AreaSpiritHealerQuery(WorldSession session, Player player, byte[] payload)
+    {
+        if (SpiritService(session, player, payload) is not { } unit)
+        {
+            return;
+        }
+
+        uint next = session.Services.GetService<SpellFeature>()?.System.ChannelRemainingMs(unit) ?? 0;
+        session.Send(WorldOpcode.SmsgAreaSpiritHealerTime, BattlegroundPackets.BuildAreaSpiritHealerTime(unit.Guid, next));
+    }
+
+    /// <summary>
+    /// vmangos HandleAreaSpiritHealerQueueOpcode → GossipHello_npc_spirit_guide (battleground.cpp:109-113): the player casts Waiting to
+    /// Resurrect on itself, which the guide's next Spirit Heal looks for.
+    /// </summary>
+    private static void AreaSpiritHealerQueue(WorldSession session, Player player, byte[] payload)
+    {
+        if (SpiritService(session, player, payload) is not null && session.Services.GetService<SpellFeature>() is { } spells)
+        {
+            spells.System.CastSpell(player, BattlegroundConstants.SpellWaitingToResurrect, SpellCastTargets.ForSelf(), triggered: true);
+        }
+    }
 
     /// <summary>vmangos HandleBattlemasterHelloOpcode (BattleGroundHandler.cpp:40-73): the list of the battlemaster's battleground.</summary>
     private static void BattlemasterHello(WorldSession session, Player player, byte[] payload)

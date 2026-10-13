@@ -171,6 +171,9 @@ public static class BattlegroundConstants
     /// <summary>The Waiting to Resurrect aura removed when leaving (Player.cpp:18681).</summary>
     public const uint SpellWaitingToResurrect = 2584;
 
+    /// <summary>Spirit Heal Channel, the battleground spirit guide's resurrection wave; it triggers Spirit Heal (22012) (vmangos battleground.cpp:40-41).</summary>
+    public const uint SpellSpiritHealChannel = 22011;
+
     /// <summary>Spirit of Redemption, whose death does not count as a death (BattleGround.cpp:1784).</summary>
     public const uint SpellSpiritOfRedemption = 27827;
 
