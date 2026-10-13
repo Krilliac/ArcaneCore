@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Stealth;
 using ArcaneCore.Game.Tests.Spells;
@@ -353,5 +354,30 @@ public sealed class StealthVisibilityTests
         Assert.Equal(0, rig.Registry.Count);
         Assert.Equal(StealthVisibility.On, rig.Registry.VisibilityOf(rig.Rogue));
         Assert.False(rig.Registry.AnyHidden); // the visibility rule goes back to its no-lookup fast path
+    }
+
+    [Fact]
+    public void DetectionDistance_IsMeasuredFromTheCamera_NotTheBody()
+    {
+        // vmangos Unit::IsVisibleForOrDetect (Unit.cpp:6455-6460) feeds GetDistance3dToCenter(viewPoint) to
+        // CanDetectStealthOf and then checks line of sight from that camera. A body five yards from a level-1 rogue
+        // is inside the 9 yard window, but a far-sight camera 35 yards away is not, and the reverse is also true.
+        using var rig = new Rig(viewerDistance: 5f);
+        rig.Viewer.Level = 1;
+        rig.Rogue.Level = 1;
+        rig.Viewer.Relocate(0f, 0f, 83.5f, 0f, 0);
+        rig.Stealthed();
+        var rule = new StealthVisibilityRule(rig.Kit.System, rig.Registry);
+        var eye = new CombatTestUnit();
+        eye.Relocate(40f, 0f, 83.5f, 0f, 0);
+        rig.Map.AddObject(eye);
+        rig.Viewer.SetUInt64(UpdateFields.PlayerFarsight, eye.Guid.Value);
+        Assert.Same(eye, rig.Viewer.ViewPoint);
+
+        Assert.False(rule.CanSee(rig.Viewer, rig.Rogue, alreadyVisible: false, detect: true));
+
+        rig.Rogue.Relocate(50f, 0f, 83.5f, 0f, 0);
+        eye.Relocate(46f, 0f, 83.5f, 0f, 0);
+        Assert.True(rule.CanSee(rig.Viewer, rig.Rogue, alreadyVisible: false, detect: true));
     }
 }
