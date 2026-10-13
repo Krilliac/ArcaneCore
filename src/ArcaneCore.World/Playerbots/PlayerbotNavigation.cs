@@ -228,7 +228,7 @@ internal static class PlayerbotNavigation
         out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
     {
         long mark = PendingMark;
-        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder), mark, ref wait, now, ref route);
+        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, now), mark, ref wait, now, ref route);
     }
 
     private static PlanOutcome Outcome(bool planned, long mark, ref TileWait wait, uint now, ref PlayerbotRoute? route)
@@ -283,7 +283,24 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
-        bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        bool completedQuestReturn = false, bool friendlyTownEnder = false, uint? nowMs = null)
+    {
+        bool planned = PlanTowardSteps(player, goal, options, out route, completedQuestReturn, friendlyTownEnder);
+        // A far goal that got no route, or only a few yards of one, may mean the bot stands on a fragment of mesh no walk leaves: the
+        // one straight move off it, when the ground beside it is the mesh's large part (TryFragmentHop). Asked only then, never per tick.
+        if (nowMs is { } hopNow && (!planned || route is { Distance: < FragmentRouteYards }) && Finite(goal)
+            && Vector2.Distance(new(player.X, player.Y), new(goal.X, goal.Y)) > FragmentGoalYards
+            && TryFragmentHop(player, options, hopNow, out PlayerbotRoute? hop))
+        {
+            route = hop;
+            return true;
+        }
+
+        return planned;
+    }
+
+    private static bool PlanTowardSteps(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
+        bool completedQuestReturn, bool friendlyTownEnder)
     {
         route = null;
         Vector3 origin = new(player.X, player.Y, player.Z);
@@ -322,6 +339,127 @@ internal static class PlayerbotNavigation
                 completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
             if (!straightRefused || PendingSince(pending) || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
         }
+    }
+
+    /// <summary>
+    /// A component of the map's region graph (<see cref="NavRegionGraph.ComponentSize"/>) of at most this many regions is a fragment of mesh:
+    /// the ridge pocket above the Valley of Trials (-137.6, -4265.7, map 1) is 3 regions, the sliver inside Ironforge (-4715.7, -871.2,
+    /// map 0) is 1 (bot QA cluster C3, probes in <c>PlayerbotDeadEndPinProbeTests</c>); the mesh's real parts are thousands.
+    /// </summary>
+    internal const int FragmentRegions = 3;
+
+    /// <summary>
+    /// A fragment is also small in area: a component of at most <see cref="FragmentRegions"/> regions that holds more polygons than this
+    /// is a real place (a plaza of three regions), not a sliver. The ridge pocket is 26 polygons (3 regions) and the Ironforge sliver is
+    /// 2 polygons (1 region); the main continents are 563,799 and 1,457,700 polygons (<c>PlayerbotMeshFragmentTerrainTests</c>).
+    /// </summary>
+    internal const int FragmentPolygons = 500;
+
+    /// <summary>A plan toward a goal farther than this (flat yards) that is refused or shorter than <see cref="FragmentRouteYards"/> asks whether the bot stands on a fragment.</summary>
+    internal const float FragmentGoalYards = 60f;
+
+    /// <summary>The route length (yards) under which a plan toward a far goal counts as no progress (a fragment's own few yards).</summary>
+    internal const float FragmentRouteYards = 30f;
+
+    /// <summary>How far (flat yards) from a fragment the hop looks for ground of a large component, and the rings it looks in.</summary>
+    internal const float FragmentHopYards = 20f;
+
+    private static readonly float[] HopRings = [3f, 6f, 10f, 14f, 18f, FragmentHopYards];
+
+    private const int HopDirections = 8;
+
+    /// <summary>The shortest time between two hop searches of one bot (ms, the bot clock the plan was asked at: the world's NowMs), so a fragment with no ground beside it costs a search per window, not per plan.</summary>
+    internal const int HopRetryMs = 5_000;
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, System.Runtime.CompilerServices.StrongBox<long>> HopRetry = new();
+
+    private static readonly PathOptions WalkingLocate = new() { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+
+    /// <summary>
+    /// Whether the bot stands on a fragment of navigation mesh: the walking region graph (steep slopes excluded) puts its place in a
+    /// component of at most <see cref="FragmentRegions"/> regions, so no walk leaves it. False when the graph is not built yet or the
+    /// bot is on no region. A region lookup and an array read; allocation-free.
+    /// </summary>
+    internal static bool IsOnMeshFragment(Player player)
+    {
+        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return false;
+        int region = nav.RegionAt(graph, PlayerbotMotion.CurrentPosition(player), WalkingLocate);
+        return region >= 0 && IsFragment(graph, region);
+    }
+
+    private static bool IsFragment(NavRegionGraph graph, int region)
+        => graph.ComponentSize(region) <= FragmentRegions && graph.ComponentPolygons(region) <= FragmentPolygons;
+
+    /// <summary>
+    /// The one straight move off a fragment (<see cref="IsOnMeshFragment"/>): a stepped terrain leg (floor within a yard per yard, in
+    /// sight: <see cref="TryTerrainRoute"/>, so a climb above a step or a wall refuses it, a drop is taken as the terrain slopes) to the
+    /// nearest point within <see cref="FragmentHopYards"/> that lies on a polygon of a large component. Eight directions in six rings,
+    /// nearest ring first. Not asked again for <see cref="HopRetryMs"/> after a miss. World thread.
+    /// </summary>
+    private static bool TryFragmentHop(Player player, PlayerbotOptions options, uint now, out PlayerbotRoute? route)
+    {
+        route = null;
+        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph
+            || !PlayerbotMapPolicy.MayMoveOn(player, options))
+            return false;
+        Vector3 here = PlayerbotMotion.CurrentPosition(player);
+        if (!Finite(here)) return false;
+        int own = nav.RegionAt(graph, here, WalkingLocate);
+        if (own < 0 || !IsFragment(graph, own)) return false;
+        System.Runtime.CompilerServices.StrongBox<long> retry = HopRetry.GetValue(player, static _ => new System.Runtime.CompilerServices.StrongBox<long>(-1));
+        if (retry.Value >= 0 && unchecked((int)(now - (uint)retry.Value)) < HopRetryMs) return false;
+        long mark = PendingMark;
+        foreach (float ring in HopRings)
+            for (int direction = 0; direction < HopDirections; direction++)
+            {
+                float angle = direction * 2f * MathF.PI / HopDirections;
+                Vector3 target = new(here.X + (MathF.Cos(angle) * ring), here.Y + (MathF.Sin(angle) * ring), here.Z);
+                int region = nav.RegionAt(graph, target, WalkingLocate);
+                if (region < 0 || IsFragment(graph, region)) continue;
+                if (TryTerrainRoute(here, target, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
+                        (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out PlayerbotRoute? hop) && hop is not null)
+                {
+                    route = hop;
+                    retry.Value = now;
+                    return true;
+                }
+            }
+
+        // A ring point whose tile is still being read answered -1 for that, not for a cliff: the window is spent only on a verdict.
+        if (!PendingSince(mark)) retry.Value = now;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="goal"/> is a place no walk reaches from where the bot stands, by the map's region graph alone (no path
+    /// search, no tile read beyond the two lookups): the walking graph (steep slopes excluded) puts the bot and the goal in different
+    /// components, and the goal is outdoors (an indoor goal may be reached over steep stairs, <see cref="TryClimbIndoors"/>). False
+    /// when the graph is not built yet or either place is on no region. Transport (tram, lift, taxi) is the caller's to try first.
+    /// Live case: Chief Hawkwind's platform from the Valley of Trials ridge, 4,900 yards away, drew an 847-yard leg and a 3,349-yard
+    /// walk toward a goal no walk reaches.
+    /// </summary>
+    internal static bool IsUnreachableOnFoot(Player player, Vector3 goal, out int fromComponent, out int toComponent)
+    {
+        fromComponent = toComponent = -1;
+        if (!Finite(goal) || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return false;
+        Vector3 here = PlayerbotMotion.CurrentPosition(player);
+        int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate);
+        if (from < 0 || to < 0) return false;
+        fromComponent = graph.ComponentOf(from);
+        toComponent = graph.ComponentOf(to);
+        // Only a bot on a large walkable part may call a goal unreachable: on a fragment or indoors the bot's own component says nothing
+        // about the world, and PlanToward's escapes (TryLeaveSteepGround, FromBeside, TryFragmentHop, the indoor climb) must run first.
+        // A bot on steep ground is not told apart: the lookup snaps it to a walking region within a few yards (horizontally, or just above
+        // or below), and it is judged from that region; one with none in reach has from < 0 and gets false above. The lookup is the
+        // graph's, so the answer costs no path search.
+        return fromComponent != toComponent && !IsFragment(graph, from)
+            && map.Collision.IsOutdoors(goal.X, goal.Y, goal.Z + 1f)
+            && map.Collision.IsOutdoors(here.X, here.Y, here.Z + 1f);
     }
 
     /// <summary>The shortest step <see cref="TryPlanToward"/> shortens its point to before it gives up.</summary>

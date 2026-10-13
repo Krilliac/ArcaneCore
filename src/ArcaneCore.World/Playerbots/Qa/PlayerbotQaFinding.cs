@@ -252,7 +252,7 @@ internal sealed record QaFindingView
     public bool QuestIsGoal => Goal.Length == 0 || QuestIsGoalOf(Kind, Goal);
 
     internal static bool QuestIsGoalOf(QaSignalKind kind, string goal)
-        => kind is not (QaSignalKind.Stall or QaSignalKind.DeathLoop) || string.Equals(goal, "Quest", StringComparison.Ordinal);
+        => kind is not (QaSignalKind.Stall or QaSignalKind.DeathLoop or QaSignalKind.UnreachableGoal) || string.Equals(goal, "Quest", StringComparison.Ordinal);
 
     internal static string LabelOf(QaSignalKind kind) => Enum.IsDefined(kind) ? QaKinds.Of(kind).Label : kind.ToString();
 

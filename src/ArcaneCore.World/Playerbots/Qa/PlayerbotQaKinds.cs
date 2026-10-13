@@ -46,6 +46,7 @@ internal static class QaKinds
         // MinOccurrences like the others: one hang can still be the host (the report is filtered for the host verdict, GC, start-up and shutdown, but not perfectly), and a
         // one-off kind would reopen closed issues on every deploy.
         new(QaSignalKind.TickHang, "tick hang", "tick-hang", 50, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
+        new(QaSignalKind.UnreachableGoal, "unreachable goal", "unreachable-goal", 18, BotIndependent: false, SingleOccurrence: false, SpellKind: false),
     ]);
 
     /// <summary>Every row, in kind order.</summary>

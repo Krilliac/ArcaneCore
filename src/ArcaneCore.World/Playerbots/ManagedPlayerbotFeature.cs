@@ -1384,9 +1384,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     ? active.Brain.QaReportContext(driven, report) : null,
                 awaitRelease);
             if (sharedLogged) active.Brain.SharedSetAside = null;
+            foreach (string skipped in active.Brain.TakeUnreachableReports())
+                LogUnreachable(logger, active.Record.BotId, active.Name, skipped, active.Brain.QaReportContext(driven, skipped));
             return "brain";
         }
     }
+
+    /// <summary>
+    /// The warning of a goal a bot skipped for lying where no walk reaches (PlayerbotWorldDestinations.SkipUnreachable; bot QA parses it as
+    /// <c>QaSignalKind.UnreachableGoal</c>). The destinations report each entry once per window and queue every report of a think, so
+    /// each skip is logged exactly once, none lost to a later one.
+    /// </summary>
+    internal static void LogUnreachable(ILogger logger, Guid botId, string name, string report, string? qaContext)
+        => logger.LogWarning("Playerbot {BotId} ({Name}) {Report}", botId, name, report + qaContext);
 
     /// <summary>
     /// The warnings of a bot's stall (bot QA parses them, PlayerbotQaSignalParser): a new stall once (<paramref name="stallCount"/> moved

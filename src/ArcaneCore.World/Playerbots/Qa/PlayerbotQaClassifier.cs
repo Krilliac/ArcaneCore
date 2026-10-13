@@ -68,6 +68,9 @@ internal static class PlayerbotQaClassifier
             case QaSignalKind.TickHang:
                 return new QaClassification(QaCause.ServerFault, "the world tick hung in its " + (s.Stage.Length != 0 ? s.Stage : "unknown") + " phase while running "
                     + (s.Reason.Length != 0 ? s.Reason : "unknown work") + "; the watchdog's log line (event 7102) carries the durations and the slowest features", title);
+            case QaSignalKind.UnreachableGoal:
+                return new QaClassification(QaCause.MissingData, string.Create(CultureInfo.InvariantCulture,
+                    $"bots skipped target {s.Target} without walking: the walking navigation mesh (steep slopes excluded) does not join the ground they stood on to the goal's ({s.Detail}). A spawn on an island platform or beyond a mesh gap: check the spawn and the mesh there"), title);
 
             case QaSignalKind.SpellRefused:
                 return Refusal(s, title);
