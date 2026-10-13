@@ -147,4 +147,28 @@ public sealed class MeshPointMovementTests
         Assert.True(legs >= 10, $"only {legs} flee legs were walked");
         Assert.True(checks >= legs);
     }
+
+    [Fact]
+    public void Flee_WithAWallRightInFront_NeverIssuesANearZeroLeg()
+    {
+        // The wolf stands 0.6 yd from the tile's west edge with the caster east of it: "away" is a wall. Every leg it walks is a real
+        // one (another direction was drawn), never a stub at the wall.
+        using var scene = new Scene(movementType: 0, wander: 0, x: 0.6f, y: 20, playerX: 6, playerY: 20);
+        CcState.RememberFearSource(scene.Wolf, scene.Player);
+        scene.Wolf.UnitFlags |= UnitFlags.Fleeing;
+        var shortest = new List<float>();
+        object? last = null;
+        for (int i = 0; i < 1_200; i++)
+        {
+            scene.World.RunTick(50);
+            if (scene.Wolf.Spline is { } spline && !ReferenceEquals(spline, last))
+            {
+                last = spline;
+                shortest.Add(MathF.Sqrt(((spline.EndX - spline.StartX) * (spline.EndX - spline.StartX)) + ((spline.EndY - spline.StartY) * (spline.EndY - spline.StartY))));
+            }
+        }
+
+        Assert.True(shortest.Count >= 5, $"only {shortest.Count} flee legs were walked");
+        Assert.True(shortest.Min() >= 0.99f, $"a flee leg of {shortest.Min()} yd was issued");
+    }
 }

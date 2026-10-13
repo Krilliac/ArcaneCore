@@ -99,8 +99,8 @@ public interface IMapAwarePathfinder : IPathfinder
 
 /// <summary>
 /// Optional: a pathfinder that can pick points on its navigation mesh and walk a ray along it (Detour
-/// <c>findRandomPointAroundCircle</c> and <c>raycast</c>; vmangos <c>Map::GetRandomPointOnGround</c> and the
-/// <c>FleeingMovementGenerator</c> raycast). Used by creature wander and flee to choose destinations that are on the mesh instead
+/// <c>findRandomPointAroundCircle</c> and <c>raycast</c>; vmangos <c>Map::GetWalkRandomPosition</c> (Map.cpp:3332) and
+/// <c>Map::GetWalkHitPosition</c>, used by <c>FleeingMovementGenerator.cpp:108</c>). Used by creature wander and flee to choose destinations that are on the mesh instead
 /// of a terrain-height point that may lie inside a building. Every query answers "unavailable" (false /
 /// <see cref="MeshRaycastResult.Available"/> false) when the map has no mesh, the tile under the query is not loaded or the start is not
 /// on the mesh, so the caller keeps its own behaviour; none throws. Positions are world coordinates; world thread.
@@ -133,7 +133,7 @@ public readonly record struct MeshRaycastResult(bool Available, bool Hit, float 
     public static MeshRaycastResult Unavailable(Vector3 end) => new(false, false, 1f, end);
 }
 
-/// <summary>vmangos <c>PathType</c> (PathFinder.h).
+/// <summary>vmangos <c>PathType</c> (PathFinder.h).</summary>
 [Flags]
 public enum PathType
 {

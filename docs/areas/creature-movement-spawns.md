@@ -49,24 +49,34 @@ live spline inside the create block (`packet_builder.cpp:152-200`).
   values are internal (never persisted or sent; grep of casts found none).
 
 * **Wander and flee points are chosen on the navmesh** (lane `w44-path-mesh-points`). `NavMeshPathfinder` implements `IMeshPointQuery`
-  (`Maps/Collision/CollisionContracts.cs`; reached through `map.Collision.MeshPoints`, which is null for a map without a navmesh):
-  `TryGetRandomPointAround` is Detour's `findRandomPointAroundCircle` (the polygons reachable from the one under the centre across edges
-  that touch the circle, loaded tiles only, one picked by horizontal area, a uniform point of it, rejected and redrawn when outside the
-  circle) and `Raycast` is Detour's `raycast` along the mesh surface (`NavMeshQuery.TryRandomPointAround` / `NavMeshQuery.Raycast`). Both
-  take the creature's `Random`, so a seed fixes the result, allocate nothing after the first call on a thread, never read a tile, never
-  throw, and answer "unavailable" (no mesh for the map, tile not loaded, centre more than 3 yd from a polygon) without drawing any
-  random numbers. Wander (`RandomMovementGenerator`) takes the point from `ICreatureMover.TryGetRandomMeshPoint` (around the spawn
-  point, within the wander distance, steep slopes excluded as vmangos `MOVE_EXCLUDE_STEEP_SLOPES`) and walks to it with
-  `FindPath` + `MovePath`, so a townsfolk or guard no longer cuts through a house. Flee (`FleeingMovementGenerator.MoveAway`) casts the
-  leg with `ICreatureMover.TryRaycastMesh`, capped at 30 yd (`MeshFleeCap`), so it ends where the mesh ends or a steep slope or wall begins
-  (`FleeingMovementGenerator.cpp:54-63`). When the query is unavailable both keep the previous choice exactly (terrain-height point,
-  straight `MoveTo`), including the order of the random draws, so meshless maps and unloaded tiles behave as before. What a creature does
-  when `FindPath` finds no path is unchanged (see the pathing notes: that is the no-path lane). Tests:
-  `Collision/NavMeshPointQueryTests.cs` (synthetic tiles; the raycast is compared with DotRecast on seeded mazes),
-  `Collision/NavMeshPointQueryRealTerrainTests.cs` (Goldshire inn, `ARCANECORE_TEST_TERRAIN_DIR`), `Creatures/MeshPointMovementTests.cs`
-  (a wander circle and a flee line that contain a house-sized hole).
+  (`Maps/Collision/CollisionContracts.cs`; reached through `map.Collision.MeshPoints`, which is null for a map without a navmesh).
+  `TryGetRandomPointAround` meets the contract of Detour's `findRandomPointAroundCircle` but is this port's own algorithm: it gathers the
+  polygons reachable from the one under the centre across edges that touch the circle (loaded tiles only, at most 256), draws a point
+  uniformly over the disc (two `Random` draws per attempt), and accepts it when one of those polygons contains it; a point over a hole or
+  over an unconnected polygon is drawn again, up to 16 times, then the answer is the start position. Drawing over the disc rather than over
+  the polygons (as Detour does, with a rejection step that is also this port's addition) keeps a 1-3 yd wander radius on 12 yd polygons spread
+  over the disc instead of piling creatures up at the spawn. `Raycast` is Detour's `raycast` along the mesh surface
+  (`NavMeshQuery.TryRandomPointAround` / `NavMeshQuery.Raycast`). Both take the creature's `Random` (a seed fixes the result), build no
+  collection per call (per-thread scratch lists; `NavMeshPointQueryTests` measures the allocation), read no tile, never throw, and answer
+  "unavailable" (no mesh for the map, tile not loaded, centre more than 3 yd from a polygon) without drawing any random numbers.
+  Wander (`RandomMovementGenerator`) takes the point from `ICreatureMover.TryGetRandomMeshPoint` (around the spawn point, within the wander
+  distance, steep slopes excluded as vmangos `MOVE_EXCLUDE_STEEP_SLOPES`) and walks to it with `FindPath` + `MovePath`, so a townsfolk or
+  guard no longer cuts through a house. That path search counts against the per-tick creature path budget; on exhaustion `FindPath` still
+  answers the straight line to the (on-mesh) point until the no-path lane lands. Flee (`FleeingMovementGenerator.MoveAway`) casts the leg
+  with `ICreatureMover.TryRaycastMesh`, capped at 30 yd (`MeshFleeCap`), so it ends where the mesh ends or a steep slope or wall begins
+  (vmangos `Map::GetWalkHitPosition` from `FleeingMovementGenerator.cpp:108`); a leg that would be shorter than 1 yd (a wall right in
+  front) is not issued: another direction is drawn, up to 4 times, and if all are blocked the creature stays and tries again after its
+  pause. When the query is unavailable both keep the previous choice exactly (terrain-height point, straight `MoveTo`), including the order
+  of the random draws, so meshless maps and unloaded tiles behave as before. What a creature does when `FindPath` finds no path is
+  unchanged (the no-path lane).
+  Where this differs from vmangos `Map::GetWalkRandomPosition` (`Map.cpp:3332`): vmangos takes Detour's random point only as a
+  direction, walks `maxRadius * rand` along it, raycasts, steps 0.5 yd back along the hit normal, snaps to the closest point on the last
+  polygon and lifts Z to the vmap height when that is higher; this port uses the sampled on-mesh point itself (at the mesh height, no vmap
+  lift, no step back from walls). Tests: `Collision/NavMeshPointQueryTests.cs` (synthetic tiles; the raycast is compared with DotRecast on
+  seeded mazes), `Collision/NavMeshPointQueryRealTerrainTests.cs` (Goldshire inn, `ARCANECORE_TEST_TERRAIN_DIR`),
+  `Creatures/MeshPointMovementTests.cs` (a wander circle and a flee line that contain a house-sized hole).
 
-Limits: wander and flee choose on the mesh only where a navmesh tile is loaded (vmangos the same); no flying circle path (`:28-44`: needs
+Limits: wander and flee choose on the mesh only where a navmesh tile is loaded (vmangos the same), and only for walkers: the query excludes nothing but steep slopes, so a swimming creature (which vmangos filters by `moveAllowedFlags`) has no water-only choice and may pick shore or water points alike; no flying circle path (`:28-44`: needs
 the Flying spline flag plumbed through `ICreatureMover.MovePath`); no timed random / pause-time API (nothing consumes it until waypoint
 node wander exists); vmangos' `Interrupt`/`Finalize` walk-mode reset (`:83-93`) is not sent separately because every spline launch
 already syncs the mode.

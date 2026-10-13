@@ -271,6 +271,23 @@ public sealed class NavMeshTile
         return !p.IsOffMeshConnection && (p.Flags & (ushort)include) != 0 && (p.Flags & (ushort)exclude) == 0;
     }
 
+    /// <summary>
+    /// Whether <paramref name="position"/> lies inside polygon <paramref name="poly"/> in x/z, and the surface height there
+    /// (<see cref="GetPolyHeight"/>). A bounding-box test first, so scanning many polygons is cheap. Allocation-free.
+    /// </summary>
+    internal bool TryHeightAtXz(int poly, Vector3 position, out float height)
+    {
+        height = 0;
+        if (position.X < _polyLow[poly].X || position.X > _polyHigh[poly].X || position.Z < _polyLow[poly].Z || position.Z > _polyHigh[poly].Z
+            || !ContainsXz(Polys[poly], position))
+        {
+            return false;
+        }
+
+        height = GetPolyHeight(poly, position);
+        return true;
+    }
+
     /// <summary>The point on the polygon closest to <paramref name="position"/> (inside: straight below or above it).</summary>
     public Vector3 ClosestPointOnPoly(int poly, Vector3 position) => ClosestPointOnPoly(poly, position, out _);
 
@@ -336,7 +353,13 @@ public sealed class NavMeshTile
             }
         }
 
-        return p.Vertices.Average(v => Vertices[v].Y);
+        double sum = 0;
+        foreach (ushort v in p.Vertices)
+        {
+            sum += Vertices[v].Y;
+        }
+
+        return (float)(sum / p.VertexCount);
     }
 
     public Vector3 Center(int poly)
@@ -403,8 +426,22 @@ public sealed class NavMeshTile
         return length <= 1e-12f ? 0 : Math.Clamp((((p.X - a.X) * dx) + ((p.Z - a.Z) * dz)) / length, 0, 1);
     }
 
+    /// <summary>As the list overload (same crossing-number test, same edge order), over the polygon's vertices without building a list.</summary>
     private bool ContainsXz(NavPoly p, Vector3 position)
-        => ContainsXz([.. p.Vertices.Select(v => Vertices[v])], position);
+    {
+        bool inside = false;
+        for (int i = 0, j = p.VertexCount - 1; i < p.VertexCount; j = i++)
+        {
+            Vector3 a = Vertices[p.Vertices[i]];
+            Vector3 b = Vertices[p.Vertices[j]];
+            if (((a.Z > position.Z) != (b.Z > position.Z)) && (position.X < ((b.X - a.X) * (position.Z - a.Z) / (b.Z - a.Z)) + a.X))
+            {
+                inside = !inside;
+            }
+        }
+
+        return inside;
+    }
 
     private bool TryDetailVertex(NavPoly p, NavPolyDetail detail, byte index, out Vector3 vertex)
     {

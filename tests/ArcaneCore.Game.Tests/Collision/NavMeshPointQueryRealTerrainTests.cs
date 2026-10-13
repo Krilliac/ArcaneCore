@@ -51,5 +51,26 @@ public sealed class NavMeshPointQueryRealTerrainTests(ITestOutputHelper output)
         }
 
         output.WriteLine($"{blockedStraight} of 200 wander points are not in a straight line over the mesh from the inn");
+
+        // The inn's walls stand between the centre and some points (a raycast that never hit would be a dead query), but not all of them.
+        Assert.InRange(blockedStraight, 1, 199);
+
+        // Small wander radii must still spread over the disc: a fall-back is the centre itself.
+        foreach (float radius in new[] { 1f, 3f, 5f })
+        {
+            int fallbacks = 0;
+            float farthest = 0;
+            for (int i = 0; i < 200; i++)
+            {
+                Assert.True(nav.TryGetRandomPointAround(EasternKingdoms, GoldshireInn, radius, random, options, out Vector3 p));
+                float d = MathF.Sqrt(((p.X - GoldshireInn.X) * (p.X - GoldshireInn.X)) + ((p.Y - GoldshireInn.Y) * (p.Y - GoldshireInn.Y)));
+                fallbacks += d < 0.01f ? 1 : 0;
+                farthest = MathF.Max(farthest, d);
+            }
+
+            output.WriteLine($"radius {radius}: {fallbacks} of 200 fell back to the centre, farthest {farthest:F2}");
+            Assert.True(fallbacks <= 20, $"radius {radius}: {fallbacks} of 200 draws fell back to the centre");
+            Assert.True(farthest > 0.7f * radius, $"radius {radius}: farthest point only {farthest} yd out");
+        }
     }
 }

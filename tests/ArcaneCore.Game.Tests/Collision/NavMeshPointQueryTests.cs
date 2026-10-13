@@ -217,6 +217,93 @@ public sealed class NavMeshPointQueryTests(ITestOutputHelper output)
         Assert.False(nav.Raycast(MapId, new Vector3(float.PositiveInfinity, 5, 0), end).Available);
     }
 
+    [Theory]
+    [InlineData(1f)]
+    [InlineData(3f)]
+    [InlineData(5f)]
+    public void RandomPoints_OnLargePolygons_AreSpreadAcrossASmallDisc_NotPiledAtTheCentre(float radius)
+    {
+        using var fixture = new NavMeshFixture();
+        // 4×4 cells of 12 yd: the whole disc lies on one or two polygons far larger than the wander radius.
+        NavMeshPathfinder nav = Load(fixture, (31, 31, new CellTile(0, 0, 0, 0, 4, 4, Size: 12)));
+        var random = new Random(21);
+        Vector3 center = new(30, 30, 0);
+        const int draws = 600;
+        int fallbacks = 0;
+        int[] quadrants = new int[4];
+        float farthest = 0;
+        float sum = 0;
+        for (int i = 0; i < draws; i++)
+        {
+            Assert.True(nav.TryGetRandomPointAround(MapId, center, radius, random, null, out Vector3 p));
+            float d = Horizontal(p, center);
+            Assert.True(d <= radius + 0.01f, $"{p} is {d} yd from the centre, radius {radius}");
+            fallbacks += d < 0.01f ? 1 : 0;
+            farthest = MathF.Max(farthest, d);
+            sum += d;
+            quadrants[(p.X >= center.X ? 1 : 0) + (p.Y >= center.Y ? 2 : 0)]++;
+        }
+
+        output.WriteLine($"radius {radius}: {fallbacks} of {draws} fell back to the centre, farthest {farthest:F2}, mean {sum / draws:F2}, quadrants {string.Join("/", quadrants)}");
+        Assert.True(fallbacks <= draws / 50, $"{fallbacks} of {draws} draws fell back to the centre");
+        Assert.True(farthest > 0.9f * radius, $"farthest point only {farthest} yd out");
+        Assert.InRange(sum / draws, 0.55f * radius, 0.78f * radius); // uniform over a disc: 2/3 of the radius
+        Assert.All(quadrants, q => Assert.True(q >= draws / 6, $"quadrants {string.Join("/", quadrants)}"));
+    }
+
+    [Fact]
+    public void ThePointQueries_BuildNoCollectionsPerCall_AndTheHelpersTheyUseAllocateNothing()
+    {
+        using var fixture = new NavMeshFixture();
+        NavMeshPathfinder nav = Load(fixture, (31, 31, Holed()));
+        var random = new Random(8);
+        Vector3 center = new(15, 10, 0);
+        NavMeshTile tile = nav.GetNavMesh(MapId)!.GetTile(0, 0)!;
+        Vector3 rc = NavMeshFormat.ToRecast(center);
+
+        void Round()
+        {
+            nav.TryGetRandomPointAround(MapId, center, 6f, random, null, out _);
+            nav.Raycast(MapId, new Vector3(2, 2, 0), new Vector3(18, 18, 0));
+            tile.ClosestPointOnPoly(0, rc);
+            nav.GetNavMesh(MapId)!.TryFindNearestPoly(rc, NavMeshPathfinder.NearExtents, PathOptions.Default, out _, out _);
+        }
+
+        for (int i = 0; i < 100; i++)
+        {
+            Round(); // warm-up: JIT, the thread's scratch lists and tile border caches
+        }
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 200; i++)
+        {
+            Round();
+        }
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public void ContainsXz_OverThePolygonVertices_MatchesTheListOverload_ForEveryPolygon()
+    {
+        NavMeshTile tile = NavMeshTile.Parse(Holed().Build());
+        var random = new Random(5);
+        int inside = 0;
+        for (int poly = 0; poly < tile.Polys.Length; poly++)
+        {
+            Vector3[] corners = [.. tile.Polys[poly].Vertices.Select(v => tile.Vertices[v])];
+            for (int i = 0; i < 200; i++)
+            {
+                Vector3 p = new((float)(random.NextDouble() * 20), 0, (float)(random.NextDouble() * 20));
+                tile.ClosestPointOnPoly(poly, p, out bool over);
+                Assert.Equal(NavMeshTile.ContainsXz(corners, p), over);
+                inside += over ? 1 : 0;
+            }
+        }
+
+        Assert.InRange(inside, 50, 5000); // both answers occurred
+    }
+
     [Fact]
     public void Raycast_AgreesWithDotRecast_OnRandomMazes()
     {
