@@ -122,9 +122,9 @@ public sealed partial class SummonService
             ApplyOwner(creature, owner, remembered.SpellId);
             InitPet(creature, SummonKind.Pet, owner, remembered.PetNumber);
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, remembered.Experience);
-            creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, 1000);
             creature.NpcFlags = 0;
             PetInitializer.InitStatsForLevel(creature, owner, owner.Level, Content);
+            creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, PetXpForLevel(creature.Level)); // ObjectMgr::GetXPForPetLevel
             creature.Health = Math.Clamp(remembered.Health, 1u, creature.MaxHealth);
             creature.SetUInt32(UpdateFields.UnitFieldPower1, Math.Min(remembered.Mana, creature.GetUInt32(UpdateFields.UnitFieldMaxpower1)));
             creature.Summon.Charm!.ReactState = remembered.ReactState;

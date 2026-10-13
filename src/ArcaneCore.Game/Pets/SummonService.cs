@@ -194,11 +194,11 @@ public sealed partial class SummonService : ISpellSummonSink
             ApplyOwner(creature, caster, req.SpellId);
             InitPet(creature, SummonKind.Pet, caster, petNumber);
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
-            creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, 1000);
             creature.NpcFlags = 0;
 
             // Pet::InitStatsForLevel(caster level, caster): level, flags and the pet_levelstats stats
             PetInitializer.InitStatsForLevel(creature, caster, caster.Level, Content);
+            creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, PetXpForLevel(creature.Level)); // ObjectMgr::GetXPForPetLevel
 
             // vmangos passes -caster orientation for the pet (SpellEffects.cpp:2372).
             return new CreatureHome(req.X, req.Y, req.Z, Creature.NormalizeOrientation(-caster.Orientation));

@@ -458,6 +458,7 @@ public sealed partial class SummonService
                 creature.UnitFlags &= ~UnitFlags.PetRename;
             }
             PetInitializer.InitStatsForLevel(creature, owner, snapshot.Level, Content);
+            creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, PetXpForLevel(creature.Level)); // ObjectMgr::GetXPForPetLevel
             creature.SetUInt32(UpdateFields.UnitFieldPetNameTimestamp, snapshot.NameTimestamp);
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, snapshot.Experience);
             creature.Health = revive

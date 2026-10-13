@@ -105,6 +105,17 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
 
         Controller.PetSkillsUnlearned += world.SavePlayer;
 
+        // Hunter pet experience from kills (vmangos Pet::GivePetXP).
+        if (_services.GetService<global::ArcaneCore.World.Progression.ProgressionFeature>() is { } progression)
+        {
+            progression.KillExperienceAwarded += (recipients, _, victim, nonRaidDungeon) =>
+            {
+                var options = progression.Progression.Options;
+                Service.MaxPetLevel = options.MaxPlayerLevel;
+                Service.AwardKillExperience(recipients, victim, nonRaidDungeon, options.RateXpKill, options.RateXpKillElite);
+            };
+        }
+
         world.MapCreated += ApplyOptions;
         foreach (Map map in world.Maps)
         {

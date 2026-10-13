@@ -153,8 +153,15 @@ public sealed class ProgressionFeature : IWorldFeature, ICharacterHooks, IDispos
         bool nonRaidDungeon = _world is { } world
             && WorldMaps.Of(world).Registry.Find(map.MapId) is { IsDungeon: true, IsRaid: false };
         IReadOnlyList<Player> recipients = KillRewards.TapRecipients(tapper, creature, group, Progression.Options.GroupXpDistance);
-        KillRewards.AwardExperience(Progression, recipients, creature, nonRaidDungeon);
+        IReadOnlyList<uint> granted = KillRewards.AwardExperience(Progression, recipients, creature, nonRaidDungeon);
+        KillExperienceAwarded?.Invoke(recipients, granted, creature, nonRaidDungeon);
     }
+
+    /// <summary>
+    /// After a kill's experience went out: the recipients, what each was given, the victim and whether the map is a non-raid dungeon
+    /// (the pets area gives the hunter pets their share).
+    /// </summary>
+    public event Action<IReadOnlyList<Player>, IReadOnlyList<uint>, Creature, bool>? KillExperienceAwarded;
 
     private void OnLevelChanged(Player player) => _world?.SavePlayer(player);
 }
