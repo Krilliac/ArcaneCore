@@ -32,8 +32,11 @@ public sealed class CheerSpeakerAi(Func<ushort, bool> isActiveEvent) : IGameObje
     private sealed class SpeakerState
     {
         public bool Started;
+
+        /// <summary>The 00:10:30 burst was already scheduled during this exact second. Not the rocket pool: that rides on each launch.</summary>
         public bool Big;
-        public readonly List<(long AtMs, bool Fire)> Events = [];
+
+        public readonly List<(long AtMs, bool Fire, bool Big)> Events = [];
         public long ClockMs;
     }
 
@@ -43,6 +46,9 @@ public sealed class CheerSpeakerAi(Func<ushort, bool> isActiveEvent) : IGameObje
     internal Func<DateTime> Now { get; set; } = () => DateTime.Now;
 
     internal Random Random { get; set; } = Random.Shared;
+
+    /// <summary>Tests: a show rocket was launched. True when that rocket came from the big-firework pool.</summary>
+    internal Action<bool>? LaunchedBig { get; set; }
 
     public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Entities.Unit target) => false;
 
@@ -73,16 +79,24 @@ public sealed class CheerSpeakerAi(Func<ushort, bool> isActiveEvent) : IGameObje
             state.Events.RemoveAll(e => e.Fire);
         }
 
-        if (now.Hour == 0 && now.Minute == 10 && now.Second == 30 && active && !state.Big)
+        // New Year only: one burst at 00:10:30. vmangos leaves m_big set and then picks only big rockets, so every later
+        // hour of event 6 (and the next midnight) stays on that pool. Here the flag only suppresses a second schedule
+        // in this same second; the ten rockets it queued are the ones that use the big pool.
+        bool burstSecond = now.Hour == 0 && now.Minute == 10 && now.Second == 30;
+        if (burstSecond && active && !state.Big)
         {
             state.Big = true;
             Schedule(state, 1000, fire: false);
-            for (int i = 0; i < 10; i++) Schedule(state, 1000, fire: true);
+            for (int i = 0; i < 10; i++) Schedule(state, 1000, fire: true, big: true);
+        }
+        else if (!burstSecond)
+        {
+            state.Big = false;
         }
 
         for (int i = 0; i < state.Events.Count; i++)
         {
-            (long at, bool fire) = state.Events[i];
+            (long at, bool fire, bool big) = state.Events[i];
             if (at > state.ClockMs) continue;
             state.Events.RemoveAt(i--);
             if (!fire)
@@ -93,10 +107,11 @@ public sealed class CheerSpeakerAi(Func<ushort, bool> isActiveEvent) : IGameObje
                 continue;
             }
 
+            LaunchedBig?.Invoke(big);
             if (PositionsFor(objects.Map.GetZoneAndAreaId(go.X, go.Y, go.Z).ZoneId) is { } positions)
             {
                 FireworkShowPosition p = positions[Random.Next(positions.Length)];
-                uint[] pool = state.Big ? FireworkBigIds : FireworkIds;
+                uint[] pool = big ? FireworkBigIds : FireworkIds;
                 // vmangos SummonGameObject then SetRespawnTime(0) + Delete(): the firework plays its spawn effect and goes.
                 objects.Summon(pool[Random.Next(pool.Length)], p.X, p.Y, p.Z, p.O, despawnAfterSeconds: 1);
             }
@@ -105,7 +120,7 @@ public sealed class CheerSpeakerAi(Func<ushort, bool> isActiveEvent) : IGameObje
         }
     }
 
-    private static void Schedule(SpeakerState state, long delayMs, bool fire) => state.Events.Add((state.ClockMs + delayMs, fire));
+    private static void Schedule(SpeakerState state, long delayMs, bool fire, bool big = false) => state.Events.Add((state.ClockMs + delayMs, fire, big));
 
     /// <summary>The launch points of a zone (vmangos fireworks_show.cpp pos map); null where there is no show.</summary>
     internal static FireworkShowPosition[]? PositionsFor(uint zoneId) => zoneId switch
