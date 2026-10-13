@@ -36,7 +36,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private ObjectGuid _visitRefused;
     private uint _visitRefusedUntil;
 
-    /// <summary>How long a class trainer that had nothing for the bot is not asked again (unless its level changes or it has more money).</summary>
+    /// <summary>How long a class trainer that had nothing for the bot is not asked again (unless its level changes, it has more money or its class-training spend limit grows).</summary>
     internal const uint TrainerQuoteMemoMs = 5_000;
 
     private readonly Dictionary<ObjectGuid, (uint Until, uint Level, uint Money, uint Limit)> _noTrainerOffer = [];

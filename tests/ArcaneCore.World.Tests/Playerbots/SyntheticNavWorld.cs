@@ -62,8 +62,8 @@ internal sealed class SyntheticNavWorld : IAsyncDisposable
                     continue;
                 }
 
-                // Pending with no read to await: the read finished between the query and the lookup (query again). A tile known
-                // missing goes to _noTile and stops reporting pending (NavMeshPathfinder), so the retries are only a bound.
+                // Pending with no read to await: another read (a prefetch) still holds the tile or the pending-read table is full, so
+                // query again. A tile known missing goes to _noTile and stops reporting pending (NavMeshPathfinder), so the retries are only a bound.
                 if (++emptyPolls > 200)
                     Assert.Fail("the probe tile still reports pending after 200 polls with no read in flight");
                 await Task.Yield();

@@ -564,7 +564,7 @@ Every request goes through the real handlers (`WorldSession.TryManagedAction`); 
 - **The trip.** The brain drives it before anything else (`PlayerbotTaxi.Drive`): walk to the master, stop, send CMSG_ACTIVATETAXI (one hop) or
   CMSG_ACTIVATETAXIEXPRESS (several hops), read SMSG_ACTIVATETAXIREPLY, then wait. In the air (UNIT_FLAG_TAXI_FLIGHT) the bot neither thinks nor
   moves and the stall watch does not judge it. After the landing the goal that asked for the trip plans again from there (usually a short walk).
-- **Failure.** A refusing reply (for example combat, money, a taxi already under way; a mounted bot is dismounted by the managed action before either request), no reply, no way to the master, no master where the node is, or a
+- **Failure.** A refusing reply (for example combat or money; a bot already flying gets no reply at all; a mounted bot is dismounted by the managed action before either request), no reply, no way to the master, no master where the node is, or a
   budget that never accepts the request ends the trip and backs taxi use off for `BackoffMinutes` (default 10); the goal walks meanwhile. A
   fight on the way to the master cancels the trip without a backoff. Death cancels it.
 - **Config** (`World:Playerbots:Taxi`): `Enabled` (true), `MinRouteYards` (600, 100..20000), `MaxWalkToMasterYards` (300, 10..2000),
