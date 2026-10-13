@@ -444,19 +444,22 @@ public static class NavMeshQuery
     private sealed class PointScratch
     {
         public readonly List<NavPolyRef> Polys = [];
-        public readonly List<float> Cumulative = [];
         public readonly HashSet<NavPolyRef> Seen = [];
         public readonly List<NavNeighbour> Neighbours = [];
         public bool InUse;
     }
 
+
     /// <summary>
-    /// A random point on the mesh within <paramref name="radius"/> (horizontal) of <paramref name="center"/>, reachable from
-    /// <paramref name="start"/> (Detour <c>findRandomPointAroundCircle</c>): the polygons reachable from the start across edges that touch
-    /// the circle are gathered (loaded tiles only), one is picked with probability proportional to its horizontal area, and a uniform
-    /// point of it is taken; a point outside the circle is rejected and drawn again (up to 16 times), after which the answer is the start
-    /// position itself. Exactly four values are drawn from <paramref name="random"/> per attempt, so a seed fixes the result.
-    /// Allocation-free after the first call on a thread. Recast space; returns false only for an unusable radius (nothing is drawn).
+    /// A random point on the mesh within <paramref name="radius"/> (horizontal) of <paramref name="center"/>, on a polygon reachable
+    /// from <paramref name="start"/> (the contract of Detour <c>findRandomPointAroundCircle</c>, not its algorithm): the polygons
+    /// reachable from the start across edges that touch the circle are gathered (loaded tiles only, at most 256), a point is drawn
+    /// uniformly over the disc, and it counts when one of the gathered polygons contains it (the one nearest in height to
+    /// <paramref name="center"/> when several do). A point over a hole, or over a polygon not connected within the circle, is drawn
+    /// again (up to 16 times), after which the answer is the start position itself. Drawing over the disc, not over the polygons,
+    /// keeps a small circle on large polygons spread across the disc. Exactly two values are drawn from <paramref name="random"/> per
+    /// attempt, so a seed fixes the result. Uses per-thread scratch lists, so no collection is built per call. Recast space; returns
+    /// false only for an unusable radius (nothing is drawn).
     /// </summary>
     public static bool TryRandomPointAround(NavMesh mesh, NavPolyRef start, Vector3 center, float radius, PathOptions options, Random random, out Vector3 point)
     {
@@ -480,7 +483,6 @@ public static class NavMeshQuery
         {
             scratch.InUse = false;
             scratch.Polys.Clear();
-            scratch.Cumulative.Clear();
             scratch.Seen.Clear();
             scratch.Neighbours.Clear();
         }
@@ -489,7 +491,6 @@ public static class NavMeshQuery
     private static bool RandomPointCore(NavMesh mesh, NavPolyRef start, Vector3 center, float radius, PathOptions options, Random random, PointScratch scratch, out Vector3 point)
     {
         List<NavPolyRef> polys = scratch.Polys;
-        List<float> cumulative = scratch.Cumulative;
         float radiusSquared = radius * radius;
         polys.Add(start);
         scratch.Seen.Add(start);
@@ -514,36 +515,25 @@ public static class NavMeshQuery
             }
         }
 
-        float total = 0;
-        foreach (NavPolyRef poly in polys)
-        {
-            total += PolygonAreaXz(poly.Tile, poly.Tile.Polys[poly.Poly]);
-            cumulative.Add(total);
-        }
-
         for (int attempt = 0; attempt < MaxRandomPointAttempts; attempt++)
         {
-            double polyDraw = random.NextDouble();
-            double triangleDraw = random.NextDouble();
-            double sDraw = random.NextDouble();
-            double tDraw = random.NextDouble();
-            if (total <= 0)
+            double angle = random.NextDouble() * 2 * Math.PI;
+            double distance = radius * Math.Sqrt(random.NextDouble());
+            Vector3 candidate = new(center.X + (float)(distance * Math.Cos(angle)), center.Y, center.Z + (float)(distance * Math.Sin(angle)));
+            float bestGap = float.MaxValue;
+            float bestHeight = 0;
+            foreach (NavPolyRef poly in polys)
             {
-                continue; // only degenerate polygons: nothing to sample, the start position stands
+                if (poly.Tile.TryHeightAtXz(poly.Poly, candidate, out float height) && MathF.Abs(height - center.Y) < bestGap)
+                {
+                    bestGap = MathF.Abs(height - center.Y);
+                    bestHeight = height;
+                }
             }
 
-            float target = (float)(polyDraw * total);
-            int chosen = 0;
-            while (chosen < cumulative.Count - 1 && cumulative[chosen] <= target)
+            if (bestGap < float.MaxValue)
             {
-                chosen++;
-            }
-
-            NavPolyRef picked = polys[chosen];
-            Vector3 candidate = SampleInPolygon(picked.Tile, picked.Tile.Polys[picked.Poly], (float)triangleDraw, (float)sDraw, (float)tDraw);
-            if (NavMeshTile.DistanceXzSquared(candidate, center) <= radiusSquared)
-            {
-                point = candidate with { Y = picked.Tile.GetPolyHeight(picked.Poly, candidate) };
+                point = candidate with { Y = bestHeight };
                 return true;
             }
         }
@@ -552,41 +542,6 @@ public static class NavMeshQuery
         return true;
     }
 
-    private static float PolygonAreaXz(NavMeshTile tile, NavPoly poly)
-    {
-        float twice = 0;
-        Vector3 a = tile.Vertices[poly.Vertices[0]];
-        for (int i = 1; i + 1 < poly.VertexCount; i++)
-        {
-            twice += MathF.Abs(NavMesh.Cross(a, tile.Vertices[poly.Vertices[i]], tile.Vertices[poly.Vertices[i + 1]]));
-        }
-
-        return twice * 0.5f;
-    }
-
-    /// <summary>A uniform point (horizontal) of a convex polygon: a fan triangle by area, then a uniform point of that triangle.</summary>
-    private static Vector3 SampleInPolygon(NavMeshTile tile, NavPoly poly, float triangleDraw, float sDraw, float tDraw)
-    {
-        Vector3 a = tile.Vertices[poly.Vertices[0]];
-        float total = PolygonAreaXz(tile, poly) * 2;
-        float target = triangleDraw * total;
-        int pick = 1;
-        float run = 0;
-        for (int i = 1; i + 1 < poly.VertexCount; i++)
-        {
-            pick = i;
-            run += MathF.Abs(NavMesh.Cross(a, tile.Vertices[poly.Vertices[i]], tile.Vertices[poly.Vertices[i + 1]]));
-            if (run >= target)
-            {
-                break;
-            }
-        }
-
-        Vector3 b = tile.Vertices[poly.Vertices[pick]];
-        Vector3 c = tile.Vertices[poly.Vertices[pick + 1]];
-        float s = MathF.Sqrt(sDraw);
-        return (a * (1 - s)) + (b * (s * (1 - tDraw))) + (c * (s * tDraw));
-    }
 
     /// <summary>Squared horizontal distance from <paramref name="p"/> to the segment a–b.</summary>
     private static float DistanceSegmentSquaredXz(Vector3 p, Vector3 a, Vector3 b)
@@ -603,7 +558,7 @@ public static class NavMeshQuery
     /// horizontally (Detour <c>raycast</c>): the segment leaves each polygon through the edge it crosses, and the walk goes on into the
     /// polygon beyond that edge (<see cref="NavMesh.TryCrossEdge"/>) until the end is inside the current polygon (fraction 1) or the edge
     /// is a wall, a polygon the filter refuses or a tile that is not loaded (a hit, at the edge). The point is on the mesh surface.
-    /// Allocation-free. Recast space.
+    /// Builds no collection per call (a test measures the allocation). Recast space.
     /// </summary>
     public static RayResult Raycast(NavMesh mesh, NavPolyRef startPoly, Vector3 start, Vector3 end, PathOptions options)
     {

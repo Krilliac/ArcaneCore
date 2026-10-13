@@ -343,6 +343,12 @@ internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : 
     /// <summary>The longest leg walked on the navmesh (vmangos FleeingMovementGenerator caps its path at 30 yd).</summary>
     public const float MeshFleeCap = 30.0f;
 
+    /// <summary>A mesh flight leg shorter than this (yd) is not walked: another direction is drawn.</summary>
+    public const float MinMeshFleeLeg = 1.0f;
+
+    /// <summary>The most other directions drawn when the first mesh leg is cut to nothing.</summary>
+    public const int MeshFleeRedraws = 4;
+
     private int _remainingMs;
     private int _pauseMs;
 
@@ -450,12 +456,25 @@ internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : 
         float y = creature.Y + (distance * MathF.Sin(angle));
         float z;
 
-        // vmangos FleeingMovementGenerator (:54-63): the leg is walked on the navmesh, capped at 30 yd and cut where the mesh ends or
-        // a steep slope begins. Without mesh data for the spot the terrain-height point stays.
+        // vmangos FleeingMovementGenerator (:108 -> Map::GetWalkHitPosition): the leg is walked on the navmesh, capped at 30 yd and cut
+        // where the mesh ends or a steep slope begins. Without mesh data for the spot the terrain-height point stays.
+        Vector3 from = new(creature.X, creature.Y, creature.Z);
         float cut = Math.Min(distance, MeshFleeCap);
-        if (mover.TryRaycastMesh(creature, new Vector3(creature.X, creature.Y, creature.Z),
-                new Vector3(creature.X + (cut * MathF.Cos(angle)), creature.Y + (cut * MathF.Sin(angle)), creature.Z), out Vector3 reached))
+        if (mover.TryRaycastMesh(creature, from, new Vector3(creature.X + (cut * MathF.Cos(angle)), creature.Y + (cut * MathF.Sin(angle)), creature.Z), out Vector3 reached))
         {
+            // A wall right in front cuts the leg to nothing: aim another way (random direction) rather than issue a zero-length move.
+            for (int redraw = 0; redraw < MeshFleeRedraws && Sq(reached.X - from.X) + Sq(reached.Y - from.Y) < MinMeshFleeLeg * MinMeshFleeLeg; redraw++)
+            {
+                float other = (float)(mover.NextDouble() * 2 * Math.PI);
+                mover.TryRaycastMesh(creature, from, new Vector3(creature.X + (cut * MathF.Cos(other)), creature.Y + (cut * MathF.Sin(other)), creature.Z), out reached);
+            }
+
+            if (Sq(reached.X - from.X) + Sq(reached.Y - from.Y) < MinMeshFleeLeg * MinMeshFleeLeg)
+            {
+                _pauseMs = mover.URand(500, 1000); // boxed in on every side tried: stay, and try again after the pause
+                return;
+            }
+
             x = reached.X;
             y = reached.Y;
             z = reached.Z;
