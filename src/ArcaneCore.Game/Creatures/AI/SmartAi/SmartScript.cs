@@ -94,7 +94,7 @@ public sealed class SmartScript
         if (!Enum.IsDefined((SmartTarget)row.TargetType)) return $"target {row.TargetType} (row {row.Id})";
         // SUMMON_CREATURE and MOVE_TO_POS act through the creature the script belongs to; an owner without one cannot run them.
         if (Me is null && row.ActionType is (byte)SmartAction.SummonCreature or (byte)SmartAction.MoveToPos or (byte)SmartAction.Evade
-            or (byte)SmartAction.AutoAttack or (byte)SmartAction.AllowCombatMovement or (byte)SmartAction.Die)
+            or (byte)SmartAction.AutoAttack or (byte)SmartAction.AllowCombatMovement or (byte)SmartAction.Die or (byte)SmartAction.CallForHelp)
             return $"action {row.ActionType} needs a creature owner (row {row.Id})";
         return null;
     }
@@ -286,6 +286,26 @@ public sealed class SmartScript
                 }
 
                 break;
+            case SmartEvent.Kill:
+                // SmartScript.cpp SMART_EVENT_KILL: param3 player victims only, param4 the victim's entry (0 any); cooldown param1..param2.
+                if (Me is null || invoker is null) return;
+                if (r.EventParam3 != 0 && invoker is not Player) return;
+                if (r.EventParam4 != 0 && (invoker is not Creature killed || killed.Entry != r.EventParam4)) return;
+                RecalcTimer(e, r.EventParam1, r.EventParam2);
+                ProcessAction(e, invoker);
+                break;
+            case SmartEvent.SummonedUnit:
+                // SMART_EVENT_SUMMONED_UNIT: param1 the summon's entry (0 any); cooldown param2..param3.
+                if (invoker is not Creature summoned || (r.EventParam1 != 0 && summoned.Entry != r.EventParam1)) return;
+                RecalcTimer(e, r.EventParam2, r.EventParam3);
+                ProcessAction(e, invoker);
+                break;
+            case SmartEvent.ReceiveEmote:
+                // SMART_EVENT_RECEIVE_EMOTE: param1 the text emote (var0); cooldown param2..param3.
+                if (r.EventParam1 != var0) return;
+                RecalcTimer(e, r.EventParam2, r.EventParam3);
+                ProcessAction(e, invoker);
+                break;
             case SmartEvent.TimedEventTriggered:
                 if (r.EventParam1 == var0) ProcessAction(e, invoker);
                 break;
@@ -397,6 +417,15 @@ public sealed class SmartScript
             case SmartAction.Die:
                 // SMART_ACTION_DIE: `me` dies (no killer).
                 if (system is not null && me is { IsAlive: true }) system.KillCreature(me);
+                break;
+            case SmartAction.Sound:
+                // SMART_ACTION_SOUND: each creature target plays sound param1 (players have no direct-sound seam here).
+                if (system is null) break;
+                foreach (Creature c in targets.OfType<Creature>()) system.PlayDirectSound(c, r.ActionParam1);
+                break;
+            case SmartAction.CallForHelp:
+                // SMART_ACTION_CALL_FOR_HELP: idle same-faction creatures within param1 yards join `me`'s fight.
+                if (system is not null && me is not null) system.CallForHelp(me, r.ActionParam1);
                 break;
             case SmartAction.PlayEmote:
                 // SmartScript.cpp SMART_ACTION_PLAY_EMOTE: every unit target plays the emote. Players have no emote seam here, so only creatures do.
