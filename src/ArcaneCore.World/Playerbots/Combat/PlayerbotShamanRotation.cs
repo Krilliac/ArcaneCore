@@ -54,12 +54,21 @@ internal sealed class PlayerbotShamanRotation : PlayerbotClassRotation
         => Do(s, LightningShield, s.Self)
             ?? (s.Role == PlayerbotRole.Healer ? HealInjuredAlly(s) : null);
 
+    /// <summary>A shaman alone, still classed as a healer because it has no Elemental Mastery or Stormstrike, heals only below this.</summary>
+    internal const float SoloEmergencyHealth = 30f;
+
     protected override RotationAction? Fight(RotationState s, RotationUnit v)
     {
+        // Every shaman without Elemental Mastery or Stormstrike is a healer, including low-level shamans whose damage is
+        // Lightning Bolt and shocks. Healing, or dropping only totems, whenever they were under 60% meant the mob never
+        // died. Alone, only an emergency is a heal. A group still heals before it damages.
+        bool mayHeal = s.InGroup || s.Self.HealthPercent < SoloEmergencyHealth;
         RotationAction? support = Do(s, ManaTideTotem, s.Self, s.InCombat && s.PowerPercent < 50f && !HasTotem(s, WaterTotems))
-            ?? (s.Role == PlayerbotRole.Healer ? HealInjuredAlly(s, 50f, 90f) : null);
+            ?? (s.Role == PlayerbotRole.Healer && mayHeal
+                ? HealInjuredAlly(s, s.InGroup ? 50f : SoloEmergencyHealth, 90f)
+                : null);
         if (support is not null) return support;
-        if (s.Role == PlayerbotRole.Healer && !HealerMayFight(s)) return Totems(s, v);
+        if (s.InGroup && s.Role == PlayerbotRole.Healer && !HealerMayFight(s)) return Totems(s, v);
 
         return Do(s, ElementalMastery, s.Self, s.InCombat && s.Attackers.Count == 0)
             ?? Do(s, EarthShock, v, v.IsCasting)
