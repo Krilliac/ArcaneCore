@@ -77,7 +77,7 @@ public sealed class SmartAiTests
         using Fight f = Start(
             Row(0, SmartEvent.Aggro, SmartAction.SetEventPhase, a1: 1),
             Row(1, (SmartEvent)3, SmartAction.SetEventPhase, a1: 2),
-            Row(2, SmartEvent.Aggro, (SmartAction)41),
+            Row(2, SmartEvent.Aggro, (SmartAction)43),
             Row(3, SmartEvent.Aggro, SmartAction.Cast, (SmartTarget)13));
         // The catalog refuses what the engine cannot run (slice 2); nothing reaches the script as unsupported.
         Assert.Single(f.Script.Events);
