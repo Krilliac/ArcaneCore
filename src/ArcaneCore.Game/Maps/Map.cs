@@ -558,8 +558,9 @@ public sealed class Map
     /// Send a packet to every player within <paramref name="range"/> of <paramref name="source"/>,
     /// as vmangos Map::MessageDistBroadcast → MessageDistDeliverer does: a 3D distance check
     /// plus both bounding radii (WorldObject::IsWithinDist defaults), an optional same-team
-    /// filter (no exemptions), and a range of 0 meaning the whole map. Only the players of the
-    /// cells within range (plus the largest bounding radius in the map) are visited.
+    /// filter (no exemptions), and a range of 0 meaning the whole map. The distance is from the
+    /// listener's camera (Camera::GetBody: far sight, mind vision, possession), not their feet.
+    /// Only the cells within range (plus the largest bounding radius in the map) are visited.
     /// </summary>
     public void BroadcastInRange(
         WorldObject source, float range, WorldOpcode opcode, ReadOnlySpan<byte> payload,
@@ -575,10 +576,21 @@ public sealed class Map
             return;
         }
 
-        // Only the cells' players: vmangos visits the WorldTypeMapContainer (Map::MessageDistBroadcast, Map.cpp).
+        // vmangos visits cameras in those cells (MessageDistDeliverer::Visit): a player whose view
+        // point is here hears the message even when their body is in another cell.
         float searchRadius = range + source.BoundingRadius + _grid.MaxBoundingRadius;
         var players = new List<Player>();
         _grid.CollectPlayers(source.X, source.Y, searchRadius, players);
+        var eyes = new List<WorldObject>();
+        _grid.CollectObjects(source.X, source.Y, searchRadius, eyes);
+        foreach (WorldObject eye in eyes)
+        {
+            if (UnitControl.ViewerOf(eye) is { } viewer && ReferenceEquals(viewer.Map, this))
+            {
+                players.Add(viewer);
+            }
+        }
+
         SortByJoinOrderDistinct(players);
         foreach (Player player in players)
         {
@@ -996,10 +1008,14 @@ public sealed class Map
 
         if (range > 0)
         {
-            float dx = player.X - source.X;
-            float dy = player.Y - source.Y;
-            float dz = player.Z - source.Z;
-            float max = range + player.BoundingRadius + source.BoundingRadius;
+            // vmangos MessageDistDeliverer: Camera::GetBody()->IsWithinDist, the view point (far sight,
+            // mind vision, the possessed unit), not the player's feet. The view point is this player
+            // when nothing else holds the camera.
+            WorldObject ear = player.ViewPoint;
+            float dx = ear.X - source.X;
+            float dy = ear.Y - source.Y;
+            float dz = ear.Z - source.Z;
+            float max = range + ear.BoundingRadius + source.BoundingRadius;
             if ((dx * dx) + (dy * dy) + (dz * dz) >= max * max)
             {
                 return;
