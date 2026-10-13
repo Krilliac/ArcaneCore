@@ -2,9 +2,11 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Npc;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -15,8 +17,8 @@ namespace ArcaneCore.World.Creatures;
 /// player summon. Bound by the cmangos <c>scripted_areatrigger</c> ids (scriptdev2.sql) rather than a table, since the imported world has none.
 /// Runs on CMSG_AREATRIGGER after the volume check (<see cref="IAreaTriggerListener"/>); like the smart trigger seam it cannot end the
 /// handler, which matches these scripts: each of them returns false in cmangos, or true only after it did nothing further.
-/// Not yet ported: at_childrens_week_spot (mini-pet), at_murkdeep and at_hive_tower (map script data), at_huldar_miran (temporary
-/// faction), at_wondervolt (trap use) and at_stormwind_recruiter (EventAI custom event).
+/// Not yet ported: at_murkdeep and at_hive_tower (map script data), at_huldar_miran (temporary faction), at_wondervolt (trap use) and
+/// at_stormwind_recruiter (EventAI custom event).
 /// </summary>
 public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorldFeature, IAreaTriggerListener
 {
@@ -28,6 +30,15 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
     public const uint QuestManorRavenholdt = 6681, NpcRavenholdt = 13936;
     public const uint QuestScentOfLarkorwi = 4291, NpcLarkorwiMate = 9683;
     public const uint QuestAncientLeaf = 7632, NpcVartrus = 14524, NpcStoma = 14525, NpcHastat = 14526;
+    /// <summary>SD2 SAY_TWILIGHT_CORRUPTER_SPAWN (-1000411) is broadcast text 11271, "Come, $N. See what the Nightmare brings...".</summary>
+    public const int TextTwilightCorrupterSpawn = 11271;
+
+    /// <summary>at_childrens_week_spot TriggerOrphanSpell: trigger, the orphan's mini-pet entry, quest.</summary>
+    public static readonly (uint Trigger, uint MiniPet, uint Quest)[] ChildrensWeekSpots =
+    [
+        (3546, 14305, 1479), (3547, 14444, 1800), (3548, 14305, 1558), (3549, 14444, 911), (3550, 14444, 910), (3552, 14305, 1687),
+    ];
+
     public const uint QuestNightmareCorruption = 8735, NpcTwilightCorrupter = 15625, ItemFragmentOfNightmare = 21149;
 
     private static readonly (uint Entry, float X, float Y, float Z, float O)[] Ancients =
@@ -49,18 +60,30 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
             return;
         }
 
-        Run(quests, player, triggerId);
+        AreaTriggerTemplate? trigger = null;
+        try
+        {
+            trigger = services.GetService<TeleportFeature>()?.Maps.FindAreaTrigger(triggerId);
+        }
+        catch (InvalidOperationException)
+        {
+            // The teleport feature is not attached (a bare test container); the player's position stands in for the centre.
+        }
+
+        Run(quests, player, triggerId, trigger is null ? null : (trigger.X, trigger.Y, trigger.Z));
     }
 
     /// <summary>Runs the script bound to <paramref name="triggerId"/>; returns true when one ran an effect (credit or summon).</summary>
-    public static bool Run(QuestNpcServices quests, Player player, uint triggerId)
+    /// <param name="centre">The trigger's centre (<c>pAt->x/y/z</c>); null falls back to the player's position, which is inside the volume.</param>
+    public static bool Run(QuestNpcServices quests, Player player, uint triggerId, (float X, float Y, float Z)? centre = null)
     {
         ArgumentNullException.ThrowIfNull(quests);
         ArgumentNullException.ThrowIfNull(player);
         return triggerId switch
         {
             TriggerRavenholdt => Ravenholdt(quests, player),
-            >= TriggerLarkorwiFirst and <= TriggerLarkorwiLast => ScentOfLarkorwi(quests, player),
+            >= TriggerLarkorwiFirst and <= TriggerLarkorwiLast => ScentOfLarkorwi(quests, player, centre ?? (player.X, player.Y, player.Z)),
+            >= 3546 and <= 3552 => ChildrensWeekSpot(quests, player, triggerId),
             TriggerAncientLeaf => AncientLeaf(quests, player),
             TriggerTwilightGrove => TwilightGrove(quests, player),
             _ => false,
@@ -84,8 +107,8 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
     }
 
     // AreaTrigger_at_scent_larkorwi: Larkorwi's mate (2 min, out-of-combat timer) unless one is already within 25 yd, alive or dead.
-    // cmangos summons at the trigger's centre; the player is inside the trigger volume, so the player's position stands in for it.
-    private static bool ScentOfLarkorwi(QuestNpcServices quests, Player player)
+    // cmangos summons at the trigger's centre.
+    private static bool ScentOfLarkorwi(QuestNpcServices quests, Player player, (float X, float Y, float Z) centre)
     {
         if (!player.IsAlive || player.IsGameMaster || StatusOf(quests, player, QuestScentOfLarkorwi) != QuestStatus.Incomplete
             || Creatures(player) is not { } creatures || Closest(creatures, player, NpcLarkorwiMate, 25f, aliveOnly: false) is not null)
@@ -93,7 +116,7 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
             return false;
         }
 
-        if (creatures.SummonInstanceCreature(NpcLarkorwiMate, player.X, player.Y, player.Z, 3.3f) is not { } mate)
+        if (creatures.SummonInstanceCreature(NpcLarkorwiMate, centre.X, centre.Y, centre.Z, 3.3f) is not { } mate)
         {
             return false;
         }
@@ -133,7 +156,7 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
     }
 
     // AreaTrigger_at_twilight_grove: the Twilight Corrupter (30 min, out-of-combat timer) for a player on Nightmare Corruption without the
-    // Fragment of the Nightmare's Corruption, unless one is alive within 500 yd. The spawn whisper (SD2 -1000411) is not sent yet.
+    // Fragment of the Nightmare's Corruption, unless one is alive within 500 yd. It speaks SAY_TWILIGHT_CORRUPTER_SPAWN to the player.
     private static bool TwilightGrove(QuestNpcServices quests, Player player)
     {
         if (!player.IsAlive || player.IsGameMaster || player.Inventory.GetItemCount(ItemFragmentOfNightmare) >= 1
@@ -150,7 +173,30 @@ public sealed class AreaTriggerScriptsFeature(IServiceProvider services) : IWorl
         }
 
         creatures.MarkTimedOutOfCombatDespawn(corrupter, 30 * 60_000);
+        creatures.SayText(corrupter, TextTwilightCorrupterSpawn, player);
         return true;
+    }
+
+    // AreaTrigger_at_childrens_week_spot: on an orphan quest whose spot this is, with that orphan out as the mini-pet, the quest completes.
+    // cmangos calls Player::CompleteQuest; the orphan quests have no other objective, so the event credit (which sends the same
+    // SMSG_QUESTUPDATE_COMPLETE) completes them the same way.
+    private static bool ChildrensWeekSpot(QuestNpcServices quests, Player player, uint triggerId)
+    {
+        foreach ((uint trigger, uint miniPet, uint quest) in ChildrensWeekSpots)
+        {
+            if (trigger != triggerId || StatusOf(quests, player, quest) != QuestStatus.Incomplete)
+            {
+                continue;
+            }
+
+            if (player.Map?.FindUpdater<PetMapSystem>()?.MiniPetOf(player) is { } pet && pet.Entry == miniPet)
+            {
+                quests.AreaExploredOrEventHappens(player, quest);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static CreatureMapSystem? Creatures(Player player) => player.Map?.FindUpdater<CreatureMapSystem>();
