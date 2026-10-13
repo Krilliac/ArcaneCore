@@ -7,7 +7,8 @@ namespace ArcaneCore.World.Warden;
 /// ModuleWin5875 and WardenModuleWin5875Data.cpp). The 18 756 encrypted, compressed module bytes ship as an embedded base64 resource and are
 /// revalidated against both pinned digests before any session uses them (WardenModuleCatalog::Validate). The scan opcodes are the ones
 /// this module decodes (MaNGOS Zero WardenPacketCodec.cpp EncodeCheckRequest: timing 0x57, memory 0xF3, MPQ 0x98, Lua 0x8B; the page,
-/// driver and module opcodes 0xB2 / 0xBF / 0x71 / 0xD9 are the same module's, TrinityCore Warden.h enum WardenCheckType for module 79C0768D...).
+/// driver and module opcodes are the same module's, TrinityCore Warden.h WardenCheckType for module 79C0768D: 0xB2 scans every
+/// committed page, 0xBF scans only MZ+PE images, then driver 0x71 and module 0xD9).
 /// </summary>
 internal sealed class WardenModuleProfile
 {
@@ -36,8 +37,13 @@ internal sealed class WardenModuleProfile
     public const uint TimingRva = 0x0002C010;
     public const byte TimingInstall = 0x01;
 
-    /// <summary>The scan opcodes before the per-session xor (the first byte of <see cref="ClientKeySeed"/>).</summary>
-    public const byte OpTiming = 0x57, OpMemory = 0xF3, OpPageA = 0xB2, OpPageB = 0xBF, OpDriver = 0x71, OpMpq = 0x98, OpLua = 0x8B, OpModule = 0xD9;
+    /// <summary>
+    /// The scan opcodes before the per-session xor (the first byte of <see cref="ClientKeySeed"/>).
+    /// <see cref="OpPageA"/> is vmangos <c>FIND_MEM_IMAGE_CODE_BY_HASH</c> (executable images): Trinity's PAGE_CHECK_B, 0xBF,
+    /// which scans only pages that start with an MZ+PE header. <see cref="OpPageB"/> is <c>FIND_CODE_BY_HASH</c> (every committed
+    /// page): Trinity's PAGE_CHECK_A, 0xB2. Trinity's A/B letters are the opposite of this enum.
+    /// </summary>
+    public const byte OpTiming = 0x57, OpMemory = 0xF3, OpPageA = 0xBF, OpPageB = 0xB2, OpDriver = 0x71, OpMpq = 0x98, OpLua = 0x8B, OpModule = 0xD9;
 
     /// <summary>The byte the module answers for "found" in page and driver scans (vmangos WardenScan.hpp PatternFound / Found = 0x4A).</summary>
     public const byte Found = 0x4A;
