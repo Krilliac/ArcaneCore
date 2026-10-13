@@ -55,11 +55,6 @@ public sealed class CharacterIdRangeDataModule : IDataModule, ICharacterDataClea
             entity.HasKey(r => r.Scope);
             entity.Property(r => r.Scope).HasColumnName("scope").HasMaxLength(64).ValueGeneratedNever();
             entity.Property(r => r.NextId).HasColumnName("next_id");
-            entity.HasData(IdRangeScopes.All.Select(scope => new CharacterIdRangeRow
-            {
-                Scope = scope,
-                NextId = 0L,
-            }));
         });
     }
 

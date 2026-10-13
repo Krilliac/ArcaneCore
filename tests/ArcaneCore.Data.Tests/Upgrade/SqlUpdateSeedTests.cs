@@ -34,7 +34,10 @@ public sealed class SqlUpdateSeedTests
     public async Task ASeedWhoseValuesChangedWithoutAStep_IsRefused()
     {
         SchemaSnapshot committed = SqlUpdateSupport.ReadSnapshot("characters");
-        SchemaSnapshot tampered = committed with { Seeds = [.. committed.Seeds!.Select(s => s with { Hash = new string('0', 64) })] };
+        SchemaSnapshot tampered = committed with
+        {
+            Seeds = [.. committed.Seeds!.Select(s => s.Table == "character_ownership" ? s with { Hash = new string('0', 64) } : s)],
+        };
         UpdateExportException ex = await Assert.ThrowsAsync<UpdateExportException>(
             () => UpdateScriptWriter.GenerateAsync(UpdateComponent.For("characters"), tampered));
         Assert.Contains("changed", ex.Message);

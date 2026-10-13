@@ -529,6 +529,13 @@
     }
   },
   "seeds": [
+    {"table":"character_id_ranges","key":"scope=s:auction","hash":"e6a37659ba4ebf04fb90c830788a09e0ca5c5579a41b92e9f04d5f072d3283fa"},
+    {"table":"character_id_ranges","key":"scope=s:group","hash":"c2b03bb787f35d4e61444039b19c72b0e3cac604c4be94968372167afe8c8632"},
+    {"table":"character_id_ranges","key":"scope=s:guild","hash":"8222dc4782e92d2e6a84131c2a897b8ac021a96ed21b25d58f9e4678331f41c7"},
+    {"table":"character_id_ranges","key":"scope=s:instance","hash":"b8ec3d51df92869a74731a959989c8f62d023975c65e7587d01b7de210eaeb18"},
+    {"table":"character_id_ranges","key":"scope=s:item","hash":"59a6b6bcc4b4ed890cf9ac19612eea49f45f735157c9d12798a42f895077a15f"},
+    {"table":"character_id_ranges","key":"scope=s:item_text","hash":"43d4af7f4fb7f32e27c5fef9c1ddfe65b4e4be88137231b7fabfe0537f28bdad"},
+    {"table":"character_id_ranges","key":"scope=s:mail","hash":"67b17b2b991ad57e678d2d4a21dfd22b2f7a738b822ee4ea4e41a5fdcb68a9cb"},
     {"table":"character_ownership","key":"scope=s:world","hash":"e84a7a168014335445bd037ff5e55a302642ff106e187b8d79ceca61eefc778f"}
   ],
   "files": {
