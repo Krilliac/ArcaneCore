@@ -329,6 +329,15 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                     Backoff(now);
                 }
                 else _blockedSpawns.Add(entry.Spawn.Guid);
+                // The spawn lies in a region the bot's does not join and the bot stands at the nearest point (or another bot proved it):
+                // no retry can succeed. With no other spawn of the entry left to try the entry and the quest are set aside at once (not
+                // after the stall bound), so the brain picks another goal instead of standing at the dead end.
+                if (PlayerbotNavigation.TakeDeadEndRefusal() && Suspensions is { } deadEnd
+                    && !_entries.Any(other => other.Entry == entry.Entry && other.Spawn.Guid != entry.Spawn.Guid && !IsBlocked(other.Spawn.Guid, now)))
+                {
+                    deadEnd.SuspendEntry(entry.Entry, now);
+                    if (questId != 0) deadEnd.SuspendQuest(questId, now);
+                }
                 // A completed quest with just one indexed ender cannot be reached by retrying a plan that keeps failing from the same
                 // spot. Leave quests with alternative enders to the ordinary spawn rotation. The set-aside is local to this bot.
                 // Both the near and the far branch count: far failures arrive once per backoff and still confirm.

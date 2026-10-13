@@ -284,6 +284,54 @@ internal static class PlayerbotNavigation
     internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
         bool completedQuestReturn = false, bool friendlyTownEnder = false)
     {
+        t_deadEnd = default;
+        t_deadEndRefusal = false;
+        long pending = PendingMark;
+        if (PlanTowardSteps(player, goal, options, out route, completedQuestReturn, friendlyTownEnder)) return true;
+        // Refused at the walkable point nearest a goal the bot's region does not join, with every query answered (no tile still being
+        // read): the walk is proven impossible. Remembered for every bot of the map, and told to the caller (TakeDeadEndRefusal).
+        if (t_deadEnd.Memory is { } memory && !PendingSince(pending))
+        {
+            if (!t_deadEnd.Known) memory.Record(t_deadEnd.From, t_deadEnd.To, Environment.TickCount64);
+            t_deadEndRefusal = true;
+        }
+
+        t_deadEnd = default;
+        return false;
+    }
+
+    /// <summary>
+    /// What <see cref="RegionLeg"/> found about the walk the current <see cref="TryPlanToward"/> call is planning: the bot stands at the
+    /// walkable point nearest a goal whose region the bot's region does not join (or the pair was proven by another bot, <c>Known</c>).
+    /// </summary>
+    private struct DeadEndNote
+    {
+        public PlayerbotDeadEnds? Memory;
+        public int From, To;
+        public bool Known;
+    }
+
+    [ThreadStatic] private static DeadEndNote t_deadEnd;
+    [ThreadStatic] private static bool t_deadEndRefusal;
+
+    /// <summary>
+    /// Whether the last <see cref="TryPlanToward"/> / <see cref="PlanToward"/> on this thread was refused because the goal's region is not
+    /// joined to the bot's and the bot stands at the nearest walkable point (or another bot proved it): no retry from here can succeed, so
+    /// the caller sets the goal aside and picks another. Clears the flag.
+    /// </summary>
+    internal static bool TakeDeadEndRefusal()
+    {
+        bool refusal = t_deadEndRefusal;
+        t_deadEndRefusal = false;
+        return refusal;
+    }
+
+    /// <summary>How near (yards) the nearest portal of a goal's unjoined region the bot must stand for the walk to count as at its dead end.</summary>
+    internal const float DeadEndYards = 6f;
+
+    private static bool PlanTowardSteps(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
+        bool completedQuestReturn, bool friendlyTownEnder)
+    {
         route = null;
         Vector3 origin = new(player.X, player.Y, player.Z);
         if (!Finite(goal) || !Finite(origin)) return false;
@@ -363,7 +411,21 @@ internal static class PlayerbotNavigation
         var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
         int from = nav.RegionAt(graph, start, locate), to = nav.RegionAt(graph, goal, locate);
         if (from < 0 || to < 0) return null;
+        PlayerbotDeadEnds deadEnds = PlayerbotDeadEnds.For(graph);
+        if (from != to && deadEnds.Known(from, to, Environment.TickCount64))
+        {
+            // Another bot (or this one) stood at the nearest point and found no way on: not a step towards a goal that cannot be walked to.
+            t_deadEnd = new DeadEndNote { Memory = deadEnds, From = from, To = to, Known = true };
+            return false;
+        }
+
         NavRegionRouteStatus status = graph.FindRoute(from, start, to, goal, RegionSearchNodes, out List<Vector3> portals);
+        // Not joined (the search ran to its end) and the bot already stands at the nearest portal, or none is nearer than the bot: the
+        // fallbacks below still get their turn (the mesh may reach a point nearer than any portal); when they all refuse, the caller
+        // records the dead end (TryPlanToward).
+        if (status == NavRegionRouteStatus.Unreachable
+            && (portals.Count == 0 || Vector3.Distance(start, portals[^1]) <= DeadEndYards))
+            t_deadEnd = new DeadEndNote { Memory = deadEnds, From = from, To = to };
         if (portals.Count == 0) return null;
         if (status == NavRegionRouteStatus.Found) portals.Add(goal);
 
