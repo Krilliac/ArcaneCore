@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Tests.Duel;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -276,5 +277,38 @@ public sealed class ReputationCombatHooksTests
         CombatTestUnit guard = rig.Npc(StormwindGuard);
         Assert.True(rig.Hooks.IsHostileTo(guard, pet));
         Assert.True(rig.Hooks.CanAttack(guard, pet));
+    }
+
+    [Fact]
+    public void SummonedPet_TakesItsOwnersStanding_ThroughTheOwnerField()
+    {
+        using var rig = new Rig();
+        rig.Service.SetReputation(rig.Player, Stormwind, ReputationMath.Bottom);
+
+        // CombatTestUnit does not implement IPlayerControlledUnit. Without UNIT_FIELD_SUMMONEDBY the guard
+        // only sees the pet's template, which is friendly to the player race.
+        var pet = new CombatTestUnit { FactionTemplate = PlayerTemplate.Id };
+        pet.UnitFlags |= UnitFlags.PlayerControlled;
+        pet.Spawn(rig.Map, 1, 0);
+        CombatTestUnit guard = rig.Npc(StormwindGuard);
+        Assert.True(rig.Resolver.TryGetReaction(guard, pet, out ReputationRank before));
+        Assert.Equal(ReputationRank.Friendly, before);
+
+        pet.SetOwnerGuid(rig.Player.Guid);
+
+        Assert.True(rig.Resolver.TryGetReaction(guard, pet, out ReputationRank after));
+        Assert.Equal(ReputationRank.Hostile, after); // CvP: the owner's Hated standing, not the template
+        Assert.True(rig.Hooks.IsHostileTo(guard, pet));
+        Assert.True(rig.Hooks.CanAttack(guard, pet));
+
+        // A beast-faction summon is still friendly to its owner (shared charmer/owner guid beats the template).
+        var beast = new CombatTestUnit { FactionTemplate = HostileNpc.Id };
+        beast.UnitFlags |= UnitFlags.PlayerControlled;
+        beast.Spawn(rig.Map, 2, 0);
+        beast.SetOwnerGuid(rig.Player.Guid);
+        Assert.True(rig.Resolver.TryGetReaction(beast, rig.Player, out ReputationRank towardOwner));
+        Assert.Equal(ReputationRank.Friendly, towardOwner);
+        Assert.True(rig.Resolver.TryGetReaction(rig.Player, beast, out ReputationRank towardPet));
+        Assert.Equal(ReputationRank.Friendly, towardPet);
     }
 }
