@@ -57,6 +57,12 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
     private DateTime Now => Time.GetUtcNow().UtcDateTime;
 
+    /// <summary>The clock of the views (age of a finding), the same as the passes use.</summary>
+    internal DateTime UtcNow => Now;
+
+    /// <summary>When this process attached QA: a finding last seen before it was not met by the current build (the views sink it as stale).</summary>
+    internal DateTime StartedUtc { get; private set; } = DateTime.MaxValue;
+
     internal PlayerbotQaAggregator? Aggregator { get; private set; }
 
     /// <summary>The spell watcher of the bots' casts (registered on the world's spell system while QA runs; null otherwise).</summary>
@@ -85,6 +91,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
         if (!options.Enabled) return;
         _options = options;
+        StartedUtc = Now;
         _directory = Path.GetFullPath(Path.Combine(services.GetService<IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory, options.Directory));
         _store = new PlayerbotQaStore(_directory, _log);
         QaStoreFile? saved = _store.Load();
@@ -106,7 +113,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time);
         if (saved is not null)
         {
-            int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed), Now);
+            int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed, saved.Tombstones), Now);
             _publisher.Ledger.Restore(saved.Ledger);
             _log.LogInformation("Bot QA restored {Count} findings from {Path} ({Dropped} invalid or over the cap, {Aged} aged out, {Merged} merged into another, {Issues} issues of merged findings to close as duplicates)",
                 aggregator.Count, _store.FilePath, dropped, aggregator.AgedOut, aggregator.Merged, aggregator.PendingDuplicates().Count);
@@ -175,8 +182,11 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             Interlocked.Read(ref _ingestFailures), Aggregator?.Count ?? 0, _store?.DisabledReason);
     }
 
-    /// <summary>Fold every queued signal into the findings; how many were taken. Safe to call from any thread.</summary>
-    internal int Drain()
+    /// <summary>
+    /// Fold the queued signals into the findings (at most <paramref name="max"/>, the rest stays queued for the background pass); how many were taken.
+    /// Safe to call from any thread.
+    /// </summary>
+    internal int Drain(int max = int.MaxValue)
     {
         if (Aggregator is null || _bus is null) return 0;
         var batch = new List<QaSignal>(256);
@@ -185,7 +195,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         do
         {
             batch.Clear();
-            moved = _bus.Drain(batch, 4096);
+            moved = _bus.Drain(batch, Math.Min(4096, max - total));
             DateTime now = Now;
             foreach (QaSignal signal in batch)
             {
@@ -248,6 +258,18 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         }
 
         Aggregator.AgeOut(Now);
+        if (_options.AutoPruneHours > 0)
+        {
+            // Measured from the later of the finding's last sighting and this process's start: a restart after a long gap prunes nothing until the age has passed in this process.
+            QaPruneResult pruned = Aggregator.Prune(Now, TimeSpan.FromHours(_options.AutoPruneHours), closed: false, dry: false, floorUtc: StartedUtc);
+            if (pruned.Count > 0)
+            {
+                string ids = string.Join(", ", pruned.Listed.Select(f => f.ShortId)) + (pruned.Count > pruned.Listed.Count ? ", ..." : string.Empty);
+                _log.LogInformation("Bot QA: forgot {Count} findings not seen for {Hours} hours (World:Playerbots:Qa:AutoPruneHours; {Ids}); {Kept} with an issue kept, {Left} remain",
+                    pruned.Count, _options.AutoPruneHours, ids, pruned.Kept, pruned.Remaining);
+            }
+        }
+
         Persist();
         Export();
         // The pass runs every ExportIntervalSeconds (5 minutes by default): the retreat counters ride on it as the periodic summary line.
@@ -315,6 +337,13 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     /// <summary>Forget one finding (exact id) or all; how many went. Takes effect on the next save.</summary>
     internal int Reset(string? id) => Aggregator?.Reset(id) ?? 0;
 
+    /// <summary>
+    /// <c>.playerbot qa prune</c>: forget (or with <paramref name="dry"/> only list) the findings not seen for <paramref name="hours"/> and, with
+    /// <paramref name="closed"/>, those whose issue is known closed. Like <see cref="Reset"/> it takes effect on the next save (the world thread never waits on the disk) and never touches GitHub.
+    /// </summary>
+    internal QaPruneResult Prune(int hours, bool closed, bool dry)
+        => Aggregator?.Prune(Now, TimeSpan.FromHours(hours), closed, dry) ?? new QaPruneResult(0, [], [], 0, dry, 0);
+
     private async Task RunAsync(CancellationToken cancellationToken)
     {
         DateTime next = Now.AddSeconds(_options.ExportIntervalSeconds);
@@ -347,7 +376,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             QaAggregatorState state = Aggregator.Export();
             _store.Save(new QaStoreFile
             {
-                SaltBase64 = Convert.ToBase64String(Aggregator.Salt), Findings = state.Findings, Bots = state.Bots, Absorbed = state.Absorbed ?? [], Ledger = _publisher.Ledger.Export(),
+                SaltBase64 = Convert.ToBase64String(Aggregator.Salt), Findings = state.Findings, Bots = state.Bots, Absorbed = state.Absorbed ?? [], Tombstones = state.Tombstones ?? [], Ledger = _publisher.Ledger.Export(),
             });
         }
     }
@@ -362,8 +391,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         {
             System.IO.Directory.CreateDirectory(_directory);
             QaSpellCoverageReport? coverage = SpellCoverage;
-            WriteAtomic(Path.Combine(_directory, "report.md"), PlayerbotQaReport.RenderMarkdown(findings, now, build, Redactor, coverage));
-            WriteAtomic(Path.Combine(_directory, "report.json"), PlayerbotQaReport.RenderJson(findings, now, build, Redactor, coverage));
+            WriteAtomic(Path.Combine(_directory, "report.md"), PlayerbotQaReport.RenderMarkdown(findings, now, build, Redactor, coverage, StartedUtc));
+            WriteAtomic(Path.Combine(_directory, "report.json"), PlayerbotQaReport.RenderJson(findings, now, build, Redactor, coverage, StartedUtc));
             _exportFailureLogged = false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

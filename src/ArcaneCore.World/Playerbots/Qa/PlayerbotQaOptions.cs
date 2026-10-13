@@ -26,6 +26,9 @@ public sealed class PlayerbotQaOptions
     /// <summary>Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever).</summary>
     public int StaleHours { get; set; } = 24;
 
+    /// <summary>Hours after which a finding not seen again is forgotten on every pass, counted from the later of its last sighting and the server start (so a restart prunes nothing at once). A finding that holds a GitHub issue is never forgotten, and GitHub is never touched. 0 (default) is off; the same as <c>.playerbot qa prune #hours</c> (0..8760).</summary>
+    public int AutoPruneHours { get; set; }
+
     /// <summary>The newest evidence samples kept per finding (1..20).</summary>
     public int MaxSamples { get; set; } = 5;
 
@@ -66,6 +69,7 @@ public sealed class PlayerbotQaOptions
         if (ExportIntervalSeconds is < 10 or > 86_400) problems.Add("ExportIntervalSeconds must be 10..86400");
         if (MaxFindings is < 10 or > 100_000) problems.Add("MaxFindings must be 10..100000");
         if (StaleHours is < 0 or > 8760) problems.Add("StaleHours must be 0..8760");
+        if (AutoPruneHours is < 0 or > 8760) problems.Add("AutoPruneHours must be 0..8760");
         if (MaxSamples is < 1 or > 20) problems.Add("MaxSamples must be 1..20");
         if (SignalQueueCapacity is < 64 or > 1_000_000) problems.Add("SignalQueueCapacity must be 64..1000000");
         if (GitHub is null) problems.Add("GitHub is missing");

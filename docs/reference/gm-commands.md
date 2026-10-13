@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 197 |
-| `Administrator` | 6 | 300 |
+| `GameMaster` | 3 | 198 |
+| `Administrator` | 6 | 301 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -347,11 +347,12 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot population disable` | 6 | Administrator | stored level through the map | Syntax: .playerbot population disable Turn the population manager off until the next .reload config or restart. Bots it started keep running. |
 | `.playerbot population target` | 6 | Administrator | stored level through the map | Syntax: .playerbot population target #count Set the number of bots to keep online (0..1000) until the next .reload config or restart (World:Playerbots:Population:TargetOnline). The effective target is also capped by MaxBots. |
 | `.playerbot population rush` | 6 | Administrator | stored level through the map | Syntax: .playerbot population rush $count [$perSecond] .playerbot population rush stop Create and start $count new population bots at $perSecond per second (default 5; at most 50), bypassing the add-budget windows. A brake pauses it while the tick p95 stays over World:Playerbots:Population:RushBrakeP95Ms. The existing bot, account and character limits apply. Progress is in .playerbot population status. |
-| `.playerbot qa` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa [top [#n]\|show $id\|spells [#n]\|reset [$id]] The playerbot QA findings: stalls, death loops, faults, missing data and spells that do not work, ranked, and the GitHub reporter's state. |
-| `.playerbot qa top` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa top [#n] List the n (default 10, at most 25) highest-ranked findings with their short ids. |
+| `.playerbot qa` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa [top [#n] [all]\|show $id\|spells [#n]\|reset [$id]\|prune [#hours] [closed] [dry]] The playerbot QA findings: stalls, death loops, faults, missing data and spells that do not work, ranked, and the GitHub reporter's state. |
+| `.playerbot qa top` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa top [#n] [all] List the n (default 10, at most 25) highest-ranked findings with their short ids and when each was last seen. Findings not seen since this server started (stale: possibly fixed by this build) are hidden behind one hint line; 'all' lists them too, after every current one. |
 | `.playerbot qa show` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa show $id Show one finding's cause, counts, evidence samples and a .go xyz command to the place (the id is at least 4 characters of the short id). |
 | `.playerbot qa spells` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa spells [#n] The spell coverage of the bots (how many of the spells they can cast are fully handled, the gaps shared by the most spells) and the n (default 10, at most 25) highest-ranked spell findings bots met. |
 | `.playerbot qa reset` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa reset [$id] Forget one finding, or all of them. Local only: GitHub issues are not touched. |
+| `.playerbot qa prune` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa prune [#hours] [closed] [dry] Forget the findings not seen for #hours (default 12, 1..720). 'closed' also forgets those whose GitHub issue is known closed, whatever their age; 'dry' only lists what would go. Findings that hold a GitHub issue are never forgotten by age; 'closed' forgets the closed ones and remembers their issue number, so a recurrence stays closed. Local only: GitHub is not touched. Takes effect on disk at the next save. |
 | `.rates` ... | 3 | GameMaster | stored level through the map | Live server rates. Syntax: .rates [show\|set\|reset] |
 | `.rates show` | 3 | GameMaster | stored level through the map | Syntax: .rates [show] [$filter] Show the live-tunable server rates: the value in force, the configured value and whether it is overridden. $filter: part of a name (xp, drop, creature...). |
 | `.rates set` | 6 | Administrator | stored level through the map | Syntax: .rates set $name $value [$reason] Change a server rate for everyone until .rates reset, .reload config or restart (not saved to any file). $name: a vmangos name such as Rate.XP.Kill or a short form (xp, xp.quest, drop.money, money, drop.epic...), any case. $value: 0 to 100 (1 is retail), some rates have their own bounds; .rates show lists them. $reason is logged with the change. |
