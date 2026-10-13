@@ -389,7 +389,11 @@ public sealed class FishingService : IMapUpdater, ILootReleaseHandler
             return false; // used up (despawning) or activated without loot: the catch falls back to the zone loot
         }
 
-        LootBag bag = loot.Generate(hole.Guid, LootSourceKind.GameObject, LootType.FishingHole, LootTableKind.GameObject, hole.Template.GetData(1), [player]);
+        uint lootId = hole.Template.GetData(1);
+        LootBag bag = loot.Generate(hole.Guid, LootSourceKind.GameObject, LootType.FishingHole, LootTableKind.GameObject, lootId, [player]);
+        // Player::SendLoot (Player.cpp:7675-7690) rolls mingold..maxgold whenever GetLootId() is set. A fishing hole's
+        // loot id is data1, so the catch pays that gold; a bobber's GetLootId() is 0 and its zone table stays moneyless.
+        bag.Gold = Math.Min(LootMoneyRules.GenerateForGameObject(hole.Template, lootId, loot.Options.MoneyRate, _random), LootService.MaxMoneyAmount);
         bag.IgnoreDistance = true; // every fishing hole is exempt (LootHandler.cpp:63-64)
         bag.ReleaseHandler = this;
         hole.Loot = bag;
