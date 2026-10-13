@@ -44,6 +44,9 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     /// <summary>Trainers a stalled bot set aside (<see cref="PlayerbotStallWatch"/>).</summary>
     internal PlayerbotSuspensions? Suspensions { get; set; }
 
+    /// <summary>What the bot may spend (<see cref="PlayerbotBudget"/>); null spends all its money.</summary>
+    internal PlayerbotBudget? Budget { get; set; }
+
     internal bool HasCandidate(Player player)
     {
         if (!_options.Enabled || !player.IsInWorld || !player.IsAlive || player.Map is null
@@ -104,7 +107,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
                 }
                 Vector3 position = new(player.X, player.Y, player.Z);
                 _stuckMs = Vector3.DistanceSquared(position, _lastPosition) < 0.0025f
-                    ? _stuckMs + elapsedMs : 0;
+                    ? _stuckMs + (PlayerbotMount.IsBusy(_session) ? 0 : elapsedMs) : 0;
                 _lastPosition = position;
                 if (_stuckMs >= 5_000)
                 {
@@ -194,7 +197,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     }
 
     /// <summary>The service fields of every creature template in entry order, a configured override in place of the imported row.</summary>
-    private static IEnumerable<NpcTemplateMetadata> TrainerRows(CreatureContent content, NpcTemplateMetadataLookup? metadata)
+    internal static IEnumerable<NpcTemplateMetadata> TrainerRows(CreatureContent content, NpcTemplateMetadataLookup? metadata)
     {
         foreach (CreatureTemplate template in content.Templates.OrderBy(t => t.Entry))
         {
@@ -219,11 +222,11 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
             destination.Spawn.Guid, NpcFlags.Trainer, destination.Spawn.MapId, destination.Spawn.X, destination.Spawn.Y,
             destination.Spawn.Z, 0, true, false, false, false, 0,
             TrainerType.Class, destination.TrainerClass, 0, 0, destination.FactionId);
-        return services.GetClassTrainerQuote(player, hint) is { TeachingSpell: not 0, LearnedSpell: not 0, Cost: var cost }
-            && player.Money >= cost;
+        return services.GetClassTrainerQuote(player, hint, 0, Budget?.Spendable(PlayerbotSpendKind.ClassTraining, player)) is
+            { TeachingSpell: not 0, LearnedSpell: not 0, Cost: var cost } && player.Money >= cost;
     }
 
-    private static NpcInfo? FindVisibleUsefulTrainer(Player player, QuestNpcServices services)
+    private NpcInfo? FindVisibleUsefulTrainer(Player player, QuestNpcServices services)
     {
         if (services.Deps.Creatures is not { } lookup) return null;
         foreach (ObjectGuid guid in player.VisibleObjects)
@@ -231,7 +234,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
             NpcInfo? npc = lookup.Find(player, guid);
             if (npc is { IsAlive: true, IsHostile: false, IsInCombat: false, IsNotSelectable: false }
                 && (npc.NpcFlags & NpcFlags.Trainer) != 0
-                && services.GetClassTrainerQuote(player, npc) is not null)
+                && services.GetClassTrainerQuote(player, npc, 0, Budget?.Spendable(PlayerbotSpendKind.ClassTraining, player)) is not null)
                 return npc;
         }
         return null;

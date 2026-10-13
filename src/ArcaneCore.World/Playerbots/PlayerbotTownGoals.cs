@@ -81,6 +81,15 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     internal uint TargetEntry { get; private set; }
 
+    /// <summary>
+    /// What the bot may spend (<see cref="PlayerbotBudget"/>); null spends all its money (tests that build a bare controller). Class
+    /// training, food, drink and ammunition are bought within it; repairs and selling are not limited by it.
+    /// </summary>
+    internal PlayerbotBudget? Budget { get; set; }
+
+    /// <summary>The most a class training offer may cost: the money the budget leaves the class spells (all of it without a budget).</summary>
+    private uint? ClassTrainingLimit(Player player) => Budget?.Spendable(PlayerbotSpendKind.ClassTraining, player);
+
     internal bool HasCandidate(Player player)
         => FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair) is not null || RepairTripWanted(player);
 
@@ -104,8 +113,11 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             if (_greenTrainerSpells.Count > 0 && services.InteractableNpc(player, _trainerTarget, NpcFlags.Trainer) is { } trainer)
             {
                 if (!PlayerbotMovementControl.Stop(session, player)) return false;
+                uint? limit = ClassTrainingLimit(player);
                 uint spell = _greenTrainerSpells.OrderBy(id => id)
-                    .FirstOrDefault(id => services.GetClassTrainerQuote(player, trainer, id) is not null);
+                    .FirstOrDefault(id => trainer.TrainerType == TrainerType.Mounts
+                        ? RidingQuote(player, services, trainer, id) is not null
+                        : services.GetClassTrainerQuote(player, trainer, id, limit) is not null);
                 if (spell != 0)
                 {
                     Goal = PlayerbotGoalKind.Train;
@@ -114,6 +126,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                     if (!session.TryManagedAction(WorldOpcode.CmsgTrainerBuySpell, TrainerPayload(trainer.Guid, spell))) return true;
                     // The handler runs inside the action: nothing learned and nothing paid is a refusal.
                     if (KnownSpellCount(player) == known && player.Money == money) Refuse(_refusedTrainers, trainer.Guid, RefusedTrainerMs);
+                    else Budget?.Invalidate();
                     _trainerListPending = false;
                     _greenTrainerSpells.Clear();
                     return true;
@@ -170,6 +183,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyFood(player, services, npc))
             return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyAmmo(player, services, npc))
+            return true;
+        if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyMount(player, services, npc))
             return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TrySellGray(player, services, npc))
             return true;
@@ -469,7 +484,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             Vector3 at = new(current.Spawn.X, current.Spawn.Y, current.Spawn.Z);
             float left = Vector3.Distance(here, at);
             if (left < _repairBest - 0.5f) { _repairBest = left; _repairStuckMs = 0; }
-            else if (!_repairClockedThisThink) _repairStuckMs += elapsedMs; // a second Update of one think does not run the clock twice
+            else if (!_repairClockedThisThink && !PlayerbotMount.IsBusy(session)) _repairStuckMs += elapsedMs; // a second Update of one think does not run the clock twice
             _repairClockedThisThink = true;
             if (_repairStuckMs < RepairTripStuckMs && Suspensions?.IsEntrySuspended(current.Entry, now) != true)
             {
@@ -589,6 +604,30 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         }
     }
 
+    /// <summary>
+    /// The price of repairing everything worn that is damaged, by the server's own pricing (<see cref="IItemService.Repair"/> asked with a
+    /// payment that refuses every price, so nothing is repaired or paid; no reputation discount). Null when nothing worn can be priced.
+    /// </summary>
+    internal static uint? TotalWornRepair(Player player, QuestNpcServices services)
+    {
+        if (services.Deps.Items is not { } items) return null;
+        ulong total = 0;
+        bool priced = false;
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is not { MaxDurability: > 0 } item || item.Durability >= item.MaxDurability)
+                continue;
+            items.Repair(player, item.Guid, 1f, cost =>
+            {
+                total += cost;
+                priced = true;
+                return false;
+            });
+        }
+
+        return priced ? (uint)Math.Min(total, uint.MaxValue) : null;
+    }
+
     private static uint EquippedDurability(Player player)
     {
         uint total = 0;
@@ -638,7 +677,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             .Where(pair => pair.Template is { } template && template.GetInventoryType() == InventoryType.Ammo
                 && player.Inventory.CheckAmmoCompatibility(template)
                 && player.Inventory.CanUseAmmo(template.Entry) == ArcaneCore.Game.Items.InventoryResult.Ok
-                && services.GetVendorPurchasePrice(player, npc, template.Entry) is { } price && price <= player.Money)
+                && services.GetVendorPurchasePrice(player, npc, template.Entry) is { } price && price <= player.Money
+                && (Budget is null || Budget.MayAfford(PlayerbotSpendKind.Essentials, price, player)))
             .OrderByDescending(pair => pair.Template!.ItemLevel).ThenBy(pair => pair.Row.Item)
             .Select(pair => pair.Row).FirstOrDefault();
     }
@@ -723,6 +763,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private bool TryTrain(Player player, QuestNpcServices services, NpcInfo npc)
     {
         if (services.Deps.Spells is null || services.Npcs.TrainerSpells(npc.Entry).Count == 0)
+            return false;
+        if (npc.TrainerType == TrainerType.Mounts && RidingQuote(player, services, npc, 0) is null)
             return false;
         _trainerTarget = npc.Guid;
         _trainerListPending = session.TryManagedAction(WorldOpcode.CmsgTrainerList, TrainerListPayload(npc.Guid));
@@ -841,7 +883,55 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         // Advisory discovery only; the correlated GREEN list and ordinary buy handler
         // remain the authority for price, prerequisites and teaching/persistence.
         => HasUsefulVendorService(player, services, npc, ref needs)
-            || (!Refused(_refusedTrainers, npc.Guid) && TrainerHasOffer(player, services, npc));
+            || (!Refused(_refusedTrainers, npc.Guid) && (npc.TrainerType == TrainerType.Mounts
+                ? RidingQuote(player, services, npc, 0) is not null
+                : TrainerHasOffer(player, services, npc)));
+
+    /// <summary>
+    /// The riding training this Mounts trainer would teach the bot, when its budget says the money for the training and the mount is
+    /// there (<see cref="PlayerbotBudget.TrainingDue"/>) and the trainer is of its race (or it is Exalted): null otherwise.
+    /// </summary>
+    private ClassTrainerQuote? RidingQuote(Player player, QuestNpcServices services, NpcInfo npc, uint spell)
+    {
+        if (Budget is not { } budget || !budget.TrainingDue(player)) return null;
+        uint free = budget.Spendable(PlayerbotSpendKind.Riding, player);
+        return services.GetRidingTrainerQuote(player, npc, spell, free - Math.Min(budget.Riding.MountCost, free));
+    }
+
+    /// <summary>
+    /// The cheapest mount this vendor sells that the bot can use (a riding-skill or mounted-aura item its inventory lets it use), when it
+    /// can ride, owns no mount and the budget lets it pay: never dearer than the cheapest the budget planned for.
+    /// </summary>
+    private VendorItem? FindMountRow(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        if (Budget is not { } budget || !budget.MountPurchaseDue(player)
+            || session.Services.GetService<SpellFeature>()?.System.Store is not { } store) return null;
+        uint limit = Math.Min(budget.Spendable(PlayerbotSpendKind.Mount, player), budget.Riding.MountCost == 0 ? uint.MaxValue : budget.Riding.MountCost);
+        VendorItem? best = null;
+        uint bestPrice = uint.MaxValue;
+        PlayerbotServiceIndex? index = PlayerbotServiceIndex.Get(session, services, player);
+        uint rankCap = index?.RankForTier(budget.Riding.MountTierIndex) ?? uint.MaxValue, rankFloor = index?.RankFloor(budget.Riding.MountTierIndex) ?? 0;
+        foreach (VendorItem row in services.Npcs.VendorItems(npc.Entry).Take(128))
+        {
+            if (Refused(_refusedPurchases, (npc.Entry, row.Item)) || player.Inventory.Templates.Find(row.Item) is not { } template
+                || !PlayerbotMountRules.FitsTier(template, rankFloor, rankCap)
+                || !PlayerbotMountRules.IsMountItem(template, store) || player.Inventory.CanUseItem(template) != ArcaneCore.Game.Items.InventoryResult.Ok
+                || services.GetVendorPurchasePrice(player, npc, row.Item) is not { } price || price > limit || price >= bestPrice) continue;
+            best = row;
+            bestPrice = price;
+        }
+
+        return best;
+    }
+
+    private bool TryBuyMount(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        if (FindMountRow(player, services, npc) is not { } row) return false;
+        Goal = PlayerbotGoalKind.Vendor;
+        bool bought = Buy(player, npc, row.Item);
+        Budget?.Invalidate();
+        return bought;
+    }
 
     /// <summary>
     /// Whether the class trainer has a spell the bot can learn and pay for (<see cref="QuestNpcServices.GetClassTrainerQuote"/>: up to 128
@@ -857,7 +947,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             && memo.Level == level && money <= memo.Money && unchecked((int)(memo.Until - now)) > 0)
             return false;
         TrainerQuotesAsked++;
-        if (services.GetClassTrainerQuote(player, npc) is not null)
+        if (services.GetClassTrainerQuote(player, npc, 0, ClassTrainingLimit(player)) is not null)
         {
             _noTrainerOffer.Remove(npc.Guid);
             return true;
@@ -877,6 +967,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 && needs.Consumables(player, spells, out bool food, out bool drink)
                 && FindConsumableVendorRow(player, services, npc, spells, food, drink) is not null) return true;
             if (needs.Ammo(player) && FindAmmoRowOf(player, services, npc) is not null) return true;
+            if (FindMountRow(player, services, npc) is not null) return true;
             if (needs.Grays(this, player, services)) return true;
             if (needs.Junk(this, player, services)) return true;
         }
@@ -905,26 +996,27 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         VendorItem[] rows = [.. services.Npcs.VendorItems(npc.Entry).Take(32).Where(row => !Refused(_refusedPurchases, (npc.Entry, row.Item)))];
         foreach (VendorItem row in rows)
         {
-            if (TryEligible(row, PlayerbotConsumableKind.Food, needFood, player, services, npc, spells))
+            if (TryEligible(row, PlayerbotConsumableKind.Food, needFood, player, services, npc, spells, Budget))
                 return row;
         }
 
         foreach (VendorItem row in rows)
         {
-            if (TryEligible(row, PlayerbotConsumableKind.Drink, needDrink, player, services, npc, spells))
+            if (TryEligible(row, PlayerbotConsumableKind.Drink, needDrink, player, services, npc, spells, Budget))
                 return row;
         }
         return null;
 
         static bool TryEligible(VendorItem row, PlayerbotConsumableKind wanted, bool needed, Player player,
-            QuestNpcServices services, NpcInfo npc, SpellSystem spells)
+            QuestNpcServices services, NpcInfo npc, SpellSystem spells, PlayerbotBudget? budget)
         {
             if (!needed || player.Inventory.Templates.Find(row.Item) is not { } template
                 || player.Inventory.CanUseItem(template) != ArcaneCore.Game.Items.InventoryResult.Ok
                 || !PlayerbotConsumables.TryClassify(template, spells, out PlayerbotConsumableKind kind)
                 || kind != wanted)
                 return false;
-            return services.GetVendorPurchasePrice(player, npc, row.Item) is not null;
+            return services.GetVendorPurchasePrice(player, npc, row.Item) is { } price
+                && (budget is null || budget.MayAfford(PlayerbotSpendKind.Essentials, price, player));
         }
     }
 

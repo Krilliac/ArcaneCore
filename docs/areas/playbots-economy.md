@@ -17,6 +17,7 @@ must obey is the server's, enforced by the ordinary handlers.
 
 | File (`src/ArcaneCore.World/Playerbots/Economy/`) | What it does |
 |---|---|
+| `PlayerbotBudget.cs`, `PlayerbotServiceIndex.cs`, `PlayerbotRidingTrips.cs`, `PlayerbotMount.cs` (folder `Playerbots/Budget/`) | The budget, the shared trainer/vendor index, the riding and mount-vendor trips, and mounting (`World:Playerbots:Budget`, `World:Playerbots:Mounts`). |
 | `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `VisitIntervalMinutes`. |
 | `PlayerbotEconomy.cs` | The world side, one per bot (owned by `PlayerbotBrain`): the visit as a state machine, one step per think. |
 | `PlayerbotEconomyPlanner.cs` | The pure decisions: which items are listable, the listing slots, the visit budget, the price plan, the upgrade to buy, the parsing of an auction letter's subject, `PlayerbotRelistMemory`. |
@@ -144,6 +145,43 @@ the economy settlement layer applies each one as a single transaction.
 * **No guess at a reply.** A reply that cannot be decoded is treated as no answer: no listing without a readable owner list, no purchase
   without a readable page.
 
+## Budget: what a bot saves for
+
+Every spend site asks the bot's `PlayerbotBudget` what it may spend; nothing is hard-coded: every cost is read from the world data
+(`npc_trainer.spellcost`, `npc_vendor` + `item_template.buy_price`) through the same pricing the trainer window and vendor list use, with
+the reputation and honor discount, and is cached in one shared `PlayerbotServiceIndex` per world (built once on the world thread, no
+world-DB query per think). The lines, in priority order, and what each spend site may spend:
+
+| Priority | Line | Reserved cost | Spend sites |
+|---|---|---|---|
+| 1 | Repair | repairing all worn gear, while it is badly worn | repairs are never blocked |
+| 2 | Essentials | no line: a purchase may always cost up to `World:Playerbots:Budget:EssentialsAllowanceCopper` | food, drink, ammunition |
+| 3 | Class training | the class spells learnable now plus those opening within `World:Playerbots:Budget:ClassLevelsAhead` levels, at the class trainer's prices | class training spends all the money the repair line leaves |
+| 4 | Mount | the cheapest mount the bot can use, once it can ride and owns none | the mount purchase |
+| 5 | Riding | the next riding tier's training plus the cheapest mount that tier lets the bot use | riding training |
+| 6 | Professions | none: managed bots have no professions | not reserved |
+| 7 | Discretionary | none | auction house purchases (`BuyUpgradeBudgetFraction` applies to what the lines above leave, but a purchase may always use up to `World:Playerbots:Budget:DiscretionaryFloorFraction` of the bot's money, so a reserve it cannot reach does not stop its buying for good). Auction listing deposits are not purchases and are never limited by a reserve |
+
+A spend of one kind may cost the bot's money less the lines of the kinds before it, so saving for a mount never holds back class
+training (class outranks riding) and class training's save-ahead keeps lower priorities from spending the money its next spells will need.
+Selling greys and junk, and listing loot at the auction house, are never limited by a reserve. `.playerbot inspect` shows `BOTINSPECT budget=...`: money, the total reserved, the
+part saved and free, the repair and class costs, the riding step (`none`, `distant`, `saving`, `train`, `buymount`, `done`) with its tier,
+training and mount cost, vendor and trainer entries, and the next step.
+
+## Mounts
+
+A bot within `World:Playerbots:Mounts:SaveLevelsAhead` levels of the next riding tier's required level (the `npc_trainer.reqlevel` of the Mounts trainer
+of its race) keeps that tier's training and the cheapest mount it can use reserved: a vendor item that requires a riding skill or whose
+on-use spell applies the mounted aura (78), usable by its race and class, by the tier's level, and by the skill rank the tier gives (read
+from the ranks the mounts ask for, ascending). When the level is reached and the spendable money covers both, the bot walks to a Mounts
+trainer of its race (`PlayerbotRidingTrips`, goal `Mount`) and buys the riding spell through the ordinary trainer handler (`IsTrainerOf`:
+its race, or Exalted); then, owning no mount, to the mount vendor for the cheapest mount it can use. Apprentice and Journeyman tiers use
+the same logic, driven by the rows; a mount counts only if it fits the highest learned tier (a Journeyman bot still saves for the epic mount while it owns the old one). A trainer or vendor on another map than the bot's is no plan: with none on its map nothing is reserved. The rank ladder (which riding skill rank each tier gives) is read from the ranks the vendor mounts ask for, not from the skill the learned riding spell grants, so a data set whose mounts do not name riding-skill ranks falls back to "first tier only" for mounts with no skill. A bot on a leg of at least `World:Playerbots:Mounts:MountMinTravelYards` outdoors, out of combat, not in an instance or
+battleground, not swimming or in a form that cannot ride (a warrior stance can), that knows a mount spell or carries a mount item, mounts through CMSG_CAST_SPELL /
+CMSG_USE_ITEM (the server's `MountCastCheck` decides); a refusal backs it off 30 seconds, doubling to ten minutes. The server dismounts a
+caster but refuses an attack from a mounted player and does not dismount for an NPC or a corpse, so the managed packets that talk to an
+NPC, loot or attack take the mount off first (`PlayerbotMount.DismountForAction`).
+
 ## Configuration
 
 `World:Playerbots:Economy`, bound into `PlayerbotOptions.Economy` and read at every decision; `.reload config` changes the live object.
@@ -155,6 +193,24 @@ the economy settlement layer applies each one as a single transaction.
 | `MaxListingsPerBot` | `5` | The most auctions one bot has listed at once (0..50), from the house's own owner list. |
 | `BuyUpgradeBudgetFraction` | `0.25` | The share (0..1) of the money held at the start of a visit that the visit may spend in all, deposits and buyout. 0 spends nothing. |
 | `VisitIntervalMinutes` | `30` | Minutes between two visits of one bot (1..1440). |
+
+`World:Playerbots:Budget` (live):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Enabled` | `true` | Off: nothing is reserved; every spend site may spend all the bot's money. |
+| `ClassLevelsAhead` | `2` | Levels ahead of its own (0..10) for which the bot reserves class spells. |
+| `EssentialsAllowanceCopper` | `10000` | Copper a food, drink or ammunition purchase may always cost, whatever is reserved. |
+| `DiscretionaryFloorFraction` | `0.10` | The share (0..1) of its money a bot may always spend on auction purchases even when the reserves leave nothing; 0 lets the reserves take everything. |
+| `RefreshSeconds` | `30` | Seconds between recomputations of a bot's reserves (1..3600); a level change recomputes at once. |
+
+`World:Playerbots:Mounts` (live):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Enabled` | `true` | Off: no riding reserve, no trips; a bot never mounts. |
+| `SaveLevelsAhead` | `4` | A bot within this many levels (0..20) of the next riding tier's required level reserves its cost. |
+| `MountMinTravelYards` | `80` | Walks of at least this many yards (1..100000) are ridden. |
 
 The server's own economy options apply to the bot as to a player: `Economy:AuctionHouses` (deposit and cut percents),
 `AuctionDepositMin`, `AuctionRateDeposit`, `AuctionRateCut`, `AuctionSilentRefusals`, `MailDeliveryDelaySeconds`. The reference list of

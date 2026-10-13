@@ -1003,6 +1003,8 @@ internal static class PlayerbotNavigation
             }
         }
 
+        // A long walk is ridden when the bot has a mount (PlayerbotMount): it stops to cast the mount, then walks on mounted.
+        if (PlayerbotMount.BeforeStep(session, player, route, options)) return true;
         return PlayerbotMotion.Follow(session, player, route, options, serverTimeMs, keepMotion);
     }
 

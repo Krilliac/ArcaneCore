@@ -217,6 +217,7 @@ internal static class PlayerbotChatPrompts
         PlayerbotGoalKind.Rest => "resting",
         PlayerbotGoalKind.Vendor => "heading to a vendor",
         PlayerbotGoalKind.Train => "heading to a class trainer",
+        PlayerbotGoalKind.Mount => "on my way to learn to ride and buy a mount",
         PlayerbotGoalKind.Recover => "recovering from a death",
         PlayerbotGoalKind.Follow => p.MasterName is { } master ? $"following {master}" : "following my group",
         PlayerbotGoalKind.Assist => p.MasterName is { } master ? $"helping {master}" : "helping my group",
