@@ -61,6 +61,12 @@ public sealed class WorldHost(
 
                 // Features are singletons, so the scope hands out the same instances.
                 scope.ServiceProvider.AttachWorldFeatures(world);
+
+                if (_fencing.Enabled && scope.ServiceProvider.GetService<IIdRangeReservationStore>() is not null)
+                {
+                    await PrimeDurableIdAllocatorsAsync(scope.ServiceProvider, scopes, cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                }
             }
 
             logger.LogInformation("Loaded {Count} character names", directory.Count);
@@ -76,6 +82,67 @@ public sealed class WorldHost(
         {
             await StopClaimWatchAsync().ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Configures and primes durable block-prefetch ID allocators for attached world features using
+    /// <see cref="IIdRangeReservationStore"/> so runtime allocations never block the world thread on I/O.
+    /// </summary>
+    public static async Task PrimeDurableIdAllocatorsAsync(
+        IServiceProvider services,
+        IServiceScopeFactory scopes,
+        uint blockSize = 1024,
+        uint lowWatermark = 256,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(scopes);
+
+        Func<string, uint, CancellationToken, Task<IdRangeBlock>> reserveAsync = async (scopeName, count, ct) =>
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            IIdRangeReservationStore store = scope.ServiceProvider.GetRequiredService<IIdRangeReservationStore>();
+            return await store.ReserveBlockAsync(scopeName, count, ct).ConfigureAwait(false);
+        };
+
+        if (services.GetService<Items.ItemsFeature>() is { } items)
+        {
+            DurableIdBlockAllocator itemAlloc = items.GuidAllocator.ConfigureBlockReservation(reserveAsync, blockSize, lowWatermark);
+            await itemAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (services.GetService<Social.SocialFeature>() is { } social)
+        {
+            var groupAlloc = new DurableIdBlockAllocator(IdRangeScopes.Group, blockSize, lowWatermark, reserveAsync);
+            await groupAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+            social.Context.Groups.IdBlockAllocator = groupAlloc;
+
+            var guildAlloc = new DurableIdBlockAllocator(IdRangeScopes.Guild, blockSize, lowWatermark, reserveAsync);
+            await guildAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+            social.Context.Guilds.IdBlockAllocator = guildAlloc;
+        }
+
+        if (services.GetService<Instances.InstanceFeature>() is { } instances)
+        {
+            var instanceAlloc = new DurableIdBlockAllocator(IdRangeScopes.Instance, blockSize, lowWatermark, reserveAsync);
+            await instanceAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+            instances.Instances.IdBlockAllocator = instanceAlloc;
+        }
+
+        if (services.GetService<Economy.EconomyFeature>() is { Enabled: true } economy)
+        {
+            var mailAlloc = new DurableIdBlockAllocator(IdRangeScopes.Mail, blockSize, lowWatermark, reserveAsync);
+            await mailAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+            economy.MailIdAllocator = mailAlloc;
+
+            var auctionAlloc = new DurableIdBlockAllocator(IdRangeScopes.Auction, blockSize, lowWatermark, reserveAsync);
+            await auctionAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+            economy.AuctionIdAllocator = auctionAlloc;
+
+            var textAlloc = new DurableIdBlockAllocator(IdRangeScopes.ItemText, blockSize, lowWatermark, reserveAsync);
+            await textAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+            economy.ItemTextIdAllocator = textAlloc;
         }
     }
 

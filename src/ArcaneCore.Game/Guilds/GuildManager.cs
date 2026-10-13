@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 
@@ -46,6 +47,27 @@ public sealed partial class GuildManager(SocialContext context)
     private readonly Dictionary<uint, Guild> _memberOf = [];
     private readonly Dictionary<ObjectGuid, (int GuildId, ObjectGuid Inviter)> _invites = [];
     private int _nextId = 1;
+
+    /// <summary>
+    /// Optional durable block allocator for guild IDs when cluster ID range reservation is enabled.
+    /// </summary>
+    public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
+
+    private int AllocateGuildId()
+    {
+        if (IdBlockAllocator is { } allocator)
+        {
+            int allocated = allocator.NextInt32();
+            if (allocated >= _nextId && allocated < int.MaxValue)
+                _nextId = allocated + 1;
+            return allocated;
+        }
+
+        if (_nextId <= 0)
+            throw new IdRangeExhaustedException(IdRangeScopes.Guild, "guild ID space exhausted");
+
+        return _nextId++;
+    }
 
     public IReadOnlyCollection<Guild> All => _guilds.Values;
 
@@ -658,7 +680,7 @@ public sealed partial class GuildManager(SocialContext context)
             return GuildAdminResult.AlreadyInGuild;
         }
 
-        guild = new Guild(_nextId++, name, leaderId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        guild = new Guild(AllocateGuildId(), name, leaderId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         guild.CreateDefaultRanks();
         _guilds[guild.Id] = guild;
         AddMember(guild, leaderId, Guild.GuildMasterRank);
