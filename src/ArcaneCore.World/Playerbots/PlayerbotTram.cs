@@ -293,15 +293,9 @@ internal static class PlayerbotTram
         ArgumentNullException.ThrowIfNull(player);
         if (player.Team != Team.Alliance) return false;
         if (IsTraveling(player)) return true;
-        if (!player.IsAlive || player.Map is not { } map || map.MapId == TramNetwork.TramMapId) return false;
         uint now = session.World.NowMs;
         if (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs) return false;
-        if (TramNetwork.Of(WorldMaps.Of(session.World)) is not { } network) return false;
-        Vector3 at = new(player.X, player.Y, player.Z);
-        if (!network.CanConsider(map.MapId, at, goal)) return false;
-        uint sourceZone = zoneAt is null ? map.GetZoneAndAreaId(at.X, at.Y, at.Z).ZoneId : zoneAt(at);
-        uint goalZone = zoneAt is null ? map.GetZoneAndAreaId(goal.X, goal.Y, goal.Z).ZoneId : zoneAt(goal);
-        if (network.Choose(map.MapId, at, goal, sourceZone, goalZone) is not { } leg) return false;
+        if (ChooseLeg(session, player, goal, zoneAt, out TramNetwork? network) is not { } leg || network is null) return false;
         uint? previous = PlayerbotAreaTriggers.TeleportTargetOf(player);
         var trip = new TramTrip(network, leg.From, leg.To, goal, now, previous);
         Trips.AddOrUpdate(player, trip);
@@ -317,13 +311,25 @@ internal static class PlayerbotTram
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
-        if (player.Team != Team.Alliance || !player.IsAlive || player.Map is not { } map || map.MapId == TramNetwork.TramMapId) return false;
-        if (TramNetwork.Of(WorldMaps.Of(session.World)) is not { } network) return false;
+        return player.Team == Team.Alliance && ChooseLeg(session, player, goal, zoneAt, out _) is not null;
+    }
+
+    /// <summary>
+    /// The one set of checks <see cref="TryBegin"/> and <see cref="IsWayTo"/> share: a living bot on a continent map that the world's tram
+    /// network (null: none described) joins to <paramref name="goal"/>; the leg to ride, or null.
+    /// </summary>
+    private static (TramPlatform From, TramPlatform To)? ChooseLeg(WorldSession session, Player player, Vector3 goal,
+        Func<Vector3, uint>? zoneAt, out TramNetwork? network)
+    {
+        network = null;
+        if (!player.IsAlive || player.Map is not { } map || map.MapId == TramNetwork.TramMapId) return null;
+        if (TramNetwork.Of(WorldMaps.Of(session.World)) is not { } found) return null;
         Vector3 at = new(player.X, player.Y, player.Z);
-        if (!network.CanConsider(map.MapId, at, goal)) return false;
+        if (!found.CanConsider(map.MapId, at, goal)) return null;
         uint sourceZone = zoneAt is null ? map.GetZoneAndAreaId(at.X, at.Y, at.Z).ZoneId : zoneAt(at);
         uint goalZone = zoneAt is null ? map.GetZoneAndAreaId(goal.X, goal.Y, goal.Z).ZoneId : zoneAt(goal);
-        return network.Choose(map.MapId, at, goal, sourceZone, goalZone) is not null;
+        network = found;
+        return found.Choose(map.MapId, at, goal, sourceZone, goalZone);
     }
 
     /// <summary>Drop the trip without a packet (death, a controller taking the bot over); the entrance consent goes with it.</summary>

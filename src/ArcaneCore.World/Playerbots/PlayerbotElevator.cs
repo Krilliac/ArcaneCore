@@ -522,6 +522,11 @@ internal static class PlayerbotElevator
     /// <summary>
     /// Whether a lift is the way to <paramref name="goal"/> from where the bot stands (<see cref="ElevatorNetwork.Choose"/>), without
     /// beginning a trip or planning a route. World thread, no side effects.
+    /// <para>
+    /// Unlike <see cref="TryBegin"/> this skips the direct-mesh check (a goal within one route's reach that the mesh joins is walked, not
+    /// ridden): it answers "is a lift the way" only for a caller that already knows the walk was refused, such as the failed-return
+    /// diagnosis (<c>PlayerbotWorldDestinations.ConfirmUnclimbable</c>). Anywhere else it can say true for a goal the bot simply walks to.
+    /// </para>
     /// </summary>
     internal static bool IsWayTo(WorldSession session, Player player, Vector3 goal)
     {

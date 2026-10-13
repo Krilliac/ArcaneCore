@@ -412,8 +412,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         {
             // No steep ground or hazard: for a bot that may not take the tram or a lift the ender across it is the reason, but only
             // when the tram or a lift really is the way there (any other failed plan is not a transit block, and is never set aside here).
-            if (!TransitAllowed(Home, player.Level, _options.Population) && TransitIsTheWay(player, destination))
-                ConfirmTransitBlocked(player, questId, entry, now);
+            if (!TransitAllowed(Home, player.Level, _options.Population) && TransitWayTo(player, destination) is { } transit)
+                ConfirmTransitBlocked(player, questId, entry, now, transit);
             return;
         }
         string reason = steep ? $"the mesh route climbs {ascent:F1} yards of steep ground"
@@ -481,15 +481,17 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, reason);
     }
 
-    private bool TransitIsTheWay(Player player, Vector3 destination)
-        => PlayerbotTram.IsWayTo(_session, player, destination, TramZoneAt) || PlayerbotElevator.IsWayTo(_session, player, destination);
+    /// <summary>"the Deeprun Tram" or "a lift" when that is the way to <paramref name="destination"/>, else null. Only valid once the walk was refused.</summary>
+    private string? TransitWayTo(Player player, Vector3 destination)
+        => PlayerbotTram.IsWayTo(_session, player, destination, TramZoneAt) ? "the Deeprun Tram"
+            : PlayerbotElevator.IsWayTo(_session, player, destination) ? "a lift" : null;
 
     /// <summary>
     /// A completed quest whose ender the bot cannot reach because it may not take the tram or a lift yet (<see cref="TransitAllowed"/>):
     /// set aside like any unreachable ender, and after <see cref="PlayerbotSuspensions.MaxReturnSetAsides"/> set-asides abandoned
     /// through the client's abandon packet and never taken again, so the far plan is not retried forever. Returns true when abandoned.
     /// </summary>
-    internal bool ConfirmTransitBlocked(Player player, uint questId, uint entry, uint now)
+    internal bool ConfirmTransitBlocked(Player player, uint questId, uint entry, uint now, string transit = "the tram or a lift")
     {
         if (Suspensions is not { } suspensions) return false;
         _failCount = 0;
@@ -501,13 +503,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (times >= PlayerbotSuspensions.MaxReturnSetAsides && PlayerbotQuestGoals.TryAbandonCompletedQuest(_session, player, questId, out _))
         {
             suspensions.MarkUnreachableQuest(questId);
-            log?.LogWarning("Playerbot {Bot} abandons completed quest {Quest} (ender {Entry}) after {Times} set-asides: level {Level} is below the tram level and the ender lies across it",
-                player.Name, questId, entry, times, player.Level);
+            log?.LogWarning("Playerbot {Bot} abandons completed quest {Quest} (ender {Entry}) after {Times} set-asides: level {Level} is below the tram level and the ender lies across {Transit}",
+                player.Name, questId, entry, times, player.Level, transit);
             return true;
         }
 
-        log?.LogWarning("Playerbot {Bot} sets aside completed quest {Quest} (ender {Entry}, set-aside {Times}): level {Level} is below the tram level and the ender lies across it",
-            player.Name, questId, entry, times, player.Level);
+        log?.LogWarning("Playerbot {Bot} sets aside completed quest {Quest} (ender {Entry}, set-aside {Times}): level {Level} is below the tram level and the ender lies across {Transit}",
+            player.Name, questId, entry, times, player.Level, transit);
         return false;
     }
 

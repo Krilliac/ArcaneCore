@@ -108,7 +108,7 @@ public sealed class PlayerbotLeaveHomeQuestTests
         => session.Services.GetRequiredService<QuestNpcFeature>().Services.StateOf(player)!.Quests.Get(questId)?.Status;
 
     [Fact]
-    public async Task ACompletedQuestsReturn_IsNeverSkippedByTheHomeRule_ForAStartHomeOrAGraduatedOne()
+    public async Task TheHomeRule_DoesNotSkipACompletedQuestsReturn_ToAnEnderOutsideTheHome()
     {
         await RunAsync((session, player, options, _) =>
         {
