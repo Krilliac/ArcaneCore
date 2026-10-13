@@ -734,9 +734,11 @@ public sealed class ScriptFidelityTests
         Creature mograine = run.Creature(3976);
         var ai = Assert.IsType<MograineAi>(mograine.AI);
         run.Player.Relocate(mograine.X + 1, mograine.Y, mograine.Z, 0, 0);
-        // The fixture player has 60 health. Mograine's white swings kill him before the 40 s shield, he drops combat, and
-        // the shield never goes out (and the next regen tick can push him back over half). He has to stay alive.
-        run.Player.MaxHealth = 10_000;
+        // White swings roll on the process-wide combat random, and a creature whose template damage is 0
+        // still hits for up to 5 (Unit::CalculateDamage's max-0 fallback). The harness player has 60 health,
+        // so during this 40 s pull a hit streak kills them, Mograine leaves combat, and Divine Shield never
+        // comes out. The timer under test does not depend on the player being able to die to those swings.
+        run.Player.MaxHealth = 50_000;
         run.Player.Health = run.Player.MaxHealth;
         run.Map.Combat.DealDamage(run.Player, mograine, mograine.MaxHealth * 6 / 10, direct: false);
         mograine.Combat.Threat.AddThreat(run.Player, 100);
