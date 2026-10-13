@@ -188,6 +188,39 @@ public sealed class ChannelManagerTests
     }
 
     [Fact]
+    public void OwnerKickingThemselves_LeavesTheChannel_AndPassesOwnership()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        f.Context.Channels.Join(a, "Club", string.Empty);
+        f.Context.Channels.Join(b, "Club", string.Empty);
+        Channel channel = f.Context.Channels.Find(Team.Alliance, "Club")!;
+        f.ClearAll();
+
+        f.Context.Channels.KickOrBan(a, "Club", "P1", ban: false);
+
+        // SetOwner inserts a missing guid, so handing ownership back to the kicker would undo the kick
+        // while ChannelManager has already dropped the membership.
+        Assert.False(channel.IsOn(a.Guid));
+        Assert.DoesNotContain(channel, f.Context.Channels.JoinedBy(a));
+        Assert.Equal(b.Guid, channel.Owner);
+        Assert.True(channel.IsOn(b.Guid));
+        Assert.Contains(ChatNotify.PlayerKicked, Notifies(f, a));
+        Assert.Contains(ChatNotify.PlayerKicked, Notifies(f, b));
+
+        f.ClearAll();
+        f.Context.Channels.Say(b, "Club", "hi", Language.Common);
+        Assert.Empty(f.Sent(a, WorldOpcode.SmsgMessagechat));
+
+        f.ClearAll();
+        f.Context.Channels.Join(a, "Club", string.Empty);
+        Assert.Equal([ChatNotify.YouJoined], Notifies(f, a));
+        Assert.True(channel.IsOn(a.Guid));
+        Assert.Contains(channel, f.Context.Channels.JoinedBy(a));
+    }
+
+    [Fact]
     public void KickAndBan_NeedAModerator_AndBanKeepsThePlayerOut()
     {
         using var f = new SocialFixture();

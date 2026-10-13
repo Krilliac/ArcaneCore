@@ -174,6 +174,13 @@ public sealed class Channel
     /// vmangos Channel::KickOrBan: member and moderator (or GM); target online and a member; only
     /// the owner or a GM may remove the owner; PLAYER_KICKED / PLAYER_BANNED to everyone (the
     /// target included); a removed owner hands ownership to the kicker.
+    /// <para>
+    /// SetOwner stores the new owner with an insert, so handing it the guid KickOrBan just erased
+    /// puts that player back on the channel (still receiving chat, and "already a member" if they
+    /// try to rejoin) while <see cref="ChannelManager"/> has already dropped the membership.
+    /// The kicker receives ownership only when they are still a member; kicking yourself passes
+    /// it to the first remaining member, the same handoff as <see cref="Leave"/>.
+    /// </para>
     /// </summary>
     internal Player? KickOrBan(Player player, string targetName, bool ban)
     {
@@ -203,7 +210,22 @@ public sealed class Channel
         _players.Remove(target.Guid.Value);
         if (changeOwner)
         {
-            SetOwner(_players.Count > 0 ? player.Guid : ObjectGuid.Empty, true);
+            // The kicker's guid is gone when they removed themselves; inserting it again would undo the kick.
+            ObjectGuid next;
+            if (_players.ContainsKey(player.Guid.Value))
+            {
+                next = player.Guid;
+            }
+            else if (_players.Count > 0)
+            {
+                next = new ObjectGuid(_players.Keys.First());
+            }
+            else
+            {
+                next = ObjectGuid.Empty;
+            }
+
+            SetOwner(next, true);
         }
 
         return target;
