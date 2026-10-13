@@ -257,6 +257,22 @@ public sealed class GraveyardRepopTests
         Assert.Same(second, rig.Service.Choose(player, bg));
     }
 
+    [Fact]
+    public void ACorpseOnAnotherMap_UsesThatMapsGraveyard_WithoutCreatingTheMap()
+    {
+        // SendSpiritResurrect reads the corpse's zone from the terrain manager (ObjectMgr.cpp:7514), not by creating the map.
+        // Map 1's linked zone is 14, so a corpse there belongs to graveyard 2; the ghost stands in zone 12 (graveyard 1).
+        using var rig = new Rig(new GraveyardContent(
+            [Loc(1, 0, 0, 0, 0), Loc(2, 1, 1000, 2000, 30, 1.5f)],
+            [new GraveyardLink(1, 12, 0), new GraveyardLink(2, 14, 0)]));
+        Assert.Null(rig.World.FindMap(1));
+
+        Assert.True(rig.Service.TeleportToCorpseGraveyard(rig.Player, new CorpsePlace(1, 10, 20, 30)));
+
+        Assert.Null(rig.World.FindMap(1));
+        Assert.Equal(new TeleportDestination(1, 1000, 2000, 30, 1.5f), rig.Teleports.DestinationOf(rig.Player));
+    }
+
     private sealed class FixedOverride(bool handles, WorldSafeLoc? graveyard) : IGraveyardOverride
     {
         public bool TryChoose(Player player, out WorldSafeLoc? chosen)

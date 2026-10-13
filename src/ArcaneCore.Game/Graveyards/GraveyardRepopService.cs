@@ -92,8 +92,12 @@ public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportServi
         }
 
         // The corpse's graveyard is chosen from the corpse's own map and position; the ghost's from where it stands now.
-        Map corpseMap = place.MapId == map.MapId ? map : world.GetMap(place.MapId);
-        WorldSafeLoc? corpseGrave = ChooseAt(player, corpseMap, place.X, place.Y, place.Z);
+        // vmangos asks sTerrainMgr.GetZoneAndAreaId (ObjectMgr.cpp:7514). GetMap would create instance 0 of that map —
+        // and every default updater — only to read the zone, including a dungeon the ghost has already left.
+        (uint corpseZone, uint corpseArea) = place.MapId == map.MapId
+            ? map.GetZoneAndAreaId(place.X, place.Y, place.Z)
+            : WorldMaps.Of(world).Terrain.For(place.MapId).GetZoneAndAreaId(place.X, place.Y, place.Z);
+        WorldSafeLoc? corpseGrave = ChooseAt(player, place.MapId, place.X, place.Y, place.Z, corpseZone, corpseArea);
         WorldSafeLoc? ghostGrave = Choose(player, map);
         if (corpseGrave is null || corpseGrave.Id == ghostGrave?.Id)
         {
@@ -118,8 +122,14 @@ public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportServi
 
     private WorldSafeLoc? ChooseAt(Player player, Map map, float x, float y, float z)
     {
+        (uint zoneId, uint areaId) = map.GetZoneAndAreaId(x, y, z);
+        return ChooseAt(player, map.MapId, x, y, z, zoneId, areaId);
+    }
+
+    private WorldSafeLoc? ChooseAt(Player player, uint mapId, float x, float y, float z, uint zoneId, uint areaId)
+    {
         WorldMaps maps = WorldMaps.Of(world);
-        if (maps.Registry.Find(map.MapId) is { IsBattleground: true })
+        if (maps.Registry.Find(mapId) is { IsBattleground: true })
         {
             foreach (IGraveyardOverride graveyardOverride in _overrides)
             {
@@ -138,12 +148,11 @@ public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportServi
             return null;
         }
 
-        (uint zoneId, uint areaId) = map.GetZoneAndAreaId(x, y, z);
         uint team = player.Team == Team.Alliance ? GraveyardCatalog.TeamAlliance : GraveyardCatalog.TeamHorde;
         WorldSafeLoc? picked = DeathHooks.For(world).Options.GraveyardFallbackToDefaults
-            ? GraveyardSelector.FindClosestOrDefault(catalog, maps.Registry, map.MapId, x, y, z, zoneId, areaId, team)
-            : GraveyardSelector.FindClosest(catalog, maps.Registry, map.MapId, x, y, z, zoneId, areaId, team);
-        return _linkSources.Count == 0 ? picked : WithExtraLinks(picked, catalog, player, map.MapId, x, y, z, zoneId, areaId);
+            ? GraveyardSelector.FindClosestOrDefault(catalog, maps.Registry, mapId, x, y, z, zoneId, areaId, team)
+            : GraveyardSelector.FindClosest(catalog, maps.Registry, mapId, x, y, z, zoneId, areaId, team);
+        return _linkSources.Count == 0 ? picked : WithExtraLinks(picked, catalog, player, mapId, x, y, z, zoneId, areaId);
     }
 
     /// <summary>The closest of the chosen graveyard and the run-time links on the spirit's map (vmangos GetClosestGraveYard's distance pick).</summary>
