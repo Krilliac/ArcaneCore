@@ -22,6 +22,14 @@ public sealed class CreatureSmartAI : AggressorAI
 
     internal CreatureMapSystem? Host => System;
 
+    /// <summary>SMART_ACTION_AUTO_ATTACK (UnitAI::SetMeleeEnabled): a change starts or stops the swing at the current victim.</summary>
+    internal void SetMeleeEnabled(bool enabled)
+    {
+        if (enabled == MeleeEnabled) return;
+        MeleeEnabled = enabled;
+        if (Victim is { } current) System?.SetMelee(Me, current, enabled);
+    }
+
     /// <summary>AzerothCore SmartAI::JustRespawned: OnReset.</summary>
     public override void OnRespawn() => Script.OnReset();
 
