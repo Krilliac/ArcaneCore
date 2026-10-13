@@ -28,14 +28,18 @@ public sealed class MountFormCastCheck : ISpellCastCheck
 /// <summary>
 /// A player casting while mounted gets off the mount first: vmangos Spell::CheckCast (Spell.cpp:5680-5692): a non-triggered cast
 /// of a spell that is neither passive nor ALLOW_WHILE_MOUNTED dismounts the player and removes the mount auras. Runs once, at the
-/// start of the cast (the strict check). The taxi branch (SPELL_FAILED_NOT_ON_TAXI while flying) has no flight state to read on
-/// this base and is not implemented.
+/// start of the cast (the strict check), after <see cref="MountCastCheck"/> so a cast vmangos already refused (underwater or indoors
+/// at :5357-5388, or a taxi at :5682) does not pull the rider off.
 /// </summary>
 public sealed class DismountOnCastCheck : ISpellCastCheck
 {
     public SpellCheckPhase Phase => SpellCheckPhase.Items;
 
-    public int Order => 0;
+    /// <summary>
+    /// Just after <see cref="MountCastCheck"/> (<see cref="SpellCastCheckOrder.Equipment"/> - 50). Order 0 ran first in this phase
+    /// and dismounted before that check could refuse the cast.
+    /// </summary>
+    public int Order => SpellCastCheckOrder.Equipment - 40;
 
     public SpellCastResult Check(in SpellCastCheckContext context)
     {
@@ -43,6 +47,12 @@ public sealed class DismountOnCastCheck : ISpellCastCheck
             || context.Spell.HasAttribute(SpellAttributes.AllowWhileMounted) || !MountService.IsMounted(player))
         {
             return SpellCastResult.CastOk;
+        }
+
+        // vmangos Spell.cpp:5682-5684: a taxi flight is a mount a player cast must not replace.
+        if ((player.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        {
+            return SpellCastResult.NotOnTaxi;
         }
 
         MountService.Unmount(context.System, player);
