@@ -297,7 +297,7 @@ public sealed class ReputationCombatHooksTests
         pet.SetOwnerGuid(rig.Player.Guid);
 
         Assert.True(rig.Resolver.TryGetReaction(guard, pet, out ReputationRank after));
-        Assert.Equal(ReputationRank.Hostile, after); // CvP: the owner's Hated standing, not the template
+        Assert.Equal(ReputationRank.Hated, after); // CvP: the owner's Hated standing, not a collapsed Hostile
         Assert.True(rig.Hooks.IsHostileTo(guard, pet));
         Assert.True(rig.Hooks.CanAttack(guard, pet));
 
