@@ -93,7 +93,7 @@ public sealed class SmartScript
         if (!Enum.IsDefined((SmartAction)row.ActionType)) return $"action {row.ActionType} (row {row.Id})";
         if (!Enum.IsDefined((SmartTarget)row.TargetType)) return $"target {row.TargetType} (row {row.Id})";
         // SUMMON_CREATURE and MOVE_TO_POS act through the creature the script belongs to; an owner without one cannot run them.
-        if (Me is null && row.ActionType is (byte)SmartAction.SummonCreature or (byte)SmartAction.MoveToPos)
+        if (Me is null && row.ActionType is (byte)SmartAction.SummonCreature or (byte)SmartAction.MoveToPos or (byte)SmartAction.Evade)
             return $"action {row.ActionType} needs a creature owner (row {row.Id})";
         return null;
     }
@@ -362,6 +362,34 @@ public sealed class SmartScript
                         system.SummonAt(me, r.ActionParam1, t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ, t.Orientation, attack, r.ActionParam3);
                 }
 
+                break;
+            case SmartAction.PlayEmote:
+                // SmartScript.cpp SMART_ACTION_PLAY_EMOTE: every unit target plays the emote. Players have no emote seam here, so only creatures do.
+                if (system is null) break;
+                foreach (Creature c in targets.OfType<Creature>()) system.PlayEmote(c, r.ActionParam1);
+                break;
+            case SmartAction.SetEmoteState:
+                // SMART_ACTION_SET_EMOTE_STATE: UNIT_NPC_EMOTESTATE of every unit target.
+                foreach (Unit u in targets.OfType<Unit>()) u.SetUInt32(UpdateFields.UnitNpcEmotestate, r.ActionParam1);
+                break;
+            case SmartAction.Evade:
+                // SMART_ACTION_EVADE: only `me` evades (the target is ignored).
+                if (system is not null && me is { IsAlive: true }) system.EnterEvadeMode(me);
+                break;
+            case SmartAction.RemoveAurasFromSpell:
+                // SMART_ACTION_REMOVEAURASFROMSPELL: spell 0 strips every aura (creature targets only here), else the spell's auras go.
+                if (system is null) break;
+                foreach (Unit u in targets.OfType<Unit>())
+                {
+                    if (r.ActionParam1 != 0) system.RemoveAuras(u, r.ActionParam1);
+                    else if (u is Creature c) system.RemoveAllAuras(c);
+                }
+
+                break;
+            case SmartAction.ForceDespawn:
+                // SMART_ACTION_FORCE_DESPAWN: every creature target despawns after param1 ms (0 at once), as cmangos ForcedDespawn.
+                if (system is null) break;
+                foreach (Creature c in targets.OfType<Creature>().ToList()) system.ForcedDespawn(c, r.ActionParam1);
                 break;
             case SmartAction.SetEventPhase:
                 SetPhase(r.ActionParam1);
