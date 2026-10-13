@@ -14,6 +14,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Progression;
@@ -46,6 +47,17 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         ArgumentNullException.ThrowIfNull(loggers);
         _logger = loggers.CreateLogger<RestFeature>();
         Writes = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), loggers.CreateLogger<RestWriteQueue>());
+        Writes.FatalFailure += ex =>
+        {
+            _logger.LogCritical(ex, "Stopping application after fatal rest write failure");
+            try
+            {
+                _services.GetService<IHostApplicationLifetime>()?.StopApplication();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        };
         _rest = new Lazy<RestService>(Build, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 

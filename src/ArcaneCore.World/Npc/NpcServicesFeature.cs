@@ -15,6 +15,7 @@ using ArcaneCore.World.Items;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Npc;
@@ -49,11 +50,25 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
     /// <summary>The queue the logout save and the landing delete go through (tests); null before <see cref="Attach"/>.</summary>
     internal TaxiFlightWriteQueue? RouteWrites => _routeWrites;
 
+    /// <summary>Drain and retry this character's taxi-flight route writes; faults if any remain undrained.</summary>
+    public Task FlushCharacterAsync(int characterId) => _routeWrites?.FlushCharacterAsync(characterId) ?? Task.CompletedTask;
+
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         _routeWrites = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), logger);
+        _routeWrites.FatalFailure += ex =>
+        {
+            logger.LogCritical(ex, "Stopping application after fatal taxi flight write failure");
+            try
+            {
+                services.GetService<IHostApplicationLifetime>()?.StopApplication();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        };
         _routeWrites.Start();
         EnsureLoaded();
         world.MapCreated += OnMapCreated;

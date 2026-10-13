@@ -16,6 +16,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -78,6 +79,12 @@ public sealed class SocialFeature(
     /// <summary>Writes queued or in progress.</summary>
     public int PendingWrites => _writes?.Pending ?? 0;
 
+    /// <summary>The social write queue, once attached.</summary>
+    public SocialWriteQueue? Writes => _writes;
+
+    /// <summary>Drain and retry this character's social writes; faults if any remain undrained.</summary>
+    public Task FlushCharacterAsync(int characterId) => _writes?.FlushCharacterAsync(characterId) ?? Task.CompletedTask;
+
     /// <summary>
     /// World thread: defer parsed social commands until this exact player's stored list is
     /// installed. Commands from a departed session cannot mutate a replacement with its GUID.
@@ -126,6 +133,17 @@ public sealed class SocialFeature(
         configuration?.GetSection(GuildOptions.SectionName).Bind(GuildOptions);
         configuration?.GetSection(SocialOptions.SectionName + ":WriteQueue").Bind(WriteQueueOptions);
         _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions);
+        _writes.FatalFailure += ex =>
+        {
+            _logger.LogCritical(ex, "Stopping application after fatal social write failure");
+            try
+            {
+                services?.GetService<IHostApplicationLifetime>()?.StopApplication();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        };
         _context = new SocialContext(world, new CharacterLookup(directory), _writes, Options);
         // The client's ChatChannels.dbc, when the operator points at one (World:Chat:ChatChannelsDbcPath); fail closed.
         string channelsDbc = configuration?.GetSection(Chat.ChatOptions.SectionName).GetValue<string>(nameof(Chat.ChatOptions.ChatChannelsDbcPath)) ?? string.Empty;

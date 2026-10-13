@@ -70,6 +70,7 @@ public static class WorldServiceCollectionExtensions
         services.AddSingleton<SessionRegistry>();
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
+        services.AddSingleton<CharacterPersistenceBarrier>();
         services.AddSingleton(sp => new WorldRuntime(
             sp.GetRequiredService<IOptions<WorldRuntimeOptions>>().Value,
             sp.GetRequiredService<ICharacterSaveQueue>(),

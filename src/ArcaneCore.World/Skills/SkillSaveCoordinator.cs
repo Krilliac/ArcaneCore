@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Skills;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Skills;
@@ -31,6 +33,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
     private readonly Lock _waitersLock = new();
     private readonly List<(int? CharacterId, TaskCompletionSource Done)> _waiters = [];
     private readonly Dictionary<int, Exception> _lastFailure = [];
+    private Exception? _terminalFailure;
     private Task? _worker;
     private long _version;
     private bool _warnedNoStore;
@@ -45,6 +48,21 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
 
     /// <summary>Characters with a snapshot waiting or being retried.</summary>
     public int Pending => _pending.Count;
+
+    /// <summary>Terminal failure that halted the skill save coordinator (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_waitersLock)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
+
+    /// <summary>Raised once when the skill save coordinator enters terminal failure (for example on <see cref="CharacterOwnershipRejectedException"/>).</summary>
+    public event Action<Exception>? FatalFailure;
 
     public void Start() => _worker ??= Task.Run(RunAsync);
 
@@ -85,7 +103,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
     {
         lock (_waitersLock)
         {
-            return _lastFailure.GetValueOrDefault(characterId);
+            return _lastFailure.GetValueOrDefault(characterId) ?? _terminalFailure;
         }
     }
 
@@ -118,6 +136,16 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
         TaskCompletionSource done;
         lock (_waitersLock)
         {
+            if (_terminalFailure is { } terminal)
+            {
+                throw NotDurable(characterId, terminal);
+            }
+
+            if (characterId is { } cid && _lastFailure.TryGetValue(cid, out Exception? charFailure) && charFailure is CharacterOwnershipRejectedException)
+            {
+                throw NotDurable(characterId, charFailure);
+            }
+
             if (characterId is { } id ? !_pending.ContainsKey(id) : _pending.IsEmpty)
             {
                 return;
@@ -145,6 +173,40 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
 
             throw;
         }
+    }
+
+    private static InvalidOperationException NotDurable(int? characterId, Exception failure)
+        => characterId is { } id
+            ? new InvalidOperationException($"skill writes for character {id} are not durable", failure)
+            : new InvalidOperationException("skill writes did not drain after terminal ownership rejection", failure);
+
+    private void FailTerminal(CharacterOwnershipRejectedException ex, IServiceProvider? scopedServices)
+    {
+        bool first = false;
+        lock (_waitersLock)
+        {
+            if (_terminalFailure is null)
+            {
+                _terminalFailure = ex;
+                first = true;
+            }
+        }
+
+        if (!first)
+        {
+            return;
+        }
+
+        _logger.LogCritical(ex, "skill save coordinator entered terminal failure after character ownership rejection");
+        try
+        {
+            scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        FatalFailure?.Invoke(ex);
     }
 
     private async Task RunAsync()
@@ -181,7 +243,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             }
 
             CompleteWaiters();
-            if (anyFailed && !token.IsCancellationRequested)
+            if (anyFailed && TerminalFailure is null && !token.IsCancellationRequested)
             {
                 try
                 {
@@ -201,9 +263,18 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
 
     private async Task<bool> TryWriteAsync(int characterId, Entry entry)
     {
+        lock (_waitersLock)
+        {
+            if (_terminalFailure is { } terminal)
+            {
+                _lastFailure[characterId] = terminal;
+                return false;
+            }
+        }
+
+        await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         try
         {
-            await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
             ICharacterSkillStore? store = scope.ServiceProvider.GetService<ICharacterSkillStore>();
             if (store is null)
             {
@@ -231,6 +302,16 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
         {
             return false;
         }
+        catch (CharacterOwnershipRejectedException ex)
+        {
+            lock (_waitersLock)
+            {
+                _lastFailure[characterId] = ex;
+            }
+
+            FailTerminal(ex, scope.ServiceProvider);
+            return false;
+        }
         catch (Exception ex)
         {
             lock (_waitersLock)
@@ -250,6 +331,20 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             for (int i = _waiters.Count - 1; i >= 0; i--)
             {
                 (int? characterId, TaskCompletionSource done) = _waiters[i];
+                if (_terminalFailure is { } terminal)
+                {
+                    done.TrySetException(NotDurable(characterId, terminal));
+                    _waiters.RemoveAt(i);
+                    continue;
+                }
+
+                if (characterId is { } cid && _lastFailure.TryGetValue(cid, out Exception? charFailure) && charFailure is CharacterOwnershipRejectedException)
+                {
+                    done.TrySetException(NotDurable(characterId, charFailure));
+                    _waiters.RemoveAt(i);
+                    continue;
+                }
+
                 if (characterId is { } id ? !_pending.ContainsKey(id) : _pending.IsEmpty)
                 {
                     done.TrySetResult();
