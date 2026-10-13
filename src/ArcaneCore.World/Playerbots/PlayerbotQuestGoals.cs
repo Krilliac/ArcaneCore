@@ -282,8 +282,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             }
             if (planned == PlanOutcome.Refused)
             {
-                if (returning && NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now))
-                    return false;
+                if (returning)
+                {
+                    if (NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now))
+                        return false;
+                    Goal = PlayerbotGoalKind.Quest;
+                    return true;
+                }
                 Backoff(now);
                 return false;
             }
