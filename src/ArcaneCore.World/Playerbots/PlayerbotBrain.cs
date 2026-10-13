@@ -1004,8 +1004,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                     {
                         // A tile of the way is being read: keep the target, ask again next think, and keep walking the route still in
                         // hand (its lease renewed) rather than standing for the wait.
-                        if (_route is { Complete: false } held
-                            && !PlayerbotNavigation.TryAdvance(_session, held, _options, interval, _session.World.NowMs))
+                        if (_route is { Complete: false } inHand
+                            && !PlayerbotNavigation.TryAdvance(_session, inHand, _options, interval, _session.World.NowMs))
                             AbandonRoute();
                         return;
                     }
