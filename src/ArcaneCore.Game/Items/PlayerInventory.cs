@@ -180,7 +180,9 @@ public sealed partial class PlayerInventory
     /// <summary>
     /// Place stored items (vmangos Player::_LoadInventory). Rows that cannot be placed (unknown
     /// template, invalid or occupied slot, missing bag) are kept aside and written back unchanged
-    /// by every save, so no item is lost; vmangos deletes or mails them instead.
+    /// by every save, so no item is lost; vmangos deletes or mails them instead. Placement on a
+    /// real player also binds the way that load does (StoreItem, QuickEquipItem, BankItem). A
+    /// shadow inventory keeps the saved flags so a planned transfer still matches.
     /// </summary>
     public void Load(IEnumerable<InventoryItemData> rows)
     {
@@ -201,6 +203,7 @@ public sealed partial class PlayerInventory
 
             Item item = Item.Create(row.Item.Guid, template, _ownerGuid);
             item.Load(row.Item);
+            ApplyLoadBinding(item, InventorySlots.Bag0, row.Slot);
             PlaceInOwnSlot(row.Slot, item);
             if (row.Slot < InventorySlots.EquipmentEnd)
             {
@@ -228,6 +231,7 @@ public sealed partial class PlayerInventory
 
             Item item = Item.Create(row.Item.Guid, template, _ownerGuid);
             item.Load(row.Item);
+            ApplyLoadBinding(item, bag.Slot, row.Slot);
             bag.StoreItem(row.Slot, item);
             item.Inventory = this;
         }
