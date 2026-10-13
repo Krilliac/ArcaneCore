@@ -107,7 +107,9 @@ public sealed class FallObserver : IClientMovementObserver
         }
 
         float currentZ = incoming.HasFlag(MovementFlags.OnTransport) ? incoming.TransportZ : incoming.Z;
-        if (state.FallStartZ == 0.0f || state.FallStartZ < currentZ || previous.TransportGuid != incoming.TransportGuid)
+        // A recorded start of 0 is a real height. Only "not falling" means there is nothing to update
+        // (vmangos uses !m_fallStartZ for both, Player.cpp:20811, and loses a fall that begins at 0).
+        if (!state.IsFalling || state.FallStartZ < currentZ || previous.TransportGuid != incoming.TransportGuid)
         {
             state.FallStartZ = currentZ;
         }
@@ -116,7 +118,7 @@ public sealed class FallObserver : IClientMovementObserver
     /// <summary>vmangos Player::HandleFall.</summary>
     private static void HandleFall(MovementObserverContext context, LocomotionState state, in MovementInfo previous, in MovementInfo incoming)
     {
-        if (state.FallStartZ == 0.0f
+        if (!state.IsFalling
             || !previous.HasFlag(MovementFlags.FallingFar)
             || previous.TransportGuid != incoming.TransportGuid
             || previous.HasFlag(MovementFlags.OnTransport) != incoming.HasFlag(MovementFlags.OnTransport)

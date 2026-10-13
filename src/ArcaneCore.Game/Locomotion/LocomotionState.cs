@@ -125,12 +125,27 @@ public sealed class LocomotionState
     public PlayerSpeedRates ConfiguredSpeedRates { get; set; } = PlayerSpeedRates.Retail;
 
     /// <summary>
-    /// Height where the current fall started, 0 when not falling (vmangos Player::m_fallStartZ;
-    /// Player::IsFalling = non-zero, SetFallInformation).
+    /// Height where the current fall started. Meaningful while <see cref="IsFalling"/>. Zero is a real height
+    /// (sea level, the deck of a transport whose local origin is 0), so it cannot also mean "not falling":
+    /// vmangos stores both in <c>m_fallStartZ</c> and <c>!m_fallStartZ</c> (Player.h:1720-1726), which re-anchors
+    /// a fall that begins at 0 on every later packet and under-counts it. Assigning this starts a fall;
+    /// <see cref="ResetFall"/> is what ends one.
     /// </summary>
-    public float FallStartZ { get; set; }
+    public float FallStartZ
+    {
+        get => _fallStartZ;
+        set
+        {
+            _fallStartZ = value;
+            _falling = true;
+        }
+    }
 
-    public bool IsFalling => FallStartZ != 0.0f;
+    private float _fallStartZ;
+
+    private bool _falling;
+
+    public bool IsFalling => _falling;
 
     /// <summary>Where the player is in the liquids (vmangos Player::m_environmentFlags).</summary>
     public EnvironmentFlags Environment { get; set; }
@@ -156,7 +171,11 @@ public sealed class LocomotionState
     internal void InvalidateEnvironmentSample() => LastEnvironmentSample = null;
 
     /// <summary>Forget the fall in progress (vmangos SetFallInformation(0)); called on teleport, swim, knock back and login.</summary>
-    public void ResetFall() => FallStartZ = 0.0f;
+    public void ResetFall()
+    {
+        _falling = false;
+        _fallStartZ = 0.0f;
+    }
 
     /// <summary>Acknowledgements that matched nothing the server sent (vmangos OnWrongAckData; counted, never punished here).</summary>
     public int WrongAckCount { get; private set; }
