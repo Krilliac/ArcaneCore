@@ -312,49 +312,63 @@ public sealed partial class PlayerInventory
         }
     }
 
+    /// <summary>vmangos Player::m_currentBuybackSlot. Not persisted (buyback itself is session-only).</summary>
+    private byte _currentBuybackSlot = InventorySlots.BuybackStart;
+
     /// <summary>
-    /// vmangos Player::AddItemToBuyBackSlot: the first empty buyback slot, else the one with the
-    /// oldest timestamp (whose item is deleted); the slot's GUID, price and timestamp fields follow.
+    /// vmangos Player::AddItemToBuyBackSlot (Player.cpp:11425-11473): the cursor slot when it is
+    /// empty, otherwise the first empty slot from the second buyback slot on, else the oldest
+    /// timestamp (that item is deleted). Buying an earlier slot back does not rewind the cursor
+    /// while the cursor slot is empty, so the hole stays until the cursor lands on it.
     /// </summary>
     private void AddItemToBuybackSlot(Item item, uint price, uint timestamp)
     {
-        byte target = InventorySlots.BuybackStart;
-        uint oldest = uint.MaxValue;
-        bool foundEmpty = false;
-        for (byte slot = InventorySlots.BuybackStart; slot < InventorySlots.BuybackEnd; slot++)
+        byte slot = _currentBuybackSlot;
+        if (_items[slot] is not null)
         {
-            if (_items[slot] is null)
+            uint oldestTime = GetBuybackTimestamp(InventorySlots.BuybackStart);
+            byte oldestSlot = InventorySlots.BuybackStart;
+            for (byte i = (byte)(InventorySlots.BuybackStart + 1); i < InventorySlots.BuybackEnd; i++)
             {
-                target = slot;
-                foundEmpty = true;
-                break;
+                if (_items[i] is null)
+                {
+                    oldestSlot = i;
+                    break;
+                }
+
+                uint time = GetBuybackTimestamp(i);
+                if (oldestTime > time)
+                {
+                    oldestTime = time;
+                    oldestSlot = i;
+                }
             }
 
-            uint time = GetBuybackTimestamp(slot);
-            if (time < oldest)
-            {
-                oldest = time;
-                target = slot;
-            }
+            slot = oldestSlot;
         }
 
-        if (!foundEmpty && _items[target] is { } evicted)
+        Item? evicted = _items[slot];
+        ClearBuybackSlot(slot);
+        if (evicted is not null)
         {
-            ClearBuybackSlot(target);
             Discard(evicted);
         }
 
-        _items[target] = item;
-        SetSlotField(target, item.Guid);
+        _items[slot] = item;
+        SetSlotField(slot, item.Guid);
         item.ContainedIn = _ownerGuid;
         item.OwnerGuid = _ownerGuid;
-        item.Slot = target;
+        item.Slot = slot;
         item.Container = null;
         item.Inventory = this;
-        int index = target - InventorySlots.BuybackStart;
+        int index = slot - InventorySlots.BuybackStart;
         Player?.SetUInt32(UpdateFields.PlayerFieldBuybackPrice1 + index, price);
         Player?.SetUInt32(UpdateFields.PlayerFieldBuybackTimestamp1 + index, timestamp);
         SendCreateIfNeeded(item);
+        if (_currentBuybackSlot < InventorySlots.BuybackEnd - 1)
+        {
+            _currentBuybackSlot++;
+        }
     }
 
     /// <summary>vmangos Player::RemoveItemFromBuyBackSlot (the item is kept by the caller).</summary>
@@ -371,5 +385,11 @@ public sealed partial class PlayerInventory
         int index = slot - InventorySlots.BuybackStart;
         Player?.SetUInt32(UpdateFields.PlayerFieldBuybackPrice1 + index, 0);
         Player?.SetUInt32(UpdateFields.PlayerFieldBuybackTimestamp1 + index, 0);
+
+        // A filled cursor moves onto the slot just freed (Player.cpp:11527-11529). An empty cursor stays.
+        if (_items[_currentBuybackSlot] is not null)
+        {
+            _currentBuybackSlot = slot;
+        }
     }
 }
