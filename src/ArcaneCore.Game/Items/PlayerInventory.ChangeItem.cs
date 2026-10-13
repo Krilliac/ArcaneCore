@@ -33,10 +33,11 @@ public sealed partial class PlayerInventory
 
         if (old.MaxDurability > 0 && old.Durability < old.MaxDurability && item.MaxDurability > 0)
         {
-            // Player::DurabilityLoss(item, percent): lose the same share of the new item's maximum.
+            // Spell::EffectSummonChangeItem (SpellEffects.cpp:2244-2248) then Player::DurabilityLoss
+            // (Player.cpp:4831-4835): the same share of the new maximum, truncated, and at least one point.
+            // A disabled durability loss leaves the new item whole, because DurabilityPointsLoss returns first.
             double lost = 1 - (old.Durability / (double)old.MaxDurability);
-            uint loss = (uint)(item.MaxDurability * lost);
-            item.Durability = loss >= item.MaxDurability ? 0 : item.MaxDurability - loss;
+            DurabilityLoss(item, lost);
         }
 
         if (InventorySlots.IsEquipmentPos(bag, slot) && slot < InventorySlots.EquipmentEnd)
