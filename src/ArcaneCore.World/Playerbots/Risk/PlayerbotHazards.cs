@@ -144,7 +144,7 @@ internal sealed class PlayerbotHazards
     /// Copies nothing.
     /// </summary>
     internal PlayerbotHazard? FirstOnRoute(uint mapId, IReadOnlyList<Vector3> points, uint nowMs, bool strong = true,
-        bool completedReturn = false)
+        bool completedReturn = false, bool chase = false)
     {
         if (points.Count < 2) return null;
         Expire(nowMs);
@@ -154,10 +154,12 @@ internal sealed class PlayerbotHazards
         // A bot revived inside a place may leave it. An errand that also ends there is not an escape. Death-loop zones already
         // refused that; a single death or retreat mark did not, so a bot that reclaimed its corpse could path to the next stop of
         // the same camp, still inside the mark (bot QA #446 Northshire 94/525, #454 Balnir Farmstead 1529/1554/10358). Place marks
-        // have no creature; a lethal or fled creature stays its own reach. The fight itself is not refused here: a creature already
-        // in reach is still chosen after one death, and set aside only after it has killed the bot twice.
+        // have no creature; a lethal or fled creature stays its own reach. The fight itself is not refused here: a creature chosen
+        // after one death or retreat is still chased inside that mark, and set aside only after it has killed the bot twice or
+        // opened a death-loop zone.
         foreach (PlayerbotHazard hazard in _hazards)
-            if (hazard.MapId == mapId && hazard.Creature.IsEmpty && hazard.Covers(start) && hazard.Covers(points[^1]))
+            if (hazard.MapId == mapId && hazard.Creature.IsEmpty && (!chase || hazard.Kind == DeathLoopKind)
+                && hazard.Covers(start) && hazard.Covers(points[^1]))
                 return hazard;
         for (int index = 1; index < points.Count; index++)
         {

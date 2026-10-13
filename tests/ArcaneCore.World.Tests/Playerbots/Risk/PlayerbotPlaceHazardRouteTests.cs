@@ -22,6 +22,7 @@ public sealed class PlayerbotPlaceHazardRouteTests
         hazards.Add(0, At, PlayerbotHazards.DeathYards, nowMs: 1_000, seconds: 300, "death");
 
         Assert.Equal("death", hazards.FirstOnRoute(0, [At, At + new Vector3(10f, 0f, 0f)], 1_000)!.Value.Kind);
+        Assert.Null(hazards.FirstOnRoute(0, [At, At + new Vector3(10f, 0f, 0f)], 1_000, chase: true));
         Assert.Null(hazards.FirstOnRoute(0, [At, At + new Vector3(PlayerbotHazards.DeathYards + 15f, 0f, 0f)], 1_000));
         // Eight yards off the corpse is where the next creature of the camp stands. One death does not skip it.
         Assert.False(hazards.CoversDeathLoop(0, At + new Vector3(8f, 0f, 0f), 1_000));
@@ -36,6 +37,7 @@ public sealed class PlayerbotPlaceHazardRouteTests
         hazards.Add(0, At, PlayerbotHazards.RetreatYards, nowMs: 1_000, seconds: 300, "retreat");
 
         Assert.Equal("retreat", hazards.FirstOnRoute(0, [At, At + new Vector3(8f, 4f, 0f)], 1_000)!.Value.Kind);
+        Assert.Null(hazards.FirstOnRoute(0, [At, At + new Vector3(8f, 4f, 0f)], 1_000, chase: true));
         Assert.False(hazards.CoversDeathLoop(0, At + new Vector3(8f, 4f, 0f), 1_000));
         Assert.Null(hazards.FirstOnRoute(0, [At, At + new Vector3(PlayerbotHazards.RetreatYards + 15f, 0f, 0f)], 1_000));
     }

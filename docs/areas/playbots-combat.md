@@ -95,7 +95,10 @@ ranged weapon and Auto Shot closes to 30 and holds, and fights in melee (Wing Cl
 8-yard dead zone. A ranged bot the enemy already reached in melee swings back; a ranged bot that found nothing to cast for 8 s at
 a target not fighting it closes to melee. Nobody ranged otherwise runs in: an out-of-mana caster wands (the rotation) or, between
 fights, drinks (the existing rest). Its victim is not `Combat.Victim` (no melee swing), so a living target that has the bot on its
-threat list keeps being its fight through the combat linger.
+threat list keeps being its fight through the combat linger, and `FindDefensiveAttacker` falls back from `Combat.Attackers` to
+`Combat.ThreatenedBy` (reachable first) when no creature is swinging directly at the bot (`PlayerbotDefensiveTargetTests`:
+bot QA #443, #539). A combat chase to an engaged or chosen target is not refused by a single death or retreat place mark the bot
+already stands in.
 
 "In melee" is the server's own swing reach (`MapCombat.CanReachWithMeleeAutoAttack`: 2D distance within the combat reach and
 less than 6 yards of height), or the 4-yard 3D distance. Judged by the 3D distance alone, a target up a slope (2 yards away, 3.9 up)
