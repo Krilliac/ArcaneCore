@@ -913,12 +913,17 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         InstanceBind? playerBind = GetPlayerBind(player.Guid, save.MapId);
-        if (playerBind is { } own && own.Save == save)
+        Group? group = GroupOf(player.Guid);
+        // vmangos DungeonMap::BindPlayerOrGroupOnEnter skips the rest only for a permanent bind
+        // (or, here, a solo player already bound to this save). A non-permanent bind kept because
+        // the player joined a group while inside this dungeon is not the group's yet: this entry
+        // is what binds the group and drops the personal save (the group had none to replace it
+        // on the way out).
+        if (playerBind is { } own && own.Save == save && (own.Permanent || group is null))
         {
-            return; // already bound here (permanent or solo)
+            return;
         }
 
-        Group? group = GroupOf(player.Guid);
         if (group is null)
         {
             BindPlayer(player.Guid, save, permanent: false);
