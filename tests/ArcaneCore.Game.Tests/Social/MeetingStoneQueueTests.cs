@@ -303,6 +303,35 @@ public sealed class MeetingStoneQueueTests : IDisposable
     }
 
     [Fact]
+    public void InvitedPlayer_DoesNotTakeARoleThePartyCannotGiveThem()
+    {
+        Player warrior = Add(1, Class.Warrior);
+        Player mage = Add(2, Class.Mage);
+        Player rogue = Add(3, Class.Rogue);
+        Player hunter = Add(4, Class.Hunter);
+        Group party = Party(warrior, mage, rogue, hunter); // tank and three damage: only the healer is open
+        _queue.Join(warrior, Area);
+
+        // Lower guid, so the queue looks at them first. A pending invite means the party cannot accept them.
+        Player invited = Add(5, Class.Priest);
+        Player free = Add(6, Class.Priest);
+        _queue.Join(invited, Area);
+        _queue.Join(free, Area);
+        Player outsider = Add(7, Class.Mage);
+        _f.Context.Groups.Invite(outsider, invited.Name);
+        Assert.NotNull(_f.Context.Groups.GetInvite(invited.Guid));
+        _f.ClearAll();
+
+        Pass();
+
+        Assert.True(party.IsMember(free.Guid));
+        Assert.False(party.IsMember(invited.Guid));
+        Assert.True(_queue.IsPlayerQueued(invited.Guid));
+        Assert.False(_queue.IsGroupQueued(party));
+        Assert.Equal(free.Guid.Value, BitConverter.ToUInt64(Assert.Single(_f.Sent(warrior, WorldOpcode.SmsgMeetingstoneMemberAdded))));
+    }
+
+    [Fact]
     public void WaitingParty_HearsInProgressEveryFiveMinutes()
     {
         Player warrior = Add(1, Class.Warrior);
