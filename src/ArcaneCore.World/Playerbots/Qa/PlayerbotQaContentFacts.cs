@@ -41,6 +41,11 @@ internal interface IQaContentFacts
 
     QaTemplateFacts? Template(uint entry);
 
+    /// <summary>
+    /// True when <paramref name="entry"/> has a <c>creature_movement_template</c> path <paramref name="pathId"/>, or when
+    /// <paramref name="pathId"/> is 0 and the default <c>ResolveWaypointPath(0, entry)</c> has points. A shared <c>waypoint_path</c>
+    /// id is not this entry's path.
+    /// </summary>
     bool HasWaypointPath(uint entry, uint pathId);
 
     /// <summary>
@@ -143,7 +148,11 @@ internal sealed class PlayerbotQaContentFacts(IServiceProvider services) : IQaCo
     public bool HasWaypointPath(uint entry, uint pathId)
     {
         if (Creatures?.Content is not { } content) return false;
-        return content.GetEntryWaypoints(entry, pathId).Count > 0 || content.GetWaypointPath(pathId).Count > 0
+        // RelayDataMissing with an entry is the "path N missing for entry E" warning. That lookup is this entry's
+        // creature_movement_template path (path 0 is ResolveWaypointPath(0, entry)), not a shared cmangos waypoint_path.
+        // GetWaypointPath stores those under entry 0 with WaypointPathBit, and path ids 0 and 1 exist globally, so treating
+        // one as this creature's path files "a path is loaded now" for an entry that has none (#329 entry 5697, #278 entry 7052).
+        return content.GetEntryWaypoints(entry, pathId).Count > 0
             || (pathId == 0 && content.ResolveWaypointPath(0, entry).Points.Count > 0);
     }
 
