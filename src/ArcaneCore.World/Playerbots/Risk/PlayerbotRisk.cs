@@ -754,12 +754,97 @@ internal sealed class PlayerbotRisk
     /// where it must; a dead bot (a ghost) is not attacked. Without <paramref name="strong"/> the creatures beyond the bot's strength
     /// are not held against it: only for the escape route itself (<see cref="EscapeRoute"/>, <see cref="PlayerbotNavigation.TryAdvance"/>);
     /// a completed quest return also relaxes pack-only hazards of individually manageable, in-range creatures.
-    /// Deaths, retreats, lethal creatures and those the bot fled from always hold.
+    /// Deaths, retreats, lethal creatures and those the bot fled from always hold, except when
+    /// <paramref name="crossBesidePlaceMarks"/>: a death or retreat mark whose centre stands off the walked line
+    /// (<see cref="PlaceMarkBesideRoadYards"/>) and does not cover the end of it. That is a mark beside the only road, not the
+    /// fight itself, and it must not refuse the walk to a friendly quest ender in town (live 2026-10-12: quest 8 ender 5688,
+    /// bots near 2176,891 map 0; quest 2160 ender 6806, Dun Morogh around -5600). A mark on the road, one covering the ender,
+    /// a death-loop zone, and every creature hazard still hold.
     /// </summary>
     internal PlayerbotHazard? Blocking(Player player, IReadOnlyList<Vector3> points, bool strong = true,
-        bool completedReturn = false)
-        => !Enabled || !player.IsAlive || Retreat.Active ? null
-            : Hazards.FirstOnRoute(player.MapId, points, _session.World.NowMs, strong, completedReturn);
+        bool completedReturn = false, bool crossBesidePlaceMarks = false)
+    {
+        if (!Enabled || !player.IsAlive || Retreat.Active) return null;
+        uint now = _session.World.NowMs;
+        PlayerbotHazard? hit = Hazards.FirstOnRoute(player.MapId, points, now, strong, completedReturn);
+        if (!crossBesidePlaceMarks || hit is not { } first || !IsPlaceMarkBesideRoad(first, points)) return hit;
+        return NextAfterBesidePlaceMarks(player, points, now, strong, completedReturn);
+    }
+
+    /// <summary>
+    /// How far (flat yards) a death or retreat mark's centre must stand from the walked line before it is beside the road rather
+    /// than on it. Inside this, the bot died or fled on the road and the mark still blocks.
+    /// </summary>
+    internal const float PlaceMarkBesideRoadYards = 8f;
+
+    /// <summary>
+    /// A remembered death or retreat (no creature of its own) whose centre is off the walked line but whose radius still covers it,
+    /// and which does not cover the end of the walk.
+    /// </summary>
+    internal static bool IsPlaceMarkBesideRoad(in PlayerbotHazard hazard, IReadOnlyList<Vector3> points)
+    {
+        if (points.Count < 2 || !hazard.Creature.IsEmpty) return false;
+        if (hazard.Kind is not ("death" or "retreat")) return false;
+        if (hazard.Covers(points[^1])) return false;
+        float closest = ClosestFlat(hazard.At, points);
+        return closest >= PlaceMarkBesideRoadYards && closest < hazard.Radius;
+    }
+
+    /// <summary>
+    /// <see cref="PlayerbotHazards.FirstOnRoute"/> again, skipping place marks <see cref="IsPlaceMarkBesideRoad"/> would let a
+    /// friendly town return cross. The first hit was one of those; a later strong, lethal, fled or on-road mark still blocks.
+    /// </summary>
+    private PlayerbotHazard? NextAfterBesidePlaceMarks(Player player, IReadOnlyList<Vector3> points, uint now, bool strong,
+        bool completedReturn)
+    {
+        IReadOnlyList<PlayerbotHazard> active = Hazards.Active(player.MapId, now);
+        if (active.Count == 0 || points.Count < 2) return null;
+        Vector3 start = points[0], end = points[^1];
+        foreach (PlayerbotHazard hazard in active)
+            if (hazard.Kind == PlayerbotHazards.DeathLoopKind && hazard.Covers(start) && hazard.Covers(end))
+                return hazard;
+        for (int index = 1; index < points.Count; index++)
+        {
+            Vector3 a = points[index - 1], b = points[index];
+            int steps = Math.Max(1, (int)MathF.Ceiling(Vector3.Distance(a, b) / 2f));
+            for (int step = 1; step <= steps; step++)
+            {
+                Vector3 point = Vector3.Lerp(a, b, (float)step / steps);
+                foreach (PlayerbotHazard hazard in active)
+                {
+                    if (hazard.Kind == PlayerbotHazards.StrongKind)
+                    {
+                        if (!strong || (completedReturn && hazard.ReturnPassable)) continue;
+                    }
+
+                    if (!hazard.Covers(point) || hazard.Covers(start) || IsPlaceMarkBesideRoad(hazard, points)) continue;
+                    return hazard;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static float ClosestFlat(Vector3 at, IReadOnlyList<Vector3> points)
+    {
+        float best = float.MaxValue;
+        for (int index = 1; index < points.Count; index++)
+        {
+            float distance = SegmentDistance(at.X, at.Y, points[index - 1].X, points[index - 1].Y, points[index].X, points[index].Y);
+            if (distance < best) best = distance;
+        }
+
+        return best;
+    }
+
+    private static float SegmentDistance(float px, float py, float ax, float ay, float bx, float by)
+    {
+        float abx = bx - ax, aby = by - ay, ab2 = (abx * abx) + (aby * aby);
+        float t = ab2 <= 1e-6f ? 0f : Math.Clamp(((px - ax) * abx + (py - ay) * aby) / ab2, 0f, 1f);
+        float dx = ax + (abx * t) - px, dy = ay + (aby * t) - py;
+        return MathF.Sqrt((dx * dx) + (dy * dy));
+    }
 
     /// <summary>
     /// The route out of a ring of strong creatures (<see cref="Refused"/>), walked by the brain before any goal (as a retreat is), or
