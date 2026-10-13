@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.Tests.Honor;
 /// <summary>Rank thresholds and the rank bar byte (vmangos HonorMgr.cpp:909-913, 980-1033).</summary>
 public sealed class HonorRanksTests
 {
-    // 60000 sits exactly on "rankPoints > (rankCount - 1) * 5000" (not greater), so it is rank 17 + 1.
+    // 60000 is exactly the positive cap. The inclusive cap and the division branch (12 + firstRank + 1) both yield rank 18.
     [Theory]
     [InlineData(0f, 0, 0, 0f, 2000f)]
     [InlineData(1f, 5, 1, 0f, 2000f)]
@@ -38,6 +38,7 @@ public sealed class HonorRanksTests
     [InlineData(-2000f, 3, -3)]
     [InlineData(-5000f, 2, -2)]
     [InlineData(-20000f, 1, -1)]
+    [InlineData(-15000f, 1, -1)] // exactly (negativeRankCount - 1) * 5000; a strict > cap drops this to unranked
     public void Negative_rank_points_map_to_dishonor_ranks(float rp, int rank, int visual)
     {
         HonorRankInfo info = HonorRanks.Calculate(rp);
