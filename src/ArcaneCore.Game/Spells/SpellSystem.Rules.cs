@@ -1,4 +1,6 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Application;
 using ArcaneCore.Game.Spells.Rules.Immunity;
@@ -113,4 +115,77 @@ public sealed partial class SpellSystem
 
         return false;
     }
+
+    /// <summary>
+    /// vmangos <c>Unit::HasBreakableByDamageCrowdControlAura</c> (Unit.cpp:10831-10858): true while <paramref name="unit"/>
+    /// carries a confuse, stun or transform aura with <see cref="SpellAuraInterruptFlags.Damage"/>, excluding the active
+    /// channeled spell of <paramref name="excludeCasterChannel"/> (so a Succubus channeling Seduction does not interrupt itself).
+    /// </summary>
+    public bool HasBreakableByDamageCrowdControlAura(Unit unit, Unit? excludeCasterChannel = null)
+    {
+        uint excludeSpellId = excludeCasterChannel is not null
+            && GetState(excludeCasterChannel.Guid)?.CurrentCast is { State: SpellCastState.Casting, Spell.IsChanneled: true } channel
+                ? channel.Spell.Id
+                : 0u;
+
+        foreach (SpellAuraHolder holder in GetAuras(unit))
+        {
+            if (holder.IsRemoved || holder.Spell.Id == excludeSpellId || (holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.Damage) == 0)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.AuraSpan)
+            {
+                if (aura is { Type: AuraType.ModConfuse or AuraType.ModStun or AuraType.Transform })
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// vmangos <c>Unit::HasAuraPetShouldAvoidBreaking</c> (Unit.cpp:10860-10864): whether pets should avoid breaking a
+    /// crowd-control aura on <paramref name="unit"/>.
+    /// </summary>
+    public bool HasAuraPetShouldAvoidBreaking(Unit unit, Unit? excludeCasterChannel = null)
+        => HasBreakableByDamageCrowdControlAura(unit, excludeCasterChannel);
+
+    /// <summary>
+    /// vmangos <c>Spell::DoAllEffectOnTarget</c> (Spell.cpp:1566-1577): when a spell with <see cref="SpellAuraInterruptFlags.Damage"/>
+    /// lands a breakable crowd-control aura on <paramref name="target"/>, stop any pets attacking it and cancel their in-flight
+    /// harmful casts at it so they do not immediately break the crowd control.
+    /// </summary>
+    internal void StopPetsAttackingCrowdControlledTarget(Unit target, Unit? caster)
+    {
+        if (!HasAuraPetShouldAvoidBreaking(target, caster))
+        {
+            return;
+        }
+
+        foreach (Unit attacker in target.Combat.Attackers.ToArray())
+        {
+            if (attacker is not Creatures.Creature { IsPet: true } pet)
+            {
+                continue;
+            }
+
+            target.Map?.Combat.AttackStop(pet);
+            if (pet.GetCharmInfo() is { } charm)
+            {
+                charm.IsCommandAttack = false;
+            }
+
+            if (!ReferenceEquals(pet, caster)
+                && GetState(pet.Guid)?.CurrentCast is { State: SpellCastState.Preparing } petCast
+                && petCast.Targets.Unit == target.Guid)
+            {
+                InterruptCurrentCast(pet);
+            }
+        }
+    }
 }
+

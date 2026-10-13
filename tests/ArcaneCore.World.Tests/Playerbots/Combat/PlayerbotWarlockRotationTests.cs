@@ -71,9 +71,9 @@ public sealed class PlayerbotWarlockRotationTests
         Assert.Null(yielded);
         Assert.Equal("pet attack", Next(Warlock.PetCompanion(pull, yielded)));
 
-        // Once the Imp is on the victim, or there is no Imp, nothing is sent.
+        // Once the Imp is fighting, or there is no Imp, nothing is sent.
         RotationState onVictim = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f), PlayerbotRole.RangeDps,
-            more: s => { s.Pet = RotationPetStatus.Alive; s.PetOnVictim = true; s.PetFighting = true; });
+            more: s => { s.Pet = RotationPetStatus.Alive; s.PetFighting = true; });
         Assert.Null(Warlock.PetCompanion(onVictim, Warlock.InCombat(onVictim)));
         RotationState noPet = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f), PlayerbotRole.RangeDps);
         Assert.Null(Warlock.PetCompanion(noPet, Warlock.InCombat(noPet)));
@@ -98,9 +98,30 @@ public sealed class PlayerbotWarlockRotationTests
         Assert.Equal("pet attack", Next(Warlock.PetCompanion(idle, new RotationAction(RotationActionKind.Cast, Book[0], VictimGuid))));
     }
 
+    [Fact]
+    public void CrowdControlledTarget_IsNotCommanded_AndAPetFightingCrowdControlIsRedirectedOrRecalled()
+    {
+        // An idle Imp is not sent onto a crowd-controlled victim (moving or standing).
+        RotationState ccVictim = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f, crowdControlled: true), PlayerbotRole.RangeDps,
+            more: s => { ImpOffTheVictim(s); s.IsMoving = true; });
+        Assert.Null(Warlock.PetCompanion(ccVictim, Warlock.InCombat(ccVictim)));
+        Assert.Null(Next(Warlock.OutOfCombat(State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f, crowdControlled: true),
+            PlayerbotRole.RangeDps, inCombat: false, more: ImpOffTheVictim))));
+
+        // A pet whose own victim was crowd-controlled is redirected to the warlock's non-CC victim, or recalled to follow when none exists.
+        RotationState redirect = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f), PlayerbotRole.RangeDps,
+            more: s => { s.Pet = RotationPetStatus.Alive; s.PetFighting = true; s.PetFightingCrowdControlled = true; });
+        RotationAction? cast = Warlock.InCombat(redirect);
+        Assert.Equal("Immolate", Next(cast));
+        Assert.Equal("pet attack", Next(Warlock.PetCompanion(redirect, cast)));
+
+        RotationState recall = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f, crowdControlled: true), PlayerbotRole.RangeDps,
+            more: s => { s.Pet = RotationPetStatus.Alive; s.PetFighting = true; s.PetFightingCrowdControlled = true; });
+        Assert.Equal("pet follow", Next(Warlock.PetCompanion(recall, Warlock.InCombat(recall))));
+    }
+
     private static void ImpOffTheVictim(RotationStateBuilder state)
     {
         state.Pet = RotationPetStatus.Alive;
-        state.PetOnVictim = false;
     }
 }

@@ -191,6 +191,10 @@ public sealed partial class SpellSystem
             FlushQueuedMeleeSpellDamage(outcome);
 
             InterruptTargetOfHostileSpell(cast, target, hit: true, dealsDamage); // rogue lane (vmangos Spell.cpp:1622-1650)
+            if ((cast.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.Damage) != 0)
+            {
+                StopPetsAttackingCrowdControlledTarget(target, cast.Caster); // vmangos Spell.cpp:1566-1577
+            }
             SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
             SpellHit?.Invoke(cast.Caster, target, cast.Spell);
         }
