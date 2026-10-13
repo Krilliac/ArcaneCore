@@ -218,28 +218,29 @@ pending gates. [Item/pet scope and verification](integration/server-item-pets-20
 and [next bounded slices](integration/next-slices-20261004.md) supersede earlier
 blanket absence labels without claiming complete vanilla fidelity.
 
-## Current state & next steps (2026-10-10)
+## Current state & next steps (2026-10-13)
 
-**This is the master to-do list for any agent (Claude or otherwise) continuing ArcaneCore.** Follow it top to bottom.
+**Master to-do list for any agent (Claude or Grok) continuing ArcaneCore.** Supersedes the 2026-10-10 section: everything in it (#68–#90, wave 17/18) is merged and `integrate/wave17` is gone.
 
 ### State
-- `main` = `ecd5b3eb` (wave 18 batch 1: #48–#53, fully gated on Nate's PC with imported content).
-- `integrate/wave17` = `8054e220` (batch 2: #54–#67). **Not yet gated onto main**; the PC went offline mid-gate.
-- The box has no git push credentials. The `main` fast-forward must be done from Nate's PC (`D:\ArcaneCore`).
-- Hosted CI is backed up. **CI is the test gate** (Nate: "let CI handle tests"). Keep builds serialized; never run full suites on the box, only a branch's own new tests.
+- `main` = `6636ce5a` (merge of #429). Claude merges via "Train N" PRs from `claude/wNN-*` / `integrate/wNN-*`. The Grok lane works in `grok/w37-*` / `grok/w38-*` branches with PRs titled `[grok lane]` straight into `main`.
+- Hosted CI is the test gate (`test (Game|World|Data|Rest)`); drafts skip CI. The box has no push creds (push via GitHub MCP) and builds stay serialized.
 
-### Merge queue into `integrate/wave17` (in order)
-**Done 2026-10-10** on `ccr-86ce8cb7-m7iigv` (steps 1-7 except the `main` fast-forward, which needs the PC): every PR below merged in this
-order, four PR defects fixed, local full gate green. Merges, fixes, gate and branch cleanup: [wave 18 report](integration/wave18-20261010.md).
+### Merged 2026-10-12/13
+- Claude: #333 (deterministic eight-bot shutdown test).
+- Grok lane: #401 + #405 area-trigger scripts (all 10 cmangos `areatrigger_scripts.cpp`) plus engine pieces (single-player GO traps, temp faction reset on respawn, AI custom events, per-map script data); #404 SmartAI slice 3; #403 pet untraining; #413 pet XP/leveling + training points; #422 pet happiness/loyalty (runaway); #425 hunters learning from pets; #410 helm/cloak toggles + mount special anim + ignored opcodes; #416 LFG/bug report/logout; #417 GM teleport opcodes; #415 comment cleanup; #427 VisibilityAllocationTests flake fix; #428 battleground spirit healers; #429 whois/setrawpos.
 
-1. **#86** CI speedup. The check names become `test (Game)`, `test (World)`, `test (Data)`, `test (Rest)`, so update branch protection. Drafts get no CI until marked ready.
-2. **#82** polymorph double-heal regen fix (fixes `EvadeFidelityTests.APolymorphedCreatureAPlayerOwns_RegeneratesATenth`).
-3. Clean, any order: #69 script hooks, #70 world scripts 2, #71 autopatcher, #75 aggro linking, #76 perf4 (visibility ~24% faster), #77 metrics **then** #78 docker, #79 playerdump, #81 multi-version S0 (refactor not yet build-verified; byte-exact replay tests must pass).
-4. World schema chain: #72 SmartAI = 48, then #84 Warden checks = 49 (drop `ReservedWorldSchema48` after #72).
-5. Characters chain: #74 world bosses = 50; #73 pets/effects = 51/52 (delete `Reserved74SchemaGap.cs` and its 2 test lines after #74); #80 opvp follow-up = 53; #83 broadcast + server mail = 54; #68 ahbot = world 50 + characters 55 (regenerate `schema.md` and `gm-commands.md` after).
-6. Stacked world scripts: #85 (Windsor, In Dreams, Nightmare Manifests) on #70; #87 FollowerAI + Kerlonian on #85; #88 batch 5 on #87; #89 (Stinky Ignatz, Triage, Magrami spectre, Plucky Johnson, city guards) on #88. Retarget each to `integrate/wave17` as its parent merges.
-7. After all: regenerate docs (`ARCANECORE_UPDATE_DOCS=1`), full gate, fast-forward `main` (from the PC), write the wave 18 report at `docs/integration/wave18-*.md` (the earlier draft was lost).
-- Do **not** merge `grok/w18-respawn` (stale and broken; delete it). `grok/wave17-test-fixes` overlaps `e7fdd74a`/`ac326b41`, so check before reusing it.
+### Open PRs (merge order)
+1. #411 zone scripts batch 1 (Lazy Peon, Galen, Miran, Keeshan, Kinelory). Ready; `test (Rest)` failed on last run, recheck/rerun after #427.
+2. #423 zone scripts batch 2 (stacked on #411; draft). Retarget to `main` after #411, mark ready.
+3. #439 zone scripts batch 3 (stacked on #423; **WIP, unbuilt**): Prospector Remtravel, Barrens stealth alert; not registered in `CreatureAiFactory`; Gallywix/Silixiz/Venture Co. lookout planned but not written.
+4. #412 SmartAI slice 3b (SET_FACTION, MORPH, AUTO_ATTACK, ALLOW_COMBAT_MOVE, DIE). `test (Game)` failed; investigate.
+5. #424 SmartAI slice 3c (stacked on #412; draft): KILL, SUMMONED_UNIT, RECEIVE_EMOTE events; SOUND etc.
+6. #434 pets possess summon limits. `test (Game)` and `test (Rest)` failed; investigate.
+7. #435 BATTLEFIELD_JOIN refuse+log, spirit guide gossip. Was green except Data (pending).
+8. #436 Far Sight (CMSG_FAR_SIGHT camera reset/restore). `test (Game)` failed; investigate.
+9. #437 Outdoor PvP capture radius/time vs type-29 templates. Running.
+- #326 Claude clustering (v60), draft. **Claude's; don't touch.**
 
 ### Open work
 - **World scripts:** about 72 of 186 mangos-classic SD2 scripts are still missing (82 before the Scourge invasion and go_scripts.cpp slice, `docs/integration/world-scripts-scourge-go-20261010.md`). Next up are the 10 area-trigger scripts (`areatrigger_scripts.cpp`). Captured Arkonarin needs a DB path. Felwood kitten (q4506) needs an owned summon plus an entry change. Private Hendel's credit needs `creature_movement_template` 4967 in the DB.
@@ -253,7 +254,24 @@ order, four PR defects fixed, local full gate green. Merges, fixes, gate and bra
 - **Autopatcher:** done (off by default).
 - Nate has approved Warden module bytes in the repo and the bot-stall pathing change.
 
+### Known flakes
+- `VisibilityAllocationTests`: GC-window sensitive on busy runners; #427 hardened it, so watch for recurrence.
+- Mograine Divine Shield timing test: failed once, passed on rerun (timing-sensitive).
+
+### Gaps by area
+- **Pets:** untraining price, taught-ability state and loyalty need persistence, which needs a characters schema bump *after* v60 (held by Claude's #326). Still open: stable gaps, happiness emote, DuelReset pet cooldowns, possess limits (#434).
+- **Handlers:** helm/cloak show flags aren't persisted (needs schema). Whois lacks account email. Spirit guide gossip timer is sent as 0. Far Sight needs real camera state in `Pets/Control/UnitControl.cs` (#436 only resets/restores). More unhandled opcodes remain in `docs/reference/opcodes.md`.
+- **Zone scripts:** about 75 cmangos zone scripts are unported; batches 1–3 cover ~13. Continue in batches of 5–8 per PR.
+- **SmartAI:** CALL_FOR_HELP, other rejected actions/targets from `docs/integration/smartai-slice2-20261010.md`, AIName for GOs.
+- **Area triggers:** all 10 ported; leftovers are DB-side data (Captured Arkonarin, Felwood kitten q4506, Hendel `creature_movement_template` 4967).
+- **Other (from 2026-10-10, still open):** Warden API-hook/EndScene/login checks and live client test; AH bot gaps (`docs/areas/auction-house-bot.md`); Docker untested; addon chat hook; multi-version S1/S2 (waiting on Nate's decisions 4 and 6 on #61).
+
+### Lane ownership
+- **Claude:** playerbots, clustering (#326), test flakes, performance, Train merges.
+- **Grok lane:** zone/area scripts, SmartAI slices, pets, opcode handlers, outdoor PvP. Either agent can pick up the other's lane if it's idle; leave a note in the PR.
+- The next characters schema version after v60 is unclaimed. Coordinate before taking it.
+
 ### Rules
 - Schema versions stay contiguous; no placeholders left at merge.
-- GPL-3.0; DCO sign-off as the repo does.
+- GPL-3.0; DCO sign-off (`Signed-off-by: Krilliac <7993979+Krilliac@users.noreply.github.com>`).
 - No full test suites on the box; CI gates.
