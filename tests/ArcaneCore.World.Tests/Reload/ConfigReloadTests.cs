@@ -606,6 +606,12 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Home)}:{property.Name}");
         }
 
+        // Autonomous flight-path use is live key by key (docs/areas/playbots.md, Flight paths).
+        foreach (PropertyInfo property in typeof(PlayerbotTaxiOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Taxi)}:{property.Name}");
+        }
+
         // The population section is live key by key (docs/areas/playbots-population.md).
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Population.PlayerbotPopulationOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

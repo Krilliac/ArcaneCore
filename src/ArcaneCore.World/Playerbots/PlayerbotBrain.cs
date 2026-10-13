@@ -343,6 +343,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
                 // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
                 PlayerbotTram.Cancel(player);
+                // A taxi trip that has not left yet is dropped with its walker; a flight in the air is the server's and goes on.
+                PlayerbotTaxi.Cancel(player);
                 // And a lift ride: the corpse loses the transport. This must run BEFORE the acknowledgements below
                 // (PlayerbotMovementControl.Update): the death root's ack then carries the cleared block, relayed as MSG_MOVE_ROOT.
                 PlayerbotElevator.Cancel(player);
@@ -392,6 +394,17 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         _deathIntentRetired = false;
         _recovery.Reset();
+
+        // In the air on a taxi flight the server moves the bot (UNIT_FLAG_TAXI_FLIGHT, PlayerbotTaxi): it neither thinks nor moves, and
+        // the stall watch does not judge it. The think after the landing continues its goal.
+        if (PlayerbotTaxi.IsFlying(player))
+        {
+            _stall.Reset();
+            _target = null;
+            _route = null;
+            _attacking = false;
+            return;
+        }
 
         // The water escape owns a bot that would otherwise stand still under water: a rest or a loot wait, or an escape already
         // under way. A sick bot still walks its quest returns and errands, so sickness alone is not a reason: StandDownWhileSick stops
@@ -450,6 +463,27 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // trip (the goal that began it begins it again afterwards).
         if (player.IsAlive)
         {
+            // A taxi trip (PlayerbotTaxi) owns the bot from the walk to the flight master until it has landed. A fight on the way to the
+            // master ends it; a failed trip only backs taxi use off, and the goal that asked for it walks.
+            if (player.Combat.IsInCombat && PlayerbotTaxi.TripOf(player) is { Stage: TaxiStage.ToMaster }) PlayerbotTaxi.Cancel(player);
+            TaxiStep taxi = PlayerbotTaxi.Drive(_session, player, _options, interval, out string? taxiFailure);
+            if (taxi == TaxiStep.Traveling)
+            {
+                _stall.Reset();
+                _target = null;
+                _route = null;
+                _attacking = false;
+                return;
+            }
+
+            if (taxi is TaxiStep.Arrived or TaxiStep.Failed)
+            {
+                _stall.Reset();
+                if (taxi == TaxiStep.Failed)
+                    _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>()
+                        .LogInformation("Playerbot taxi trip given up, the goal walks: {Why}", taxiFailure);
+            }
+
             PlayerbotThinkProbe.Phase("tram");
             if (player.Combat.IsInCombat && PlayerbotTram.TripOf(player) is { Stage: TramStage.ToEntrance }) PlayerbotTram.Cancel(player);
             TramStep tram = PlayerbotTram.Drive(_session, player, _options, interval, out string? tramFailure);
@@ -489,6 +523,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 return;
             }
         }
+
+        // A flight master within reach whose node the bot does not know yet teaches it (CMSG_TAXIQUERYAVAILABLENODES, PlayerbotTaxi).
+        if (player.IsAlive) PlayerbotTaxi.Discover(_session, player, _options);
 
         PlayerbotThinkProbe.Phase("stall watch");
         if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,

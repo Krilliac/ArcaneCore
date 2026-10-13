@@ -75,7 +75,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      14 keys
-#   WORLD                       362 keys
+#   WORLD                       366 keys
 #
 ###############################################################################
 
@@ -11711,6 +11711,58 @@ World.Playerbots.Social.Guilds.TargetSize = 25
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.StallSeconds = 120
+
+#
+#    World.Playerbots.Taxi.BackoffMinutes
+#        Description: Minutes a bot does not try to fly after a flight attempt failed (the server
+#                     refused the flight, the flight master could not be reached, or none stood
+#                     where the node is): it walks meanwhile (1..1440; default 10).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Taxi.BackoffMinutes = 10
+
+#
+#    World.Playerbots.Taxi.Enabled
+#        Description: Let bots discover flight masters they pass and fly between known nodes (on by
+#                     default). Off: bots never talk to a flight master.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Taxi.Enabled = true
+
+#
+#    World.Playerbots.Taxi.MaxWalkToMasterYards
+#        Description: The farthest, in yards, the bot's own position may lie from the flight path
+#                     node it departs from, and the node it lands at from the trip's end, in a
+#                     straight line (10..2000; default 300). The two walks together must also be at
+#                     most half of the straight line.
+#        Type: float
+#        Default: 300
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Taxi.MaxWalkToMasterYards = 300
+
+#
+#    World.Playerbots.Taxi.MinRouteYards
+#        Description: A trip is flown only when the straight line from the bot to where it is going
+#                     is at least this many yards (100..20000; default 600). Shorter trips are
+#                     walked.
+#        Type: float
+#        Default: 600
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Taxi.MinRouteYards = 600
 
 #
 #    World.Playerbots.ThinkIntervalMs

@@ -47,6 +47,8 @@ internal static class PlayerbotPacketIntake
         WorldOpcode.SmsgQuestgiverOfferReward,
         // PlayerbotTownGoals: trainer lists.
         WorldOpcode.SmsgTrainerList,
+        // PlayerbotTaxi: the reply to a flight activation.
+        WorldOpcode.SmsgActivatetaxireply,
     }
     .Concat(PlayerbotPartyAI.IntakeOpcodes)
     .Concat(PlayerbotSocialPackets.IntakeOpcodes)

@@ -120,7 +120,7 @@ In the read-only schema-53 world snapshot, 484 of 3,221 quests with creature giv
 (15.03%) have a nearest pair beyond 1200 yards. All six reported delivery stalls (120, 118, 1420, 6384, 164, 165)
 fall beyond it; the shortest is quest 165 at 1312.7 yards. The default retains those six exclusions while allowing
 local hand-ins after long objective travel. It can exclude other legitimate long deliveries, and 0 opts out of the
-same-map distance limit. Terrain, hostile pockets and autonomous taxi travel have separate limits.
+same-map distance limit. Terrain and hostile pockets have separate limits; long trips may be flown (see Flight paths).
 
 A far goal (a quest giver or ender, a corpse) is approached a leg at a time (`PlayerbotNavigation.TryPlanToward`). Beyond
 `MaxPathPoints - 2` yards the map's region graph leads (`NavRegionGraph`, [collision-pathing](collision-pathing.md); built off the world
@@ -494,6 +494,37 @@ and the shared action budget does not apply; the controller's `Tick` runs on the
 every tick with a `PlayerbotControllerContext` (`TryAction`, `AcknowledgeServerOrders`).
 Stopping a bot detaches its controller; `IsScripted(botId)` reports the mode. Switching back
 to autonomous mode resumes the brain with whatever state it had before.
+
+### Flight paths
+
+Bots discover flight masters and fly between known taxi nodes on long trips (`PlayerbotTaxi`; `World:Playerbots:Taxi`, every key live).
+Every request goes through the real handlers (`WorldSession.TryManagedAction`); a bot never writes its taxi mask or starts a flight.
+
+- **Discovery.** At most every 2 seconds a bot looks at the objects it sees. A living flight master it may talk to (the server's own
+  `InteractableNpc` check: range, faction reaction) whose node (the nearest network node with a mount for the bot's team, as the server maps
+  it) the bot does not know gets CMSG_TAXIQUERYAVAILABLENODES. The server learns the node (SMSG_NEW_TAXI_PATH). A master that did not teach its
+  node is asked again after a minute. Known nodes are never asked for. Discovery only happens within interaction range; bots do not detour to
+  unknown masters.
+- **Planning.** `TryTravelByTaxi(session, player, mapId, destination, options)` is called by `PlayerbotWorldDestinations` for a quest
+  destination after the tram and lift checks (a lift's own walk is kept). The estimate of the walk is the straight line (no path query). Taxi
+  is used when it is at least `MinRouteYards` (default 600), the bot knows a node within `MaxWalkToMasterYards` (default 300) of itself, a
+  Dijkstra over known nodes of the map (fare = path price) reaches a known landing node within `MaxWalkToMasterYards` of the destination, the
+  two walks together are at most half the straight line, a flight master of the departure node that the bot may approach exists (found in the
+  creature content, so one out of sight counts), and the bot can pay the whole fare now. The fare used is the undiscounted path price, an
+  upper bound of what the server charges after reputation and honor discounts. Otherwise the goal walks as before.
+- **The trip.** The brain drives it before anything else (`PlayerbotTaxi.Drive`): walk to the master, stop, send CMSG_ACTIVATETAXI (one hop) or
+  CMSG_ACTIVATETAXIEXPRESS (several hops), read SMSG_ACTIVATETAXIREPLY, then wait. In the air (UNIT_FLAG_TAXI_FLIGHT) the bot neither thinks nor
+  moves and the stall watch does not judge it. After the landing the goal that asked for the trip plans again from there (usually a short walk).
+- **Failure.** A refusing reply (for example a mount, combat, money), no reply, no way to the master, no master where the node is, or a
+  budget that never accepts the request ends the trip and backs taxi use off for `BackoffMinutes` (default 10); the goal walks meanwhile. A
+  fight on the way to the master cancels the trip without a backoff. Death cancels it.
+- **Config** (`World:Playerbots:Taxi`): `Enabled` (true), `MinRouteYards` (600, 100..20000), `MaxWalkToMasterYards` (300, 10..2000),
+  `BackoffMinutes` (10, 1..1440).
+
+Deviations from retail 1.12 and vmangos: the client picks its own route and fare; the bot computes both from the same node and path data. It
+sends CMSG_ACTIVATETAXI for a single hop and the express opcode for several (which opcode a 1.12.1 client sends for a single hop is
+UNVERIFIED). Intermediate legs are charged by the server when each starts, as for a player. Cross-map paths and scripted (SEND_TAXI) paths are
+not used.
 
 ### Home area
 
