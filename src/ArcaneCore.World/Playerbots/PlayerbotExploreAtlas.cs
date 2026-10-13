@@ -135,19 +135,34 @@ internal sealed class PlayerbotExploreAtlas
     /// Whether a creature more than <paramref name="margin"/> levels above <paramref name="level"/> stands within
     /// <paramref name="rings"/> rings of <paramref name="from"/> (the threat index, which keeps the strongest samples of each
     /// 80-yard cell): the bot is under-levelled for the area, not merely in a place with nothing to fight (a city, a low zone).
+    /// The square is the one <see cref="HasCellNear"/> searches. A radius of <c>rings</c> explore-cells measured from the single
+    /// threat cell under the bot stops one threat cell short of that square's far side (the bot occupies only one half of its
+    /// own explore cell), so the stronger creature in the missed strip was invisible and the bot stayed on Explore.
     /// </summary>
     internal bool HasStrongerNear(uint map, uint level, Vector3 from, int rings, int margin)
     {
-        if (!float.IsFinite(from.X) || !float.IsFinite(from.Y)) return false;
-        int reach = (int)MathF.Ceiling(rings * CellYards / ThreatCellYards);
-        int cx = ThreatCellOf(from.X), cy = ThreatCellOf(from.Y);
-        for (int x = cx - reach; x <= cx + reach; x++)
-            for (int y = cy - reach; y <= cy + reach; y++)
+        if (!float.IsFinite(from.X) || !float.IsFinite(from.Y) || rings < 0) return false;
+        (int x0, int x1) = ThreatSpan(CellOf(from.X), rings);
+        (int y0, int y1) = ThreatSpan(CellOf(from.Y), rings);
+        for (int x = x0; x <= x1; x++)
+            for (int y = y0; y <= y1; y++)
                 if (_threats.TryGetValue((map, x, y), out ThreatCell? cell))
                     foreach (List<Threat> samples in cell.ByFaction.Values)
                         foreach (Threat threat in samples)
                             if (threat.MinLevel > level + margin) return true;
         return false;
+    }
+
+    /// <summary>
+    /// Threat cells overlapping explore cells <c>[cell - rings, cell + rings]</c>. Explore cell <c>e</c> is threat cells
+    /// <c>scale*e</c> and <c>scale*e + scale - 1</c> (<see cref="CellYards"/> is <c>scale</c> times the threat cell), including
+    /// when <c>e</c> is negative.
+    /// </summary>
+    private static (int First, int Last) ThreatSpan(int exploreCell, int rings)
+    {
+        int scale = (int)(CellYards / ThreatCellYards);
+        int firstCell = exploreCell - rings, lastCell = exploreCell + rings;
+        return (firstCell * scale, lastCell * scale + (scale - 1));
     }
 
     /// <summary>A candidate near an elite or creature at least five levels higher is a poor unattended grinding site.</summary>
