@@ -145,6 +145,7 @@ How to read the tables:
 | `AntiCheat:SpeedClock:Window` | `int` | `20` | - | Pairs of consecutive packets in the window. Default 20. |
 | `AntiCheat:SpeedSlackYards` | `float` | `2` | - | Distance in yards that one packet may always cover on top of the speed budget (rounding, collision push). Default 2. |
 | `AntiCheat:SpeedTolerancePercent` | `float` | `10` | - | Tolerance above the allowed speed, in percent, before the speed check scores. Default 10. |
+| `AntiCheat:StaffNoticeCooldownSeconds` | `int` | `30` | - | The staff line for a kick, an autoban or a failed autoban is sent at most once per account and kind per this many seconds; repeats inside the window are counted and reported as one "N more suppressed" line. Independent of World:Announce. 0 sends every line. 0-3600, default 30. |
 | `AntiCheat:TeleportDistance` | `float` | `50` | - | One packet moving farther than this, plus what the speed covers in the latency slack, is a teleport (fork AntiCheat.Teleport.Distance). Default 50. |
 | `AntiCheat:TerrainChecks` | `bool` | `true` | - | Run the checks that need world geometry (swimming out of water, climbing into the air, walking through a wall). Each runs only where the terrain or vmap data for that spot is actually loaded; without data it never scores. Default true. |
 
@@ -947,6 +948,7 @@ How to read the tables:
 | `Warden:ScanIntervalMaxSeconds` | `uint` | `60` | - | Warden:ScanIntervalMaxSeconds: the longest gap between scan requests. Default 60. |
 | `Warden:ScanIntervalMinSeconds` | `uint` | `30` | - | Warden:ScanIntervalMinSeconds: the shortest random gap between scan requests (MaNGOS Zero normal interval 30-60 s). |
 | `Warden:ScansPerRequest` | `int` | `3` | - | Warden:ScansPerRequest (vmangos Warden.NumScans). Default 3. |
+| `Warden:StaffNoticeCooldownSeconds` | `uint` | `30` | - | Warden:StaffNoticeCooldownSeconds: the staff line for a Kick or Ban verdict is sent at most once per account and action per this many seconds; repeats inside the window are counted and reported as one "N more suppressed" line. Independent of World:Announce. 0 sends every line. 0-3600, default 30. |
 
 ## `World`
 
@@ -1005,7 +1007,31 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `World:Announce:AntiCheat:AllowNamesInWorldMessage` | `bool` | `false` | - | Let the world message carry character names when the announcing code supplies a text for it. Off by default. |
+| `World:Announce:AntiCheat:DedupSeconds` | `int` | `30` | - | An announcement identical to one delivered this many seconds ago is suppressed. 0 disables the window. |
+| `World:Announce:AntiCheat:GmNotify` | `bool` | `true` | - | Send the announcement to every online account above Player (an on-screen notification and a chat line). Staff only. |
+| `World:Announce:AntiCheat:IncludeDetails` | `bool` | `true` | - | Add the staff-only detail (who, how long, counts, hashes) to the staff chat line. Players never see it. |
+| `World:Announce:AntiCheat:MinimumSeverity` | `AnnounceSeverity` | `Info` | - | Announcements below this severity are logged and counted but not delivered. Values: `Info`, `Warning`, `Error`, `Critical`. |
+| `World:Announce:AntiCheat:RateBurst` | `int` | `10` | - | Rate limit: how many announcements of this category may go out back to back before the limit applies. 0 disables the limit. |
+| `World:Announce:AntiCheat:RatePerMinute` | `int` | `20` | - | Rate limit: announcements of this category refilled per minute once the burst is used. Suppressed ones are counted and reported on the next delivered announcement. |
+| `World:Announce:AntiCheat:WorldMessage` | `bool` | `false` | - | Send a short system chat line to every online player. Never carries account names; never carries character names unless `AllowNamesInWorldMessage`. |
+| `World:Announce:BotQa:AllowNamesInWorldMessage` | `bool` | `false` | - | Let the world message carry character names when the announcing code supplies a text for it. Off by default. |
+| `World:Announce:BotQa:DedupSeconds` | `int` | `3600` | - | An announcement identical to one delivered this many seconds ago is suppressed. 0 disables the window. |
+| `World:Announce:BotQa:GmNotify` | `bool` | `true` | - | Send the announcement to every online account above Player (an on-screen notification and a chat line). Staff only. |
+| `World:Announce:BotQa:IncludeDetails` | `bool` | `true` | - | Add the staff-only detail (who, how long, counts, hashes) to the staff chat line. Players never see it. |
+| `World:Announce:BotQa:MinimumSeverity` | `AnnounceSeverity` | `Info` | - | Announcements below this severity are logged and counted but not delivered. Values: `Info`, `Warning`, `Error`, `Critical`. |
+| `World:Announce:BotQa:RateBurst` | `int` | `5` | - | Rate limit: how many announcements of this category may go out back to back before the limit applies. 0 disables the limit. |
+| `World:Announce:BotQa:RatePerMinute` | `int` | `6` | - | Rate limit: announcements of this category refilled per minute once the burst is used. Suppressed ones are counted and reported on the next delivered announcement. |
+| `World:Announce:BotQa:WorldMessage` | `bool` | `false` | - | Send a short system chat line to every online player. Never carries account names; never carries character names unless `AllowNamesInWorldMessage`. |
 | `World:Announce:Enabled` | `bool` | `true` | - | Master switch for delivery to players and staff. When false announcements are still logged and counted. |
+| `World:Announce:Faults:AllowNamesInWorldMessage` | `bool` | `false` | - | Let the world message carry character names when the announcing code supplies a text for it. Off by default. |
+| `World:Announce:Faults:DedupSeconds` | `int` | `300` | - | An announcement identical to one delivered this many seconds ago is suppressed. 0 disables the window. |
+| `World:Announce:Faults:GmNotify` | `bool` | `true` | - | Send the announcement to every online account above Player (an on-screen notification and a chat line). Staff only. |
+| `World:Announce:Faults:IncludeDetails` | `bool` | `true` | - | Add the staff-only detail (who, how long, counts, hashes) to the staff chat line. Players never see it. |
+| `World:Announce:Faults:MinimumSeverity` | `AnnounceSeverity` | `Warning` | - | Announcements below this severity are logged and counted but not delivered. Values: `Info`, `Warning`, `Error`, `Critical`. |
+| `World:Announce:Faults:RateBurst` | `int` | `5` | - | Rate limit: how many announcements of this category may go out back to back before the limit applies. 0 disables the limit. |
+| `World:Announce:Faults:RatePerMinute` | `int` | `6` | - | Rate limit: announcements of this category refilled per minute once the burst is used. Suppressed ones are counted and reported on the next delivered announcement. |
+| `World:Announce:Faults:WorldMessage` | `bool` | `false` | - | Send a short system chat line to every online player. Never carries account names; never carries character names unless `AllowNamesInWorldMessage`. |
 | `World:Announce:HotSwap:AllowNamesInWorldMessage` | `bool` | `false` | - | Let the world message carry character names when the announcing code supplies a text for it. Off by default. |
 | `World:Announce:HotSwap:DedupSeconds` | `int` | `0` | - | An announcement identical to one delivered this many seconds ago is suppressed. 0 disables the window. |
 | `World:Announce:HotSwap:GmNotify` | `bool` | `true` | - | Send the announcement to every online account above Player (an on-screen notification and a chat line). Staff only. |
@@ -1017,6 +1043,30 @@ How to read the tables:
 | `World:Announce:HotSwap:WorldMessage` | `bool` | `false` | - | Send a short system chat line to every online player. Never carries account names; never carries character names unless `AllowNamesInWorldMessage`. |
 | `World:Announce:HotSwap:WorldMessageIncludeReason` | `bool` | `true` | - | Put the free-text reason the staff member gave (`.reload creature_template fixed drop rates`) into the world message. The reason is shown to players as typed. |
 | `World:Announce:HotSwap:WorldMessageOnFailure` | `bool` | `false` | - | Also send the world message for a swap that was rejected or failed. Default false: players only hear about changes that happened. |
+| `World:Announce:Saves:AllowNamesInWorldMessage` | `bool` | `false` | - | Let the world message carry character names when the announcing code supplies a text for it. Off by default. |
+| `World:Announce:Saves:DedupSeconds` | `int` | `120` | - | An announcement identical to one delivered this many seconds ago is suppressed. 0 disables the window. |
+| `World:Announce:Saves:GmNotify` | `bool` | `true` | - | Send the announcement to every online account above Player (an on-screen notification and a chat line). Staff only. |
+| `World:Announce:Saves:IncludeDetails` | `bool` | `true` | - | Add the staff-only detail (who, how long, counts, hashes) to the staff chat line. Players never see it. |
+| `World:Announce:Saves:MinimumSeverity` | `AnnounceSeverity` | `Warning` | - | Announcements below this severity are logged and counted but not delivered. Values: `Info`, `Warning`, `Error`, `Critical`. |
+| `World:Announce:Saves:RateBurst` | `int` | `5` | - | Rate limit: how many announcements of this category may go out back to back before the limit applies. 0 disables the limit. |
+| `World:Announce:Saves:RatePerMinute` | `int` | `6` | - | Rate limit: announcements of this category refilled per minute once the burst is used. Suppressed ones are counted and reported on the next delivered announcement. |
+| `World:Announce:Saves:WorldMessage` | `bool` | `false` | - | Send a short system chat line to every online player. Never carries account names; never carries character names unless `AllowNamesInWorldMessage`. |
+| `World:Announce:Shutdown:AllowNamesInWorldMessage` | `bool` | `false` | - | Let the world message carry character names when the announcing code supplies a text for it. Off by default. |
+| `World:Announce:Shutdown:DedupSeconds` | `int` | `0` | - | An announcement identical to one delivered this many seconds ago is suppressed. 0 disables the window. |
+| `World:Announce:Shutdown:GmNotify` | `bool` | `true` | - | Send the announcement to every online account above Player (an on-screen notification and a chat line). Staff only. |
+| `World:Announce:Shutdown:IncludeDetails` | `bool` | `true` | - | Add the staff-only detail (who, how long, counts, hashes) to the staff chat line. Players never see it. |
+| `World:Announce:Shutdown:MinimumSeverity` | `AnnounceSeverity` | `Info` | - | Announcements below this severity are logged and counted but not delivered. Values: `Info`, `Warning`, `Error`, `Critical`. |
+| `World:Announce:Shutdown:RateBurst` | `int` | `10` | - | Rate limit: how many announcements of this category may go out back to back before the limit applies. 0 disables the limit. |
+| `World:Announce:Shutdown:RatePerMinute` | `int` | `20` | - | Rate limit: announcements of this category refilled per minute once the burst is used. Suppressed ones are counted and reported on the next delivered announcement. |
+| `World:Announce:Shutdown:WorldMessage` | `bool` | `false` | - | Send a short system chat line to every online player. Never carries account names; never carries character names unless `AllowNamesInWorldMessage`. |
+| `World:Announce:Wiring:AllowNamesInWorldMessage` | `bool` | `false` | - | Let the world message carry character names when the announcing code supplies a text for it. Off by default. |
+| `World:Announce:Wiring:DedupSeconds` | `int` | `300` | - | An announcement identical to one delivered this many seconds ago is suppressed. 0 disables the window. |
+| `World:Announce:Wiring:GmNotify` | `bool` | `true` | - | Send the announcement to every online account above Player (an on-screen notification and a chat line). Staff only. |
+| `World:Announce:Wiring:IncludeDetails` | `bool` | `true` | - | Add the staff-only detail (who, how long, counts, hashes) to the staff chat line. Players never see it. |
+| `World:Announce:Wiring:MinimumSeverity` | `AnnounceSeverity` | `Warning` | - | Announcements below this severity are logged and counted but not delivered. Values: `Info`, `Warning`, `Error`, `Critical`. |
+| `World:Announce:Wiring:RateBurst` | `int` | `10` | - | Rate limit: how many announcements of this category may go out back to back before the limit applies. 0 disables the limit. |
+| `World:Announce:Wiring:RatePerMinute` | `int` | `20` | - | Rate limit: announcements of this category refilled per minute once the burst is used. Suppressed ones are counted and reported on the next delivered announcement. |
+| `World:Announce:Wiring:WorldMessage` | `bool` | `false` | - | Send a short system chat line to every online player. Never carries account names; never carries character names unless `AllowNamesInWorldMessage`. |
 
 ## `World:Chat`
 

@@ -61,7 +61,7 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_playerbot_chat_screening_timeouts_total{kind}` | counter | bot chat safety patterns that ran out of time (`kind`: `input` screening a player's line, `output` screening a model reply, `strip` removing personal data before sending or from a flag excerpt; docs/areas/playbots.md) |
 | `arcanecore_faults_total{site,type}` | counter | exceptions caught by the server's catch-and-log sites and the crash hooks (the fault ledger, `.server faults`, [invariants](invariants.md#the-fault-ledger)) |
 | `arcanecore_hotswap_total{kind,result}` | counter | live changes: `kind` data / module / code, `result` applied / rejected / failed / unchanged ([announcements](../areas/hot-swap-announcements.md)) |
-| `arcanecore_announce_total{category,severity,outcome}` | counter | operational announcements and what became of each (`sent`, `disabled`, `below_minimum`, `off`, `rate_limited`, `duplicate`) |
+| `arcanecore_announce_total{category,severity,outcome,staff_direct}` | counter | operational announcements and what became of each (`sent`, `disabled`, `below_minimum`, `off`, `staff_direct`, `rate_limited`, `duplicate`); `staff_direct` is true when the caller sent the staff line itself (Warden, anti-cheat), and the outcome `staff_direct` means the staff were told directly and there was no world line to send |
 | `arcanecore_faults_distinct` | gauge | distinct fault signatures in the ledger (reset by `.server faults reset`) |
 | `arcanecore_invariant_failures_total` | counter | failed `Invariant.Assert`/`Check` calls since start |
 | `arcanecore_gc_collections_total{generation}` | counter | `GC.CollectionCount` |

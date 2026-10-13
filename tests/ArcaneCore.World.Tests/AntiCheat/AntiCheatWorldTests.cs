@@ -5,9 +5,13 @@ using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.AntiCheat;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Announce;
+using ArcaneCore.World.Tests.HotCode;
+using ArcaneCore.World.Tests.Ops;
 using ArcaneCore.World.Tests.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -210,6 +214,134 @@ public sealed class AntiCheatWorldTests
         reader.ReadUInt32(); // movement counter
         MovementInfo block = MovementInfo.Read(ref reader);
         Assert.Equal(valid, block.X, 2);
+    }
+
+    /// <summary>Every system chat line the client receives until it has been quiet for <paramref name="quietMs"/>.</summary>
+    private static async Task<List<string>> ChatLinesAsync(WorldTestClient client, int quietMs = 400)
+    {
+        var lines = new List<string>();
+        foreach ((WorldOpcode opcode, byte[] payload) in await client.CollectAsync(TimeSpan.FromMilliseconds(quietMs)))
+        {
+            if (opcode == WorldOpcode.SmsgMessagechat)
+            {
+                lines.Add(ChatMessage.Parse(payload).Text);
+            }
+        }
+
+        return lines;
+    }
+
+    [Fact]
+    public async Task TheKick_GoesToStaffDirectlyOnce_AndTheAnnouncerAddsOnlyAWorldLineThatNamesNeitherThePlayerNorTheDetector()
+    {
+        var sink = new RecordingSink();
+        var announce = new AnnounceOptions();
+        announce.AntiCheat.WorldMessage = true;
+        var announcer = new OpsAnnouncer(announce, sink, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IOpsAnnouncer>(announcer));
+        await using WorldTestClient staff = await host.EnterWorldAsync("WATCHER", "Watcher", AccountSecurity.Moderator);
+        await using WorldTestClient cheater = await host.EnterWorldAsync("ANNOUNCED", "Announced");
+        await ApplyAsync(host, new AntiCheatOptions { Action = AntiCheatAction.Kick, ScoreGmAlert = 20, ScoreRubberband = 30, ScoreKick = 40 });
+        Mover mover = await MoverAsync(host, cheater, "Announced");
+        await staff.CollectAsync();
+
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        await mover.StepAsync(100, 80f); // teleport 25: alert
+        await mover.StepAsync(100, 80f); // 50: kick
+        Assert.True(await cheater.IsClosedByServerAsync());
+
+        List<string> staffLines = await ChatLinesAsync(staff);
+        Assert.Single(staffLines, l => l.Contains("Announced", StringComparison.Ordinal) && l.Contains("Teleport", StringComparison.Ordinal) && !l.Contains("Kicked", StringComparison.Ordinal));
+        Assert.Single(staffLines, l => l.Contains("Kicked Announced", StringComparison.Ordinal)); // the feature sends its direct kick line once
+        Assert.All(staffLines, l => Assert.Contains("[AntiCheat]", l, StringComparison.Ordinal));
+
+        // The announcer's part: the world line (the category's WorldMessage is on) and no staff line (StaffChat/StaffNotify null,
+        // StaffHandled set). The sink here only records; that the real sink then keeps the world line from staff is proven in
+        // WardenTests.WithTheRealSink_StaffGetOnlyTheDirectLine_AndPlayersOnlyTheWorldLine.
+        AnnounceDelivery delivery = Assert.Single(sink.Sent);
+        Assert.Null(delivery.StaffChat);
+        Assert.Null(delivery.StaffNotify);
+        Assert.Contains("kicked a player", delivery.WorldChat, StringComparison.Ordinal);
+        Assert.DoesNotContain("Announced", delivery.WorldChat, StringComparison.Ordinal);
+        Assert.DoesNotContain("Teleport", delivery.WorldChat, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RepeatedKicksOfOneAccount_GiveStaffOneKickLine_ThenOneSuppressedCount()
+    {
+        // AntiCheat:StaffNoticeCooldownSeconds (default 30): one kick line per account per window, then the held count once.
+        var clock = new ManualTimestamp();
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<TimeProvider>(clock));
+        await using WorldTestClient staff = await host.EnterWorldAsync("WATCH3", "Watcherthree", AccountSecurity.Moderator);
+        await using WorldTestClient cheater = await host.EnterWorldAsync("REKICK", "Rekicked");
+        await ApplyAsync(host, new AntiCheatOptions { Action = AntiCheatAction.Kick, ScoreGmAlert = 20, ScoreRubberband = 30, ScoreKick = 40 });
+        Account account = (await host.Accounts.FindByUsernameAsync("REKICK"))!;
+        int characterId = (await host.Characters.GetByAccountAsync(account.Id)).Single().Id;
+
+        async Task KickAsync(WorldTestClient client)
+        {
+            Mover mover = await MoverAsync(host, client, "Rekicked");
+            await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+            await mover.StepAsync(100, 80f); // teleport 25
+            await mover.StepAsync(100, 80f); // 50: kick
+            Assert.True(await client.IsClosedByServerAsync());
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Rekicked") is null, "the kicked character left the world");
+        }
+
+        await staff.CollectAsync();
+        await KickAsync(cheater);
+        await using WorldTestClient again = await host.ConnectAsync();
+        await again.AuthenticateAsync("REKICK", account.SessionKey!);
+        await again.LoginAsync((ulong)characterId);
+        await KickAsync(again);
+
+        List<string> lines = await ChatLinesAsync(staff);
+        Assert.Single(lines, l => l.Contains("Kicked Rekicked", StringComparison.Ordinal)); // the second kick is held back, not sent
+
+        clock.Advance(TimeSpan.FromSeconds(31));
+        string count = Assert.Single(await ChatLinesAsync(staff));
+        Assert.Contains("[AntiCheat]", count, StringComparison.Ordinal);
+        Assert.Contains($"account {account.Id}: kick: 1 more suppressed in the last 30 s", count, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheStaffAlert_DoesNotDependOnTheAnnouncer_AndOneBurstDoesNotStarveAnotherPlayersAlert()
+    {
+        // Everything that could hide the alert in the announcer is switched on: off, a severity floor above the alert, no details, one token.
+        var announce = new AnnounceOptions { Enabled = false };
+        announce.AntiCheat.MinimumSeverity = AnnounceSeverity.Error;
+        announce.AntiCheat.IncludeDetails = false;
+        announce.AntiCheat.RateBurst = 1;
+        announce.AntiCheat.RatePerMinute = 1;
+        var sink = new RecordingSink();
+        var announcer = new OpsAnnouncer(announce, sink, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IOpsAnnouncer>(announcer));
+        await using WorldTestClient staff = await host.EnterWorldAsync("WATCH2", "Watcher", AccountSecurity.Moderator);
+        await using WorldTestClient first = await host.EnterWorldAsync("FIRST", "Firstcheat");
+        await using WorldTestClient second = await host.EnterWorldAsync("SECOND", "Secondcheat");
+        await using WorldTestClient third = await host.EnterWorldAsync("THIRD", "Thirdcheat");
+        await ApplyAsync(host, new AntiCheatOptions { Action = AntiCheatAction.GmAlert, ScoreGmAlert = 20, ScoreRubberband = 1000, ScoreKick = 2000 });
+        Mover m1 = await MoverAsync(host, first, "Firstcheat");
+        Mover m2 = await MoverAsync(host, second, "Secondcheat");
+        Mover m3 = await MoverAsync(host, third, "Thirdcheat");
+        await staff.CollectAsync();
+
+        foreach (Mover m in new[] { m1, m2, m3 })
+        {
+            await m.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+            await m.StepAsync(100, 80f); // teleport 25: alert
+        }
+
+        List<string> lines = await ChatLinesAsync(staff, 600);
+        foreach (string name in new[] { "Firstcheat", "Secondcheat", "Thirdcheat" })
+        {
+            string line = Assert.Single(lines, l => l.Contains(name, StringComparison.Ordinal));
+            Assert.Contains("Teleport", line, StringComparison.Ordinal); // the detector
+            Assert.Contains("score", line, StringComparison.Ordinal);    // the detail
+            Assert.Contains("Map ", line, StringComparison.Ordinal);     // the position
+        }
+
+        Assert.Empty(sink.Sent); // the announcer was never needed, and no alert reached a player either
     }
 
     [Fact]

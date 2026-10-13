@@ -19,6 +19,7 @@ Any awaited reply that is later than `ResponseTimeoutSeconds` is a protocol fail
 - `Action` (Log, Kick, Ban): applied when a scan fails. A check can override it with its own `Action`.
 - `ProtocolAction`: applied when the handshake fails, a reply is malformed or late, or the module fails to load. Log records the failure and keeps the session, up to `MaxProtocolFailures`; Kick disconnects. Ban acts as Kick: a protocol failure (such as one late reply from a lagging client) never bans, as in vmangos.
 - `BanSeconds`: the ban length, 0 for permanent. The ban author is `Warden`.
+- `StaffNoticeCooldownSeconds` (default 30, 0 off): a Kick or Ban sends staff online one direct line (account and reason), at most once per account and action per window; repeats are counted and reported as one `N more suppressed in the last 30 s` line. All verdicts of one scan reply (or one packet, tick or flush) are acted on once, at the strongest action: one staff line and one ban however many scans failed. Each verdict is still logged.
 
 ## Checks
 

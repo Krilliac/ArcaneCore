@@ -115,6 +115,13 @@ public sealed class WardenOptions
     /// </summary>
     public uint ProtocolReportIntervalSeconds { get; set; } = 10;
 
+    /// <summary>
+    /// Warden:StaffNoticeCooldownSeconds: the staff line for a Kick or Ban verdict is sent at most once per account and action per this
+    /// many seconds; repeats inside the window are counted and reported as one "N more suppressed" line. Independent of World:Announce.
+    /// 0 sends every line. 0-3600, default 30.
+    /// </summary>
+    public uint StaffNoticeCooldownSeconds { get; set; } = 30;
+
     /// <summary>Warden:BanSeconds for <see cref="WardenAction.Ban"/>; 0 is permanent. Default 86400 (vmangos Warden.ClientBanDuration).</summary>
     public long BanSeconds { get; set; } = 86400;
 
@@ -163,6 +170,11 @@ public sealed class WardenOptions
         if (ProtocolReportIntervalSeconds is < 1 or > 3600)
         {
             problems.Add("Warden:ProtocolReportIntervalSeconds must be 1-3600.");
+        }
+
+        if (StaffNoticeCooldownSeconds > 3600)
+        {
+            problems.Add("Warden:StaffNoticeCooldownSeconds must be 0-3600.");
         }
 
         if (ScanIntervalMinSeconds == 0 || ScanIntervalMaxSeconds < ScanIntervalMinSeconds)

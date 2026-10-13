@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Persistence;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -693,6 +695,101 @@ public sealed class CharacterSaveQueueTests
         public int Next() => Interlocked.Increment(ref _attempts);
     }
 
+    private sealed class CountingSink : IAnnounceSink
+    {
+        private readonly ConcurrentQueue<AnnounceDelivery> _sent = new();
+        public int Count => _sent.Count;
+        public AnnounceDelivery[] Sent => [.. _sent];
+        public void Deliver(AnnounceDelivery delivery) => _sent.Enqueue(delivery);
+    }
+
+    private sealed class OutcomeLogger : ILogger
+    {
+        public ConcurrentQueue<(LogLevel Level, string Message)> Entries { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Entries.Enqueue((logLevel, formatter(state, exception)));
+    }
+
+    [Fact]
+    public async Task ABusyStorm_IsAnnouncedOnTheThirdConsecutiveLockedFailure_Once_AndTheRestAreDuplicatesInTheWindow()
+    {
+        var sink = new CountingSink();
+        var announcerLog = new OutcomeLogger();
+        long now = 1_000_000; // frozen: every failure is inside the 120 s duplicate window
+        var announcer = new OpsAnnouncer(new AnnounceOptions(), sink, announcerLog, () => Volatile.Read(ref now));
+        await using var kit = new Kit(announcer: announcer);
+        var @lock = new Locked();
+        var sentBeforeAttempt = new ConcurrentDictionary<int, int>();
+        kit.Store.OnSave = (state, _) =>
+        {
+            int attempt = @lock.Next();
+            sentBeforeAttempt[attempt] = sink.Count; // what the staff had been told before this attempt ran
+            if (!@lock.IsReleased)
+            {
+                throw Busy();
+            }
+
+            return Task.CompletedTask;
+        };
+        try
+        {
+            kit.Queue.Enqueue(State(1, 11));
+            kit.Queue.Start();
+            for (int i = 0; i < 8 && @lock.Attempts < 6; i++)
+            {
+                _ = kit.Queue.FlushCharacterAsync(1); // a barrier retries the retained snapshot at once; the consumer does too after its pause
+                Assert.True(await BecomesTrueAsync(() => @lock.Attempts > i, seconds: 20), $"attempt {i + 1} never ran");
+            }
+
+            Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 6, seconds: 20), $"only {@lock.Attempts} attempts ran");
+            await Task.Delay(100); // the announcement of the last attempt is made after it throws
+
+            // Streaks 1 and 2 announce nothing; streak 3 announces; streaks 4 and later are duplicates.
+            Assert.Equal(0, sentBeforeAttempt[2]);
+            Assert.Equal(0, sentBeforeAttempt[3]);
+            Assert.Equal(1, sentBeforeAttempt[4]);
+            AnnounceDelivery storm = Assert.Single(sink.Sent);
+            Assert.Contains("database is busy", storm.StaffChat, StringComparison.Ordinal);
+            Assert.Null(storm.WorldChat);
+
+            // Each failure past the third was counted as a duplicate and logged below Warning (a lock storm lasts minutes).
+            (LogLevel Level, string Message)[] entries = [.. announcerLog.Entries];
+            int duplicates = entries.Count(e => e.Message.Contains("(duplicate)", StringComparison.Ordinal));
+            Assert.True(duplicates >= 2, $"expected at least 2 duplicates, saw {duplicates}");
+            Assert.All(entries.Where(e => e.Message.Contains("(duplicate)", StringComparison.Ordinal)), e => Assert.Equal(LogLevel.Debug, e.Level));
+            Assert.Single(entries, e => e.Message.Contains("(sent)", StringComparison.Ordinal));
+        }
+        finally
+        {
+            @lock.Release();
+        }
+    }
+
+    [Fact]
+    public void AQuarantinedCharacter_IsAnnouncedOncePerQuarantine_NotOnEveryPeriodicEnqueue()
+    {
+        var sink = new CountingSink();
+        long now = 1_000_000;
+        var announcer = new OpsAnnouncer(new AnnounceOptions { Saves = { DedupSeconds = 0 } }, sink, NullLogger.Instance, () => Volatile.Read(ref now));
+        using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+        var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance, announcer: announcer);
+        queue.QuarantineCharacter(7);
+
+        for (int i = 0; i < 5; i++)
+        {
+            queue.Enqueue(State(7, 1));
+        }
+
+        Assert.Equal(1, sink.Count); // the announcer's dedup window is off: the queue itself speaks once
+
+        queue.ResumeCharacter(7);
+        queue.QuarantineCharacter(7);
+        queue.Enqueue(State(7, 1));
+        Assert.Equal(2, sink.Count); // a new quarantine is news again
+    }
+
     [Fact]
     public async Task DatabaseLockedOnOneSave_DoesNotHoldTheConsumer_AndTheSnapshotIsWrittenOnceTheLockIsGone()
     {
@@ -1034,11 +1131,11 @@ public sealed class CharacterSaveQueueTests
     private sealed class Kit : IAsyncDisposable
     {
         private readonly ServiceProvider _services;
-        public Kit(WorldRuntimeOptions? options = null, ILogger<CharacterSaveQueue>? logger = null)
+        public Kit(WorldRuntimeOptions? options = null, ILogger<CharacterSaveQueue>? logger = null, IOpsAnnouncer? announcer = null)
         {
             _services = new ServiceCollection().AddSingleton<ICharacterStore>(Store).BuildServiceProvider();
             Queue = new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(),
-                logger ?? NullLogger<CharacterSaveQueue>.Instance, Options.Create(options ?? new WorldRuntimeOptions()));
+                logger ?? NullLogger<CharacterSaveQueue>.Instance, Options.Create(options ?? new WorldRuntimeOptions()), announcer);
         }
 
         public RecordingStore Store { get; } = new();

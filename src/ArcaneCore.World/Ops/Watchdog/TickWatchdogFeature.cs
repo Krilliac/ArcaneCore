@@ -2,8 +2,10 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -55,6 +57,19 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         {
             monitor.HostLoad = hostLoad;
             world.HostLoad = hostLoad;
+        }
+
+        if (services.GetService<IOpsAnnouncer>() is { } announcer)
+        {
+            // Staff only (World:Announce:Faults), one per kind per dedup window. A hang still running and the same hang completed have keys of
+            // their own, so the final-duration line is not swallowed by the "is hung" line sent a moment before. Runs on the watchdog thread; a hung world thread delays only the delivery.
+            monitor.Alerted = alert => announcer.Announce(
+                AnnounceCategory.Faults,
+                alert.Kind == TickAlertKind.Hang ? AnnounceSeverity.Critical : AnnounceSeverity.Warning,
+                alert.Text,
+                alert.Detail,
+                gmOnly: true,
+                dedupKey: alert.Kind == TickAlertKind.Hang ? (alert.InProgress ? "tick-Hang-running" : "tick-Hang-done") : "tick-" + alert.Kind);
         }
 
         world.WorldTick += OnTick;
