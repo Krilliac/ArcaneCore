@@ -131,8 +131,17 @@ public sealed class PlayerbotClassRotationTests
         Assert.Equal("Call Pet", Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps,
             inCombat: false, more: s => s.CanCallPet = true))));
         Assert.Null(Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps, inCombat: false))));
-        Assert.Equal("pet attack", Next(Hunter.InCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), Victim(20f), PlayerbotRole.RangeDps,
-            more: s => { s.Pet = RotationPetStatus.Alive; s.PetUnit = pet with { IsAlive = true, Health = 100 }; s.HasRangedWeapon = true; }))));
+        // The shot is the think and the idle pet is sent beside it; a pet command that leads would take every think when it does not stick.
+        RotationState shooting = State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), Victim(20f), PlayerbotRole.RangeDps,
+            more: s => { s.Pet = RotationPetStatus.Alive; s.PetUnit = pet with { IsAlive = true, Health = 100 }; s.HasRangedWeapon = true; });
+        RotationAction? shot = Hunter.InCombat(shooting);
+        Assert.Equal("Auto Shot", Next(shot));
+        Assert.Equal("pet attack", Next(Hunter.PetCompanion(shooting, shot)));
+        // A pet that already has a victim of its own is not pulled off it.
+        RotationState busyPet = State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), Victim(20f), PlayerbotRole.RangeDps,
+            more: s => { s.Pet = RotationPetStatus.Alive; s.PetUnit = pet with { IsAlive = true, Health = 100 }; s.HasRangedWeapon = true; s.PetFighting = true; });
+        Assert.Equal("Auto Shot", Next(Hunter.InCombat(busyPet)));
+        Assert.Null(Hunter.PetCompanion(busyPet, Hunter.InCombat(busyPet)));
         Assert.Equal("pet follow", Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3, 100, "Aspect of the Hawk"), null, PlayerbotRole.RangeDps,
             inCombat: false, more: s => { s.Pet = RotationPetStatus.Alive; s.PetUnit = pet with { IsAlive = true, Health = 100 }; s.PetFighting = true; }))));
     }

@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Playerbots.Combat;
 using Xunit;
@@ -48,6 +49,53 @@ public sealed class PlayerbotWarlockRotationTests
             PlayerbotRole.RangeDps, blocked: ["Immolate", "Corruption", "Shadow Bolt"], more: ImpOffTheVictim))));
         Assert.Equal("pet attack", Next(Warlock.OutOfCombat(State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(25f),
             PlayerbotRole.RangeDps, inCombat: false, blocked: ["Immolate", "Corruption", "Shadow Bolt"], more: ImpOffTheVictim))));
+    }
+
+    /// <summary>
+    /// The CI flake (run 38454056590, "the Imp never attacked the wolf"): the Imp came out while the warlock already stood at range.
+    /// Every think then had a cast ready, the cast won over the pet command (one action per think) and a cast in progress ends the
+    /// think, so three Shadow Bolts killed the wolf without the demon ever being sent.
+    /// </summary>
+    [Fact]
+    public void StandingAndCasting_StillSendsTheImpAtTheVictim_UntilItIsOnIt()
+    {
+        RotationState standing = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f), PlayerbotRole.RangeDps, more: ImpOffTheVictim);
+        RotationAction? cast = Warlock.InCombat(standing);
+        Assert.Equal("Immolate", Next(cast));
+        Assert.Equal("pet attack", Next(Warlock.PetCompanion(standing, cast)));
+
+        // The pull: out of combat the think yields to the cast (no action), and the demon is sent in that same think.
+        RotationState pull = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f), PlayerbotRole.RangeDps, inCombat: false,
+            more: ImpOffTheVictim);
+        RotationAction? yielded = Warlock.OutOfCombat(pull);
+        Assert.Null(yielded);
+        Assert.Equal("pet attack", Next(Warlock.PetCompanion(pull, yielded)));
+
+        // Once the Imp is on the victim, or there is no Imp, nothing is sent.
+        RotationState onVictim = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f), PlayerbotRole.RangeDps,
+            more: s => { s.Pet = RotationPetStatus.Alive; s.PetOnVictim = true; s.PetFighting = true; });
+        Assert.Null(Warlock.PetCompanion(onVictim, Warlock.InCombat(onVictim)));
+        RotationState noPet = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f), PlayerbotRole.RangeDps);
+        Assert.Null(Warlock.PetCompanion(noPet, Warlock.InCombat(noPet)));
+    }
+
+    /// <summary>A pet with a victim of its own is not pulled off it, and no command goes beside a cast aimed at the pet (Health Funnel).</summary>
+    [Fact]
+    public void ABusyImp_IsLeftAlone_AndNoCommandGoesBesideACastAtTheImp()
+    {
+        RotationState busy = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f), PlayerbotRole.RangeDps,
+            more: s => { s.Pet = RotationPetStatus.Alive; s.PetFighting = true; });
+        Assert.Equal("Immolate", Next(Warlock.InCombat(busy)));
+        Assert.Null(Warlock.PetCompanion(busy, Warlock.InCombat(busy)));
+        Assert.Null(Next(Warlock.OutOfCombat(State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(25f), PlayerbotRole.RangeDps,
+            inCombat: false, more: s => { s.Pet = RotationPetStatus.Alive; s.PetFighting = true; }))));
+
+        var imp = new RotationUnit { Guid = new ObjectGuid(0xF140000000000099UL), Distance = 2f, Health = 30, MaxHealth = 100, IsAlive = true };
+        RotationState idle = State(Warlock, Book, Self(9, 100, "Demon Skin"), Victim(20f), PlayerbotRole.RangeDps,
+            more: s => { ImpOffTheVictim(s); s.PetUnit = imp; });
+        var funnel = new RotationAction(RotationActionKind.Cast, Book[0], imp.Guid);
+        Assert.Null(Warlock.PetCompanion(idle, funnel));
+        Assert.Equal("pet attack", Next(Warlock.PetCompanion(idle, new RotationAction(RotationActionKind.Cast, Book[0], VictimGuid))));
     }
 
     private static void ImpOffTheVictim(RotationStateBuilder state)

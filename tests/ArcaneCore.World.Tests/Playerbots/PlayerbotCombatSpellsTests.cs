@@ -383,6 +383,77 @@ public sealed class PlayerbotCombatSpellsTests
         }
     }
 
+    /// <summary>
+    /// A standing warlock with a cast ready and an idle demon out: one think produces the cast and the CMSG_PET_ACTION attack, and the
+    /// demon takes the target. (The CI flake "the Imp never attacked the wolf": the cast won every think, so the command never went.)
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AStandingWarlock_CastsAndSendsItsIdleDemon_InOneThink(bool outOfCombatPull)
+    {
+        var template = new CreatureTemplate { Entry = Pets.PetTestServices.Entry, Name = "Test Imp", MinLevel = 1, MaxLevel = 1,
+            DisplayIds = [903], MinLevelHealth = Pets.PetTestServices.Health, MaxLevelHealth = Pets.PetTestServices.Health, Faction = 35 };
+        Creatures.CreatureTestStore.Current.Value = new Creatures.CreatureTestContext(new CreatureContent([template], [], [], [], []));
+        WorldTestHost host;
+        try { host = WorldTestHost.Start(); }
+        finally { Creatures.CreatureTestStore.Current.Value = null; }
+
+        await using (host)
+        {
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Creature target = await AddTargetAsync(host, session, 7, 31 + (outOfCombatPull ? 1u : 0u));
+            uint before = await host.World.InvokeAsync(() => target.Health);
+            Creature pet = await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter); // only a hunter restores a cached pet; it turns warlock below
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                SpellInfo bolt = feature.System.Store.Get(SpellTestServices.Bolt)!;
+                feature.System.Store = new SpellStore(feature.System.Store.All.Append(bolt with { Id = 9101, Name = "Shadow Bolt", Rank = "Rank 1" }), [], []);
+                Assert.True(feature.Spellbook.LearnSpell(player, 9101));
+                var snapshot = new ArcaneCore.Kernel.Characters.Pets.PersistentPetSnapshot((int)player.Guid.Low, 9102, Pets.PetTestServices.Entry, 1, 0,
+                    50, 30, 0, 1, [], [], Name: "Imp", NameTimestamp: 1, RenameAllowed: false);
+                Creature restored = session.Services.GetRequiredService<ArcaneCore.World.Pets.PetsFeature>().Service.RestoreCurrentPet(player, snapshot)!;
+                Assert.Null(restored.Combat.Victim);
+                player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+                return restored;
+            });
+
+            var helper = new PlayerbotCombatSpells(session);
+            var sent = new List<WorldOpcode>();
+            bool consumed = await host.World.InvokeAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(4);
+                session.ManagedDispatchObserver = sent.Add;
+                if (!outOfCombatPull) return helper.Update(session.Player!, target, 0);
+                helper.PullTarget = target;
+                return helper.UpdateOutOfCombat(session.Player!, 0);
+            });
+
+            Assert.Contains(WorldOpcode.CmsgPetAction, sent);
+            Assert.Same(target, await host.World.InvokeAsync(() => pet.Combat.Victim));
+            if (outOfCombatPull)
+            {
+                // Upkeep yields to the pull cast (the brain's combat think casts it next), so only the demon is sent here.
+                Assert.False(consumed);
+                return;
+            }
+
+            Assert.True(consumed);
+            Assert.Contains(WorldOpcode.CmsgCastSpell, sent);
+            await host.WaitForWorldAsync(() => target.Health < before, "the warlock's Shadow Bolt");
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+        }
+    }
+
     private static async Task<Creature> AddTargetAsync(WorldTestHost host, WorldSession session, float xOffset, uint low)
     {
         Creature target = null!;
