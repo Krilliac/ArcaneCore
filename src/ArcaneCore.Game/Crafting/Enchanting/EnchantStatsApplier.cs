@@ -29,7 +29,9 @@ public sealed class EnchantStatsApplier(IItemStatsApplier inner) : IItemStatsApp
         if (apply)
         {
             inner.Apply(player, item, slot, apply: true);
-            enchantments.Apply(item, apply: true);
+            // A temporary enchantment already counting down in the bags must keep that leftover.
+            // ApplyEnchantment would otherwise start again from the item field, which still holds the original duration.
+            enchantments.Apply(item, apply: true, keepRunningTimer: true);
         }
         else
         {

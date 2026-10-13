@@ -102,20 +102,25 @@ public sealed class PlayerEnchantments
     }
 
     /// <summary>vmangos <c>Player::ApplyEnchantment(Item*, bool)</c>: every slot of the item.</summary>
-    public void Apply(Item item, bool apply, bool applyDuration = true)
+    public void Apply(Item item, bool apply, bool applyDuration = true, bool keepRunningTimer = false)
     {
         ArgumentNullException.ThrowIfNull(item);
         for (int slot = 0; slot < EnchantSlots.Count; slot++)
         {
-            Apply(item, slot, apply, applyDuration);
+            Apply(item, slot, apply, applyDuration, keepRunningTimer);
         }
     }
 
     /// <summary>
     /// vmangos <c>Player::ApplyEnchantment(Item*, slot, apply, apply_dur)</c> (Player.cpp:11739-11884). Applying twice or removing what was not applied
     /// does nothing, so the pair stays balanced however the callers interleave.
+    /// <para>
+    /// <paramref name="keepRunningTimer"/> is the equip path. The item field keeps the duration from when the timer started (it is written back only
+    /// when the timer stops), and a bag item's timer keeps running, so reading that field on equip would hand the enchantment its full time again.
+    /// vmangos avoids that by <c>RemoveEnchantmentDurations</c> writing the leftover before the item is stored; here the running timer is the leftover.
+    /// </para>
     /// </summary>
-    public void Apply(Item item, int slot, bool apply, bool applyDuration = true)
+    public void Apply(Item item, int slot, bool apply, bool applyDuration = true, bool keepRunningTimer = false)
     {
         ArgumentNullException.ThrowIfNull(item);
         if (slot is < 0 or >= EnchantSlots.Count)
@@ -155,7 +160,7 @@ public sealed class PlayerEnchantments
             _player.SetUInt32(UpdateFields.PlayerVisibleItem10 + (item.Slot * VisibleItemStride) + 1 + slot, apply ? currentId : 0);
         }
 
-        if (applyDuration)
+        if (applyDuration && !(keepRunningTimer && apply && IsTracked(item, slot)))
         {
             AddDuration(item, slot, apply ? ItemEnchantments.Duration(item, slot) : 0, send: true);
         }
