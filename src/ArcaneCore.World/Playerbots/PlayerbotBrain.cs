@@ -266,17 +266,20 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>Stalls reported so far.</summary>
     internal int StallCount => _stall.Count;
 
-    /// <summary>Skips of a goal no walk reaches reported so far (<see cref="PlayerbotWorldDestinations.SkipUnreachable"/>, one per entry per window).</summary>
-    internal int UnreachableCount => _destinations.UnreachableReports;
-
     /// <summary>
-    /// The latest reported skip as the log line bot QA parses (<see cref="PlayerbotQaSignalParser"/>): the goal, what it names, where the bot
-    /// stood and the two region-graph components. Null before the first.
+    /// The skips of goals no walk reaches reported since the last call, each as the log line bot QA parses (<see cref="PlayerbotQaSignalParser"/>):
+    /// the goal held when it was met, what it names, where the bot stood and the two region-graph components. One think can skip several
+    /// entries; every one is returned (<see cref="PlayerbotWorldDestinations.TryTakeUnreachable"/>).
     /// </summary>
-    internal string? UnreachableReport => _destinations.LastUnreachable is { } skip
-        ? string.Create(CultureInfo.InvariantCulture,
-            $"goal unreachable on foot: goal={_goal} target={skip.Entry} quest={skip.Quest} at {skip.At.X:F1},{skip.At.Y:F1},{skip.At.Z:F1} map {skip.Map} components={skip.FromComponent}/{skip.ToComponent}")
-        : null;
+    internal IReadOnlyList<string> TakeUnreachableReports()
+    {
+        if (!_destinations.HasUnreachableReports) return [];
+        var lines = new List<string>();
+        while (_destinations.TryTakeUnreachable(out PlayerbotWorldDestinations.UnreachableSkip skip))
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"goal unreachable on foot: goal={skip.Goal} target={skip.Entry} quest={skip.Quest} at {skip.At.X:F1},{skip.At.Y:F1},{skip.At.Z:F1} map {skip.Map} components={skip.FromComponent}/{skip.ToComponent}"));
+        return lines;
+    }
 
     /// <summary>Context for the warning the QA log tap parses; no bot identity or issue-key fields are added.</summary>
     internal string QaReportContext(Player player, string report)
@@ -377,6 +380,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
         _destinations.SetQuestAside ??= _quests.SetAside;
         _destinations.TeleportToBind ??= TeleportToBindPointForQuest;
+        _destinations.GoalOf ??= () => _goal;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _town.Budget = _trainers.Budget = _riding.Budget = _budget; _economy.SpendBudget = _budget;
         _riding.Suspensions = _suspensions;

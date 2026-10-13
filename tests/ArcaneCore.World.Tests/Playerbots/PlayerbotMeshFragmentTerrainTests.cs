@@ -41,6 +41,16 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         {
             await using Terrain terrain = await StartWithGraphAsync(map, pin);
             Assert.Equal(fragment, await terrain.Host.OnWorldAsync(() => PlayerbotNavigation.IsOnMeshFragment(terrain.Player)));
+            // The numbers behind PlayerbotNavigation.FragmentPolygons (500): regions and polygons of the pin's component.
+            (int regions, int polygons) = await terrain.Host.OnWorldAsync(() =>
+            {
+                var nav = (NavMeshPathfinder)terrain.Player.Map!.Collision.Pathfinder;
+                NavRegionGraph graph = nav.RegionGraph(map, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+                int region = nav.RegionAt(graph, pin, new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true });
+                return (graph.ComponentSize(region), graph.ComponentPolygons(region));
+            });
+            output.WriteLine($"map {map} pin {pin}: component of {regions} regions, {polygons} polygons");
+            if (fragment) Assert.True(polygons <= PlayerbotNavigation.FragmentPolygons, $"{polygons} polygons");
         }
     }
 

@@ -62,6 +62,12 @@ internal static class PlayerbotQaClassifier
                 return new QaClassification(QaCause.ServerFault, "the server caught " + (s.ExceptionType.Length != 0 ? s.ExceptionType : "an exception") + " at its '"
                     + s.Goal + "' catch site and recovered; the frames below are where it was thrown", title);
 
+            case QaSignalKind.RunFailed:
+                return RunFailure(s, title);
+
+            case QaSignalKind.TickHang:
+                return new QaClassification(QaCause.ServerFault, "the world tick hung in its " + (s.Stage.Length != 0 ? s.Stage : "unknown") + " phase while running "
+                    + (s.Reason.Length != 0 ? s.Reason : "unknown work") + "; the watchdog's log line (event 7102) carries the durations and the slowest features", title);
             case QaSignalKind.UnreachableGoal:
                 return new QaClassification(QaCause.MissingData, string.Create(CultureInfo.InvariantCulture,
                     $"bots skipped target {s.Target} without walking: the walking navigation mesh (steep slopes excluded) does not join the ground they stood on to the goal's ({s.Detail}). A spawn on an island platform or beyond a mesh gap: check the spawn and the mesh there"), title);
@@ -83,6 +89,19 @@ internal static class PlayerbotQaClassifier
 
     private static string SpellPrefix(QaSignal s)
         => PlayerbotQaAggregator.SpellOf(s) + (s.EffectIndex >= 0 ? string.Create(CultureInfo.InvariantCulture, $" effect {s.EffectIndex} ({s.EffectName})") : string.Empty) + ": ";
+
+    private static QaClassification RunFailure(QaSignal s, string? title)
+    {
+        string where = (s.Detail.Length != 0 ? s.Detail : string.Create(CultureInfo.InvariantCulture, $"map {s.Map}"))
+            + (s.Segment > 0 ? string.Create(CultureInfo.InvariantCulture, $" wing {s.Segment}") : string.Empty) + " at " + (s.Stage.Length != 0 ? s.Stage : "an unknown stage");
+        return s.Reason switch
+        {
+            "wiped" => new QaClassification(QaCause.ContentDifficulty, "the group wiped out its allowed number of times in " + where, title),
+            "no-path-to-entrance" or "no-path-to-boss" => new QaClassification(QaCause.MissingData,
+                "the group found no walkable path in " + where + " (navigation data, or a door the walker cannot open)", title),
+            _ => new QaClassification(QaCause.Unknown, "the run ended with '" + s.Reason + "' in " + where, title),
+        };
+    }
 
     private static QaClassification Refusal(QaSignal s, string? title)
     {

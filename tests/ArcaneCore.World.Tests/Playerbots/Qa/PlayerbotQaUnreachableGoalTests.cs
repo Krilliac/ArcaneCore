@@ -17,8 +17,7 @@ public sealed class PlayerbotQaUnreachableGoalTests
     public void TheLoggedLine_IsParsedAsAnUnreachableGoal_WithNoBotIdentity()
     {
         var log = new ListLogger();
-        int logged = ManagedPlayerbotFeature.LogUnreachable(log, QaData.Bot1, "Ironwander", reports: 1, logged: 0, Report, qaContext: null);
-        Assert.Equal(1, logged);
+        ManagedPlayerbotFeature.LogUnreachable(log, QaData.Bot1, "Ironwander", Report, qaContext: null);
 
         QaSignal s = QaData.Parse(Assert.Single(log.Entries).Message);
         Assert.Equal(QaSignalKind.UnreachableGoal, s.Kind);
@@ -31,15 +30,6 @@ public sealed class PlayerbotQaUnreachableGoalTests
         Assert.DoesNotContain("Ironwander", s.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(QaData.Bot1.ToString(), s.Message, StringComparison.Ordinal);
         Assert.StartsWith("Playerbot <bot> goal unreachable on foot: goal=Quest target=6747", s.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void ALineAlreadyLogged_OrNoReport_IsNotLoggedAgain()
-    {
-        var log = new ListLogger();
-        Assert.Equal(2, ManagedPlayerbotFeature.LogUnreachable(log, QaData.Bot1, "x", reports: 2, logged: 2, Report, null));
-        Assert.Equal(0, ManagedPlayerbotFeature.LogUnreachable(log, QaData.Bot1, "x", reports: 1, logged: 0, report: null, null));
-        Assert.Empty(log.Entries);
     }
 
     [Fact]

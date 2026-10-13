@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Npc;
@@ -43,6 +44,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     private QaSpellCoverageReport? _coverage;
     private WorldRuntime? _world;
     private PlayerbotQaFaultFeed? _faultFeed;
+    private System.Diagnostics.Metrics.Meter? _findingsMeter;
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
     internal Func<string, string?>? EnvironmentReader { get; init; }
@@ -63,6 +65,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
     /// <summary>When this process attached QA: a finding last seen before it was not met by the current build (the views sink it as stale).</summary>
     internal DateTime StartedUtc { get; private set; } = DateTime.MaxValue;
+
+    /// <summary>The build this process runs, which stamps every occurrence and every report (test seam: a test may give another).</summary>
+    internal string Build { get; init; } = PlayerbotQaIssueComposer.BuildVersion();
 
     internal PlayerbotQaAggregator? Aggregator { get; private set; }
 
@@ -109,12 +114,12 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             }
         }
 
-        var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt, options.StaleHours > 0 ? TimeSpan.FromHours(options.StaleHours) : null, _log);
+        var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt, options.StaleHours > 0 ? TimeSpan.FromHours(options.StaleHours) : null, _log, Build);
         _facts = new PlayerbotQaContentFacts(services);
-        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time);
+        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time, Build);
         if (saved is not null)
         {
-            int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed, saved.Tombstones), Now);
+            int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed, saved.Tombstones, saved.Builds, saved.EvictedBuilds), Now);
             _publisher.Ledger.Restore(saved.Ledger);
             _log.LogInformation("Bot QA restored {Count} findings from {Path} ({Dropped} invalid or over the cap, {Aged} aged out, {Merged} merged into another, {Issues} issues of merged findings to close as duplicates)",
                 aggregator.Count, _store.FilePath, dropped, aggregator.AgedOut, aggregator.Merged, aggregator.PendingDuplicates().Count);
@@ -131,6 +136,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         }
 
         Aggregator = aggregator;
+        if (services.GetService<MetricsOptions>() is { Enabled: true }) _findingsMeter = PlayerbotQaMeters.RegisterFindings(aggregator.Snapshot, this);
         if (services.GetService<IOpsAnnouncer>() is { } announcer)
         {
             aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view);
@@ -153,6 +159,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     public async Task StopAsync()
     {
         if (Aggregator is null) return;
+        _findingsMeter?.Dispose();
         await _cts.CancelAsync().ConfigureAwait(false);
         try
         {
@@ -207,7 +214,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             {
                 try
                 {
-                    Aggregator.Ingest(signal, _facts, now);
+                    if (Aggregator.Ingest(signal, _facts, now) is not null && !signal.FromCoverage) PlayerbotQaMeters.CountOccurrences(signal.Kind, signal.Occurrences);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
@@ -234,7 +241,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         {
             try
             {
-                Aggregator.Ingest(signal, _facts, now);
+                if (Aggregator.Ingest(signal, _facts, now) is not null) PlayerbotQaMeters.CountOccurrences(signal.Kind, signal.Occurrences);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -382,7 +389,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             QaAggregatorState state = Aggregator.Export();
             _store.Save(new QaStoreFile
             {
-                SaltBase64 = Convert.ToBase64String(Aggregator.Salt), Findings = state.Findings, Bots = state.Bots, Absorbed = state.Absorbed ?? [], Tombstones = state.Tombstones ?? [], Ledger = _publisher.Ledger.Export(),
+                SaltBase64 = Convert.ToBase64String(Aggregator.Salt), Findings = state.Findings, Bots = state.Bots, Absorbed = state.Absorbed ?? [], Tombstones = state.Tombstones ?? [], Builds = state.Builds ?? [], EvictedBuilds = state.EvictedBuilds ?? [], Ledger = _publisher.Ledger.Export(),
             });
         }
     }
@@ -392,7 +399,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         if (Aggregator is null) return;
         IReadOnlyList<QaFindingView> findings = Aggregator.Snapshot();
         DateTime now = Now;
-        string build = PlayerbotQaIssueComposer.BuildVersion();
+        string build = Build;
         try
         {
             System.IO.Directory.CreateDirectory(_directory);

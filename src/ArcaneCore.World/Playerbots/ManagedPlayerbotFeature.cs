@@ -1384,25 +1384,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     ? active.Brain.QaReportContext(driven, report) : null,
                 awaitRelease);
             if (sharedLogged) active.Brain.SharedSetAside = null;
-            string? skipped = active.Brain.UnreachableReport;
-            active.UnreachableLogged = LogUnreachable(logger, active.Record.BotId, active.Name, active.Brain.UnreachableCount, active.UnreachableLogged,
-                skipped, skipped is null ? null : active.Brain.QaReportContext(driven, skipped));
+            foreach (string skipped in active.Brain.TakeUnreachableReports())
+                LogUnreachable(logger, active.Record.BotId, active.Name, skipped, active.Brain.QaReportContext(driven, skipped));
             return "brain";
         }
     }
 
     /// <summary>
     /// The warning of a goal a bot skipped for lying where no walk reaches (PlayerbotWorldDestinations.SkipUnreachable; bot QA parses it as
-    /// <c>QaSignalKind.UnreachableGoal</c>): once per report (<paramref name="reports"/> moved past <paramref name="logged"/>), and the
-    /// destinations report each entry once per window, so a bot meeting the same spawn every think writes one line, not thousands.
-    /// Returns the reports now logged.
+    /// <c>QaSignalKind.UnreachableGoal</c>). The destinations report each entry once per window and queue every report of a think, so
+    /// each skip is logged exactly once, none lost to a later one.
     /// </summary>
-    internal static int LogUnreachable(ILogger logger, Guid botId, string name, int reports, int logged, string? report, string? qaContext)
-    {
-        if (reports == logged || report is null) return logged;
-        logger.LogWarning("Playerbot {BotId} ({Name}) {Report}", botId, name, report + qaContext);
-        return reports;
-    }
+    internal static void LogUnreachable(ILogger logger, Guid botId, string name, string report, string? qaContext)
+        => logger.LogWarning("Playerbot {BotId} ({Name}) {Report}", botId, name, report + qaContext);
 
     /// <summary>
     /// The warnings of a bot's stall (bot QA parses them, PlayerbotQaSignalParser): a new stall once (<paramref name="stallCount"/> moved
@@ -1977,7 +1971,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public IPlayerbotController? Controller;
         public string? FaultCode;
         public int StallsLogged;
-        public int UnreachableLogged;
         public PlayerbotStatus? Status; // world thread: the last status line (StatusOf)
         private string? _stallSource;
         private string? _stallCode;

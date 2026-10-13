@@ -64,6 +64,9 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_announce_total{category,severity,outcome,staff_direct}` | counter | operational announcements and what became of each (`sent`, `disabled`, `below_minimum`, `off`, `staff_direct`, `rate_limited`, `duplicate`); `staff_direct` is true when the caller sent the staff line itself (Warden, anti-cheat), and the outcome `staff_direct` means the staff were told directly and there was no world line to send |
 | `arcanecore_faults_distinct` | gauge | distinct fault signatures in the ledger (reset by `.server faults reset`) |
 | `arcanecore_invariant_failures_total` | counter | failed `Invariant.Assert`/`Check` calls since start |
+| `arcanecore_botqa_findings{kind,state}` | gauge | bot QA findings held, per finding kind (the slug of its GitHub label, e.g. `run-failed`, `tick-hang`) and publication state (`pending`, `dryrun`, `published`, `knownclosed`, `failed`); every combination is exported, zeros included. Registered only with `Ops:Metrics:Enabled` and QA enabled (docs/areas/playbots-qa.md) |
+| `arcanecore_botqa_occurrences_total{kind}` | counter | occurrences folded into bot QA findings, per kind (a polled server fault counts its new occurrences; the start-up spell coverage counts none) |
+| `arcanecore_playerbot_runs_total{outcome}` | counter | dungeon and raid runs that ended, when their group disbands: `outcome` = `completed`, `given_up`, `timeout` (the run ended on a reason ending in `timeout`: gather, travel, enter, regroup or run step; operator stops are `given_up`) |
 | `arcanecore_gc_collections_total{generation}` | counter | `GC.CollectionCount` |
 | `arcanecore_gc_heap_size_bytes`, `arcanecore_gc_allocated_bytes_total`, `arcanecore_gc_pause_time_seconds_total` | gauge/counter | GC and allocation |
 | `arcanecore_threadpool_queue_length`, `arcanecore_process_working_set_bytes` | gauge | runtime |

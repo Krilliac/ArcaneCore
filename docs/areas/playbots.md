@@ -149,12 +149,16 @@ which is exact and needs no path search.
   quest's return): after the tram, lift and taxi trips were tried, a spawn whose region is in another component than the bot's (walking
   graph, steep slopes excluded) and that stands outdoors (an indoor goal may be climbed to over steep stairs, `TryClimbIndoors`) is skipped
   without a path query, and the next spawn is judged in the same think. The answer is true only for a bot on a large part (its own
-  component has more than `FragmentRegions` regions), outdoors, and on a walking region; a fragment bot, an indoor bot or one on steep
-  ground gets false, so `PlanToward`'s own escapes (`TryLeaveSteepGround`, `FromBeside`, the fragment hop, the stall path) run. With no
-  other spawn of the entry left, the entry is set aside; the quest follows only when no other objective of it is left, and neither counts
-  towards abandoning the quest (`SuspendQuest(..., countsAsSetAside: false)`). Every other planner caller plans as before.
+  component is not a fragment: more than `FragmentRegions` regions or more than `FragmentPolygons` polygons), and outdoors; a fragment bot
+  or an indoor bot gets false, so `PlanToward`'s own escapes (`TryLeaveSteepGround`, `FromBeside`, the fragment hop, the stall path) run.
+  A bot on steep ground is not told apart: the region lookup snaps it to a walking region within about 3 yards (horizontally, or just above
+  or below) and it is judged from that region; with none in reach the answer is false. With no other spawn of the entry left, the entry
+  is set aside. The quest follows only when none of its open objectives (creature, game object, item, as the bot's quest log has them)
+  can still be served: for a hunted objective the quests of the log that the entry serves (as a creature objective or an item's dropper)
+  are judged, for a giver or ender trip the quest of the trip. Neither counts towards abandoning the quest (`SuspendQuest(..., countsAsSetAside: false)`). Every other planner caller plans as before.
 - **The skip is reported**: one warning per entry and bot per 600 seconds, `Playerbot <id> (<name>) goal unreachable on foot: goal=G
-  target=T quest=Q at x,y,z map M components=a/b` (`ManagedPlayerbotFeature.LogUnreachable`). Bot QA parses it as its own kind,
+  target=T quest=Q at x,y,z map M components=a/b` (`ManagedPlayerbotFeature.LogUnreachable`); the goal is the one held when the skip was
+  met, and every skip of one think is queued (at most 8 waiting) and logged. Bot QA parses it as its own kind,
   `UnreachableGoal` (label `unreachable goal`, cause `MissingData`), keyed by goal, quest and target, never by the bot's place; the stall
   detector and its bounds are untouched.
 - **Fragment escape** (every `TryPlanToward` caller, asked only when a plan toward a goal farther than 60 yards is refused or only a route

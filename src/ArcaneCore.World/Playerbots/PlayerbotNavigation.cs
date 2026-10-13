@@ -349,7 +349,8 @@ internal static class PlayerbotNavigation
 
     /// <summary>
     /// A fragment is also small in area: a component of at most <see cref="FragmentRegions"/> regions that holds more polygons than this
-    /// is a real place (a plaza of three regions), not a sliver. The ridge pocket is some tens of polygons, a town thousands.
+    /// is a real place (a plaza of three regions), not a sliver. The ridge pocket is 26 polygons (3 regions) and the Ironforge sliver is
+    /// 2 polygons (1 region); the main continents are 563,799 and 1,457,700 polygons (<c>PlayerbotMeshFragmentTerrainTests</c>).
     /// </summary>
     internal const int FragmentPolygons = 500;
 
@@ -450,10 +451,12 @@ internal static class PlayerbotNavigation
         if (from < 0 || to < 0) return false;
         fromComponent = graph.ComponentOf(from);
         toComponent = graph.ComponentOf(to);
-        // Only a bot on a large walkable part may call a goal unreachable: on a fragment, indoors or on a steep patch the bot's own
-        // component says nothing about the world, and PlanToward's escapes (TryLeaveSteepGround, FromBeside, TryFragmentHop, the
-        // indoor climb) must run first. A bot on a steep patch has no walking region within the lookup's reach (from < 0, false above) or\n        // a small component; the lookup is the graph's, so the answer costs no path search.
-        return fromComponent != toComponent && graph.ComponentSize(from) > FragmentRegions
+        // Only a bot on a large walkable part may call a goal unreachable: on a fragment or indoors the bot's own component says nothing
+        // about the world, and PlanToward's escapes (TryLeaveSteepGround, FromBeside, TryFragmentHop, the indoor climb) must run first.
+        // A bot on steep ground is not told apart: the lookup snaps it to a walking region within a few yards (horizontally, or just above
+        // or below), and it is judged from that region; one with none in reach has from < 0 and gets false above. The lookup is the
+        // graph's, so the answer costs no path search.
+        return fromComponent != toComponent && !IsFragment(graph, from)
             && map.Collision.IsOutdoors(goal.X, goal.Y, goal.Z + 1f)
             && map.Collision.IsOutdoors(here.X, here.Y, here.Z + 1f);
     }

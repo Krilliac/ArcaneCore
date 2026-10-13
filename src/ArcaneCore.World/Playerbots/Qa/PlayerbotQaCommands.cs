@@ -92,7 +92,7 @@ public sealed class PlayerbotQaCommands : ICommandExtension
             return true;
         }
 
-        foreach (string line in PlayerbotQaReport.ChatShow(finding!, feature.Redactor)) context.Reply(line);
+        foreach (string line in PlayerbotQaReport.ChatShow(finding!, feature.Redactor, feature.Build)) context.Reply(line);
         return true;
     }
 

@@ -16324,6 +16324,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Qa:GitHub:ReopenOnRegression",
+      "section": "World:Playerbots:Qa",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Reopen a closed issue, with one comment (the new build, the occurrences on it, the distinct bots and a sample), when its finding recurs on a build other than the one it was observed closed on (a regression; a recurrence on the same build is a person's won't-fix and is left alone). Acts only while publishing is on, under the comment cap; never closes anything.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Qa:GitHub:Repository",
       "section": "World:Playerbots:Qa",
       "type": "string",
@@ -16450,6 +16466,22 @@
       "daemons": "World",
       "reload": "start",
       "meaning": "Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Qa:TickHangWarmupMinutes",
+      "section": "World:Playerbots:Qa",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "5",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbotsqa",
       "isCollection": false

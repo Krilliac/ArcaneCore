@@ -2,6 +2,8 @@ using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -101,8 +103,10 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         Assert.Equal(0, searches);
         Assert.True(destinations.Suspensions!.IsEntrySuspended(6, world.Host.World.NowMs));
         Assert.Equal(1, destinations.UnreachableReports);
-        Assert.Equal(6u, destinations.LastUnreachable!.Value.Entry);
-        Assert.NotEqual(destinations.LastUnreachable.Value.FromComponent, destinations.LastUnreachable.Value.ToComponent);
+        Assert.True(destinations.TryTakeUnreachable(out PlayerbotWorldDestinations.UnreachableSkip skip));
+        Assert.Equal(6u, skip.Entry);
+        Assert.NotEqual(skip.FromComponent, skip.ToComponent);
+        Assert.False(destinations.HasUnreachableReports);
 
         // The same entry met again inside the window is skipped but not reported again; past the window it is.
         uint now = world.Host.World.NowMs;
@@ -111,6 +115,48 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         Assert.True(await world.Host.OnWorldAsync(() =>
             destinations.SkipUnreachable(world.Player, 6, 20001, UnreachableSpawn, 0, now + PlayerbotWorldDestinations.UnreachableReportMs + 1, returning: false, out _)));
         Assert.Equal(2, destinations.UnreachableReports);
+    }
+
+    /// <summary>One think can skip several entries: each is queued with the goal held at that moment and none is lost to a later one; a full queue marks nothing reported.</summary>
+    [Fact]
+    public async Task SeveralEntriesSkippedInOneThink_AreAllReported_WithTheGoalHeldThen()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        PlayerbotWorldDestinations destinations = DestinationsOf(world);
+        PlayerbotGoalKind goal = PlayerbotGoalKind.Grind;
+        destinations.GoalOf = () => goal;
+        await world.Host.OnWorldAsync(() =>
+        {
+            Assert.True(destinations.SkipUnreachable(world.Player, 6, 20001, UnreachableSpawn, 0, 1_000, returning: false, out _));
+            goal = PlayerbotGoalKind.Quest; // the goal changes before the lines are written
+            Assert.True(destinations.SkipUnreachable(world.Player, 7, 20002, UnreachableSpawn, 55, 1_000, returning: false, out _));
+            return true;
+        });
+        Assert.Equal(2, destinations.UnreachableReports);
+        Assert.True(destinations.TryTakeUnreachable(out PlayerbotWorldDestinations.UnreachableSkip first));
+        Assert.True(destinations.TryTakeUnreachable(out PlayerbotWorldDestinations.UnreachableSkip second));
+        Assert.False(destinations.TryTakeUnreachable(out _));
+        Assert.Equal((6u, PlayerbotGoalKind.Grind), (first.Entry, first.Goal));
+        Assert.Equal((7u, PlayerbotGoalKind.Quest, 55u), (second.Entry, second.Goal, second.Quest));
+
+        // More entries than the queue holds: the extra ones are not marked reported and are reported once the queue is drained.
+        await world.Host.OnWorldAsync(() =>
+        {
+            for (uint entry = 100; entry < 100 + PlayerbotWorldDestinations.MaxPendingReports + 2; entry++)
+                Assert.True(destinations.SkipUnreachable(world.Player, entry, 30000 + entry, UnreachableSpawn, 0, 2_000, returning: false, out _));
+            return true;
+        });
+        Assert.Equal(2 + PlayerbotWorldDestinations.MaxPendingReports, destinations.UnreachableReports);
+        while (destinations.TryTakeUnreachable(out _)) { }
+        await world.Host.OnWorldAsync(() =>
+        {
+            for (uint entry = 100; entry < 100 + PlayerbotWorldDestinations.MaxPendingReports + 2; entry++)
+                destinations.SkipUnreachable(world.Player, entry, 30000 + entry, UnreachableSpawn, 0, 2_500, returning: false, out _);
+            return true;
+        });
+        Assert.Equal(2 + PlayerbotWorldDestinations.MaxPendingReports + 2, destinations.UnreachableReports);
     }
 
     [Fact]
@@ -128,15 +174,56 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
             "the control: the same call outside a return is a skip");
     }
 
+    private static Quest QuestOf(int creature1, uint count1, int creature2, uint count2, uint item, uint itemCount)
+        => new(new QuestTemplate
+        {
+            Entry = 77, Title = "t", ReqCreatureOrGOId1 = creature1, ReqCreatureOrGOCount1 = count1, ReqCreatureOrGOId2 = creature2, ReqCreatureOrGOCount2 = count2,
+            ReqItemId1 = item, ReqItemCount1 = itemCount,
+        });
+
+    private static bool Other(Quest quest, QuestStatusData status, uint skipped, Func<uint, bool>? suspended = null, uint held = 0, uint[]? droppers = null)
+        => PlayerbotQuestObjectives.HasOtherOpenObjective(quest, status, skipped, suspended ?? (_ => false), _ => held, _ => droppers);
+
+    /// <summary>The quest's own open objectives decide (creature, game object and item), whether the bot hunts or travels.</summary>
+    [Fact]
+    public void TheOtherOpenObjectives_OfAQuest_AreReadFromTheQuestAndTheBotsProgress()
+    {
+        QuestStatusData status = new() { Status = QuestStatus.Incomplete };
+        Quest two = QuestOf(100, 2, 200, 1, 0, 0);
+        Assert.True(Other(two, status, 100), "creature 200 is still to kill");
+        Assert.False(Other(two, status, 100, suspended: e => e == 200), "creature 200 is set aside too");
+        status.CreatureOrGOCount[1] = 1;
+        Assert.False(Other(two, status, 100), "creature 200 is done: 100 was the last open objective");
+        Assert.True(Other(two, status, 200), "100 is still open");
+
+        Assert.True(Other(QuestOf(100, 2, -5001, 1, 0, 0), new QuestStatusData(), 100), "an open game object objective");
+
+        Quest item = QuestOf(100, 1, 0, 0, 5000, 3);
+        status = new QuestStatusData { Status = QuestStatus.Incomplete };
+        status.CreatureOrGOCount[0] = 1;
+        Assert.True(Other(item, status, 100, held: 0, droppers: null), "an item with no known creature source is still open");
+        Assert.True(Other(item, status, 100, held: 0, droppers: [100, 300]), "another creature drops the item");
+        Assert.False(Other(item, status, 100, suspended: e => e == 300, held: 0, droppers: [100, 300]), "the other dropper is set aside");
+        Assert.False(Other(item, status, 100, held: 3, droppers: [100, 300]), "the item is in the bag");
+
+        Assert.True(PlayerbotQuestObjectives.Serves(item, new QuestStatusData(), 100, _ => 0, _ => null));
+        Assert.True(PlayerbotQuestObjectives.Serves(item, status, 300, _ => 0, _ => (uint[])[100, 300]));
+        Assert.False(PlayerbotQuestObjectives.Serves(item, status, 300, _ => 3, _ => (uint[])[100, 300]), "the item is in the bag");
+        Assert.False(PlayerbotQuestObjectives.Serves(two, status, 999, _ => 0, _ => null));
+    }
+
     [Fact]
     public async Task TheQuestFollowsItsLastEntry_OnlyWithoutAnotherObjective_AndNeverCountsTowardsAbandoning()
     {
         await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
         PlayerbotWorldDestinations destinations = DestinationsOf(world);
         PlayerbotSuspensions suspensions = destinations.Suspensions!;
-        destinations.SetQuestAsideUnreachable(77, 1_000, questHasOtherObjective: true);
-        Assert.False(suspensions.IsQuestSuspended(77, 1_001));
-        for (int i = 0; i < 2 * PlayerbotSuspensions.MaxReturnSetAsides; i++) destinations.SetQuestAsideUnreachable(77, 1_000, questHasOtherObjective: false);
+        QuestStatusData status = new() { Status = QuestStatus.Incomplete };
+        Quest quest = QuestOf(100, 2, 200, 1, 0, 0);
+        destinations.SetQuestAsideUnreachable(77, 1_000, Other(quest, status, 100));
+        Assert.False(suspensions.IsQuestSuspended(77, 1_001), "creature 200 is still to kill");
+        status.CreatureOrGOCount[1] = 1;
+        for (int i = 0; i < 2 * PlayerbotSuspensions.MaxReturnSetAsides; i++) destinations.SetQuestAsideUnreachable(77, 1_000, Other(quest, status, 100));
         Assert.True(suspensions.IsQuestSuspended(77, 1_001));
         Assert.Equal(0, suspensions.QuestSetAsideCount(77));
     }
