@@ -170,9 +170,12 @@ public sealed class SocialFeature(
     }
 
     /// <summary>
-    /// Guild, officer, party, raid and channel chat (vmangos HandleMessagechatOpcode). Group
-    /// chat is Universal on two-side group realms; guild and officer chat are always Universal
-    /// (addon messages keep the addon language).
+    /// Guild, officer, party, raid and channel chat (vmangos HandleMessagechatOpcode).
+    /// Party and raid become Universal only when two-side groups are on, guild and officer
+    /// only when two-side guilds are on. That conversion is applied before
+    /// SPELL_AURA_MOD_LANGUAGE, which then overwrites it; <see cref="ChatHandlers"/> has
+    /// already applied the aura, so a live one is left as the language the line is heard in.
+    /// Addon lines keep the addon language.
     /// </summary>
     public bool TryHandle(WorldSession session, Player player, ClientChatMessage message)
     {
@@ -180,7 +183,7 @@ public sealed class SocialFeature(
         {
             case ChatType.Party or ChatType.Raid or ChatType.RaidLeader or ChatType.RaidWarning:
             {
-                Language language = message.Language != Language.Addon && Options.AllowTwoSideGroup ? Language.Universal : message.Language;
+                Language language = HeardLanguage(session, player, message.Language, Options.AllowTwoSideGroup);
                 byte[] packet = ChatPackets.BuildMessage(message.Type, language, player.Guid, message.Text, player.ChatTag);
                 Context.Groups.BroadcastChat(player, message.Type, packet);
                 return true;
@@ -188,7 +191,7 @@ public sealed class SocialFeature(
 
             case ChatType.Guild or ChatType.Officer:
             {
-                Language language = message.Language == Language.Addon ? Language.Addon : Language.Universal;
+                Language language = HeardLanguage(session, player, message.Language, Options.AllowTwoSideGuild);
                 byte[] packet = ChatPackets.BuildMessage(message.Type, language, player.Guid, message.Text, player.ChatTag);
                 Context.Guilds.BroadcastChat(player, message.Type == ChatType.Officer, packet);
                 return true;
@@ -201,6 +204,27 @@ public sealed class SocialFeature(
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// vmangos HandleChatMessageOpcode (the non-GM branch): a cross-faction channel of this kind
+    /// is spoken in Universal, unless a MOD_LANGUAGE aura is forcing the tongue. The aura wins
+    /// because the reference overwrites the Universal conversion with the first such aura.
+    /// </summary>
+    private static Language HeardLanguage(WorldSession session, Player player, Language spoken, bool crossFaction)
+    {
+        if (spoken == Language.Addon || !crossFaction)
+        {
+            return spoken;
+        }
+
+        if (session.Services.GetService<SpellFeature>()?.System is { } spells
+            && ArcaneCore.Game.Chat.ChatLanguageQueries.ModLanguageOverride(spells, player) is not null)
+        {
+            return spoken;
+        }
+
+        return Language.Universal;
     }
 
     /// <summary>Stop background reads and timers, then drain writes before the provider is disposed.</summary>

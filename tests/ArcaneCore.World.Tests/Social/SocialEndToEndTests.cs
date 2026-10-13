@@ -99,7 +99,8 @@ public sealed class SocialEndToEndTests
 
         await player.SendChatAsync(ChatType.Guild, Language.Common, "welcome");
         ChatMessage heard = await gm.ReadChatAsync();
-        Assert.Equal((ChatType.Guild, Language.Universal, 2ul, "welcome"), (heard.Type, heard.Language, heard.Sender, heard.Text));
+        // Same-faction guild chat keeps the spoken language (vmangos converts to Universal only when two-side guilds are on).
+        Assert.Equal((ChatType.Guild, Language.Common, 2ul, "welcome"), (heard.Type, heard.Language, heard.Sender, heard.Text));
 
         await player.SendAsync(WorldOpcode.CmsgGuildRoster, []);
         byte[] roster = await player.ReadUntilAsync(WorldOpcode.SmsgGuildRoster);
