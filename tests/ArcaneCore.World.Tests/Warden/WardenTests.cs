@@ -305,6 +305,37 @@ public sealed class WardenTests
         Assert.Equal(request.Length, p);
     }
 
+    /// <summary>
+    /// vmangos type 2 is FIND_MEM_IMAGE_CODE_BY_HASH (executable images only) and type 3 is FIND_CODE_BY_HASH (every committed
+    /// page). Trinity's table for this module names those the other way around: 0xBF (PAGE_CHECK_B) is the MZ+PE image scan and
+    /// 0xB2 (PAGE_CHECK_A) is every page. A type-2 row must not go out as the all-pages opcode.
+    /// </summary>
+    [Fact]
+    public void AnImageScan_UsesTheMzPeOpcode_AndAnAllPagesScan_UsesTheOther()
+    {
+        WardenCheckRow[] rows =
+        [
+            new() { Id = 2, Type = 2, Data = "AA", Address = 1, Result = "0", BuildMin = 5875, BuildMax = 5875 },
+            new() { Id = 3, Type = 3, Data = "BB", Address = 2, Result = "1", BuildMin = 5875, BuildMax = 5875 },
+        ];
+        List<WardenCheckOptions> checks = WardenCheckRows.Merge(rows, [], 5875);
+        Assert.Equal([WardenCheckKind.PageA, WardenCheckKind.PageB], checks.Select(c => c.Kind));
+
+        var rig = new Rig(Scans([.. checks]));
+        rig.Handshake();
+        rig.Warden.Update(10_000);
+        byte[] request = rig.Next();
+        byte x = WardenModuleProfile.XorByte;
+
+        // No string table. Each page scan is opcode, seed, HMAC-SHA1, address, length (30 bytes).
+        Assert.Equal(63, request.Length);
+        Assert.Equal((byte)WardenServerCommand.CheatChecksRequest, request[0]);
+        Assert.Equal(0, request[1]);
+        Assert.Equal((byte)(0xBF ^ x), request[2]);
+        Assert.Equal((byte)(0xB2 ^ x), request[32]);
+        Assert.Equal(x, request[^1]);
+    }
+
     [Fact]
     public void AMatchingReply_PassesAndSchedulesTheNextScan_AMismatchCallsTheConfiguredAction()
     {
