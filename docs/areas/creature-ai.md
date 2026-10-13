@@ -245,7 +245,8 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   buttons toggle, buttons and spell foci fire their linked trap, traps cast at the user, `GameObjectMapSystem.UseByUnit`; with
   COMMAND_ADDITIONAL the object plays custom animation datalong), 15 CAST_SPELL
   (datalong or a dataint at random; datalong2 bit 0x01 triggered; COMMAND_ADDITIONAL casts without a target), 18 DESPAWN_SELF
-  (temporary creatures, after datalong ms), 21 SET_ACTIVEOBJECT (nothing to do here), 25 SET_RUN (script moves run, and the client is
+  (the target creature, else the source, after datalong ms, through `ForcedDespawn`: a database spawn dies without loot and
+  respawns after its delay, a temporary creature is removed), 21 SET_ACTIVEOBJECT (nothing to do here), 25 SET_RUN (script moves run, and the client is
   told), 28 STAND_STATE, 29 MODIFY_NPC_FLAGS (datalong2 0 remove, 1 add, 2 toggle: the code, not the header comment), 31
   TERMINATE_SCRIPT (npc entry datalong within datalong2 yd, else the step's buddy; COMMAND_ADDITIONAL inverts), 32 PAUSE_WAYPOINTS
   (MotionMaster::PauseWaypoints(0)/UnpauseWaypoints: the waypoint generator stops and later sets off for the same node), 36 SET_FACING
@@ -269,8 +270,7 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   and its target, so a command that only needed the target acted; it no longer does.
 - **Not carried out** (skipped and reported once per relay id): every other command, the data flags BUDDY_IS_PET, BUDDY_BY_POOL,
   BUDDY_BY_SPAWN_GROUP and BUDDY_BY_STRING_ID, a player as the speaker, emoter, mover or caster, the MOVE_TO teleport, speed and forced
-  movement, DESPAWN_SELF of a database spawn (no forced despawn with a respawn timer exists), TERMINATE_SCRIPT by pool and its waypoint
-  pause adjustment, TEMP_SPAWN_CREATURE's spawn data template (dataint4), ACTIVATE_OBJECT of the player-only object types (chests,
+  movement, TERMINATE_SCRIPT by pool and its waypoint pause adjustment, TEMP_SPAWN_CREATURE's spawn data template (dataint4), ACTIVATE_OBJECT of the player-only object types (chests,
   goobers, quest givers, chairs), MOVEMENT's `waypoint_path` origin (datalong3 bit 0x2) and the passed target itself (the path runs, but
   no waypoint script sees the target),
   formations and the path, linear and fall types, and SEND_AI_EVENT's delayed form (relays have no delay argument). The commands the 109 relays reached
