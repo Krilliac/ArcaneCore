@@ -8,6 +8,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
@@ -180,6 +181,27 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
         }
 
         UpdateBuffTraps();
+        UpdateSpiritGuides();
+    }
+
+    /// <summary>
+    /// vmangos npc_spirit_guideAI::UpdateAI (scripts/battlegrounds/battleground.cpp:58-71): a living spirit guide that is not channelling
+    /// starts Spirit Heal Channel (22011) again, whose end resurrects the dead around it that wait for it (Spirit Heal, 22012).
+    /// </summary>
+    private void UpdateSpiritGuides()
+    {
+        if (_creatures is null || Spells is not { } spells)
+        {
+            return;
+        }
+
+        foreach (Creature guide in _creatures.Creatures.ToArray())
+        {
+            if ((guide.NpcFlags & (uint)NpcFlags.SpiritGuide) != 0 && guide.IsInWorld && guide.IsAlive && !spells.IsChanneling(guide))
+            {
+                spells.CastSpell(guide, BattlegroundConstants.SpellSpiritHealChannel, SpellCastTargets.ForSelf(), triggered: false);
+            }
+        }
     }
 
     // ---- the spawn gate (vmangos BattleGround::OnObjectDBLoad / CanBeSpawned) ----

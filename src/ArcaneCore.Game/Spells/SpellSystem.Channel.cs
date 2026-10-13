@@ -22,4 +22,14 @@ public sealed partial class SpellSystem
         Finish(cast);
         return true;
     }
+
+    /// <summary>
+    /// The time left on <paramref name="unit"/>'s running channel in milliseconds, 0 when it is not channelling (vmangos
+    /// <c>GetCurrentSpell(CURRENT_CHANNELED_SPELL)->GetCastedTime()</c>, the channel's m_timer).
+    /// </summary>
+    public uint ChannelRemainingMs(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return GetState(unit.Guid)?.CurrentCast is { State: SpellCastState.Casting } cast ? (uint)Math.Max(0, cast.Timer) : 0;
+    }
 }

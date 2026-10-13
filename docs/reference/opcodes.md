@@ -742,8 +742,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_FORCE_TURN_RATE_CHANGE_ACK` | `0x02DF` | handled | — | — |
 | `MSG_PVP_LOG_DATA` | `0x02E0` | handled | 4 | decoded |
 | `CMSG_LEAVE_BATTLEFIELD` | `0x02E1` | handled | — | — |
-| `CMSG_AREA_SPIRIT_HEALER_QUERY` | `0x02E2` | unhandled | — | — |
-| `CMSG_AREA_SPIRIT_HEALER_QUEUE` | `0x02E3` | unhandled | — | — |
+| `CMSG_AREA_SPIRIT_HEALER_QUERY` | `0x02E2` | handled | — | — |
+| `CMSG_AREA_SPIRIT_HEALER_QUEUE` | `0x02E3` | handled | — | — |
 | `SMSG_AREA_SPIRIT_HEALER_TIME` | `0x02E4` | — | 0 | — |
 | `CMSG_GM_UNTEACH` | `0x02E5` | unhandled | — | — |
 | `SMSG_WARDEN_DATA` | `0x02E6` | — | 0 | — |
