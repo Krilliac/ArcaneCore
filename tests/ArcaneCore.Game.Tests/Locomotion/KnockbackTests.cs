@@ -174,10 +174,37 @@ public sealed class KnockbackTests
     {
         using var kit = Kit();
         (Player caster, Player target, FakeSession targetSession, _, _) = Setup(kit, targetX: 6, targetY: 0);
+        caster.SetFloat(UpdateFields.UnitFieldBoundingradius, 0.4f);
+        target.SetFloat(UpdateFields.UnitFieldBoundingradius, 1.1f);
 
         kit.System.CastSpell(caster, Pull, SpellCastTargets.ForUnit(target.Guid), triggered: true);
 
-        Assert.Equal(KnockbackPackets.BuildOrder(target.Guid.Value, 0, new KnockbackInfo(1f, 0f, -6f, -4f)), Assert.Single(Of(targetSession, WorldOpcode.SmsgMoveKnockBack)));
+        // GetDistance2d subtracts both UNIT_FIELD_BOUNDINGRADIUS values. 6 - 1.1 - 0.4 = 4.5, under the value cap of 10.
+        float gap = 6f - target.BoundingRadius - caster.BoundingRadius;
+        Assert.Equal(4.5f, gap, 3);
+        Assert.Equal(KnockbackPackets.BuildOrder(target.Guid.Value, 0, new KnockbackInfo(1f, 0f, -gap, -4f)), Assert.Single(Of(targetSession, WorldOpcode.SmsgMoveKnockBack)));
+    }
+
+    [Fact]
+    public void PlayerPull_ClampsTheGapAtZero_WhenTheModelsOverlap()
+    {
+        using var kit = Kit();
+        const float centerDistance = 0.2f;
+        (Player caster, Player target, FakeSession targetSession, _, _) = Setup(kit, targetX: centerDistance, targetY: 0);
+        Assert.True(centerDistance < caster.BoundingRadius + target.BoundingRadius);
+
+        kit.System.CastSpell(caster, Pull, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        // A center distance inside both radii is a negative gap. Negating that would knock the target away.
+        // GetDistance2d clamps at 0, so the horizontal speed stays 0 (vertical is still misc / 10).
+        byte[] order = Assert.Single(Of(targetSession, WorldOpcode.SmsgMoveKnockBack));
+        var reader = new PacketReader(order);
+        reader.ReadPackedGuid();
+        reader.ReadUInt32();
+        Assert.Equal(1f, reader.ReadSingle(), 4); // still aimed from the caster toward the target
+        Assert.Equal(0f, reader.ReadSingle(), 4);
+        Assert.Equal(0f, reader.ReadSingle(), 4);
+        Assert.Equal(-4f, reader.ReadSingle(), 4);
     }
 
     [Fact]
