@@ -466,6 +466,33 @@ public sealed class EnchantEngineTests
     }
 
     [Fact]
+    public void Reequipping_DoesNotRestartARunningTemporaryEnchantment()
+    {
+        using var rig = new Rig();
+        Item sword = rig.Give(Sword);
+        uint before = rig.Stat(0);
+        Rig.Enchant(sword, StrengthRing, EnchantSlots.Temporary, duration: 60_000);
+
+        rig.Inventory.SwapItem(sword.BagSlot, sword.Slot, InventorySlots.Bag0, InventorySlots.MainHand);
+        Assert.Equal(60_000u, rig.Enchantments.LeftMs(sword, EnchantSlots.Temporary));
+        Assert.Equal(before + 4, rig.Stat(0));
+
+        rig.Enchantments.Update(10_000);
+        rig.Inventory.SwapItem(InventorySlots.Bag0, InventorySlots.MainHand, InventorySlots.Bag0, InventorySlots.ItemStart + 5);
+        Assert.Equal(before, rig.Stat(0));
+        Assert.Equal(50_000u, rig.Enchantments.LeftMs(sword, EnchantSlots.Temporary));
+
+        rig.Enchantments.Update(5_000);
+        rig.Inventory.SwapItem(sword.BagSlot, sword.Slot, InventorySlots.Bag0, InventorySlots.MainHand);
+
+        // The field still says 60 s (it is not rewritten while the timer runs). Equip used to start
+        // the timer from that field and hand the enchantment its full time again.
+        Assert.Equal(60_000u, ItemEnchantments.Duration(sword, EnchantSlots.Temporary));
+        Assert.Equal(45_000u, rig.Enchantments.LeftMs(sword, EnchantSlots.Temporary));
+        Assert.Equal(before + 4, rig.Stat(0));
+    }
+
+    [Fact]
     public void AnExpiredTemporaryEnchantment_IsRemovedFromTheStats_ClearedAndLogged()
     {
         using var rig = new Rig();
