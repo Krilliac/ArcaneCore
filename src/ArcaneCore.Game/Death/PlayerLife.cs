@@ -138,6 +138,11 @@ public static class PlayerLife
     /// stored values that were clamped to the smaller maximums (vmangos has the auras and the
     /// final stats before it restores them: Player.cpp:15057-15070). A value that changed since
     /// the load (damage, spending) is left alone, and so is a player that is not alive.
+    /// A ghost without a body was already resurrected at half (<see cref="HasNoBodyToReturnTo"/>,
+    /// <c>ResurrectPlayer(0.5f)</c>, Player.cpp:4638-4655): that replaces the saved health, mana
+    /// and energy and clears rage, so those are not copied back from the save. If the auras then
+    /// raised a maximum, the same half is taken of the new one. Focus and happiness are not part
+    /// of that resurrection and still follow the saved values.
     /// </summary>
     public static void ReapplyAfterAuras(Player player, LoadedLife loaded)
     {
@@ -149,6 +154,12 @@ public static class PlayerLife
         }
 
         CharacterLife life = loaded.Stored;
+        if (HasNoBodyToReturnTo(life))
+        {
+            ReapplyNoBodyRestore(player, loaded);
+            return;
+        }
+
         if (life.Health > 0 && player.Health == loaded.AppliedHealth && loaded.AppliedHealth < life.Health)
         {
             player.Health = Math.Min(life.Health, player.MaxHealth);
@@ -156,11 +167,62 @@ public static class PlayerLife
 
         for (int i = 0; i < PowerCount && i < life.Powers.Count; i++)
         {
-            var power = (PowerType)i;
-            if (MapCombat.GetPower(player, power) == loaded.AppliedPowers[i] && loaded.AppliedPowers[i] < life.Powers[i])
-            {
-                MapCombat.SetPower(player, power, life.Powers[i]);
-            }
+            LiftStoredPower(player, loaded, (PowerType)i);
+        }
+    }
+
+    /// <summary>
+    /// The half resurrection of a ghost with no corpse, after auras (vmangos loads auras before
+    /// <c>LoadCorpse</c>'s <c>ResurrectPlayer(0.5f)</c>). Rage stays 0. Focus and happiness were
+    /// never part of the resurrection, so a clamped saved value of those still comes back.
+    /// </summary>
+    private static void ReapplyNoBodyRestore(Player player, LoadedLife loaded)
+    {
+        const float percent = CombatConstants.CorpseReclaimRestorePercent;
+        if (player.Health == loaded.AppliedHealth)
+        {
+            player.Health = Math.Max(1u, (uint)(player.MaxHealth * percent));
+        }
+
+        ReapplyFraction(player, loaded, PowerType.Mana, percent);
+        if (UnchangedSinceLoad(player, loaded, PowerType.Rage))
+        {
+            MapCombat.SetPower(player, PowerType.Rage, 0);
+        }
+
+        ReapplyFraction(player, loaded, PowerType.Energy, percent);
+        LiftStoredPower(player, loaded, PowerType.Focus);
+        LiftStoredPower(player, loaded, PowerType.Happiness);
+    }
+
+    private static void ReapplyFraction(Player player, LoadedLife loaded, PowerType power, float percent)
+    {
+        if (!UnchangedSinceLoad(player, loaded, power))
+        {
+            return;
+        }
+
+        MapCombat.SetPower(player, power, (uint)(MapCombat.GetMaxPower(player, power) * percent));
+    }
+
+    private static bool UnchangedSinceLoad(Player player, LoadedLife loaded, PowerType power)
+    {
+        int index = (int)power;
+        return index < loaded.AppliedPowers.Count && MapCombat.GetPower(player, power) == loaded.AppliedPowers[index];
+    }
+
+    private static void LiftStoredPower(Player player, LoadedLife loaded, PowerType power)
+    {
+        int index = (int)power;
+        CharacterLife life = loaded.Stored;
+        if (index >= life.Powers.Count || !UnchangedSinceLoad(player, loaded, power))
+        {
+            return;
+        }
+
+        if (loaded.AppliedPowers[index] < life.Powers[index])
+        {
+            MapCombat.SetPower(player, power, life.Powers[index]);
         }
     }
 
