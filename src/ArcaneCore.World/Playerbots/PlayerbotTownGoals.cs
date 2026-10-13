@@ -30,6 +30,20 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private const uint ThinkCooldownMs = 1500;
     private const uint RepairBackoffMs = 60_000;
 
+    /// <summary>How long a refused plan to a visible service NPC is remembered before the walk to it is planned again.</summary>
+    internal const uint VisitRefusedMs = 10_000;
+
+    private ObjectGuid _visitRefused;
+    private uint _visitRefusedUntil;
+
+    /// <summary>How long a class trainer that had nothing for the bot is not asked again (unless its level changes or it has more money).</summary>
+    internal const uint TrainerQuoteMemoMs = 5_000;
+
+    private readonly Dictionary<ObjectGuid, (uint Until, uint Level, uint Money)> _noTrainerOffer = [];
+
+    /// <summary>How many times a class trainer's offer was worked out rather than read from the memo (tests).</summary>
+    internal int TrainerQuotesAsked { get; private set; }
+
     /// <summary>How long a vendor's refusal to sell an item to the bot keeps the bot from asking again.</summary>
     internal const uint RefusedPurchaseMs = 600_000;
 
@@ -125,10 +139,17 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             if (player.Map is not { }) return false;
             if (_route is null || _routeTarget != npc.Guid)
             {
+                // A plan to this NPC was refused a moment ago (after its fallbacks, 30 to 40 queries): not asked again every think.
+                if (_visitRefused == npc.Guid && unchecked((int)(_visitRefusedUntil - session.World.NowMs)) > 0) return false;
                 PlanOutcome visit = PlayerbotNavigation.PlanExact(player, new(npc.X, npc.Y, npc.Z), options, ref _tileWait,
                     session.World.NowMs, out _route);
                 if (visit == PlanOutcome.Pending) return true; // a tile of the way is being read: keep the visit, plan again next think
-                if (visit == PlanOutcome.Refused) return false;
+                if (visit == PlanOutcome.Refused)
+                {
+                    _visitRefused = npc.Guid;
+                    _visitRefusedUntil = unchecked(session.World.NowMs + VisitRefusedMs);
+                    return false;
+                }
                 _routeTarget = npc.Guid;
             }
             return PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs);
@@ -272,6 +293,21 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// <summary>How long the bot leaves repair trips alone after one found nothing to go to (no affordable repair, no NPC, no way).</summary>
     internal const uint RepairTripBackoffMs = 30_000;
 
+    /// <summary>
+    /// The rest doubles with every round in a row that found nothing to go to (<see cref="RepairTripBackoffMs"/>, twice, four times ...) up
+    /// to this. Before, a bot with no way to any repair NPC planned to every spawn of the map again every 30 seconds, for hours: 18
+    /// plans of 30 to 40 queries each, a round after round. A plan that succeeds, or the bot being <see cref="RepairBackoffResetYards"/>
+    /// from where the last round ended, starts the rests over.
+    /// </summary>
+    internal const uint RepairTripBackoffMaxMs = 300_000;
+
+    /// <summary>How far from where the last empty round ended the bot has to be for the rest to be over (the way from there may be open).</summary>
+    internal const float RepairBackoffResetYards = 300f;
+
+    private int _repairEmptyRounds;
+    private Vector3 _repairRestFrom;
+    private uint _repairRestMap;
+
     /// <summary>At most this many repair NPC spawns of the map are kept as trip goals (the nearest first).</summary>
     private const int MaxRepairSpawns = 64;
 
@@ -298,6 +334,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         _thinksAreAnnounced = true;
         _repairPlansThisThink = 0;
         _repairClockedThisThink = false;
+        MarkThinkQueries();
     }
 
     /// <summary>For a caller that does not call <see cref="BeginThink"/>: the world clock moving on opens a new think.</summary>
@@ -307,7 +344,35 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         _thinkStampMs = now;
         _repairPlansThisThink = 0;
         _repairClockedThisThink = false;
+        MarkThinkQueries();
     }
+
+    /// <summary>
+    /// The most path queries, and the most query time, the repair plans of one think may spend before the rest of the candidates wait
+    /// for the next think (<see cref="RepairQueryBudgetSpent"/>). Live (live-w34-r1, 2026-10-12): 618 of 773 slow bot thinks (&gt;50 ms)
+    /// were slowest in the town phase, 114 path queries each on average, 0.6 ms of the phase's time not path search: a plan that is refused
+    /// runs its fallbacks (the steep escape, the starts beside the bot, hazard detours), 30 to 40 queries, and
+    /// <see cref="MaxRepairPlansPerThink"/> of them made the think 100. A plan that comes cheap (one query) still lets the others follow.
+    /// </summary>
+    internal const int MaxRepairQueriesPerThink = 16;
+
+    private const long MaxRepairQueryMsPerThink = 5;
+
+    private int _queriesAtThinkStart;
+    private long _queryTicksAtThinkStart;
+
+    private void MarkThinkQueries()
+    {
+        PlayerbotThinkProbe? probe = PlayerbotThinkProbe.Active;
+        _queriesAtThinkStart = probe?.Queries ?? 0;
+        _queryTicksAtThinkStart = probe?.QueryTicks ?? 0;
+    }
+
+    /// <summary>Whether the path queries made since this think began (<see cref="BeginThink"/>) are over the repair budget; never off a think.</summary>
+    private bool RepairQueryBudgetSpent()
+        => PlayerbotThinkProbe.Active is { } probe
+            && (probe.Queries - _queriesAtThinkStart >= MaxRepairQueriesPerThink
+                || (probe.QueryTicks - _queryTicksAtThinkStart) * 1000 >= MaxRepairQueryMsPerThink * System.Diagnostics.Stopwatch.Frequency);
 
     private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairSpawns = [];
     private readonly HashSet<uint> _blockedRepairSpawns = [];
@@ -326,10 +391,29 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// </summary>
     private bool RepairTripWanted(Player player)
     {
-        if (!player.IsAlive || player.Money == 0 || !NeedsRepairTrip(player)) return false;
+        if (!player.IsAlive) return false;
+        if (!NeedsRepairTrip(player))
+        {
+            _repairEmptyRounds = 0; // the gear is fine (whatever the bot's money): the next trip starts with the short rest again
+            return false;
+        }
+
+        if (player.Money == 0) return false;
         uint now = session.World.NowMs;
         if (_repairBackoffUntil != 0 && unchecked(now - _repairBackoffUntil) > int.MaxValue) return false;
-        if (_repairTripBackoffUntil != 0 && unchecked(now - _repairTripBackoffUntil) > int.MaxValue) return false;
+        if (_repairEmptyRounds > 0)
+        {
+            // Another map, or far from where the last round found nothing (also once the rest is over): the way from here may be open,
+            // so the rests start over.
+            if (player.MapId != _repairRestMap
+                || Vector3.DistanceSquared(_repairRestFrom, new Vector3(player.X, player.Y, player.Z)) >= RepairBackoffResetYards * RepairBackoffResetYards)
+            {
+                _repairTripBackoffUntil = 0;
+                _repairEmptyRounds = 0;
+            }
+            else if (_repairTripBackoffUntil != 0 && unchecked(now - _repairTripBackoffUntil) > int.MaxValue) return false;
+        }
+
         return session.Services.GetService<QuestNpcFeature>()?.Services is { } services
             && CheapestWornRepair(player, services) is { } cost && cost <= player.Money;
     }
@@ -421,7 +505,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                      .OrderBy(s => Vector3.DistanceSquared(here, new Vector3(s.Spawn.X, s.Spawn.Y, s.Spawn.Z))).ToArray())
         {
             if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
-            if (_repairPlansThisThink >= MaxRepairPlansPerThink) return false;
+            if (_repairPlansThisThink >= MaxRepairPlansPerThink || _repairPlansThisThink > 0 && RepairQueryBudgetSpent()) return false;
             _repairPlansThisThink++;
             PlanOutcome planned = PlayerbotNavigation.PlanToward(player, new Vector3(spawn.X, spawn.Y, spawn.Z), options, ref _tileWait, now,
                 out PlayerbotRoute? route);
@@ -437,6 +521,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 continue;
             }
 
+            _repairEmptyRounds = 0;
             _repairRoute = route;
             _repairSpawn = spawn.Guid;
             _repairBest = Vector3.Distance(here, new Vector3(spawn.X, spawn.Y, spawn.Z));
@@ -458,7 +543,11 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         // Nothing to walk to: rest from trips a while, then look again with every spawn.
         ClearRepairTrip();
         _blockedRepairSpawns.Clear();
-        _repairTripBackoffUntil = Math.Max(1u, unchecked(now + RepairTripBackoffMs));
+        uint rest = (uint)Math.Min((ulong)RepairTripBackoffMs << Math.Min(_repairEmptyRounds, 8), RepairTripBackoffMaxMs);
+        if (_repairEmptyRounds < 8) _repairEmptyRounds++;
+        _repairRestFrom = here;
+        _repairRestMap = map.MapId;
+        _repairTripBackoffUntil = Math.Max(1u, unchecked(now + rest));
         return false;
     }
 
@@ -520,13 +609,14 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         return Buy(player, npc, row.Item);
     }
 
-    private VendorItem? FindAmmoRow(Player player, QuestNpcServices services, NpcInfo npc)
+    /// <summary>A hunter with a bow, gun or crossbow equipped and fewer than <see cref="AmmoLowWater"/> fitting rounds: a bot fact, the same for every vendor.</summary>
+    private static bool AmmoLow(Player player)
     {
         if (player.Class != Class.Hunter
             || player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged) is not { } ranged
             || (ItemClass)ranged.Template.Class != ItemClass.Weapon
             || ranged.Template.SubClass is not (WeaponBow or WeaponGun or WeaponCrossbow))
-            return null;
+            return false;
         uint carried = 0;
         foreach (Item item in player.Inventory.AllItems)
         {
@@ -534,8 +624,14 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 carried += item.Count;
         }
 
-        if (carried >= AmmoLowWater)
-            return null;
+        return carried < AmmoLowWater;
+    }
+
+    private VendorItem? FindAmmoRow(Player player, QuestNpcServices services, NpcInfo npc)
+        => AmmoLow(player) ? FindAmmoRowOf(player, services, npc) : null;
+
+    private VendorItem? FindAmmoRowOf(Player player, QuestNpcServices services, NpcInfo npc)
+    {
         return services.Npcs.VendorItems(npc.Entry).Take(64)
             .Select(row => (Row: row, Template: player.Inventory.Templates.Find(row.Item)))
             .Where(pair => !Refused(_refusedPurchases, (npc.Entry, pair.Row.Item)))
@@ -652,48 +748,157 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         }
     }
 
+    /// <summary>The visible service NPCs of one <see cref="FindNpc"/> call, with their distance and visible-set order (the sort's tie-break).</summary>
+    private readonly List<(float Distance, int Order, NpcInfo Info)> _serviceNpcs = [];
+
+    /// <summary>
+    /// The nearest visible NPC with one of the <paramref name="required"/> services that is of use to the bot. Before, every candidate was
+    /// asked whether it had anything for the bot (food rows, ammunition, the bags' grays and junk, the trainer's spells) and the nearest
+    /// of the useful ones taken: about 14 microseconds and 1.7 KB for each of 50 service NPCs in sight, every think, in a city with
+    /// nothing to do. Now the candidates are put in distance order and asked until one says yes, and the facts about the bot that do not
+    /// depend on the NPC (<see cref="ServiceNeeds"/>) are worked out once per call. The answer is the same: the first useful NPC in the
+    /// same stable distance order.
+    /// </summary>
     private NpcInfo? FindNpc(Player player, NpcFlags required)
     {
         if (player.Map is null || session.Services.GetService<QuestNpcFeature>()?.Services is not { } services
             || services.Deps.Creatures is not { } lookup)
             return null;
-        return player.VisibleObjects.Select(guid => lookup.Find(player, guid))
-            .Where(info => info is { IsAlive: true, IsHostile: false, IsInCombat: false }
-                && (info.NpcFlags & required) != 0 && !info.IsNotSelectable
-                && Suspensions?.IsEntrySuspended(info.Entry, session.World.NowMs) != true)
-            .Select(info => info!)
-            .Where(info => HasUsefulService(player, services, info))
-            .OrderBy(info => Distance(player, info))
-            .FirstOrDefault(info => (info.NpcFlags & required) != 0);
+        uint now = session.World.NowMs;
+        _serviceNpcs.Clear();
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (lookup.Find(player, guid) is not { IsAlive: true, IsHostile: false, IsInCombat: false } info
+                || (info.NpcFlags & required) == 0 || info.IsNotSelectable
+                || Suspensions?.IsEntrySuspended(info.Entry, now) == true)
+                continue;
+            _serviceNpcs.Add((Distance(player, info), _serviceNpcs.Count, info));
+        }
+
+        if (_serviceNpcs.Count == 0) return null;
+        _serviceNpcs.Sort(static (a, b) => a.Distance.CompareTo(b.Distance) is var order and not 0 ? order : a.Order.CompareTo(b.Order));
+        var needs = new ServiceNeeds();
+        NpcInfo? found = null;
+        foreach ((_, _, NpcInfo info) in _serviceNpcs)
+        {
+            if (!HasUsefulService(player, services, info, ref needs)) continue;
+            found = info;
+            break;
+        }
+
+        _serviceNpcs.Clear();
+        return found;
     }
 
-    private bool HasUsefulService(Player player, QuestNpcServices services, NpcInfo npc)
+    /// <summary>
+    /// What a vendor could do for the bot that does not depend on which vendor it is, each worked out the first time it is asked and
+    /// kept for the rest of one <see cref="FindNpc"/> call (the bot does not change inside it).
+    /// </summary>
+    private struct ServiceNeeds
+    {
+        private byte _repair, _consumables, _ammo, _grays, _junk;
+        private bool _food, _drink;
+
+        internal bool Repair(PlayerbotTownGoals goals, Player player)
+        {
+            if (_repair == 0) _repair = (byte)(goals.RepairWanted(player) ? 2 : 1);
+            return _repair == 2;
+        }
+
+        internal bool Consumables(Player player, SpellSystem spells, out bool food, out bool drink)
+        {
+            if (_consumables == 0)
+            {
+                (_food, _drink) = ConsumableNeeds(player, spells);
+                _consumables = (byte)(_food || _drink ? 2 : 1);
+            }
+
+            food = _food;
+            drink = _drink;
+            return _consumables == 2;
+        }
+
+        internal bool Ammo(Player player)
+        {
+            if (_ammo == 0) _ammo = (byte)(AmmoLow(player) ? 2 : 1);
+            return _ammo == 2;
+        }
+
+        internal bool Grays(PlayerbotTownGoals goals, Player player, QuestNpcServices services)
+        {
+            if (_grays == 0) _grays = (byte)(goals.SellableGrays(player, services).Any() ? 2 : 1);
+            return _grays == 2;
+        }
+
+        internal bool Junk(PlayerbotTownGoals goals, Player player, QuestNpcServices services)
+        {
+            if (_junk == 0) _junk = (byte)(goals.FindJunk(player, services) is not null ? 2 : 1);
+            return _junk == 2;
+        }
+    }
+
+    private bool HasUsefulService(Player player, QuestNpcServices services, NpcInfo npc, ref ServiceNeeds needs)
         // Advisory discovery only; the correlated GREEN list and ordinary buy handler
         // remain the authority for price, prerequisites and teaching/persistence.
-        => HasUsefulVendorService(player, services, npc)
-            || (!Refused(_refusedTrainers, npc.Guid) && services.GetClassTrainerQuote(player, npc) is not null);
+        => HasUsefulVendorService(player, services, npc, ref needs)
+            || (!Refused(_refusedTrainers, npc.Guid) && TrainerHasOffer(player, services, npc));
 
-    private bool HasUsefulVendorService(Player player, QuestNpcServices services, NpcInfo npc)
+    /// <summary>
+    /// Whether the class trainer has a spell the bot can learn and pay for (<see cref="QuestNpcServices.GetClassTrainerQuote"/>: up to 128
+    /// spells described and weighed per trainer). A trainer with nothing is not asked again for <see cref="TrainerQuoteMemoMs"/>, unless the
+    /// bot's level changed or it has more money than when it was asked; what else could make a spell learnable (a quest reward, a
+    /// skill) is noticed at the next look after that.
+    /// </summary>
+    private bool TrainerHasOffer(Player player, QuestNpcServices services, NpcInfo npc)
     {
-        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && RepairWanted(player)) return true;
+        uint now = session.World.NowMs;
+        uint level = player.Level, money = player.Money;
+        if (_noTrainerOffer.TryGetValue(npc.Guid, out (uint Until, uint Level, uint Money) memo)
+            && memo.Level == level && money <= memo.Money && unchecked((int)(memo.Until - now)) > 0)
+            return false;
+        TrainerQuotesAsked++;
+        if (services.GetClassTrainerQuote(player, npc) is not null)
+        {
+            _noTrainerOffer.Remove(npc.Guid);
+            return true;
+        }
+
+        if (_noTrainerOffer.Count >= MaxRefusals) _noTrainerOffer.Clear();
+        _noTrainerOffer[npc.Guid] = (unchecked(now + TrainerQuoteMemoMs), level, money);
+        return false;
+    }
+
+    private bool HasUsefulVendorService(Player player, QuestNpcServices services, NpcInfo npc, ref ServiceNeeds needs)
+    {
+        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && needs.Repair(this, player)) return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && services.Npcs.VendorItems(npc.Entry).Count > 0)
         {
             if (session.Services.GetService<SpellFeature>()?.System is { } spells
-                && FindConsumableVendorRow(player, services, npc, spells) is not null) return true;
-            if (FindAmmoRow(player, services, npc) is not null) return true;
-            if (SellableGrays(player, services).Any()) return true;
-            if (FindJunk(player, services) is not null) return true;
+                && needs.Consumables(player, spells, out bool food, out bool drink)
+                && FindConsumableVendorRow(player, services, npc, spells, food, drink) is not null) return true;
+            if (needs.Ammo(player) && FindAmmoRowOf(player, services, npc) is not null) return true;
+            if (needs.Grays(this, player, services)) return true;
+            if (needs.Junk(this, player, services)) return true;
         }
         return false;
     }
 
-    private VendorItem? FindConsumableVendorRow(Player player, QuestNpcServices services, NpcInfo npc,
-        SpellSystem spells)
-    {
-        bool needFood = !PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Food);
-        bool needDrink = player.PowerType == PowerType.Mana
+    /// <summary>Whether the bot lacks usable food, and usable drink (a mana user only): bot facts, the same for every vendor.</summary>
+    private static (bool Food, bool Drink) ConsumableNeeds(Player player, SpellSystem spells)
+        => (!PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Food),
+            player.PowerType == PowerType.Mana
             && player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana) > 0
-            && !PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Drink);
+            && !PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Drink));
+
+    private VendorItem? FindConsumableVendorRow(Player player, QuestNpcServices services, NpcInfo npc, SpellSystem spells)
+    {
+        (bool food, bool drink) = ConsumableNeeds(player, spells);
+        return FindConsumableVendorRow(player, services, npc, spells, food, drink);
+    }
+
+    private VendorItem? FindConsumableVendorRow(Player player, QuestNpcServices services, NpcInfo npc,
+        SpellSystem spells, bool needFood, bool needDrink)
+    {
         if (!needFood && !needDrink)
             return null;
 
