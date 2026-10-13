@@ -280,8 +280,8 @@ public sealed class CombatRogueScenario() : ClassCombatScenario("rogue", 1, Clas
     ["Stealth", "Sinister Strike"]);
 
 /// <summary>
-/// Undead priest: Power Word: Fortitude between fights, Smite from range; once the fight is on its health is dropped to 40% and it
-/// must heal itself with Lesser Heal (vmangos SelectHealTarget below 60% for a healer).
+/// Undead priest: Power Word: Fortitude between fights, Smite from range. Once the fight is on, its health is dropped to 20%.
+/// A priest alone smites while merely hurt and heals itself only in an emergency, under 30%.
 /// </summary>
 public sealed class CombatPriestScenario() : ClassCombatScenario("priest", 5, Class.Priest,
     [ClassCombatSpells.Smite, ClassCombatSpells.LesserHeal, ClassCombatSpells.PowerWordFortitude],
@@ -295,16 +295,16 @@ public sealed class CombatPriestScenario() : ClassCombatScenario("priest", 5, Cl
     {
         if (_wounded || trace.First("Smite") is null) return;
         Player player = bot.RequirePlayer();
-        player.Health = Math.Max(1u, player.MaxHealth * 2 / 5);
+        player.Health = Math.Max(1u, player.MaxHealth / 5);
         _wounded = true;
     }
 
     protected override Task VerifyAsync(ScenarioContext context, ScenarioBot bot, Creature wolf, CombatTrace trace)
-        => context.StepAsync("it healed itself below half health", () =>
+        => context.StepAsync("it healed itself in an emergency", () =>
         {
             CombatCast smite = trace.First("Smite")!;
             ScenarioContext.Expect(trace.Casts.Any(c => c.Name == "Lesser Heal" && c.WorldMs >= smite.WorldMs && c.Targets.Contains(bot.Guid.Value)),
-                $"no Lesser Heal on itself after it dropped to 40%; it cast: [{trace}]");
+                $"no Lesser Heal on itself after it dropped to 20%; it cast: [{trace}]");
             return Task.CompletedTask;
         });
 }

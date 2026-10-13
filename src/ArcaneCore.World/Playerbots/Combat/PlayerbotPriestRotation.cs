@@ -45,6 +45,9 @@ internal sealed class PlayerbotPriestRotation : PlayerbotClassRotation
 
     protected override IEnumerable<string> Dispels => [DispelMagicSpell, AbolishDisease, CureDisease];
 
+    /// <summary>Where casters and healers stand is the class default. A priest alone heals only below this, then goes back to Smite.</summary>
+    internal const float SoloEmergencyHealth = 30f;
+
     public override float PreferredRange(RotationState state) => CasterRange;
 
     protected override RotationAction? Upkeep(RotationState s)
@@ -73,7 +76,18 @@ internal sealed class PlayerbotPriestRotation : PlayerbotClassRotation
             RotationAction? heal = Do(s, PowerWordShield, shieldTarget, s.Role == PlayerbotRole.Healer)
                 ?? (SelectHealTarget(s, 60f, 80f) is { } wounded ? HealDirect(s, wounded) : null)
                 ?? (SelectPeriodicHealTarget(s, 80f, 90f) is { } scratched ? HealPeriodic(s, scratched) : null);
-            if (heal is not null || !HealerMayFight(s)) return heal;
+            // A priest with no Shadowform is a healer by role, including every priest below 40 who is out grinding alone.
+            // Healing whenever they were under 60% meant the whole fight was Lesser Heal: the gnoll never died, and the stall
+            // watch gave the combat up (bot QA, Silverpine Rot Hide 1674/1675, Westfall 154, Dun Morogh 1196, all priests).
+            // Alone, only an emergency is a heal. A group still heals before it damages.
+            if (s.InGroup)
+            {
+                if (heal is not null || !HealerMayFight(s)) return heal;
+            }
+            else if (s.Self.HealthPercent < SoloEmergencyHealth && heal is not null)
+            {
+                return heal;
+            }
         }
 
         return Do(s, Shadowform, s.Self, s.Form != Form.Shadow)
