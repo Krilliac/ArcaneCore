@@ -207,6 +207,34 @@ public sealed partial class PlayerbotTaxiTests
         Assert.Null(await host.OnWorldAsync(() => PlayerbotTaxi.LastFailure(player)));
     }
 
+    [Fact]
+    public async Task ThePartyAiEngaging_DropsAHalfFinishedTrip_WithoutABackoff()
+    {
+        TaxiServices.Current.Value = new TaxiFixture();
+        await using WorldTestHost host = Party.PartyTestHost.Start(o => o.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone);
+        Guid id = await Party.PartyTestHost.StartBotAsync(host, "Taxiparty");
+        ManagedPlayerbotFeature feature = Party.PartyTestHost.Feature(host);
+        Player player = await host.PlayerAsync("Taxiparty");
+        await host.OnWorldAsync(() =>
+        {
+            Rig.Know(host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.StateOf(player)!, 1, 2);
+            player.Money = 1000;
+            player.Relocate(TaxiFixture.StartX - 120f, TaxiFixture.StartY, TaxiFixture.Z, 0, host.World.NowMs);
+            PlayerbotOptions options = Party.PartyTestHost.PlayerbotOptionsOf(host);
+            options.Taxi.MinRouteYards = 100f;
+            Vector3 goal = new(TaxiFixture.StartX + 262f, TaxiFixture.StartY, TaxiFixture.Z);
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi((WorldSession)player.Session, player, 0, goal, options));
+        });
+
+        await using WorldTestClient master = await host.EnterWorldAsync("TAXIMASTER", "Taxipartym");
+        await master.SendAsync(WorldOpcode.CmsgGroupInvite, Party.PartyTestHost.CString("Taxiparty"));
+        await host.WaitForWorldAsync(() => feature.IsPartyDriven(id), "the party AI drives the grouped bot");
+
+        Assert.False(await host.OnWorldAsync(() => PlayerbotTaxi.IsActive(player)));
+        Assert.False(await host.OnWorldAsync(() => PlayerbotTaxi.IsBackedOff(player, host.World.NowMs)));
+        Assert.Null(await host.OnWorldAsync(() => PlayerbotTaxi.LastFailure(player)));
+    }
+
     private sealed class IdleController : IPlayerbotController
     {
         public void Tick(PlayerbotControllerContext context, uint elapsedMs) { }

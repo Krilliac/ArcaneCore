@@ -278,13 +278,15 @@ internal static class PlayerbotTaxi
         private uint[] _cacheRoute = [];
         private uint _cacheFare;
         private uint _cacheMoney;
+        private TaxiIndex? _cacheIndex;
+        private float _cacheMaxWalk;
 
-        public bool TryCached(IReadOnlyList<uint> mask, uint source, Vector3 goal, Vector3 here, uint money, out bool found, out uint[] route, out uint fare)
+        public bool TryCached(IReadOnlyList<uint> mask, uint source, Vector3 goal, Vector3 here, uint money, TaxiIndex index, float maxWalk, out bool found, out uint[] route, out uint fare)
         {
             found = false;
             route = [];
             fare = 0;
-            if (!_hasCache || _cacheSource != source || _cacheGoal != goal || _cacheCellX != Cell(here.X) || _cacheCellY != Cell(here.Y)
+            if (!_hasCache || !ReferenceEquals(_cacheIndex, index) || _cacheMaxWalk != maxWalk || _cacheSource != source || _cacheGoal != goal || _cacheCellX != Cell(here.X) || _cacheCellY != Cell(here.Y)
                 || _cacheMoneyBucket != money / MoneyBucket) return false;
             for (int i = 0; i < _cacheMask.Length; i++)
             {
@@ -301,7 +303,7 @@ internal static class PlayerbotTaxi
             return true;
         }
 
-        public void Store(IReadOnlyList<uint> mask, uint source, Vector3 goal, Vector3 here, uint money, bool found, uint[] route, uint fare)
+        public void Store(IReadOnlyList<uint> mask, uint source, Vector3 goal, Vector3 here, uint money, TaxiIndex index, float maxWalk, bool found, uint[] route, uint fare)
         {
             _hasCache = true;
             for (int i = 0; i < _cacheMask.Length; i++) _cacheMask[i] = i < mask.Count ? mask[i] : 0;
@@ -314,6 +316,8 @@ internal static class PlayerbotTaxi
             _cacheRoute = route;
             _cacheFare = fare;
             _cacheMoney = money;
+            _cacheIndex = index;
+            _cacheMaxWalk = maxWalk;
         }
 
         private static int Cell(float v) => (int)MathF.Floor(v / 25f);
@@ -433,10 +437,10 @@ internal static class PlayerbotTaxi
 
         if (source is null) return TaxiTravel.Walk;
         Memo cache = Memos.GetOrCreateValue(player);
-        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, player.Money, out bool routed, out uint[] route, out uint fare))
+        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, player.Money, index, taxi.MaxWalkToMasterYards, out bool routed, out uint[] route, out uint fare))
         {
             routed = index.TryRoute(state.TaxiMask, source, here, destination, player.Money, taxi.MaxWalkToMasterYards, straight, out route, out fare);
-            cache.Store(state.TaxiMask, source.Id, destination, here, player.Money, routed, route, fare);
+            cache.Store(state.TaxiMask, source.Id, destination, here, player.Money, index, taxi.MaxWalkToMasterYards, routed, route, fare);
         }
 
         if (!routed) return TaxiTravel.Walk;

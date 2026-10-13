@@ -1214,8 +1214,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
+                        if (!active.BattlegroundDriven) PlayerbotTaxi.Cancel(driven);
                         active.BattlegroundDriven = true;
-                        PlayerbotTaxi.Cancel(driven);
                         driver = "battleground";
                         PlayerbotThinkProbe.Phase("battleground");
                         battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
@@ -1230,8 +1230,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
+                        if (!active.GroupDriven) PlayerbotTaxi.Cancel(driven);
                         active.GroupDriven = true;
-                        PlayerbotTaxi.Cancel(driven);
                         driver = "group";
                         PlayerbotThinkProbe.Phase("group");
                         coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
