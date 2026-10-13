@@ -578,7 +578,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_MAIL_LIST_RESULT` | `0x023B` | — | 7 | decoded |
 | `CMSG_BATTLEFIELD_LIST` | `0x023C` | handled | — | — |
 | `SMSG_BATTLEFIELD_LIST` | `0x023D` | — | 24 | decoded |
-| `CMSG_BATTLEFIELD_JOIN` | `0x023E` | unhandled | — | — |
+| `CMSG_BATTLEFIELD_JOIN` | `0x023E` | handled | — | — |
 | `SMSG_BATTLEFIELD_WIN` | `0x023F` | — | 2 | allowlisted |
 | `SMSG_BATTLEFIELD_LOSE` | `0x0240` | — | 2 | allowlisted |
 | `CMSG_TAXICLEARNODE` | `0x0241` | unhandled | — | — |

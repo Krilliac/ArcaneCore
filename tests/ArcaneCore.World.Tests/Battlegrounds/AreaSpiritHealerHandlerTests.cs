@@ -33,4 +33,28 @@ public sealed class AreaSpiritHealerHandlerTests
             .HasAura(host.World.FindOnlinePlayer("Ashout")!, BattlegroundConstants.SpellWaitingToResurrect));
         Assert.False(waiting);
     }
+
+    [Fact]
+    public async Task BattlefieldJoin_IsRefused_NothingIsQueued()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("ASHJOIN", "Ashjoin");
+        await client.CollectAsync(Quiet);
+
+        await client.SendAsync(WorldOpcode.CmsgBattlefieldJoin, BitConverter.GetBytes(489u)); // Warsong Gulch
+        await client.SendAsync(WorldOpcode.CmsgBattlefieldJoin, BitConverter.GetBytes(0u));
+
+        Assert.DoesNotContain(await client.CollectAsync(Quiet), p => p.Opcode == WorldOpcode.SmsgBattlefieldStatus);
+    }
+
+    [Fact]
+    public async Task SpiritGuideGossipTimer_IsWiredOnTheTick()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("ASHGOS", "Ashgos");
+        await host.WaitForWorldAsync(() => host.WorldServices.GetRequiredService<ArcaneCore.World.Npc.QuestNpcFeature>().Services.SpiritGuideNextResurrectMs is not null,
+            "the spirit guide timer hook");
+        uint none = await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<ArcaneCore.World.Npc.QuestNpcFeature>().Services.SpiritGuideNextResurrectMs!(ObjectGuid.Player(99)));
+        Assert.Equal(0u, none);
+    }
 }
