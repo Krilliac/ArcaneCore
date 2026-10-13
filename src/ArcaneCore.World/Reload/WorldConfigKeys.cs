@@ -119,6 +119,18 @@ public static class WorldConfigKeys
         LiveNonNegative("Maps:VisibilityRelocationLowerLimit", o => o.Maps.VisibilityRelocationLowerLimit, (o, v) => o.Maps.VisibilityRelocationLowerLimit = v),
         LiveNonNegative("Maps:GridPrefetchDistance", o => o.Maps.GridPrefetchDistance, (o, v) => o.Maps.GridPrefetchDistance = v),
 
+        // Population-scaled respawn: CreatureMapSystem.OnCreatureDied and GameObjectMapSystem.Despawn read the shared options at each death
+        // and despawn (docs/areas/creature-movement-spawns.md, "Population-scaled respawn"); a respawn already scheduled keeps its time.
+        Live("Respawn:Dynamic:Enabled", o => o.Respawn.Dynamic.Enabled, (o, v) => o.Respawn.Dynamic.Enabled = v),
+        Live("Respawn:Dynamic:PlayerThreshold", o => o.Respawn.Dynamic.PlayerThreshold, (o, v) => o.Respawn.Dynamic.PlayerThreshold = v, DynamicRespawnOptions.CheckPlayerThreshold),
+        Live("Respawn:Dynamic:ScalePerPlayer", o => o.Respawn.Dynamic.ScalePerPlayer, (o, v) => o.Respawn.Dynamic.ScalePerPlayer = v, DynamicRespawnOptions.CheckScalePerPlayer),
+        Live("Respawn:Dynamic:MinimumSeconds", o => o.Respawn.Dynamic.MinimumSeconds, (o, v) => o.Respawn.Dynamic.MinimumSeconds = v, DynamicRespawnOptions.CheckMinimumSeconds),
+        Live("Respawn:Dynamic:MaxReduction", o => o.Respawn.Dynamic.MaxReduction, (o, v) => o.Respawn.Dynamic.MaxReduction = v, DynamicRespawnOptions.CheckMaxReduction),
+        Live("Respawn:Dynamic:CountBots", o => o.Respawn.Dynamic.CountBots, (o, v) => o.Respawn.Dynamic.CountBots = v),
+        Live("Respawn:Dynamic:Radius", o => o.Respawn.Dynamic.Radius, (o, v) => o.Respawn.Dynamic.Radius = v, DynamicRespawnOptions.CheckRadius),
+        Live("Respawn:Dynamic:IncludeElitesAndRares", o => o.Respawn.Dynamic.IncludeElitesAndRares, (o, v) => o.Respawn.Dynamic.IncludeElitesAndRares = v),
+        Live("Respawn:Dynamic:IncludeGameObjects", o => o.Respawn.Dynamic.IncludeGameObjects, (o, v) => o.Respawn.Dynamic.IncludeGameObjects = v),
+
         // The cross-faction rules, read from the shared SocialOptions at each use. Keys map to vmangos
         // AllowTwoSide.Interaction.Group / .Guild / .Channel (World.cpp:610-613) and AllowTwoSide.AddFriend (:618).
         LiveSocial("AllowTwoSideAddFriend", o => o.AllowTwoSideAddFriend, (o, v) => o.AllowTwoSideAddFriend = v),

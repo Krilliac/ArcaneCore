@@ -30,6 +30,7 @@ public sealed class GmSpawnCommands : ICommandGroup
         [
             new ChatCommand("creature", AccountSecurity.GameMaster, "Syntax: .spawninfo creature [#radius]\nList the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first.", Creatures, RetailLevel: 2),
             new ChatCommand("gameobject", AccountSecurity.GameMaster, "Syntax: .spawninfo gameobject [#radius]\nList the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first.", GameObjects, RetailLevel: 2),
+            new ChatCommand("dynamic", AccountSecurity.GameMaster, "Syntax: .spawninfo dynamic\nShow the population-scaled respawn (World:Respawn:Dynamic) at your position: whether it is on, the players counted within its radius, the multiplier and example respawn delays. Read-only.", Dynamic, RetailLevel: 2),
             new ChatCommand("summary", AccountSecurity.GameMaster, "Syntax: .spawninfo summary\nCount the creatures and game objects of this map by state, including the respawn times kept for unloaded grids.", Summary, RetailLevel: 2),
         ], RetailLevel: 2),
     ];
@@ -137,6 +138,30 @@ public sealed class GmSpawnCommands : ICommandGroup
             context.Reply(string.Create(CultureInfo.InvariantCulture, $"... {near.Count - MaxRows} more not shown."));
         }
 
+        return true;
+    }
+
+    private static bool Dynamic(CommandContext context, string text)
+    {
+        if (text.Trim().Length != 0)
+        {
+            return false;
+        }
+
+        if (GmNpcCommands.SystemOf(context) is not { } system)
+        {
+            return true;
+        }
+
+        Player player = context.Player;
+        CreatureMapSystem.DynamicRespawnProbe probe = system.ProbeDynamicRespawn(player.X, player.Y);
+        ArcaneCore.Game.Maps.DynamicRespawnOptions o = probe.Options;
+        context.Reply(string.Create(CultureInfo.InvariantCulture,
+            $"Dynamic respawn: {(o.Active ? "on" : o.Enabled ? "enabled but a value is out of range (see the start-up log)" : "off")}; {(probe.MapScales ? "this map scales" : "this map never scales (dungeon, raid, battleground or instance)")}."));
+        context.Reply(string.Create(CultureInfo.InvariantCulture,
+            $"Players within {o.Radius:0.##} yards ({(o.CountBots ? "bots counted" : "bots ignored")}): {probe.Players}; threshold {o.PlayerThreshold}, {o.ScalePerPlayer:0.###} per player above it: multiplier x{probe.Multiplier:0.###}."));
+        context.Reply(string.Create(CultureInfo.InvariantCulture,
+            $"Respawn delays here: 60 s -> {probe.Scale(60)} s, 120 s -> {probe.Scale(120)} s, 300 s -> {probe.Scale(300)} s, 600 s -> {probe.Scale(600)} s (minimum {o.MinimumSeconds} s, at most {o.MaxReduction:P0} off)."));
         return true;
     }
 

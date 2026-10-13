@@ -43,7 +43,7 @@ public sealed class PoolMapTests
     {
         WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(0);
-        var system = new GameObjectMapSystem(map, content) { Random = new Random(seed) };
+        var system = new GameObjectMapSystem(map, content, random: new Random(seed));
         map.AddUpdater(system);
         world.AddPlayer(Player(1).Player);
         world.RunTick(50);

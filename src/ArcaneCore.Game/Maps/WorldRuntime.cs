@@ -54,6 +54,11 @@ public sealed class WorldRuntime : IDisposable
         _saveQueue = saveQueue;
         _logger = logger;
         Scripts.Logger = logger;
+        // .reload config refuses a bad value; a start-up file is not checked anywhere else, and a bad value turns the scaling off.
+        foreach (string problem in options.Respawn.Dynamic.Problems())
+        {
+            logger.LogWarning("{Problem}; a bad value turns World:Respawn:Dynamic off, so with Enabled=true spawns fall back to the zone-rate scaling of Creatures:Respawn:DynamicRate (or none); fix it and .reload config.", problem);
+        }
     }
 
     /// <summary>

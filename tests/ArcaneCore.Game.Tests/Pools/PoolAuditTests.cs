@@ -43,7 +43,7 @@ public sealed class PoolAuditTests
     {
         using WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(0);
-        var system = new GameObjectMapSystem(map, BadlandsContent()) { Random = new Random(17) };
+        var system = new GameObjectMapSystem(map, BadlandsContent(), random: new Random(17));
         map.AddUpdater(system);
         world.AddPlayer(Player(1).Player);
         world.RunTick(50);

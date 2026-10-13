@@ -113,4 +113,7 @@ public sealed class WorldRuntimeOptions
 
     /// <summary>Grid lifecycle and terrain data (the <c>World:Maps</c> section; docs/areas/grid-terrain.md).</summary>
     public MapOptions Maps { get; set; } = new();
+
+    /// <summary>Respawn tuning (the <c>World:Respawn</c> section): population-scaled respawn delays (<c>World:Respawn:Dynamic</c>).</summary>
+    public WorldRespawnOptions Respawn { get; set; } = new();
 }
