@@ -62,6 +62,14 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
         Assert.Contains("  column ", before);
         Assert.Contains("  index ", before);
         Assert.Equal(expected, before);
+
+        string expectedSeeds = await SqlUpdateSupport.SeedRowsAsync(freshDb, schema);
+        if (component == "characters")
+        {
+            Assert.Contains("seed table character_ownership", expectedSeeds);
+        }
+
+        Assert.Equal(expectedSeeds, await SqlUpdateSupport.SeedRowsAsync(db, schema));
     }
 
     [Theory]

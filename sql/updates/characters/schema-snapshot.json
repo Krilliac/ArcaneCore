@@ -522,6 +522,9 @@
       ]
     }
   },
+  "seeds": [
+    {"table":"character_ownership","key":"scope=s:world","hash":"e84a7a168014335445bd037ff5e55a302642ff106e187b8d79ceca61eefc778f"}
+  ],
   "files": {
     "mariadb/0060_CharacterOwnershipDataModule.sql": "5e5ddb03b479ce59a87afa174600d94a068bdfde98c93194b4b2aa3bde4b0e81",
     "mariadb/base_v0059.sql": "4d8831bca7f10716842f30f344e6961e7ad905b7779bc6f7a818afe157509015",

@@ -22,19 +22,51 @@ public sealed record SnapshotTable(
 /// <param name="Previous">The tables before the newest update file (null while the newest file is the baseline); lets the newest file be regenerated.</param>
 public sealed record ProviderSnapshot(IReadOnlyList<SnapshotTable> Tables, IReadOnlyList<SnapshotTable>? Previous);
 
+/// <summary>A declared row seed: its table, its key (<c>column=value</c>) and a SHA-256 of every column's typed value.</summary>
+public sealed record SnapshotSeed(string Table, string Key, string Hash)
+{
+    /// <summary>The seeds a definition's steps declare (provider independent).</summary>
+    public static IReadOnlyList<SnapshotSeed> Of(SchemaDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        return [.. definition.Steps.SelectMany(s => s.Changes).OfType<EnsureRowChange>().Select(seed =>
+        {
+            var values = new SortedDictionary<string, object?>(StringComparer.Ordinal) { [seed.KeyColumn] = seed.KeyValue };
+            foreach ((string column, object? value) in seed.Values)
+            {
+                values[column] = value;
+            }
+
+            string canonical = seed.Table + "\n" + string.Join("\n", values.Select(v => v.Key + "=" + Typed(v.Value)));
+            return new SnapshotSeed(seed.Table, seed.KeyColumn + "=" + Typed(seed.KeyValue), UpdateScriptWriter.Hash(canonical));
+        }).OrderBy(s => s.Table, StringComparer.Ordinal).ThenBy(s => s.Key, StringComparer.Ordinal)];
+    }
+
+    private static string Typed(object? value) => value switch
+    {
+        null => "null",
+        bool b => "b:" + (b ? "1" : "0"),
+        sbyte or byte or short or ushort or int or uint or long or ulong => "i:" + Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture),
+        string s => "s:" + s,
+        _ => throw new NotSupportedException($"a schema seed value of type {value.GetType().Name} is not recordable"),
+    };
+}
+
 /// <summary>
 /// <c>sql/updates/&lt;component&gt;/schema-snapshot.json</c>: the shape of a component's schema (per provider: tables, columns
 /// with store types and nullability, index shapes) after its newest update file, plus a manifest of every released file's
 /// content hash. The next schema step is generated against it, and a model change that no step accounts for is refused.
-/// There are no seed rows to record: the schema bootstrapper writes only the version row (initial data comes from the
-/// daemons' initializers, not from schema).
+/// The declared <see cref="EnsureRowChange"/> seeds (table, key, hash of the values) are recorded too, so editing a seed's values
+/// without a new step fails the golden test. Other initial data comes from the daemons' initializers, not from schema.
 /// </summary>
 /// <param name="Component">auth, characters or world.</param>
 /// <param name="Version">The schema version after the newest update file.</param>
 /// <param name="Providers">Keyed by provider folder name (sqlite, mariadb, postgresql).</param>
 /// <param name="Files">Path relative to the component folder -> SHA-256 (hex) of the file's LF-normalised text, for every update file.</param>
+/// <param name="Seeds">The declared row seeds after the newest update file; null in a snapshot written before seeds were recorded.</param>
 public sealed record SchemaSnapshot(
-    string Component, int Version, IReadOnlyDictionary<string, ProviderSnapshot> Providers, IReadOnlyDictionary<string, string> Files)
+    string Component, int Version, IReadOnlyDictionary<string, ProviderSnapshot> Providers, IReadOnlyDictionary<string, string> Files,
+    IReadOnlyList<SnapshotSeed>? Seeds = null)
 {
     private static readonly JsonSerializerOptions s_json = new()
     {
@@ -58,7 +90,14 @@ public sealed record SchemaSnapshot(
         json.AppendJoin(",\n", Providers.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p =>
             $"    {Js(p.Key)}: {{\n      \"tables\": {Tables(p.Value.Tables, "      ")},\n      \"previous\": " +
             (p.Value.Previous is null ? "null" : Tables(p.Value.Previous, "      ")) + "\n    }"));
-        json.Append("\n  },\n  \"files\": {\n");
+        json.Append("\n  },\n  \"seeds\": [");
+        SnapshotSeed[] seeds = [.. (Seeds ?? []).OrderBy(s => s.Table, StringComparer.Ordinal).ThenBy(s => s.Key, StringComparer.Ordinal)];
+        if (seeds.Length > 0)
+        {
+            json.Append('\n').AppendJoin(",\n", seeds.Select(s => "    " + JsonSerializer.Serialize(s, s_json))).Append("\n  ");
+        }
+
+        json.Append("],\n  \"files\": {\n");
         json.AppendJoin(",\n", Files.OrderBy(f => f.Key, StringComparer.Ordinal).Select(f => $"    {Js(f.Key)}: {Js(f.Value)}"));
         json.Append("\n  }\n}\n");
         return json.ToString();
