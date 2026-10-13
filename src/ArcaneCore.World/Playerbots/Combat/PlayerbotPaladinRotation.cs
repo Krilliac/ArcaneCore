@@ -47,6 +47,9 @@ internal sealed class PlayerbotPaladinRotation : PlayerbotClassRotation
 
     protected override IEnumerable<string> Dispels => [Cleanse, Purify];
 
+    /// <summary>A paladin alone, still classed as a healer because it has no Holy Shield or Sanctity Aura, heals only below this.</summary>
+    internal const float SoloEmergencyHealth = 30f;
+
     /// <summary>A paladin fights in melee; only a healer with a group to heal stands back.</summary>
     public override float PreferredRange(RotationState state)
         => state.Role == PlayerbotRole.Healer && state.InGroup ? CasterRange : MeleeRange;
@@ -109,7 +112,18 @@ internal sealed class PlayerbotPaladinRotation : PlayerbotClassRotation
         {
             RotationAction? heal = Do(s, HolyShock, s.Self, s.Self.HealthPercent < 50f)
                 ?? HealInjuredAlly(s, 80f, 90f);
-            if (heal is not null || !HealerMayFight(s)) return heal;
+            // A paladin with neither Holy Shield nor Sanctity Aura is a healer, including every paladin grinding alone below
+            // those talents. Holy Shock on itself under 50%, else a direct heal under 80%, and a null when still under 60%
+            // (HealerMayFight) meant the whole fight was a heal: Judgement and the seal never went out, Update returned true,
+            // and the brain never swung, so the mob never died. Alone, only an emergency is a heal. A group still heals first.
+            if (s.InGroup)
+            {
+                if (heal is not null || !HealerMayFight(s)) return heal;
+            }
+            else if (s.Self.HealthPercent < SoloEmergencyHealth && heal is not null)
+            {
+                return heal;
+            }
         }
 
         string seal = SealFor(s);
