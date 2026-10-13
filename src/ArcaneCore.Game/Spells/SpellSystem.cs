@@ -573,10 +573,7 @@ public sealed partial class SpellSystem
             cast.State = SpellCastState.Casting;
             cast.Timer = duration;
             SealModScope(cast); // vmangos Spell.cpp:3834: a channel ends its mods when it starts, not when it ends
-            cast.CastX = caster.X;
-            cast.CastY = caster.Y;
-            cast.CastZ = caster.Z;
-            cast.CastO = caster.Orientation;
+            cast.RememberCastPosition(); // vmangos Spell.cpp:4108-4110: the channel's movement check starts here
             if (caster is Player player)
             {
                 player.Session.Send(WorldOpcode.MsgChannelStart, SpellPackets.BuildChannelStart(spell.Id, (uint)duration));
@@ -723,10 +720,10 @@ public sealed partial class SpellSystem
         if (cast.State == SpellCastState.Casting && cast.Timer > 0)
         {
             // vmangos Spell::update (Spell.cpp:4130-4139): a jump cancels every player channel, and a turn cancels a channel with
-            // the turning channel interrupt flag (the orientation is compared with the one stored when the channel started).
+            // the turning channel interrupt flag. Facing is the transport offset while aboard (the same space as CastO).
             if (cast.Caster is Player channeller
                 && (channeller.Movement.HasFlag(MovementFlags.Jumping)
-                    || (cast.Spell.ChannelInterruptFlags.HasFlag(SpellAuraInterruptFlags.Turning) && channeller.Orientation != cast.CastO)))
+                    || (cast.Spell.ChannelInterruptFlags.HasFlag(SpellAuraInterruptFlags.Turning) && cast.FacingNow != cast.CastO)))
             {
                 Cancel(cast);
                 return;
