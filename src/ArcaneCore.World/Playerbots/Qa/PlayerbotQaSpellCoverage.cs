@@ -46,7 +46,10 @@ internal sealed record QaSpellCoverageReport(DateTime ComputedUtc, int Castable,
         sb.Append(CultureInfo.InvariantCulture, $"Computed {ComputedUtc:u} from the spell table and the live handler registries ({TrainerRows} class trainer rows). ");
         sb.Append(Describe()).Append(".\n\n");
         sb.Append("Bots can cast the class spell books at trainer level: the class spells trainers teach, the start spells and the talent spells; the ones a ")
-            .Append("class rotation or an escape names are the rotation spells. A gap is an effect with no handler, an aura type nothing implements, a DUMMY ")
+            .Append("class rotation or an escape names are the rotation spells, and so are the single-target heals a priest, druid, paladin or shaman ")
+            .Append("picks from its book (Lesser Heal, Healing Touch, Healing Wave, Renew: those rotations never name them). A start spell with no class ")
+            .Append("family that the rotation names (wand Shoot) counts for the class that starts with it. A gap is an effect with no handler, an aura ")
+            .Append("type nothing implements, a DUMMY ")
             .Append("or OVERRIDE_CLASS_SCRIPTS aura nothing known reads (advisory: a rule may read it by spell id; never published), or a DUMMY / SCRIPT_EFFECT ")
             .Append("that is a spell's only behaviour with no script. Each gap is a `spell unsupported` finding; one is published only once a bot really casts it.\n\n");
         IReadOnlyList<QaCoverageOffender> top = TopOffenders(15);
@@ -86,9 +89,11 @@ internal sealed record QaSpellCoverageReport(DateTime ComputedUtc, int Castable,
 /// implements (<see cref="PlayerbotQaSpellGapAnalyzer"/>). The spells bots can cast are the class spell books at trainer level: every class spell a
 /// class trainer teaches (<c>npc_trainer</c>: the teaching spell's LEARN_SPELL targets, or the row's spell itself), the spells a new character of each
 /// race and class starts with (<c>playercreateinfo_spell</c>) and the talent rank spells; a class spell is one of a class's spell family, so an NPC
-/// spell is never counted. Those whose name a class rotation or the escapes use are the rotation spells (a bot resolves its abilities from its book
-/// by name). Passive spells are left out (bots do not cast them). Pure; run it off the world thread after start-up (the registries are complete then
-/// and only read).
+/// spell is never counted. A start spell with no class family still counts, for the class that starts with it, when that class's rotation names it
+/// (wand Shoot, family 0, which the spell system auto-repeats). Those whose name a class rotation or the escapes use are the rotation spells, and so
+/// is every single-target direct or periodic heal of a class whose rotation heals from the book (<see cref="PlayerbotAbilities"/>; priest, druid,
+/// paladin, shaman) rather than by name. Passive spells are left out (bots do not cast them). Pure; run it off the world thread after start-up (the
+/// registries are complete then and only read).
 /// </summary>
 internal static class PlayerbotQaSpellCoverage
 {
@@ -147,17 +152,27 @@ internal static class PlayerbotQaSpellCoverage
             set.UnionWith(list);
         }
 
-        void Book(SpellInfo? spell)
+        void Book(SpellInfo? spell, Class? genericOwner = null)
         {
-            if (spell is null || spell.IsPassive || ClassOf(spell.SpellFamilyName) is not { } playerClass) return;
-            Add(castable, spell, playerClass, names.TryGetValue(playerClass, out HashSet<string>? set) && set.Contains(spell.Name));
+            if (spell is null || spell.IsPassive) return;
+            if (ClassOf(spell.SpellFamilyName) is { } playerClass)
+            {
+                bool named = names.TryGetValue(playerClass, out HashSet<string>? set) && set.Contains(spell.Name);
+                Add(castable, spell, playerClass, named || IsBookHeal(playerClass, spell));
+                return;
+            }
+
+            // No class family: only a start spell the owning class's rotation names (wand Shoot). A trainer row of an NPC spell that merely shares
+            // a name stays out, which is why genericOwner is set only from playercreateinfo_spell.
+            if (genericOwner is not { } owner || !names.TryGetValue(owner, out HashSet<string>? owned) || !owned.Contains(spell.Name)) return;
+            Add(castable, spell, owner, rotation: true);
         }
 
         foreach (Class playerClass in Enum.GetValues<Class>())
         {
             foreach (Race race in Enum.GetValues<Race>())
             {
-                foreach (uint id in store.GetCreateSpells((byte)race, (byte)playerClass)) Book(store.Get(id));
+                foreach (uint id in store.GetCreateSpells((byte)race, (byte)playerClass)) Book(store.Get(id), playerClass);
             }
         }
 
@@ -208,6 +223,17 @@ internal static class PlayerbotQaSpellCoverage
             EffectIndex = g.EffectIndex, EffectName = g.EffectName, EffectValue = g.EffectValue, Aura = g.Aura, Reason = g.Code, Detail = g.Detail,
             Message = "start-up spell coverage: " + QaSpellGaps.Describe(g.Code, g.Detail),
         });
+
+    /// <summary>
+    /// Whether <paramref name="playerClass"/>'s rotation casts <paramref name="spell"/> from the heal lists rather than by name.
+    /// Priest, druid, paladin and shaman call <c>HealDirect</c> / <c>HealPeriodic</c> (<see cref="PlayerbotAbilities.Resolve"/>); the other classes do not.
+    /// </summary>
+    private static bool IsBookHeal(Class playerClass, SpellInfo spell)
+    {
+        if (playerClass is not (Class.Priest or Class.Druid or Class.Paladin or Class.Shaman)) return false;
+        PlayerbotAbilities known = PlayerbotAbilities.Resolve([spell], []);
+        return known.DirectHeals.Count > 0 || known.PeriodicHeals.Count > 0;
+    }
 
     private static void Add(Dictionary<uint, (SpellInfo Spell, uint Classes, bool Rotation)> castable, SpellInfo spell, Class playerClass, bool rotation)
     {
