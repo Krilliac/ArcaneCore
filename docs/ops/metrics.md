@@ -48,6 +48,10 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_world_maps_loaded` | gauge | maps and instances at the last sample |
 | `arcanecore_nav_tile_installs_total` | counter | navigation mesh tiles installed on the thread that needed them: path-query reads and grid tile loads, nearly all on the world thread; the slow-map-update line shows the same count per update |
 | `arcanecore_nav_tile_install_time_milliseconds_total` | counter | time those installations took (a tile read under disk contention can take seconds) |
+| `arcanecore_creature_path_straight_fallbacks_total` | counter | authored creature routes (waypoint, point, formation, scripted move) walked along a straight line because the navmesh had no path |
+| `arcanecore_creature_path_no_path_total` | counter | creature path searches that found no path (chase stands, flee/wander wait, home teleports). A chaser standing at an unreachable target searches every 100 ms, so it adds about 10 per second to this counter |
+| `arcanecore_creature_path_deferred_total` | counter | creature path requests put off to a later update because the per-update search budget was spent, or whose tiles were still being read (`TilesPending`) |
+| `arcanecore_creature_path_home_teleports_total` | counter | evade returns done by teleport because no whole mesh path led home |
 | `arcanecore_db_save_queue_depth` | gauge | characters with a snapshot queued or being written; the queue keeps one per character (TC `db_queue_*`) |
 | `arcanecore_db_save_queue_oldest_age_milliseconds` | gauge | age of the longest-waiting character snapshot, queued or in its write; 0 when none (the `World:SaveQueueWarnAgeMs` check, [persistence](../areas/persistence.md)) |
 | `arcanecore_map_players` / `_creatures` / `_objects` `{map,instance}` | gauge | per map, sampled every `MapSampleIntervalSeconds` on the world thread (TC `map_creatures`, `map_players`) |

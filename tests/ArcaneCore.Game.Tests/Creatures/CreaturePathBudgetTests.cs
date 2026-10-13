@@ -165,7 +165,7 @@ public sealed class CreaturePathBudgetTests
     }
 
     [Fact]
-    public void ANonDeferrableRequest_OverBudget_WalksTheStraightLine_WithoutSearching()
+    public void ANonDeferrableRequest_OverBudget_IsDeferred_NeverTheStraightLine()
     {
         using Crowd c = Start(new CreaturePathBudget(MaxSearches: 1, MaxNodes: long.MaxValue));
         Creature wolf = c.Wolves[0];
@@ -174,8 +174,9 @@ public sealed class CreaturePathBudgetTests
         IReadOnlyList<Vector3> second = c.System.FindPath(wolf, new Vector3(4, 5, 6));
 
         Assert.Equal(1, c.Paths.Calls);
-        Assert.Equal(new Vector3(4, 5, 6), Assert.Single(second));
-        Assert.Equal(1, c.System.DirectFallbackPaths);
+        Assert.Empty(second); // an empty path: the caller asks again on a later update
+        Assert.Equal(0, c.System.DirectFallbackPaths);
+        Assert.Equal(1, c.System.DeferredPathSearches);
         Assert.NotEmpty(first);
 
         c.World.RunTick(50); // a new update restores the budget

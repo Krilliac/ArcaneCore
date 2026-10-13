@@ -22,7 +22,9 @@ namespace ArcaneCore.Game.Creatures;
 /// <para>
 /// Point choice (docs/areas/creature-movement-spawns.md): like vmangos (<c>Creature::GetRandomPoint</c>, <c>MOVE_PATHFINDING | MOVE_EXCLUDE_STEEP_SLOPES</c>)
 /// the point is a navmesh point within the wander distance (<see cref="ICreatureMover.TryGetRandomMeshPoint"/>) reached by a mesh path; where no
-/// mesh is loaded it is uniform over the wander disc at the height provider's ground Z (or the spawn Z), walked straight. Flying creatures (<c>CanFly</c>, :28-44) keep the ground wander.
+/// mesh is loaded it is uniform over the wander disc at the height provider's ground Z (or the spawn Z), walked straight (the pathfinder's
+/// answer for a map or tile without mesh data). A leg with no path (the point is off the mesh) is skipped and tried again 1-1.5 s later; a leg
+/// the path budget cannot serve waits for the next update. Flying creatures (<c>CanFly</c>, :28-44) keep the ground wander.
 /// </para>
 /// </summary>
 internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
@@ -53,6 +55,11 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         _expiryMs = expiryMs;
         _remainingMs = expiryMs;
     }
+
+    /// <summary>How long a wander whose point has no path waits before it picks another (1-1.5 s, the wait of the flee and fear generators).</summary>
+    public const int NoPathRetryMinMs = FleeingMovementGenerator.NoPathRetryMinMs;
+
+    public const int NoPathRetryMaxMs = FleeingMovementGenerator.NoPathRetryMaxMs;
 
     /// <summary>vmangos RandomMovementGenerator constructor default when the spawn has none.</summary>
     public const float DefaultWanderDistance = 5.0f;
@@ -135,14 +142,24 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         }
 
         bool run = _run ?? ShouldRun(creature, mover);
-        if (onMesh)
+
+        // The leg goes through the pathfinder whether or not the point came from the mesh: a terrain-height point on a map that has a mesh
+        // but nothing at that spot (a house, a wall) has no path, and a wandering creature never walks a straight line through geometry.
+        PlannedPath plan = mover.PlanPath(creature, new Vector3(destX, destY, destZ));
+        if (plan.Outcome == PathOutcome.NoPath)
         {
-            mover.MovePath(creature, mover.FindPath(creature, new Vector3(destX, destY, destZ)), run, SplineFacing.None);
+            // Skip this leg and pick again later (vmangos' mesh point is always reachable, so it never meets this).
+            _nextMoveMs = mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
+            return true;
         }
-        else
+
+        if (plan.Outcome == PathOutcome.Deferred)
         {
-            mover.MoveTo(creature, destX, destY, destZ, run, finalOrientation: null);
+            _nextMoveMs = 0; // the search budget is spent: pick again on the next update
+            return true;
         }
+
+        mover.MovePath(creature, plan.Corners, run, SplineFacing.None);
 
         if (_wanderSteps > 0)
         {

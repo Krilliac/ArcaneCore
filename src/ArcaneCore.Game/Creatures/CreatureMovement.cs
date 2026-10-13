@@ -40,8 +40,27 @@ internal interface ICreatureMover
     /// <summary>Stop a moving creature where it is (stop packet).</summary>
     void StopMoving(Creature creature);
 
-    /// <summary>A path from the creature to <paramref name="destination"/> (pathfinder seam; straight line by default).</summary>
+    /// <summary>
+    /// The path of an authored route (waypoint, point, formation, scripted move) from the creature to <paramref name="destination"/>:
+    /// the mesh path, or the straight line when the mesh has no path (vmangos moves such a spline along the shortcut,
+    /// <c>MoveSplineInit::Move(PathFinder*)</c>). EMPTY when the map's search budget is spent: the caller asks again on a later update,
+    /// it never walks straight for want of budget.
+    /// </summary>
     IReadOnlyList<Vector3> FindPath(Creature creature, Vector3 destination);
+
+    /// <summary>
+    /// Search a path for a motion that decides itself what no path means (<see cref="PathOutcome"/>). The default, for a mover without
+    /// a pathfinder, is <see cref="FindPath"/> labelled <see cref="PathOutcome.Direct"/>. <paramref name="toSpawn"/> (a return home) uses the
+    /// vmangos end tolerance (<see cref="Maps.Collision.PathOptions.EndTolerance"/>): a spawn point a few yards off the mesh still has a whole path.
+    /// </summary>
+    PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false) => new(PathOutcome.Direct, FindPath(creature, destination));
+
+    /// <summary>
+    /// Put the creature at the spot at once (vmangos <c>Unit::NearTeleportTo</c>), as an evade return does when no whole path leads home.
+    /// The default only relocates.
+    /// </summary>
+    void TeleportHome(Creature creature, float x, float y, float z, float orientation)
+        => creature.Relocate(x, y, z, orientation, creature.Movement.Time);
 
     /// <summary>A uniform random number in [0, 1).</summary>
     double NextDouble();

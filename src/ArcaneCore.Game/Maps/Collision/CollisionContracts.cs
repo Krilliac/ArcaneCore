@@ -254,6 +254,17 @@ public sealed record PathOptions
     /// disk contention took 5.6 s of one world tick, live 2026-10-12).
     /// </summary>
     public bool NonBlockingTiles { get; init; }
+
+    /// <summary>vmangos <c>BuildPolyPath</c> "farFromPoly" distance (PathFinder.cpp:209): an endpoint farther than this from its polygon makes the path incomplete.</summary>
+    public const float VmangosEndTolerance = 7.0f;
+
+    /// <summary>
+    /// 0 (default): an endpoint is located within <see cref="MMaps.NavMeshPathfinder.NearExtents"/> (3 yd) and the path is <see cref="PathType.Incomplete"/>
+    /// as soon as it is 0.1 yd off its polygon. Above 0 (vmangos, <see cref="VmangosEndTolerance"/>): the destination is located within 5 yd
+    /// horizontally (PathFinder.cpp:128 FindWalkPoly extents) and is only "far" past this distance, so a point a few yards off the mesh whose
+    /// polygon the corridor reaches is a whole path ending at the nearest mesh point.
+    /// </summary>
+    public float EndTolerance { get; init; }
 }
 
 /// <summary>A path answer: its classification and its corner points (world coordinates).</summary>
