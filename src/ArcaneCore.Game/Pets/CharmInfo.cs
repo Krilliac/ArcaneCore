@@ -108,6 +108,12 @@ public sealed class CharmInfo
     /// <summary>vmangos Pet::m_trainingPoints: minus the training points spent, plus those earned (shown through UNIT_TRAINING_POINTS).</summary>
     public int TrainingPoints { get; internal set; }
 
+    /// <summary>vmangos Pet::m_happinessTimer: milliseconds to the next happiness loss (7.5 s period).</summary>
+    internal int HappinessTimerMs { get; set; } = SummonService.HappinessPeriodMs;
+
+    /// <summary>vmangos Pet::m_loyaltyTimer: milliseconds to the next loyalty tick (12 s period).</summary>
+    internal int LoyaltyTimerMs { get; set; } = SummonService.LoyaltyPeriodMs;
+
     /// <summary>vmangos Pet::m_resetTalentsCost: the copper the last untraining cost (0 before the first). Kept in memory only.</summary>
     public uint ResetTalentsCost { get; internal set; }
 

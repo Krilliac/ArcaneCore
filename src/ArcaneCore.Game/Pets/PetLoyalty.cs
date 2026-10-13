@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Pets;
 /// Hunter pet loyalty (vmangos Pet.cpp). The level (1 Rebellious … 6 Best Friend) is UNIT_FIELD_BYTES_1 byte 1 (Pet::SetLoyaltyLevel, :879-882);
 /// the points move between <see cref="StartPoints"/> and <see cref="LevelUpPoints"/> (Pet::ModifyLoyalty, :795-837), and each level gained or lost
 /// adds or takes the pet's level in training points. Training points show as UNIT_TRAINING_POINTS (Pet::SetTP / GetDispTP, :983-996).
-/// The loyalty ticks (happiness decay, kill bonus) belong to the pet happiness system, which ArcaneCore does not run yet.
+/// The loyalty ticks (happiness decay, kill bonus) are SummonService.Happiness.
 /// </summary>
 public static class PetLoyalty
 {
