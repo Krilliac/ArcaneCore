@@ -191,7 +191,7 @@ public sealed class PlayerbotTransitReturnTests
     }
 
     [Fact]
-    public async Task ALevelOneBot_WhoseEnderIsOnTheSameLevelAsALift_IsNeverSetAside()
+    public async Task ALevelOneBot_WhoseEnderIsOnTheSameLevelAsALift_WalksThere_AndIsNeverSetAside() // the walk plans, so the transit gate is never asked; the gate itself is pinned by the tram and plain-unreachable cases
     {
         (ElevatorTestWorld world, PlayerbotWorldDestinations destinations, PlayerbotSuspensions suspensions) = await LiftAsync(1, null, NextToTheLiftBot);
         await using (world)
