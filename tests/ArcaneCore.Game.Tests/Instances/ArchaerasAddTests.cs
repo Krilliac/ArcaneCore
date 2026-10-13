@@ -241,7 +241,7 @@ public sealed class ArchaerasAddTests
         rig.Spells.RemoveAuras(g, Stoned);
         Assert.True(g.AI!.AttackStart(rig.Player));
         long start = rig.Spells.NowMs;
-        rig.Run(40_000);
+        RunAlive(rig, 40_000);
         long[] at = [.. rig.Spells.Of(g, Whirlwind).Select(c => c.AtMs - start)];
         Assert.True(at.Length >= 3, string.Join(',', at));
         Assert.InRange(at[0], 4900, 9600);
@@ -258,19 +258,31 @@ public sealed class ArchaerasAddTests
         rig.Spells.RemoveAuras(w, Stoned);
         Assert.True(w.AI!.AttackStart(rig.Player));
         long start = rig.Spells.NowMs;
-        rig.Run(60_000);
+        RunAlive(rig, 60_000);
         long[] at = [.. rig.Spells.Of(w, Trample).Select(c => c.AtMs - start)];
         Assert.True(at.Length >= 2, string.Join(',', at));
         Assert.InRange(at[0], 3900, 10600);
         Assert.InRange(at[1] - at[0], 12900, 22600);
     }
 
-    /// <summary>Runs <paramref name="ms"/> with Archaedas pinned at <paramref name="health"/>: the 5 s out-of-combat regeneration would otherwise heal him past the threshold mid-run.</summary>
+    /// <summary>Runs <paramref name="ms"/> with the player kept alive: the awake add melees him, and a random death ends the fight, evades the
+    /// add back to Stoned and stops its casts mid-run (a 21 s gap was seen in a Whirlwind run).</summary>
+    private static void RunAlive(DungeonNpcRig rig, uint ms)
+    {
+        for (uint done = 0; done < ms; done += 50)
+        {
+            rig.Player.Health = rig.Player.MaxHealth;
+            rig.Tick();
+        }
+    }
+
+    /// <summary>Runs <paramref name="ms"/> with Archaedas pinned at <paramref name="health"/> and the player kept alive: the 5 s out-of-combat regeneration would otherwise heal him past the threshold mid-run.</summary>
     private static void HoldHealth(DungeonNpcRig rig, Creature archaedas, uint health, uint ms)
     {
         for (uint done = 0; done < ms; done += 50)
         {
             archaedas.Health = health;
+            rig.Player.Health = rig.Player.MaxHealth; // the custodian melees the player; a random death would end the fight and re-stone the custodian
             rig.Tick();
         }
     }

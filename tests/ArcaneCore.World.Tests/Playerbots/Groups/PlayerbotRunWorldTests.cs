@@ -73,7 +73,7 @@ public sealed class PlayerbotRunWorldTests
         Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == DungeonEntry.Deadmines)), world.Trace());
         uint firstInstance = world.Player(bots[0].Id).Map!.InstanceId;
         Assert.NotEqual(0u, firstInstance);
-        Creature firstTrash = VisibleCreature(world, bots[0].Id, LifecycleTrash);
+        Creature firstTrash = await VisibleCreatureAsync(world, bots[0].Id, LifecycleTrash);
         Assert.True(firstTrash.IsAlive);
         Assert.True(await world.RunUntilAsync(360_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
         Assert.True(first.Run!.Complete, world.Trace());
@@ -95,8 +95,8 @@ public sealed class PlayerbotRunWorldTests
         uint secondInstance = world.Player(bots[0].Id).Map!.InstanceId;
         Assert.NotEqual(firstInstance, secondInstance);
         Assert.Equal(BossEntry, second.Run!.CurrentBoss!.Entry);
-        Assert.True(VisibleCreature(world, bots[0].Id, BossEntry).IsAlive);
-        Assert.True(VisibleCreature(world, bots[0].Id, LifecycleTrash).IsAlive);
+        Assert.True((await VisibleCreatureAsync(world, bots[0].Id, BossEntry)).IsAlive);
+        Assert.True((await VisibleCreatureAsync(world, bots[0].Id, LifecycleTrash)).IsAlive);
     }
 
     [Fact]
@@ -600,11 +600,12 @@ public sealed class PlayerbotRunWorldTests
         => GroupTestWorld.StartAsync(quests ?? [], configure, dungeon: true, Register,
             withLifecycleTrash ? [.. Bosses(), LifecycleTrashSpawn()] : Bosses());
 
-    private static Creature VisibleCreature(GroupTestWorld world, Guid botId, uint entry)
+    /// <summary>On the world thread: the visible set and the map are mutated by the tick, so enumerating them from the test thread races it.</summary>
+    private static Task<Creature> VisibleCreatureAsync(GroupTestWorld world, Guid botId, uint entry) => world.OnWorldAsync(() =>
     {
         Player player = world.Player(botId);
         return player.VisibleObjects.Select(g => player.Map!.FindObject(g)).OfType<Creature>().Single(c => c.Entry == entry);
-    }
+    });
 
     // Scenario-only pack member on the straight entrance-to-boss route; 600 s respawn exceeds both runs.
     private static (CreatureTemplate Template, CreatureSpawn Spawn) LifecycleTrashSpawn() =>
