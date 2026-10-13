@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Creatures;
 [Flags]
 public enum TemporaryFactionFlags : uint
 {
-    /// <summary>The faction stays until a script changes it back (but a respawn here always re-reads the template's).</summary>
+    /// <summary>The faction stays until a script changes it back, through respawns too.</summary>
     None = 0x00,
     /// <summary>Restored at respawn (Creature::SetDeathState JUST_ALIVED, Creature.cpp:1929).</summary>
     RestoreRespawn = 0x01,
@@ -27,10 +27,14 @@ public sealed partial class Creature
     /// <summary>The restore flags of the current temporary faction (cmangos m_temporaryFactionFlags); None when none is set.</summary>
     public TemporaryFactionFlags TemporaryFactionFlags { get; private set; }
 
+    /// <summary>Whether a temporary faction is set (TEMPFACTION_NONE is a persistent one: it survives respawn).</summary>
+    public bool HasTemporaryFaction { get; private set; }
+
     /// <summary>cmangos Creature::SetFactionTemporary (Creature.cpp:2653-2670): the faction until a restore point the flags name.</summary>
     public void SetFactionTemporary(uint factionTemplate, TemporaryFactionFlags flags)
     {
         TemporaryFactionFlags = flags;
+        HasTemporaryFaction = true;
         FactionTemplate = factionTemplate;
     }
 
@@ -46,6 +50,7 @@ public sealed partial class Creature
         }
 
         TemporaryFactionFlags = TemporaryFactionFlags.None;
+        HasTemporaryFaction = false;
         FactionTemplate = Template.Faction;
     }
 

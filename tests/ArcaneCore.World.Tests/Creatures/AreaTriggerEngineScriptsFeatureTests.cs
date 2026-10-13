@@ -200,6 +200,31 @@ public sealed class AreaTriggerEngineScriptsFeatureTests
     }
 
     [Fact]
+    public async Task TemporaryFaction_WithoutRestoreRespawn_OutlivesTheRespawn()
+    {
+        var fixture = new QuestJournalFixture { Templates = [Plain(1)] };
+        await using WorldTestHost host = Start(fixture, Template(AreaTriggerEngineScriptsFeature.NpcSaean));
+        await using WorldTestClient client = await EnterAsync(host, fixture, "ATPERS", "Atpers", seed: false);
+        Player player = await host.PlayerAsync("Atpers");
+        await WaitLoadedAsync(host, player);
+
+        uint persistent = 0, restored = 0;
+        await host.OnWorldAsync(() =>
+        {
+            Creature a = player.Map!.FindUpdater<CreatureMapSystem>()!.SummonInstanceCreature(AreaTriggerEngineScriptsFeature.NpcSaean, player.X, player.Y, player.Z, 0f)!;
+            a.SetFactionTemporary(14, TemporaryFactionFlags.None);
+            a.InitializeFields();
+            persistent = a.FactionTemplate;
+            a.SetFactionTemporary(14, TemporaryFactionFlags.RestoreRespawn);
+            a.InitializeFields();
+            restored = a.FactionTemplate;
+        });
+
+        Assert.Equal(14u, persistent);
+        Assert.Equal(35u, restored);
+    }
+
+    [Fact]
     public async Task StormwindRecruiter_SendsCustomEventA_ToJustine_ForAnAllianceRecruit()
     {
         var fixture = new QuestJournalFixture { Templates = [Plain(1)] };

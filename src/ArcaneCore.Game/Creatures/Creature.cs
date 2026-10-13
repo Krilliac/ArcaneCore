@@ -438,8 +438,13 @@ public sealed partial class Creature : Unit, ICombatCreature
         SetUInt32(UpdateFields.UnitFieldBaseattacktime + 1, t.MeleeBaseAttackTime);
         SetUInt32(UpdateFields.UnitFieldRangedattacktime, t.RangedBaseAttackTime);
 
-        FactionTemplate = t.Faction;
-        TemporaryFactionFlags = TemporaryFactionFlags.None; // a respawn re-reads the template's faction (TEMPFACTION_RESTORE_RESPAWN)
+        if (!HasTemporaryFaction || (TemporaryFactionFlags & TemporaryFactionFlags.RestoreRespawn) != 0)
+        {
+            // A temporary faction without TEMPFACTION_RESTORE_RESPAWN outlives the respawn (cmangos Creature.cpp:1929).
+            FactionTemplate = t.Faction;
+            HasTemporaryFaction = false;
+            TemporaryFactionFlags = TemporaryFactionFlags.None;
+        }
         RegeneratesHealth = true;
         NpcFlags = t.NpcFlags;
 

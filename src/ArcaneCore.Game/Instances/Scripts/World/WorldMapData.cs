@@ -27,13 +27,15 @@ public abstract class WorldMapData : ScriptedInstance
     internal Random Random { get; set; } = Random.Shared;
 
     /// <summary>
-    /// cmangos WorldObject::GetRandomPoint(x, y, z, distance) without the ground check: a point within <paramref name="radius"/> yards
-    /// around the given one, at its height.
+    /// cmangos WorldObject::GetRandomPoint(x, y, z, distance): a point within <paramref name="radius"/> yards around the given one, put on
+    /// the ground near its height (the given height where the terrain has none).
     /// </summary>
     protected (float X, float Y, float Z) RandomPointAround(float x, float y, float z, float radius)
     {
         double angle = Random.NextDouble() * Math.PI * 2, distance = Random.NextDouble() * radius;
-        return (x + (float)(distance * Math.Cos(angle)), y + (float)(distance * Math.Sin(angle)), z);
+        float px = x + (float)(distance * Math.Cos(angle)), py = y + (float)(distance * Math.Sin(angle));
+        float ground = Instance.GetHeight(px, py, z + 2f);
+        return (px, py, ground > ArcaneCore.Game.Maps.Terrain.TerrainTile.InvalidHeight && Math.Abs(ground - z) <= 10f ? ground : z);
     }
 
     /// <summary>The world map script of a continent (cmangos ScriptMgr's per-map <c>GetInstanceData</c>), or null for a map without one.</summary>
