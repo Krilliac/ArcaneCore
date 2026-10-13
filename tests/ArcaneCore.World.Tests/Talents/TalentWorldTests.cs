@@ -569,6 +569,9 @@ public sealed class TalentWorldTests
 
         await client.SendAsync(WorldOpcode.MsgTalentWipeConfirm, GuidBody(Trainer));
         await client.ReadUntilAsync(WorldOpcode.SmsgRemovedSpell);
+        // The removal packet is sent before the respec is queued. Wait until that world-thread handler returns,
+        // or Flush runs before the failing write exists and FailedCharacters is still empty (the CI flake).
+        await host.OnWorldAsync(() => { });
         await Talents(host).Persistence.FlushAsync();
 
         Assert.Contains(record.Id, Talents(host).Persistence.FailedCharacters);

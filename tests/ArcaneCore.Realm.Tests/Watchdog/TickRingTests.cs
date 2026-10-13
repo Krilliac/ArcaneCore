@@ -68,6 +68,9 @@ public sealed class TickRingTests
             while (!stop.IsCancellationRequested)
             {
                 ring.Record(next++);
+                // A tight writer laps the whole ring during one copy, so every snapshot is empty on a fast
+                // runner and the test reports "only 0 non-empty snapshots". Yield a moment between samples.
+                Thread.SpinWait(64);
             }
         });
 
