@@ -136,9 +136,9 @@ internal sealed class SnapshotCatalog
     }
 
     /// <summary>The catalog the code's model describes for <paramref name="db"/>'s provider.</summary>
-    public static SnapshotCatalog FromModel(DbContext db)
+    public static SnapshotCatalog FromModel(DbContext db, SchemaDefinition definition)
     {
-        SchemaChangeDecider.ModelOperations ops = SchemaChangeDecider.ReadModel(db);
+        SchemaChangeDecider.ModelOperations ops = SchemaChangeDecider.ReadModel(db, definition);
         var catalog = new SnapshotCatalog();
         foreach (CreateTableOperation table in ops.Tables.Values)
         {
@@ -169,7 +169,8 @@ internal sealed class SnapshotCatalog
     /// <summary>The catalog after the creates of a planned step.</summary>
     public void Apply(PlannedStep step, SnapshotCatalog model)
     {
-        foreach (PlannedAction action in step.Actions.Where(a => a.Decision == ChangeDecision.Create))
+        // A row seed (ChangeObject.Row) changes no schema object: it is in the file as a statement but not in the catalog.
+        foreach (PlannedAction action in step.Actions.Where(a => a.Decision == ChangeDecision.Create && a.Object != ChangeObject.Row))
         {
             switch (action.Operation)
             {

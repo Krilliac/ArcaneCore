@@ -177,7 +177,7 @@ internal static class UpdateScriptWriter
         foreach ((DatabaseProvider provider, string folder) in Providers)
         {
             using DbContext db = component.CreateOffline(provider);
-            SnapshotCatalog model = SnapshotCatalog.FromModel(db);
+            SnapshotCatalog model = SnapshotCatalog.FromModel(db, definition);
             var generated = new List<UpdateFile>();
             ProviderSnapshot snapshot;
             if (existing is null)
@@ -277,7 +277,7 @@ internal static class UpdateScriptWriter
         var statements = new List<string>();
         IMigrationsSqlGenerator generator = db.GetService<IMigrationsSqlGenerator>();
         IModel model = db.GetService<IDesignTimeModel>().Model;
-        foreach (AlterDatabaseOperation alter in SchemaChangeDecider.ReadModel(db).AlterDatabase)
+        foreach (AlterDatabaseOperation alter in SchemaChangeDecider.ReadModel(db, component.Definition).AlterDatabase)
         {
             statements.AddRange(generator.Generate([alter], model).Select(c => c.CommandText));
         }
