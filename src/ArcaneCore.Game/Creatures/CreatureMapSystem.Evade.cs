@@ -87,6 +87,7 @@ public sealed partial class CreatureMapSystem
             }
         }
 
+        creature.RestoreTemporaryFactionAt(TemporaryFactionFlags.RestoreCombatStop); // cmangos Unit::CombatStop
         creature.AI?.OnEvade();
         Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureEvade(creature);
         if (!creature.IsAlive)
@@ -232,6 +233,7 @@ public sealed partial class CreatureMapSystem
         creature.Motion.Reset();
         _ai.Spells?.Interrupt(creature);
         ResetAiState(creature);
+        creature.RestoreTemporaryFactionAt(TemporaryFactionFlags.RestoreCombatStop); // cmangos Unit::CombatStop at death
         creature.AI?.OnDeath(killer);
         if (Map.FindUpdater<Instances.Scripts.InstanceData>() is { } instanceData)
         {
