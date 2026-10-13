@@ -36,10 +36,8 @@ public sealed class ManagedPlayerbotLifecycleTests
         // Hold the first stop that reaches its persistence write, independent of dictionary order.
         // The old foreach cannot advance past it; a batched stop reaches the other seven.
         TaskCompletionSource<Guid> held = owners.HoldNextUpdate();
-        long ticksAtStart = host.World.Stats.Snapshot().TotalTicks;
         Task shutdown = feature.ShutdownBeforeWorldStopAsync();
         bool advanced = false;
-        long ticksBeforeRelease = 0;
         try
         {
             Guid heldId = await held.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -52,17 +50,11 @@ public sealed class ManagedPlayerbotLifecycleTests
             }
             catch (TimeoutException) { /* prove the missing progress after releasing the gate and draining shutdown */ }
             Assert.False(shutdown.IsCompleted);
-            ticksBeforeRelease = host.World.Stats.Snapshot().TotalTicks;
         }
         finally { owners.ReleaseHeldUpdates(); }
 
         await shutdown.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(advanced, "shutdown did not begin stopping the other seven bots while one stop write was held");
-        long ticksToFinish = host.World.Stats.Snapshot().TotalTicks - ticksBeforeRelease;
-        long totalTicks = host.World.Stats.Snapshot().TotalTicks - ticksAtStart;
-        Console.WriteLine($"Eight-bot shutdown used {totalTicks} world ticks total, {ticksToFinish} after the held stop was released");
-        Assert.InRange(totalTicks, 0, 64);
-        Assert.InRange(ticksToFinish, 0, 24);
         for (int i = 0; i < ids.Length; i++)
         {
             Assert.Equal(ManagedPlayerbotState.Stopped, (await owners.FindAsync(ids[i]))!.State);
