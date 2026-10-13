@@ -42,8 +42,32 @@ public static class TradeRules
     /// <summary>TRADE_SLOT_NONTRADED: shown to the partner (enchanting target), never moved.</summary>
     public const int NonTradedSlot = 6;
 
-    /// <summary>TRADE_DISTANCE in yards (vmangos: 11.11).</summary>
+    /// <summary>TRADE_DISTANCE in yards (vmangos: 11.11). Initiate and accept use this.</summary>
     public const float MaxDistance = 11.11f;
+
+    /// <summary>
+    /// INTERACTION_DISTANCE (vmangos ObjectDefines.h). <c>Player::SetPosition</c> cancels an open trade at this range
+    /// (Player.cpp:5977-5979, <c>IsWithinDistInMap</c>), not at <see cref="MaxDistance"/>.
+    /// </summary>
+    public const float InteractionDistance = 5.0f;
+
+    /// <summary>
+    /// Whether a position change ends the trade (vmangos Player::SetPosition, Player.cpp:5977-5979).
+    /// <c>IsWithinDistInMap(trader, INTERACTION_DISTANCE)</c> adds both bounding radii and uses a strict
+    /// less-than, so a distance equal to that reach already cancels. Standing still does not: a trade
+    /// opened between this and <see cref="MaxDistance"/> stays open until somebody moves.
+    /// </summary>
+    public static bool MovementEndsTrade(bool positionChanged, float distanceSquared, float combinedBoundingRadius)
+    {
+        if (!positionChanged || !float.IsFinite(distanceSquared))
+        {
+            return false;
+        }
+
+        float radii = float.IsFinite(combinedBoundingRadius) && combinedBoundingRadius > 0f ? combinedBoundingRadius : 0f;
+        float reach = InteractionDistance + radii;
+        return distanceSquared >= reach * reach;
+    }
 
     /// <summary>
     /// Whether an accept arrives too soon after the last modification of the trade (vmangos HandleAcceptTradeOpcode,
@@ -106,6 +130,9 @@ public sealed class TradeSide(Player player)
 /// </summary>
 public sealed class TradeSession(Player initiator, Player target)
 {
+    private (float X, float Y, float Z) _anchorA = (initiator.X, initiator.Y, initiator.Z);
+    private (float X, float Y, float Z) _anchorB = (target.X, target.Y, target.Z);
+
     public TradeSide Initiator { get; } = new(initiator);
 
     public TradeSide Target { get; } = new(target);
@@ -147,5 +174,25 @@ public sealed class TradeSession(Player initiator, Player target)
         float dy = a.Y - b.Y;
         float dz = a.Z - b.Z;
         return (dx * dx) + (dy * dy) + (dz * dz) <= TradeRules.MaxDistance * TradeRules.MaxDistance;
+    }
+
+    /// <summary>
+    /// vmangos <c>Player::SetPosition</c> (Player.cpp:5977-5979): once either player actually moves, the trade ends
+    /// when the two are no longer within <see cref="TradeRules.InteractionDistance"/> in 3D, including both bounding
+    /// radii. The positions at construction are the baseline, so standing still — even past interaction distance but
+    /// inside <see cref="TradeRules.MaxDistance"/> — does not end it. Turning in place does not count as a move.
+    /// </summary>
+    public bool SeparatedByMovement()
+    {
+        Player a = Initiator.Player;
+        Player b = Target.Player;
+        bool moved = a.X != _anchorA.X || a.Y != _anchorA.Y || a.Z != _anchorA.Z
+            || b.X != _anchorB.X || b.Y != _anchorB.Y || b.Z != _anchorB.Z;
+        _anchorA = (a.X, a.Y, a.Z);
+        _anchorB = (b.X, b.Y, b.Z);
+        float dx = a.X - b.X;
+        float dy = a.Y - b.Y;
+        float dz = a.Z - b.Z;
+        return TradeRules.MovementEndsTrade(moved, (dx * dx) + (dy * dy) + (dz * dz), a.BoundingRadius + b.BoundingRadius);
     }
 }
