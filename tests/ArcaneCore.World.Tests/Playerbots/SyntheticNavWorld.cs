@@ -51,8 +51,14 @@ internal sealed class SyntheticNavWorld : IAsyncDisposable
             // background read now, so a bot's first plan is not answered "pending" while the pool finds that out.
             Vector3 probe = new(5, 5, 0);
             var nonBlocking = new PathOptions { LoadTiles = true, NonBlockingTiles = true };
+            // The read can finish between the query and the lookup, leaving no pending task to await: query again then.
             while (nav.FindPath(0, probe, probe, nonBlocking).Type == PathType.TilesPending)
-                await nav.PendingTileRead(0, 31, 31)!;
+            {
+                if (nav.PendingTileRead(0, 31, 31) is { } read)
+                    await read;
+                else
+                    await Task.Yield();
+            }
         }
         foreach ((int x, int y, _) in tiles)
             Assert.True(nav.LoadTile(0, x, y));
