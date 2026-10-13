@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Reputation;
 
@@ -8,10 +9,11 @@ namespace ArcaneCore.Game.Reputation;
 /// <summary>
 /// The full unit-to-unit reaction ladder of vmangos <c>WorldObject::GetReactionTo</c> and
 /// <c>GetFactionReactionTo</c> (D:\refs\vmangos\src\game\Objects\Object.cpp:3608-3743), re-implemented with the
-/// reputation state, forced reactions, duels and group membership this codebase has. Order: self; owner or charmer
-/// (same controlling player); GM neutral; forced rank; for player-controlled units the duel, same-raid and reputation
+/// reputation state, forced reactions, duels and group membership this codebase has. Order: self; the same
+/// charmer or owner guid; GM neutral; forced rank; for player-controlled units the duel, same-raid and reputation
 /// (at war) rules; then the faction rule (contested guards, forced rank, standing capped at Neutral while at war, and
-/// finally the template relations).
+/// finally the template relations). The player a pet, totem or charmed unit acts for is <c>Unit::GetAffectingPlayer</c>
+/// (the summoned-by / charmed-by fields). A stand-in that only implements <see cref="IPlayerControlledUnit"/> still counts.
 /// <para>
 /// Fails closed: <c>false</c> means "cannot resolve" (a reputation faction whose player state is not loaded), and the
 /// callers fall back to the template-only hooks instead of guessing. An unknown template or a faction missing from
@@ -51,10 +53,19 @@ public sealed class ReputationReactionResolver(
             return true;
         }
 
-        Player? selfOwner = DuelRules.ControllingPlayer(self);
-        Player? targetOwner = DuelRules.ControllingPlayer(target);
+        // Always friendly to a charmer, an owner or a unit they control (Object.cpp:3614-3617, GetCharmerOrOwnerOrOwnGuid).
+        // This does not need the player to be resolved: a pet's summoned-by guid is the owner's own guid.
+        if (self.CharmerOrOwnerOrOwnGuid == target.CharmerOrOwnerOrOwnGuid)
+        {
+            rank = ReputationRank.Friendly;
+            return true;
+        }
 
-        // Always friendly to a charmer, an owner or a unit they control (GetCharmerOrOwnerOrOwnGuid).
+        Player? selfOwner = AffectingPlayer(self);
+        Player? targetOwner = AffectingPlayer(target);
+
+        // A stand-in that only reports IPlayerControlledUnit (no summoned-by field) is still friendly to that player.
+        // A real pet already returned above, because its summoned-by guid is the owner's own guid.
         if (selfOwner is not null && ReferenceEquals(selfOwner, targetOwner))
         {
             rank = ReputationRank.Friendly;
@@ -219,8 +230,8 @@ public sealed class ReputationReactionResolver(
 
         // Not all neutral creatures can be attacked (Object.cpp:3775-3792): between a player side and a creature, two
         // Neutral reactions need the faction to be at war, unless a forced rank decides.
-        Player? attackerOwner = DuelRules.ControllingPlayer(attacker);
-        Player? victimOwner = DuelRules.ControllingPlayer(victim);
+        Player? attackerOwner = AffectingPlayer(attacker);
+        Player? victimOwner = AffectingPlayer(victim);
         if (forward == ReputationRank.Neutral && backward == ReputationRank.Neutral && (attackerOwner is null) != (victimOwner is null))
         {
             Player player = victimOwner ?? attackerOwner!;
@@ -237,6 +248,15 @@ public sealed class ReputationReactionResolver(
         canAttack = true;
         return true;
     }
+
+    /// <summary>
+    /// vmangos <c>Unit::GetAffectingPlayer</c> (Unit.cpp:4824-4833): the unit itself when it is a player, otherwise the
+    /// player behind <c>UNIT_FIELD_SUMMONEDBY</c> / <c>UNIT_FIELD_CHARMEDBY</c>. Production pets and charmed creatures do not
+    /// implement <see cref="IPlayerControlledUnit"/>, so the duel seam alone never sees them; that seam is only the fallback
+    /// for a stand-in that reports a player without writing the owner field.
+    /// </summary>
+    private static Player? AffectingPlayer(Unit unit)
+        => unit.GetAffectingPlayer() ?? DuelRules.ControllingPlayer(unit);
 
     private PlayerReputation? Reputation(Player player) => _reputationOf(player);
 }
