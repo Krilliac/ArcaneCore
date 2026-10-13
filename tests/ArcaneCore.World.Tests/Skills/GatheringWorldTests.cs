@@ -184,6 +184,37 @@ public sealed class GatheringWorldTests
     }
 
     [Fact]
+    public async Task Skinning_ClearsTheSkinnableFlag_EvenWhenTheCorpseHasNoSkinningLoot()
+    {
+        // EffectSkinning removes UNIT_FLAG_SKINNABLE after SendLoot (SpellEffects.cpp:5376-5378) even when the
+        // creature has no skinning table. OpenSkinning returns before clearing the flag in that case, so a
+        // second cast must not succeed or raise the skill again.
+        await using WorldTestHost host = Start(out _, VeinLock);
+        await using WorldTestClient client = await host.EnterWorldAsync("SKINONCE", "Skinonce");
+        Player player = await host.PlayerAsync("Skinonce");
+        Game.Spells.SpellSystem spells = Spells(host);
+        spells.Random = new FixedRandom(int.MaxValue);
+        var template = new CreatureTemplate { Entry = 4003, Name = "Test Boar", MinLevel = 20, MaxLevel = 20, MinLevelHealth = 60, MaxLevelHealth = 60, Faction = 32, Rank = (uint)CreatureRank.Normal };
+        var spawn = new CreatureSpawn { Guid = 4003, Entry = template.Entry, MapId = 0, X = player.X + 1, Y = player.Y, Z = player.Z };
+        var boar = new Creature(4003, template, spawn, new CreatureContent([template], [spawn], [], [], []), new Random(1));
+        await host.OnWorldAsync(() =>
+        {
+            host.World.GetMap(0).AddObject(boar);
+            boar.Health = 0;
+            boar.UnitFlags |= UnitFlags.Skinnable;
+            boar.SkinningForOthersMs = 0;
+            player.Skills!.Set(SkillIds.Skinning, 120, 150, 2);
+        });
+
+        SpellCastResult Cast() => host.OnWorldAsync(() => spells.CastSpell(player, SkinCast, SpellCastTargets.ForUnit(boar.Guid), triggered: false)).GetAwaiter().GetResult();
+
+        Assert.Equal(SpellCastResult.CastOk, Cast());
+        Assert.Equal((ushort)121, await host.OnWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Skinning)));
+        Assert.Equal(SpellCastResult.TargetUnskinnable, Cast());
+        Assert.Equal((ushort)121, await host.OnWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Skinning)));
+    }
+
+    [Fact]
     public async Task AQuestVein_WithoutItsQuest_StaysClosed_AndGivesNoSkillUp()
     {
         // The chest quest gate (data8) of a use also holds for the open-lock spell, and a refused open raises no skill.
