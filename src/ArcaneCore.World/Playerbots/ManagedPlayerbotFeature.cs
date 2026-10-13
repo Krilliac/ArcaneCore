@@ -1331,7 +1331,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>
     /// The running bots' status lines (StatusOf), the snapshot rebuilt only when one of them changed, the running set changed or
-    /// PublishStopped touched it (_snapshotEpoch).
+    /// PublishStopped touched it (_snapshotEpoch). <paramref name="bots"/> is the active set captured at the start of the tick. A
+    /// start can enter <see cref="_active"/> after that capture and before this rebuild: its login check is a command at the start
+    /// of a tick, and the rest of the start runs off the world thread, so the active-set add can land while this tick is already
+    /// inside <see cref="Update"/>. Dropping that bot because it is already active, and not writing a fresh row because it is not
+    /// in <paramref name="bots"/>, omits it from <see cref="Snapshot"/> until the next tick. The wait posted as soon as start
+    /// returns runs at the beginning of that next tick and then finds no row.
     /// </summary>
     private void PublishSnapshot(ActiveBot[] bots)
     {
@@ -1350,8 +1355,18 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (changed || running != _builtCount || _snapshotEpoch != _builtEpoch)
             {
                 PlayerbotStatus[] current = Volatile.Read(ref _snapshot);
-                Volatile.Write(ref _snapshot, current.Where(s => !_active.ContainsKey(s.BotId))
-                    .Concat(bots.Where(b => _active.ContainsKey(b.Record.BotId)).Select(b => b.Status!)).ToArray());
+                // Rows this tick republishes are replaced. Every other row stays, including a bot that became active after
+                // `bots` was captured: its previous (stopped) row remains until the next tick publishes the running one.
+                var republished = new HashSet<Guid>(running);
+                var fresh = new List<PlayerbotStatus>(running);
+                foreach (ActiveBot b in bots)
+                {
+                    if (!_active.ContainsKey(b.Record.BotId) || b.Status is null) continue;
+                    republished.Add(b.Record.BotId);
+                    fresh.Add(b.Status);
+                }
+
+                Volatile.Write(ref _snapshot, current.Where(s => !republished.Contains(s.BotId)).Concat(fresh).ToArray());
                 _builtCount = running;
                 _builtEpoch = _snapshotEpoch;
             }
