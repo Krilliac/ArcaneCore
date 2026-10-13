@@ -224,22 +224,43 @@ public sealed partial class PlayerbotTaxiTests
             PlayerbotOptions options = Options(t => t.BackoffMinutes = 10);
             Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
 
-            // The bot got onto a mount after the trip began: the server answers ERR_TAXIPLAYERALREADYMOUNTED and starts nothing.
-            player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, TaxiFixture.GryphonDisplay);
+            // The bot is in combat when the flight request reaches the server (a mounted bot is dismounted by the managed action, so a mount no longer refuses): ERR_TAXIPLAYERBUSY, nothing starts.
+            player.UnitFlags |= UnitFlags.InCombat;
             rig.Session.ManagedBudget = new ManagedActionBudget(2);
             Assert.Equal(TaxiStep.Failed, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out string? failure));
-            Assert.Contains("PlayerAlreadyMounted", failure);
+            Assert.Contains("PlayerBusy", failure);
             Assert.False(PlayerbotTaxi.IsFlying(player));
             Assert.Equal(1000u, player.Money);
             Assert.Equal(failure, PlayerbotTaxi.LastFailure(player));
 
             // Backed off: the same long trip is walked until the window ends.
-            player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, 0);
+            player.UnitFlags &= ~UnitFlags.InCombat;
             uint now = rig.Session.World.NowMs;
             Assert.True(PlayerbotTaxi.IsBackedOff(player, now));
             Assert.Equal(TaxiTravel.Walk, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
             Assert.True(PlayerbotTaxi.IsBackedOff(player, now + (9 * 60_000u)));
             Assert.False(PlayerbotTaxi.IsBackedOff(player, now + (11 * 60_000u)));
+            return 0;
+        });
+    }
+
+    [Fact]
+    public async Task AMountedBot_IsDismountedByTheFlightRequest_AndFlies()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnPlayer((player, state) =>
+        {
+            Rig.Know(state, 1, 2);
+            player.Money = 1000;
+            PlayerbotOptions options = Options();
+            Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
+
+            // The managed action takes the mount off before a bot talks to a flight master (PlayerbotMount.DismountForAction).
+            player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, TaxiFixture.GryphonDisplay);
+            rig.Session.ManagedBudget = new ManagedActionBudget(2);
+            Assert.Equal(TaxiStep.Traveling, PlayerbotTaxi.Drive(rig.Session, player, options, 500, out string? failure));
+            Assert.Null(failure);
+            Assert.True(PlayerbotTaxi.IsFlying(player));
             return 0;
         });
     }

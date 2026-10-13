@@ -146,11 +146,11 @@ public sealed partial class PlayerbotTaxiTests
             player.Money = 1000;
             PlayerbotOptions options = Options();
 
-            // Another controller's flight request was refused (mounted) and nobody read the reply.
-            player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, TaxiFixture.GryphonDisplay);
+            // Another controller's flight request was refused (in combat) and nobody read the reply.
+            player.UnitFlags |= UnitFlags.InCombat;
             rig.Session.ManagedBudget = new ManagedActionBudget(2);
             Assert.True(rig.Session.TryManagedAction(WorldOpcode.CmsgActivatetaxi, PlayerbotTaxi.ActivatePayload(TaxiFixture.MasterGuid, [1u, 2u], 100)));
-            player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, 0);
+            player.UnitFlags &= ~UnitFlags.InCombat;
 
             Assert.Equal(TaxiTravel.Traveling, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
             rig.Session.ManagedBudget = new ManagedActionBudget(2);
