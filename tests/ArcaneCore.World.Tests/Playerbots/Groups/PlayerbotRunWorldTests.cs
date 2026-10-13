@@ -593,57 +593,52 @@ public sealed class PlayerbotRunWorldTests
         }, Bosses());
 
     [Fact]
-    public async Task AGivenUpRun_ReportsOneRunFailedSignalToBotQa_ByContentIds_WithNoBotOrGroupIdentity_AndCountsItAsGivenUp()
+    public async Task AnOperatorStop_CountsAsAGivenUpRun_ButReportsNothingToBotQa()
     {
         var bus = new PlayerbotQaSignalBus(64);
         (List<string> outcomes, MeterListener listener) = ListenToRuns();
         using MeterListener _ = listener;
         await using GroupTestWorld world = await StartWithQaAsync(bus);
-        (Guid Id, string Name)[] members = await AddPartyAsync(world, "Qaz");
+        await AddPartyAsync(world, "Qaz");
         world.Coordinator.RunRoll = () => 0d;
         Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
 
+        // A GM stop, a scale-down, a shutdown or a controller taking over ends a run through Forget: not a finding about content or code.
         await world.OnWorldAsync(() =>
         {
             world.Coordinator.Forget(group.LeaderBotId);
             return true;
         });
 
+        Assert.Equal("leader-stopped", group.Run!.Reason);
         var signals = new List<QaSignal>();
         bus.Drain(signals, 16);
-        QaSignal signal = Assert.Single(signals);
-        Assert.Equal(QaSignalKind.RunFailed, signal.Kind);
-        Assert.Equal("leader-stopped", signal.Reason);
-        Assert.Equal(DungeonEntry.Deadmines, signal.Map);
-        Assert.False(string.IsNullOrEmpty(signal.Stage));
-        Assert.Null(signal.BotKey);
-        Assert.Equal(0, signal.BotClass);
-        string everything = signal.Message + "|" + signal.Detail + "|" + signal.Stage + "|" + signal.Reason + "|" + PlayerbotQaFingerprint.Key(signal);
-        Assert.All(members, m => Assert.DoesNotContain(m.Name, everything, StringComparison.Ordinal));
-        Assert.Equal($"leader-stopped in {signal.Detail} at {signal.Stage}", PlayerbotQaAggregator.Subject(signal, null));
+        Assert.Empty(signals);
         Assert.Equal(1, world.Coordinator.RunTotals.GivenUp);
         lock (outcomes) Assert.Contains("given_up", outcomes);
     }
 
-    [Fact]
-    public async Task ARunThatTimesOut_ReportsARunFailedSignalWithTheTimeoutReason_AndCountsItAsATimeout()
+    [Theory]
+    [InlineData("travel-timeout", "timeout")]
+    [InlineData("no-path-to-entrance", "given_up")]
+    public async Task ARunGivenUpForAContentReason_ReportsOneRunFailedSignalToBotQa_WithNoBotOrGroupIdentity_AndCountsItByOutcome(string reason, string outcome)
     {
         var bus = new PlayerbotQaSignalBus(64);
         (List<string> outcomes, MeterListener listener) = ListenToRuns();
         using MeterListener _ = listener;
         await using GroupTestWorld world = await StartWithQaAsync(bus);
-        await AddPartyAsync(world, "Qat");
+        (Guid Id, string Name)[] members = await AddPartyAsync(world, "Qat");
         world.Coordinator.RunRoll = () => 0d;
         Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
-        // A run lasts under a minute here and MaxRunMinutes cannot go below 10 (validated), so the step timeout the group AI raises is injected the way its own
-        // faults are (RunFault, applied by Advance): the same Finish, disband and report path as a real gather or travel timeout.
+        // A run lasts under a minute here and MaxRunMinutes cannot go below 10 (validated), so the fault the group AI raises is injected the way its own are
+        // (RunFault, applied by Advance): the same Finish, disband and report path as a real gather or travel timeout or a no-path.
         await world.OnWorldAsync(() =>
         {
-            group.RunFault = "travel-timeout";
+            group.RunFault = reason;
             return true;
         });
 
@@ -652,12 +647,53 @@ public sealed class PlayerbotRunWorldTests
         var signals = new List<QaSignal>();
         bus.Drain(signals, 16);
         Assert.True(signals.Count == 1, world.Trace());
-        QaSignal signal = Assert.Single(signals);
+        QaSignal signal = signals[0];
         Assert.Equal(QaSignalKind.RunFailed, signal.Kind);
-        Assert.Equal("travel-timeout", signal.Reason);
+        Assert.Equal(reason, signal.Reason);
         Assert.Equal(DungeonEntry.Deadmines, signal.Map);
+        Assert.False(string.IsNullOrEmpty(signal.Stage));
+        Assert.Null(signal.BotKey);
+        Assert.Equal(0, signal.BotClass);
+        string everything = signal.Message + "|" + signal.Detail + "|" + signal.Stage + "|" + signal.Reason + "|" + PlayerbotQaFingerprint.Key(signal);
+        Assert.All(members, m => Assert.DoesNotContain(m.Name, everything, StringComparison.Ordinal));
+        Assert.Equal($"{reason} in {signal.Detail} at {signal.Stage}", PlayerbotQaAggregator.Subject(signal, null));
         Assert.Equal(1, world.Coordinator.RunTotals.GivenUp);
-        lock (outcomes) Assert.Contains("timeout", outcomes);
+        lock (outcomes) Assert.Contains(outcome, outcomes);
+    }
+
+    [Theory]
+    [InlineData("no-path-to-entrance", true)]
+    [InlineData("no-path-to-boss", true)]
+    [InlineData("gather-timeout", true)]
+    [InlineData("travel-timeout", true)]
+    [InlineData("enter-refused-or-timeout", true)]
+    [InlineData("regroup-timeout", true)]
+    [InlineData("run-timeout", true)]
+    [InlineData("objective-missing", true)]
+    [InlineData("stalled", true)]
+    [InlineData("wiped", true)]
+    [InlineData("leader-stopped", false)]
+    [InlineData("leader-left", false)]
+    [InlineData("leader-gone", false)]
+    [InlineData("too-few", false)]
+    [InlineData("invites-unanswered", false)]
+    [InlineData("disbanded", false)]
+    [InlineData("aborted", false)]
+    public void OnlyContentAndCodeReasons_AreFindings(string reason, bool finding)
+        => Assert.Equal(finding, PlayerbotGroupCoordinator.PointsAtContentOrCode(reason));
+
+    [Fact]
+    public void ARealStepTimeout_GivesUpTheMachineAtItsStep_AndIsCountedAsATimeout()
+    {
+        var run = new PlayerbotRunMachine(new PlayerbotRunPlan(36, "The Deadmines", 0, 1, false, 5, 1, 36, default, default, 10, [], []), 3);
+        run.Apply(PlayerbotRunSignal.Timeout("travel"));
+
+        Assert.Equal(PlayerbotRunStep.GiveUp, run.Step);
+        Assert.Equal(PlayerbotRunStep.Travel, run.FailedStep);
+        Assert.Equal("travel-timeout", run.Reason);
+        Assert.Equal(PlayerbotRunMeters.Timeout, PlayerbotRunMeters.OutcomeOf(run.Complete, run.Reason));
+        Assert.Equal(PlayerbotRunMeters.GivenUp, PlayerbotRunMeters.OutcomeOf(false, "no-path-to-boss"));
+        Assert.Equal(PlayerbotRunMeters.Completed, PlayerbotRunMeters.OutcomeOf(true, null));
     }
 
     [Fact]

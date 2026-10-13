@@ -133,7 +133,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         }
 
         Aggregator = aggregator;
-        if (services.GetService<MetricsOptions>() is { Enabled: true }) _findingsMeter = PlayerbotQaMeters.RegisterFindings(aggregator.Snapshot);
+        if (services.GetService<MetricsOptions>() is { Enabled: true }) _findingsMeter = PlayerbotQaMeters.RegisterFindings(aggregator.Snapshot, this);
         if (services.GetService<IOpsAnnouncer>() is { } announcer)
         {
             aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view);

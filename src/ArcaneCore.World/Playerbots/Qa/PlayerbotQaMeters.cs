@@ -31,11 +31,11 @@ internal static class PlayerbotQaMeters
 
     /// <summary>
     /// Create the findings gauge over <paramref name="findings"/> (the aggregator's cached snapshot): one measurement per kind and publication state, zeros
-    /// included so a series does not appear and vanish. The caller disposes the returned meter when QA stops.
+    /// included so a series does not appear and vanish. The caller disposes the returned meter when QA stops. <paramref name="scope"/> is the owner (the meter's <see cref="Meter.Scope"/>), so a listener can tell one QA feature's gauge from another's.
     /// </summary>
-    internal static Meter RegisterFindings(Func<IReadOnlyList<QaFindingView>> findings)
+    internal static Meter RegisterFindings(Func<IReadOnlyList<QaFindingView>> findings, object? scope = null)
     {
-        var meter = new Meter(FindingsMeterName, "1.0");
+        var meter = new Meter(FindingsMeterName, "1.0", null, scope);
         meter.CreateObservableGauge("arcanecore.botqa.findings", () => Observe(findings()), "{finding}", "Bot QA findings held, by finding kind and publication state.");
         return meter;
     }

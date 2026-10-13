@@ -505,14 +505,25 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>
-    /// Report a run that ended without finishing to bot QA, straight to the sink (docs/areas/playbots-qa.md): the instance map and wing, the stage it failed at, the
-    /// boss it was heading for and the reason. No group, bot or character is named. Once per run (the disband that calls this happens once), never per tick, and
-    /// nothing is built while QA is off; a failure of the report is swallowed so it cannot reach the world tick.
+    /// Whether a run that ended with <paramref name="reason"/> points at content or code and so belongs in bot QA: no path to the entrance or the boss, a step that
+    /// really timed out (gather, travel, enter, regroup, run), a boss that is not where the content says, a stalled group, or a group that wiped out its wipes.
+    /// Operator and lifecycle ends are not findings (a bot stopped, scaled down, taken over or leashed: <c>leader-stopped</c>, <c>leader-left</c>, <c>leader-gone</c>;
+    /// <c>too-few</c>, <c>invites-unanswered</c>, <c>disbanded</c>, <c>aborted</c>); they still count in the runs metric.
+    /// </summary>
+    internal static bool PointsAtContentOrCode(string reason)
+        => reason.StartsWith("no-path", StringComparison.Ordinal) || reason.EndsWith("timeout", StringComparison.Ordinal)
+            || reason is "objective-missing" or "stalled" or "wiped";
+
+    /// <summary>
+    /// Report a run that ended for a content or code reason (<see cref="PointsAtContentOrCode"/>) to bot QA, straight to the sink (docs/areas/playbots-qa.md): the
+    /// instance map and wing, the stage it failed at, the boss it was heading for and the reason. No group, bot or character is named. Once per run (the disband
+    /// that calls this happens once), never per tick, and nothing is built while QA is off; a failure of the report is swallowed so it cannot reach the world tick.
     /// </summary>
     private void ReportRunFailed(BotGroup group, PlayerbotRunMachine run, string reason)
     {
         try
         {
+            if (!PointsAtContentOrCode(reason)) return;
             if (services.GetService<IPlayerbotQaSink>() is not { Enabled: true } sink) return;
             PlayerbotRunStep stage = run.Step == PlayerbotRunStep.GiveUp ? run.FailedStep : run.Step;
             string stageName = stage.ToString().ToLowerInvariant();

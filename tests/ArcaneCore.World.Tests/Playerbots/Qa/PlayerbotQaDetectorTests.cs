@@ -83,7 +83,7 @@ public sealed class PlayerbotQaDetectorTests : IDisposable
         Assert.Equal("world tick hung in Features: SpellFeature", view.Subject);
         Assert.True(view.BotIndependent);
         Assert.Equal(QaCause.ServerFault, view.Cause);
-        Assert.True(QaKinds.Of(QaSignalKind.TickHang).SingleOccurrence);
+        Assert.False(QaKinds.Of(QaSignalKind.TickHang).SingleOccurrence);
         Assert.All(QaKinds.All.Where(r => r.Kind != QaSignalKind.TickHang), r => Assert.True(QaKinds.Of(QaSignalKind.TickHang).Weight > r.Weight));
         Assert.InRange(QaKinds.Of(QaSignalKind.RunFailed).Weight, QaKinds.Of(QaSignalKind.Stall).Weight, QaKinds.Of(QaSignalKind.Quarantine).Weight);
     }
@@ -105,40 +105,80 @@ public sealed class PlayerbotQaDetectorTests : IDisposable
         Assert.True(SpinWait.SpinUntil(condition, TimeSpan.FromSeconds(10)), "the signals were not folded in time");
     }
 
-    private static double Occurrences(MetricsStore store, string kind)
-        => store.Collect().Where(m => m.Name == "arcanecore.botqa.occurrences").SelectMany(m => m.Series)
-            .Where(s => s.Tags.Any(t => t.Key == "kind" && t.Value == kind)).Sum(s => s.Value);
+    /// <summary>The findings gauge of exactly this feature (its meter's scope), read through a listener so other tests' features and meters never mix in.</summary>
+    private static Dictionary<(string Kind, string State), long> FindingsOf(PlayerbotQaFeature feature, out bool registered)
+    {
+        var values = new Dictionary<(string Kind, string State), long>();
+        bool found = false;
+        using var listener = new System.Diagnostics.Metrics.MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (ReferenceEquals(instrument.Meter.Scope, feature) && instrument.Name == "arcanecore.botqa.findings")
+            {
+                found = true;
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            string kind = "", state = "";
+            foreach (KeyValuePair<string, object?> tag in tags)
+            {
+                if (tag.Key == "kind") kind = (string)tag.Value!;
+                if (tag.Key == "state") state = (string)tag.Value!;
+            }
+
+            values[(kind, state)] = value;
+        });
+        listener.Start();
+        listener.RecordObservableInstruments();
+        registered = found;
+        return values;
+    }
 
     [Fact]
     public async Task WithMetricsOn_TheFindingsGauge_HasOneSeriesPerKindAndState_AndTheOccurrenceCounterCountsFoldedSignals()
     {
         using var store = new MetricsStore();
         store.Start();
+        long runFailedOccurrences = 0;
+        using var counter = new System.Diagnostics.Metrics.MeterListener();
+        counter.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == PlayerbotQaMeters.MeterName && instrument.Name == "arcanecore.botqa.occurrences") l.EnableMeasurementEvents(instrument);
+        };
+        counter.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            foreach (KeyValuePair<string, object?> tag in tags)
+                if (tag.Key == "kind" && (string?)tag.Value == "run-failed") Interlocked.Add(ref runFailedOccurrences, value);
+        });
+        counter.Start();
         (ServiceProvider services, PlayerbotQaSignalBus bus) = Build(metrics: true);
         using ServiceProvider _ = services;
         var feature = new PlayerbotQaFeature(services);
         feature.Attach(null!);
         try
         {
-            double before = Occurrences(store, "run-failed");
             var sink = new PlayerbotQaSink(bus);
             sink.Report(Run("wiped", "boss", boss: 644));
             sink.Report(Run("wiped", "boss", boss: 644));
             sink.Report(Hang("Maps", "map", 500));
-            Eventually(() => feature.Aggregator!.Snapshot().Count == 2 && Occurrences(store, "run-failed") >= before + 2 && Occurrences(store, "tick-hang") >= 1);
+            Eventually(() => feature.Aggregator!.Snapshot().Count == 2 && Interlocked.Read(ref runFailedOccurrences) >= 2);
 
-            MetricSnapshot gauge = store.Collect().Single(m => m.Name == "arcanecore.botqa.findings");
-            Assert.Equal(MetricKind.Gauge, gauge.Kind);
-            Assert.Equal(QaKinds.All.Count * Enum.GetValues<QaPublicationState>().Length, gauge.Series.Count);
-            Assert.All(gauge.Series, s => Assert.Equal(["kind", "state"], s.Tags.Select(t => t.Key).Order()));
-            double Count(string kind, string state)
-                => gauge.Series.Single(s => s.Tags.Any(t => t is { Key: "kind" } && t.Value == kind) && s.Tags.Any(t => t is { Key: "state" } && t.Value == state)).Value;
-            Assert.Equal(1, Count("run-failed", "pending"));
-            Assert.Equal(1, Count("tick-hang", "pending"));
-            Assert.Equal(0, Count("run-failed", "published"));
-            Assert.Equal(0, Count("stall", "pending"));
-            Assert.Equal(before + 2, Occurrences(store, "run-failed"));
-            Assert.True(Occurrences(store, "tick-hang") >= 1);
+            Dictionary<(string Kind, string State), long> gauge = FindingsOf(feature, out bool registered);
+            Assert.True(registered);
+            Assert.Equal(QaKinds.All.Count * Enum.GetValues<QaPublicationState>().Length, gauge.Count);
+            Assert.Equal(1, gauge[("run-failed", "pending")]);
+            Assert.Equal(1, gauge[("tick-hang", "pending")]);
+            Assert.Equal(0, gauge[("run-failed", "published")]);
+            Assert.Equal(0, gauge[("stall", "pending")]);
+            Assert.Equal(2, Interlocked.Read(ref runFailedOccurrences));
+
+            // The exporter's store sees the same instrument with exactly the two bounded labels.
+            Assert.Contains(store.Collect(), m => m.Name == "arcanecore.botqa.findings" && m.Kind == MetricKind.Gauge
+                && m.Series.Any(s => s.Tags.Select(t => t.Key).Order().SequenceEqual(["kind", "state"]) && s.Tags.Any(t => t.Key == "kind" && t.Value == "run-failed")));
+            Assert.Contains(store.Collect(), m => m.Name == "arcanecore.botqa.occurrences" && m.Kind == MetricKind.Counter
+                && m.Series.Any(s => s.Tags.Count == 1 && s.Tags[0].Key == "kind"));
         }
         finally
         {
@@ -149,8 +189,6 @@ public sealed class PlayerbotQaDetectorTests : IDisposable
     [Fact]
     public async Task WithMetricsOff_NoFindingsGaugeIsRegistered()
     {
-        using var store = new MetricsStore();
-        store.Start();
         (ServiceProvider services, PlayerbotQaSignalBus bus) = Build(metrics: false);
         using ServiceProvider _ = services;
         var feature = new PlayerbotQaFeature(services);
@@ -159,7 +197,8 @@ public sealed class PlayerbotQaDetectorTests : IDisposable
         {
             new PlayerbotQaSink(bus).Report(Run("wiped", "boss"));
             Eventually(() => feature.Aggregator!.Snapshot().Count == 1);
-            Assert.DoesNotContain(store.Collect(), m => m.Name == "arcanecore.botqa.findings");
+            FindingsOf(feature, out bool registered);
+            Assert.False(registered);
         }
         finally
         {

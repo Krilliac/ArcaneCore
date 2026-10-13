@@ -10,6 +10,7 @@ using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Ops.Watchdog;
 
@@ -46,6 +47,8 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         }
 
         _clock = services.GetService<WatchdogClock>() ?? WatchdogClock.System;
+        _attachedMicros = _clock.NowMicros;
+        _warmupMicros = (services.GetService<IOptions<PlayerbotQaOptions>>()?.Value.TickHangWarmupMinutes ?? 5) * 60_000_000L;
         _monitor = monitor;
         monitor.StartTicking(world.Options.TickIntervalMs);
         monitor.BodyStats = () =>
@@ -85,39 +88,85 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             monitor.BudgetMicros / 1000, monitor.HangMicros == long.MaxValue ? 0 : monitor.HangMicros / 1000, monitor.Ring.Capacity);
     }
 
-    // Watchdog thread only: Describe (called by the monitor just before it raises the alert) leaves the hang's phase and work kind here, and the alert handler
-    // reads them. They are identity strings for bot QA's fingerprint: a phase name and a kind of work, never a duration.
+    // Watchdog thread only (Describe, the alert handler and the report all run inside TickMonitor.Check): Describe leaves the hang's facts here just before the
+    // monitor raises the alert, and the handler reads them. They are identity strings for bot QA's fingerprint (a phase name and a kind of work), never a duration.
     private IPlayerbotQaSink? _qa;
-    private string _hangPhase = "Unknown";
-    private string _hangItem = "none";
-    private string? _inProgressReported;
+    private HangFacts _facts = HangFacts.Unknown;
+    private string? _lastInProgress;
+    private int _inProgressDistinct;
+    private long _attachedMicros;
+    private long _warmupMicros;
+    private volatile bool _stopping;
+
+    /// <summary>What a hang is, for bot QA: the tick phase, the kind of work in it and whether the garbage collector took the tick.</summary>
+    internal readonly record struct HangFacts(string Phase, string Item, bool GcDominated)
+    {
+        internal static HangFacts Unknown { get; } = new("Unknown", "none", false);
+    }
+
+    /// <summary>The share of a completed tick that GC pauses must take for it to be the host's doing rather than the code's (the host sampler's own threshold).</summary>
+    private const double GcShare = HostLoadSampler.GcShareThreshold;
+
+    /// <summary>The facts of a hang still running: where the world thread is. Autosave has a fixed token (its work is the save pass, not a handler).</summary>
+    internal static HangFacts RunningFacts(TickPosition position)
+        => new(position.Phase.ToString(), position.Phase == TickPhase.Autosave ? "autosave" : WorkKind(position.Work), false);
 
     /// <summary>
-    /// Watchdog thread, once per hang alert (a rate-limited event, never per tick): report the hang to bot QA. A hang still running is reported once per
-    /// (phase, work) until it completes, and its completion is then not reported again; a hang that ended between two checks is reported by its completion
-    /// alert. Never throws: the watchdog thread keeps checking whatever the sink does.
+    /// The facts of a hang that ended, from the slowest recent tick: its dominant phase, and the work that belongs to that phase (<c>map</c> for the maps phase, a
+    /// fixed token for commands, world-tick handlers and autosave, the slowest feature only when the feature phase dominates), so the item never names code that
+    /// was not the slow part. No slow tick recorded: the stall was outside the tick body.
     /// </summary>
-    private void ReportHangToQa(TickAlert alert)
+    internal static HangFacts CompletedFacts(SlowTickInfo? worst)
+    {
+        if (worst is null) return new HangFacts("OutsideTick", "none", false);
+        string phase = DominantPhase(worst.Phases);
+        string item = phase switch
+        {
+            nameof(TickPhase.Maps) => "map",
+            nameof(TickPhase.Autosave) => "autosave",
+            nameof(TickPhase.Commands) => "commands",
+            nameof(TickPhase.WorldTick) => "worldtick-handlers",
+            _ => worst.TopFeatures.Count > 0 ? worst.TopFeatures[0].Name : "none",
+        };
+        bool gc = worst.Phases.GcCaptured && worst.Phases.Gc.PauseTicks / 10.0 >= worst.DurationMicros * GcShare;
+        return new HangFacts(phase, item, gc);
+    }
+
+    private void ReportHangToQa(TickAlert alert) => ReportHang(alert, _facts);
+
+    /// <summary>
+    /// Watchdog thread, once per hang alert (a rate-limited event, never per tick): report the hang to bot QA unless it was not the code's doing. Never reported:
+    /// after shutdown began, in the start-up warm-up (<see cref="PlayerbotQaOptions.TickHangWarmupMinutes"/>), when the host-load verdict blames the machine or
+    /// the GC, or when GC pauses took most of the tick. A hang still running is reported once per (phase, work); the completion alert reports only the hangs that
+    /// no running report stood for (several can end between two checks). Never throws: the watchdog thread keeps checking whatever the sink does.
+    /// </summary>
+    internal void ReportHang(TickAlert alert, in HangFacts facts)
     {
         if (_qa is not { } qa || alert.Kind != TickAlertKind.Hang) return;
         try
         {
-            string seen = _hangPhase + "|" + _hangItem;
+            long occurrences = 1;
             if (alert.InProgress)
             {
-                if (string.Equals(_inProgressReported, seen, StringComparison.Ordinal)) return;
-                _inProgressReported = seen;
+                string seen = facts.Phase + "|" + facts.Item;
+                if (string.Equals(_lastInProgress, seen, StringComparison.Ordinal)) return;
+                _lastInProgress = seen;
+                _inProgressDistinct++;
             }
-            else if (_inProgressReported is not null)
+            else
             {
-                _inProgressReported = null;
-                return;
+                occurrences = alert.Hangs - _inProgressDistinct;
+                _lastInProgress = null;
+                _inProgressDistinct = 0;
+                if (occurrences <= 0) return;
             }
 
+            if (_stopping || alert.HostVerdict is HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses || facts.GcDominated
+                || _clock.NowMicros - _attachedMicros < _warmupMicros) return;
             string detail = alert.Detail.Length <= 400 ? alert.Detail : alert.Detail[..400];
             qa.Report(new QaSignal
             {
-                Kind = QaSignalKind.TickHang, AtUtc = DateTime.UtcNow, Stage = _hangPhase, Reason = _hangItem, Message = alert.Text + ": " + detail,
+                Kind = QaSignalKind.TickHang, AtUtc = DateTime.UtcNow, Stage = facts.Phase, Reason = facts.Item, Message = alert.Text + ": " + detail, Occurrences = occurrences,
             });
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -150,9 +199,12 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
 
     public Task StopAsync()
     {
+        _stopping = true;
         _monitor?.StopTicking();
         return Task.CompletedTask;
     }
+
+
 
     /// <summary>How far back a recorded slow tick still explains a hang or overrun line.</summary>
     private static readonly TimeSpan DetailWindow = TickStats.SlowTickRetention;
@@ -163,12 +215,12 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
     /// </summary>
     private string Describe(WorldRuntime world, bool inProgress)
     {
+        _facts = HangFacts.Unknown; // a Describe that throws must not leave the previous hang's facts to be reported again
         var text = new StringBuilder();
         if (inProgress)
         {
             TickPosition position = world.CurrentPosition;
-            _hangPhase = position.Phase.ToString();
-            _hangItem = WorkKind(position.Work);
+            _facts = RunningFacts(position);
             if (position.Phase == TickPhase.Idle)
             {
                 text.Append("world thread is between ticks (not inside a tick body)");
@@ -184,15 +236,13 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             IReadOnlyList<SlowTickInfo> slow = world.Stats.SlowTicks(DetailWindow);
             if (slow.Count == 0)
             {
-                _hangPhase = "OutsideTick";
-                _hangItem = "none";
+                _facts = CompletedFacts(null);
                 text.Append(CultureInfo.InvariantCulture, $"no tick body over the interval was recorded in the last {DetailWindow.TotalSeconds:F0} s (the stall was outside the tick body)");
             }
             else
             {
                 SlowTickInfo worst = slow[0];
-                _hangPhase = DominantPhase(worst.Phases);
-                _hangItem = worst.TopFeatures.Count > 0 ? worst.TopFeatures[0].Name : "none";
+                _facts = CompletedFacts(worst);
                 text.Append(CultureInfo.InvariantCulture, $"slowest tick body {worst.DurationMicros / 1000} ms: {worst.Phases.Format()}");
                 if (worst.TopFeatures.Count > 0)
                 {

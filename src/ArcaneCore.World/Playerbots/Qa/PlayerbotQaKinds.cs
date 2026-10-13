@@ -42,9 +42,10 @@ internal static class QaKinds
         // Run failed 24: a give-up is the dungeon system working as designed most of the time (a wipe, a slow walk), so it ranks just under a relay gap (25)
         // and needs MinOccurrences repeats at one stage before it becomes an issue; the count term then lifts a stage that fails again and again.
         new(QaSignalKind.RunFailed, "run failed", "run-failed", 24, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
-        // Tick hang 50: the only kind that freezes every player, not just bots, so it outranks the worst bot fault (quarantine and disabled, 45) from the first
-        // occurrence; one hang is enough (the watchdog already rate-limits and a hang is never expected).
-        new(QaSignalKind.TickHang, "tick hang", "tick-hang", 50, BotIndependent: true, SingleOccurrence: true, SpellKind: false),
+        // Tick hang 50: the only kind that freezes every player, not just bots, so it outranks the worst bot fault (quarantine and disabled, 45). It needs
+        // MinOccurrences like the others: one hang can still be the host (the report is filtered for the host verdict, GC, start-up and shutdown, but not perfectly), and a
+        // one-off kind would reopen closed issues on every deploy.
+        new(QaSignalKind.TickHang, "tick hang", "tick-hang", 50, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
     ]);
 
     /// <summary>Every row, in kind order.</summary>
