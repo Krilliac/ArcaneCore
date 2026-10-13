@@ -177,10 +177,11 @@ public static class ForcedMovement
     private static PathOptions ChargeOptions(Unit unit) => new() { Mover = PathMover.For(unit), EndTolerance = PathOptions.VmangosEndTolerance };
 
     /// <summary>
-    /// vmangos Spell::CheckCast SPELL_EFFECT_CHARGE (Spell.cpp:5917-5929): a caster on the ground (not in water, within 1.6 yd of the floor)
-    /// needs a path that is neither <see cref="PathType.NoPath"/> nor <see cref="PathType.Incomplete"/> to the target's position; the cast
-    /// fails with SPELL_FAILED_NOPATH otherwise. A swimmer charging at a target in water is let through (the pathfinder's swimming
-    /// shortcut, PathFinder.cpp:197-201); the path length cap of the reference (:5931) is not modelled.
+    /// vmangos Spell::CheckCast SPELL_EFFECT_CHARGE (Spell.cpp:5909-5934, tested only under strict): a caster on the ground (not in water,
+    /// within 1.6 yd of the floor) needs a path that is neither <see cref="PathType.NoPath"/> nor <see cref="PathType.Incomplete"/> to the
+    /// target's position; the cast fails with SPELL_FAILED_NOPATH otherwise. A charge the water shortcut covers
+    /// (<see cref="ChargeSwims"/>) is let through, and <see cref="ChargePath"/> then answers the straight line for it: both read the same
+    /// decision, so a cast that passes the check always launches a spline. The path length cap of the reference (:5931) is not modelled.
     /// </summary>
     public static bool ChargeHasNoPath(Unit caster, Unit target)
     {
@@ -192,7 +193,9 @@ public static class ForcedMovement
         }
 
         var start = new Vector3(caster.X, caster.Y, caster.Z);
-        if (IsInWater(map, start, out _))
+        var destination = new Vector3(target.X, target.Y, target.Z);
+        PathOptions options = ChargeOptions(caster);
+        if (ChargeSwims(map, start, destination, options))
         {
             return false;
         }
@@ -203,45 +206,63 @@ public static class ForcedMovement
             return false;
         }
 
-        var destination = new Vector3(target.X, target.Y, target.Z);
-        PathOptions options = ChargeOptions(caster);
-        if (options.Mover is { CanSwim: true } && IsInWater(map, destination, out _))
-        {
-            return false;
-        }
-
         PathResult path = map.Collision.FindPath(start, destination, options);
         return (path.Type & (PathType.Incomplete | PathType.NoPath)) != 0;
     }
 
     /// <summary>
-    /// The way a charge goes: the navigation path from the unit to <paramref name="destination"/> when the map has one that reaches it, else
-    /// the straight line (<c>generatePath = true</c>, <c>forceDestination = true</c>: the path always ends on the destination). Points after the start.
-    /// EMPTY when the mesh answers <see cref="PathType.NoPath"/> (an endpoint off the mesh): the charge makes no move, as vmangos
-    /// <c>ChargeMovementGenerator::Initialize</c> returns on <c>PATHFIND_NOPATH</c> (PointMovementGenerator.cpp:237-238). A map or tile
-    /// without mesh data still answers the straight line.
+    /// The swimming shortcut of a charge (vmangos PathFinder.cpp:197-201): the caster is in water, or it can swim and the destination is in water.
+    /// With no mesh path such a charge goes straight instead of having no path, in the cast check and in <see cref="ChargePath"/> alike.
     /// </summary>
-    public static IReadOnlyList<Vector3> ChargePath(Unit unit, Vector3 destination)
+    private static bool ChargeSwims(Map map, Vector3 start, Vector3 probe, PathOptions options)
+        => IsInWater(map, start, out _) || (options.Mover is { CanSwim: true } && IsInWater(map, probe, out _));
+
+    /// <summary>
+    /// The way a charge goes: the navigation path from the unit to <paramref name="destination"/> when the map has one that reaches it, else
+    /// the straight line (<c>generatePath = true</c>, <c>forceDestination = true</c>). Points after the start. A whole path that ends short of
+    /// <paramref name="destination"/> (a target a few yards off the mesh) is walked to its end, and then straight to the destination only when
+    /// that last segment has line of sight, else the charge stops at the path end (vmangos walks the path, then UpdateForMelee). EMPTY when the
+    /// mesh answers <see cref="PathType.NoPath"/> and the swimming shortcut (<see cref="ChargeSwims"/>, probed at <paramref name="target"/> when
+    /// given) does not cover the charge: no move, as vmangos <c>ChargeMovementGenerator::Initialize</c> returns on <c>PATHFIND_NOPATH</c>
+    /// (PointMovementGenerator.cpp:237-238). A map or tile without mesh data still answers the straight line.
+    /// </summary>
+    public static IReadOnlyList<Vector3> ChargePath(Unit unit, Vector3 destination, Unit? target = null)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        if (unit.Map?.Collision is { } collision)
+        if (unit.Map?.Collision is { } collision && unit.Map is { } map)
         {
-            PathResult path = collision.FindPath(new Vector3(unit.X, unit.Y, unit.Z), destination, ChargeOptions(unit));
+            var start = new Vector3(unit.X, unit.Y, unit.Z);
+            PathOptions options = ChargeOptions(unit);
+            PathResult path = collision.FindPath(start, destination, options);
             if ((path.Type & PathType.NoPath) != 0)
             {
-                return [];
+                Vector3 probe = target is null ? destination : new Vector3(target.X, target.Y, target.Z);
+                return ChargeSwims(map, start, probe, options) ? [destination] : [];
             }
 
-            if (path.HasPath && (path.Type & PathType.Incomplete) == 0 && Vector3.Distance(path.End, destination) < 0.5f)
+            if (path.HasPath && (path.Type & PathType.Incomplete) == 0)
             {
-                var corners = new List<Vector3>(path.Points.Count - 1);
-                for (int i = 1; i < path.Points.Count - 1; i++)
+                bool reaches = Vector3.Distance(path.End, destination) < 0.5f;
+                var corners = new List<Vector3>(path.Points.Count);
+                for (int i = 1; i < path.Points.Count - (reaches ? 1 : 0); i++)
                 {
                     corners.Add(path.Points[i]);
                 }
 
-                corners.Add(destination);
-                return corners;
+                if (reaches)
+                {
+                    corners.Add(destination);
+                }
+                else if (collision.LineOfSight.IsInLineOfSight(map.MapId, path.End + new Vector3(0, 0, MapCollision.DefaultEyeHeight),
+                    destination + new Vector3(0, 0, MapCollision.DefaultEyeHeight)))
+                {
+                    corners.Add(destination);
+                }
+
+                if (corners.Count > 0)
+                {
+                    return corners;
+                }
             }
         }
 

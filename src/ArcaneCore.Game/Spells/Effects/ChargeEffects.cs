@@ -49,7 +49,7 @@ public sealed class ChargeEffects : ISpellHandlerModule
             map.FindUpdater<Creatures.CreatureMapSystem>()?.StopMoving(creature);
         }
 
-        ForcedMovement.LaunchSpline(caster, ForcedMovement.ChargePath(caster, destination), ForcedMovement.ChargeSpeed);
+        ForcedMovement.LaunchSpline(caster, ForcedMovement.ChargePath(caster, destination, target), ForcedMovement.ChargeSpeed);
 
         // "not all charge effects used in negative spells"
         if (!context.Spell.IsPositiveSpell(context.System.Store.Get))

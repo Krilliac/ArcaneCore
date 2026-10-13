@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Tests.SpawnGroups;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -67,21 +68,40 @@ public sealed partial class NoStraightPathTests
     }
 
     [Theory]
-    [InlineData(41f)]
-    [InlineData(43f)]
-    [InlineData(44.5f)]
-    public void Home_APointOneToFiveYardsOffTheMesh_WalksHome(float homeX)
+    [InlineData(41f, 0f)]
+    [InlineData(43f, 0f)]
+    [InlineData(44.5f, 0f)]   // 4.5 yd beside the mesh
+    [InlineData(44.5f, 4f)]   // 4.5 beside and 4 above: 3D distance 6.0, inside vmangos' 7 yd
+    [InlineData(42f, 3f)]     // a vertical offset alone
+    public void Home_APointOffTheMeshWithinSevenYards_WalksToTheNearestMeshPoint(float homeX, float homeZ)
     {
-        // The walkable tile ends at x = 40; the spawn point lies 1-4.5 yd beyond it. vmangos FindWalkPoly looks 5 yd around and only
-        // calls the path partial past 7 yd, so the creature runs to the nearest mesh point instead of teleporting.
+        // The walkable tile ends at x = 40; vmangos FindWalkPoly looks 5 yd around (10 up and down) and only calls the path partial past 7 yd
+        // (3D), so the creature runs to the nearest mesh point instead of teleporting.
         using var scene = new Scene(x: 30, y: 30);
-        scene.Wolf.Motion.MoveTargetedHome(new CreatureHome(homeX, 30, 0, 1f));
+        scene.Wolf.Motion.MoveTargetedHome(new CreatureHome(homeX, 30, homeZ, 1f));
 
         Assert.Equal(0, scene.Creatures.HomePathTeleports);
         Assert.True(scene.Wolf.IsMoving);
         Assert.Equal(30f, scene.Wolf.X, 2);
+        Vector3 end = scene.Wolf.Spline!.Points[^1];
+        Assert.InRange(end.X, 39.5f, 40.05f); // the edge of the walkable tile, short of the spawn point
+        Assert.InRange(end.Y, 29.5f, 30.5f);
+        Assert.False(InHouse(end.X, end.Y));
     }
 
+    [Theory]
+    [InlineData(44.5f, 6.5f)] // 3D distance 7.9: past farFromPoly
+    [InlineData(46f, 0f)]     // beyond the 5 yd search box
+    [InlineData(38f, -4f)]    // the mesh is 4 above the spawn point: refused ("do not select points over player pos")
+    public void Home_APointTooFarFromTheMesh_Teleports(float homeX, float homeZ)
+    {
+        using var scene = new Scene(x: 30, y: 30);
+        scene.Wolf.Motion.MoveTargetedHome(new CreatureHome(homeX, 30, homeZ, 1f));
+
+        Assert.Equal(1, scene.Creatures.HomePathTeleports);
+        Assert.False(scene.Wolf.IsMoving);
+        Assert.Equal(homeX, scene.Wolf.X, 2);
+    }
     [Fact]
     public void Home_APointInAnUnreachableArea_Teleports()
     {
@@ -229,5 +249,34 @@ public sealed partial class NoStraightPathTests
         }
 
         Assert.True(follower.IsMoving, "the follower never set off once budget returned");
+    }
+
+    private static void MakePet(Scene scene) => scene.Wolf.Summon = new SummonLinks(SummonKind.Pet, scene.Player.Guid, 1, TotemSlots.None, 0);
+
+    [Fact]
+    public void APet_WithAGroundOnlyTemplate_SwimsOverWaterPolygons_ALikeNonPetCannot()
+    {
+        // The whole tile is water: vmangos Creature::CanSwim is IsPet || the template's water bit (Creature.h:166).
+        using var scene = new Scene(x: 30, y: 30, template: Template() with { InhabitType = 1 }, terrain: NavTerrain.Water);
+        var destination = new Vector3(10, 30, 0);
+
+        Assert.Equal(PathOutcome.NoPath, scene.Creatures.PlanPath(scene.Wolf, destination).Outcome); // a ground creature: no water polygons
+
+        MakePet(scene);
+        PlannedPath asPet = scene.Creatures.PlanPath(scene.Wolf, destination);
+        Assert.Equal(PathOutcome.Mesh, asPet.Outcome);
+        Assert.True(asPet.CanMove);
+    }
+
+    [Fact]
+    public void APet_WithTheAirBit_GetsNoFlierShortcut_ANonPetFlierDoes()
+    {
+        var inHole = new Vector3(20, 20, 0);
+        using var scene = new Scene(x: 30, y: 20, template: Template() with { InhabitType = 5 });
+
+        Assert.Equal(PathOutcome.Direct, scene.Creatures.PlanPath(scene.Wolf, inHole).Outcome); // a flier crosses the hole
+
+        MakePet(scene);
+        Assert.NotEqual(PathOutcome.Direct, scene.Creatures.PlanPath(scene.Wolf, inHole).Outcome); // CanFly is !IsPet && air (Creature.h:167)
     }
 }

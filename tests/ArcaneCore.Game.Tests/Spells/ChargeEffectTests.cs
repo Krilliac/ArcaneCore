@@ -41,7 +41,10 @@ public sealed class ChargeEffectTests
 
     private static SpellInfo Ranged(SpellInfo spell) => spell with { RangeIndex = 4, Range = new SpellRange(0, 30) };
 
-    private static SpellTestKit Kit() => new(
+    private static SpellTestKit Kit() => new(ChargeSpells());
+
+    private static SpellInfo[] ChargeSpells() =>
+    [
         Ranged(Spell(Charge,
             Effect(SpellEffectName.Charge, 0, SpellImplicitTarget.UnitEnemy),
             Effect(SpellEffectName.TriggerSpell, 0, SpellImplicitTarget.UnitEnemy, trigger: ChargeBonus))),
@@ -57,7 +60,7 @@ public sealed class ChargeEffectTests
         Ranged(Spell(FriendlyCharge, Effect(SpellEffectName.Charge, 0, SpellImplicitTarget.UnitFriend))),
         Spell(Blink, Effect(SpellEffectName.Leap, 0, SpellImplicitTarget.UnitCaster) with { Radius = 20f }),
         Ranged(Spell(FaceTeleport, Effect(SpellEffectName.TeleportUnitsFaceCaster, 0, SpellImplicitTarget.UnitEnemy) with { Radius = 5f })),
-        Ranged(Spell(FaceTeleportToDest, Effect(SpellEffectName.TeleportUnitsFaceCaster, 0, SpellImplicitTarget.UnitEnemy) with { Radius = 5f })));
+        Ranged(Spell(FaceTeleportToDest, Effect(SpellEffectName.TeleportUnitsFaceCaster, 0, SpellImplicitTarget.UnitEnemy) with { Radius = 5f }))];
 
     private sealed record Move(ulong Guid, Vector3 Start, uint SplineId, byte Type, uint Flags, uint DurationMs, uint PointCount, Vector3 Destination);
 
@@ -321,6 +324,75 @@ public sealed class ChargeEffectTests
         Player dryTarget = dry.AddPlayer(2, Locomotion.HazardKit.Ground, out _);
         WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
         Assert.True(ForcedMovement.ChargeHasNoPath(walker, dryTarget));
+    }
+
+    [Fact]
+    public void Charge_ByASwimmer_InWater_OverAMeshHole_ReallyMovesTheCaster_AndTheSameCastOnLandIsRefused()
+    {
+        // The mesh answers NoPath (a hole). In water the charge is exempt from the check AND ChargePath answers the swimming shortcut, the
+        // straight line: the spline launches, the caster moves, and the melee start and the stun are not for nothing.
+        using var wet = new Locomotion.HazardKit(ArcaneCore.Game.Maps.Terrain.LiquidTypeFlags.Water, ChargeSpells());
+        Player swimmer = wet.AddPlayer(1, Locomotion.HazardKit.Ground, out FakeSession swimmerSession);
+        Player prey = wet.AddPlayer(2, Locomotion.HazardKit.Ground, out _);
+        prey.Relocate(Locomotion.HazardKit.X + 10, Locomotion.HazardKit.Y, Locomotion.HazardKit.Ground, 0, 1);
+        wet.Kit.Spellbook.Teach(swimmer, Charge);
+        WorldCollision.Of(wet.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
+        float before = swimmer.X;
+
+        Assert.Equal(SpellCastResult.CastOk, wet.Kit.System.HandleCastRequest(swimmer, Charge, SpellCastTargets.ForUnit(prey.Guid)));
+
+        Assert.True(swimmer.X > before + 1f, $"the swimmer did not move ({before} -> {swimmer.X})");
+        Assert.NotEmpty(Of(swimmerSession, WorldOpcode.SmsgMonsterMove));
+        Assert.Same(prey, swimmer.Combat.Victim);
+
+        using var dry = new Locomotion.HazardKit(null, ChargeSpells());
+        Player walker = dry.AddPlayer(1, Locomotion.HazardKit.Ground, out _);
+        Player dryPrey = dry.AddPlayer(2, Locomotion.HazardKit.Ground, out _);
+        dryPrey.Relocate(Locomotion.HazardKit.X + 10, Locomotion.HazardKit.Y, Locomotion.HazardKit.Ground, 0, 1);
+        dry.Kit.Spellbook.Teach(walker, Charge);
+        WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
+        Assert.Equal(SpellCastResult.Nopath, dry.Kit.System.HandleCastRequest(walker, Charge, SpellCastTargets.ForUnit(dryPrey.Guid)));
+    }
+
+    /// <summary>A whole path that ends 10 yd short of the destination (a target standing off the mesh).</summary>
+    private sealed class ShortPath : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(PathType.Normal, [start, new Vector3(10, start.Y, Z), new Vector3(15, start.Y, Z)]);
+    }
+
+    [Fact]
+    public void Charge_ToATargetOffTheMesh_WalksThePathThenStraightToTheTarget_WhenThereIsLineOfSight()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, FakeSession casterSession) = kit.AddPlayer(1, 0, 0);
+        (Player target, _) = kit.AddPlayer(2, 30, 0);
+        WorldCollision.Of(kit.World).Install(new Obstacles(), new ShortPath());
+        casterSession.Clear();
+
+        kit.System.CastSpell(caster, Charge, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        Move move = ReadMove(Assert.Single(Of(casterSession, WorldOpcode.SmsgMonsterMove)));
+        Assert.Equal(3u, move.PointCount); // (10, 0), the path end (15, 0), then the contact point
+        Assert.Equal(30f - Gap(caster, target), caster.X, 2);
+    }
+
+    [Fact]
+    public void Charge_ToATargetOffTheMesh_StopsAtThePathEnd_WhenALineOfSightIsBlocked()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, FakeSession casterSession) = kit.AddPlayer(1, 0, 0);
+        (Player target, _) = kit.AddPlayer(2, 30, 0);
+        WorldCollision.Of(kit.World).Install(new Obstacles { WallX = 20f }, new ShortPath());
+        casterSession.Clear();
+
+        kit.System.CastSpell(caster, Charge, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        Move move = ReadMove(Assert.Single(Of(casterSession, WorldOpcode.SmsgMonsterMove)));
+        Assert.Equal(2u, move.PointCount);
+        Assert.Equal(15f, caster.X, 2); // the wall between the path end and the target: no straight leg through it
     }
 
     [Fact]

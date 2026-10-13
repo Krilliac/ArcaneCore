@@ -843,8 +843,9 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         far = false;
         if (tolerance > 0)
         {
-            // vmangos FindWalkPoly extents {5, zSearchDist, 5}; "far" is the farFromPoly test of BuildPolyPath.
-            if (!mesh.TryFindNearestPoly(position, new Vector3(5, FarExtents.Y, 5), options, out poly, out onMesh))
+            // vmangos FindWalkPoly (PathFinder.cpp:128-141): extents {5, 10, 5}, and a polygon whose nearest point is more than 3 above the query point is refused;
+            // "far" is the farFromPoly test of BuildPolyPath (3D distance past tolerance).
+            if (!mesh.TryFindNearestPoly(position, new Vector3(5, 10, 5), options, out poly, out onMesh) || onMesh.Y > position.Y + 3.0f)
             {
                 far = true;
                 return false;

@@ -501,10 +501,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     private static PathOptions[] BuildMoverOptions(float tolerance)
     {
-        var all = new PathOptions[8];
+        var all = new PathOptions[16]; // InhabitType bits 0-2, plus 8 for a pet
         for (uint inhabit = 0; inhabit < all.Length; inhabit++)
         {
-            all[inhabit] = new PathOptions { Mover = PathMover.FromInhabit(inhabit), EndTolerance = tolerance };
+            all[inhabit] = new PathOptions { Mover = PathMover.FromInhabit(inhabit & 7, isPet: (inhabit & 8) != 0), EndTolerance = tolerance };
         }
 
         return all;
@@ -516,7 +516,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// (<paramref name="toSpawn"/>) also takes vmangos' 7 yd end tolerance.
     /// </summary>
     private static PathOptions PathOptionsFor(Creature creature, bool toSpawn)
-        => (toSpawn ? s_spawnOptions : s_moverOptions)[creature.Template.InhabitType & 7];
+        => (toSpawn ? s_spawnOptions : s_moverOptions)[(creature.Template.InhabitType & 7) | (creature.IsPet ? 8 : 0)];
 
     /// <summary>One counted search through the map's pathfinder. World thread.</summary>
     private PathResult SearchPath(Vector3 start, Vector3 destination, PathOptions? options = null)

@@ -61,7 +61,7 @@ public sealed partial class NoStraightPathTests
         private readonly NavMeshFixture? _fixture;
 
         public Scene(float x, float y, IPathfinder? custom = null, byte movementType = 0, float wander = 0, float playerX = 0, float playerY = 0,
-            CreatureTemplate? template = null, Func<int, int, bool>? walkable = null)
+            CreatureTemplate? template = null, Func<int, int, bool>? walkable = null, NavTerrain? terrain = null)
         {
             CreatureContent content = Content([template ?? Template()], [Spawn(1, WolfEntry, x, y, z: 0, movementType: movementType, wander: wander)]);
             (World, _, Creatures) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
@@ -69,7 +69,7 @@ public sealed partial class NoStraightPathTests
             {
                 _fixture = new NavMeshFixture();
                 _fixture.WriteParams(MapId);
-                _fixture.WriteTile(MapId, 31, 31, walkable is null ? House() : House() with { Walkable = walkable });
+                _fixture.WriteTile(MapId, 31, 31, (walkable is null ? House() : House() with { Walkable = walkable }) with { Flags = (_, _) => terrain ?? NavTerrain.Ground });
                 var nav = new NavMeshPathfinder(_fixture.Directory);
                 Assert.True(nav.LoadTile(MapId, 31, 31));
                 WorldCollision.Of(World).Install(pathfinder: nav);
