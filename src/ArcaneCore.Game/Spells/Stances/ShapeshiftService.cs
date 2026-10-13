@@ -150,12 +150,22 @@ public sealed class ShapeshiftService
     }
 
     /// <summary>
-    /// The forms that cast the Shapeshift Form Effect (9033) when applied: Cat, Tree, Travel, Aquatic, Bear, Dire Bear and
-    /// Moonkin (SpellAuras.cpp:2436-2445). Not Ghost Wolf, Stealth, Shadowform or the warrior stances.
+    /// The forms whose handler casts the Shapeshift Form Effect (9033) on both apply and remove
+    /// (SpellAuras.cpp:2435-2448, the switch above <c>if (apply)</c>): Cat, Tree, Travel, Aquatic, Bear, Dire Bear and
+    /// Moonkin. Not Ghost Wolf, Stealth, Shadowform or the warrior stances.
     /// </summary>
     public static bool CastsShapeshiftFormEffect(ShapeshiftForm form)
         => form is ShapeshiftForm.Cat or ShapeshiftForm.Tree or ShapeshiftForm.Travel or ShapeshiftForm.Aqua
             or ShapeshiftForm.Bear or ShapeshiftForm.DireBear or ShapeshiftForm.Moonkin;
+
+    /// <summary>SpellAuras.cpp:2445. No-op when 9033 is not in the spell store (the same guard as the apply path).</summary>
+    private void CastShapeshiftFormEffect(Unit target, ShapeshiftForm form)
+    {
+        if (CastsShapeshiftFormEffect(form) && _spells.Store.Get(ShapeshiftFormEffectSpell) is not null)
+        {
+            _spells.CastSpell(target, ShapeshiftFormEffectSpell, SpellCastTargets.ForSelf(), triggered: true);
+        }
+    }
 
     private void OnShapeshiftAura(SpellSystem spells, SpellAuraHolder holder, SpellAura aura, bool apply)
     {
@@ -206,11 +216,8 @@ public sealed class ShapeshiftService
             _switching = outerSwitching;
         }
 
-        // Cast Shapeshift Form Effect to remove slows and roots (SpellAuras.cpp:2433-2449).
-        if (CastsShapeshiftFormEffect(form) && _spells.Store.Get(ShapeshiftFormEffectSpell) is not null)
-        {
-            _spells.CastSpell(target, ShapeshiftFormEffectSpell, SpellCastTargets.ForSelf(), triggered: true);
-        }
+        // Cast Shapeshift Form Effect to remove slows and roots (SpellAuras.cpp:2435-2448). The same call runs on remove.
+        CastShapeshiftFormEffect(target, form);
 
         ApplyDisplay(target, form);
 
@@ -301,6 +308,9 @@ public sealed class ShapeshiftService
     {
         Unit target = holder.Target;
         bool wasWarriorStance = IsWarriorStance(form);
+
+        // The 9033 switch is not inside if (apply) (SpellAuras.cpp:2435-2448): cancelling the form breaks roots and slows too.
+        CastShapeshiftFormEffect(target, form);
 
         RemoveDisplay(target, form);
 
