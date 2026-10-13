@@ -119,7 +119,9 @@ public static class GameObjectLocks
                     uint skill = LockSkills.ForLockType(lockType);
                     if (skill != 0 || lockType == LockType.Blasting)
                     {
-                        if (skillValue(player, skill) + skillBonus < entry.Skills[i])
+                        // CanOpenLock reads the skill only when the lock type has one (reqSkill ? GetSkillValue : 0).
+                        uint have = skill == 0 ? 0 : skillValue(player, skill);
+                        if (have + skillBonus < entry.Skills[i])
                         {
                             return GameObjectUseResult.SkillTooLow;
                         }

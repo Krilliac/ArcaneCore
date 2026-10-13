@@ -41,6 +41,7 @@ public sealed class SayCameraRangeTests
 
         await host.OnWorldAsync(() => CharmService.SetView(host.World.FindOnlinePlayer("Ear")!, null));
         await ear.CollectAsync();
+        await speaker.CollectAsync(); // the speaker hears its own first say too
         await speaker.SendChatAsync(ChatType.Say, Language.Common, "feet are still far");
         Assert.Equal("feet are still far", (await speaker.ReadChatAsync()).Text);
         Assert.DoesNotContain(await ear.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);
