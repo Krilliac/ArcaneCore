@@ -99,6 +99,7 @@ public sealed partial class CharmService
         SetView(caster, null);
         RemovePetActionBar(caster);
         Untrack(target);
+        ResummonAfterPossessedMinion(caster, target);
 
         // On delete only do caster related effects.
         if (removeMode == AuraRemoveMode.Delete)

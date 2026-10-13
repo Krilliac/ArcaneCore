@@ -35,6 +35,12 @@ internal sealed class CharmCastCheck(CharmService service) : ISpellCastCheck
         for (int i = 0; i < spell.Effects.Count; i++)
         {
             SpellEffectInfo effect = spell.Effects[i];
+            // SPELL_EFFECT_SUMMON_POSSESSED: a caster that already charms something cannot (Spell.cpp:6120-6123).
+            if (effect.Effect == SpellEffectName.SummonPossessed && !caster.CharmGuid.IsEmpty)
+            {
+                return SpellCastResult.AlreadyHaveCharm;
+            }
+
             if (effect.Effect != SpellEffectName.ApplyAura)
             {
                 continue;
