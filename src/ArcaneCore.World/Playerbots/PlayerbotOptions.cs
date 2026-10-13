@@ -43,8 +43,20 @@ public sealed class PlayerbotOptions
     /// <summary>Milliseconds between two decisions of a bot (50..60000).</summary>
     public int ThinkIntervalMs { get; set; } = 500;
 
-    /// <summary>The most managed client actions all bots may send in one world tick (1..64).</summary>
-    public int MaxActionsPerTick { get; set; } = 4;
+    /// <summary>
+    /// The most managed client actions all bots may send in one world tick (1..64). The tick's think time is bounded separately, by
+    /// the 8 ms <see cref="PlayerbotThinkRotation.TickBudgetMs"/>: with about 1000 bots the action budget must not be the first limit a
+    /// tick meets, or each bot waits more ticks for its share of actions and its movement lease runs out between thinks.
+    /// </summary>
+    public int MaxActionsPerTick { get; set; } = 48;
+
+    /// <summary>
+    /// How far (flat yards, 0.5..100) the target of a chase may move from the place the chase route was planned to before the route is
+    /// planned again, in the same think that sees it. A route cut short of its target by the route bounds (<c>MaxRouteYards</c>,
+    /// <c>MaxPathPoints</c>) is planned again only once the bot has walked 75% of it. A chase route walked to its end is planned again
+    /// at once, whatever this says.
+    /// </summary>
+    public float ChaseReplanYards { get; set; } = 5f;
 
     /// <summary>
     /// A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches
@@ -190,6 +202,7 @@ public sealed class PlayerbotOptions
         if (MaxBulkCommand is < 1 or > MaxBotsCeiling) throw new InvalidOperationException($"{SectionName}: MaxBulkCommand must be 1..{MaxBotsCeiling}.");
         if (ThinkIntervalMs is < 50 or > 60_000) throw new InvalidOperationException($"{SectionName}: ThinkIntervalMs must be 50..60000.");
         if (MaxActionsPerTick is < 1 or > 64) throw new InvalidOperationException($"{SectionName}: MaxActionsPerTick must be 1..64.");
+        if (!float.IsFinite(ChaseReplanYards) || ChaseReplanYards is < 0.5f or > 100f) throw new InvalidOperationException($"{SectionName}: ChaseReplanYards must be 0.5..100.");
         if (!double.IsFinite(SlowThinkLogMs) || SlowThinkLogMs is < 0 or > 60_000) throw new InvalidOperationException($"{SectionName}: SlowThinkLogMs must be 0..60000.");
         if (MaxThinkSearchNodes != 0 && MaxThinkSearchNodes is < ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes or > 10_000_000)
             throw new InvalidOperationException($"{SectionName}: MaxThinkSearchNodes must be 0 or {ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000.");

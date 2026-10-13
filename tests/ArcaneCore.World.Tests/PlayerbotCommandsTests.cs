@@ -17,7 +17,7 @@ public sealed class PlayerbotCommandsTests
         Assert.Equal(1000, options.MaxRegisteredBots);
         Assert.Equal(50, options.MaxBulkCommand);
         Assert.Equal(500, options.ThinkIntervalMs);
-        Assert.Equal(4, options.MaxActionsPerTick);
+        Assert.Equal(48, options.MaxActionsPerTick);
         Assert.Equal(128, options.MaxPathPoints);
         Assert.Equal(2000f, options.MaxRouteYards);
         Assert.Equal(7f, options.MoveSpeed);

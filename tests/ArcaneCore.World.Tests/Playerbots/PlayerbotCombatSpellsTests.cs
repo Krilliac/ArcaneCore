@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -44,6 +45,41 @@ public sealed class PlayerbotCombatSpellsTests
             Assert.Equal(before, await host.World.InvokeAsync(() => target.Health));
             await host.World.AdvanceClockAsync(50);
             Assert.Equal(before - 7, await host.World.InvokeAsync(() => target.Health));
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
+    /// <summary>A caster running at its target stops and casts in one think: the cast waited for the next think, seconds later on a crowded server, before.</summary>
+    [Fact]
+    public async Task AMovingCaster_StopsAndCastsInTheSameThink()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Creature target = await AddTargetAsync(host, session, 7, 3);
+            uint before = await host.World.InvokeAsync(() => target.Health);
+            var helper = new PlayerbotCombatSpells(session);
+            Assert.True(await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                var options = new PlayerbotOptions { MaxPathPoints = 8, MaxRouteYards = 400 };
+                Assert.True(PlayerbotNavigation.TryPlan(player, new(player.X + 100, player.Y, player.Z), options, out PlayerbotRoute? route));
+                session.ManagedBudget = new ManagedActionBudget(4);
+                Assert.True(PlayerbotNavigation.TryAdvance(session, route!, options, 500, host.World.NowMs));
+                Assert.True(player.Movement.HasFlag(MovementFlags.MaskMoving));
+
+                session.ManagedBudget = new ManagedActionBudget(2);
+                bool consumed = helper.Update(player, target, 0);
+                Assert.False(player.Movement.HasFlag(MovementFlags.MaskMoving));
+                return consumed;
+            }));
+            await host.WaitForWorldAsync(() => target.Health < before, "the cast of the think that stopped the bot");
         }
         finally
         {

@@ -12049,6 +12049,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:ChaseReplanYards",
+      "section": "World:Playerbots",
+      "type": "float",
+      "kind": "scalar",
+      "elementType": "float",
+      "enumValues": null,
+      "default": "5",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "How far (flat yards, 0.5..100) the target of a chase may move from the place the chase route was planned to before the route is planned again, in the same think that sees it. A route cut short of its target by the route bounds (`MaxRouteYards`, `MaxPathPoints`) is planned again only once the bot has walked 75% of it. A chase route walked to its end is planned again at once, whatever this says.",
+      "allowed": "a number, '.' is the decimal point",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Chat:Channels",
       "section": "World:Playerbots",
       "type": "PlayerbotChatChannels",
@@ -13319,11 +13335,11 @@
       "kind": "scalar",
       "elementType": "int",
       "enumValues": null,
-      "default": "4",
+      "default": "48",
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The most managed client actions all bots may send in one world tick (1..64).",
+      "meaning": "The most managed client actions all bots may send in one world tick (1..64). The tick's think time is bounded separately, by the 8 ms `PlayerbotThinkRotation.TickBudgetMs`: with about 1000 bots the action budget must not be the first limit a tick meets, or each bot waits more ticks for its share of actions and its movement lease runs out between thinks.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

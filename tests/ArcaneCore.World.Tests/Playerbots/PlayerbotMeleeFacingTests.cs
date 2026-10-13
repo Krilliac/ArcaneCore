@@ -72,4 +72,57 @@ public sealed class PlayerbotMeleeFacingTests
             await session.ManagedClosed;
         }
     }
+
+    /// <summary>A bot in reach that faces away turns and swings in the one think; the swing used to wait for the next, seconds later on a crowded server.</summary>
+    [Fact]
+    public async Task ABotThatFacesAwayAndHasNotSwung_TurnsAndSwingsInTheSameThink()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        Creature mob = null!;
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500, Risk = { Enabled = false } });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                mob = new Creature(993903, new CreatureTemplate
+                {
+                    Entry = 993903, Name = "swing mob", CreatureType = 1, MinLevel = 20, MaxLevel = 20,
+                    MinLevelHealth = 2000, MaxLevelHealth = 2000,
+                }, null, CreatureContent.Empty, new Random(993903));
+                mob.Relocate(player.X + 2, player.Y, player.Z, 0, host.World.NowMs);
+                player.Map!.AddObject(mob);
+                return true;
+            });
+            await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(mob.Guid), "mob visibility");
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Assert.True(player.Map!.Combat.Attack(mob, player));
+                player.Map!.Combat.DealDamage(mob, player, 1);
+                session.Services.GetRequiredService<SpellFeature>().System.Store = new SpellStore([], [], []);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                Assert.Same(mob, player.Combat.Victim);
+
+                var attacking = typeof(PlayerbotBrain).GetField("_attacking", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                attacking.SetValue(brain, false);
+                player.Relocate(player.X, player.Y, player.Z, MathF.PI, host.World.NowMs);
+                Assert.False(MapCombat.HasInArc(player, mob, CombatConstants.AutoAttackArc));
+                session.ManagedBudget = new ManagedActionBudget(4);
+                brain.Update(500);
+                Assert.True(MapCombat.HasInArc(player, mob, CombatConstants.AutoAttackArc), "not turned");
+                Assert.True((bool)attacking.GetValue(brain)!, "turned, but the swing waited for the next think");
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
 }

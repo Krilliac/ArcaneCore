@@ -13,7 +13,7 @@ password-less Player accounts and logs them in through an ordinary socketless `W
 (`Net/ManagedWorldSession.cs`): every bot action is a real CMSG run through the real world
 handler (`TryManagedAction`), and server replies are captured into a bounded outbound queue.
 Configuration is `World:Playerbots` (`Enabled`, `MaxBots` 8, `MaxRegisteredBots` 1000, `ThinkIntervalMs` 500,
-`MaxActionsPerTick` 4, `AllowedMaps` [0, 1], `FaultBackoffSeconds` 30, `MaxFaults` 3,
+`MaxActionsPerTick` 48, `AllowedMaps` [0, 1], `FaultBackoffSeconds` 30, `MaxFaults` 3,
 `FaultWindowSeconds` 3600, `AllowLocalLlm`, ...; off by default).
 
 **Caps.** `MaxBots` (0..1000) bounds the bots **running** at once: a stopped, faulted or quarantined bot holds no slot, and a

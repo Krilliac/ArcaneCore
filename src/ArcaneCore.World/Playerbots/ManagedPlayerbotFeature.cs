@@ -65,6 +65,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private WorldRuntime? _world;
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
+    private readonly PlayerbotCadenceStats _cadence = new();
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
     private readonly PlayerbotThinkProbe _probe = new();
     private PlayerbotSlowThinkLog? _slowThinks;
@@ -418,6 +419,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (!_active.TryGetValue(botId, out ActiveBot? active) || active.Paused) return false;
             IPlayerbotController? previous = active.Controller;
             active.Controller = controller;
+            // A controller attaching or detaching changes who walks the bot: the route of the one before is stopped, not left to its lease.
+            if (!ReferenceEquals(previous, controller) && active.Session.Player is { } walker) ReleaseMotion(active.Session, walker);
             if (controller is not null && active.GroupDriven)
             {
                 // A controller takes over a member of a bot-led group: it leaves the group (and the brain resumes when it detaches).
@@ -698,6 +701,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
 
         bot.Session.ManagedBudget = null;
+        ReleaseMotion(bot.Session, player); // the brain's route is not the party AI's
         bot.Party.Leash(player, master, stay);
         bot.PartyDriven = true;
         return new(true, stay ? "staying" : "following", botId, player.Name);
@@ -1137,12 +1141,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for, and a tick thinks
         // for no more bots once PlayerbotThinkRotation.TickBudgetMs went by (one think itself is bounded by MaxThinkSearchNodes).
+        int thinks = 0;
+        bool actionLimited = false;
         _rotation.TickWithin(bots.Length, PlayerbotThinkRotation.TickBudgetMs, index =>
         {
-            if (budget.Remaining <= 0) return false;
+            if (budget.Remaining <= 0) { actionLimited = true; return false; }
             Think(bots[index], budget);
+            thinks++;
             return true;
         });
+        // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
+        _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited);
+        if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
+            logger.LogInformation(
+                "Playerbot cadence over the last minute: {Bots} bots, think gap p50 {GapP50Ms} ms, p95 {GapP95Ms} ms, max {GapMaxMs} ms; "
+                + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
+                cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapMaxMs, cadence.ThinksPerTick, cadence.Ticks,
+                cadence.TimeLimitedPct, cadence.ActionLimitedPct);
         PublishSnapshot(bots);
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
@@ -1185,10 +1200,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private string ThinkCore(ActiveBot active, ManagedActionBudget budget)
     {
         string driver = "idle";
+        if (active.Paused || active.Session.State != SessionState.InWorld) active.GapPrimed = false;
         if (!active.Paused && active.Session.State == SessionState.InWorld)
         {
             uint sinceLast = unchecked(_world!.NowMs - active.LastUpdateMs);
             active.LastUpdateMs = _world.NowMs;
+            // The first think after login or unpause measures the time since the record was made (or the pause), not a think gap.
+            if (active.GapPrimed)
+            {
+                _cadence.RecordGap(sinceLast);
+                if (active.Session.Player is { } measured) PlayerbotMotion.NoteThinkGap(measured, sinceLast);
+            }
+
+            active.GapPrimed = true;
             try
             {
                 if (active.Session.Player is { IsInWorld: true } observed) active.Brain.ObserveKillingBlows(observed);
@@ -1257,17 +1281,46 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return driver;
     }
 
+    /// <summary>
+    /// The party AI takes the bot or gives it back, or a controller attaches or detaches: the route of the one before is not the next
+    /// one's, and the motion would walk it for its lease, seconds long (<see cref="PlayerbotMotion"/>). Stops the bot if it moves along
+    /// one. Party AI and controllers only: a bot-led group and the battleground coordinator are not stopped at takeover (stopping there
+    /// broke group formation); their drivers stop the bot themselves when they have nothing to walk: the group leader's Hold states
+    /// (PlayerbotGroupAI.Hold), a member whose leader is missing, Release, and the battleground coordinator's idle phases.
+    /// </summary>
+    private static void ReleaseMotion(WorldSession session, Player player)
+    {
+        if (PlayerbotMotion.IsActive(player)) PlayerbotMovementControl.Stop(session, player);
+    }
+
+    /// <summary>
+    /// After a brain's think: a route the brain gave up (<see cref="PlayerbotBrain.TakeRouteAbandoned"/>), or a goal it changed, with no
+    /// route kept or started by the think, stops the bot. The motion walks a route for its lease, as long as twice the bot's think gap
+    /// (<see cref="PlayerbotMotion.NoteThinkGap"/>), and left to it a bot would run a stale route for seconds. A think that kept or started
+    /// a route (a chase that waits for a tile keeps and renews the route it has) is not stopped.
+    /// </summary>
+    internal static void SettleMotion(WorldSession session, PlayerbotBrain brain, Player player, PlayerbotGoalKind goalBefore, uint renewals, uint sinceLast)
+    {
+        bool abandoned = brain.TakeRouteAbandoned();
+        PlayerbotMotion.SettleAfterThink(session, player, abandoned || brain.Goal != goalBefore, renewals, sinceLast);
+    }
+
     /// <summary>One tick of an autonomous bot outside a bot-led group: its party AI in a real player's group, its brain otherwise.</summary>
     private string UpdateAutonomous(ActiveBot active, Player driven, uint sinceLast)
     {
         // A bot in a real player's group follows its party AI; out of it (or after its master's timeout) the
         // brain takes over again, a fresh one: the old one's routes and targets belong to another place.
         bool party = active.Party.Drives(driven);
-        if (active.PartyDriven && !party) ReplaceBrain(active);
+        if (active.PartyDriven && !party)
+        {
+            ReleaseMotion(active.Session, driven);
+            ReplaceBrain(active);
+        }
         // The party AI follows its master: a tram trip of the brain ends (its entrance consent with it); off the tram map again under the
         // brain, a bot left there takes the nearest exit (PlayerbotTram.Drive).
         if (party && !active.PartyDriven)
         {
+            ReleaseMotion(active.Session, driven);
             PlayerbotTram.Cancel(driven);
             // A bot aboard a lift is never moved off the car mid-shaft: its ride ends at the next stop (PlayerbotElevator.Cancel), and the
             // party AI takes it only once it stands on the landing. Meanwhile the ride is driven here (PartyDriven stays false).
@@ -1288,7 +1341,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         else
         {
+            PlayerbotGoalKind goalBefore = active.Brain.Goal;
+            uint renewals = PlayerbotMotion.RenewalsOf(driven);
             active.Brain.Update(sinceLast);
+            SettleMotion(active.Session, active.Brain, driven, goalBefore, renewals, sinceLast);
             string? report = active.Brain.StallReport;
             bool awaitRelease = report?.StartsWith("death loop:", StringComparison.Ordinal) == true && !driven.IsAlive
                 && !driven.RepopDestinationResolved;
@@ -1848,6 +1904,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public string Name = session.Player!.Name;
         public uint MapId = session.Player!.Map!.MapId;
         public uint LastUpdateMs = session.World.NowMs;
+        /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>
+        public bool GapPrimed;
         public volatile bool Paused;
         public IPlayerbotController? Controller;
         public string? FaultCode;

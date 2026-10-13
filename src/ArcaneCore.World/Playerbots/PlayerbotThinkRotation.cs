@@ -41,6 +41,9 @@ internal sealed class PlayerbotThinkRotation
         return visited;
     }
 
+    /// <summary>Whether the last <see cref="TickWithin(int, double, Func{int, bool}, Func{double})"/> left bots unvisited because its time budget went by.</summary>
+    internal bool LastTickTimeLimited { get; private set; }
+
     /// <summary>The wall time one tick spends on the bots' thinks before it leaves the rest to the next tick.</summary>
     internal const double TickBudgetMs = 8;
 
@@ -59,9 +62,10 @@ internal sealed class PlayerbotThinkRotation
     internal int TickWithin(int count, double budgetMs, Func<int, bool> visit, Func<double> elapsedMs)
     {
         bool first = true;
+        LastTickTimeLimited = false;
         return Tick(count, index =>
         {
-            if (!first && elapsedMs() >= budgetMs) return false;
+            if (!first && elapsedMs() >= budgetMs) { LastTickTimeLimited = true; return false; }
             first = false;
             return visit(index);
         });
