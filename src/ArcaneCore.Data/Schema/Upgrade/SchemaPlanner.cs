@@ -59,6 +59,25 @@ public static class SchemaPlanner
         }
     }
 
+    /// <summary>
+    /// The plan with no database at all: a component's baseline (<paramref name="from"/> null: an empty database to the current
+    /// schema) or the steps after <paramref name="fromVersion"/> up to <paramref name="throughVersion"/>, evaluated against
+    /// <paramref name="from"/>, a virtual catalog (a snapshot of the schema after the previous update file). It never calls
+    /// <c>ExistsAsync</c>, never opens a connection and reads nothing from <paramref name="db"/> but its model and SQL
+    /// generator, so the context may carry a placeholder connection string (the update files are exported without a server).
+    /// Reserved placeholder versions are refused. Unique indexes are decided as on an empty table: no rows exist to collide.
+    /// </summary>
+    internal static async Task<SchemaPlan> PlanOfflineAsync(
+        DbContext db, SchemaDefinition definition, SnapshotCatalog? from, int fromVersion, int throughVersion, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(definition);
+        var session = new Session(db, definition, script: true, offline: true, allowReservedGaps: false, from ?? SnapshotCatalog.Empty());
+        return from is null
+            ? await session.PlanCreateAsync(SchemaState.Missing, null, cancellationToken).ConfigureAwait(false)
+            : await session.PlanStepsAsync(SchemaState.Behind, fromVersion, [], cancellationToken, throughVersion).ConfigureAwait(false);
+    }
+
     private sealed class Session
     {
         private readonly DbContext _db;
@@ -66,13 +85,15 @@ public static class SchemaPlanner
         private readonly bool _script;
         private readonly bool _offline;
         private readonly bool _allowReservedGaps;
+        private readonly SnapshotCatalog? _catalog;
         private readonly SchemaChangeDecider.ModelOperations _ops;
         private readonly HashSet<string> _virtualTables = new(StringComparer.Ordinal);
         private readonly Dictionary<string, HashSet<string>> _virtualColumns = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<CatalogIndex>> _indexes = new(StringComparer.Ordinal);
 
-        public Session(DbContext db, SchemaDefinition definition, bool script, bool offline, bool allowReservedGaps)
+        public Session(DbContext db, SchemaDefinition definition, bool script, bool offline, bool allowReservedGaps, SnapshotCatalog? catalog = null)
         {
+            _catalog = catalog ?? (offline ? SnapshotCatalog.Empty() : null);
             _db = db;
             _definition = definition;
             _script = script;
@@ -239,8 +260,9 @@ public static class SchemaPlanner
             return plan with { DatabaseVersion = match.ForeignVersion, ForeignLine = match };
         }
 
-        private async Task<SchemaPlan> PlanStepsAsync(SchemaState state, int from, List<PlannedStep> prefix, CancellationToken ct)
+        public async Task<SchemaPlan> PlanStepsAsync(SchemaState state, int from, List<PlannedStep> prefix, CancellationToken ct, int? through = null)
         {
+            int target = through ?? _definition.CurrentVersion;
             if (RefuseReservedGaps(state, state == SchemaState.AdoptV1 ? null : from, from) is { } refused)
             {
                 return refused;
@@ -248,7 +270,7 @@ public static class SchemaPlanner
 
             var steps = new List<PlannedStep>(prefix);
             int version = from;
-            foreach (SchemaStep step in _definition.Steps.Where(s => s.Version > from).OrderBy(s => s.Version))
+            foreach (SchemaStep step in _definition.Steps.Where(s => s.Version > from && s.Version <= target).OrderBy(s => s.Version))
             {
                 if (step.Version != version + 1)
                 {
@@ -268,12 +290,12 @@ public static class SchemaPlanner
                 version = step.Version;
             }
 
-            if (version != _definition.CurrentVersion)
+            if (version != target)
             {
                 return new SchemaPlan(
                     _definition.Component, SchemaState.Unknown, from, _definition.CurrentVersion, steps,
                     $"The {_definition.Component} schema is at version {version} but this build needs " +
-                    $"{_definition.CurrentVersion} and has no upgrade path.");
+                    $"{target} and has no upgrade path.");
             }
 
             return new SchemaPlan(_definition.Component, state, state == SchemaState.AdoptV1 ? null : from, _definition.CurrentVersion, steps, null);
@@ -303,7 +325,7 @@ public static class SchemaPlanner
                             $"cannot add column {add.Table}.{add.Column}: the table does not exist in the database."));
                     }
                     else if (_virtualTables.Contains(add.Table) || (_virtualColumns.TryGetValue(add.Table, out HashSet<string>? added) && added.Contains(add.Column))
-                        || await SchemaCatalog.ColumnExistsAsync(_db, add.Table, add.Column, ct).ConfigureAwait(false))
+                        || await ColumnExistsAsync(add.Table, add.Column, ct).ConfigureAwait(false))
                     {
                         actions.Add(new PlannedAction(ChangeObject.Column, add.Table, add.Column, ChangeDecision.Satisfied, $"column {add.Table}.{add.Column} exists"));
                     }
@@ -367,6 +389,11 @@ public static class SchemaPlanner
         {
             CreateTableOperation op = _ops.Tables.GetValueOrDefault(table)
                 ?? throw new InvalidOperationException($"table {table} is not in the model");
+            if (_offline && !_virtualTables.Contains(table) && !_catalog!.HasTable(table))
+            {
+                op = WithoutLaterColumns(op, addedLater);
+            }
+
             if (await TableExistsAsync(table, ct).ConfigureAwait(false))
             {
                 if (_virtualTables.Contains(table))
@@ -375,7 +402,9 @@ public static class SchemaPlanner
                 }
                 else
                 {
-                    IReadOnlyList<string> actual = await SchemaCatalog.ReadColumnsAsync(_db, table, ct).ConfigureAwait(false);
+                    IReadOnlyList<string> actual = _offline
+                        ? _catalog!.ColumnNames(table)
+                        : await SchemaCatalog.ReadColumnsAsync(_db, table, ct).ConfigureAwait(false);
                     string? mismatch = SchemaChangeDecider.ColumnMismatch(op, actual, addedLater);
                     if (mismatch is not null)
                     {
@@ -402,10 +431,12 @@ public static class SchemaPlanner
 
         private async Task<PlannedAction> DecideIndexAsync(CreateIndexOperation index, CancellationToken ct)
         {
-            bool tableIsNew = _virtualTables.Contains(index.Table);
+            bool tableIsNew = _virtualTables.Contains(index.Table) || _offline;
             if (!_indexes.TryGetValue(index.Table, out List<CatalogIndex>? existing))
             {
-                existing = [.. await SchemaCatalog.ReadIndexesAsync(_db, index.Table, ct).ConfigureAwait(false)];
+                existing = _offline
+                    ? [.. _catalog!.IndexesOf(index.Table)]
+                    : [.. await SchemaCatalog.ReadIndexesAsync(_db, index.Table, ct).ConfigureAwait(false)];
                 _indexes[index.Table] = existing;
             }
 
@@ -426,7 +457,47 @@ public static class SchemaPlanner
 
         private async Task<bool> TableExistsAsync(string table, CancellationToken ct)
             => _virtualTables.Contains(table)
-                || (!_offline && await SchemaCatalog.TableExistsAsync(_db, table, ct).ConfigureAwait(false));
+                || (_offline
+                    ? _catalog?.HasTable(table) == true
+                    : await SchemaCatalog.TableExistsAsync(_db, table, ct).ConfigureAwait(false));
+
+        private async Task<bool> ColumnExistsAsync(string table, string column, CancellationToken ct)
+            => _offline
+                ? _catalog?.HasColumn(table, column) == true
+                : await SchemaCatalog.ColumnExistsAsync(_db, table, column, ct).ConfigureAwait(false);
+
+        /// <summary>
+        /// The table as it exists at this step when a later step adds some of its columns (the bootstrapper tolerates such a
+        /// table lacking them): a file written for step N must not carry what step N+1 adds, or a database that reached N by
+        /// another route would skip N+1's column. Refuses a table whose key or an index uses a column that is held back.
+        /// </summary>
+        private CreateTableOperation WithoutLaterColumns(CreateTableOperation op, IReadOnlySet<(string Table, string Column)> addedLater)
+        {
+            string[] held = [.. op.Columns.Select(c => c.Name).Where(c => addedLater.Contains((op.Name, c)))];
+            if (held.Length == 0)
+            {
+                return op;
+            }
+
+            if ((op.PrimaryKey?.Columns.Any(held.Contains) ?? false) || _ops.IndexesByTable[op.Name].Any(i => i.Columns.Any(held.Contains)))
+            {
+                throw new NotSupportedException(
+                    $"table {op.Name} is created by one step and gets {string.Join(", ", held)} from a later step, but its key or an index uses that column; " +
+                    "export the steps in separate releases.");
+            }
+
+            var trimmed = new CreateTableOperation { Name = op.Name, Schema = op.Schema, Comment = op.Comment, PrimaryKey = op.PrimaryKey };
+            trimmed.Columns.AddRange(op.Columns.Where(c => !held.Contains(c.Name)));
+            trimmed.UniqueConstraints.AddRange(op.UniqueConstraints);
+            trimmed.ForeignKeys.AddRange(op.ForeignKeys);
+            trimmed.CheckConstraints.AddRange(op.CheckConstraints);
+            foreach (var annotation in op.GetAnnotations())
+            {
+                trimmed.AddAnnotation(annotation.Name, annotation.Value);
+            }
+
+            return trimmed;
+        }
 
         private async Task<int> CountPresentAsync(IEnumerable<string> tables, CancellationToken ct)
         {

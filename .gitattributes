@@ -1,0 +1,2 @@
+# Update files are applied by hand with sqlite3/psql/mysql and hashed by the golden tests: keep LF on every checkout.
+sql/updates/** text eol=lf
