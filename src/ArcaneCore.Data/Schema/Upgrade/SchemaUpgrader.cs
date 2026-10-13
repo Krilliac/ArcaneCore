@@ -29,7 +29,7 @@ public static class SchemaUpgrader
         options ??= new SchemaUpgradeOptions();
         SchemaPlan plan = await SchemaPlanner.PlanAsync(db, definition, includeScript: false, cancellationToken).ConfigureAwait(false);
 
-        SchemaPolicyException.ThrowIfForbidden(options.Policy, plan);
+        SchemaPolicyException.ThrowIfForbidden(options.EffectivePolicy, plan, options.ValidateOnly);
         if (plan.State == SchemaState.Newer)
         {
             throw new SchemaDowngradeException(plan.Refusal!, plan.DatabaseVersion!.Value, plan.CodeVersion);

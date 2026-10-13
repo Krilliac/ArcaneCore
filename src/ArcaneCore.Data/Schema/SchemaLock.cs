@@ -187,6 +187,11 @@ internal sealed class SchemaLock : IAsyncDisposable
         {
             _transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 8)
+        {
+            // Mode=ReadOnly cannot acquire a BEGIN IMMEDIATE write transaction; use a deferred read transaction.
+            _transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+        }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 5 or 6)
         {
             throw Timeout(timeout, ex);

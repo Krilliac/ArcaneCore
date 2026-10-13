@@ -59,7 +59,7 @@ public sealed class DocsConsistencyTests
     {
         string runbook = ReadRunbook();
         string[] keys = [.. typeof(DatabaseUpgradeOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(p => p.Name)];
-        Assert.Equal(["LockTimeoutSeconds", "Policy"], keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["LockTimeoutSeconds", "Policy", "ValidateOnly"], keys.Order(StringComparer.Ordinal));
         foreach (string key in keys)
         {
             Assert.Contains($"Database:Upgrade:{key}", runbook, StringComparison.Ordinal);

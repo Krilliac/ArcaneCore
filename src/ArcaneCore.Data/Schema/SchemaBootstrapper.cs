@@ -98,7 +98,7 @@ public sealed class SchemaDefinition
 /// <see cref="SchemaBlockedException"/>, <see cref="SchemaPolicyException"/>) that every existing
 /// <c>catch (SchemaMismatchException)</c> still handles.
 /// </remarks>
-public class SchemaMismatchException(string message) : Exception(message)
+public class SchemaMismatchException(string message) : InvalidOperationException(message)
 {
     /// <summary>Why the bootstrap failed, for callers that map failures to exit codes without parsing the message.</summary>
     public SchemaMismatchReason Reason { get; init; }
@@ -170,23 +170,56 @@ public static class SchemaBootstrapper
         => EnsureAsync(db, definition, new SchemaUpgradeOptions { LockTimeout = lockTimeout }, logger, cancellationToken);
 
     /// <summary>
+    /// Validate-only entry point for serving nodes: acquires the component schema lock, executes zero DDL and zero
+    /// seed inserts, and verifies that the database exists, its version table records <see cref="SchemaDefinition.CurrentVersion"/>,
+    /// and all registered module tables are present (failing closed with <see cref="SchemaMismatchException"/>, which derives
+    /// from <see cref="InvalidOperationException"/>, if missing, behind, or ahead).
+    /// </summary>
+    public static Task ValidateAsync(
+        DbContext db, SchemaDefinition definition, TimeSpan? lockTimeout = null, ILogger? logger = null, CancellationToken cancellationToken = default)
+        => EnsureAsync(
+            db,
+            definition,
+            new SchemaUpgradeOptions
+            {
+                Policy = SchemaPolicy.Never,
+                ValidateOnly = true,
+                LockTimeout = lockTimeout ?? DefaultLockTimeout,
+            },
+            logger,
+            cancellationToken);
+
+    /// <summary>
     /// <see cref="EnsureAsync(DbContext, SchemaDefinition, TimeSpan, ILogger?, CancellationToken)"/> with the
     /// upgrade tooling's options: the startup policy (checked before the database is created and again, under
     /// the lock, against the state the lock holder sees), the lock wait and a per-step progress callback.
+    /// When <paramref name="seedAfterEnsure"/> is supplied and the policy permits writes (not <see cref="SchemaUpgradeOptions.ValidateOnly"/>
+    /// and not <see cref="SchemaPolicy.Never"/>), it runs inside the same component <see cref="SchemaLock"/> so concurrent
+    /// daemon starts serialize both schema DDL and initial seeding.
     /// </summary>
     public static async Task EnsureAsync(
-        DbContext db, SchemaDefinition definition, SchemaUpgradeOptions options, ILogger? logger = null, CancellationToken cancellationToken = default)
+        DbContext db,
+        SchemaDefinition definition,
+        SchemaUpgradeOptions options,
+        ILogger? logger = null,
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task>? seedAfterEnsure = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         using IDisposable exempt = CharacterWriteFence.Exempt(); // the bootstrap creates and seeds the ownership row itself
         TimeSpan lockTimeout = options.LockTimeout;
+        SchemaPolicy effectivePolicy = options.EffectivePolicy;
         var creator = (IRelationalDatabaseCreator)db.GetService<IDatabaseCreator>();
         if (!await creator.ExistsAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (options.Policy == SchemaPolicy.Never)
+            if (effectivePolicy == SchemaPolicy.Never)
             {
-                // Refuse before CreateAsync: policy Never creates nothing, not even an empty database.
-                throw new SchemaPolicyException(SchemaPolicyException.MissingDatabaseMessage(definition), SchemaState.Missing, null, definition.CurrentVersion);
+                // Refuse before CreateAsync: policy Never (and ValidateOnly) creates nothing, not even an empty database.
+                throw new SchemaPolicyException(
+                    SchemaPolicyException.MissingDatabaseMessage(definition, options.ValidateOnly),
+                    SchemaState.Missing,
+                    null,
+                    definition.CurrentVersion);
             }
 
             try
@@ -211,11 +244,19 @@ public static class SchemaBootstrapper
                 .ConfigureAwait(false))
             {
                 await RunAsync(db, definition, options, logger, cancellationToken).ConfigureAwait(false);
+                if (seedAfterEnsure is not null && !options.ValidateOnly && effectivePolicy != SchemaPolicy.Never)
+                {
+                    await seedAfterEnsure(cancellationToken).ConfigureAwait(false);
+                }
+
                 await schemaLock.CompleteAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            // Only a database this build accepted: a refused one is left byte-for-byte untouched.
-            await UseWriteAheadLogAsync(db, definition, logger, cancellationToken).ConfigureAwait(false);
+            // Only a database this build accepted (and not in validate-only mode): a refused or read-only check leaves it byte-for-byte untouched.
+            if (!options.ValidateOnly)
+            {
+                await UseWriteAheadLogAsync(db, definition, logger, cancellationToken).ConfigureAwait(false);
+            }
         }
         finally
         {
@@ -266,16 +307,27 @@ public static class SchemaBootstrapper
 
     private static async Task RunAsync(DbContext db, SchemaDefinition definition, SchemaUpgradeOptions options, ILogger? logger, CancellationToken ct)
     {
+        SchemaPolicy effectivePolicy = options.EffectivePolicy;
+
         // The startup policy, judged on the read-only plan under the lock (before anything, including the
         // version-0 marker of a resumed create, is written): a process that waited sees the winner's work.
-        if (options.Policy != SchemaPolicy.Always)
+        if (effectivePolicy != SchemaPolicy.Always)
         {
             SchemaPlan plan = await SchemaPlanner.PlanAsync(db, definition, includeScript: false, options.AllowReservedSchemaGaps, ct).ConfigureAwait(false);
-            SchemaPolicyException.ThrowIfForbidden(options.Policy, plan);
+            SchemaPolicyException.ThrowIfForbidden(effectivePolicy, plan, options.ValidateOnly);
         }
 
         // Read only now that the lock is held: a process that waited sees the winner's work.
-        int? version = await TryReadVersionAsync(db, definition, ct).ConfigureAwait(false);
+        // In ValidateOnly (or Never) mode, never write the version-0 marker into a rowless version table.
+        int? version = options.ValidateOnly || effectivePolicy == SchemaPolicy.Never
+            ? await ReadRecordedVersionAsync(db, definition, ct).ConfigureAwait(false)
+            : await TryReadVersionAsync(db, definition, ct).ConfigureAwait(false);
+
+        if (options.ValidateOnly && version is not null && version < CreatingVersion)
+        {
+            throw new SchemaMismatchException(
+                $"The {definition.Component} schema version table holds {version}, which is not a version this build knows; the table is damaged.");
+        }
 
         // Fail closed before any create, adoption or step: a reserved placeholder version recorded as applied would make
         // every later build skip the owner's real step (ReservedSchemaGaps).
@@ -283,6 +335,66 @@ public static class SchemaBootstrapper
         if (pendingGaps.Count > 0 && !options.AllowReservedSchemaGaps)
         {
             throw new SchemaMismatchException(ReservedSchemaGaps.RefusalMessage(definition, version, pendingGaps));
+        }
+
+        if (options.ValidateOnly)
+        {
+            if (version is null || version == CreatingVersion)
+            {
+                throw new SchemaPolicyException(
+                    $"The {definition.Component} database has no recorded schema version in {definition.VersionTable} (schema_versions missing or uninitialized); " +
+                    $"this build needs schema version {definition.CurrentVersion} and validate-only mode refuses to create or adopt a schema.",
+                    version is null ? SchemaState.Fresh : SchemaState.Creating,
+                    version,
+                    definition.CurrentVersion);
+            }
+
+            if (version > CreatingVersion && definition.ForeignLines.Count > 0)
+            {
+                ForeignLineDetection detection = await ForeignLineDetector.DetectAsync(db, definition, version.Value, ct).ConfigureAwait(false);
+                if (detection.Refusal is not null)
+                {
+                    throw new SchemaMismatchException(detection.Refusal);
+                }
+
+                if (detection.Match is { } match)
+                {
+                    throw new SchemaPolicyException(
+                        $"The {definition.Component} database is on the {match.Line.Name} schema line (version {match.ForeignVersion}); " +
+                        $"this build needs schema version {definition.CurrentVersion} and validate-only mode refuses to migrate it.",
+                        SchemaState.Behind,
+                        match.ForeignVersion,
+                        definition.CurrentVersion);
+                }
+            }
+
+            if (version > definition.CurrentVersion)
+            {
+                throw new SchemaMismatchException(SchemaChangeDecider.NewerMessage(definition, version.Value));
+            }
+
+            if (version < definition.CurrentVersion)
+            {
+                throw new SchemaPolicyException(
+                    $"The {definition.Component} database has schema version {version}, this build needs schema version {definition.CurrentVersion}; " +
+                    "validate-only mode refuses to apply DDL migrations.",
+                    SchemaState.Behind,
+                    version,
+                    definition.CurrentVersion);
+            }
+
+            var presentTables = new HashSet<string>(await SchemaCatalogInfo.ReadTablesAsync(db, ct).ConfigureAwait(false), StringComparer.OrdinalIgnoreCase);
+            foreach (string table in ModelTables(db, definition))
+            {
+                if (!presentTables.Contains(table))
+                {
+                    throw new SchemaMismatchException(
+                        $"The {definition.Component} database records schema version {version} in {definition.VersionTable}, " +
+                        $"but required module table '{table}' is missing (validate-only mode refuses to create or repair tables).");
+                }
+            }
+
+            return;
         }
 
         if (version is null)
