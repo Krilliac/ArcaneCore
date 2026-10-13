@@ -13223,6 +13223,19 @@ World.Playerbots.Qa.SignalQueueCapacity = 4096
 #
 World.Playerbots.Qa.StaleHours = 24
 
+#
+#    World.Playerbots.Qa.TickHangWarmupMinutes
+#        Description: Minutes after the world starts ticking during which a tick hang is not
+#                     reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first
+#                     tick (0..1440, default 5).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.TickHangWarmupMinutes = 5
+
 #----------------------------------------------------------------------------
 # World:Social
 #----------------------------------------------------------------------------

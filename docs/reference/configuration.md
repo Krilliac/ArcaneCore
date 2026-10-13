@@ -1466,6 +1466,7 @@ How to read the tables:
 | `World:Playerbots:Qa:MaxSamples` | `int` | `5` | - | The newest evidence samples kept per finding (1..20). |
 | `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
 | `World:Playerbots:Qa:StaleHours` | `int` | `24` | - | Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever). |
+| `World:Playerbots:Qa:TickHangWarmupMinutes` | `int` | `5` | - | Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5). |
 
 ## `World:Social`
 

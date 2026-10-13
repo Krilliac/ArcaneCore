@@ -5,7 +5,9 @@ using ArcaneCore.Kernel.Ops.Watchdog.Counters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Ops.Announce;
 using ArcaneCore.World.Ops.Watchdog;
+using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Tests.HotCode;
+using ArcaneCore.World.Tests.Playerbots.Qa;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -120,6 +122,222 @@ public sealed class TickWatchdogFeatureTests
         Assert.True(monitor.IsAlive(clock.NowMicros, out _));
         Assert.True(monitor.Overruns >= 1);
     }
+
+    [Fact]
+    public async Task AHang_IsReportedToBotQaOnce_ByPhaseAndWork_NotByDuration_AndItsCompletionIsNotCountedTwice()
+    {
+        var clock = new ManualClock();
+        WatchdogOptions options = Options(o =>
+        {
+            o.HangMs = 100;
+            o.BudgetMs = 50;
+        });
+        options.HostLoad.Enabled = false;
+        var bus = new PlayerbotQaSignalBus(64);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s =>
+        {
+            Register(s, options, clock);
+            s.AddSingleton<IPlayerbotQaSink>(new PlayerbotQaSink(bus));
+            s.AddSingleton(Microsoft.Extensions.Options.Options.Create(new PlayerbotQaOptions { TickHangWarmupMinutes = 0 }));
+        });
+        TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
+        await WorldTestHost.WaitForAsync(() => monitor.Ring.Count >= 5, "frames");
+
+        using var release = new ManualResetEventSlim(false);
+        using var entered = new ManualResetEventSlim(false);
+        host.World.Post(() =>
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+        });
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+        clock.AdvanceMs(300);
+        monitor.Check(clock.NowMicros);
+
+        var first = new List<QaSignal>();
+        bus.Drain(first, 16);
+        QaSignal running = Assert.Single(first);
+        Assert.Equal(QaSignalKind.TickHang, running.Kind);
+        Assert.Equal(nameof(TickPhase.Commands), running.Stage);
+        Assert.False(string.IsNullOrEmpty(running.Reason));
+        Assert.Null(running.BotKey);
+        Assert.StartsWith("v1|tickhang|phase=Commands|item=", PlayerbotQaFingerprint.Key(running), StringComparison.Ordinal);
+
+        // The same hang, a second later and longer, is the same finding; and once it completes, the completion is not a second occurrence of it.
+        clock.AdvanceMs(60_000);
+        monitor.Check(clock.NowMicros);
+        var again = new List<QaSignal>();
+        bus.Drain(again, 16);
+        Assert.Empty(again);
+
+        release.Set();
+        await WorldTestHost.WaitForAsync(() => monitor.HangsCompleted >= 1, "the completed hang");
+        monitor.Check(clock.NowMicros);
+        var done = new List<QaSignal>();
+        bus.Drain(done, 16);
+        Assert.Empty(done);
+
+        var aggregator = new PlayerbotQaAggregator(100, 5);
+        Assert.NotNull(aggregator.Ingest(running, new FakeFacts(), QaData.T0));
+        QaFindingView view = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(QaSignalKind.TickHang, view.Kind);
+        Assert.True(view.BotIndependent);
+    }
+
+    private static QaSignal[] DrainSignals(PlayerbotQaSignalBus bus)
+    {
+        var list = new List<QaSignal>();
+        bus.Drain(list, 64);
+        return [.. list];
+    }
+
+    private static TickAlert HangAlert(bool inProgress, HostLoadVerdict verdict = HostLoadVerdict.Quiet, int hangs = 1)
+        => new(TickAlertKind.Hang, "The world tick is hung", "hang threshold 100 ms", inProgress, verdict, hangs);
+
+    private static SlowTickInfo SlowTick(TickPhases phases, params (string, long)[] top)
+        => new(1, 0, phases.CommandsMicros + phases.MapsMicros + phases.FeaturesMicros + phases.AutosaveMicros, phases, top);
+
+    /// <summary>A started host with a QA sink on a bus; <paramref name="warmupMinutes"/> is the QA option, the clock is the one given.</summary>
+    private static WorldTestHost StartQa(PlayerbotQaSignalBus bus, ManualClock clock, int warmupMinutes = 0)
+        => WorldTestHost.Start(configureServices: s =>
+        {
+            WatchdogOptions options = Options(o => o.HangMs = 100);
+            options.HostLoad.Enabled = false;
+            Register(s, options, clock);
+            s.AddSingleton<IPlayerbotQaSink>(new PlayerbotQaSink(bus));
+            s.AddSingleton(Microsoft.Extensions.Options.Options.Create(new PlayerbotQaOptions { TickHangWarmupMinutes = warmupMinutes }));
+        });
+
+    [Fact]
+    public void ACompletedHang_NamesTheWorkOfItsDominantPhase_NotTheTopFeature()
+    {
+        (string, long)[] top = [("SpellFeature", 900_000)];
+        TickWatchdogFeature.HangFacts maps = TickWatchdogFeature.CompletedFacts(SlowTick(new TickPhases(1_000, 3_000_000, 5_000), top));
+        TickWatchdogFeature.HangFacts autosave = TickWatchdogFeature.CompletedFacts(SlowTick(new TickPhases(1_000, 1_000, 5_000) { AutosaveMicros = 4_000_000 }, top));
+        TickWatchdogFeature.HangFacts commands = TickWatchdogFeature.CompletedFacts(SlowTick(new TickPhases(4_000_000, 1_000, 5_000), top));
+        TickWatchdogFeature.HangFacts features = TickWatchdogFeature.CompletedFacts(SlowTick(new TickPhases(1_000, 1_000, 4_000_000), top));
+        TickWatchdogFeature.HangFacts handlers = TickWatchdogFeature.CompletedFacts(SlowTick(new TickPhases(1_000, 1_000, 4_000_000) { WorldTickMicros = 3_900_000 }, top));
+
+        Assert.Equal(("Maps", "map"), (maps.Phase, maps.Item));
+        Assert.Equal(("Autosave", "autosave"), (autosave.Phase, autosave.Item));
+        Assert.Equal(("Commands", "commands"), (commands.Phase, commands.Item));
+        Assert.Equal(("Features", "SpellFeature"), (features.Phase, features.Item));
+        Assert.Equal(("WorldTick", "worldtick-handlers"), (handlers.Phase, handlers.Item));
+        Assert.Equal(("OutsideTick", "none"), (TickWatchdogFeature.CompletedFacts(null).Phase, TickWatchdogFeature.CompletedFacts(null).Item));
+        // The running and the completed report of the same autosave hang are one fingerprint.
+        TickWatchdogFeature.HangFacts running = TickWatchdogFeature.RunningFacts(new TickPosition(TickPhase.Autosave, null, 0));
+        Assert.Equal((autosave.Phase, autosave.Item), (running.Phase, running.Item));
+    }
+
+    [Fact]
+    public void ATickTheGcTook_IsMarkedAsGc_OnlyWhenItsPausesWereMostOfTheTick()
+    {
+        var most = new TickPhases(1_000, 1_000, 3_000_000) { GcCaptured = true, Gc = new GcDelta(TimeSpan.TicksPerSecond * 2, 0, 0, 1) };
+        var little = new TickPhases(1_000, 1_000, 3_000_000) { GcCaptured = true, Gc = new GcDelta(TimeSpan.TicksPerMillisecond * 10, 0, 0, 0) };
+        Assert.True(TickWatchdogFeature.CompletedFacts(SlowTick(most)).GcDominated);
+        Assert.False(TickWatchdogFeature.CompletedFacts(SlowTick(little)).GcDominated);
+        Assert.False(TickWatchdogFeature.CompletedFacts(SlowTick(new TickPhases(1_000, 1_000, 3_000_000) { Gc = new GcDelta(TimeSpan.TicksPerSecond * 2, 0, 0, 1) })).GcDominated);
+    }
+
+    [Fact]
+    public async Task AHangThatStartsAndEndsBetweenTwoChecks_IsReportedByItsCompletion_WithTheFactsOfItsDominantPhase()
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        await using WorldTestHost host = StartQa(bus, new ManualClock());
+        var feature = host.WorldServices.GetRequiredService<TickWatchdogFeature>();
+
+        feature.ReportHang(HangAlert(inProgress: false), TickWatchdogFeature.CompletedFacts(SlowTick(new TickPhases(1_000, 3_000_000, 5_000), ("SpellFeature", 900_000))));
+        feature.ReportHang(HangAlert(inProgress: false), TickWatchdogFeature.CompletedFacts(SlowTick(new TickPhases(1_000, 1_000, 5_000) { AutosaveMicros = 4_000_000 }, ("SpellFeature", 900_000))));
+
+        QaSignal[] signals = DrainSignals(bus);
+        Assert.Equal([("Maps", "map"), ("Autosave", "autosave")], signals.Select(s => (s.Stage, s.Reason)));
+        Assert.All(signals, s => Assert.DoesNotContain("SpellFeature", PlayerbotQaFingerprint.Key(s) + s.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ACompletionReports_OnlyTheHangsNoRunningReportStoodFor()
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        await using WorldTestHost host = StartQa(bus, new ManualClock());
+        var feature = host.WorldServices.GetRequiredService<TickWatchdogFeature>();
+        var running = new TickWatchdogFeature.HangFacts("Features", "SpellFeature", false);
+        var completed = new TickWatchdogFeature.HangFacts("Maps", "map", false);
+
+        feature.ReportHang(HangAlert(inProgress: true), running);
+        feature.ReportHang(HangAlert(inProgress: true), running); // the same hang, still running: not again
+        feature.ReportHang(HangAlert(inProgress: false, hangs: 1), completed); // its own completion: not a second occurrence
+        feature.ReportHang(HangAlert(inProgress: true), running);
+        feature.ReportHang(HangAlert(inProgress: false, hangs: 3), completed); // two more ended unseen: they are reported
+
+        QaSignal[] signals = DrainSignals(bus);
+        Assert.Equal(["Features", "Features", "Maps"], signals.Select(s => s.Stage));
+        Assert.Equal([1L, 1L, 2L], signals.Select(s => s.Occurrences));
+    }
+
+    [Theory]
+    [InlineData(HostLoadVerdict.HostStarved, false)]
+    [InlineData(HostLoadVerdict.GcPauses, false)]
+    [InlineData(HostLoadVerdict.ProcessBusy, true)]
+    [InlineData(HostLoadVerdict.Quiet, true)]
+    [InlineData(HostLoadVerdict.Unknown, true)]
+    public async Task AHangTheHostVerdictBlamesOnTheMachine_IsNotReported(HostLoadVerdict verdict, bool reported)
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        await using WorldTestHost host = StartQa(bus, new ManualClock());
+        var feature = host.WorldServices.GetRequiredService<TickWatchdogFeature>();
+
+        feature.ReportHang(HangAlert(inProgress: false, verdict), new TickWatchdogFeature.HangFacts("Maps", "map", false));
+
+        Assert.Equal(reported ? 1 : 0, DrainSignals(bus).Length);
+    }
+
+    [Fact]
+    public async Task AHangThatTheGcTook_IsNotReported()
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        await using WorldTestHost host = StartQa(bus, new ManualClock());
+        var feature = host.WorldServices.GetRequiredService<TickWatchdogFeature>();
+
+        feature.ReportHang(HangAlert(inProgress: false), new TickWatchdogFeature.HangFacts("Features", "SpellFeature", GcDominated: true));
+
+        Assert.Empty(DrainSignals(bus));
+    }
+
+    [Fact]
+    public async Task AHangInTheStartUpWarmup_IsNotReported_AndOneAfterItIs()
+    {
+        var clock = new ManualClock();
+        var bus = new PlayerbotQaSignalBus(64);
+        await using WorldTestHost host = StartQa(bus, clock, warmupMinutes: 5);
+        var feature = host.WorldServices.GetRequiredService<TickWatchdogFeature>();
+        var facts = new TickWatchdogFeature.HangFacts("Maps", "map", false);
+
+        clock.AdvanceMs(4 * 60_000);
+        feature.ReportHang(HangAlert(inProgress: false), facts);
+        Assert.Empty(DrainSignals(bus));
+
+        clock.AdvanceMs(2 * 60_000);
+        feature.ReportHang(HangAlert(inProgress: false), facts);
+        Assert.Single(DrainSignals(bus));
+    }
+
+    [Fact]
+    public async Task AHangAfterShutdownBegan_IsNotReported()
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        WorldTestHost host = StartQa(bus, new ManualClock());
+        var feature = host.WorldServices.GetRequiredService<TickWatchdogFeature>();
+        await feature.StopAsync();
+
+        feature.ReportHang(HangAlert(inProgress: false), new TickWatchdogFeature.HangFacts("Maps", "map", false));
+
+        Assert.Empty(DrainSignals(bus));
+        await host.DisposeAsync();
+    }
+
+    [Fact]
+    public void ATickHang_NeedsTheMinimumOccurrences_LikeOtherKinds()
+        => Assert.False(QaKinds.Of(QaSignalKind.TickHang).SingleOccurrence);
 
     [Fact]
     public async Task StoppingTheHost_StopsTicking_SoLivenessNoLongerDependsOnTheWorldThread()

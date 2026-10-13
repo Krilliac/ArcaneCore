@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Npc;
@@ -43,6 +44,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     private QaSpellCoverageReport? _coverage;
     private WorldRuntime? _world;
     private PlayerbotQaFaultFeed? _faultFeed;
+    private System.Diagnostics.Metrics.Meter? _findingsMeter;
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
     internal Func<string, string?>? EnvironmentReader { get; init; }
@@ -134,6 +136,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         }
 
         Aggregator = aggregator;
+        if (services.GetService<MetricsOptions>() is { Enabled: true }) _findingsMeter = PlayerbotQaMeters.RegisterFindings(aggregator.Snapshot, this);
         if (services.GetService<IOpsAnnouncer>() is { } announcer)
         {
             aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view);
@@ -156,6 +159,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     public async Task StopAsync()
     {
         if (Aggregator is null) return;
+        _findingsMeter?.Dispose();
         await _cts.CancelAsync().ConfigureAwait(false);
         try
         {
@@ -210,7 +214,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             {
                 try
                 {
-                    Aggregator.Ingest(signal, _facts, now);
+                    if (Aggregator.Ingest(signal, _facts, now) is not null && !signal.FromCoverage) PlayerbotQaMeters.CountOccurrences(signal.Kind, signal.Occurrences);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
@@ -237,7 +241,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         {
             try
             {
-                Aggregator.Ingest(signal, _facts, now);
+                if (Aggregator.Ingest(signal, _facts, now) is not null) PlayerbotQaMeters.CountOccurrences(signal.Kind, signal.Occurrences);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
