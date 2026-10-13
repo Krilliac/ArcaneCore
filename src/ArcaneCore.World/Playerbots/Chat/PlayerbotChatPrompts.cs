@@ -130,6 +130,7 @@ internal static class PlayerbotChatPrompts
         }
         catch (JsonException)
         {
+            // the model's answer was not the JSON asked for: no reply and no command, the bot says nothing
             return (null, null);
         }
     }

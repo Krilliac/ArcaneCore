@@ -106,6 +106,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
+                // shutdown: the worker was cancelled
             }
         }
 

@@ -283,7 +283,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                     {
                         // Never the key: the request carries it, the exception text does not.
                         Interlocked.Increment(ref _dropped);
-                        _logger.LogWarning("Bot chat: a reply failed ({Error})", error.GetType().Name);
+                        _logger.LogWarning("Bot chat: a reply failed ({Error})", error.GetType().Name); // type only, by design: the exception text may carry the request URL or key
                     }
                 }
             }

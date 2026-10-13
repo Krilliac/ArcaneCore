@@ -162,7 +162,7 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
     public static LogSink Queued(string name, ILineWriter destination, int capacity, Func<string, ILineWriter, LogSink> create)
     {
         LogSink? sink = null;
-        var queue = new QueuedLineWriter(destination, capacity, name, dropped => sink!.DropNotice(dropped));
+        var queue = new QueuedLineWriter(destination, capacity, name, dropped => sink!.DropNotice(dropped), priorityDropNotice: lost => sink!.PriorityDropNotice(lost));
         sink = create(name, queue);
         return sink;
     }

@@ -485,7 +485,9 @@ public sealed class ManagedPlayerbotLifecycleTests
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultonce", 1, 1)).BotId);
-        Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
+        // A exception type only this test throws: its fault signature is new to the process-wide ledger, so this is its first occurrence
+        // (logged with the exception at Error) whatever other tests did, and nothing here touches the shared ledger.
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1, make: m => new OneActionFaultMarkerException(m)))).Success);
 
         await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the fault is recorded", 20);
 
@@ -493,8 +495,30 @@ public sealed class ManagedPlayerbotLifecycleTests
         Assert.True(record.DesiredEnabled);
         Assert.Contains("fixture-action-fault", record.ErrorCode);
         (Exception? error, string message) = Assert.Single(log.Entries, e => e.Message.Contains("action failed"));
-        Assert.IsType<InvalidOperationException>(error);
+        Assert.IsType<OneActionFaultMarkerException>(error);
         Assert.Contains("fixture-action-fault", message);
+        // Error, not Warning: the console colours it red and an operator reading only errors sees it. The QA tap still parses this text.
+        Assert.Equal(LogLevel.Error, Assert.Single(log.Leveled, e => e.Message.Contains("action failed")).Level);
+    }
+
+    /// <summary>A fire-and-forget operator command used to answer with the exception type only and lose the exception; it is now logged at Error and counted.</summary>
+    [Fact]
+    public async Task ACommandFault_IsLoggedAtError_WithTheException_AndCountedInTheLedger()
+    {
+        var log = new CapturingLogger();
+        await using WorldTestHost host = Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), new MemoryManagedPlayerbotStore(), logger: log);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        static long CountAtSite() => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
+            .Where(f => f.Site == "playerbot-command" && f.ExceptionType.EndsWith(nameof(CommandFaultMarkerException), StringComparison.Ordinal)).Sum(f => f.Count);
+        long before = CountAtSite();
+
+        feature.ReportCommandFault("probe-command", new CommandFaultMarkerException("fixture-command-fault"));
+
+        (LogLevel level, Exception? error, string message) = Assert.Single(log.Leveled, e => e.Message.Contains("probe-command"));
+        Assert.Equal(LogLevel.Error, level);
+        Assert.Equal("fixture-command-fault", Assert.IsType<CommandFaultMarkerException>(error).Message);
+        Assert.Contains("failed", message);
+        Assert.Equal(before + 1, CountAtSite());
     }
 
     [Fact]
@@ -798,13 +822,17 @@ public sealed class ManagedPlayerbotLifecycleTests
     }
 
     /// <summary>A scripted controller whose first <paramref name="faults"/> ticks throw (an action fault in the bot's update).</summary>
-    internal sealed class ThrowingController(int faults, string message = "fixture-action-fault") : IPlayerbotController
+    internal sealed class OneActionFaultMarkerException(string message) : InvalidOperationException(message);
+
+    internal sealed class CommandFaultMarkerException(string message) : InvalidOperationException(message);
+
+    internal sealed class ThrowingController(int faults, string message = "fixture-action-fault", Func<string, Exception>? make = null) : IPlayerbotController
     {
         private int _remaining = faults;
 
         public void Tick(PlayerbotControllerContext context, uint elapsedMs)
         {
-            if (Interlocked.Decrement(ref _remaining) >= 0) throw new InvalidOperationException(message);
+            if (Interlocked.Decrement(ref _remaining) >= 0) throw make?.Invoke(message) ?? new InvalidOperationException(message);
         }
 
         public void Detached(Guid botId) { }
@@ -813,15 +841,23 @@ public sealed class ManagedPlayerbotLifecycleTests
     internal sealed class CapturingLogger : ILogger<ManagedPlayerbotFeature>
     {
         private readonly ConcurrentQueue<(Exception? Error, string Message)> _entries = new();
+        private readonly ConcurrentQueue<(LogLevel Level, Exception? Error, string Message)> _leveled = new();
 
         public IReadOnlyList<(Exception? Error, string Message)> Entries => [.. _entries];
+
+        /// <summary>The same entries with the level they were logged at.</summary>
+        public IReadOnlyList<(LogLevel Level, Exception? Error, string Message)> Leveled => [.. _leveled];
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => _entries.Enqueue((exception, formatter(state, exception)));
+        {
+            string message = formatter(state, exception);
+            _entries.Enqueue((exception, message));
+            _leveled.Enqueue((logLevel, exception, message));
+        }
     }
 
     internal static WorldTestHost Start(InMemoryAccountStore accounts, InMemoryCharacterStore characters,

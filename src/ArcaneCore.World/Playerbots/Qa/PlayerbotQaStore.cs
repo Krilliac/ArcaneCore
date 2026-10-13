@@ -99,7 +99,7 @@ internal sealed class PlayerbotQaStore(string directory, ILogger logger)
             if (!_failedWriteLogged)
             {
                 _failedWriteLogged = true;
-                logger.LogError("Bot QA could not save {Path} ({Type}); it retries on the next pass", FilePath, ex.GetType().Name);
+                logger.LogError(ex, "Bot QA could not save {Path} ({Type}); it retries on the next pass", FilePath, ex.GetType().Name);
             }
 
             return false;

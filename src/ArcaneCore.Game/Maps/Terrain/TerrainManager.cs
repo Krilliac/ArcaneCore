@@ -158,7 +158,7 @@ public sealed class TerrainManager
         catch (InvalidDataException ex)
         {
             // vmangos: "Map file '%s' is non-compatible version (outdated?)" — logged, tile left empty.
-            _logger.LogError("Terrain: {Path} is not a usable z1.4 .map file ({Reason}); re-extract the maps", path, ex.Message);
+            _logger.LogError(ex, "Terrain: {Path} is not a usable z1.4 .map file ({Reason}); re-extract the maps", path, ex.Message);
             return TerrainTile.Empty;
         }
     }
