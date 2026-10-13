@@ -71,8 +71,10 @@ internal sealed class WorldTestHost : IAsyncDisposable
         Accounts.Events = StatusEvents;
         collection.AddSingleton<IAccountStore>(Accounts);
         collection.AddSingleton<IAccountAdmin>(Accounts);
-        // Live-ban enforcement (docs/security/live-bans.md): the registry, the status events and the ban rows.
-        collection.AddSingleton(Registry);
+        // Live-ban enforcement (docs/security/live-bans.md) and per-account session claims (M15.0 item A4).
+        collection.AddSingleton<IAccountSessionClaimStore, InMemoryAccountSessionClaimStore>();
+        collection.AddSingleton(sp => new SessionRegistry(sp.GetRequiredService<IAccountSessionClaimStore>()));
+        collection.AddSingleton<ISessionClaims>(sp => sp.GetRequiredService<SessionRegistry>());
         collection.AddSingleton(StatusEvents);
         collection.AddSingleton<IBanStore>(Bans);
         if (banOptions is not null)
@@ -91,6 +93,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         WorldTestServices.RegisterAll(collection);
         configureServices?.Invoke(collection);
         _services = collection.BuildServiceProvider();
+        Registry = _services.GetRequiredService<SessionRegistry>();
 
         var options = new WorldRuntimeOptions { TickIntervalMs = 5, UpdateCompressionThreshold = compressionThreshold, AutosaveIntervalMs = 0 };
         configure?.Invoke(options);
@@ -155,7 +158,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     public CharacterSaveQueue SaveQueue { get; }
 
-    public SessionRegistry Registry { get; } = new();
+    public SessionRegistry Registry { get; }
 
     public OpcodeTable Opcodes { get; }
 

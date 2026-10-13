@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Social;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
@@ -14,6 +15,7 @@ using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -67,7 +69,9 @@ public static class WorldServiceCollectionExtensions
         services.AddWorldFeatures();
         services.AddSingleton<CharacterDirectory>();
         services.AddSingleton<CharacterDeletionReconciler>();
-        services.AddSingleton<SessionRegistry>();
+        services.TryAddSingleton<IAccountSessionClaimStore, InMemoryAccountSessionClaimStore>();
+        services.AddSingleton(sp => new SessionRegistry(sp.GetRequiredService<IAccountSessionClaimStore>()));
+        services.AddSingleton<ISessionClaims>(sp => sp.GetRequiredService<SessionRegistry>());
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         services.AddSingleton(sp => new WorldRuntime(
