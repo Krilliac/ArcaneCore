@@ -3,6 +3,7 @@ using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Characters;
@@ -209,29 +210,77 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
     }
 
-    private uint NextMailId() => Interlocked.Increment(ref _lastMailId);
+    public DurableIdBlockAllocator? MailIdAllocator { get; set; }
+
+    public DurableIdBlockAllocator? AuctionIdAllocator { get; set; }
+
+    public DurableIdBlockAllocator? ItemTextIdAllocator { get; set; }
+
+    private uint NextMailId()
+    {
+        if (MailIdAllocator is { } allocator)
+        {
+            uint next = allocator.Next();
+            RaiseTo(ref _lastMailId, next);
+            return next;
+        }
+
+        return Interlocked.Increment(ref _lastMailId);
+    }
 
     /// <summary>World thread. Internal so tests can observe the allocator after a reseed.</summary>
-    internal uint NextAuctionId() => Interlocked.Increment(ref _lastAuctionId);
+    internal uint NextAuctionId()
+    {
+        if (AuctionIdAllocator is { } allocator)
+        {
+            uint next = allocator.Next();
+            RaiseTo(ref _lastAuctionId, next);
+            return next;
+        }
+
+        return Interlocked.Increment(ref _lastAuctionId);
+    }
 
     /// <summary>The highest IDs handed out or seeded so far, read without allocating. Internal so tests can observe a reseed.</summary>
     internal (uint Mail, uint Auction, uint Text) LastAllocatedIds()
         => (Volatile.Read(ref _lastMailId), Volatile.Read(ref _lastAuctionId), Volatile.Read(ref _lastTextId));
 
-    private uint NextTextId() => Interlocked.Increment(ref _lastTextId);
+    private uint NextTextId()
+    {
+        if (ItemTextIdAllocator is { } allocator)
+        {
+            uint next = allocator.Next();
+            RaiseTo(ref _lastTextId, next);
+            return next;
+        }
+
+        return Interlocked.Increment(ref _lastTextId);
+    }
 
     /// <summary>A fresh mail id above <paramref name="atLeast"/> (a stored maximum), for a loaded character dump (<c>.pdump load</c>).</summary>
     internal uint ReserveMailId(uint atLeast)
     {
         RaiseTo(ref _lastMailId, atLeast);
-        return NextMailId();
+        uint id = NextMailId();
+        while (id <= atLeast)
+        {
+            id = NextMailId();
+        }
+
+        return id;
     }
 
     /// <summary>A fresh item text id above <paramref name="atLeast"/>, for a loaded character dump.</summary>
     internal uint ReserveItemTextId(uint atLeast)
     {
         RaiseTo(ref _lastTextId, atLeast);
-        return NextTextId();
+        uint id = NextTextId();
+        while (id <= atLeast)
+        {
+            id = NextTextId();
+        }
+
+        return id;
     }
 
     private IMailboxAccess? _retailMailboxAccess;
