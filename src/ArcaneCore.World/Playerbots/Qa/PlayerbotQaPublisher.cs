@@ -257,7 +257,20 @@ internal sealed class PlayerbotQaPublisher
         if (f.Kind == QaSignalKind.SpellUnsupported && QaSpellGaps.IsAdvisory(f.Reason)) return false; // a DUMMY aura nothing seems to read: a lead, listed only
         if (f.Cause == QaCause.OutsideHome) return false; // expected for a homed bot (PlayerbotQaClassifier); the report lists it
         if (!f.BotIndependent && f.DistinctBots < git.MinDistinctBots) return false;
-        return !(f.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed);
+        return !(f.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed && !IsRegression(f));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="f"/> recurs on the running build after its issue was closed on another one (<see cref="PlayerbotQaGitHubOptions.ReopenOnRegression"/>).
+    /// A KnownClosed finding is compared with the build it was first observed closed on; a finding that was not KnownClosed yet (its issue was closed behind our back and is
+    /// found closed just now) with the build its issue was last known open on (the last create, reopen or comment). With no such build recorded, or a recurrence on that same
+    /// build (a person closed it while it was still happening), it is not a regression. The running build must have met the finding.
+    /// </summary>
+    private bool IsRegression(QaFindingView f)
+    {
+        if (!_options.GitHub.ReopenOnRegression || f.CountOnBuild(_build) <= 0) return false;
+        string? reference = f.Publication.State == QaPublicationState.KnownClosed ? f.ClosedBuild : f.ReportedBuild;
+        return reference is not null && !string.Equals(reference, _build, StringComparison.Ordinal);
     }
 
     /// <summary>Publish one finding; false when the pass should stop (a transient failure: the rest would fail the same way).</summary>
@@ -276,7 +289,7 @@ internal sealed class PlayerbotQaPublisher
             if (current is null) return true;
             DateTime now = _time.GetUtcNow().UtcDateTime;
             if (current.Publication.State == QaPublicationState.Published && current.OccurrencesReported >= current.Count) return true;
-            if (current.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed) return true;
+            if (current.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed && !IsRegression(current)) return true;
 
             long freshCount = current.Count - current.OccurrencesReported;
             bool commentDue = freshCount > 0 && (current.LastCommentUtc is not { } lastComment || now - lastComment >= TimeSpan.FromHours(git.CommentIntervalHours))
@@ -352,20 +365,38 @@ internal sealed class PlayerbotQaPublisher
                 return true;
             }
 
+            bool reopened = false;
+            bool regressionComment = false;
             if (!found.Open)
             {
-                if (!git.ReopenClosed)
+                bool regression = IsRegression(current);
+                if (!git.ReopenClosed && !regression)
                 {
                     _state.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.KnownClosed, found.Number), null, current.Count));
                     _logger.LogInformation("Bot QA: finding {Id} has a closed issue (#{Number}); it is left closed", current.ShortId, found.Number);
                     return true;
                 }
 
+                // A regression reopens only together with its one comment, so the hourly comment cap decides first; without budget the finding stays as it is and the next pass tries again.
+                regressionComment = regression && Ledger.CanComment(now, git.MaxCommentsPerHour);
+                if (!git.ReopenClosed && !regressionComment)
+                {
+                    _logger.LogInformation("Bot QA: the hourly comment cap ({Cap}) is reached; the regression of {Id} (issue #{Number}) is reported on a later pass", git.MaxCommentsPerHour, current.ShortId, found.Number);
+                    return true;
+                }
+
                 await client.ReopenAsync(found.Number, cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation("Bot QA: reopened issue #{Number} for finding {Id}", found.Number, current.ShortId);
+                reopened = true;
+                _logger.LogInformation("Bot QA: reopened issue #{Number} for finding {Id}{Why}", found.Number, current.ShortId, regressionComment ? $" (regression on build {_build})" : string.Empty);
             }
 
-            if (commentDue)
+            if (regressionComment)
+            {
+                await client.CommentAsync(found.Number, PlayerbotQaIssueComposer.RegressionComment(current, _build, current.ClosedBuild ?? current.ReportedBuild, redactor), cancellationToken).ConfigureAwait(false);
+                Ledger.RecordComment(now);
+                _state.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.Published, found.Number), now, current.Count));
+            }
+            else if (commentDue)
             {
                 await client.CommentAsync(found.Number, PlayerbotQaIssueComposer.Comment(current, freshCount, redactor), cancellationToken).ConfigureAwait(false);
                 Ledger.RecordComment(now);
@@ -373,7 +404,7 @@ internal sealed class PlayerbotQaPublisher
             }
             else
             {
-                _state.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.Published, found.Number)));
+                _state.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.Published, found.Number), Reported: reopened));
             }
 
             return true;

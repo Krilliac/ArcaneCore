@@ -74,8 +74,11 @@ internal sealed record QaTombstone(string Id, QaSignalKind Kind, int Issue, uint
 /// problem now, keeping the published one's id and publication state.
 /// Thread-safe.
 /// </summary>
-internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byte[]? salt = null, TimeSpan? staleAfter = null, ILogger? log = null) : IQaPublicationState
+internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byte[]? salt = null, TimeSpan? staleAfter = null, ILogger? log = null, string? build = null) : IQaPublicationState
 {
+    /// <summary>The build every occurrence is stamped with (<see cref="PlayerbotQaIssueComposer.BuildVersion"/> unless a test or the feature gave one).</summary>
+    internal string Build { get; } = QaFinding.CleanBuild(build) ?? PlayerbotQaIssueComposer.BuildVersion();
+
     /// <summary>How far from a finding's anchor (its first sample, in yards, measured on the ground plane) a signal still folds into it across a zone cell border.</summary>
     internal const float AnchorYards = 160f;
 
@@ -201,7 +204,12 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             }
             else
             {
-                finding.Count += Math.Max(1, signal.Occurrences);
+                long added = Math.Max(1, signal.Occurrences);
+                finding.Count += added;
+                // A closed finding whose build was never recorded (a file from before format 2, a tombstone's revival) is taken as closed on the build that last met
+                // it, else on this one: a recurrence on a later build is then a regression, one on this build is not.
+                if (finding.Publication.State == QaPublicationState.KnownClosed && finding.ClosedBuild is null) finding.ClosedBuild = finding.LastBuild ?? Build;
+                finding.AddBuild(Build, added);
                 if (signal.AtUtc > finding.LastSeenUtc) finding.LastSeenUtc = signal.AtUtc;
                 if (finding.FirstSeenUtc > signal.AtUtc) finding.FirstSeenUtc = signal.AtUtc;
                 if (bot is { } hash)
@@ -515,6 +523,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
     private void Absorb(QaFinding into, QaFinding from)
     {
+        into.AbsorbBuilds(from, from.LastSeenUtc > into.LastSeenUtc);
         into.Count += from.Count;
         if (from.FirstSeenUtc < into.FirstSeenUtc) into.FirstSeenUtc = from.FirstSeenUtc;
         if (from.LastSeenUtc > into.LastSeenUtc) into.LastSeenUtc = from.LastSeenUtc;
@@ -544,7 +553,13 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
         if (!into.Publication.HoldsIssue) into.OccurrencesReported = Math.Max(into.OccurrencesReported, from.OccurrencesReported);
         if (from.LastCommentUtc is { } commented && (into.LastCommentUtc is null || commented > into.LastCommentUtc)) into.LastCommentUtc = commented;
-        if (into.Publication.State is QaPublicationState.Pending && from.Publication.State is not QaPublicationState.Pending) into.Publication = from.Publication;
+        if (into.Publication.State is QaPublicationState.Pending && from.Publication.State is not QaPublicationState.Pending)
+        {
+            into.Publication = from.Publication;
+            into.ClosedBuild = from.ClosedBuild;
+            into.ReportedBuild = from.ReportedBuild;
+        }
+
         List<QaSample> samples = [.. into.Samples, .. from.Samples];
         samples.Sort(static (x, y) => x.AtUtc.CompareTo(y.AtUtc));
         into.Samples.Clear();
@@ -590,8 +605,18 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 return;
             }
 
+            bool wasClosed = finding.Publication.State == QaPublicationState.KnownClosed;
             finding.Publication = update.Publication;
-            if (update.LastCommentUtc is { } at) finding.LastCommentUtc = at;
+            // The build the finding was first observed closed on; cleared once the issue is open again (or the publish failed), so a later closure is stamped afresh.
+            if (update.Publication.State != QaPublicationState.KnownClosed) finding.ClosedBuild = null;
+            else if (!wasClosed || finding.ClosedBuild is null) finding.ClosedBuild = Build;
+            if (update.LastCommentUtc is { } at)
+            {
+                finding.LastCommentUtc = at;
+                finding.ReportedBuild = Build;
+            }
+
+            if (update.Reported) finding.ReportedBuild = Build;
             if (update.OccurrencesReported is { } reported) finding.OccurrencesReported = reported;
             _snapshot = null;
         }
@@ -822,6 +847,9 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     FirstSeenUtc = view.FirstSeenUtc, LastSeenUtc = view.LastSeenUtc, Quest = view.Quest, Target = view.Target, Map = view.Map,
                     QuestTitle = view.QuestTitle, Cause = view.Cause, CauseDetail = view.CauseDetail ?? string.Empty, Severity = view.Severity,
                     Publication = view.Publication ?? QaPublication.Pending, LastCommentUtc = view.LastCommentUtc,
+                    // Format 1 files carry no builds: they stay unknown (null / empty) until the first occurrence on this build stamps them.
+                    FirstBuild = QaFinding.CleanBuild(view.FirstBuild), LastBuild = QaFinding.CleanBuild(view.LastBuild),
+                    ClosedBuild = QaFinding.CleanBuild(view.ClosedBuild), ReportedBuild = QaFinding.CleanBuild(view.ReportedBuild),
                     OccurrencesReported = Math.Max(0, view.OccurrencesReported), Spell = view.Spell, SpellName = view.SpellName ?? string.Empty,
                     SpellRank = view.SpellRank ?? string.Empty, EffectIndex = view.EffectIndex, EffectName = view.EffectName ?? string.Empty,
                     EffectValue = view.EffectValue, Aura = view.Aura, Reason = view.Reason ?? string.Empty, ReasonDetail = view.ReasonDetail ?? string.Empty,
@@ -830,6 +858,12 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     Anchor = view.Anchor ?? (view.Samples ?? []).Where(sm => sm.HasPosition).Select(sm => new QaAnchor(sm.Map, sm.X, sm.Y)).FirstOrDefault()
                         ?? PlayerbotQaFingerprint.CellCentreOfKey(view.Key),
                 };
+                foreach (QaBuildCount entry in (view.BuildCounts ?? []).Where(e => e is not null && QaFinding.CleanBuild(e.Build) is not null && e.Count > 0)
+                    .DistinctBy(e => QaFinding.CleanBuild(e.Build), StringComparer.Ordinal).Take(QaFinding.MaxTrackedBuilds))
+                {
+                    finding.BuildCounts.Add(new QaBuildCount(QaFinding.CleanBuild(entry.Build)!, entry.Count));
+                }
+
                 if (view.Kind == QaSignalKind.DeathLoop) RestoreLoop(finding, view);
                 if (state.Bots.TryGetValue(view.Id, out ulong[]? bots)) finding.Bots.UnionWith(bots.Take(QaFinding.MaxTrackedBots));
                 if (finding.Bots.Count < view.DistinctBots) finding.AnonymousBots = view.DistinctBots;

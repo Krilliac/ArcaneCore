@@ -16324,6 +16324,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Qa:GitHub:ReopenOnRegression",
+      "section": "World:Playerbots:Qa",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Reopen a closed issue, with one comment (the new build, the occurrences on it, the distinct bots and a sample), when its finding recurs on a build other than the one it was observed closed on (a regression; a recurrence on the same build is a person's won't-fix and is left alone). Acts only while publishing is on, under the comment cap; never closes anything.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Qa:GitHub:Repository",
       "section": "World:Playerbots:Qa",
       "type": "string",

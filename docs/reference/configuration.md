@@ -1457,6 +1457,7 @@ How to read the tables:
 | `World:Playerbots:Qa:GitHub:MinOccurrences` | `int` | `3` | - | A finding is reported once it was seen this many times (1..1000000). |
 | `World:Playerbots:Qa:GitHub:Publish` | `bool` | `false` | - | Really create issues and comments (off by default = dry run: the would-be issues are written to `qa/pending-issues/` and logged, nothing is sent). |
 | `World:Playerbots:Qa:GitHub:ReopenClosed` | `bool` | `false` | - | Reopen a finding's issue when it was closed and the finding keeps happening (off by default: a closed issue is recorded as known and left alone). |
+| `World:Playerbots:Qa:GitHub:ReopenOnRegression` | `bool` | `true` | - | Reopen a closed issue, with one comment (the new build, the occurrences on it, the distinct bots and a sample), when its finding recurs on a build other than the one it was observed closed on (a regression; a recurrence on the same build is a person's won't-fix and is left alone). Acts only while publishing is on, under the comment cap; never closes anything. |
 | `World:Playerbots:Qa:GitHub:Repository` | `string` | `""` | - | The repository, `owner/repo` (required while enabled). |
 | `World:Playerbots:Qa:GitHub:RequestTimeoutSeconds` | `int` | `15` | - | Seconds one GitHub request may take (1..120). |
 | `World:Playerbots:Qa:GitHub:TokenEnvironmentVariable` | `string` | `"ARCANECORE_GITHUB_TOKEN"` | - | The name of the environment variable that holds a fine-grained token with Issues read and write on the repository (the value is never read from configuration and never logged). |

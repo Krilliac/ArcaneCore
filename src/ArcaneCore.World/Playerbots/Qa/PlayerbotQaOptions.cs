@@ -141,6 +141,12 @@ public sealed class PlayerbotQaGitHubOptions
     public bool ReopenClosed { get; set; }
 
     /// <summary>
+    /// Reopen a closed issue, with one comment (the new build, the occurrences on it, the distinct bots and a sample), when its finding recurs on a build other than the one it was
+    /// observed closed on (a regression; a recurrence on the same build is a person's won't-fix and is left alone). Acts only while publishing is on, under the comment cap; never closes anything.
+    /// </summary>
+    public bool ReopenOnRegression { get; set; } = true;
+
+    /// <summary>
     /// When findings are merged into one (the same problem met in several places) and each had its own issue, comment on the absorbed issue with a link to the surviving one and
     /// close it as not planned (a duplicate). Off (the default, so the first start after an upgrade can be checked: the start-up log lists every issue it would close, each with the surviving issue) keeps the absorbed issue open and untouched; the merge is recorded in the store either way.
     /// </summary>

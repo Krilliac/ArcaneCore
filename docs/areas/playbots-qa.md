@@ -156,6 +156,20 @@ them after every current one, marked `(stale)`. A stale finding whose issue is o
 marked `(stale)`, and `report.md` keeps it in its main table the same way. Every `top` line shows when the finding was last seen (`<1m ago`, `5m ago`, `2h ago`, `1d ago`). `report.md` lists the stale ones
 last under "Stale (not seen since <start>)" (one table row each, no evidence block) and has a "Last seen" column; `report.json` marks them `"Stale": true`.
 
+**Build stamps and the quiet signal.** Every occurrence is stamped with the running build (`PlayerbotQaIssueComposer.BuildVersion()`, the same string the issue
+shows). A finding keeps `FirstBuild`, `LastBuild` and the occurrence count of the **current and the previous build only** (`BuildCounts`, newest first, at most
+two entries, so it never grows; the counts of older builds are dropped, `FirstBuild` stays). `.playerbot qa show <id>` prints a `builds first A, last B; per build ...;
+on this build (X): N` line. `report.json` carries the same per entry (`FirstBuild`, `LastBuild`, `Builds`) plus the signal for "a fix landed and the problem stopped"
+versus "nothing ran there": `SeenOnCurrentBuild` and `OccurrencesOnCurrentBuild` say whether the file's `Build` met the finding, and the file's `BuildSinceUtc` is when this
+process (so at least that build) started. An external tool can say "published issue #N: 0 occurrences in H hours on build X" from `GeneratedUtc - BuildSinceUtc` when
+`SeenOnCurrentBuild` is false. `BuildSinceUtc` is a lower bound (an earlier run of the same build is not tracked). `Stale` keeps its meaning (last seen before this
+process started). `ClosedBuild` (the build the finding was first observed `KnownClosed` on) and `ReportedBuild` (the build of the issue's last create, reopen or comment) are
+exported too.
+
+`findings.json` is at **format version 2** (the build stamps). A build reads versions 1 and 2: a version 1 file loads with every build unknown (null, no counts) and the first
+occurrence on the running build stamps it; a file of a newer version is still refused and kept untouched. An older build refuses a version 2 file, so roll a rollback by
+restoring the version 1 backup of `findings.json`.
+
 **Pruning.** `.playerbot qa prune [#hours] [closed] [dry]` forgets the findings not seen for `#hours` (default 12, 1..720); `dry` lists what
 would go (at most ten lines) and changes nothing. The reply gives the count by kind, how many remain, and how many old findings were kept.
 It is local only (GitHub is never touched) and takes effect on disk at the next save, like `reset`.
@@ -169,7 +183,7 @@ It is local only (GitHub is never touched) and takes effect on disk at the next 
 - A finding without an issue that recurs is created again with the same id; the publisher finds an existing issue by its marker as usual, and if that
   lookup finds nothing, it files a new one like for any new finding.
 - `reset` keeps the tombstones (they are only memory of closed issues); a finding that recurs after a `reset` of a pruned one is still `KnownClosed`.
-- `findings.json` stays at format version 1: the `Tombstones` field is additive, an older build ignores the unknown field and drops it on its next save
+- The `Tombstones` field is additive (format version 1, still read; see Build stamps), an older build ignores the unknown field and drops it on its next save
   (a recurrence is then found by its marker, as before this feature).
 - Skipped: a finding the publisher is working on, a finding with a duplicate issue still to close, and the start-up spell-coverage findings (by age).
 
@@ -246,6 +260,15 @@ back from its key on load (only a key that rebuilds to itself), and keeps its id
 * **Open issue**: add a comment with the new occurrences, at most once per `CommentIntervalHours` (default 24) per finding.
 * **Closed issue**: left closed and remembered as known-closed (no API call on later passes). With `World:Playerbots:Qa:GitHub:ReopenClosed` = true it is
   reopened and commented instead.
+* **Regression** (`World:Playerbots:Qa:GitHub:ReopenOnRegression`, default true): a finding whose issue is known closed that **recurs on a different build than the one it was
+  first observed closed on** (`ClosedBuild`; for a finding closed behind our back, the build of the issue's last create, reopen or comment; for a file from before format 2 or a
+  tombstone, the build that last met it, else the running one) is a regression. The issue is reopened and gets **one** comment: the new build, the occurrences on it, the total, the
+  distinct bots and the latest sample. A recurrence on the **same** build is a person's won't-fix and is left closed (and counted nowhere else). The reopen and its comment
+  are one step under `MaxCommentsPerHour`: with no budget the issue stays closed and the next pass retries, and the comment ignores `CommentIntervalHours` (it is not a routine
+  occurrence note). The option only acts while publishing is on, and it never closes anything: the lane has no auto-close.
+  How it interacts with `ReopenClosed`: `ReopenClosed` (default off) reopens a closed issue for **any** recurrence on any build and keeps its old comment rules; with it on,
+  `ReopenOnRegression` only chooses the comment, so a regression gets the regression comment (when the comment budget allows) instead of the routine occurrence comment. With
+  `ReopenClosed` off, `ReopenOnRegression` is the only way a closed issue is reopened; with both off a closed issue is left alone.
 
 A POST is never sent twice. If a create or comment times out, gets a 5xx or loses the connection, GitHub may already have applied it, so
 the call is **not** retried: the finding is marked Failed and the next pass's marker lookup finds what was created (or creates it if it

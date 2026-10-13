@@ -64,6 +64,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     /// <summary>When this process attached QA: a finding last seen before it was not met by the current build (the views sink it as stale).</summary>
     internal DateTime StartedUtc { get; private set; } = DateTime.MaxValue;
 
+    /// <summary>The build this process runs, which stamps every occurrence and every report (test seam: a test may give another).</summary>
+    internal string Build { get; init; } = PlayerbotQaIssueComposer.BuildVersion();
+
     internal PlayerbotQaAggregator? Aggregator { get; private set; }
 
     /// <summary>The spell watcher of the bots' casts (registered on the world's spell system while QA runs; null otherwise).</summary>
@@ -109,9 +112,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             }
         }
 
-        var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt, options.StaleHours > 0 ? TimeSpan.FromHours(options.StaleHours) : null, _log);
+        var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt, options.StaleHours > 0 ? TimeSpan.FromHours(options.StaleHours) : null, _log, Build);
         _facts = new PlayerbotQaContentFacts(services);
-        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time);
+        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time, Build);
         if (saved is not null)
         {
             int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed, saved.Tombstones), Now);
@@ -392,7 +395,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         if (Aggregator is null) return;
         IReadOnlyList<QaFindingView> findings = Aggregator.Snapshot();
         DateTime now = Now;
-        string build = PlayerbotQaIssueComposer.BuildVersion();
+        string build = Build;
         try
         {
             System.IO.Directory.CreateDirectory(_directory);

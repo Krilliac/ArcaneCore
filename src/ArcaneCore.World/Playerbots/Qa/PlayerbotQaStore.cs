@@ -39,7 +39,14 @@ internal sealed partial class QaStoreJsonContext : JsonSerializerContext;
 /// </summary>
 internal sealed class PlayerbotQaStore(string directory, ILogger logger)
 {
-    internal const int CurrentFormat = 1;
+    /// <summary>
+    /// 2 adds the per-finding build stamps (first and last build, per-build counts, closed and reported build). The reader still accepts
+    /// <see cref="OldestReadableFormat"/>: those fields are simply absent, so their builds load as unknown.
+    /// </summary>
+    internal const int CurrentFormat = 2;
+
+    /// <summary>The oldest format this build still reads.</summary>
+    internal const int OldestReadableFormat = 1;
 
     private bool _failedWriteLogged;
 
@@ -73,7 +80,7 @@ internal sealed class PlayerbotQaStore(string directory, ILogger logger)
         }
 
         if (file is null) return Disable($"{FilePath} is empty or null; it is kept untouched");
-        if (file.FormatVersion != CurrentFormat)
+        if (file.FormatVersion is < OldestReadableFormat or > CurrentFormat)
         {
             return Disable($"{FilePath} has format version {file.FormatVersion}, this build reads {CurrentFormat}; it is kept untouched");
         }
