@@ -3803,6 +3803,22 @@
       "isCollection": false
     },
     {
+      "path": "Database:Upgrade:ValidateOnly",
+      "section": "Database",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "Both",
+      "reload": "start",
+      "meaning": "When true, serving nodes run startup schema checks in validate-only mode: zero DDL and zero seed inserts are executed, and startup fails closed if any component schema is missing, behind, or ahead of the build's current version. Default is `false`. See docs/ops/database-upgrade.md.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#database",
+      "isCollection": false
+    },
+    {
       "path": "Database:World:ConnectionString",
       "section": "Database",
       "type": "string",

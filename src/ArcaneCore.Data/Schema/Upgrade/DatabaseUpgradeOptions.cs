@@ -22,6 +22,13 @@ public sealed class DatabaseUpgradeOptions
 
     public int LockTimeoutSeconds { get; set; } = 60;
 
+    /// <summary>
+    /// When true, serving nodes run startup schema checks in validate-only mode: zero DDL and zero seed inserts are
+    /// executed, and startup fails closed if any component schema is missing, behind, or ahead of the build's current
+    /// version. Default is <c>false</c>. See docs/ops/database-upgrade.md.
+    /// </summary>
+    public bool ValidateOnly { get; set; }
+
     /// <summary>The bootstrapper options these settings mean; a lock timeout outside 1..86400 s is a configuration error.</summary>
     public SchemaUpgradeOptions ToSchemaOptions()
     {
@@ -36,7 +43,12 @@ public sealed class DatabaseUpgradeOptions
             throw new InvalidOperationException($"Database:Upgrade:Policy must be Always, CreateOnly or Never, not {Policy}.");
         }
 
-        return new SchemaUpgradeOptions { Policy = Policy, LockTimeout = TimeSpan.FromSeconds(LockTimeoutSeconds) };
+        return new SchemaUpgradeOptions
+        {
+            Policy = ValidateOnly ? SchemaPolicy.Never : Policy,
+            ValidateOnly = ValidateOnly,
+            LockTimeout = TimeSpan.FromSeconds(LockTimeoutSeconds),
+        };
     }
 }
 

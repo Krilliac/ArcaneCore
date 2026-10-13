@@ -34,6 +34,17 @@ public sealed class SchemaUpgradeOptions
     public SchemaPolicy Policy { get; init; } = SchemaPolicy.Always;
 
     /// <summary>
+    /// When true, the bootstrapper runs in validate-only serving mode: it executes zero DDL and zero seed inserts,
+    /// reads the recorded schema version, and verifies that the component is at <see cref="SchemaDefinition.CurrentVersion"/>
+    /// with all registered module tables present (failing closed with <see cref="SchemaMismatchException"/>, which derives
+    /// from <see cref="InvalidOperationException"/>, if missing, behind, or ahead).
+    /// </summary>
+    public bool ValidateOnly { get; init; }
+
+    /// <summary>The effective policy: <see cref="SchemaPolicy.Never"/> when <see cref="ValidateOnly"/> is enabled, otherwise <see cref="Policy"/>.</summary>
+    internal SchemaPolicy EffectivePolicy => ValidateOnly ? SchemaPolicy.Never : Policy;
+
+    /// <summary>
     /// Whether <see cref="SchemaUpgrader"/> refuses when other sessions are connected to the database
     /// (<see cref="ServerProbe.CountOtherSessionsAsync"/>, best effort). Off by default for the library; the
     /// arcane-db tool turns it on unless told <c>--allow-active-sessions</c>, because the references expect the server to be stopped.

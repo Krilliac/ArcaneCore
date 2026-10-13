@@ -210,9 +210,11 @@ do: they refuse to start on a database that lacks migrations and make the operat
 |---|---|---|---|
 | `Database:Upgrade:Policy` | `Always`, `CreateOnly`, `Never` | `Always` | `Always`: create and upgrade. `CreateOnly`: create an empty database, resume an interrupted create, **refuse to adopt or upgrade** an existing one. `Never`: verify only, create nothing, not even a missing database (the retail behaviour) |
 | `Database:Upgrade:LockTimeoutSeconds` | 1 to 86400 | 60 | how long a start waits for another process's schema work |
+| `Database:Upgrade:ValidateOnly` | `true`, `false` | `false` | `true`: validate-only serving mode; verify that every component's schema is at the exact current version with all registered module tables present, executing zero DDL and zero seed inserts |
 
 A refused start prints one line (`database schema refused: ...`, passwords removed) and exits 4 (7 for a lock timeout)
 instead of crashing. Even `CreateOnly` creates a missing database and a fresh schema, which retail never does; `Never`
-plus `arcane-db upgrade` is the retail-like pair. Everything else on a start (seeding, for example) is unchanged.
+(or `Database:Upgrade:ValidateOnly`) plus `arcane-db upgrade` is the retail-like pair, and startup seeding is serialized
+under the component schema lock (and skipped in validate-only mode).
 
 Characters schema v60 (`character_ownership`) is forward-only: roll back by restoring the pre-upgrade backup. How to clear a stuck ownership row is in `docs/CHARACTER_FENCING_ACCEPTANCE.md` (Operations).
