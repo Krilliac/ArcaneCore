@@ -1,6 +1,11 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Npc;
@@ -59,5 +64,87 @@ public sealed class GossipDbScriptTests
         kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
 
         Assert.Equal([(kit.Npc.Guid, 1405u, true)], started);
+    }
+
+    [Fact]
+    public void QuestList_OfACreatureWithoutGossip_StartsTheMenuTextScript_WithThePlayerAsTheSource()
+    {
+        // vmangos SendPreparedQuest looks up the default menu text only when the list has more than one quest
+        // (Player.cpp:12450-12465). That lookup is GetGossipTextId, so the text's script starts. Hello on a
+        // quest giver with no gossip flag never reaches SendPreparedGossip's own lookup.
+        using var kit = QuestListKit(quests: 2, menuId: 1405, scriptId: 1405);
+        var started = new List<(ObjectGuid Npc, uint Script, bool PlayerIsSource)>();
+        kit.Services.GossipScriptStarted += (_, npc, script, playerIsSource) => started.Add((npc, script, playerIsSource));
+
+        kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
+
+        Assert.Equal([(kit.Npc.Guid, 1405u, true)], started);
+        Assert.Contains(kit.Session.Sent, p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestList);
+    }
+
+    [Fact]
+    public void OneQuest_OpensDetails_AndDoesNotStartTheMenuTextScript()
+    {
+        using var kit = QuestListKit(quests: 1, menuId: 1405, scriptId: 1405);
+        var started = new List<uint>();
+        kit.Services.GossipScriptStarted += (_, _, script, _) => started.Add(script);
+
+        kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
+
+        Assert.Empty(started);
+        Assert.Contains(kit.Session.Sent, p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestDetails);
+    }
+
+    private static QuestListKit QuestListKit(int quests, uint menuId, uint scriptId) => new(quests, menuId, scriptId);
+
+    private sealed class QuestListKit : IDisposable
+    {
+        public QuestListKit(int quests, uint menuId, uint scriptId)
+        {
+            Player = TestWorld.CreatePlayer(1, 0, 0, Session);
+            World.AddPlayer(Player);
+            Npc = new NpcInfo(ObjectGuid.WithEntry(HighGuid.Unit, 1, 1), 1, 1, NpcFlags.QuestGiver, 0, 0, 0, Player.Z,
+                0.5f, true, false, false, false, menuId);
+            QuestTemplate[] templates = Enumerable.Range(0, quests)
+                .Select(i => new QuestTemplate { Entry = (uint)(15 + i), Method = 2, Title = $"Task {i}" })
+                .ToArray();
+            var content = new QuestContent(templates,
+                templates.Select(t => new CreatureQuestRelation { Id = 1, Quest = t.Entry }).ToArray(), []);
+            var npcContent = NpcContent.Empty with
+            {
+                GossipMenus = [new GossipMenu { Entry = menuId, TextId = 2039, ScriptId = scriptId }],
+            };
+            Services = new QuestNpcServices(new QuestStore(content), new NpcStore(npcContent),
+                new QuestNpcDependencies(Creatures: new Lookup(Npc)), new QuestNpcOptions(), new Sink(), () => 100,
+                NullLogger.Instance);
+            PlayerNpcState state = Services.Track(Player);
+            Services.CompleteLoad(state, new CharacterQuestData([], []));
+        }
+
+        public WorldRuntime World { get; } = TestWorld.CreateRuntime();
+
+        public FakeSession Session { get; } = new();
+
+        public Player Player { get; }
+
+        public NpcInfo Npc { get; }
+
+        public QuestNpcServices Services { get; }
+
+        public void Dispose() => World.Dispose();
+
+        private sealed class Lookup(NpcInfo npc) : ICreatureLookup
+        {
+            public NpcInfo? Find(Player player, ObjectGuid guid) => guid == npc.Guid ? npc : null;
+        }
+
+        private sealed class Sink : IQuestNpcSink
+        {
+            public void QuestsChanged(Player player, IReadOnlyList<CharacterQuestStatus> rows) { }
+
+            public void TaxiMaskChanged(Player player, IReadOnlyList<uint> mask) { }
+
+            public void CharacterChanged(Player player) { }
+        }
     }
 }
