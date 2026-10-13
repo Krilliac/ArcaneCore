@@ -80,7 +80,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_GAMESPEED_SET` | `0x0047` | — | 0 | — |
 | `CMSG_SERVERTIME` | `0x0048` | unhandled | — | — |
 | `SMSG_SERVERTIME` | `0x0049` | — | 0 | — |
-| `CMSG_PLAYER_LOGOUT` | `0x004A` | unhandled | — | — |
+| `CMSG_PLAYER_LOGOUT` | `0x004A` | handled | — | — |
 | `CMSG_LOGOUT_REQUEST` | `0x004B` | handled | — | — |
 | `SMSG_LOGOUT_RESPONSE` | `0x004C` | — | 45 | decoded |
 | `SMSG_LOGOUT_COMPLETE` | `0x004D` | — | 38 | decoded |
@@ -324,7 +324,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_CANCEL_CHANNELLING` | `0x013B` | handled | — | — |
 | `SMSG_AI_REACTION` | `0x013C` | — | 40 | decoded |
 | `CMSG_SET_SELECTION` | `0x013D` | handled | — | — |
-| `CMSG_SET_TARGET_OBSOLETE` | `0x013E` | unhandled | — | — |
+| `CMSG_SET_TARGET_OBSOLETE` | `0x013E` | handled | — | — |
 | `CMSG_ATTACKSWING` | `0x0141` | handled | — | — |
 | `CMSG_ATTACKSTOP` | `0x0142` | handled | — | — |
 | `SMSG_ATTACKSTART` | `0x0143` | — | 122 | decoded |
@@ -395,7 +395,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_QUESTGIVER_HELLO` | `0x0184` | handled | — | — |
 | `SMSG_QUESTGIVER_QUEST_LIST` | `0x0185` | — | 0 | — |
 | `CMSG_QUESTGIVER_QUERY_QUEST` | `0x0186` | handled | — | — |
-| `CMSG_QUESTGIVER_QUEST_AUTOLAUNCH` | `0x0187` | unhandled | — | — |
+| `CMSG_QUESTGIVER_QUEST_AUTOLAUNCH` | `0x0187` | handled | — | — |
 | `SMSG_QUESTGIVER_QUEST_DETAILS` | `0x0188` | — | 18 | decoded |
 | `CMSG_QUESTGIVER_ACCEPT_QUEST` | `0x0189` | handled | — | — |
 | `CMSG_QUESTGIVER_COMPLETE_QUEST` | `0x018A` | handled | — | — |
@@ -462,7 +462,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_PETITION_QUERY_RESPONSE` | `0x01C7` | — | 0 | — |
 | `SMSG_FISH_NOT_HOOKED` | `0x01C8` | — | 0 | — |
 | `SMSG_FISH_ESCAPED` | `0x01C9` | — | 0 | — |
-| `CMSG_BUG` | `0x01CA` | unhandled | — | — |
+| `CMSG_BUG` | `0x01CA` | handled | — | — |
 | `SMSG_NOTIFICATION` | `0x01CB` | — | 56 | decoded |
 | `CMSG_PLAYED_TIME` | `0x01CC` | handled | — | — |
 | `SMSG_PLAYED_TIME` | `0x01CD` | — | 5 | decoded |
@@ -515,7 +515,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_ENVIRONMENTALDAMAGELOG` | `0x01FC` | — | 2 | decoded |
 | `CMSG_RWHOIS` | `0x01FD` | unhandled | — | — |
 | `SMSG_RWHOIS` | `0x01FE` | — | 0 | — |
-| `MSG_LOOKING_FOR_GROUP` | `0x01FF` | unhandled | 0 | — |
+| `MSG_LOOKING_FOR_GROUP` | `0x01FF` | handled | 0 | — |
 | `CMSG_SET_LOOKING_FOR_GROUP` | `0x0200` | unhandled | — | — |
 | `CMSG_UNLEARN_SPELL` | `0x0201` | unhandled | — | — |
 | `CMSG_UNLEARN_SKILL` | `0x0202` | handled | — | — |
