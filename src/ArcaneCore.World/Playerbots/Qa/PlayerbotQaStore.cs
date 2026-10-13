@@ -28,6 +28,9 @@ internal sealed record QaStoreFile
 
     /// <summary>The builds this store has run and when each was first seen (at most <see cref="PlayerbotQaAggregator.MaxKnownBuilds"/>): what orders builds. Absent in files from before it.</summary>
     public IReadOnlyList<QaBuildSeen> Builds { get; init; } = [];
+
+    /// <summary>Builds that left <see cref="Builds"/> (at most <see cref="PlayerbotQaAggregator.MaxEvictedBuilds"/>), with their first-seen time: a rollback to one is still known to be old.</summary>
+    public IReadOnlyList<QaBuildSeen> EvictedBuilds { get; init; } = [];
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, UseStringEnumConverter = true, DefaultIgnoreCondition = JsonIgnoreCondition.Never)]

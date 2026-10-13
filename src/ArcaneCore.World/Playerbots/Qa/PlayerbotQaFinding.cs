@@ -210,6 +210,15 @@ internal sealed record QaFindingView
     /// </summary>
     public string? ClosedBuild { get; init; }
 
+    /// <summary>When the store first saw <see cref="ClosedBuild"/>, stamped as it was set: a regression is judged on it, so it holds after the build leaves the registry. Null in older data.</summary>
+    public DateTime? ClosedBuildSeenUtc { get; init; }
+
+    /// <summary>When the store first saw <see cref="ReportedBuild"/> (stamped as it was set). Null in older data.</summary>
+    public DateTime? ReportedBuildSeenUtc { get; init; }
+
+    /// <summary>The finding's issue was closed as not planned (a decision): a regression never reopens it, so nothing is looked up for it again.</summary>
+    public bool NotPlanned { get; init; }
+
     /// <summary>The build that was running when the publisher last created, reopened or commented on the finding's issue (the issue was open then).</summary>
     public string? ReportedBuild { get; init; }
 
@@ -269,7 +278,7 @@ internal sealed record QaFindingView
 /// <param name="LastCommentUtc">When a comment was added (also stamps the finding's reported build).</param>
 /// <param name="OccurrencesReported">The occurrences now told to GitHub.</param>
 /// <param name="Reported">The issue was created or reopened without a comment: stamps the finding's reported build all the same.</param>
-internal sealed record QaPublicationUpdate(QaPublication Publication, DateTime? LastCommentUtc = null, long? OccurrencesReported = null, bool Reported = false);
+internal sealed record QaPublicationUpdate(QaPublication Publication, DateTime? LastCommentUtc = null, long? OccurrencesReported = null, bool Reported = false, bool? NotPlanned = null);
 
 /// <summary>The mutable aggregate behind a <see cref="QaFindingView"/>; owned by <see cref="PlayerbotQaAggregator"/> and touched only under its lock.</summary>
 internal sealed class QaFinding
@@ -292,6 +301,12 @@ internal sealed class QaFinding
     public List<QaBuildCount> BuildCounts { get; } = [];
 
     public string? ClosedBuild { get; set; }
+
+    public DateTime? ClosedBuildSeenUtc { get; set; }
+
+    public DateTime? ReportedBuildSeenUtc { get; set; }
+
+    public bool NotPlanned { get; set; }
 
     public string? ReportedBuild { get; set; }
 
@@ -443,5 +458,6 @@ internal sealed class QaFinding
         EffectName = EffectName, EffectValue = EffectValue, Aura = Aura, Reason = Reason, ReasonDetail = ReasonDetail, Item = Item, Npc = Npc,
         GameObject = GameObject, ClassMask = ClassMask, Coverage = Coverage, Anchor = Anchor, Attackers = [.. Attackers], DeathSource = DeathSource,
         FirstBuild = FirstBuild, LastBuild = LastBuild, BuildCounts = [.. BuildCounts], ClosedBuild = ClosedBuild, ReportedBuild = ReportedBuild,
+        ClosedBuildSeenUtc = ClosedBuildSeenUtc, ReportedBuildSeenUtc = ReportedBuildSeenUtc, NotPlanned = NotPlanned,
     };
 }

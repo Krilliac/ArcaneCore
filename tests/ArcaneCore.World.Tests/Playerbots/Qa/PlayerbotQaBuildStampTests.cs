@@ -39,12 +39,12 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         Assert.True(store.Save(new QaStoreFile
         {
             SaltBase64 = Convert.ToBase64String(old.Salt), Findings = state.Findings, Bots = state.Bots, Absorbed = state.Absorbed ?? [], Tombstones = state.Tombstones ?? [], Ledger = ledger,
-            Builds = state.Builds ?? [],
+            Builds = state.Builds ?? [], EvictedBuilds = state.EvictedBuilds ?? [],
         }));
         if (oldFiles) StripBuildFields(store.FilePath);
         QaStoreFile loaded = new PlayerbotQaStore(_directory, new ListLogger()).Load()!;
         PlayerbotQaAggregator fresh = NewAggregator(newBuild, Convert.FromBase64String(loaded.SaltBase64));
-        fresh.Restore(new QaAggregatorState(loaded.Findings, loaded.Bots, loaded.Absorbed, loaded.Tombstones, loaded.Builds), at ?? QaData.T0.AddHours(++_restarts));
+        fresh.Restore(new QaAggregatorState(loaded.Findings, loaded.Bots, loaded.Absorbed, loaded.Tombstones, loaded.Builds, loaded.EvictedBuilds), at ?? QaData.T0.AddHours(++_restarts));
         return (fresh, loaded.Ledger);
     }
 
@@ -706,5 +706,84 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         Assert.Equal(new QaPublication(QaPublicationState.KnownClosed, 9), merged.Publication);
         Assert.Equal("build-1", merged.ClosedBuild);
         Assert.Equal([new QaBuildCount("build-1", 4)], merged.BuildCounts);
+    }
+
+    // ----- eviction from the build registry -----------------------------------------------------------------------------------------------
+
+    /// <summary>Restart on <paramref name="count"/> more builds that never meet the finding: enough to push the earliest builds out of the registry.</summary>
+    private (PlayerbotQaAggregator Aggregator, QaLedgerState Ledger) Churn(PlayerbotQaAggregator aggregator, QaLedgerState ledger, int count)
+    {
+        for (int i = 1; i <= count; i++) (aggregator, ledger) = Restart(aggregator, ledger, "churn-" + i);
+        return (aggregator, ledger);
+    }
+
+    [Fact]
+    public async Task AReferenceBuildEvictedFromTheRegistry_StillLetsANewerBuildReopen()
+    {
+        var (rig, one, id, issue, ledger) = await ClosedOnBuildOne();
+        (PlayerbotQaAggregator churned, QaLedgerState l1) = Churn(one, ledger, PlayerbotQaAggregator.MaxKnownBuilds + PlayerbotQaAggregator.MaxEvictedBuilds + 5);
+        Assert.DoesNotContain(churned.Export().Builds!, b => b.Build == "build-1");
+        Assert.DoesNotContain(churned.Export().EvictedBuilds!, b => b.Build == "build-1"); // even the evicted tail has forgotten it
+        Assert.NotNull(Of(churned, id).ClosedBuildSeenUtc); // the finding kept the time itself
+
+        (PlayerbotQaAggregator newest, QaLedgerState l2) = Restart(churned, l1, "build-newest");
+        Occurs(newest, 3);
+        await rig.Run(rig.Publisher(newest, "build-newest", l2), newest);
+
+        Assert.Equal(1, rig.GitHub.Patches);
+        Assert.Equal("open", (string)rig.GitHub.Get(issue)["state"]!);
+        Assert.Single(rig.CommentBodies());
+    }
+
+    [Fact]
+    public async Task ARollbackToAnEvictedBuild_IsStillOld_AndDoesNotReopen()
+    {
+        var rig = new Rig();
+        PlayerbotQaAggregator a = NewAggregator("build-A");
+        string id = Occurs(a, 3);
+        (PlayerbotQaAggregator b, QaLedgerState lb) = Restart(a, new QaLedgerState([], []), "build-B");
+        Occurs(b, 3);
+        rig.GitHub.Add(PlayerbotQaIssueComposer.MarkerOf(id), open: false);
+        PlayerbotQaPublisher onB = rig.Publisher(b, "build-B", lb);
+        await rig.Run(onB, b);
+        Assert.Equal("build-B", Of(b, id).ClosedBuild);
+
+        (PlayerbotQaAggregator churned, QaLedgerState l1) = Churn(b, onB.Ledger.Export(), PlayerbotQaAggregator.MaxKnownBuilds + 5);
+        Assert.DoesNotContain(churned.Export().Builds!, x => x.Build == "build-A"); // A left the registry; its time is remembered in the evicted tail
+        Assert.Contains(churned.Export().EvictedBuilds!, x => x.Build == "build-A");
+
+        (PlayerbotQaAggregator rolledBack, QaLedgerState l2) = Restart(churned, l1, "build-A");
+        Assert.False(rolledBack.IsBuildNewer("build-A", "build-B")); // not re-registered at "now"
+        Occurs(rolledBack, 3);
+        await rig.Run(rig.Publisher(rolledBack, "build-A", l2), rolledBack);
+
+        Assert.Equal(0, rig.GitHub.Patches);
+        Assert.Equal(0, rig.GitHub.Comments);
+        Assert.Equal(QaPublicationState.KnownClosed, Of(rolledBack, id).Publication.State);
+    }
+
+    // ----- not planned ------------------------------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ANotPlannedFinding_MakesNoApiCallOnLaterPasses()
+    {
+        var (rig, one, id, issue, ledger) = await ClosedOnBuildOne();
+        rig.GitHub.Get(issue)["state_reason"] = "not_planned";
+        (PlayerbotQaAggregator two, QaLedgerState l2) = Restart(one, ledger, "build-2");
+        Occurs(two, 3);
+        PlayerbotQaPublisher publisher = rig.Publisher(two, "build-2", l2);
+
+        await rig.Run(publisher, two); // the first pass looks the issue up and learns it is a decision
+
+        Assert.Equal(0, rig.GitHub.Patches);
+        Assert.True(Of(two, id).NotPlanned);
+        int calls = rig.GitHub.Http.Requests.Length;
+        Occurs(two, 2);
+        await rig.Run(publisher, two);
+        await rig.Run(publisher, two);
+
+        Assert.Equal(calls, rig.GitHub.Http.Requests.Length); // nothing is listed or looked up again
+        (PlayerbotQaAggregator three, _) = Restart(two, publisher.Ledger.Export(), "build-3");
+        Assert.True(Of(three, id).NotPlanned); // persisted
     }
 }
