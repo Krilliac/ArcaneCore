@@ -288,16 +288,16 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         for (int index = crumbs.Count - 1; index >= 0; index--)
             if (crumbs[index] == goal) { end = index; break; }
         if (end < 0) return null;
-        var points = new List<Vector3> { new(player.X, player.Y, player.Z) };
-        float length = 0;
-        for (int index = crumbs.Count - 1; index >= end; index--)
-        {
-            length += Vector3.Distance(points[^1], crumbs[index]);
-            points.Add(crumbs[index]);
-        }
-
-        return points.Count >= 2 ? new PlayerbotRoute(points, length) : null;
+        return TrailRoute(player, crumbs, end);
     }
+
+    /// <summary>
+    /// The way back along the trail from the bot to crumb <paramref name="end"/>. Each leg is checked against models (doodads included)
+    /// and the mesh (<see cref="PlayerbotMoveCheck.TrailRoute"/>) and the first blocked leg is cut and ends the way: the trail is where
+    /// the bot has been, not proof that the straight chord between two crumbs is walkable (it may have walked round a fence).
+    /// </summary>
+    internal static PlayerbotRoute? TrailRoute(Player player, IReadOnlyList<Vector3> crumbs, int end)
+        => player.Map is { } map ? PlayerbotMoveCheck.TrailRoute(map, new Vector3(player.X, player.Y, player.Z), crumbs, end) : null;
 
     private static Vector3 Centroid(Player player, IReadOnlyList<Creature> enemyList, IReadOnlyList<(Vector3 Anchor, float Safe)> zones)
     {

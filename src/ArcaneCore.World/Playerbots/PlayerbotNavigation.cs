@@ -24,6 +24,7 @@ internal sealed class PlayerbotRoute
     /// road then does not take this walk away (<see cref="PlayerbotRisk.Blocking"/>).
     /// </summary>
     internal bool CrossBesidePlaceMarks { get; set; }
+
     internal PlayerbotRoute(IReadOnlyList<Vector3> points, float distance, bool navigated = false)
     {
         Points = points;
@@ -457,8 +458,7 @@ internal static class PlayerbotNavigation
         PathResult path = PlayerbotThinkProbe.Find(map.Collision, from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
             Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true, NonBlockingTiles = true });
         if ((path.Type & PathType.NotUsingPath) != 0)
-            return TryTerrainRoute(from, to, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
-                (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out PlayerbotRoute? terrain) ? terrain : null;
+            return PlayerbotMoveCheck.TerrainRoute(map, from, to, options, out PlayerbotRoute? terrain) ? terrain : null;
         return IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards) && (path.Type & PathType.Incomplete) == 0
             ? new PlayerbotRoute(path.Points, path.Length, navigated: true) : null;
     }
@@ -493,9 +493,8 @@ internal static class PlayerbotNavigation
         // before using that route; absent heights, steep terrain and known model obstructions refuse it.
         if ((path.Type & PathType.NotUsingPath) != 0)
         {
-            straightRefused = !TryTerrainRoute(start, destination, options,
-                (x, y, z) => map.Collision.GetHeight(x, y, z),
-                (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out route);
+            // A route over a doodad or off the mesh is refused; TryPlanToward then plans a shorter chunk, which ends before the obstacle.
+            straightRefused = !PlayerbotMoveCheck.TerrainRoute(map, start, destination, options, out route);
             return !straightRefused;
         }
 
@@ -742,6 +741,9 @@ internal static class PlayerbotNavigation
                 float floor = map.Collision.GetHeight(x, y, start.Z + 2f);
                 if (InvalidHeight(floor) || MathF.Abs(floor - start.Z) > 2.5f) continue;
                 Vector3 beside = new(x, y, floor + 0.05f);
+                // The doodad-blind line of sight, on purpose: the start stands on a fragment of mesh, which is often a rock or a root (a
+                // doodad), and a doodad-aware sight from inside it is blocked in every direction. This is a hop of at most 5 yards onto
+                // ground the mesh joins; the legs that follow are the mesh's own, and the doodad-aware leg check applies to stepped routes.
                 if (!map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2, beside.X, beside.Y, beside.Z + 2)) continue;
                 PathResult path = Query(map, beside, destination, options, partial, steep: false, out bool capped);
                 if ((path.Type & PathType.TilesPending) != 0) return null;
@@ -758,9 +760,8 @@ internal static class PlayerbotNavigation
                     continue;
                 }
 
-                if (Bounded([start, .. path.Points], options, reaches) is not { } joined || joined.Points.Count > options.MaxPathPoints + 1) continue;
-                bool[] legs = [false, .. Enumerable.Repeat(true, joined.Points.Count - 2)];
-                return new PlayerbotRoute(joined.Points, joined.Distance, legs);
+                if (Bounded([start, .. path.Points], options, reaches) is { } joined && joined.Points.Count <= options.MaxPathPoints + 1)
+                    return joined;
             }
         }
 
@@ -1067,8 +1068,7 @@ internal static class PlayerbotNavigation
         {
             float floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
             if (!Finite(candidate) || InvalidHeight(floor) || MathF.Abs(floor - candidate.Z) > 2f
-                || !map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2,
-                    candidate.X, candidate.Y, floor + 2)) return null;
+                || !PlayerbotMoveCheck.LineClear(map.Collision, start, candidate with { Z = floor })) return null;
             return new Vector3(candidate.X, candidate.Y, floor + 0.05f);
         }, out next, out nextPoint);
 
@@ -1092,6 +1092,7 @@ internal static class PlayerbotNavigation
             if (InvalidHeight(floor) || MathF.Abs(floor - previous.Z) > 1f) return false;
             next.Z = floor + 0.05f;
             if (!clear(previous, next)) return false;
+
             length += Vector3.Distance(previous, next);
             if (!float.IsFinite(length) || length > options.MaxRouteYards) return false;
             points.Add(next);
