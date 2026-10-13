@@ -13,14 +13,15 @@ using ArcaneCore.World.Packets;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Battlegrounds;
 
 /// <summary>
 /// The battleground opcodes (vmangos Handlers/BattleGroundHandler.cpp): the battlemaster hello and join, the battlefield list and port, leaving
 /// a battlefield, the scoreboard and the map positions. CMSG_BATTLEFIELD_STATUS stays registered by <see cref="InactiveQueueHandlers"/>, which
-/// answers through <see cref="BattlegroundFeature.SendStatusReports"/>. The portal join (CMSG_BATTLEFIELD_JOIN) is not registered: vmangos'
-/// portal join passes an empty battlemaster and is refused. The area spirit healer query and queue answer from the spirit guide's wave
+/// answers through <see cref="BattlegroundFeature.SendStatusReports"/>. The old portal join (CMSG_BATTLEFIELD_JOIN) is refused and logged:
+/// vmangos passes an empty battlemaster, which no NPC check accepts on 1.12. The area spirit healer query and queue answer from the spirit guide's wave
 /// (<see cref="MatchRuntime"/> keeps it channelling Spirit Heal Channel).
 /// </summary>
 public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
@@ -34,11 +35,31 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgLeaveBattlefield, LeaveBattlefield);
         table.OnWorld(WorldOpcode.MsgPvpLogData, PvpLogData);
         table.OnWorld(WorldOpcode.MsgBattlegroundPlayerPositions, PlayerPositions);
+        table.OnWorld(WorldOpcode.CmsgBattlefieldJoin, BattlefieldJoin);
         table.OnWorld(WorldOpcode.CmsgAreaSpiritHealerQuery, AreaSpiritHealerQuery);
         table.OnWorld(WorldOpcode.CmsgAreaSpiritHealerQueue, AreaSpiritHealerQueue);
     }
 
     private static BattlegroundFeature? Feature(WorldSession session) => session.Services.GetService<BattlegroundFeature>();
+
+    /// <summary>
+    /// vmangos HandleBattlefieldJoinOpcode → RequestBgJoinQueue(ObjectGuid(), 0, mapId, false) (BattleGroundHandler.cpp:76-79, 88-125): with an
+    /// empty battlemaster the 1.12 path fails GetNPCIfCanInteractWith and only reports a passive anticheat action ("invalid BG type" for an
+    /// unknown map, else "invalid creature"). Nothing is queued; the attempt is logged.
+    /// </summary>
+    private static void BattlefieldJoin(WorldSession session, Player player, byte[] payload)
+    {
+        if (!BattlegroundPackets.TryParseMap(payload, out uint mapId))
+        {
+            return;
+        }
+
+        string reason = BattlegroundManager.TypeOfMap(mapId) == BattlegroundType.None
+            ? "Attempt to queue for invalid BG type"
+            : "Attempt to queue for BG through invalid creature";
+        session.Logger.LogWarning("[{Endpoint}] PassiveAnticheat: {Reason} (CMSG_BATTLEFIELD_JOIN map {Map}) by {Player}",
+            session.RemoteEndpoint, reason, mapId, player.Name);
+    }
 
     /// <summary>
     /// The spirit service the area spirit healer opcodes name (vmangos BattleGroundHandler.cpp:579-612): the player is in a battleground and the

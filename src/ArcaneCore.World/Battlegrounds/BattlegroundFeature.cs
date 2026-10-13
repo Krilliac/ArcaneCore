@@ -19,6 +19,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Graveyards;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
@@ -248,6 +249,38 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         {
             match.Update(diffMs);
         }
+
+        WireSpiritGuideTimer();
+    }
+
+    /// <summary>
+    /// The gossip hello of a spirit guide sends SMSG_AREA_SPIRIT_HEALER_TIME (vmangos NPCHandler.cpp:360-361) with the time left on its
+    /// Spirit Heal Channel. The NPC services are rebuilt when the content loads, so the hook is (re)installed on the tick whenever unset.
+    /// </summary>
+    private void WireSpiritGuideTimer()
+    {
+        if (services.GetService<QuestNpcFeature>()?.Services is { SpiritGuideNextResurrectMs: null } npcs)
+        {
+            npcs.SpiritGuideNextResurrectMs = SpiritGuideNextResurrectMs;
+        }
+    }
+
+    internal uint SpiritGuideNextResurrectMs(ObjectGuid guide)
+    {
+        if (services.GetService<SpellFeature>()?.System is not { } spells)
+        {
+            return 0;
+        }
+
+        foreach (MatchRuntime match in _matches.Values)
+        {
+            if (match.Map?.FindObject(guide) is Unit unit)
+            {
+                return spells.ChannelRemainingMs(unit);
+            }
+        }
+
+        return 0;
     }
 
     /// <summary>
