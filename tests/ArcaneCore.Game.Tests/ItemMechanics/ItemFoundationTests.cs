@@ -15,12 +15,16 @@ public sealed class ItemFoundationTests
 {
     private const uint ConjuredWater = 92001; // flag 0x2 (shape of the mage conjured food)
     private const uint TimedStone = 92002; // Duration 1800
+    private const uint ChippedBlade = 92011;
+    private const uint ReforgedBlade = 92012;
 
     private static readonly ItemTemplateStore Store = new(
         [
             .. Templates,
             new ItemTemplate { Entry = ConjuredWater, Class = 0, Name = "Conjured Water", DisplayId = 1, Flags = 0x2, Stackable = 20 },
             new ItemTemplate { Entry = TimedStone, Class = 12, Name = "Timed Stone", DisplayId = 1, Duration = 1800 },
+            new ItemTemplate { Entry = ChippedBlade, Class = 2, Name = "Chipped Blade", DisplayId = 1, Stackable = 1, MaxDurability = 100 },
+            new ItemTemplate { Entry = ReforgedBlade, Class = 2, Name = "Reforged Blade", DisplayId = 1, Stackable = 1, MaxDurability = 50 },
         ], []);
 
     private static PlayerInventory Loaded()
@@ -70,6 +74,20 @@ public sealed class ItemFoundationTests
         Assert.True(inv.AutoEquipItem(pouch.BagSlot, pouch.Slot));
         pouchItem = Give(inv, RecruitsBoots); // lands in the equipped pouch or backpack
         return inv;
+    }
+
+    [Fact]
+    public void ChangeItem_AFractionalDurabilityLoss_TakesAtLeastOnePoint()
+    {
+        // EffectSummonChangeItem (SpellEffects.cpp:2244-2248) feeds the lost share to Player::DurabilityLoss,
+        // which truncates max × percent and then forces one point (Player.cpp:4831-4835). 1% of 50 truncates to 0.
+        PlayerInventory inv = Loaded();
+        Item old = Give(inv, ChippedBlade);
+        old.Durability = 99;
+
+        Item changed = Assert.IsType<Item>(inv.ChangeItem(old, ReforgedBlade));
+
+        Assert.Equal(49u, changed.Durability);
     }
 
     [Fact]
