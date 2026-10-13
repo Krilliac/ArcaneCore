@@ -306,6 +306,24 @@ public sealed class FishingCatchTests
     }
 
     [Fact]
+    public void ASuccessfulCatchNearAHole_PaysTheHolesTemplateGold()
+    {
+        // vmangos Player::SendLoot (Player.cpp:7675-7690): GetLootId() for a fishing hole is data1, so a ready hole
+        // fills its loot and then GenerateMoneyLoot(mingold, maxgold). A bobber's GetLootId() is 0, so zone loot pays nothing.
+        using var rig = new FishingRig(spawns: [HoleAt(15)]);
+        GameObject hole = rig.Objects.GameObjects.Single(g => g.Type == GameObjectType.FishingHole);
+        hole.ReplaceTemplate(hole.Template with { MinGold = 37, MaxGold = 37 });
+        CastAndWaitForTheBite(rig);
+
+        Click(rig);
+
+        ParsedLoot window = Window(rig);
+        Assert.Equal((hole.Guid.Value, LootType.Fishing), (window.Guid, window.Type));
+        Assert.Equal(37u, window.Gold);
+        Assert.Equal(FishingRig.HoleFish, Assert.Single(window.Items).ItemId);
+    }
+
+    [Fact]
     public void AHoleLootedOut_CountsAUse_AndDespawnsAtTheDrawnUseCount()
     {
         using var rig = new FishingRig(spawns: [HoleAt(15)]); // data2 = data3 = 2: gone after the second use
