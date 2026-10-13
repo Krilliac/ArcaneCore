@@ -397,6 +397,21 @@ internal static class PlayerbotTaxi
     }
 
     /// <summary>
+    /// Whether <paramref name="destination"/> on <paramref name="mapId"/> can be reached by a known, affordable taxi route from a nearby
+    /// known departure node (<see cref="TryTravelByTaxi"/>), without starting a trip. Shares the per-bot route cache with
+    /// <see cref="TryTravelByTaxi"/>.
+    /// </summary>
+    internal static bool CanTravelByTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.Taxi.Enabled) return false;
+        if (IsActive(player)) return true;
+        return TryPlanTaxi(session, player, mapId, destination, options, out _, out _, out _);
+    }
+
+    /// <summary>
     /// Begin a taxi trip towards <paramref name="destination"/> on <paramref name="mapId"/> when flying is the clear win, else
     /// <see cref="TaxiTravel.Walk"/>. A trip already under way answers <see cref="TaxiTravel.Traveling"/>. The estimate of the walk is the
     /// straight line (no path query); flying needs a known departure node within <see cref="PlayerbotTaxiOptions.MaxWalkToMasterYards"/> of the
@@ -408,20 +423,32 @@ internal static class PlayerbotTaxi
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(options);
-        PlayerbotTaxiOptions taxi = options.Taxi;
-        if (!taxi.Enabled) return TaxiTravel.Walk;
+        if (!options.Taxi.Enabled) return TaxiTravel.Walk;
         if (IsActive(player)) return TaxiTravel.Traveling;
+        if (!TryPlanTaxi(session, player, mapId, destination, options, out uint[] route, out uint fare, out CreatureSpawn master))
+            return TaxiTravel.Walk;
+        Trips.AddOrUpdate(player, new TaxiTrip(mapId, route, fare, master.Entry, new Vector3(master.X, master.Y, master.Z), destination, session.World.NowMs));
+        return TaxiTravel.Traveling;
+    }
+
+    private static bool TryPlanTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options,
+        out uint[] route, out uint fare, out CreatureSpawn master)
+    {
+        route = [];
+        fare = 0;
+        master = default!;
+        PlayerbotTaxiOptions taxi = options.Taxi;
         if (!player.IsInWorld || !player.IsAlive || player.Map is not { } map || map.MapId != mapId || player.Combat.IsInCombat || IsFlying(player)
             || player.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0)
-            return TaxiTravel.Walk;
+            return false;
         uint now = session.World.NowMs;
-        if (IsBackedOff(player, now)) return TaxiTravel.Walk;
+        if (IsBackedOff(player, now)) return false;
         Vector3 here = new(player.X, player.Y, player.Z);
-        if (!IsFinite(here) || !IsFinite(destination)) return TaxiTravel.Walk;
+        if (!IsFinite(here) || !IsFinite(destination)) return false;
         float straight = Vector3.Distance(here, destination);
-        if (straight < taxi.MinRouteYards) return TaxiTravel.Walk;
+        if (straight < taxi.MinRouteYards) return false;
         if (session.Services.GetService<QuestNpcFeature>()?.Services is not { } services || services.StateOf(player) is not { Loaded: true } state)
-            return TaxiTravel.Walk;
+            return false;
         TaxiIndex index = TaxiIndex.Of(services.Npcs);
         bool alliance = player.Team == Team.Alliance;
 
@@ -435,18 +462,18 @@ internal static class PlayerbotTaxi
             if (walk <= nearest) { source = node; nearest = walk; }
         }
 
-        if (source is null) return TaxiTravel.Walk;
+        if (source is null) return false;
         Memo cache = Memos.GetOrCreateValue(player);
-        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, player.Money, index, taxi.MaxWalkToMasterYards, out bool routed, out uint[] route, out uint fare))
+        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, player.Money, index, taxi.MaxWalkToMasterYards, out bool routed, out route, out fare))
         {
             routed = index.TryRoute(state.TaxiMask, source, here, destination, player.Money, taxi.MaxWalkToMasterYards, straight, out route, out fare);
             cache.Store(state.TaxiMask, source.Id, destination, here, player.Money, index, taxi.MaxWalkToMasterYards, routed, route, fare);
         }
 
-        if (!routed) return TaxiTravel.Walk;
-        if (FindMasterSpawn(session, player, services, index, mapId, source.Id, here) is not { } master) return TaxiTravel.Walk;
-        Trips.AddOrUpdate(player, new TaxiTrip(mapId, route, fare, master.Entry, new Vector3(master.X, master.Y, master.Z), destination, now));
-        return TaxiTravel.Traveling;
+        if (!routed) return false;
+        if (FindMasterSpawn(session, player, services, index, mapId, source.Id, here) is not { } found) return false;
+        master = found;
+        return true;
     }
 
     /// <summary>

@@ -213,8 +213,9 @@ internal sealed class PlayerbotHomeArea
     }
 
     /// <summary>
-    /// Whether <paramref name="quest"/> is a leave-home quest: it has creature enders and none of them has a spawn inside, while every
-    /// creature it asks the bot to kill does (so only the turn-in lies outside; a quest that sends the bot out to hunt is not one).
+    /// Whether <paramref name="quest"/> is a leave-home quest: it has creature enders and none of them has a spawn inside, any spawned
+    /// creature starter on the home map has a spawn inside, and every creature it asks the bot to kill does (so only the turn-in lies
+    /// outside; a quest begun in another zone or sending the bot out to hunt is not one).
     /// Cached per quest like <see cref="QuestInside"/>. Item and object objectives (drops, nodes) are not checked, as in <see cref="QuestInside"/>.
     /// </summary>
     internal bool QuestLeavesHome(QuestStore quests, CreatureContent content, Quest quest)
@@ -232,6 +233,21 @@ internal sealed class PlayerbotHomeArea
                 leaves = false;
                 break;
             }
+        }
+
+        if (leaves)
+        {
+            bool anyStarterSpawned = false, starterInside = false;
+            foreach (uint starter in quests.CreatureStartersOf(quest.Id))
+            {
+                if (content.GetSpawns(MapId, starter).Count == 0) continue;
+                anyStarterSpawned = true;
+                if (!HasSpawnInside(content, starter)) continue;
+                starterInside = true;
+                break;
+            }
+
+            if (anyStarterSpawned && !starterInside) leaves = false;
         }
 
         for (int index = 0; leaves && index < quest.ReqCreatureOrGOId.Count; index++)

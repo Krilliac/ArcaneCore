@@ -121,6 +121,16 @@ In the read-only schema-53 world snapshot, 484 of 3,221 quests with creature giv
 fall beyond it; the shortest is quest 165 at 1312.7 yards. The default retains those six exclusions while allowing
 local hand-ins after long objective travel. It can exclude other legitimate long deliveries, and 0 opts out of the
 same-map distance limit. Terrain and hostile pockets have separate limits; long trips may be flown (see Flight paths).
+At pickup and offscreen travel (`MayTakeQuest`, `RefreshEntries`), `PlayerbotQuestGoals.CanExecuteObjectives` also skips
+non-auto-complete quests whose mechanics bots do not execute: exploration/escort/event-script quests (`QuestSpecialFlags.ExplorationOrEvent`),
+GameObject or spell-cast objectives (`ReqCreatureOrGOId < 0` or `ReqSpell != 0`, such as quest 5382 "Doctor Theolen Krastinov, the Butcher"),
+friendly creature objectives credited by item or spell use (`IsKillObjective`, such as quest 5441 "Lazy Peons"), and creature objectives whose
+spawns exist only on another continent or an instance without an entrance trigger on the bot's map. For a completed quest already in the log,
+`CompletedReturnQuest` (`CanReturnToEnder`) holds the quest in the log without selecting it as the active walking goal when its ender lies
+beyond the walking return range (`MaxDeliveryYards` outside a home, `MaxUnhomedReturnWalkYards` = 3000 for an unhomed bot) and no known,
+affordable taxi route reaches it (`PlayerbotTaxi.CanTravelByTaxi`); a leave-home quest (`PlayerbotHomeArea.QuestLeavesHome`) must also have
+any spawned starter on the home map inside that home so a quest begun in another zone (such as Silverpine quest 428) is not treated as a
+leave-home quest of a later home.
 
 A far goal (a quest giver or ender, a corpse) is approached a leg at a time (`PlayerbotNavigation.TryPlanToward`). Beyond
 `MaxPathPoints - 2` yards the map's region graph leads (`NavRegionGraph`, [collision-pathing](collision-pathing.md); built off the world

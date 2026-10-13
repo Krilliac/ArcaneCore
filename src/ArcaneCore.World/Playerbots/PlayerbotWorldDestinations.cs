@@ -729,6 +729,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         foreach (uint questId in CandidateQuests(services, level))
         {
             if (services.Quests.Get(questId) is not { } candidate) continue;
+            if (!PlayerbotQuestGoals.CanExecuteObjectives(_session, player, services, content, candidate)) continue;
             if (_trip.IsInfeasible(mapId, player.X, player.Y, quests, content, questId,
                 maxDeliveryYards, player))
             {
@@ -792,6 +793,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// controller (<c>PlayerbotQuestGoals.FindCandidate</c>) so the two cannot disagree: the home (<paramref name="giverInHome"/>, and
     /// <see cref="PlayerbotHomeArea.QuestAllowed"/>: its enders and kill targets have spawns inside, or a graduated home's leave-home quest
     /// the bot is old enough for; without creature content nothing is),
+    /// supported objective mechanics (<see cref="PlayerbotQuestGoals.CanExecuteObjectives"/>),
     /// not an item-only repeatable the bot cannot supply (<see cref="CanPursueStarter"/>), and the journal and prerequisites
     /// (<see cref="QuestNpcServices.CanTakeQuest(Player, uint)"/>, no running or complete status), and last the trip's feasibility
     /// (<see cref="PlayerbotQuestTripFeasibility.IsInfeasible"/>, by the caller's own <paramref name="trip"/>).
@@ -803,6 +805,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         // Cheapest first: this runs per quest of each candidate NPC every think; the trip check walks spawns and paths.
         if (services.CanTakeQuest(player, quest.Id) != true
             || state.Quests.Get(quest.Id) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }) return false;
+        if (!PlayerbotQuestGoals.CanExecuteObjectives(player.Session as WorldSession, player, services, content, quest)) return false;
         if (!CanPursueStarter(player, quest, loot, services.Npcs)) return false;
         return content is null || !trip.IsInfeasible(player.MapId, player.X, player.Y, services.Quests, content, quest.Id,
             maxDeliveryYards, player);
