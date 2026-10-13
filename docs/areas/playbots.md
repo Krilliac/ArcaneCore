@@ -147,6 +147,22 @@ answers a straight line (vmangos `PathFinder`'s `HaveTiles` shortcut) that the t
 halved (down to 24 yards) until it stays on the loaded mesh, and walking it loads the next tile. Before, the bot stood at such a tile edge
 for good: the wave-8 rehearsal's quest-35 stall (Dawnrover 107 yards north of the Elwynn tile boundary, 610 yards from Guard Thomas).
 
+**Legs that do not come from a mesh corridor are checked for doodads and the mesh edge** (`PlayerbotMoveCheck`). The mesh proves its own
+corridors walkable; nothing else did, and the line of sight they were checked with ignores M2 doodads (the vmangos default for spells), so
+bots walked through fences, trees and rocks: the server does not collide a managed bot's movement packets. The legs concerned are the
+stepped terrain route (`TryTerrainRoute`: no mesh, or an endpoint tile not loaded), its per-step check (`PlayerbotMotion.Validate`,
+`TryStepOnMap`), the walk to a follow-drop edge and the retreat trail
+(`PlayerbotRetreat.TrailRoute`). Each is checked with (a) a line of sight at chest height (1.2 yards) **including doodads**
+(`ignoreM2: false`; spell line of sight is unchanged, the shared default stays) and (b) where a mesh is loaded under the leg, the mesh
+raycast (`IMeshPointQuery.Raycast`): a leg that leaves the mesh (a hole, a building's footprint, a wall edge) stops there. A leg whose
+start is off the mesh, or whose ray ends where no mesh tile is loaded beyond (tested with a second, zero-length query one yard past the
+edge), is not judged by the mesh and keeps (a) alone. A blocked leg of the retreat trail (`TryClip`) is cut half a yard before the obstacle (bisection of the segment, 6
+steps) when at least 1.5 yards of progress remain, else refused; a stepped terrain route is refused whole instead of
+cut, and `TryPlanToward` then plans a shorter chunk (down to 24 yards), so the mesh's own shorter step stays preferred. Cost: one raycast and one vmap query per leg when the route is planned, a few
+more only when blocked; the per-tick step check uses the line of sight alone; no allocation beyond the route. Tests:
+`PlayerbotMoveCheckTests` (stand-in line of sight with an M2-only wall, a mesh hole, a border with no tile) and
+`ADoodadFenceNearKharanos_BlocksAStraightLeg_TheDefaultSightLetsThrough` (real Dun Morogh fence, `ARCANECORE_TEST_TERRAIN_DIR`).
+
 Every bot route excludes the mesh's steep polygons (`NavTerrain.SteepSlopes`). A bot standing on steep ground, or on a patch of walkable
 polygons among them, got no route at all (no path, or a partial path ending at the patch's edge) and stood there for good: Ironwander on
 the mountainside north of Coldridge Valley (-5605.6, 155.8, 453.3), live 2026-10-09, `stalled 7960s: goal=Grind target=1196` (the goal

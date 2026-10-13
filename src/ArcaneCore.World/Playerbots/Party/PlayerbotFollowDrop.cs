@@ -80,7 +80,7 @@ internal static class PlayerbotFollowDrop
             if (ValidHeight(floor) && MathF.Abs(floor - edge.Z) <= 1f)
             {
                 // Still on the upper floor: one more step along it, in sight.
-                if (!collision.IsInLineOfSight(edge.X, edge.Y, edge.Z + 2f, x, y, floor + 2f)) return null;
+                if (!PlayerbotMoveCheck.LineClear(collision, edge, new Vector3(x, y, floor))) return null;
                 edge = new Vector3(x, y, floor);
                 continue;
             }
@@ -101,7 +101,7 @@ internal static class PlayerbotFollowDrop
             PlayerbotRoute? toEdge = null;
             if (Vector2.Distance(new(edge.X, edge.Y), new(origin.X, origin.Y)) > 0.3f
                 && !PlayerbotNavigation.TryTerrainRoute(origin, edge, options, (px, py, pz) => collision.GetHeight(px, py, pz),
-                    (a, b) => collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out toEdge))
+                    (a, b) => PlayerbotMoveCheck.LineClear(collision, a, b), out toEdge))
                 return null;
             return new PlayerbotDropPlan(toEdge, edge, stepOff, landing, height, damage);
         }
