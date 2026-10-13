@@ -68,6 +68,39 @@ public sealed class AuctionBotFeatureTests
     }
 
     [Fact]
+    public async Task A_listing_whose_commit_is_unknown_still_fills_the_house_cap()
+    {
+        // The insert committed, then its acknowledgement was lost: the auction is reserved and absent from the cache.
+        // It still occupies the one slot of this house, so another sell pass must not mint a second one.
+        var lost = new LostBotListingAck();
+        await using var fixture = await Fixture.CreateAsync(wrapStore: lost.Wrap, extra: new()
+        {
+            ["AuctionHouseBot:SellChance"] = "0",
+            ["AuctionHouseBot:BuyChance"] = "0",
+            ["AuctionHouseBot:MaxAuctionsPerHouse"] = "1",
+        });
+        Assert.Equal(1u, fixture.Bot.Options.MaxAuctionsPerHouse);
+        Assert.Equal(1, await fixture.OnWorld(() => fixture.Bot.Sell(House)));
+        await fixture.WaitUntilAsync(() =>
+        {
+            AuctionBotCustodyRow? pending = fixture.Bot.Ledger.Pending.SingleOrDefault();
+            return pending is not null && fixture.Economy.IsAuctionQuarantined(pending.AuctionId)
+                && fixture.Economy.FindAuction(pending.AuctionId) is null;
+        });
+
+        Assert.Equal(1, await fixture.CountAsync<AuctionRow>(a => a.SellerId == EconomyFeature.BotSellerId));
+        await fixture.OnWorld(() =>
+        {
+            Assert.DoesNotContain(fixture.Economy.Auctions, view => view.Auction.SellerId == EconomyFeature.BotSellerId);
+            Assert.Equal(1, fixture.Economy.BotAuctionCount(House));
+            Assert.Equal(0, fixture.Bot.Sell(House));
+            return true;
+        });
+        Assert.Equal(1, await fixture.CountAsync<AuctionRow>(a => a.SellerId == EconomyFeature.BotSellerId));
+        Assert.Single(fixture.Bot.Ledger.Pending);
+    }
+
+    [Fact]
     public async Task Replaying_a_committed_listing_operation_mints_nothing()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -317,6 +350,60 @@ public sealed class AuctionBotFeatureTests
             ["AuctionHouseBot:BuyChance"] = "often",
         }).Build();
         Assert.Contains(OpsCli.Validate(broken).Issues, i => i.Key == "AuctionHouseBot" && i.Severity == ConfigSeverity.Error);
+    }
+
+    /// <summary>
+    /// A bot listing's commit succeeds and then the acknowledgement is lost, and neither the ledger re-read nor a recovery
+    /// snapshot can be answered. The auction stays reserved and out of the cache, which is the window where the house cap
+    /// used to see an empty slot.
+    /// </summary>
+    private sealed class LostBotListingAck
+    {
+        public IEconomyStore Wrap(IEconomyStore inner) => new Store(inner);
+
+        private sealed class Store(IEconomyStore inner) : IEconomyStore
+        {
+            public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
+            {
+                EconomyCommitResult result = await inner.CommitAsync(request, cancellationToken).ConfigureAwait(false);
+                if (request.Changes.Any(change => change is InsertAuction { Auction.SellerId: EconomyFeature.BotSellerId }))
+                {
+                    throw new IOException("lost acknowledgement of a bot listing");
+                }
+
+                return result;
+            }
+
+            public Task<bool> IsCommittedAsync(Guid operationId, CancellationToken cancellationToken = default)
+                => Task.FromException<bool>(new IOException("bot listing reconciliation unavailable"));
+
+            public Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
+                => filter.AuctionId is not null
+                    ? Task.FromException<AuctionSnapshot>(new IOException("bot listing recovery snapshot unavailable"))
+                    : inner.GetAuctionSnapshotAsync(filter, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsAsync(int receiverId, CancellationToken cancellationToken = default)
+                => inner.GetMailsAsync(receiverId, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetExpiredMailsAsync(long now, int max, CancellationToken cancellationToken = default)
+                => inner.GetExpiredMailsAsync(now, max, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsInvolvingAsync(int characterId, CancellationToken cancellationToken = default)
+                => inner.GetMailsInvolvingAsync(characterId, cancellationToken);
+
+            public Task<string?> GetItemTextAsync(uint itemTextId, CancellationToken cancellationToken = default)
+                => inner.GetItemTextAsync(itemTextId, cancellationToken);
+
+            public Task<IReadOnlyList<AuctionRecord>> GetAuctionsAsync(CancellationToken cancellationToken = default)
+                => inner.GetAuctionsAsync(cancellationToken);
+
+            public Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> itemGuids,
+                CancellationToken cancellationToken = default)
+                => inner.GetEscrowItemsAsync(itemGuids, cancellationToken);
+
+            public Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default)
+                => inner.GetIdSeedAsync(cancellationToken);
+        }
     }
 
     private sealed class ManualClock(DateTimeOffset start) : TimeProvider

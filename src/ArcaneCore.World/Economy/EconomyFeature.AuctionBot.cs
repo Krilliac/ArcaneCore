@@ -26,9 +26,20 @@ public sealed partial class EconomyFeature
     internal IEnumerable<AuctionView> OpenAuctions(uint houseId)
         => HouseAuctions(houseId, Now).Where(v => !_busyAuctions.Contains(v.Auction.Id));
 
-    /// <summary>World thread: bot auctions in a house, published or still settling.</summary>
+    /// <summary>
+    /// World thread: bot auctions in a house. Published ones, listings still settling, and reserved ones missing from the
+    /// cache (an insert whose outcome is unknown, a row whose escrow does not match). A lost acknowledgement still occupies
+    /// a slot: the row may exist until recovery decides, and leaving it out lets the next sell pass list past
+    /// <c>MaxAuctionsPerHouse</c>.
+    /// </summary>
     internal int BotAuctionCount(uint houseId)
-        => _auctions.Values.Count(v => v.Auction.HouseId == houseId && v.Auction.SellerId == BotSellerId) + _botListingsInFlight.Values.Count(h => h == houseId);
+    {
+        int published = _auctions.Values.Count(v => v.Auction.HouseId == houseId && v.Auction.SellerId == BotSellerId);
+        int settling = _botListingsInFlight.Values.Count(h => h == houseId);
+        int reserved = _auctionRecoveries.Count(pair => !_auctions.ContainsKey(pair.Key) && !_botListingsInFlight.ContainsKey(pair.Key)
+            && pair.Value.Affected.Any(row => row.Id == pair.Key && row.HouseId == houseId && row.SellerId == BotSellerId));
+        return published + settling + reserved;
+    }
 
     /// <summary>
     /// World thread: list a brand-new item for the bot. The item is minted into escrow and the auction inserted in one transaction;
