@@ -240,30 +240,67 @@ internal static class PlayerbotQaClassifier
         => string.Create(CultureInfo.InvariantCulture, $"creature entry {entry} has no spawn {Where(s)}") + (noTemplate ? " and no creature_template row" : string.Empty);
 
     private static QaClassification DeathLoop(QaSignal s, IQaContentFacts facts, string? title)
+        => ClassifyDeathLoop(
+            s.Attackers,
+            s.Bot is null ? [] : [new QaSample(s.AtUtc, s.HasPosition, s.Map, s.X, s.Y, s.Z, [.. s.Attackers], s.Message) { Bot = s.Bot }],
+            s.Bot,
+            s.Quest,
+            facts,
+            title);
+
+    internal static QaClassification ClassifyDeathLoop(QaFinding finding, QaBotObservation? latestBot, IQaContentFacts facts)
+        => ClassifyDeathLoop(
+            finding.Attackers,
+            finding.Samples,
+            latestBot,
+            finding.Quest,
+            facts,
+            finding.QuestTitle ?? (finding.Quest != 0 ? facts.QuestTitle(finding.Quest) : null),
+            finding.AttackerFacts,
+            finding.AttackerBotLevels,
+            finding.MinBotLevel);
+
+    internal static QaClassification ClassifyDeathLoop(
+        IReadOnlyCollection<uint> attackers,
+        IReadOnlyList<QaSample> samples,
+        QaBotObservation? latestBot,
+        uint quest,
+        IQaContentFacts facts,
+        string? title = null,
+        IReadOnlyDictionary<uint, QaAttackerFact>? rememberedFacts = null,
+        IReadOnlyDictionary<uint, int>? rememberedLevels = null,
+        int rememberedMinBotLevel = 0)
     {
-        IReadOnlyList<string>? observedSources = s.Bot?.DeathSources is { Count: > 0 } all ? all : null;
+        QaBotObservation? bot = latestBot ?? samples.LastOrDefault(s => s.Bot is not null)?.Bot;
+        IReadOnlyList<string>? observedSources = bot?.DeathSources is { Count: > 0 } all ? all : null;
         bool creatureMajority = observedSources is not null
             && observedSources.Count(source => source == "Creature") * 2 > observedSources.Count;
-        if (s.Attackers.Count == 0 || observedSources is not null && !creatureMajority)
+        if (attackers.Count == 0 || observedSources is not null && !creatureMajority)
         {
-            IReadOnlyList<string> sources = observedSources ?? [s.Bot?.Source ?? "Unobserved"];
+            IReadOnlyList<string> sources = observedSources ?? [bot?.Source ?? "Unobserved"];
             int behaviourDeaths = sources.Count(source => source is "Fall" or "FallToVoid" or "Drowning" or "Exhausted"
                 or "Lava" or "Slime" or "Fire" or "Self");
-            QaCause cause = s.Bot is null || behaviourDeaths * 2 > sources.Count ? QaCause.BehaviourBug : QaCause.Unknown;
+            QaCause cause = bot is null || behaviourDeaths * 2 > sources.Count ? QaCause.BehaviourBug : QaCause.Unknown;
             string deathDetail = sources.Count == 1 ? DescribeDeathSource(sources[0])
                 : "death sources in this loop: " + string.Join("; ", sources.Select(DescribeDeathSource));
-            return new QaClassification(cause, (s.Attackers.Count == 0
+            return new QaClassification(cause, (attackers.Count == 0
                 ? "died repeatedly with no attacker entry: " : "died repeatedly with nearby attackers: ") + deathDetail, title);
         }
 
         var notes = new List<string>();
         var descriptions = new List<string>();
         bool difficult = false;
-        int? questLevel = s.Quest != 0 ? facts.QuestLevel(s.Quest) : null;
-        int? referenceLevel = s.Bot is { Level: > 0 } bot ? bot.Level : questLevel;
-        foreach (uint entry in s.Attackers)
+        int? questLevel = quest != 0 ? facts.QuestLevel(quest) : null;
+        int? minBotLevel = rememberedMinBotLevel > 0 ? rememberedMinBotLevel : null;
+        if (latestBot is { Level: > 0 } lb && (minBotLevel is null || lb.Level < minBotLevel.Value)) minBotLevel = lb.Level;
+        foreach (QaSample sample in samples)
         {
-            QaAttackerFact? observed = s.Bot?.AttackerFacts.FirstOrDefault(a => a.Entry == entry);
+            if (sample.Bot is { Level: > 0 } sb && (minBotLevel is null || sb.Level < minBotLevel.Value)) minBotLevel = sb.Level;
+        }
+
+        foreach (uint entry in attackers)
+        {
+            QaAttackerFact? observed = LookupAttackerFact(entry, samples, latestBot, rememberedFacts);
             QaTemplateFacts? template = facts.Template(entry);
             if (observed is null && template is null)
             {
@@ -290,24 +327,77 @@ internal static class PlayerbotQaClassifier
                 difficult = true;
                 notes.Add(string.Create(CultureInfo.InvariantCulture, $"{entry} is {(rank == 1 ? "an elite" : rank == 2 ? "a rare elite" : "a world boss")} (level {minLevel}-{maxLevel})"));
             }
+
+            int? attackerBotLevel = LookupAttackerBotLevel(entry, samples, latestBot, rememberedLevels) ?? minBotLevel;
+            int? referenceLevel = attackerBotLevel ?? questLevel;
             if (referenceLevel is { } level && attackerLevel >= level + LevelMargin)
             {
                 difficult = true;
                 notes.Add(string.Create(CultureInfo.InvariantCulture,
-                    $"{entry} is level {attackerLevel} against {(s.Bot is null ? "quest" : "bot")} level {level}"));
+                    $"{entry} is level {attackerLevel} against {(attackerBotLevel is null ? "quest" : "bot")} level {level}"));
             }
         }
 
-        if (s.Attackers.Count >= ManyAttackers)
+        if (attackers.Count >= ManyAttackers)
         {
             difficult = true;
-            notes.Add(string.Create(CultureInfo.InvariantCulture, $"{s.Attackers.Count} different attackers ({string.Join('/', s.Attackers)})"));
+            notes.Add(string.Create(CultureInfo.InvariantCulture, $"{attackers.Count} different attackers ({string.Join('/', attackers)})"));
         }
 
         string detail = difficult ? string.Join("; ", notes)
-            : string.Create(CultureInfo.InvariantCulture, $"died repeatedly to attackers {string.Join('/', s.Attackers)}; no observed elite, hostile guard or confirmed level gap");
+            : string.Create(CultureInfo.InvariantCulture, $"died repeatedly to attackers {string.Join('/', attackers)}; no observed elite, hostile guard or confirmed level gap");
         if (descriptions.Count > 0) detail += "; attacker facts: " + string.Join("; ", descriptions);
         return new QaClassification(difficult ? QaCause.ContentDifficulty : QaCause.Unknown, detail, title);
+    }
+
+    private static QaAttackerFact? LookupAttackerFact(
+        uint entry,
+        IReadOnlyList<QaSample> samples,
+        QaBotObservation? latestBot,
+        IReadOnlyDictionary<uint, QaAttackerFact>? rememberedFacts)
+    {
+        QaAttackerFact? merged = rememberedFacts is not null && rememberedFacts.TryGetValue(entry, out QaAttackerFact? rem) ? rem : null;
+        foreach (QaSample sample in samples)
+        {
+            if (sample.Bot?.AttackerFacts.FirstOrDefault(a => a.Entry == entry) is { } fact)
+            {
+                merged = merged is null ? fact : QaFinding.MergeAttackerFact(merged, fact);
+            }
+        }
+
+        if (latestBot?.AttackerFacts.FirstOrDefault(a => a.Entry == entry) is { } latest)
+        {
+            merged = merged is null ? latest : QaFinding.MergeAttackerFact(merged, latest);
+        }
+
+        return merged;
+    }
+
+    private static int? LookupAttackerBotLevel(
+        uint entry,
+        IReadOnlyList<QaSample> samples,
+        QaBotObservation? latestBot,
+        IReadOnlyDictionary<uint, int>? rememberedLevels)
+    {
+        int? minLevel = rememberedLevels is not null && rememberedLevels.TryGetValue(entry, out int rem) && rem > 0 ? rem : null;
+        foreach (QaSample sample in samples)
+        {
+            if (sample.Bot is { Level: > 0 } sb
+                && (sample.Attackers.Contains(entry) || sb.AttackerFacts.Any(a => a.Entry == entry))
+                && (minLevel is null || sb.Level < minLevel.Value))
+            {
+                minLevel = sb.Level;
+            }
+        }
+
+        if (latestBot is { Level: > 0 } lb
+            && lb.AttackerFacts.Any(a => a.Entry == entry)
+            && (minLevel is null || lb.Level < minLevel.Value))
+        {
+            minLevel = lb.Level;
+        }
+
+        return minLevel;
     }
 
     private static string DescribeDeathSource(string source) => source switch

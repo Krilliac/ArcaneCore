@@ -153,7 +153,7 @@ internal sealed class PlayerbotQaPublisher
     {
         PlayerbotQaGitHubOptions git = _options.GitHub;
         if (!git.Enabled) return;
-        QaFindingView[] eligible = [.. findings.Where(Eligible)
+        QaFindingView[] eligible = [.. findings.Where(f => Eligible(f, findings))
             .OrderBy(f => f.Publication.State == QaPublicationState.Failed ? 1 : 0).ThenByDescending(f => f.Severity).ThenBy(f => f.Id, StringComparer.Ordinal)];
         if (eligible.Length == 0 && _state.PendingDuplicates().Count == 0) return;
         if (!git.Publish)
@@ -249,7 +249,7 @@ internal sealed class PlayerbotQaPublisher
         return true;
     }
 
-    private bool Eligible(QaFindingView f)
+    private bool Eligible(QaFindingView f, IReadOnlyList<QaFindingView> all)
     {
         PlayerbotQaGitHubOptions git = _options.GitHub;
         // A spell gap is reported on its first real occurrence (a bot cast it); a gap only the start-up coverage lists (Count 0) stays in the
@@ -257,9 +257,15 @@ internal sealed class PlayerbotQaPublisher
         if (f.Count < (QaKinds.Of(f.Kind).SingleOccurrence ? 1 : git.MinOccurrences)) return false;
         if (f.Kind == QaSignalKind.SpellUnsupported && QaSpellGaps.IsAdvisory(f.Reason)) return false; // a DUMMY aura nothing seems to read: a lead, listed only
         if (f.Cause == QaCause.OutsideHome) return false; // expected for a homed bot (PlayerbotQaClassifier); the report lists it
+        if (f.Kind == QaSignalKind.SharedSetAside && !f.Publication.HoldsIssue && CoveredByStall(f, all)) return false; // the stall finding carries the rich samples
         if (!f.BotIndependent && f.DistinctBots < git.MinDistinctBots) return false;
         return !(f.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed && !IsRegression(f));
     }
+
+    private static bool CoveredByStall(QaFindingView setAside, IReadOnlyList<QaFindingView> all)
+        => setAside.Quest != 0
+            ? all.Any(other => other.Kind == QaSignalKind.Stall && other.Quest == setAside.Quest && other.QuestIsGoal && other.Cause != QaCause.OutsideHome)
+            : setAside.Target != 0 && all.Any(other => other.Kind == QaSignalKind.Stall && other.Target == setAside.Target && other.Cause != QaCause.OutsideHome);
 
     /// <summary>
     /// Whether <paramref name="f"/> recurs on the running build after its issue was closed on another one (<see cref="PlayerbotQaGitHubOptions.ReopenOnRegression"/>).

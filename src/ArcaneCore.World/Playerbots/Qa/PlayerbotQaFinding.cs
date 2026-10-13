@@ -438,6 +438,15 @@ internal sealed class QaFinding
     /// <summary>A death loop's attackers: the non-zero entries of every signal folded in (at most <see cref="MaxAttackers"/>); a loop that shares one of them is this loop.</summary>
     public SortedSet<uint> Attackers { get; } = [];
 
+    /// <summary>Observed creature facts across every signal folded into this death loop, keyed by creature entry.</summary>
+    public Dictionary<uint, QaAttackerFact> AttackerFacts { get; } = [];
+
+    /// <summary>Minimum positive bot level observed against each attacker entry in this death loop.</summary>
+    public Dictionary<uint, int> AttackerBotLevels { get; } = [];
+
+    /// <summary>Minimum positive bot level observed across any signal in this death loop (0 when none).</summary>
+    public int MinBotLevel { get; set; }
+
     /// <summary>A stall's coarse identity (<see cref="PlayerbotQaFingerprint.StallGroup"/>); empty for other kinds. In memory only: recomputed on load.</summary>
     public string Group { get; set; } = string.Empty;
 
@@ -448,6 +457,41 @@ internal sealed class QaFinding
 
     /// <summary>Different bots seen (saturates at <see cref="MaxTrackedBots"/> tracked ids; a bot-less signal's own count counts too).</summary>
     public int DistinctBots => Math.Max(Bots.Count, AnonymousBots);
+
+    public void RecordLoopObservation(IReadOnlyCollection<uint> attackers, QaBotObservation? bot)
+    {
+        if (bot is null) return;
+        if (bot.Level > 0 && (MinBotLevel == 0 || bot.Level < MinBotLevel)) MinBotLevel = bot.Level;
+        foreach (uint entry in attackers)
+        {
+            if (entry != 0 && bot.Level > 0 && (!AttackerBotLevels.TryGetValue(entry, out int prev) || bot.Level < prev))
+            {
+                AttackerBotLevels[entry] = bot.Level;
+            }
+        }
+
+        foreach (QaAttackerFact fact in bot.AttackerFacts ?? [])
+        {
+            if (fact.Entry == 0) continue;
+            if (bot.Level > 0 && (!AttackerBotLevels.TryGetValue(fact.Entry, out int prevLevel) || bot.Level < prevLevel))
+            {
+                AttackerBotLevels[fact.Entry] = bot.Level;
+            }
+
+            AttackerFacts[fact.Entry] = AttackerFacts.TryGetValue(fact.Entry, out QaAttackerFact? existing)
+                ? MergeAttackerFact(existing, fact)
+                : fact;
+        }
+    }
+
+    internal static QaAttackerFact MergeAttackerFact(QaAttackerFact a, QaAttackerFact b) => new(
+        a.Entry,
+        Math.Max(a.Level, b.Level),
+        Math.Min(a.MinLevel, b.MinLevel),
+        Math.Max(a.MaxLevel, b.MaxLevel),
+        (b.Rank is >= 1 and <= 3 && a.Rank is < 1 or > 3) ? b.Rank : Math.Max(a.Rank, b.Rank),
+        a.Guard || b.Guard,
+        a.Hostile || b.Hostile);
 
     public QaFindingView ToView() => new()
     {

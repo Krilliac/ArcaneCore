@@ -296,6 +296,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     }
 
                     if (finding.DeathSource.Length == 0) finding.DeathSource = SourceOf(signal);
+                    finding.RecordLoopObservation(signal.Attackers, signal.Bot);
                 }
 
                 finding.Samples.Add(new QaSample(signal.AtUtc, signal.HasPosition, signal.Map, signal.X, signal.Y, signal.Z, [.. signal.Attackers], signal.Message)
@@ -313,8 +314,12 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             if (own)
             {
                 finding.QuestTitle = signal.Kind == QaSignalKind.DeathLoop ? cause.QuestTitle : cause.QuestTitle ?? finding.QuestTitle;
-                finding.Cause = cause.Cause;
-                finding.CauseDetail = cause.Detail;
+                if (signal.Kind != QaSignalKind.DeathLoop || signal.FromCoverage)
+                {
+                    finding.Cause = cause.Cause;
+                    finding.CauseDetail = cause.Detail;
+                }
+
                 finding.Goal = signal.Goal;
                 // A death loop keeps the subject of its first signal: its attackers vary from one signal to the next.
                 if (signal.Kind != QaSignalKind.DeathLoop || finding.Subject.Length == 0) finding.Subject = Subject(signal, finding.QuestTitle);
@@ -322,7 +327,9 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             else
             {
                 finding.QuestTitle ??= cause.QuestTitle;
-                if (finding.Cause == QaCause.Unknown && finding.CauseDetail.Length == 0)
+                if (signal.Kind != QaSignalKind.DeathLoop
+                    && finding.Cause == QaCause.Unknown
+                    && (cause.Cause != QaCause.Unknown || finding.CauseDetail.Length == 0))
                 {
                     finding.Cause = cause.Cause;
                     finding.CauseDetail = cause.Detail;
@@ -330,6 +337,16 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
                 if (finding.Goal.Length == 0) finding.Goal = signal.Goal;
                 if (finding.Subject.Length == 0) finding.Subject = Subject(signal, finding.QuestTitle);
+            }
+
+            if (signal.Kind == QaSignalKind.DeathLoop && !signal.FromCoverage)
+            {
+                QaClassification loopCause = PlayerbotQaClassifier.ClassifyDeathLoop(finding, signal.Bot, facts);
+                if (loopCause.Cause != QaCause.Unknown || finding.Cause == QaCause.Unknown)
+                {
+                    finding.Cause = loopCause.Cause;
+                    finding.CauseDetail = loopCause.Detail;
+                }
             }
 
             finding.Severity = PlayerbotQaClassifier.Severity(finding.Kind, finding.Count, finding.DistinctBots, finding.LastSeenUtc, now);
@@ -598,12 +615,25 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             if (into.Attackers.Count < QaFinding.MaxLoopAttackers) into.Attackers.Add(attacker);
         }
 
+        if (from.MinBotLevel > 0 && (into.MinBotLevel == 0 || from.MinBotLevel < into.MinBotLevel)) into.MinBotLevel = from.MinBotLevel;
+        foreach ((uint entry, int level) in from.AttackerBotLevels)
+        {
+            if (!into.AttackerBotLevels.TryGetValue(entry, out int prev) || level < prev) into.AttackerBotLevels[entry] = level;
+        }
+
+        foreach ((uint entry, QaAttackerFact fact) in from.AttackerFacts)
+        {
+            into.AttackerFacts[entry] = into.AttackerFacts.TryGetValue(entry, out QaAttackerFact? existing)
+                ? QaFinding.MergeAttackerFact(existing, fact)
+                : fact;
+        }
+
         if (into.DeathSource.Length == 0) into.DeathSource = from.DeathSource;
         into.Anchor ??= from.Anchor;
         if (into.Quest == 0) into.Quest = from.Quest;
         if (into.Target == 0) into.Target = from.Target;
         into.QuestTitle ??= from.QuestTitle;
-        if (into.Cause == QaCause.Unknown && into.CauseDetail.Length == 0)
+        if (into.Cause == QaCause.Unknown && (from.Cause != QaCause.Unknown || into.CauseDetail.Length == 0))
         {
             into.Cause = from.Cause;
             into.CauseDetail = from.CauseDetail;
@@ -625,6 +655,16 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         samples.Sort(static (x, y) => x.AtUtc.CompareTo(y.AtUtc));
         into.Samples.Clear();
         into.Samples.AddRange(samples.Skip(Math.Max(0, samples.Count - maxSamples)));
+        if (into.Kind == QaSignalKind.DeathLoop)
+        {
+            QaClassification loopCause = PlayerbotQaClassifier.ClassifyDeathLoop(into, latestBot: null, NoQaContentFacts.Instance);
+            if (loopCause.Cause != QaCause.Unknown)
+            {
+                into.Cause = loopCause.Cause;
+                into.CauseDetail = loopCause.Detail;
+            }
+        }
+
         into.Severity = Math.Max(into.Severity, from.Severity);
     }
 
@@ -1024,6 +1064,10 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
         finding.DeathSource = !string.IsNullOrEmpty(view.DeathSource) ? view.DeathSource
             : (view.Samples ?? []).Select(sm => sm.Bot?.Source).FirstOrDefault(src => !string.IsNullOrEmpty(src)) ?? "Unobserved";
+        foreach (QaSample sample in view.Samples ?? [])
+        {
+            finding.RecordLoopObservation(sample.Attackers ?? [], sample.Bot);
+        }
     }
 
     /// <summary>The optional ids of a direct signal; a field the signal leaves empty keeps what the finding had.</summary>
