@@ -35,6 +35,7 @@ public sealed class RangedCastPipelineTests
     private const uint Wand = 92003;
     private const uint ThrownStack = 92004;
     private const uint ThrownSingle = 92005;
+    private const uint Libram = 92006;
     private const uint Arrow = 92010;
     private const uint Bullet = 92011;
     private const uint ExoticArrow = 92012;
@@ -46,6 +47,7 @@ public sealed class RangedCastPipelineTests
         new() { Entry = Wand, Class = 2, SubClass = 19, DisplayId = 302, InventoryType = 26, Delay = 1500, MaxDurability = 40 },
         new() { Entry = ThrownStack, Class = 2, SubClass = 16, DisplayId = 303, InventoryType = 25, Delay = 2000, Stackable = 200 },
         new() { Entry = ThrownSingle, Class = 2, SubClass = 16, DisplayId = 304, InventoryType = 25, Delay = 2000, MaxDurability = 30 },
+        new() { Entry = Libram, Class = (uint)ItemClass.Armor, SubClass = ItemSubClasses.ArmorLibram, DisplayId = 400, InventoryType = (uint)InventoryType.Relic },
         new() { Entry = Arrow, Class = 6, SubClass = 2, DisplayId = 5996, InventoryType = 24, Stackable = 200, Damages = [new ItemDamage(4, 5, 0)] },
         new() { Entry = Bullet, Class = 6, SubClass = 3, DisplayId = 5998, InventoryType = 24, Stackable = 200, Damages = [new ItemDamage(4, 5, 0)] },
         new() { Entry = ExoticArrow, Class = 6, SubClass = 2, DisplayId = 5990, InventoryType = 24, Stackable = 200, Flags = 0x8, Damages = [new ItemDamage(4, 5, 0)] },
@@ -193,6 +195,26 @@ public sealed class RangedCastPipelineTests
         Arm(player, Arrow);
         player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged)!.Durability = 0;
 
+        Assert.Equal(SpellCastResult.EquippedItem, Fire(kit, player, target, Shot));
+    }
+
+    [Fact]
+    public void ARelicInTheRangedSlot_IsNotARangedWeapon()
+    {
+        // Paladin librams (and druid idols, shaman totems) occupy EQUIPMENT_SLOT_RANGED but are armor.
+        // GetWeaponForAttack returns null unless the item is ITEM_CLASS_WEAPON, so a weapon-damage shot
+        // is SPELL_FAILED_EQUIPPED_ITEM (Spell.cpp:7398-7402), even with infinite ammo.
+        using var kit = Kit();
+        (Player player, _, Player target) = Shooter(kit);
+        player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Paladin);
+        Equip(player, Libram);
+
+        Assert.NotNull(player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged));
+        Assert.Null(PlayerAmmo.RangedWeapon(player, nonBroken: true));
+        Assert.Null(PlayerAmmo.RangedWeapon(player, nonBroken: false));
+        Assert.Equal(SpellCastResult.EquippedItem, Fire(kit, player, target, Shot));
+
+        kit.System.RangedOptions.Ammo.Mode = AmmoMode.Infinite;
         Assert.Equal(SpellCastResult.EquippedItem, Fire(kit, player, target, Shot));
     }
 

@@ -25,13 +25,15 @@ public static class PlayerAmmo
 
     /// <summary>
     /// The ranged-slot weapon (vmangos Player::GetWeaponForAttack(RANGED_ATTACK, nonbroken, false)):
-    /// a broken item (durability 0 of a non-zero maximum) is skipped when <paramref name="nonBroken"/> is set.
+    /// only an ITEM_CLASS_WEAPON counts (a libram, idol or totem occupies the same slot and is not one),
+    /// and a broken item (durability 0 of a non-zero maximum) is skipped when <paramref name="nonBroken"/> is set.
     /// </summary>
     public static Item? RangedWeapon(Player player, bool nonBroken)
     {
         ArgumentNullException.ThrowIfNull(player);
         Item? item = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged);
-        if (item is null || (nonBroken && item.MaxDurability > 0 && item.Durability == 0))
+        if (item is null || item.Template.Class != (uint)ItemClass.Weapon
+            || (nonBroken && item.MaxDurability > 0 && item.Durability == 0))
         {
             return null;
         }
