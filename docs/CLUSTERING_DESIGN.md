@@ -312,6 +312,18 @@ resolve transfers; evacuate supported residents or perform normal logout; flush
 all feature queues; release leases; acknowledge drain; then terminate the owned
 process. A launch, heartbeat, or signal alone is not readiness or completed drain.
 
+### Host supervisor and console layout (M15.4)
+
+A single clustered host runs **3 executables** across **6 to 9 OS processes**:
+`ArcaneCore.Realm`, `ArcaneCore.World` (selected by role: `combined | gateway | worker | social | coordinator`),
+and the host supervisor (`ClusterHostSupervisor` in `src/ArcaneCore.World/Cluster/Supervision/`).
+Bots remain in-process on the `worker` that owns their map; there is no separate bot-world executable.
+
+- **Default merged console (`Merged`).** By default, the supervisor spawns every child windowless (`CreateNoWindow = true`, redirected `stdout`/`stderr`), writes every line to that child's per-process log file, and multiplexes output into the single supervisor console prefixed with its `[<name>]` role tag (for example `[realm]`, `[gateway:1]`, `[worker:EK]`, `[worker:Kalimdor]`, `[worker:Instances]`, `[social]`, `[coordinator]`).
+- **Per-process console switch.** Each supervised child configures `Cluster:Supervisor:Processes:<name>:Console` as `merged` (default), `window` (own OS console window with `CreateNoWindow = false`), or `none` (silent background process, log file only).
+- **Unconditional error/exception visibility.** Regardless of whether a child is configured for `merged`, `window`, or `none`, any `stderr` output or error/exception line (`ERROR`, `FATAL`, `CRIT`, `[ERR]`, `[FTL]`, `Unhandled exception`, `Exception:`) is always surfaced in the supervisor's merged console alongside its `[<name>]` prefix and written to the child's log file so crashes or faults are never hidden.
+- **Lifecycle, backoff, and capacity admission.** Unexpected child exits trigger capped exponential restart backoff (`1 s -> 2 s -> 4 s -> ... -> 60 s` maximum) and increment the child's incarnation and restart counters. Before launch, `CheckCapacityAdmission` enforces `MaxConcurrentProcesses`, `MaxTotalAllocatedMemoryMb`, `MinFreeMemoryReserveMb`, and single-writer map ownership across workers. `DrainAndStopAsync` drains and terminates only supervisor-owned child processes and never restarts a drained child.
+
 ## Auxiliary services
 
 Status: planned design, requested 2026-10-10; nothing in this section is built.
