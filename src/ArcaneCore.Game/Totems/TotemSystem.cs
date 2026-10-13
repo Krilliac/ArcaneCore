@@ -327,7 +327,9 @@ public sealed partial class TotemSystem
         totem.UnitFlags = flags;
 
         uint spellId = _totemSpells(entry) ?? 0;
-        var info = new TotemInfo(totem, caster, slot, context.Spell.Id, spellId, context.Spell.GetDuration());
+        // Spell::EffectSummonTotem stores the cast's m_duration (SpellEffects.cpp:4985): CalculateDuration,
+        // including duration modifiers, not the raw SpellDuration base.
+        var info = new TotemInfo(totem, caster, slot, context.Spell.Id, spellId, context.Cast.Duration);
         _byGuid[totem.Guid] = info;
         TotemQuery.Add(info);
         if (slot != TotemSlot.None)

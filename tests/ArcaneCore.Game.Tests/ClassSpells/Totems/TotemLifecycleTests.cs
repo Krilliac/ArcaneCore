@@ -44,6 +44,26 @@ public sealed class TotemLifecycleTests
     }
 
     [Fact]
+    public void SummonedLife_FollowsTheCastDuration_NotTheRawSpellBase()
+    {
+        // vmangos Spell::EffectSummonTotem: pTotem->SetDuration(m_duration) (SpellEffects.cpp:4985).
+        // m_duration is CalculateDuration, so a duration modifier must move the unsummon.
+        using var kit = new TotemKit(summonDurationMs: 1000);
+        kit.Spells.RegisterValueModifier(new ExtendDuration(4_000));
+        (Player shaman, _) = kit.AddPlayer(1, 0, 0);
+        kit.Cast(shaman, TotemKit.EarthTotemSummon);
+
+        kit.Advance(1000);
+        Assert.NotNull(kit.Totems.GetTotem(shaman, TotemSlot.Earth));
+
+        kit.Advance(3900);
+        Assert.NotNull(kit.Totems.GetTotem(shaman, TotemSlot.Earth));
+
+        kit.Advance(200);
+        Assert.Null(kit.Totems.GetTotem(shaman, TotemSlot.Earth));
+    }
+
+    [Fact]
     public void PartyAreaAura_ReachesTheOwnersSubGroup_OnlyThroughTheOwnerAwareResolver()
     {
         using var kit = new TotemKit();
@@ -203,5 +223,11 @@ public sealed class TotemLifecycleTests
         (WorldOpcode _, byte[] despawn) = Assert.Single(packets, p => p.Opcode == WorldOpcode.SmsgGameobjectDespawnAnim);
         Assert.Equal(totem.Guid.Value, BitConverter.ToUInt64(despawn));
         Assert.DoesNotContain(packets, p => (ushort)p.Opcode is 0x412 or 0x413);
+    }
+
+    private sealed class ExtendDuration(int extraMs) : ISpellValueModifier
+    {
+        public int Modify(SpellValueKind kind, in SpellValueContext context, int value)
+            => kind == SpellValueKind.Duration ? value + extraMs : value;
     }
 }
