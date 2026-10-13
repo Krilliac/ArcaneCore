@@ -349,8 +349,11 @@ public sealed partial class PlayerInventory
             return true;
         }
 
+        // Backpack only, so the second pass can move the stack into a quiver and select it
+        // (vmangos CanStoreNewItem(INVENTORY_SLOT_BAG_0, NULL_SLOT), Player.cpp:633-635). Any bag
+        // here drops arrows into an already-worn quiver and never writes PLAYER_AMMO_ID.
         var dest = new List<ItemPosCount>();
-        if (CanStoreItem(InventorySlots.NullBag, InventorySlots.NullSlot, dest, template, amount, null, swap: false, out _, out _) == InventoryResult.Ok)
+        if (CanStoreItem(InventorySlots.Bag0, InventorySlots.NullSlot, dest, template, amount, null, swap: false, out _, out _) == InventoryResult.Ok)
         {
             StoreNewItem(dest, template, amount);
             return true;

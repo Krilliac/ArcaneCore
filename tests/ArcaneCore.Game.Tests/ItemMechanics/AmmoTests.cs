@@ -235,4 +235,19 @@ public sealed class AmmoTests
         player.Inventory.AddStartingItems();
         Assert.Equal(Arrow, player.Inventory.AmmoId);
     }
+
+    [Fact]
+    public void StartingItems_QuiverBeforeArrows_SelectsThatAmmo()
+    {
+        (Player player, _) = CreatePlayer();
+        var starting = new ItemTemplateStore(All, [new StartingItem(1, 1, LightQuiver, 1), new StartingItem(1, 1, RoughArrow, 100)]);
+        player.Inventory.Templates = starting;
+        player.Inventory.AddStartingItems();
+
+        // First pass keeps the arrows in the backpack; the second pass moves them into the quiver and selects them.
+        Assert.Equal(RoughArrow, player.Inventory.AmmoId);
+        Item arrows = player.Inventory.AllItems.Single(i => i.Entry == RoughArrow);
+        Assert.Equal(100u, arrows.Count);
+        Assert.Equal(LightQuiver, arrows.Container!.Entry);
+    }
 }
