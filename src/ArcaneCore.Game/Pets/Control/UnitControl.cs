@@ -35,6 +35,13 @@ internal sealed class UnitControlState
     /// <summary>vmangos Unit::m_invincibilityHpThreshold (Unit.h:480-508): damage never takes health below this; 0 = off.</summary>
     public uint InvincibilityHpThreshold;
 
+    /// <summary>
+    /// The client turned its far sight off (CMSG_FAR_SIGHT 0, vmangos Camera::ResetView(false)): the camera is back on the player while
+    /// PLAYER_FARSIGHT still names the view point, which CMSG_FAR_SIGHT 1 returns to. Holds the PLAYER_FARSIGHT value it was reset for,
+    /// so a later view point (a new value) is not affected; 0 = not reset.
+    /// </summary>
+    public ulong ViewResetFor;
+
     /// <summary>The creature AI that ran before the charm (restored when no creature system can build a fresh one).</summary>
     public Creatures.CreatureAI? PreviousAi;
 }
@@ -117,23 +124,45 @@ public static class UnitControl
             get
             {
                 ulong far = player.GetUInt64(UpdateFields.PlayerFarsight);
-                return far != 0 && player.Map?.FindObject(new ObjectGuid(far)) is { } eye ? eye : player;
+                if (far == 0 && Find(player) is { ViewResetFor: not 0 } state)
+                {
+                    state.ViewResetFor = 0; // the view ended; a later view of the same object starts unreset
+                }
+
+                return far != 0 && Find(player)?.ViewResetFor != far && player.Map?.FindObject(new ObjectGuid(far)) is { } eye ? eye : player;
             }
         }
+    }
+
+    /// <summary>
+    /// vmangos HandleFarSightOpcode (MiscHandler.cpp:1138-1155): with a PLAYER_FARSIGHT object on the map, 0 puts the camera back on the
+    /// player and 1 back on that object; the field itself is left as it is. Returns false when there is no such object.
+    /// </summary>
+    public static bool SetFarSightActive(Player player, bool active)
+    {
+        ulong far = player.GetUInt64(UpdateFields.PlayerFarsight);
+        if (far == 0 || player.Map?.FindObject(new ObjectGuid(far)) is null)
+        {
+            return false;
+        }
+
+        State(player).ViewResetFor = active ? 0 : far;
+        player.NeedsVisibilityUpdate = true;
+        return true;
     }
 
     /// <summary>The player whose camera looks from <paramref name="unit"/>: its possessor when that player's farsight is the unit.</summary>
     internal static Player? ViewerOf(WorldObject obj)
     {
         if (obj is Unit unit && Find(unit)?.Possessor is { IsEmpty: false } possessor && unit.Map?.FindPlayer(possessor) is { } player
-            && player.GetUInt64(UpdateFields.PlayerFarsight) == unit.Guid.Value)
+            && player.GetUInt64(UpdateFields.PlayerFarsight) == unit.Guid.Value && Find(player)?.ViewResetFor != unit.Guid.Value)
         {
             return player;
         }
 
         // SPELL_AURA_BIND_SIGHT (Mind Vision) and far sight points: the player who looks from the object.
         return SightWatchers.TryGetValue(obj, out Player? watcher) && watcher.IsInWorld && ReferenceEquals(watcher.Map, obj.Map)
-            && watcher.GetUInt64(UpdateFields.PlayerFarsight) == obj.Guid.Value ? watcher : null;
+            && watcher.GetUInt64(UpdateFields.PlayerFarsight) == obj.Guid.Value && Find(watcher)?.ViewResetFor != obj.Guid.Value ? watcher : null;
     }
 
     /// <summary>The player whose camera a bind-sight aura or far sight point moved to the object (vmangos Camera::SetView from a spell).</summary>

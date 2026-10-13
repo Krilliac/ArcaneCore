@@ -638,7 +638,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_PLAY_MUSIC` | `0x0277` | — | 4 | decoded |
 | `SMSG_PLAY_OBJECT_SOUND` | `0x0278` | — | 0 | — |
 | `CMSG_REQUEST_PET_INFO` | `0x0279` | handled | — | — |
-| `CMSG_FAR_SIGHT` | `0x027A` | unhandled | — | — |
+| `CMSG_FAR_SIGHT` | `0x027A` | handled | — | — |
 | `SMSG_SPELLDISPELLOG` | `0x027B` | — | 0 | — |
 | `SMSG_DAMAGE_CALC_LOG` | `0x027C` | — | 0 | — |
 | `CMSG_ENABLE_DAMAGE_LOG` | `0x027D` | unhandled | — | — |
