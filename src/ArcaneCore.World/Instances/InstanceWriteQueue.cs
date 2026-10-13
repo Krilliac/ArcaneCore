@@ -625,14 +625,6 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
     private async Task ExecuteWriteAsync(Work work)
     {
-        lock (_gate)
-        {
-            if (IsObsoleteUnderGate(work.Key, work.Epoch))
-            {
-                return;
-            }
-        }
-
         Exception? failure = await TryWriteAsync(work.Key, work.Value, MaxAttempts).ConfigureAwait(false);
         lock (_gate)
         {

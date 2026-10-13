@@ -285,8 +285,12 @@ internal sealed class SocialWorld : IAsyncDisposable
     public async Task BotJoinsAsync(string inviter, string invitee, Guild guild)
     {
         int before = guild.MemberCount;
-        Assert.True(await SendAsync(inviter, WorldOpcode.CmsgGuildInvite, SocialTestSupport.CString(invitee)));
-        Assert.True(await SendAsync(invitee, WorldOpcode.CmsgGuildAccept));
+        await Host.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotSocialPackets.Send((WorldSession)Host.World.FindOnlinePlayer(inviter)!.Session, WorldOpcode.CmsgGuildInvite, SocialTestSupport.CString(invitee)));
+            Assert.True(PlayerbotSocialPackets.Send((WorldSession)Host.World.FindOnlinePlayer(invitee)!.Session, WorldOpcode.CmsgGuildAccept, []));
+            return true;
+        });
         await Host.WaitForWorldAsync(() => guild.MemberCount == before + 1, $"{invitee} joins {guild.Name}");
     }
 
