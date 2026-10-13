@@ -203,6 +203,7 @@ public sealed class NearTeleportSink : ITeleportSink
         unit.Relocate(x, y, z, orientation, now);
         if (unit is Player player)
         {
+            player.ClearEmoteState(); // vmangos near TeleportTo (chair use included) ends a state emote
             player.NeedsVisibilityUpdate = true;
             player.Session.Send(
                 Protocol.WorldOpcode.MsgMoveTeleportAck,

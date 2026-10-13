@@ -372,6 +372,8 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
             orientation += 2 * MathF.PI;
         }
 
+        // vmangos Unit::SetPosition for a player (Unit.cpp:10672) -> Player::SetPosition: a spline step moves the player, so a state emote ends.
+        player.ClearEmoteState();
         player.Relocate(to.X, to.Y, to.Z, float.IsFinite(orientation) ? orientation : player.Orientation, _nowMs());
         player.NeedsVisibilityUpdate = true;
         flight.Expected = to;

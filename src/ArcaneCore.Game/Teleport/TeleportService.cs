@@ -493,6 +493,8 @@ public sealed class TeleportService
         arrived.Z = dest.Z;
         arrived.Orientation = dest.Orientation;
         player.ApplyMovement(arrived, _world.NowMs);
+        // Unit::TeleportPositionRelocation -> Player::SetPosition(..., teleport = true) (Unit.cpp:9855): positionChanged ends a state emote.
+        player.ClearEmoteState();
         if (LocomotionStates.TryGet(player, out LocomotionState state))
         {
             state.ResetFall();

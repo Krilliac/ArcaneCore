@@ -11,6 +11,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Chat;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -25,8 +26,8 @@ namespace ArcaneCore.World.Tests.Chat;
 public sealed class TextEmoteDbcTests
 {
     private static EmoteCatalog Catalog() => new(
-        [new TextEmoteRow(101, 3), new TextEmoteRow(86, 12), new TextEmoteRow(9, 14), new TextEmoteRow(34, 0)],
-        [new EmoteRow(3, 0, 0, 0), new EmoteRow(12, 0, 1, 3), new EmoteRow(14, 0, 1, 0)]);
+        [new TextEmoteRow(101, 3), new TextEmoteRow(86, 12), new TextEmoteRow(9, 14), new TextEmoteRow(10, 15), new TextEmoteRow(34, 0)],
+        [new EmoteRow(3, 0, 0, 0), new EmoteRow(12, 0, 1, 3), new EmoteRow(14, 0, 1, 0), new EmoteRow(15, 0, 1, 0)]);
 
     private static byte[] TextEmote(uint textEmote, uint number, ulong target)
     {
@@ -163,6 +164,186 @@ public sealed class TextEmoteDbcTests
 
             await watcher.ReadUntilAsync(WorldOpcode.SmsgEmote);
             Assert.False(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasAura(host.World.FindOnlinePlayer("Waver")!, Pretend)));
+        }
+    }
+
+    private static uint _clock = 5000;
+
+    private static async Task<byte[]> BlockAsync(WorldTestHost host, MovementFlags flags, float dx = 0, float turn = 0)
+    {
+        (float x, float y, float z, float o) = await host.PlayerStateAsync("Waver", p => (p.X, p.Y, p.Z, p.Orientation));
+        var writer = new PacketWriter(48);
+        new MovementInfo { Flags = flags, Time = _clock += 100, X = x + dx, Y = y, Z = z, Orientation = o + turn }.Write(writer);
+        return writer.ToArray();
+    }
+
+    private static Task<uint> EmoteState(WorldTestHost host) => host.PlayerStateAsync("Waver", p => p.GetUInt32(UpdateFields.UnitNpcEmotestate));
+
+    /// <summary>The UNIT_NPC_EMOTESTATE values in the Values updates (plain or compressed) among <paramref name="packets"/>.</summary>
+    private static List<uint> EmoteStatesIn(IEnumerable<(WorldOpcode Opcode, byte[] Payload)> packets)
+    {
+        var states = new List<uint>();
+        foreach ((WorldOpcode opcode, byte[] payload) in packets)
+        {
+            if (opcode is not (WorldOpcode.SmsgUpdateObject or WorldOpcode.SmsgCompressedUpdateObject))
+            {
+                continue;
+            }
+
+            var reader = new PacketReader(opcode == WorldOpcode.SmsgCompressedUpdateObject ? WorldTestClient.Inflate(payload) : payload);
+            uint blocks = reader.ReadUInt32();
+            reader.ReadByte();
+            for (uint i = 0; i < blocks; i++)
+            {
+                if (reader.ReadByte() != (byte)ObjectUpdateType.Values)
+                {
+                    break; // a create block: not what this reads
+                }
+
+                reader.ReadPackedGuid();
+                int words = reader.ReadByte();
+                uint[] mask = new uint[words];
+                for (int w = 0; w < words; w++)
+                {
+                    mask[w] = reader.ReadUInt32();
+                }
+
+                for (int index = 0; index < words * 32; index++)
+                {
+                    if ((mask[index >> 5] & (1u << (index & 31))) != 0)
+                    {
+                        uint value = reader.ReadUInt32();
+                        if (index == UpdateFields.UnitNpcEmotestate)
+                        {
+                            states.Add(value);
+                        }
+                    }
+                }
+            }
+        }
+
+        return states;
+    }
+
+    /// <summary>Every packet up to and including the Values update that carries UNIT_NPC_EMOTESTATE = 0 (read timeout per packet), then what follows it.</summary>
+    private static async Task<List<(WorldOpcode Opcode, byte[] Payload)>> ReadUntilStateEndsAsync(WorldTestClient client)
+    {
+        var seen = new List<(WorldOpcode Opcode, byte[] Payload)>();
+        while (!EmoteStatesIn(seen).Contains(0u))
+        {
+            seen.Add(await client.ReadAsync());
+        }
+
+        seen.AddRange(await client.CollectAsync());
+        return seen;
+    }
+
+    private static async Task DanceAsync(WorldTestHost host, WorldTestClient waver, WorldTestClient watcher)
+    {
+        await waver.SendAsync(WorldOpcode.CmsgTextEmote, TextEmote(9, 0, 0)); // a state emote
+        await watcher.ReadUntilAsync(WorldOpcode.SmsgTextEmote);
+        Assert.Equal(14u, await EmoteState(host));
+        await watcher.CollectAsync();
+    }
+
+    [Theory]
+    [InlineData(WorldOpcode.MsgMoveHeartbeat, MovementFlags.None, 1.0f)]      // the position changed (Player::SetPosition positionChanged)
+    [InlineData(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward, 0f)]  // MOVEFLAG_MASK_XZ on the block, in place
+    [InlineData(WorldOpcode.MsgMoveStartStrafeRight, MovementFlags.StrafeRight, 0f)]
+    public async Task AStateEmote_EndsWhenThePlayerMoves_AndObserversAreToldTheStateIsZero(WorldOpcode opcode, MovementFlags flags, float dx)
+    {
+        (WorldTestHost host, WorldTestClient waver, WorldTestClient watcher) = await StartAsync(withCatalog: true);
+        await using (host)
+        {
+            await DanceAsync(host, waver, watcher);
+
+            await waver.SendAsync(opcode, await BlockAsync(host, flags, dx));
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Waver")!.GetUInt32(UpdateFields.UnitNpcEmotestate) == 0, "the emote state to end");
+
+            List<(WorldOpcode Opcode, byte[] Payload)> seen = await ReadUntilStateEndsAsync(watcher);
+            Assert.Contains(seen, p => p.Opcode == opcode);
+            Assert.Contains(0u, EmoteStatesIn(seen)); // the update the watcher got carries UNIT_NPC_EMOTESTATE = 0
+        }
+    }
+
+    [Theory]
+    [InlineData(MovementFlags.None, 0f, 0f)]                // a stop in place
+    [InlineData(MovementFlags.PitchUp, 0f, 0f)]             // pitch is in MASK_MOVING but not MASK_XZ
+    [InlineData(MovementFlags.TurnLeft, 0f, 1f)]            // turning in place: the orientation alone does not end it
+    public async Task AStateEmote_SurvivesAStopAPitchAndATurnInPlace(MovementFlags flags, float dx, float turn)
+    {
+        (WorldTestHost host, WorldTestClient waver, WorldTestClient watcher) = await StartAsync(withCatalog: true);
+        await using (host)
+        {
+            await DanceAsync(host, waver, watcher);
+
+            await waver.SendAsync(WorldOpcode.MsgMoveHeartbeat, await BlockAsync(host, flags, dx, turn));
+            Assert.Contains(await watcher.CollectFromAsync(WorldOpcode.MsgMoveHeartbeat), p => p.Opcode == WorldOpcode.MsgMoveHeartbeat); // handled and relayed before the check
+            Assert.Equal(14u, await EmoteState(host));
+        }
+    }
+
+    [Fact]
+    public async Task AManagedBotsMovement_EndsAStateEmote_ThroughTheServerAppliedPath()
+    {
+        (WorldTestHost host, WorldTestClient waver, WorldTestClient watcher) = await StartAsync(withCatalog: true);
+        await using (host)
+        {
+            await DanceAsync(host, waver, watcher);
+
+            await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Waver")!;
+                var movement = new MovementInfo { Flags = MovementFlags.Forward, Time = 1, X = player.X, Y = player.Y, Z = player.Z, Orientation = player.Orientation };
+                return ArcaneCore.World.Handlers.MovementHandlers.MoveManagedBot((ArcaneCore.World.Net.WorldSession)player.Session, player, WorldOpcode.MsgMoveStartForward, movement);
+            });
+
+            Assert.Equal(0u, await EmoteState(host));
+            Assert.Contains(0u, EmoteStatesIn(await ReadUntilStateEndsAsync(watcher)));
+        }
+    }
+
+    [Fact]
+    public async Task ANearTeleport_EndsAStateEmote_WhenItArrives()
+    {
+        (WorldTestHost host, WorldTestClient waver, WorldTestClient watcher) = await StartAsync(withCatalog: true);
+        await using (host)
+        {
+            await DanceAsync(host, waver, watcher);
+            await waver.CollectAsync();
+
+            ulong guid = await host.PlayerStateAsync("Waver", p => p.Guid.Value);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Waver")!;
+                return host.WorldServices.GetRequiredService<TeleportFeature>().Teleports.TeleportTo(player, player.MapId, player.X + 5, player.Y, player.Z, player.Orientation);
+            });
+            await waver.ReadUntilAsync(WorldOpcode.MsgMoveTeleportAck);
+            Assert.Equal(14u, await EmoteState(host)); // still the same position until the client acknowledges (Unit.cpp:9855 runs on the ack)
+
+            var ack = new PacketWriter();
+            ack.WriteUInt64(guid);
+            ack.WriteUInt32(0);
+            ack.WriteUInt32(0);
+            await waver.SendAsync(WorldOpcode.MsgMoveTeleportAck, ack.ToArray());
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Waver")!.GetUInt32(UpdateFields.UnitNpcEmotestate) == 0, "the emote state to end");
+            Assert.Contains(0u, EmoteStatesIn(await ReadUntilStateEndsAsync(watcher)));
+        }
+    }
+
+    [Fact]
+    public async Task AnotherStateTextEmote_ReplacesTheEmoteState()
+    {
+        (WorldTestHost host, WorldTestClient waver, WorldTestClient watcher) = await StartAsync(withCatalog: true);
+        await using (host)
+        {
+            await waver.SendAsync(WorldOpcode.CmsgTextEmote, TextEmote(9, 0, 0));
+            await watcher.ReadUntilAsync(WorldOpcode.SmsgTextEmote);
+            Assert.Equal(14u, await EmoteState(host));
+
+            await waver.SendAsync(WorldOpcode.CmsgTextEmote, TextEmote(10, 0, 0));
+            await watcher.ReadUntilAsync(WorldOpcode.SmsgTextEmote);
+            Assert.Equal(15u, await EmoteState(host));
         }
     }
 
