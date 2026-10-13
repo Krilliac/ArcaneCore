@@ -793,7 +793,8 @@ public sealed partial class MapCombat
         }
 
         bool enterCombat = !ReferenceEquals(attacker, victim);
-        bool combatLink = enterCombat && startsCombat; // false: a hunter trap's hit on a player (vmangos Spell.cpp:1650)
+        // false: a hunter trap's hit on a player does not start combat (Spell.cpp:1650); the flag still refreshes (:1688).
+        bool combatLink = enterCombat && startsCombat;
         if (damage == 0)
         {
             bool suppressedSpellThreat = SuppressesSpellThreat(attacker, victim, threatSpell);
@@ -803,11 +804,7 @@ public sealed partial class MapCombat
                 RewardRage(ragePlayer, (uint)(cleanDamage * 0.75f), attacker: true, CombatEnvironment.For(_world));
             }
 
-            if (combatLink)
-            {
-                SetInCombatWithAggressor(victim, attacker);
-                SetInCombatWithVictim(attacker, victim);
-            }
+            LinkHostileHit(attacker, victim, combatLink, threatSpell);
 
             if (enterCombat && !suppressedSpellThreat)
             {
@@ -843,11 +840,7 @@ public sealed partial class MapCombat
             DamageTaken?.Invoke(attacker, victim, damage);
         }
 
-        if (combatLink)
-        {
-            SetInCombatWithAggressor(victim, attacker);
-            SetInCombatWithVictim(attacker, victim);
-        }
+        LinkHostileHit(attacker, victim, combatLink, threatSpell);
 
         if (direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } rager)
         {
@@ -1097,6 +1090,34 @@ public sealed partial class MapCombat
 
         unit.UnitFlags |= UnitFlags.InCombat;
         Track(unit);
+    }
+
+    /// <summary>
+    /// vmangos Unit::DealDamage's combat link, or the out-of-combat PvP flag when that link is skipped.
+    /// A hunter trap's hit on a player does not start combat (Spell.cpp:1650) but
+    /// <see cref="SetOutOfCombatWithVictim"/> still refreshes the attacker's flag (Spell.cpp:1688-1692).
+    /// A damage shield does neither (Unit::DealDamage ShouldEnterCombat, Unit.cpp:704).
+    /// </summary>
+    private void LinkHostileHit(Unit attacker, Unit victim, bool combatLink, SpellInfo? threatSpell)
+    {
+        if (combatLink)
+        {
+            SetInCombatWithAggressor(victim, attacker);
+            SetInCombatWithVictim(attacker, victim);
+        }
+        else if (!ReferenceEquals(attacker, victim) && threatSpell?.HasAura(AuraType.DamageShield) != true)
+        {
+            SetOutOfCombatWithVictim(attacker, victim);
+        }
+    }
+
+    /// <summary>vmangos Unit::SetOutOfCombatWithVictim: flag the attacker, do not enter combat (touchOnly).</summary>
+    private static void SetOutOfCombatWithVictim(Unit attacker, Unit victim)
+    {
+        if (attacker is Player player)
+        {
+            TogglePlayerPvpFlagOnAttackVictim(player, victim, touchOnly: true);
+        }
     }
 
     /// <summary>vmangos Unit::SetInCombatWithAggressor: the victim's PvP pulse and combat state (players linger 5.5 s).</summary>
