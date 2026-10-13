@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
@@ -113,6 +114,30 @@ public sealed class SkinningLifecycleTests
         rig.World.RunTick(100);
         Assert.Equal(0u, wolf.SkinningForOthersMs);
         Assert.True(rig.Loot.IsSkinnableBy(stranger, wolf));
+    }
+
+    [Fact]
+    public void APartyMemberBeyondLootRange_MaySkinDuringTheHeadStart()
+    {
+        // vmangos Creature::IsTappedBy (Creature.cpp:1615-1632) is the whole tap group, not the members who were
+        // within reward distance when the loot was rolled. Recipients exclude the far member; skinning must not.
+        using Rig rig = CreateRig();
+        var groups = new FakeGroups();
+        rig.Loot.Groups = groups;
+        rig.Map.Combat.DamageTaken += (attacker, victim, damage) => rig.Loot.OnCreatureDamaged(attacker, victim, damage);
+        (Player killer, _) = rig.Join(1);
+        (Player far, _) = rig.Join(2, 500, 0);
+        (Player stranger, _) = rig.Join(3, 1, 0);
+        groups.Create(LootMethod.FreeForAll, killer, far);
+
+        Creature wolf = rig.KillWolf(killer);
+
+        Assert.True(wolf.SkinningForOthersMs > 0);
+        Assert.Contains(killer.Guid, rig.Loot.FindLoot(wolf.Guid)!.Recipients);
+        Assert.DoesNotContain(far.Guid, rig.Loot.FindLoot(wolf.Guid)!.Recipients);
+        Assert.True(rig.Loot.IsSkinnableBy(killer, wolf));
+        Assert.True(rig.Loot.IsSkinnableBy(far, wolf));
+        Assert.False(rig.Loot.IsSkinnableBy(stranger, wolf));
     }
 
     [Fact]
