@@ -54,9 +54,11 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// with what it can do by itself while it waits for partners (<see cref="Groups.PlayerbotGroupCoordinator"/>).
     /// </summary>
     internal Func<uint, uint, bool>? HeldForGroup { get; set; }
+    internal Func<Player, uint, uint, bool>? AllSpawnsVisited { get; set; }
     internal uint QuestId { get; private set; }
     internal uint TargetEntry { get; private set; }
     internal uint PreferredCreatureEntry { get; private set; }
+    internal uint PreferredQuestId { get; private set; }
     internal uint PreferredItemUseId { get; private set; }
     internal uint PreferredItemUseQuestId { get; private set; }
     internal string StageName => _stage.ToString();
@@ -553,6 +555,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         public uint Progress;
         public uint ItemUseId;
         public ulong Key;
+        public bool Visited;
     }
 
     /// <summary>
@@ -579,6 +582,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
 
         PreferredCreatureEntry = chosen.Entry;
+        PreferredQuestId = chosen.Quest;
         PreferredItemUseId = chosen.ItemUseId;
         PreferredItemUseQuestId = chosen.ItemUseId != 0 ? chosen.Quest : 0u;
     }
@@ -607,11 +611,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (entry <= 0 || status.CreatureOrGOCount[index] >= required)
                     continue;
                 if (quest.ReqSpell[index] == 0 && Huntable(player, services, content, questId, (uint)entry, now))
-                    Consider(ref best, bot, questId, (uint)entry, status.CreatureOrGOCount[index]);
+                    Consider(ref best, bot, questId, (uint)entry, status.CreatureOrGOCount[index], 0,
+                        AllSpawnsVisited?.Invoke(player, (uint)entry, now) == true);
                 else if (IsItemUseCreatureObjective(quest, index)
                     && player.Inventory.GetItemCount(quest.Template.SrcItemId) > 0
                     && ItemUseHuntable(content, questId, (uint)entry, now))
-                    Consider(ref best, bot, questId, (uint)entry, status.CreatureOrGOCount[index], quest.Template.SrcItemId);
+                    Consider(ref best, bot, questId, (uint)entry, status.CreatureOrGOCount[index], quest.Template.SrcItemId,
+                        AllSpawnsVisited?.Invoke(player, (uint)entry, now) == true);
             }
 
             // An item objective is hunted at the creatures that drop the item.
@@ -636,7 +642,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     uint dropper = droppers[d];
                     if (content.GetSpawns(player.MapId, dropper).Count == 0 || content.FindTemplate(dropper) is not { } template
                         || template.Rank != 0 || template.MinLevel > player.Level + 2) continue;
-                    if (Huntable(player, services, content, questId, dropper, now)) Consider(ref best, bot, questId, dropper, have);
+                    if (Huntable(player, services, content, questId, dropper, now))
+                        Consider(ref best, bot, questId, dropper, have, 0,
+                            AllSpawnsVisited?.Invoke(player, dropper, now) == true);
                 }
             }
         }
@@ -658,11 +666,15 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             && Contention?.IsEntrySuspended(entry, now) != true
             && (Home is not { } home || content is not null && home.HasSpawnInside(content, entry));
 
-    private static void Consider(ref Objective best, ulong bot, uint questId, uint entry, uint progress, uint itemUseId = 0)
+    private static void Consider(ref Objective best, ulong bot, uint questId, uint entry, uint progress, uint itemUseId = 0, bool visited = false)
     {
         ulong key = PlayerbotContention.Mix(bot, ((ulong)questId << 32) | entry);
-        if (best.Entry != 0 && key >= best.Key) return;
-        best = new Objective { Entry = entry, Quest = questId, Progress = progress, ItemUseId = itemUseId, Key = key };
+        if (best.Entry != 0)
+        {
+            if (!best.Visited && visited) return;
+            if (best.Visited == visited && key >= best.Key) return;
+        }
+        best = new Objective { Entry = entry, Quest = questId, Progress = progress, ItemUseId = itemUseId, Key = key, Visited = visited };
     }
 
     /// <summary>

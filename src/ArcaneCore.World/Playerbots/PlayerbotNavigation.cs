@@ -242,6 +242,34 @@ internal static class PlayerbotNavigation
         return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, now), mark, ref wait, now, ref route);
     }
 
+    /// <summary>
+    /// Maximum flat shortfall (yards) between a blind wander leg's requested destination and the end of a navigated partial path.
+    /// A wander ray projected into a cliff wall, canyon wall, or steep slope gets a partial Detour corridor that ends at the wall
+    /// edge and slides the bot along the wall; refusing navigated wander routes that stop more than this short of their destination
+    /// makes the bot turn away from the wall instead of hugging it.
+    /// </summary>
+    internal const float WanderMaxShortfallYards = 8f;
+
+    /// <summary>
+    /// Plans a blind exploration wander leg toward <paramref name="destination"/>, refusing navigated partial routes on walkable ground
+    /// that stop more than <see cref="WanderMaxShortfallYards"/> short of <paramref name="destination"/> (into a wall or cliff).
+    /// </summary>
+    internal static PlanOutcome PlanWander(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
+        out PlayerbotRoute? route)
+    {
+        PlanOutcome outcome = PlanToward(player, destination, options, ref wait, now, out route);
+        if (outcome == PlanOutcome.Route && route is { Navigated: true, Points.Count: > 0 }
+            && !IsOnMeshFragment(player)
+            && player.Map is { } map && OnWalkableMesh(map, PlayerbotMotion.CurrentPosition(player))
+            && Vector2.Distance(Flat(route.Points[^1]), Flat(destination)) > WanderMaxShortfallYards)
+        {
+            route = null;
+            return PlanOutcome.Refused;
+        }
+
+        return outcome;
+    }
+
     private static PlanOutcome Outcome(bool planned, long mark, ref TileWait wait, uint now, ref PlayerbotRoute? route)
     {
         if (planned && route is not null)
@@ -419,7 +447,8 @@ internal static class PlayerbotNavigation
     }
 
     private static bool IsFragment(NavRegionGraph graph, int region)
-        => graph.ComponentSize(region) <= FragmentRegions && graph.ComponentPolygons(region) <= FragmentPolygons;
+        => (graph.ComponentSize(region) <= FragmentRegions || graph.PolygonCount > FragmentPolygons * 4)
+            && graph.ComponentPolygons(region) <= FragmentPolygons;
 
     /// <summary>
     /// The one straight move off a fragment (<see cref="IsOnMeshFragment"/>): a stepped terrain leg (floor within a yard per yard, in
@@ -487,6 +516,7 @@ internal static class PlayerbotNavigation
         // or below), and it is judged from that region; one with none in reach has from < 0 and gets false above. The lookup is the
         // graph's, so the answer costs no path search.
         return fromComponent != toComponent && !IsFragment(graph, from)
+            && !(graph.ComponentPolygons(to) > FragmentPolygons && (long)graph.ComponentPolygons(from) * 16 < graph.ComponentPolygons(to))
             && map.Collision.IsOutdoors(goal.X, goal.Y, goal.Z + 1f)
             && map.Collision.IsOutdoors(here.X, here.Y, here.Z + 1f);
     }
@@ -1230,7 +1260,8 @@ internal static class PlayerbotNavigation
         if (current.Complete || current.Points.Count < 2 || !PlayerbotMotion.IsActive(player) || !Finite(destination)) return false;
         Vector3 here = PlayerbotMotion.CurrentPosition(player);
         if (!PlanDirect(player, destination, destination, options, partial: true, out PlayerbotRoute? leg, out _, null, current.Points[^1])
-            || leg is null) return false;
+            || leg is null
+            || (leg.Navigated && Vector2.Distance(Flat(leg.Points[^1]), Flat(destination)) > WanderMaxShortfallYards)) return false;
         if (Guards.TryGetValue(player, out PlayerbotRisk? risk) && risk.Blocking(player, leg.Points, completedReturn: false) is not null)
             return false;
         chained = current.Then(here, leg);

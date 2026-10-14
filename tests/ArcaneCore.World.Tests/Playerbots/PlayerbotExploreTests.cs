@@ -445,6 +445,65 @@ public sealed class PlayerbotExploreTests
     public async Task StalledExplore_HomedBotAmongStrongCreatures_IsNotTeleported()
         => Assert.False(await StallExploringAsync(StrandedContent(fitting: false), homed: true));
 
+    [Fact]
+    public async Task PlanWander_RefusesPartialWallSlidingLegThatStopsShortOfDestination_AndTurnsImmediately()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } };
+        var brain = new PlayerbotBrain(session, options);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                // Any wander ray east (cos > 0, into the canyon wall at X=110) returns a partial path sliding along the wall to (110, end.Y)
+                // which is > 8 yards short of the 48-yard destination; rays away from the wall succeed cleanly.
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new EastWallPartialPathfinder(110f));
+
+                TileWait wait = default;
+                var intoWall = new Vector3(148f, 115f, 83.53f);
+                Assert.Equal(PlanOutcome.Refused, PlayerbotNavigation.PlanWander(player, intoWall, options, ref wait, host.World.NowMs, out PlayerbotRoute? refusedRoute));
+                Assert.Null(refusedRoute);
+
+                // First Explore think faces east (0 rad), hits the wall refusal, and increments _exploreRefusals to 1;
+                // the very next think switches immediately to full-circle golden-angle spread and walks away from the wall.
+                MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                bool walkedAway = false;
+                for (int think = 0; think < 6; think++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(2);
+                    explore.Invoke(brain, [player, 500u]);
+                    if (routeField.GetValue(brain) is PlayerbotRoute valid && valid.Points[^1].X < 95f)
+                    {
+                        walkedAway = true;
+                        break;
+                    }
+                }
+
+                Assert.True(walkedAway, "bot should immediately turn away from the wall after a refused partial wander leg");
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    private sealed class EastWallPartialPathfinder(float wallX) : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            if (end.X <= wallX)
+                return PathResult.StraightLine(start, end, PathType.Normal);
+
+            var clamped = new Vector3(wallX, end.Y, end.Z);
+            return PathResult.StraightLine(start, clamped, PathType.Normal | PathType.Incomplete);
+        }
+    }
+
     private sealed class ManualStrandClock : IWorldFeature
     {
         public void Attach(ArcaneCore.Game.Maps.WorldRuntime world) => world.UseManualClock();

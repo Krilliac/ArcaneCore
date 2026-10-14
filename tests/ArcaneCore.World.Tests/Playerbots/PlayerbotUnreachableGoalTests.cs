@@ -349,6 +349,32 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         Assert.Equal(PlanOutcome.Refused, outcome);
     }
 
+    [Fact]
+    public async Task SkipUnreachable_EscalatesEntrySuspensionOnSubsequentStrikes()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        PlayerbotWorldDestinations destinations = DestinationsOf(world);
+        PlayerbotSuspensions suspensions = destinations.Suspensions!;
+        await world.Host.OnWorldAsync(() =>
+        {
+            uint now = world.Host.World.NowMs;
+            Assert.False(destinations.Update(world.Player, 6, 500, preferredQuestId: 788));
+            Assert.Equal(1, suspensions.EntryStrikeCount(6));
+            Assert.True(suspensions.IsEntrySuspended(6, now + PlayerbotSuspensions.SuspendMs - 1));
+            Assert.True(destinations.TryTakeUnreachable(out PlayerbotWorldDestinations.UnreachableSkip firstSkip));
+            Assert.Equal(788u, firstSkip.Quest);
+
+            // Second unreachable check after the first 10-minute suspension expires escalates to strike 2 (20 minutes).
+            uint afterFirst = now + PlayerbotSuspensions.SuspendMs + 1;
+            Assert.True(destinations.SkipUnreachable(world.Player, 6, 20001, UnreachableSpawn, 788, afterFirst, returning: false, out _));
+            Assert.Equal(2, suspensions.EntryStrikeCount(6));
+            Assert.True(suspensions.IsEntrySuspended(6, afterFirst + PlayerbotSuspensions.SuspendMs + 1_000));
+            return true;
+        });
+    }
+
     private sealed class Content(CreatureContent content) : ICreatureDataStore
     {
         public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);

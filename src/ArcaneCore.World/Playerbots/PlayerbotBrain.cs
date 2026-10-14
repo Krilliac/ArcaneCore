@@ -91,6 +91,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private Func<int, int, bool>? _exploreBlockedFilter;
     private uint _exploreSearchAfter;
     private PlayerbotGoalKind _goal = PlayerbotGoalKind.Explore;
+    private PlayerbotGoalKind? _planningGoal;
     private long _lootStartedMs;
     private readonly Queue<(WorldOpcode Opcode, byte[] Payload)> _lootActions = new();
     private bool _lootResponseReceived;
@@ -392,13 +393,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
         _destinations.SetQuestAside ??= _quests.SetAside;
         _destinations.TeleportToBind ??= TeleportToBindPointForQuest;
-        _destinations.GoalOf ??= () => _goal;
+        _destinations.GoalOf ??= () => _planningGoal ?? _goal;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _town.Budget = _trainers.Budget = _riding.Budget = _budget; _economy.SpendBudget = _budget;
         _riding.Suspensions = _suspensions;
         _quests.Contention ??= _contention;
         _quests.OnContentionExhausted ??= RaiseContentionExhausted;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
+        _quests.AllSpawnsVisited ??= _destinations.HasAllSpawnsVisited;
         _destinations.ValidatePlanning(player);
         if (!player.IsInWorld) return;
         PlayerbotThinkProbe.Phase("brain");
@@ -942,7 +944,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (spellFeature?.System.GetState(player.Guid)?.CurrentCast is
                     { State: ArcaneCore.Game.Spells.SpellCastState.Preparing or ArcaneCore.Game.Spells.SpellCastState.Casting }) return;
                 if (_session.ManagedBudget is { Remaining: <= 0 }) return;
-                if (_destinations.Update(player, 0, interval))
+                _planningGoal = PlayerbotGoalKind.Quest;
+                bool questPlanned = _destinations.Update(player, 0, interval);
+                _planningGoal = null;
+                if (questPlanned)
                 {
                     _target = null;
                     AbandonRoute();
@@ -985,14 +990,19 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (_target is null)
             {
                 PlayerbotThinkProbe.Phase("grind destinations");
-                if (_destinations.Update(player, _quests.PreferredCreatureEntry, interval))
+                PlayerbotGoalKind huntGoal = _quests.PreferredCreatureEntry != 0 && _quests.PreferredItemUseId == 0
+                    ? PlayerbotGoalKind.Grind : PlayerbotGoalKind.Quest;
+                _planningGoal = huntGoal;
+                bool huntPlanned = _destinations.Update(player, _quests.PreferredCreatureEntry, interval, preferredQuestId: _quests.PreferredQuestId);
+                _planningGoal = null;
+                if (huntPlanned)
                 {
                     AbandonRoute();
-                    _goal = _quests.PreferredCreatureEntry != 0 && _quests.PreferredItemUseId == 0
-                        ? PlayerbotGoalKind.Grind : PlayerbotGoalKind.Quest;
+                    _goal = huntGoal;
                     TargetEntry = _destinations.TargetEntry;
                     if (_destinations.QuestId != 0) QuestId = _destinations.QuestId;
                     else if (_quests.PreferredItemUseQuestId != 0) QuestId = _quests.PreferredItemUseQuestId;
+                    else if (_quests.PreferredQuestId != 0) QuestId = _quests.PreferredQuestId;
                     return;
                 }
                 if (_destinations.WaitingForTiles) return; // the route's tiles are being read: keep the goal, plan again next think
@@ -2323,11 +2333,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         PlayerbotThinkProbe.Phase("explore candidates");
         if (TryExploreSpawns(player, elapsedMs)) return;
         // Wander onward: keep roughly the current facing (within +-60 degrees, golden-ratio spread so successive legs
-        // differ). Only after repeated refusals turn anywhere. The old golden-angle-from-zero choice sent each leg
+        // differ). Only after a refusal turn anywhere. The old golden-angle-from-zero choice sent each leg
         // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
         System.Numerics.Vector3 destination = WanderLegEnd(player, new(player.X, player.Y, player.Z), player.Orientation);
         PlayerbotThinkProbe.Phase("explore wander plan");
-        if (PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
+        if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
         {
             AbandonRoute();
             _roamDirection--; // the same leg again once the tile is in
@@ -2357,11 +2367,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     /// <summary>
     /// The end of the next wandering leg from <paramref name="from"/>, facing <paramref name="orientation"/>: roughly that facing (within
-    /// +-60 degrees, golden-ratio spread so successive legs differ). Only after repeated refusals turn anywhere. The old
-    /// golden-angle-from-zero choice sent each leg ~137 degrees from the last one, so a bot that lost its route every few thinks ran in
-    /// circles. Beyond 0.8 of the home radius the next leg heads back in instead of wandering further out; so does a leg that would end
-    /// out of a clipped home's zone (a wander across the Westfall-Duskwood border inside the circle). Back in is the centre first,
-    /// then, while legs are refused, a fan around it (InwardLeg). Takes the next direction of the rotation (<c>_roamDirection</c>).
+    /// +-60 degrees, golden-ratio spread so successive legs differ). After any refusal turn anywhere around the compass so the bot turns
+    /// away from a cliff or canyon wall immediately instead of probing into the same wall again. Beyond 0.8 of the home radius the next leg
+    /// heads back in instead of wandering further out; so does a leg that would end out of a clipped home's zone (a wander across the
+    /// Westfall-Duskwood border inside the circle). Back in is the centre first, then, while legs are refused, a fan around it (InwardLeg).
+    /// Takes the next direction of the rotation (<c>_roamDirection</c>).
     /// </summary>
     private static readonly float[] BorderDeflectDegrees = [45f, -45f, 90f, -90f, 135f, -135f];
 
@@ -2369,8 +2379,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         int attempt = _roamDirection++;
         float spread = (((attempt + (int)(player.Guid.Low % 7)) * 0.618034f) % 1f) - 0.5f;
-        float angle = _exploreRefusals >= 3
-            ? (attempt + player.Guid.Low) * 2.39996323f
+        float turnSign = (player.Guid.Low & 1) == 0 ? 1f : -1f;
+        float angle = _exploreRefusals >= 1
+            ? orientation + (turnSign * _exploreRefusals * 2.39996323f)
             : orientation + (spread * MathF.PI * 2f / 3f);
         var destination = new System.Numerics.Vector3(
             from.X + (MathF.Cos(angle) * ExploreLegYards),
@@ -2497,7 +2508,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             foreach (var entry in _exploreBlockedCells) { oldest = entry.Key; break; }
             _exploreBlockedCells.Remove(oldest);
         }
-        _exploreBlockedCells[key] = unchecked(_session.World.NowMs + 60_000u);
+        _exploreBlockedCells[key] = unchecked(_session.World.NowMs + 180_000u);
         _exploreCandidate = null;
         _exploreBestDistSq = float.PositiveInfinity;
         TargetEntry = 0;
@@ -2512,8 +2523,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private bool TryExploreSpawns(Player player, uint elapsedMs)
     {
-        // A named kill objective still owns travel and targeting. Static grinding is the idle fallback only.
-        if (_quests.PreferredCreatureEntry != 0) return false;
+        // Explore is only entered after _destinations.Update had no unvisited/reachable spawn for PreferredCreatureEntry;
+        // use the explore atlas to walk toward nearby level-appropriate spawns while the quest camp waits to respawn,
+        // instead of falling into blind 48-yard wander rays against surrounding hills/walls.
         uint mapId = player.Map!.MapId;
         if (!_options.AllowedMaps.Contains(mapId)) return false;
         var creatureFeature = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
@@ -2596,10 +2608,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         var destination = new System.Numerics.Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z);
         PlanOutcome atlasPlan = PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out _route);
         if (atlasPlan == PlanOutcome.Pending) return true;
+        float flatDistSq = (destination.X - player.X) * (destination.X - player.X) + (destination.Y - player.Y) * (destination.Y - player.Y);
         if (atlasPlan == PlanOutcome.Refused
             || _route is not { Points.Count: > 0 }
             || (System.Numerics.Vector3.DistanceSquared(new(player.X, player.Y, player.Z), _route.Points[^1]) <= 4f * 4f
-                && (destination.X - player.X) * (destination.X - player.X) + (destination.Y - player.Y) * (destination.Y - player.Y) > 65f * 65f))
+                && flatDistSq > 65f * 65f)
+            || (_route.Navigated && flatDistSq <= 175f * 175f
+                && (System.Numerics.Vector2.DistanceSquared(new(destination.X, destination.Y), new(_route.Points[^1].X, _route.Points[^1].Y)) > 15f * 15f
+                    || MathF.Abs(destination.Z - _route.Points[^1].Z) > 8f)))
         {
             BlockExploreCell(chosen);
             AbandonRoute();
@@ -2641,11 +2657,17 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         CreatureSpawn spawn = candidate.Spawn;
         Player player = _exploreSearchPlayer!;
+        uint now = _session.World.NowMs;
+        if (_suspensions.IsEntrySuspended(spawn.Entry, now) || _destinations.IsVisited(spawn.Guid, now))
+            return false;
         CreatureTemplate? template = _exploreSearchContent!.FindTemplate(spawn.Entry);
         if (template is null || !PlayerbotWorldDestinations.IsPresent(player, spawn)
             || _exploreSearchHome is { } home && (!home.Contains(spawn) || home.DistanceTo(spawn.X, spawn.Y) > home.ExploreRadius))
             return false;
         var point = new System.Numerics.Vector3(spawn.X, spawn.Y, spawn.Z);
+        if (PlayerbotNavigation.IsDeadEndPin(player, point)
+            || PlayerbotNavigation.IsUnreachableOnFoot(player, point, out _, out _))
+            return false;
         foreach (PlayerbotHazard hazard in _exploreSearchHazards)
             if (hazard.Covers(point)) return false;
         return !_exploreSearchAtlas!.HasStrongHazard(candidate, player.Level, _exploreThreatFilter!);

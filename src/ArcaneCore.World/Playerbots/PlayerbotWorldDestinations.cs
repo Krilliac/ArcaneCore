@@ -233,7 +233,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (!_entries.Any(other => other.Entry == entry && !IsBlocked(other.Spawn.Guid, now) && IsPresent(player, other.Spawn)))
         {
             entrySetAside = true;
-            Suspensions?.SuspendEntry(entry, now);
+            if (Suspensions is { } suspensions)
+            {
+                if (suspensions.EntryStrikeCount(entry) > 0)
+                    suspensions.SuspendEntryEscalating(entry, now);
+                else
+                    suspensions.SuspendEntry(entry, now);
+            }
         }
 
         if (_unreachableReportedAt.TryGetValue(entry, out uint last) && unchecked(now - last) < UnreachableReportMs) return true;
@@ -295,7 +301,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal Action? PreparedPlanProbe { get; set; }
 
     /// <summary>Returns true while travel owns the intent: a movement attempt or pending navigation; false permits another goal.</summary>
-    internal bool Update(Player player, uint preferredCreatureEntry, uint elapsedMs, uint returnQuestId = 0)
+    internal bool Update(Player player, uint preferredCreatureEntry, uint elapsedMs, uint returnQuestId = 0, uint preferredQuestId = 0)
     {
         WaitingForTiles = false;
         if (Volatile.Read(ref _permanentlyStopped) != 0 || (player.IsInWorld && !player.IsAlive))
@@ -402,6 +408,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (Suspended(entry.Entry)) continue;
             if (!Eligible(entry.Entry, preferredCreatureEntry, player, services, state, returnQuestId, SkipQuest, loot,
                     Home, _content, GiverInHome(entry.Spawn), out uint questId)) continue;
+            if (questId == 0 && preferredCreatureEntry != 0) questId = preferredQuestId;
             if (Seen(player, entry.Entry, returnQuestId, hunting))
             {
                 if (returnQuestId == 0 && preferredCreatureEntry == 0) SettleArrival(player, entry.Entry);
@@ -639,6 +646,28 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         }
 
         return any && visited;
+    }
+
+    /// <summary>
+    /// Whether every present in-home spawn of <paramref name="entry"/> on the bot's map is currently marked visited (empty camp waiting for respawn).
+    /// </summary>
+    internal bool HasAllSpawnsVisited(Player player, uint entry, uint now)
+    {
+        if (entry == 0 || _visited.Count == 0) return false;
+        CreatureContent? content = _content ?? _session.Services.GetService<CreatureWorldFeature>()?.Content;
+        if (content is null) return false;
+        IReadOnlyList<CreatureSpawn> spawns = content.GetSpawns(player.MapId, entry);
+        if (spawns.Count == 0) return false;
+        bool any = false;
+        for (int i = 0; i < spawns.Count; i++)
+        {
+            CreatureSpawn spawn = spawns[i];
+            if (!IsPresent(player, spawn) || (Home is { } home && !home.Contains(spawn))) continue;
+            any = true;
+            if (!IsVisited(spawn.Guid, now)) return false;
+        }
+
+        return any;
     }
 
     private bool GiverInHome(CreatureSpawn spawn) => Home is not { } home || home.Contains(spawn);
