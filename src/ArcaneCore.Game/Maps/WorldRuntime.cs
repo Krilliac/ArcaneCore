@@ -3,6 +3,7 @@ using System.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.Kernel.Characters;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Maps;
@@ -68,6 +69,9 @@ public sealed class WorldRuntime : IDisposable
     public Scripting.ScriptHookRegistry Scripts { get; } = new();
 
     public WorldRuntimeOptions Options { get; }
+
+    /// <summary>The durable characters-database authority assigned before features attach and world startup.</summary>
+    public CharacterOwnershipToken? CharacterOwnership { get; set; }
 
     /// <summary>Optional native player display geometry, applied before <see cref="Map.AddPlayer"/>.</summary>
     public Func<uint, ArcaneCore.Game.Spells.DisplayModelGeometry?>? PlayerDisplayModelResolver { get; set; }
@@ -465,6 +469,8 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>Put a loaded player into its map and the online registry (world thread).</summary>
     public void AddPlayer(Player player)
     {
+        if (player.CharacterOwnership is null && CharacterOwnership is { } ownership)
+            player.CharacterOwnership = ownership;
         if (!_online.TryAdd(player.Guid, player))
         {
             throw new InvalidOperationException($"{player.Name} ({player.Guid}) is already online");

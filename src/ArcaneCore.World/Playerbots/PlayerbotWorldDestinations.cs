@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Characters;
@@ -15,17 +16,20 @@ using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 
 namespace ArcaneCore.World.Playerbots;
 
 /// <summary>World-thread destination hints for static quest/objective spawns.</summary>
-internal sealed class PlayerbotWorldDestinations(WorldSession session, PlayerbotOptions options)
+internal sealed class PlayerbotWorldDestinations(WorldSession session, PlayerbotOptions options, PlayerbotNavigationExecutor? executor = null)
 {
     private const int MaxEntryScan = 128;
     private const uint BackoffMs = 2_000;
     private const uint FarSpawnBlockMs = 30_000;
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
+    private readonly PlayerbotNavigationExecutor? _executor = executor;
     private readonly PlayerbotQuestTripFeasibility _trip = new();
     private readonly List<DestinationEntry> _entries = [];
     private readonly HashSet<uint> _blockedSpawns = [];
@@ -49,6 +53,37 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private int _failedPlans;
     private Vector3 _lastPosition;
     private uint _stuckMs;
+    private PlayerbotNavigationJob? _pendingNavigation;
+    private PendingIdentity? _pendingIdentity;
+    private uint _pendingEntry;
+    private uint _pendingSpawnGuid;
+    private PlayerbotAsyncNavigationPlan? _navigationPlan;
+    private IDisposable? _planLease;
+    private PlayerbotNavigationRequest? _awaitingRequest;
+    private bool _planningDeferred;
+    private int _permanentlyStopped;
+
+    internal bool IsPlanning => _navigationPlan is not null || _planningDeferred;
+
+    internal void Stop()
+    {
+        ClearRoute();
+    }
+
+    internal void Dispose()
+    {
+        Interlocked.Exchange(ref _permanentlyStopped, 1);
+        Stop();
+    }
+
+    internal void CancelPlanning() => ClearNavigation();
+
+    internal void ValidatePlanning(Player player)
+    {
+        if (_pendingIdentity is { } pending && (!player.IsAlive || !player.IsInWorld
+            || !ReferenceEquals(player, pending.Player) || !ReferenceEquals(player.Map, pending.Map)
+            || player.Combat.IsInCombat)) ClearNavigation();
+    }
 
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
@@ -256,12 +291,23 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     private TileWait _tileWait;
 
-    /// <summary>Returns true only when a normal movement action was attempted.</summary>
+    /// <summary>Test seam: run on the world thread right after an answered async plan was replayed (a test records a pending tile lookup that the replay would have met here).</summary>
+    internal Action? PreparedPlanProbe { get; set; }
+
+    /// <summary>Returns true while travel owns the intent: a movement attempt or pending navigation; false permits another goal.</summary>
     internal bool Update(Player player, uint preferredCreatureEntry, uint elapsedMs, uint returnQuestId = 0)
     {
         WaitingForTiles = false;
-        if (!_options.Enabled || !player.IsInWorld || !player.IsAlive || player.Map is not { } map || elapsedMs == 0)
+        if (Volatile.Read(ref _permanentlyStopped) != 0 || (player.IsInWorld && !player.IsAlive))
+        {
+            // Stopped for good, or dead: the route and the trip are over.
+            Stop();
             return false;
+        }
+
+        // Transient guards (disabled, not in the world for a moment, no map, a zero step) leave the route and the trip alone, as before the lanes.
+        if (!_options.Enabled || !player.IsInWorld || player.Map is not { } map || elapsedMs == 0) return false;
+        _planningDeferred = false;
         uint now = _session.World.NowMs;
         if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue) return false;
         if (_backoffUntil != 0) _backoffUntil = 0;
@@ -273,7 +319,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             NoteArrival(player, preferredCreatureEntry, now);
             if (_route is not null && _routeTarget == preferredCreatureEntry && IsVisited(_routeSpawnGuid, now)) ClearRoute();
         }
-
+        if (ConsumeNavigation(player, map.MapId, preferredCreatureEntry, returnQuestId)) return true;
+        if (_pendingNavigation is not null) return true;
         LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
         if (_route is not null)
         {
@@ -368,7 +415,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // and the destination plans again from the other platform's exit (PlayerbotTram). A low-level bot with no home takes no
             // tram or lift trip (TransitAllowed): the live fresh launch sent about 76 level 1 bots to Stormwind quests by the tram.
             bool transit = TransitAllowed(Home, player.Level, _options.Population);
-            if (transit && PlayerbotTram.TryBegin(_session, player, destination, TramZoneAt))
+            if (_navigationPlan is null && transit && PlayerbotTram.TryBegin(_session, player, destination, TramZoneAt))
             {
                 ClearRoute();
                 TargetEntry = entry.Entry;
@@ -381,7 +428,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // drives the ride from the next think, and the destination plans again from the other landing (PlayerbotElevator). When the
             // lift's own mesh check found the way on foot, that route is walked: still one path query this think.
             PlayerbotRoute? walk = null;
-            if (transit && PlayerbotElevator.TryBegin(_session, player, destination, _options, out walk))
+            if (_navigationPlan is null && transit && PlayerbotElevator.TryBegin(_session, player, destination, _options, out walk))
             {
                 ClearRoute();
                 TargetEntry = entry.Entry;
@@ -393,7 +440,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // A long trip between two flight path nodes the bot knows and can pay for (PlayerbotTaxi): the brain drives it from the next
             // think (walk to the flight master, fly, land), and the destination plans again from where the bot lands. A lift's own walk
             // (above) is taken as it is; the tram and the lift keep their precedence.
-            if (walk is null && PlayerbotTaxi.TryTravelByTaxi(_session, player, player.Map!.MapId, destination, _options) == TaxiTravel.Traveling)
+            if (_navigationPlan is null && walk is null && PlayerbotTaxi.TryTravelByTaxi(_session, player, player.Map!.MapId, destination, _options) == TaxiTravel.Traveling)
             {
                 ClearRoute();
                 TargetEntry = entry.Entry;
@@ -403,7 +450,6 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
 
             PlayerbotRoute? route = walk;
-            PlanOutcome planned = PlanOutcome.Route;
             bool returning = returnQuestId != 0 && returnQuestId == questId;
             bool friendlyTown = returning && FriendlyTownEnder(player, entry.Entry);
             // A spawn in a part of the map no walk joins to the bot's (the region graph's components) is skipped without a path query or a
@@ -411,7 +457,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // return (the hazard and set-aside rules there are their own). The skip costs no path search, so the next spawn is judged in
             // this think; when no other spawn of the entry is left to try, the entry and the quest are set aside at once without
             // counting towards abandoning the quest (PlayerbotSuspensions.SuspendQuest).
-            if (route is null && SkipUnreachable(player, entry.Entry, entry.Spawn.Guid, destination, questId, now, returning, out bool entrySetAside))
+            if (route is null && _navigationPlan is null && SkipUnreachable(player, entry.Entry, entry.Spawn.Guid, destination, questId, now, returning, out bool entrySetAside))
             {
                 // Only when every objective of the quest is set aside too is the quest: another creature of it may still be reachable.
                 if (entrySetAside) SetAsideQuestsOfUnreachable(entry.Entry, questId, now, player, services, state, loot);
@@ -419,7 +465,47 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 continue;
             }
 
-            if (route is null)
+            PlanOutcome planned = route is not null ? PlanOutcome.Route : PlanOutcome.Refused;
+            if (_navigationPlan is { } plan)
+            {
+                if (_pendingEntry != entry.Entry || _pendingSpawnGuid != entry.Spawn.Guid)
+                {
+                    ClearNavigation();
+                    _planningDeferred = true;
+                    return true;
+                }
+                if (planned != PlanOutcome.Route)
+                {
+                    long pendingMark = PlayerbotNavigation.PendingMark;
+                    bool prepared = PlayerbotNavigation.TryPlanTowardPrepared(player, destination, _options, plan,
+                        out route, out bool deferred, completedQuestReturn: returning, friendlyTownEnder: friendlyTown, nowMs: now);
+                    PreparedPlanProbe?.Invoke();
+                    if (!deferred)
+                    {
+                        // The world-thread parts of a prepared plan (the region graph's locate) can still meet a tile being read.
+                        if (prepared) _tileWait.Reset();
+                        planned = prepared ? PlanOutcome.Route
+                            : PlayerbotNavigation.PendingSince(pendingMark) && _tileWait.Hold(now) ? PlanOutcome.Pending : PlanOutcome.Refused;
+                    }
+
+                    if (deferred)
+                    {
+                        _awaitingRequest = plan.NextRequest;
+                        if (_awaitingRequest is null) ClearNavigation();
+                        else SubmitAwaitingNavigation();
+                        _planningDeferred = true;
+                        return true;
+                    }
+                }
+                // A pending replay keeps the answered plan: the next think replays it (the tile is read by then) instead of asking the worker
+                // again, so the wait (_tileWait) runs on from its first hold and is bounded by TileWait.MaxMs.
+                if (planned != PlanOutcome.Pending) ClearNavigation();
+            }
+            else if (planned != PlanOutcome.Route && TryBeginNavigation(player, map, destination, entry, questId, preferredCreatureEntry, returnQuestId))
+            {
+                return true;
+            }
+            else if (planned != PlanOutcome.Route)
                 planned = PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out route,
                     completedQuestReturn: returning, friendlyTownEnder: friendlyTown);
             if (planned == PlanOutcome.Pending)
@@ -1001,10 +1087,129 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private void ClearRoute(bool keepTrip = false)
     {
         if (!keepTrip) { _travelEntry = 0; _travelQuest = 0; }
+        ClearNavigation();
         _route = null;
         _routeTarget = default;
         _routeSpawnGuid = 0;
     }
+
+    private void ClearNavigation()
+    {
+        _pendingNavigation?.Dispose();
+        _pendingNavigation = null;
+        _pendingIdentity = null;
+        _navigationPlan = null;
+        _awaitingRequest = null;
+        _planLease?.Dispose();
+        _planLease = null;
+        _planningDeferred = false;
+    }
+
+    private bool TryBeginNavigation(Player player, Map map, Vector3 destination, DestinationEntry entry, uint questId,
+        uint preferredEntry, uint returnQuestId)
+    {
+        if (Volatile.Read(ref _permanentlyStopped) != 0) return true;
+        if (_executor is null || Vector3.Distance(new(player.X, player.Y, player.Z), destination) <= PlayerbotNavigation.NearYards)
+            return false;
+        if (_navigationPlan is not null) return true;
+        if (map.Collision.Pathfinder is not NavMeshPathfinder nav) return false;
+        PathOptions pathOptions = new() { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes,
+            AllowPartial = true, MaxPoints = Math.Max(2, _options.MaxPathPoints), MaxSearchNodes = PlayerbotNavigation.MaxSearchNodes,
+            LoadTiles = true };
+        NavRegionGraph? graph = nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        var request = new PlayerbotNavigationRequest(map.MapId, PlayerbotMotion.CurrentPosition(player), destination, pathOptions,
+            graph, _options.MaxRouteYards, _options.MaxPathPoints, nav.Dataset);
+        TargetEntry = entry.Entry;
+        QuestId = questId;
+        if (!_executor.TryAcquirePlan(out IDisposable lease))
+        {
+            _planningDeferred = true;
+            return true;
+        }
+        _planLease = lease;
+        _navigationPlan = new PlayerbotAsyncNavigationPlan(map.MapId, request.Start, request.Dataset);
+        _awaitingRequest = request;
+        _pendingIdentity = new(player, map, nav, _content, _contentVersion, _quests, Home, player.Level,
+            preferredEntry, returnQuestId, questId, request.Start, graph, _options.MaxRouteYards, _options.MaxPathPoints);
+        _pendingEntry = entry.Entry;
+        _pendingSpawnGuid = entry.Spawn.Guid;
+        SubmitAwaitingNavigation();
+        if (Volatile.Read(ref _permanentlyStopped) != 0) ClearNavigation();
+        return true;
+    }
+
+    private void SubmitAwaitingNavigation()
+    {
+        if (_pendingNavigation is null && _awaitingRequest is { } request && _executor is not null
+            && Volatile.Read(ref _permanentlyStopped) == 0
+            && _executor.TrySubmit(request, out PlayerbotNavigationJob job))
+        {
+            _pendingNavigation = job;
+            if (Volatile.Read(ref _permanentlyStopped) != 0) ClearNavigation();
+        }
+    }
+
+    private bool ConsumeNavigation(Player player, uint mapId, uint preferredEntry, uint returnQuestId)
+    {
+        if (_navigationPlan is not { } plan) return false;
+        if (_pendingIdentity is not { } identity || !ReferenceEquals(player, identity.Player)
+            || !ReferenceEquals(player.Map, identity.Map) || !player.IsInWorld || !player.IsAlive
+            || !ReferenceEquals(player.Map?.Collision.Pathfinder, identity.Pathfinder)
+            || !ReferenceEquals(_content, identity.Content) || _contentVersion != identity.ContentVersion
+            || !ReferenceEquals(_quests, identity.Quests) || !ReferenceEquals(Home, identity.Home)
+            || player.Level != identity.Level || preferredEntry != identity.PreferredEntry || returnQuestId != identity.ReturnQuestId
+            || _options.MaxRouteYards != identity.MaxRouteYards || _options.MaxPathPoints != identity.MaxPathPoints
+            || Suspended(_pendingEntry)
+            || Vector3.DistanceSquared(PlayerbotMotion.CurrentPosition(player), identity.Start) > 1f)
+        {
+            ClearNavigation();
+            _planningDeferred = true;
+            return true;
+        }
+        if (_pendingNavigation is not { } job)
+        {
+            if (_awaitingRequest is null) return false;
+            SubmitAwaitingNavigation();
+            return true;
+        }
+        if (!job.Completion.IsCompleted) return true;
+        PlayerbotNavigationResult result = job.Completion.GetAwaiter().GetResult();
+        job.Dispose();
+        _pendingNavigation = null;
+        if (result.Status != PlayerbotNavigationResultStatus.Completed || result.Path is null
+            || !ReferenceEquals(identity.RegionGraph,
+                identity.Pathfinder.RegionGraph(mapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)))
+        {
+            ClearNavigation();
+            _planningDeferred = true;
+            return true;
+        }
+        DestinationEntry? current = _entries.FirstOrDefault(entry => entry.Spawn.Guid == _pendingSpawnGuid && entry.Entry == _pendingEntry);
+        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
+        LootContent? loot = _session.Services.GetService<GameObjectLootFeature>()?.LootContent;
+        if (current is null || !IsPresent(player, current.Spawn) || VisibleTarget(player, current.Entry, returnQuestId)
+            || !Eligible(current.Entry, preferredEntry, player, services, services?.StateOf(player), returnQuestId, SkipQuest, loot,
+                Home, _content, GiverInHome(current.Spawn), out uint questId)
+            || questId != identity.QuestId)
+        {
+            ClearNavigation();
+            _planningDeferred = true;
+            return true;
+        }
+        if (_awaitingRequest is not { } completed || !plan.AddResult(completed, result))
+        {
+            ClearNavigation();
+            _planningDeferred = true;
+            return true;
+        }
+        _awaitingRequest = null;
+        return false;
+    }
+
+    private sealed record PendingIdentity(Player Player, Map Map, NavMeshPathfinder Pathfinder,
+        CreatureContent? Content, int ContentVersion, QuestStore? Quests, PlayerbotHomeArea? Home, uint Level,
+        uint PreferredEntry, uint ReturnQuestId, uint QuestId, Vector3 Start, NavRegionGraph? RegionGraph,
+        float MaxRouteYards, int MaxPathPoints);
 
     private void Backoff(uint now)
     {

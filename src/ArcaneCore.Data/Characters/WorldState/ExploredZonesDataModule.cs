@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -86,6 +87,7 @@ public sealed class EfExploredZonesStore(CharacterDbContext db) : IExploredZones
     }
 
     public async Task DeleteAsync(int characterId, CancellationToken cancellationToken = default)
-        => await db.Set<ExploredZonesEntity>().Where(r => r.CharacterId == characterId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        => await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<ExploredZonesEntity>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 }

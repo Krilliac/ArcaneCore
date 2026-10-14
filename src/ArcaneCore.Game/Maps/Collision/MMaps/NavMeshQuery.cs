@@ -273,6 +273,7 @@ public static class NavMeshQuery
     {
         ArgumentNullException.ThrowIfNull(mesh);
         ArgumentNullException.ThrowIfNull(options);
+        options.CancellationToken.ThrowIfCancellationRequested();
         // The node list, index, closed flags, open queue and neighbour buffer are reused across queries on this thread (a bot query
         // grows them to up to 32 768 nodes); a nested query (a tile loader that paths) gets fresh ones.
         SearchScratch scratch = t_scratch is { InUse: false } cached ? cached : new SearchScratch();
@@ -341,6 +342,11 @@ public static class NavMeshQuery
 
         while (goal < 0 && open.TryDequeue(out int current, out float priority))
         {
+            if ((expansions & 31) == 0)
+            {
+                options.CancellationToken.ThrowIfCancellationRequested();
+            }
+
             // A node re-queued at a lower total leaves its older, dearer entry behind.
             if (closed[current] || priority > nodes[current].Total)
             {
@@ -360,6 +366,11 @@ public static class NavMeshQuery
             mesh.CollectNeighbours(node.Poly, neighbours);
             foreach ((NavPolyRef next, Vector3 left, Vector3 right, byte crossSide) in neighbours)
             {
+                if ((expansions & 31) == 0)
+                {
+                    options.CancellationToken.ThrowIfCancellationRequested();
+                }
+
                 if (next == parent || !next.Tile.Passes(next.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags))
                 {
                     continue;
@@ -415,6 +426,7 @@ public static class NavMeshQuery
             }
         }
 
+        options.CancellationToken.ThrowIfCancellationRequested();
         bool complete = goal >= 0;
         PathSearchCounters.RecordSearch(nodes.Count, expansions, capped);
         var corridor = new List<(NavPolyRef, Vector3, Vector3)>();

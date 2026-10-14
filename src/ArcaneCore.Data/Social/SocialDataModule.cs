@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Social;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -141,6 +142,7 @@ public sealed class SocialDataModule : IDataModule, ICharacterDataCleanup
     internal static async Task DeleteReferencesOfDeletedCharacterAsync(
         CharacterDbContext db, int characterId, CancellationToken cancellationToken)
     {
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // deletes only the rows of an id with no characters row: the deletion lifetime fence is token-independent
         await db.Set<CharacterSocialRow>()
             .Where(r => (r.CharacterId == characterId || r.OtherId == characterId) && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);

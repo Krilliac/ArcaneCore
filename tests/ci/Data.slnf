@@ -2,6 +2,7 @@
   "solution": {
     "path": "../../ArcaneCore.slnx",
     "projects": [
+      "tests/ArcaneCore.Data.ProcessRunner/ArcaneCore.Data.ProcessRunner.csproj",
       "tests/ArcaneCore.Data.Tests/ArcaneCore.Data.Tests.csproj"
     ]
   }

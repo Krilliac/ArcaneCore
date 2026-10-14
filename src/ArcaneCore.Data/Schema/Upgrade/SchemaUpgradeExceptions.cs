@@ -30,14 +30,15 @@ public sealed class SchemaPolicyException(string message, SchemaState state, int
 
     public int CodeVersion { get; } = codeVersion;
 
-    internal static string MissingDatabaseMessage(SchemaDefinition definition)
-        => $"The {definition.Component} database does not exist and the schema policy Never creates nothing. " +
+    internal static string MissingDatabaseMessage(SchemaDefinition definition, bool validateOnly = false)
+        => $"The {definition.Component} database does not exist (missing {definition.VersionTable} / schema_versions) and " +
+           $"{(validateOnly ? "validate-only mode (the schema policy Never)" : "the schema policy Never")} creates nothing. " +
            $"Create it with 'arcane-db upgrade' (docs/ops/database-upgrade.md) or set Database:Upgrade:Policy to CreateOnly or Always.";
 
     /// <summary>Refuse a database state the policy does not allow; states the normal path refuses itself (newer, unknown) pass through.</summary>
-    internal static void ThrowIfForbidden(SchemaPolicy policy, SchemaPlan plan)
+    internal static void ThrowIfForbidden(SchemaPolicy policy, SchemaPlan plan, bool validateOnly = false)
     {
-        if (policy == SchemaPolicy.Always)
+        if (policy == SchemaPolicy.Always && !validateOnly)
         {
             return;
         }
@@ -45,7 +46,7 @@ public sealed class SchemaPolicyException(string message, SchemaState state, int
         bool allowed = plan.State switch
         {
             SchemaState.Current or SchemaState.Newer or SchemaState.Unknown => true,
-            SchemaState.Missing or SchemaState.Fresh or SchemaState.Creating or SchemaState.NoVersionRow => policy == SchemaPolicy.CreateOnly,
+            SchemaState.Missing or SchemaState.Fresh or SchemaState.Creating or SchemaState.NoVersionRow => !validateOnly && policy == SchemaPolicy.CreateOnly,
             _ => false,
         };
         if (allowed)
@@ -53,10 +54,13 @@ public sealed class SchemaPolicyException(string message, SchemaState state, int
             return;
         }
 
-        string have = plan.DatabaseVersion is { } v ? $"schema version {v}" : $"no complete schema ({plan.State})";
+        string have = plan.DatabaseVersion is { } v
+            ? $"schema version {v}"
+            : $"no complete schema ({plan.State}; {plan.Component}_schema / schema_versions missing or uninitialized)";
+        string modeText = validateOnly ? $"validate-only mode (the schema policy {policy})" : $"the schema policy {policy}";
         string message = plan.State == SchemaState.Missing
-            ? MissingDatabaseMessage(new SchemaDefinition { Component = plan.Component, CurrentVersion = plan.CodeVersion, Version1Tables = [] })
-            : $"The {plan.Component} database has {have}, this build needs schema version {plan.CodeVersion}; the schema policy {policy} " +
+            ? MissingDatabaseMessage(new SchemaDefinition { Component = plan.Component, CurrentVersion = plan.CodeVersion, Version1Tables = [] }, validateOnly)
+            : $"The {plan.Component} database has {have}, this build needs schema version {plan.CodeVersion}; {modeText} " +
               "does not create or upgrade an existing database. Run 'arcane-db upgrade' with every daemon stopped " +
               "(docs/ops/database-upgrade.md), or set Database:Upgrade:Policy to Always.";
         throw new SchemaPolicyException(message, plan.State, plan.DatabaseVersion, plan.CodeVersion);

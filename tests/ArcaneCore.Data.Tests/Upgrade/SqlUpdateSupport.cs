@@ -180,6 +180,39 @@ internal static class SqlUpdateSupport
         return text.ToString();
     }
 
+    /// <summary>
+    /// Every row of every table a declared <see cref="EnsureRowChange"/> seeds, ordered by the key column, as comparable text.
+    /// Values are typed alike across engines (a boolean prints as 0/1 whatever the column's storage).
+    /// </summary>
+    public static async Task<string> SeedRowsAsync(DbContext db, SchemaDefinition definition)
+    {
+        await using ConnectionScope scope = await ConnectionScope.OpenAsync(db);
+        var text = new StringBuilder();
+        foreach (IGrouping<string, EnsureRowChange> table in definition.Steps.SelectMany(s => s.Changes).OfType<EnsureRowChange>()
+            .GroupBy(s => s.Table, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
+        {
+            string[] columns = [.. table.SelectMany(s => s.Values.Keys.Append(s.KeyColumn)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+            string select = $"SELECT {string.Join(", ", columns.Select(c => UpgradeTestSupport.Quote(db, c)))} FROM {UpgradeTestSupport.Quote(db, table.Key)} " +
+                $"ORDER BY {string.Join(", ", columns.Select(c => UpgradeTestSupport.Quote(db, c)))}";
+            text.Append("seed table ").Append(table.Key).Append(" (").Append(string.Join(", ", columns)).Append(")\n");
+            foreach (string row in await QueryAsync(db, select, null, SeedRow))
+            {
+                text.Append("  ").Append(row).Append('\n');
+            }
+        }
+
+        return text.ToString();
+    }
+
+    private static string SeedRow(DbDataReader reader)
+        => string.Join("|", Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetValue(i) switch
+        {
+            null or DBNull => "NULL",
+            bool b => b ? "1" : "0",
+            IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+            var v => v.ToString(),
+        }));
+
     private static string Row(DbDataReader reader)
         => string.Join("|", Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetValue(i) switch
         {

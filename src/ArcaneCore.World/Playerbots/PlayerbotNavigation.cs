@@ -243,6 +243,19 @@ internal static class PlayerbotNavigation
         return PendingSince(mark) && wait.Hold(now) ? PlanOutcome.Pending : PlanOutcome.Refused;
     }
 
+    internal static bool TryPlanTowardPrepared(Player player, Vector3 goal, PlayerbotOptions options,
+        PlayerbotAsyncNavigationPlan plan, out PlayerbotRoute? route, out bool deferred, bool completedQuestReturn = false,
+        bool friendlyTownEnder = false, uint? nowMs = null)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        plan.ResetPass();
+        using IDisposable scope = plan.Activate();
+        bool planned = TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, nowMs);
+        deferred = plan.Deferred || plan.Exhausted || plan.NextRequest is not null;
+        if (deferred) route = null;
+        return planned && !deferred;
+    }
+
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
@@ -306,6 +319,7 @@ internal static class PlayerbotNavigation
         bool completedQuestReturn, bool friendlyTownEnder)
     {
         route = null;
+        if (PlayerbotAsyncNavigationPlan.Current?.Exhausted == true) return false;
         Vector3 origin = new(player.X, player.Y, player.Z);
         if (!Finite(goal) || !Finite(origin)) return false;
         float distance = Vector3.Distance(origin, goal);
@@ -541,11 +555,23 @@ internal static class PlayerbotNavigation
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false,
         bool friendlyTownEnder = false, bool chase = false)
     {
+        if (PlayerbotAsyncNavigationPlan.Current?.Deferred == true)
+        {
+            route = null;
+            straightRefused = false;
+            return false;
+        }
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes) || route is null) return false;
         bool crossBeside = completedQuestReturn && friendlyTownEnder;
         route.CompletedQuestReturn = completedQuestReturn;
         route.CrossBesidePlaceMarks = crossBeside;
         route.Chase = chase;
+        if (PlayerbotAsyncNavigationPlan.Current?.Deferred == true)
+        {
+            route = null;
+            straightRefused = false;
+            return false;
+        }
         if (!Guards.TryGetValue(player, out PlayerbotRisk? risk)
             || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not { } hazard) return true;
 
@@ -591,7 +617,9 @@ internal static class PlayerbotNavigation
         // A detour leg that waited for a tile still being read is no evidence of a ring: the caller asks again once it is in.
         if (PendingSince(detourMark)) return false;
         // A goal's walk refused: evidence for the ring escape (PlayerbotRisk.Refused), which judges whether the bot is boxed in.
-        if (!trial) risk.Refused(player, hazard);
+        PlayerbotAsyncNavigationPlan? currentPlan = PlayerbotAsyncNavigationPlan.Current;
+        if (!trial && (currentPlan is null || (!currentPlan.Deferred && !currentPlan.Exhausted)))
+            risk.Refused(player, hazard);
         return false;
     }
 
@@ -707,7 +735,7 @@ internal static class PlayerbotNavigation
     {
         long before = PathSearchCounters.CappedSearches;
         PathResult path = QueryOnce(map, from, to, options, partial, steep, searchNodes);
-        capped = PathSearchCounters.CappedSearches != before;
+        capped = PathSearchCounters.CappedSearches != before || PlayerbotThinkProbe.ConsumeLastQueryCapped();
         return path;
     }
 

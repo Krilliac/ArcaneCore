@@ -122,7 +122,8 @@ public sealed class ForgetDeletedCharacterTests
         public Task<CharacterQuestData> LoadAsync(int characterId, CancellationToken cancellationToken = default)
             => Task.FromResult(CharacterQuestData.Empty);
 
-        public async Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts, CancellationToken cancellationToken = default)
+        public async Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
         {
             Attempts.Enqueue($"quests:{characterId}");
             if (Gate is { } gate)
@@ -136,7 +137,8 @@ public sealed class ForgetDeletedCharacterTests
             }
         }
 
-        public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask, CancellationToken cancellationToken = default)
+        public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask,
+            CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
         {
             Attempts.Enqueue($"taxi:{characterId}");
             return Fail ? Task.FromException(new InvalidOperationException("quest storage unavailable")) : Task.CompletedTask;

@@ -19,7 +19,7 @@ public sealed partial class GuildManager
             return null;
         }
 
-        var guild = new Guild(_nextId++, name, leaderId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        var guild = new Guild(AllocateGuildId(), name, leaderId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         guild.CreateDefaultRanks();
         _guilds[guild.Id] = guild;
         AddMember(guild, leaderId, Guild.GuildMasterRank, petitionId);

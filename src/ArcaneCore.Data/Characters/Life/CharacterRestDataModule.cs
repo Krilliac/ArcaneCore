@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -118,6 +119,7 @@ public sealed class EfCharacterRestStore(CharacterDbContext db) : ICharacterRest
     }
 
     public async Task DeleteAsync(int characterId, CancellationToken cancellationToken = default)
-        => await db.Set<CharacterRestRow>().Where(r => r.CharacterId == characterId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        => await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<CharacterRestRow>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 }

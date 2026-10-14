@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -107,9 +108,9 @@ public sealed class EfCharacterSpellStore(CharacterDbContext db) : ICharacterSpe
     }
 
     public async Task RemoveAsync(int characterId, uint spell, CancellationToken cancellationToken = default)
-        => await db.Set<CharacterSpellRow>()
-            .Where(r => r.CharacterId == characterId && r.Spell == spell)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        => await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<CharacterSpellRow>().Where(r => r.CharacterId == characterId && r.Spell == spell).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 
     /// <summary>
     /// Remove the spellbook rows of a character id that has no <c>characters</c> row (the queued
@@ -117,7 +118,10 @@ public sealed class EfCharacterSpellStore(CharacterDbContext db) : ICharacterSpe
     /// wipes a character recreated with the same id (docs/integration/character-delete.md).
     /// </summary>
     public async Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
-        => await db.Set<CharacterSpellRow>()
+    {
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // deletes only the rows of an id with no characters row: the deletion lifetime fence is token-independent
+        await db.Set<CharacterSpellRow>()
             .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
 }

@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.AntiCheat;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -110,5 +111,6 @@ public sealed class EfAntiCheatLogStore(CharacterDbContext db) : IAntiCheatLogSt
             .OrderByDescending(r => r.Id).Take(Math.Max(0, limit)).ToListAsync(cancellationToken).ConfigureAwait(false)).Select(r => r.ToEntry())];
 
     public Task<int> DeleteAsync(int characterId, CancellationToken cancellationToken = default)
-        => db.Set<AntiCheatLogRow>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken);
+        => CharacterWrites.InTransactionAsync(
+            db, () => db.Set<AntiCheatLogRow>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken), cancellationToken);
 }

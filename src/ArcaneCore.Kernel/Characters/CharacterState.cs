@@ -29,7 +29,8 @@ public sealed record CharacterState(
     CharacterLife? Life = null,
     byte BankBagSlotCount = 0,
     TransportSeat? Transport = null,
-    ushort Drunk = 0);
+    ushort Drunk = 0,
+    CharacterOwnershipToken? Ownership = null);
 
 /// <summary>
 /// Where on a ship a character stands (vmangos <c>characters.transport_guid</c> and <c>transport_x</c> .. <c>transport_o</c>):

@@ -11,44 +11,11 @@ namespace ArcaneCore.Game.Tests;
 /// and retried, but only up to <see cref="DirtyWindowSlack"/> over the limit: growth large enough to trigger a collection in its own window
 /// still fails. Every window that ran GC-free is asserted against the threshold, so an allocation that is intermittent or grows per call
 /// fails instead of being averaged or minimised away. Each window runs inside a no-GC region when one can be entered (2026-10-13: CI runners
-/// discarded 18 of 20 windows), so cross-thread collections no longer starve the probe of clean windows.
-/// <para>
-/// Second source, established by A/B (2026-10-12, CreatureMovement + GridTerrain test namespaces, fresh process per run, xunit parallel):
-/// with tiered compilation on, 3 of 30 runs failed an allocation window (5264, 5480 and 8200 bytes; the code under test allocates nothing),
-/// with DOTNET_TieredPGO=0 still 1 of 30, with DOTNET_TieredCompilation=0 0 of 30. So tier-0 to tier-1 promotion (call counting after its
-/// 100 ms delay, background tier-1 compile, OSR of hot loops) landing inside a window is what reads as an allocation; which allocation
-/// that is was not identified. <see cref="WarmUp"/> therefore spends enough calls and wall time before the first window that the promotion
-/// has very likely finished (the approach of docs/integration/tick-allocation-20261004.md). It is not guaranteed: the 100 ms delay restarts
-/// whenever other tests in the host compile new tier-0 code. A late promotion over-counts (a flake), it never hides an allocation.
-/// </para>
+/// discarded 18 of 20 windows), so cross-thread collections no longer starve the probe of clean windows. One unmeasured call first keeps one-off runtime work (JIT of the delegate) out of it.
 /// </summary>
 internal static class AllocationProbe
 {
     private const int MaxAttempts = 40;
-
-    /// <summary>Wall time the warm-up spans: the tiering delay (100 ms, restarted by new tier-0 activity) plus the background compile.</summary>
-    private const int WarmUpMs = 600;
-
-    /// <summary>Fewer calls than the tier-1 call-count threshold (30) never promote a method, however long they take.</summary>
-    private const int MinWarmUpCalls = 60;
-
-    /// <summary>
-    /// Unmeasured: runs <paramref name="window"/> repeatedly, with pauses so the call-counting timer can fire and the background tier-1
-    /// compile can install, until at least <see cref="MinWarmUpCalls"/> calls and <see cref="WarmUpMs"/> went by, then once more with the
-    /// final code.
-    /// </summary>
-    private static void WarmUp(Action window)
-    {
-        long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        int calls = 0;
-        while (calls < MinWarmUpCalls || System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds < WarmUpMs)
-        {
-            window();
-            if (++calls % 10 == 0) Thread.Sleep(25);
-        }
-
-        window();
-    }
 
     /// <summary>How far over the limit a window that saw a collection may read before it fails instead of being retried.</summary>
     private const long DirtyWindowSlack = 16 * 1024;
@@ -62,7 +29,7 @@ internal static class AllocationProbe
     {
         int clean = 0;
         int discarded = 0;
-        WarmUp(window);
+        window(); // unmeasured: first-call runtime work stays out of the windows
         for (int attempt = 0; attempt < MaxAttempts && clean < cleanWindows; attempt++)
         {
             // A no-GC region keeps collections (triggered by any thread) out of the window, so on a busy runner the window is GC-free instead
@@ -99,36 +66,22 @@ internal static class AllocationProbe
 
     private static bool TryStartNoGcRegion()
     {
-        // Only one no-GC region exists per process. Parallel allocation tests used to give up at once, then every
-        // window on a busy runner was discarded and the probe failed with "only 1 of 5 GC-free windows".
-        long until = Environment.TickCount64 + 500;
-        while (true)
+        if (System.Runtime.GCSettings.LatencyMode == System.Runtime.GCLatencyMode.NoGCRegion)
         {
-            if (System.Runtime.GCSettings.LatencyMode != System.Runtime.GCLatencyMode.NoGCRegion)
-            {
-                try
-                {
-                    if (GC.TryStartNoGCRegion(NoGcBudget))
-                    {
-                        return true;
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                    // raced another thread entering the region
-                }
-                catch (ArgumentOutOfRangeException)
-                {
-                    return false; // budget larger than this GC configuration allows
-                }
-            }
+            return false; // another test's probe holds the process-wide region
+        }
 
-            if (Environment.TickCount64 >= until)
-            {
-                return false;
-            }
-
-            Thread.Sleep(1);
+        try
+        {
+            return GC.TryStartNoGCRegion(NoGcBudget);
+        }
+        catch (InvalidOperationException)
+        {
+            return false; // raced another thread entering the region
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false; // budget larger than this GC configuration allows
         }
     }
 

@@ -79,6 +79,7 @@ public static class WorldConfigKeys
         Fixed("TickTimer", v => v.Runtime.TickTimer),
         Fixed("TickLateToleranceMs", v => v.Runtime.TickLateToleranceMs),
         Fixed("Maps:DataDirectory", v => v.Runtime.Maps.DataDirectory),
+        FixedPlayerbots(nameof(PlayerbotOptions.AsyncNavigationEnabled), o => o.AsyncNavigationEnabled),
         FixedListener("Port", v => v.Port),
         FixedListener("BindAddress", v => v.BindAddress),
 
@@ -496,4 +497,7 @@ public static class WorldConfigKeys
 
     private static WorldConfigKey FixedListener(string path, Func<WorldOptions, object?> read)
         => new($"{Root}:{path}", v => v.Listener is { } listener ? read(listener) : null, null, null);
+
+    private static WorldConfigKey FixedPlayerbots(string path, Func<PlayerbotOptions, object?> read)
+        => new($"{PlayerbotOptions.SectionName}:{path}", v => v.Playerbots is { } playerbots ? read(playerbots) : null, null, null);
 }

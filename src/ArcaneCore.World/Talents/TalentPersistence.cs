@@ -1,7 +1,9 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Characters.Talents;
 using ArcaneCore.Game.Talents;
+using ArcaneCore.Kernel.Characters;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Talents;
@@ -26,6 +28,7 @@ public sealed class TalentPersistence : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly Channel<PendingWrite> _writes =
         Channel.CreateUnbounded<PendingWrite>(new UnboundedChannelOptions { SingleReader = true });
+    private Exception? _terminalFailure;
 
     private Task? _writer;
     private bool _warnedNoStore;
@@ -39,6 +42,21 @@ public sealed class TalentPersistence : IAsyncDisposable
 
     /// <summary>Writes queued and not yet finished.</summary>
     public int PendingWrites => _writes.Reader.Count;
+
+    /// <summary>Terminal failure that halted the talent writer (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
+
+    /// <summary>Raised once when the talent writer enters terminal failure (for example on <see cref="CharacterOwnershipRejectedException"/>).</summary>
+    public event Action<Exception>? FatalFailure;
 
     /// <summary>Characters whose last write failed and still await a reconciling flush.</summary>
     public IReadOnlyCollection<int> FailedCharacters
@@ -163,6 +181,11 @@ public sealed class TalentPersistence : IAsyncDisposable
         {
             await _writer.ConfigureAwait(false);
         }
+
+        if (_terminalFailure is { } terminal)
+        {
+            throw new InvalidOperationException("TalentPersistence stopped with a terminal ownership failure", terminal);
+        }
     }
 
     private Desired Of(int characterId)
@@ -191,6 +214,11 @@ public sealed class TalentPersistence : IAsyncDisposable
         HashSet<uint>? disabled;
         lock (_lock)
         {
+            if (_terminalFailure is { } terminal)
+            {
+                throw new InvalidOperationException($"talent state writes for character {characterId} are not durable", terminal);
+            }
+
             if (!_failed.Contains(characterId))
             {
                 return;
@@ -238,13 +266,50 @@ public sealed class TalentPersistence : IAsyncDisposable
         }
     }
 
+    private void FailTerminal(CharacterOwnershipRejectedException ex, IServiceProvider? scopedServices)
+    {
+        bool first = false;
+        lock (_lock)
+        {
+            if (_terminalFailure is null)
+            {
+                _terminalFailure = ex;
+                first = true;
+            }
+        }
+
+        if (!first)
+        {
+            return;
+        }
+
+        _logger.LogCritical(ex, "talent persistence entered terminal failure after character ownership rejection");
+        try
+        {
+            scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        FatalFailure?.Invoke(ex);
+    }
+
     private async Task WriteLoopAsync()
     {
         await foreach (PendingWrite pending in _writes.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
             try
             {
-                await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
+                lock (_lock)
+                {
+                    if (_terminalFailure is { } terminal && pending.CharacterId is not null)
+                    {
+                        throw new InvalidOperationException($"talent state writes for character {pending.CharacterId.Value} are not durable", terminal);
+                    }
+                }
+
                 ICharacterTalentStore? store = scope.ServiceProvider.GetService<ICharacterTalentStore>();
                 if (store is null)
                 {
@@ -260,6 +325,19 @@ public sealed class TalentPersistence : IAsyncDisposable
 
                 await pending.Write(store).ConfigureAwait(false);
                 pending.Done?.TrySetResult();
+            }
+            catch (CharacterOwnershipRejectedException ex)
+            {
+                if (pending.CharacterId is { } characterId)
+                {
+                    lock (_lock)
+                    {
+                        _failed.Add(characterId);
+                    }
+                }
+
+                FailTerminal(ex, scope.ServiceProvider);
+                pending.Done?.TrySetException(ex);
             }
             catch (Exception ex)
             {

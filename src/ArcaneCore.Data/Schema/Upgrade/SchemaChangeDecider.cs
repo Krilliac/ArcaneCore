@@ -49,15 +49,17 @@ internal static class SchemaChangeDecider
         ILookup<string, CreateIndexOperation> IndexesByTable,
         IReadOnlyList<AlterDatabaseOperation> AlterDatabase);
 
-    internal static ModelOperations ReadModel(DbContext db)
+    internal static ModelOperations ReadModel(DbContext db, SchemaDefinition definition)
     {
+        ArgumentNullException.ThrowIfNull(definition);
         IRelationalModel model = db.GetService<IDesignTimeModel>().Model.GetRelationalModel();
         IReadOnlyList<MigrationOperation> all = db.GetService<IMigrationsModelDiffer>().GetDifferences(null, model);
 
         // A fresh model yields CREATE TABLE and CREATE INDEX operations (plus, with Pomelo, the database's
         // default character set, which only a fresh create applies). Anything else would be dropped
         // silently, which is how indexes were once lost, so refuse it loudly.
-        MigrationOperation? other = all.FirstOrDefault(o => o is not (CreateTableOperation or CreateIndexOperation or AlterDatabaseOperation));
+        MigrationOperation? other = all.FirstOrDefault(o => o is not (CreateTableOperation or CreateIndexOperation or AlterDatabaseOperation)
+            && (o is not InsertDataOperation insert || !IsDeclaredSeed(insert, definition)));
         if (other is not null)
         {
             throw new InvalidOperationException(
@@ -68,6 +70,38 @@ internal static class SchemaChangeDecider
             all.OfType<CreateTableOperation>().ToDictionary(t => t.Name, StringComparer.Ordinal),
             all.OfType<CreateIndexOperation>().ToLookup(i => i.Table, StringComparer.Ordinal),
             [.. all.OfType<AlterDatabaseOperation>()]);
+    }
+
+    private static bool IsDeclaredSeed(InsertDataOperation operation, SchemaDefinition definition)
+    {
+        EnsureRowChange[] seeds = [.. definition.Steps.SelectMany(s => s.Changes).OfType<EnsureRowChange>()
+            .Concat(definition.ModelSeedDeclarations)
+            .Where(seed => string.Equals(seed.Table, operation.Table, StringComparison.Ordinal))];
+        if (seeds.Length == 0 || !string.IsNullOrEmpty(operation.Schema) || operation.Columns.Length == 0 || operation.Values.GetLength(1) != operation.Columns.Length)
+            return false;
+
+        for (int row = 0; row < operation.Values.GetLength(0); row++)
+        {
+            bool matched = false;
+            foreach (EnsureRowChange seed in seeds)
+            {
+                Dictionary<string, object?> expected = new(StringComparer.Ordinal) { [seed.KeyColumn] = seed.KeyValue };
+                foreach ((string column, object? value) in seed.Values)
+                    expected.Add(column, value);
+                if (expected.Count == operation.Columns.Length
+                    && operation.Columns.All(column => expected.ContainsKey(column))
+                    && operation.Columns.Select((column, index) => Equals(expected[column], operation.Values[row, index])).All(match => match))
+                {
+                    matched = true;
+                    break;
+                }
+            }
+
+            if (!matched)
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>The tables of the current model other than the component's version table, in creation order.</summary>

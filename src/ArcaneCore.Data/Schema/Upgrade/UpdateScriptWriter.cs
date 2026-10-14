@@ -171,13 +171,16 @@ internal static class UpdateScriptWriter
             throw new UpdateExportException($"{component.Name}: the snapshot is at schema version {existing.Version}, newer than this build ({current}).");
         }
 
+        IReadOnlyList<SnapshotSeed> seeds = SnapshotSeed.Of(definition);
+        RequireSeedsUnchanged(component, existing, seeds, current);
+
         var files = new List<UpdateFile>();
         var providers = new Dictionary<string, ProviderSnapshot>(StringComparer.Ordinal);
         var manifest = new Dictionary<string, string>(existing?.Files ?? new Dictionary<string, string>(), StringComparer.Ordinal);
         foreach ((DatabaseProvider provider, string folder) in Providers)
         {
             using DbContext db = component.CreateOffline(provider);
-            SnapshotCatalog model = SnapshotCatalog.FromModel(db);
+            SnapshotCatalog model = SnapshotCatalog.FromModel(db, definition);
             var generated = new List<UpdateFile>();
             ProviderSnapshot snapshot;
             if (existing is null)
@@ -227,7 +230,45 @@ internal static class UpdateScriptWriter
             }
         }
 
-        return new UpdateSet(files, new SchemaSnapshot(component.Name, current, providers, manifest));
+        return new UpdateSet(files, new SchemaSnapshot(component.Name, current, providers, manifest, seeds));
+    }
+
+    /// <summary>
+    /// A released seed keeps its values: a seed in the snapshot must still be declared with the same hash, and at the snapshot's own
+    /// version no seed may appear that the snapshot lacks (a new seed belongs to a new step). A snapshot written before seeds were
+    /// recorded (null) adopts the declared ones.
+    /// </summary>
+    private static void RequireSeedsUnchanged(UpdateComponent component, SchemaSnapshot? existing, IReadOnlyList<SnapshotSeed> declared, int current)
+    {
+        if (existing?.Seeds is not { } recorded)
+        {
+            return;
+        }
+
+        foreach (SnapshotSeed seed in recorded)
+        {
+            SnapshotSeed? now = declared.FirstOrDefault(d => d.Table == seed.Table && d.Key == seed.Key);
+            if (now is null)
+            {
+                throw new UpdateExportException($"{component.Name}: the released seed row {seed.Table} ({seed.Key}) is no longer declared. A released seed is never removed: ship a new step.");
+            }
+
+            if (now.Hash != seed.Hash)
+            {
+                throw new UpdateExportException(
+                    $"{component.Name}: the values of the released seed row {seed.Table} ({seed.Key}) changed. Ship the change as a new schema step, never by editing a seed.");
+            }
+        }
+
+        if (existing.Version == current)
+        {
+            SnapshotSeed? added = declared.FirstOrDefault(d => !recorded.Any(r => r.Table == d.Table && r.Key == d.Key));
+            if (added is not null)
+            {
+                throw new UpdateExportException(
+                    $"{component.Name}: the model declares the seed row {added.Table} ({added.Key}) that no schema step accounts for. Add a step that seeds it, then export again.");
+            }
+        }
     }
 
     /// <summary>Generate and write the files and snapshot of <paramref name="components"/> under <paramref name="root"/> (<c>sql/updates</c>).</summary>
@@ -277,7 +318,7 @@ internal static class UpdateScriptWriter
         var statements = new List<string>();
         IMigrationsSqlGenerator generator = db.GetService<IMigrationsSqlGenerator>();
         IModel model = db.GetService<IDesignTimeModel>().Model;
-        foreach (AlterDatabaseOperation alter in SchemaChangeDecider.ReadModel(db).AlterDatabase)
+        foreach (AlterDatabaseOperation alter in SchemaChangeDecider.ReadModel(db, component.Definition).AlterDatabase)
         {
             statements.AddRange(generator.Generate([alter], model).Select(c => c.CommandText));
         }

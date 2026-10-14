@@ -83,22 +83,23 @@ public sealed class QuestRewardStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
-    public async Task QuestSaveAlreadyHoldingOlderRow_CannotOverwriteAnInterleavedReward(DatabaseProvider provider)
+    public async Task QuestRowLoadedBeforeAReward_CannotOverwriteIt_ThroughTheRewardedConcurrencyToken(DatabaseProvider provider)
     {
+        // The Rewarded column is a concurrency token (QuestNpcCharactersModule): a writer holding a row it loaded
+        // before a durable reward must fail rather than reopen the history. The reward lands on a second
+        // connection between this context's read and write, so nothing here touches the ownership fence and the
+        // outcome is the same on every provider.
         Seed seed = await CreateAsync(provider);
-        var interceptor = new BeforeQuestSave(async () =>
-        {
-            Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(seed.Connection, seed.Request));
-        });
-        await using (CharacterDbContext db = Context(seed.Connection, interceptor))
-        {
-            // SavingChanges runs after SaveQuestsAsync has loaded the old row and
-            // staged these counters, but before it issues its UPDATE statement.
-            CharacterQuestStatus old = seed.Request.ExpectedQuest with { Status = 3, MobCount1 = 0 };
-            await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => new EfCharacterQuestStore(db)
-                .SaveQuestsAsync(old.CharacterId, [old]));
-            Assert.True(interceptor.Fired);
-        }
+        await using CharacterDbContext stale = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        CharacterQuestStatusRow loaded = await stale.Set<CharacterQuestStatusRow>()
+            .SingleAsync(r => r.CharacterId == seed.Request.ExpectedQuest.CharacterId && r.Quest == seed.Request.ExpectedQuest.Quest);
+        Assert.False(loaded.Rewarded);
+
+        Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(seed.Connection, seed.Request));
+
+        loaded.Status = 3;
+        loaded.MobCount1 = 0;
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => stale.SaveChangesAsync());
 
         await AssertPersistedAsync(seed, rewarded: true);
     }
@@ -555,23 +556,6 @@ public sealed class QuestRewardStoreTests : IAsyncLifetime
             .AddInterceptors(interceptor).Options);
 
     private sealed record Seed(DatabaseConnectionOptions Connection, CharacterQuestRewardRequest Request, int OtherId);
-
-    private sealed class BeforeQuestSave(Func<Task> action) : SaveChangesInterceptor
-    {
-        public bool Fired { get; private set; }
-
-        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
-            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
-        {
-            if (!Fired)
-            {
-                Fired = true;
-                await action();
-            }
-
-            return result;
-        }
-    }
 
     private sealed class BeforeFirstRead(Action action) : DbCommandInterceptor
     {

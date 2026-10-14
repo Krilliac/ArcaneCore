@@ -7,6 +7,7 @@ using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -106,15 +107,36 @@ public sealed partial class InstanceManager : IMapResolver
     public IMapResolver? BattlegroundMaps { get; set; }
 
     /// <summary>
+    /// Optional durable block allocator for instance IDs when cluster ID range reservation is enabled.
+    /// </summary>
+    public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
+
+    private uint NextRawInstanceId()
+    {
+        if (IdBlockAllocator is { } allocator)
+        {
+            uint allocated = (uint)allocator.NextInt32();
+            if (allocated >= _nextInstanceId && allocated < (uint)int.MaxValue)
+                _nextInstanceId = allocated + 1;
+            return allocated;
+        }
+
+        if (_nextInstanceId == 0 || _nextInstanceId > (uint)int.MaxValue)
+            throw new IdRangeExhaustedException(IdRangeScopes.Instance, "instance ID space exhausted");
+
+        return _nextInstanceId++;
+    }
+
+    /// <summary>
     /// A fresh instance id from the counter the dungeon saves use, for a map that is not a dungeon save (a battleground match; vmangos
     /// <c>MapManager::GenerateInstanceId</c> serves both). World thread.
     /// </summary>
     public uint AllocateInstanceId()
     {
-        uint id = _nextInstanceId++;
+        uint id = NextRawInstanceId();
         while (_saves.ContainsKey(id))
         {
-            id = _nextInstanceId++;
+            id = NextRawInstanceId();
         }
 
         return id;
@@ -812,10 +834,10 @@ public sealed partial class InstanceManager : IMapResolver
 
     private InstanceSave CreateSave(MapTemplate template)
     {
-        uint id = _nextInstanceId++;
+        uint id = NextRawInstanceId();
         while (_saves.ContainsKey(id) || _world.FindMap(template.Entry, id) is not null)
         {
-            id = _nextInstanceId++;
+            id = NextRawInstanceId();
         }
 
         long resetTime = template.IsRaid ? GetRaidResetTime(template.Entry) : Now + _options.NormalDungeonResetSeconds;

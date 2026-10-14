@@ -196,6 +196,27 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task AsyncNavigation_IsRestartOnly_AndKeepsStartupValue()
+    {
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "AsyncNavigationEnabled": true } } }""");
+        var playerbots = new PlayerbotOptions { AsyncNavigationEnabled = false };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        ReloadResult enabled = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Applied, enabled.Status);
+        Assert.False(playerbots.AsyncNavigationEnabled);
+        Assert.Contains("World:Playerbots:AsyncNavigationEnabled option can't be changed at reload, using current value (False).", enabled.Notes);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "AsyncNavigationEnabled": false } } }""");
+        ReloadResult disabled = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Applied, disabled.Status);
+        Assert.False(playerbots.AsyncNavigationEnabled);
+        Assert.DoesNotContain(disabled.Notes, n => n.Contains("World:Playerbots:AsyncNavigationEnabled", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task WorldOptionsListener_CannotChange_AtReload()
     {
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Port": 9999, "BindAddress": "127.0.0.1" } }""");
@@ -606,6 +627,7 @@ public sealed class ConfigReloadTests : IDisposable
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.SlowThinkLogMs)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxThinkSearchNodes)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.AsyncNavigationEnabled)}");
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Risk)}:{property.Name}");
@@ -727,9 +749,10 @@ public sealed class ConfigReloadTests : IDisposable
         // for its timer; Maps:DataDirectory: TerrainManager / CollisionServices load at attach (vmangos
         // DataDir, World.cpp:932-935); Port / BindAddress: the listener is bound at start (World.cpp:598);
         // MaxConnections / MaxConnectionsPerIp: the connection limiter is built at start (hardening lane);
-        // TickTimer / TickLateToleranceMs: WorldRuntime.Run builds its waiter and scheduler once (perf-limits lane).
-        Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:MaxConnections", "World:MaxConnectionsPerIp", "World:Port",
-            "World:TickIntervalMs", "World:TickLateToleranceMs", "World:TickTimer"], restartOnly);
+        // TickTimer / TickLateToleranceMs: WorldRuntime.Run builds its waiter and scheduler once (perf-limits lane);
+        // Playerbots:AsyncNavigationEnabled: the private navigation executor is created when the feature attaches.
+        Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:MaxConnections", "World:MaxConnectionsPerIp",
+            "World:Playerbots:AsyncNavigationEnabled", "World:Port", "World:TickIntervalMs", "World:TickLateToleranceMs", "World:TickTimer"], restartOnly);
     }
 
     private sealed class NullSaveQueue : ICharacterSaveQueue

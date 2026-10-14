@@ -192,6 +192,7 @@ internal static class PlanFormatter
         {
             ChangeObject.Table => action.Table,
             ChangeObject.Column => $"{action.Table}.{action.Name}",
+            ChangeObject.Row => $"{action.Name} on {action.Table}",
             _ => $"{action.Name} on {action.Table}",
         };
 

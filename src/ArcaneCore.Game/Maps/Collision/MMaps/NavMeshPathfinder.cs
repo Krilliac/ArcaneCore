@@ -5,6 +5,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.Game.Maps.Collision.MMaps;
 
+/// <summary>Immutable identity of one navmesh data source; it carries no live collision state.</summary>
+public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Identity);
+
 /// <summary>
 /// The navmesh-backed <see cref="IPathfinder"/> (vmangos <c>MMapManager</c> + <c>PathFinder</c>):
 /// one <see cref="NavMesh"/> per map from <c>NNN.mmap</c>, tiles loaded and released with the
@@ -30,19 +33,40 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
 
     private readonly string _directory;
     private readonly ILogger _logger;
+    public NavMeshDatasetDescriptor Dataset { get; }
     private readonly Dictionary<uint, NavMesh?> _meshes = [];
     private readonly TilePrefetchCache<NavMeshTile> _prefetch = new();
 
     public NavMeshPathfinder(string directory, ILogger? logger = null, int maxConcurrentTileReads = DefaultConcurrentTileReads)
+        : this(directory, logger, Guid.NewGuid(), maxConcurrentTileReads)
+    {
+    }
+
+    private NavMeshPathfinder(string directory, ILogger? logger, Guid identity, int maxConcurrentTileReads = DefaultConcurrentTileReads)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
-        _directory = directory;
+        _directory = Path.GetFullPath(directory);
         _logger = logger ?? NullLogger.Instance;
         MaxConcurrentTileReads = Math.Clamp(maxConcurrentTileReads, 1, 16);
         _tileReadSlots = new SemaphoreSlim(MaxConcurrentTileReads, MaxConcurrentTileReads);
+        Dataset = new(_directory, identity);
     }
 
     public bool Enabled => true;
+
+    /// <summary>
+    /// A private, serially used ground-navigation context over the same immutable data directory.
+    /// No live tiles, query state, prefetch jobs or collision-model service are shared with the owner.
+    /// </summary>
+    public NavMeshPathfinder CreateIndependent() => CreateIndependent(Dataset, _logger);
+
+    /// <summary>Create a private context for a detached request without consulting live collision services.</summary>
+    public static NavMeshPathfinder CreateIndependent(NavMeshDatasetDescriptor dataset, ILogger? logger = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dataset.Directory);
+        if (dataset.Identity == Guid.Empty) throw new ArgumentException("dataset identity is required", nameof(dataset));
+        return new(dataset.Directory, logger, dataset.Identity);
+    }
 
     /// <summary>
     /// The collision-model line test a flier's straight shortcut needs (vmangos
@@ -86,7 +110,11 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         => LoadTile(mapId, tileX, tileY, out _);
 
     private bool LoadTile(uint mapId, int tileX, int tileY, out bool prefetchHit)
+        => LoadTile(mapId, tileX, tileY, CancellationToken.None, out prefetchHit);
+
+    private bool LoadTile(uint mapId, int tileX, int tileY, CancellationToken cancellationToken, out bool prefetchHit)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         prefetchHit = false;
         if (GetNavMesh(mapId) is not { } mesh)
         {
@@ -115,6 +143,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         {
             return false;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         try
         {
@@ -354,7 +384,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         {
             _queryStamp++;
             _queryLoads = 0;
-            EnsureTile(graph.MapId, at, options.NonBlockingTiles);
+            EnsureTile(graph.MapId, at, options.NonBlockingTiles, options.CancellationToken);
         }
 
         Vector3 recast = NavMeshFormat.ToRecast(at);
@@ -365,6 +395,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
     {
         options ??= PathOptions.Default;
+        options.CancellationToken.ThrowIfCancellationRequested();
         if (!IsFinite(start) || !IsFinite(end))
         {
             return PathResult.None(start);
@@ -390,8 +421,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         _trackPendingThisQuery = nonBlocking;
         try
         {
-            EnsureTile(mapId, start, nonBlocking);
-            EnsureTile(mapId, end, nonBlocking);
+            EnsureTile(mapId, start, nonBlocking, options.CancellationToken);
+            EnsureTile(mapId, end, nonBlocking, options.CancellationToken);
             if (nonBlocking && QueryTileStillOpen())
             {
                 // An endpoint's tile is still being read: the search cannot even locate it (an endpoint on an unloaded tile would
@@ -401,8 +432,9 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
 
             mesh.TileLoader = (x, y) =>
             {
+                options.CancellationToken.ThrowIfCancellationRequested();
                 Vector3 center = NavMeshFormat.ToWorld(mesh.TileCenter(x, y));
-                return EnsureTile(mapId, center, nonBlocking) ? mesh.GetTile(x, y) : null;
+                return EnsureTile(mapId, center, nonBlocking, options.CancellationToken) ? mesh.GetTile(x, y) : null;
             };
             PathResult result = FindPath(mesh, mapId, start, end, options);
             // A tile the search wanted was not in yet. A whole path found without it stands (the tile could only have offered another
@@ -497,8 +529,9 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     /// the pool (<see cref="PollTileRead"/>), a tile whose read has not finished counts as pending
     /// (<see cref="PathSearchCounters.TilesPending"/>) and is false, and one whose read has finished is installed.
     /// </summary>
-    private bool EnsureTile(uint mapId, Vector3 at, bool nonBlocking)
+    private bool EnsureTile(uint mapId, Vector3 at, bool nonBlocking, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (Terrain.TerrainTile.TileOf(at.X, at.Y) is not { } terrain || GetNavMesh(mapId) is not { } mesh)
         {
             return false;
@@ -576,7 +609,10 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         _queryLoads++;
         long loadStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         bool prefetchHit = readTile is not null;
-        bool loaded = readTile is not null ? InstallReadTile(mapId, terrain.X, terrain.Y, readTile) : LoadTile(mapId, terrain.X, terrain.Y, out prefetchHit);
+        bool loaded = readTile is not null
+            ? InstallReadTile(mapId, terrain.X, terrain.Y, readTile)
+            : LoadTile(mapId, terrain.X, terrain.Y, cancellationToken, out prefetchHit);
+        cancellationToken.ThrowIfCancellationRequested();
         PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted,
             mapId, terrain.X, terrain.Y, prefetchHit, loaded);
         if (!loaded)

@@ -12,6 +12,7 @@ using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Honor;
@@ -69,6 +70,9 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
 
     /// <summary>Writes queued or in progress.</summary>
     public int PendingWrites => _writes?.Pending ?? 0;
+
+    /// <summary>The honor write queue, once loaded.</summary>
+    public HonorWriteQueue? Writes => _writes;
 
     public void Attach(WorldRuntime world)
     {
@@ -242,6 +246,17 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             services.GetService<IConfiguration>()?.GetSection(HonorSettings.SectionName).Bind(settings);
             _options = settings.ToOptions();
             _writes = new HonorWriteQueue(scopes, loggers.CreateLogger<HonorWriteQueue>());
+            _writes.FatalFailure += ex =>
+            {
+                _logger.LogCritical(ex, "Stopping application after fatal honor write failure");
+                try
+                {
+                    services.GetService<IHostApplicationLifetime>()?.StopApplication();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            };
 
             // HonorMaintenancer::Initialize (HonorMgr.cpp:654-669): read the stored days; the very first start takes the most
             // recent maintenance weekday. It must happen before any player's honor is computed, or every row would count as

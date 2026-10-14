@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Instances;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Microsoft.EntityFrameworkCore;
 
@@ -136,6 +137,8 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
     public async Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default)
     {
         int id = checked((int)instanceId);
-        await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 }

@@ -155,7 +155,7 @@ phases remain planned and deployment is a separate gate.
 |---|---|---|
 | M15.0 | Ownership/session seams, durable fencing and saves, ID allocation, schema authority | planned — first implementation tranche |
 | M15.1 | Separate gateway and one worker, versioned gRPC, replica session claims/readiness | planned — depends on M15.0 |
-| M15.2 | Realm-wide identity/social authority and distinct map instances | planned — depends on M15.1 |
+| M15.2 | Realm-wide identity/social and auction/mail authority, role-specific feature registration, and distinct map instances | planned — depends on M15.1; economy ownership must precede multiple game workers |
 | M15.3 | Complete fenced handoff and static multiple-worker placement | planned — depends on M15.2 |
 | M15.4 | Host supervision, recovery, drain and capacity-aware placement | planned — depends on M15.3 |
 | M15.5 | Existing CLI/build/import/test jobs, content rollout, migration/rollback and cross-host acceptance | planned — depends on M15.4 |
