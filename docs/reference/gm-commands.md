@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 199 |
-| `Administrator` | 6 | 302 |
+| `GameMaster` | 3 | 207 |
+| `Administrator` | 6 | 311 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -271,6 +271,14 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.anticheat delete` | 6 | Administrator | stored level through the map | Syntax: .anticheat delete [$name] Forget the character's live score and delete its violation log rows. |
 | `.anticheat score` | 3 | GameMaster | stored level through the map | Syntax: .anticheat score [$name] [#value] Show the character's live score; with a value (administrators) set it and apply what it warrants. |
 | `.anticheat rubberband` | 3 | GameMaster | stored level through the map | Syntax: .anticheat rubberband [$name] Move the online character back to its last validated position. |
+| `.cluster` ... | 3 | GameMaster | stored level through the map | Syntax: .cluster [status\|node\|routes\|nodes\|leases\|social\|diag] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
+| `.cluster status` | 3 | GameMaster | stored level through the map | Syntax: .cluster status Show the cluster node identity, durable ownership fence, map routing summary, and authority leases. |
+| `.cluster node` | 3 | GameMaster | stored level through the map | Syntax: .cluster node [$player] Show which cluster node and map worker host the selected or named player (or this daemon at the console), along with their ownership token and map coordinates. |
+| `.cluster routes` | 3 | GameMaster | stored level through the map | Syntax: .cluster routes [$mapId] List the static continent and active instance map routes across cluster workers, with online player, bot, object, and transit counts. |
+| `.cluster nodes` | 3 | GameMaster | stored level through the map | Syntax: .cluster nodes List the active cluster worker and authority nodes, their readiness, drain state, and player/instance load. |
+| `.cluster leases` | 3 | GameMaster | stored level through the map | Syntax: .cluster leases Show durable character ownership fencing, realm singleton authority leases (economy, social, instances), and write-behind queue depths. |
+| `.cluster social` | 3 | GameMaster | stored level through the map | Syntax: .cluster social Show cross-worker social presence counts by continent/worker, active groups, guilds, and social router state. |
+| `.cluster diag` | 6 | Administrator | stored level through the map | Syntax: .cluster diag Run the deterministic cluster diagnostics collector and rollback-readiness check for this realm. |
 | `.creature` ... | 3 | GameMaster | stored level through the map | Creature commands. |
 | `.creature add` | 3 | GameMaster | stored level through the map | Syntax: .creature add &lt;entry&gt; — spawn a temporary creature where you stand (not saved). |
 | `.creature info` | 3 | GameMaster | stored level through the map | Syntax: .creature info — details of the selected creature. |
@@ -284,6 +292,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane queues` | 6 | Administrator | stored level through the map | Syntax: .arcane queues Show the pending and retained writes of the write-behind queues. |
 | `.arcane dbc` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane dbc Show how each client DBC the server reads was resolved (loaded, missing or format mismatch) and where from. |
 | `.arcane dbc validate` | 6 | Administrator | stored level through the map | Syntax: .arcane dbc validate Check the world database's spell, map, area, faction, display ... ids against the DBCs in ClientData:DbcDirectory and report the dangling ones. |
+| `.arcane cluster` | 3 | GameMaster | stored level through the map | Syntax: .arcane cluster [status\|node\|routes\|nodes\|leases\|social\|diag] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
 | `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |

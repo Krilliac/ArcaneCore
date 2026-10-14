@@ -152,6 +152,33 @@ public sealed class ClusterMapPlacementTable : IClusterMapRouter
         }
     }
 
+    /// <summary>Returns a point-in-time snapshot of all registered workers ordered by worker ID.</summary>
+    public IReadOnlyList<ClusterWorkerStatus> SnapshotWorkers()
+    {
+        lock (_sync)
+        {
+            return [.. _workers.Values.OrderBy(w => w.WorkerId.Value, StringComparer.Ordinal)];
+        }
+    }
+
+    /// <summary>Returns a point-in-time snapshot of all static map assignments ordered by map ID.</summary>
+    public IReadOnlyList<(uint MapId, WorkerNodeId WorkerId)> SnapshotStaticMaps()
+    {
+        lock (_sync)
+        {
+            return [.. _staticMaps.OrderBy(kv => kv.Key).Select(kv => (kv.Key, kv.Value))];
+        }
+    }
+
+    /// <summary>Returns a point-in-time snapshot of all active instance bindings ordered by map ID and instance ID.</summary>
+    public IReadOnlyList<(uint MapId, uint InstanceId, WorkerNodeId WorkerId)> SnapshotInstanceBindings()
+    {
+        lock (_sync)
+        {
+            return [.. _instanceBindings.OrderBy(kv => kv.Key.MapId).ThenBy(kv => kv.Key.InstanceId).Select(kv => (kv.Key.MapId, kv.Key.InstanceId, kv.Value))];
+        }
+    }
+
     /// <inheritdoc />
     public bool TryBindInstance(uint mapId, uint instanceId, WorkerNodeId workerId, out string? failureReason)
     {
