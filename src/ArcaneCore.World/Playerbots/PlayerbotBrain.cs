@@ -1032,6 +1032,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
             if (_combatSpells.Update(player, target, interval))
             {
+                if (player.Locomotion.ActiveSpline is not null || (_route is not null && !PlayerbotMotion.IsActive(player)))
+                {
+                    AbandonRoute();
+                }
+
                 _rangedIdleMs = 0;
                 _goal = PlayerbotGoalKind.Combat;
                 return;

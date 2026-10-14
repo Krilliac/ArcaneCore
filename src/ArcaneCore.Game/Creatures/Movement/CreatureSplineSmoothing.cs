@@ -24,7 +24,7 @@ public static class CreatureSplineSmoothing
     public const float MaxCornerCutArmYards = 3.5f;
     public const float MinCornerArmYards = 2.0f;
     public const float MinCornerTurnCos = 0.9659f; // cos(15 deg)
-    public const float MaxHeightDeltaYards = 1.5f;
+    public const float MaxHeightDeltaYards = 0.85f;
     public const int MaxSplinePoints = 32;
 
     /// <summary>
@@ -131,7 +131,7 @@ public static class CreatureSplineSmoothing
             return;
         }
 
-        uint h = HashSeed(seedCounter, start, corners[^1]);
+        uint h = HashSeed(seedCounter);
         float unitSigned = ((h & 0xFFFFu) / 32767.5f) - 1.0f;
         float lateralBias = unitSigned * MaxLateralOffsetYards;
         if (MathF.Abs(lateralBias) < 0.08f)
@@ -199,16 +199,20 @@ public static class CreatureSplineSmoothing
         }
 
         float z = candidate.Z;
-        if (getHeight(mapId, candidate.X, candidate.Y, candidate.Z + 2f) is { } floor
+        if (getHeight(mapId, candidate.X, candidate.Y, candidate.Z) is { } floor
             && float.IsFinite(floor)
             && floor > TerrainTile.InvalidHeight)
         {
-            if (MathF.Abs(floor - original.Z) > MaxHeightDeltaYards)
+            float delta = MathF.Abs(floor - original.Z);
+            if (delta > MaxHeightDeltaYards)
             {
                 return false;
             }
 
-            z = floor;
+            if (delta <= 0.4f)
+            {
+                z = floor;
+            }
         }
 
         grounded = new Vector3(candidate.X, candidate.Y, z);
@@ -245,7 +249,7 @@ public static class CreatureSplineSmoothing
         }
 
         float arm = MathF.Min(MaxCornerCutArmYards, 0.35f * MathF.Min(inLen, outLen));
-        if (arm < 0.75f)
+        if (arm < 1.25f)
         {
             return false;
         }
@@ -260,11 +264,11 @@ public static class CreatureSplineSmoothing
             return false;
         }
 
-        // Keep points at least 0.5 yards apart so 11/11/10-bit quarter-yard offsets in SMSG_MONSTER_MOVE stay distinct.
-        if (Vector3.DistanceSquared(a, q1) < 0.25f
-            || Vector3.DistanceSquared(q1, q2) < 0.25f
-            || Vector3.DistanceSquared(q2, q3) < 0.25f
-            || Vector3.DistanceSquared(q3, c) < 0.25f)
+        // Keep points at least ~0.9 yards apart so 11/11/10-bit quarter-yard offsets in SMSG_MONSTER_MOVE stay smooth and distinct.
+        if (Vector3.DistanceSquared(a, q1) < 0.81f
+            || Vector3.DistanceSquared(q1, q2) < 0.81f
+            || Vector3.DistanceSquared(q2, q3) < 0.81f
+            || Vector3.DistanceSquared(q3, c) < 0.81f)
         {
             return false;
         }
@@ -292,17 +296,21 @@ public static class CreatureSplineSmoothing
         float om = 1f - u;
         Vector3 raw = (om * om * p0) + (2f * om * u * p1) + (u * u * p2);
         float z = raw.Z;
-        if (getHeight(mapId, raw.X, raw.Y, raw.Z + 2f) is { } floor
+        if (getHeight(mapId, raw.X, raw.Y, raw.Z) is { } floor
             && float.IsFinite(floor)
             && floor > TerrainTile.InvalidHeight)
         {
-            if (MathF.Abs(floor - raw.Z) > MaxHeightDeltaYards)
+            float delta = MathF.Abs(floor - raw.Z);
+            if (delta > MaxHeightDeltaYards)
             {
                 result = default;
                 return false;
             }
 
-            z = floor;
+            if (delta <= 0.4f)
+            {
+                z = floor;
+            }
         }
 
         result = new Vector3(raw.X, raw.Y, z);
@@ -328,11 +336,9 @@ public static class CreatureSplineSmoothing
         return len > 1e-4f ? new Vector2(v.X / len, v.Y / len) : new Vector2(1f, 0f);
     }
 
-    private static uint HashSeed(ulong counter, Vector3 start, Vector3 end)
+    private static uint HashSeed(ulong counter)
     {
         uint h = (uint)counter ^ (uint)(counter >> 32) ^ 0x9E3779B9u;
-        h ^= (uint)((int)MathF.Round(start.X * 0.25f) * 73856093);
-        h ^= (uint)((int)MathF.Round(end.Y * 0.25f) * 19349663);
         h ^= h >> 16;
         h *= 0x85EBCA6Bu;
         h ^= h >> 13;

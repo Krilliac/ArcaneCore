@@ -450,7 +450,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             : PathOutcome.Mesh;
         if (outcome == PathOutcome.Mesh && corners.Count >= 2 && Map.Collision.MeshPoints is { } mesh)
         {
-            corners = CreatureSplineSmoothing.VaryAndSmooth(creature, start, corners, mesh, _height.GetHeight, pathOptions, allowVariation: !toSpawn);
+            corners = CreatureSplineSmoothing.VaryAndSmooth(
+                creature, start, corners, mesh, _height.GetHeight, pathOptions, allowVariation: !toSpawn && !creature.Combat.IsInCombat);
         }
 
         return new PlannedPath(outcome, corners);

@@ -152,6 +152,36 @@ public sealed class PlayerbotRouteSmoothingTests
         }
     }
 
+    [Fact]
+    public void Walk_OnWorldTickStepAcrossATurnVertex_StopsAtTheCornerVertex_WithNewSegmentHeading()
+    {
+        var start = new Vector3(0f, 0f, Floor);
+        var corner = new Vector3(5f, 0f, Floor);
+        var end = new Vector3(5f, 10f, Floor);
+        var route = new PlayerbotRoute([start, corner, end], 15f, navigated: true);
+
+        // Bot is 0.20 yards before the corner, moving east (heading 0) for a 50ms tick (0.35 yards).
+        Vector3 from = new(4.80f, 0f, Floor);
+        Vector3 pos = PlayerbotMotion.Walk(
+            route,
+            from,
+            nextPoint: 1,
+            distance: 0.35f,
+            heading: 0f,
+            out int newNextPoint,
+            out float newHeading,
+            out bool arrived,
+            out bool turned);
+
+        // Instead of overshooting 0.15 yards north onto leg 2 while observer clients dead-reckoned east,
+        // Walk stops at the exact corner vertex and reports leg 2's heading (+pi/2).
+        Assert.True(turned);
+        Assert.False(arrived);
+        Assert.Equal(2, newNextPoint);
+        Assert.Equal(corner, pos);
+        Assert.Equal(MathF.PI / 2f, newHeading, 3);
+    }
+
     private static float SampleYAtX(IReadOnlyList<Vector3> points, float x)
     {
         for (int i = 1; i < points.Count; i++)

@@ -246,4 +246,27 @@ public sealed class CreatureSplineSmoothingTests
         Assert.Equal(26.25f, mid.Z, 2);
         Assert.Equal(MathF.PI / 2f, midHeading, 2);
     }
+
+    [Fact]
+    public void CreatureSplineSmoothing_OnElevatedBridgeAboveTerrain_PreservesNavMeshZ()
+    {
+        var mesh = new ClearMeshQuery();
+        // Creature is on a bridge/porch at Z = 10.6f while raw terrain below is at Z = 10.0f (delta 0.6f > 0.4f).
+        var start = new Vector3(0f, 0f, 10.6f);
+        var corners = new List<Vector3>
+        {
+            new(12f, 0f, 10.6f),
+            new(12f, 12f, 10.6f),
+        };
+
+        List<Vector3> smoothed = CreatureSplineSmoothing.SmoothCorners(
+            0u,
+            start,
+            corners,
+            mesh,
+            static (_, _, _, _) => 10.0f);
+
+        Assert.Equal(4, smoothed.Count);
+        Assert.All(smoothed, pt => Assert.Equal(10.6f, pt.Z, 3));
+    }
 }

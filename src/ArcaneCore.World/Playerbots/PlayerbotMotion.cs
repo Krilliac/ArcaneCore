@@ -39,8 +39,8 @@ internal static class PlayerbotMotion
     /// <summary>A real client heartbeats about every 500 ms while moving.</summary>
     internal const uint HeartbeatIntervalMs = 500;
 
-    /// <summary>A route turn sharper than this (about 5.7 degrees) is reported at once with the new orientation, so curved spline arcs stream smooth heading updates.</summary>
-    internal const float TurnRadians = 0.10f;
+    /// <summary>A route turn sharper than this (about 11.5 degrees) is reported at once with the new orientation.</summary>
+    internal const float TurnRadians = 0.20f;
 
     /// <summary>How long a destination involved in a loop is refused.</summary>
     internal const uint LoopBlacklistMs = 60_000;
@@ -265,9 +265,10 @@ internal static class PlayerbotMotion
         state.World = session.World;
         if (!CanMove(player) || !player.IsInWorld || player.Map is not { } map || !ReferenceEquals(map, state.Map)
             || session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true
+            || player.Locomotion.ActiveSpline is not null
             || (player.Movement.Flags & MovementFlags.Forward) == 0)
         {
-            // Something else already moved or stopped the bot (death, teleport, a root acknowledgement).
+            // Something else already moved or stopped the bot (death, teleport, charge spline, a root acknowledgement).
             state.Clear();
             return;
         }
@@ -490,6 +491,7 @@ internal static class PlayerbotMotion
         turned = false;
         newNextPoint = Math.Max(1, nextPoint);
         float remaining = float.IsFinite(distance) ? MathF.Max(0, distance) : 0;
+        float walked = 0f;
         while (newNextPoint < route.Points.Count)
         {
             Vector3 target = route.Points[newNextPoint];
@@ -502,18 +504,32 @@ internal static class PlayerbotMotion
                 continue;
             }
 
-            if (remaining <= 1e-4f) break;
             float segmentHeading = Normalize(MathF.Atan2(segment.Y, segment.X));
-            if (AngleBetween(segmentHeading, newHeading) > TurnRadians) turned = true;
-            newHeading = segmentHeading;
+            if (AngleBetween(segmentHeading, newHeading) > TurnRadians)
+            {
+                turned = true;
+                newHeading = segmentHeading;
+                // On a normal world tick (remaining <= 1 yd past the vertex), stop right at the corner vertex so the turn
+                // heartbeat reports the exact corner position where observer clients' straight-line dead reckoning along the
+                // old heading arrived, avoiding sideways position snaps across corners.
+                if (walked > 0f && remaining <= 1.0f) break;
+            }
+            else
+            {
+                newHeading = segmentHeading;
+            }
+
+            if (remaining <= 1e-4f) break;
             if (remaining < length)
             {
                 position += (target - position) * (remaining / length);
+                walked += remaining;
                 remaining = 0;
                 break;
             }
 
             position = target;
+            walked += length;
             remaining -= length;
             newNextPoint++;
         }
@@ -633,25 +649,50 @@ internal static class PlayerbotMotion
     private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
     {
         if (!Finite(candidate)) return null;
+        float maxCeilingZ = MathF.Max(from.Z, candidate.Z) + 1.25f;
         if (route.LegsNavigated(fromPoint, toPoint))
         {
             float best = float.NaN;
             foreach (float raise in MeshFloorProbes)
             {
-                float floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z + raise);
+                float floor = ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, raise, maxCeilingZ);
                 if (!ValidHeight(floor) || MathF.Abs(floor - candidate.Z) > MeshFloorToleranceYards) continue;
                 if (float.IsNaN(best) || MathF.Abs(floor - candidate.Z) < MathF.Abs(best - candidate.Z)) best = floor;
+                // Only fall back to the +4 yd stair-lip probe when the standard probe found no floor near the leg.
+                if (MathF.Abs(best - candidate.Z) <= 1.25f) break;
             }
 
             return float.IsNaN(best) ? candidate : candidate with { Z = best + 0.05f };
         }
 
-        float ground = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
+        float ground = ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, 0f, maxCeilingZ);
         if (!ValidHeight(ground) || MathF.Abs(ground - candidate.Z) > 2f)
             return null;
         // Doodads (fences, trees, rocks) block a stepped leg too: the server does not collide a managed bot's movement.
         if (!PlayerbotMoveCheck.LineClear(map.Collision, from, candidate with { Z = ground })) return null;
         return candidate with { Z = ground + 0.05f };
+    }
+
+    /// <summary>
+    /// Resolve the walkable floor near <paramref name="z"/> without snapping onto overhead M2/WMO props (tree branches, bushes, fences,
+    /// roof eaves) that <see cref="MapCollision.GetHeight"/> prefers whenever <c>modelHeight &gt; mapHeight</c>.
+    /// </summary>
+    private static float ResolveWalkFloor(Map map, float x, float y, float z, float raise, float maxCeilingZ)
+    {
+        float terrain = map.Terrain.GetHeight(x, y, z);
+        float floor = map.Collision.GetHeight(x, y, z + raise);
+        if (ValidHeight(terrain) && ValidHeight(floor) && floor > terrain + 0.4f
+            && MathF.Abs(terrain - z) + 0.25f < MathF.Abs(floor - z))
+        {
+            floor = terrain;
+        }
+
+        if (ValidHeight(floor) && floor > maxCeilingZ)
+        {
+            return ValidHeight(terrain) && terrain <= maxCeilingZ ? terrain : TerrainTile.InvalidHeightValue;
+        }
+
+        return floor;
     }
 
     private static readonly float[] MeshFloorProbes = [0f, 4f];

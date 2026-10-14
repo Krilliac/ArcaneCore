@@ -288,7 +288,14 @@ public static class ForcedMovement
 
     private static float? SafeFloor(MapCollision collision, float x, float y, float z)
     {
+        float terrain = collision.Map.Terrain.GetHeight(x, y, z);
         float h = collision.GetHeight(x, y, z);
+        if (terrain > TerrainTile.InvalidHeight && float.IsFinite(terrain)
+            && h > terrain + 0.4f && MathF.Abs(terrain - z) <= 1.0f)
+        {
+            h = terrain;
+        }
+
         return h > TerrainTile.InvalidHeight && float.IsFinite(h) ? h : null;
     }
 
@@ -303,7 +310,7 @@ public static class ForcedMovement
         const float MinSegmentYards = 8.0f;
         const float StepYards = 4.0f;
         const float MinVerticalDeviationYards = 0.35f;
-        const float MaxWalkableDeltaYards = 3.5f;
+        const float MaxWalkableDeltaYards = 1.6f;
         const int MaxTotalPoints = 16;
 
         List<Vector3>? expanded = null;
@@ -358,8 +365,7 @@ public static class ForcedMovement
         {
             float t = (float)s / steps;
             Vector3 lerp = Vector3.Lerp(from, to, t);
-            float ground = collision.GetHeight(lerp.X, lerp.Y, lerp.Z + 2f);
-            if (ground <= TerrainTile.InvalidHeight || !float.IsFinite(ground))
+            if (SafeFloor(collision, lerp.X, lerp.Y, lerp.Z) is not { } ground)
             {
                 return false;
             }
@@ -547,7 +553,9 @@ public static class ForcedMovement
             return new Vector3(anchor.X, anchor.Y, anchor.Z);
         }
 
-        float z = collision?.GetHeight(x, y, anchor.Z) ?? TerrainTile.InvalidHeightValue;
+        float z = collision is not null && SafeFloor(collision, x, y, anchor.Z) is { } floor
+            ? floor
+            : TerrainTile.InvalidHeightValue;
         return new Vector3(x, y, z > TerrainTile.InvalidHeight ? z : anchor.Z);
     }
 

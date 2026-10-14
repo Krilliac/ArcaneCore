@@ -26,35 +26,35 @@ namespace ArcaneCore.World.Playerbots;
 /// </summary>
 internal static class PlayerbotRouteSmoothing
 {
-    /// <summary>Shortest navigated route that receives per-bot lateral lane offset and sinusoidal weave (flat yards).</summary>
-    internal const float MinVariedRouteYards = 18f;
+    /// <summary>Shortest navigated route that receives per-bot lateral lane offset (flat yards).</summary>
+    internal const float MinVariedRouteYards = 24f;
 
     /// <summary>Target spacing between subdivided points along long outdoor segments (flat yards).</summary>
-    internal const float SubdivisionStepYards = 11f;
+    internal const float SubdivisionStepYards = 16f;
 
     /// <summary>Distance over which lateral offset ramps from zero after the start and back to zero before the destination (flat yards).</summary>
-    internal const float EndpointTaperYards = 10f;
+    internal const float EndpointTaperYards = 12f;
 
     /// <summary>Maximum per-bot constant lateral lane offset from the Detour centerline on outdoor corridors (yards).</summary>
-    internal const float MaxLaneOffsetYards = 2.2f;
+    internal const float MaxLaneOffsetYards = 1.85f;
 
-    /// <summary>Maximum additional sinusoidal lateral weave amplitude along long outdoor corridors (yards).</summary>
-    internal const float MaxWeaveAmplitudeYards = 0.85f;
+    /// <summary>Additional sinusoidal lateral weave amplitude (0: bots hold a steady personal lane without zig-zagging).</summary>
+    internal const float MaxWeaveAmplitudeYards = 0f;
 
     /// <summary>Shortest adjacent leg length eligible for quadratic Bezier corner-cutting (flat yards).</summary>
-    internal const float MinCornerLegYards = 3.5f;
+    internal const float MinCornerLegYards = 6.0f;
 
     /// <summary>Maximum distance trimmed back from a sharp vertex along each adjacent leg when forming a corner spline (flat yards).</summary>
     internal const float MaxCornerTrimYards = 3.8f;
 
-    /// <summary>Minimum turn angle (~11.5 degrees) that triggers corner spline smoothing.</summary>
-    internal const float MinCornerRadians = 0.20f;
+    /// <summary>Minimum turn angle (~15 degrees) that triggers corner spline smoothing.</summary>
+    internal const float MinCornerRadians = 0.26f;
 
     /// <summary>Maximum turn angle (~150 degrees) eligible for corner spline smoothing (hairpins stay sharp).</summary>
     internal const float MaxCornerRadians = 2.62f;
 
     /// <summary>Maximum vertical difference allowed between an offset/smoothed point's interpolated Z and the actual floor height (yards).</summary>
-    internal const float MaxFloorDeltaYards = 1.25f;
+    internal const float MaxFloorDeltaYards = 0.75f;
 
     /// <summary>Upper bound on output waypoints so a smoothed route remains compact.</summary>
     internal const int MaxSmoothedPoints = 96;
@@ -329,7 +329,7 @@ internal static class PlayerbotRouteSmoothing
             return false;
 
         float trim = MathF.Min(MaxCornerTrimYards, 0.30f * MathF.Min(lenIn, lenOut));
-        if (trim < 0.6f)
+        if (trim < 1.5f)
             return false;
 
         Vector3 rawA = Vector3.Lerp(corner, prev, trim / lenIn);
@@ -361,13 +361,17 @@ internal static class PlayerbotRouteSmoothing
     private static bool TrySnapHeight(Map map, Vector3 candidate, out Vector3 snapped)
     {
         snapped = candidate;
+        float terrain = map.Terrain.GetHeight(candidate.X, candidate.Y, candidate.Z);
         float floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
-        if (!ValidHeight(floor))
-            floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z + 2f);
+        // When the base NavMesh point is on the terrain, refuse any offset/cut point where MapCollision.GetHeight hits an overhead
+        // M2/WMO model (fence, bush, rock, tree branch, porch eave) above the terrain.
+        if (ValidHeight(terrain) && ValidHeight(floor) && floor > terrain + 0.35f && MathF.Abs(terrain - candidate.Z) <= 0.6f)
+            return false;
+
         if (!ValidHeight(floor) || MathF.Abs(floor - candidate.Z) > MaxFloorDeltaYards)
             return false;
 
-        snapped = candidate with { Z = floor + 0.05f };
+        snapped = candidate with { Z = floor };
         return true;
     }
 

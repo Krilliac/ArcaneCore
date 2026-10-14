@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Protocol;
@@ -370,6 +371,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
             return true;
 
+        var beforePos = new System.Numerics.Vector3(player.X, player.Y, player.Z);
         var writer = new PacketWriter(24);
         writer.WriteUInt32(spell.Id);
         targets.Write(writer);
@@ -379,6 +381,12 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
         if (Accepted(feature, player, spell))
         {
+            if (player.Locomotion.ActiveSpline is not null
+                || System.Numerics.Vector3.DistanceSquared(beforePos, new System.Numerics.Vector3(player.X, player.Y, player.Z)) > 0.25f)
+            {
+                PlayerbotMotion.Reset(player);
+            }
+
             _refusedUntil.Remove(spell.Id);
             return feature.System.GetState(player.Guid)?.MeleeCast is null;
         }

@@ -315,8 +315,9 @@ internal static class PlayerbotNavigation
         // A far goal that got no route, or only a few yards of one, may mean the bot stands on a fragment of mesh no walk leaves: the
         // one straight move off it, when the ground beside it is the mesh's large part (TryFragmentHop). Asked only then (never on a
         // pending tile read, which is no verdict on the route), never per tick.
+        Vector3 current = PlayerbotMotion.CurrentPosition(player);
         if (nowMs is { } hopNow && !PendingSince(pending) && (!planned || route is { Distance: < FragmentRouteYards }) && Finite(goal)
-            && Vector2.Distance(new(player.X, player.Y), new(goal.X, goal.Y)) > FragmentGoalYards
+            && Vector2.Distance(new(current.X, current.Y), new(goal.X, goal.Y)) > FragmentGoalYards
             && TryFragmentHop(player, options, hopNow, out PlayerbotRoute? hop))
         {
             route = hop;
@@ -331,7 +332,7 @@ internal static class PlayerbotNavigation
     {
         route = null;
         if (PlayerbotAsyncNavigationPlan.Current?.Exhausted == true) return false;
-        Vector3 origin = new(player.X, player.Y, player.Z);
+        Vector3 origin = PlayerbotMotion.CurrentPosition(player);
         if (!Finite(goal) || !Finite(origin)) return false;
         float distance = Vector3.Distance(origin, goal);
         long pending = PendingMark;
@@ -593,9 +594,10 @@ internal static class PlayerbotNavigation
         Guards.TryGetValue(player, out PlayerbotRisk? risk);
         if (risk?.Blocking(player, route.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not { } hazard)
         {
-            if (!trial && route.Navigated && player.Map is { } smoothMap && smoothMap.Collision.MeshPoints is not null)
+            if (!trial && !chase && route.Navigated && player.Map is { } smoothMap && smoothMap.Collision.MeshPoints is not null)
             {
-                PlayerbotRoute smoothed = PlayerbotRouteSmoothing.VaryAndSmooth(player, smoothMap, route, varyLateral: !chase);
+                PlayerbotRoute smoothed = PlayerbotRouteSmoothing.VaryAndSmooth(
+                    player, smoothMap, route, varyLateral: !PlayerbotMotion.IsActive(player));
                 if (!ReferenceEquals(smoothed, route)
                     && risk?.Blocking(player, smoothed.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is null)
                 {
