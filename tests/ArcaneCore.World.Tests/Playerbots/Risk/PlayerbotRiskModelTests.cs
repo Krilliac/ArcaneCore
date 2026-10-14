@@ -238,6 +238,22 @@ public sealed class PlayerbotRiskModelTests
         Assert.False(caster.IsLethalTo(51));
 
         Assert.Equal(CreatureSpellThreat.None, PlayerbotCreatureSpells.Of([Cast(100, 777, 0, 0)], spells));
+
+        // Spell 13322 Frostbolt (SpellLevel 20, ScalesWithCreatureLevel, 55-64 damage every 3.1-5.1 s on level 7 Darkeye Bonecaster 1522):
+        // scaled at caster level 7 to MaxHit 19 (~4.63 DPS) instead of unscaled 64 (~15.61 DPS), so a level 7 bot engages rather than avoiding.
+        var frostbolt = new SpellInfo
+        {
+            Id = 13322,
+            Name = "Frostbolt",
+            SpellLevel = 20,
+            Attributes = (SpellAttributes)ArcaneCore.Game.Spells.Casters.CasterAttributes.ScalesWithCreatureLevel,
+            Effects = [new SpellEffectInfo { Effect = SpellEffectName.SchoolDamage, TargetA = SpellImplicitTarget.UnitEnemy, BasePoints = 54, DieSides = 10 }],
+        };
+        CreatureSpellThreat bonecasterLv7 = PlayerbotCreatureSpells.Of([Cast(1522, 13322, 3100, 5100)], id => id == 13322 ? frostbolt : null, casterLevel: 7);
+        CreatureSpellThreat bonecasterLv20 = PlayerbotCreatureSpells.Of([Cast(1522, 13322, 3100, 5100)], id => id == 13322 ? frostbolt : null, casterLevel: 20);
+        Assert.Equal(19, bonecasterLv7.MaxHit);
+        Assert.Equal(64, bonecasterLv20.MaxHit);
+        Assert.True(bonecasterLv7.Dps < 5f);
     }
 
     private static CreatureAiEvent Cast(uint creature, uint spell, int repeatMin, int repeatMax) => new()

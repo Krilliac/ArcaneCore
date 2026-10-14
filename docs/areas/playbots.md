@@ -128,7 +128,9 @@ local hand-ins after long objective travel. It can exclude other legitimate long
 same-map distance limit. Terrain and hostile pockets have separate limits; long trips may be flown (see Flight paths).
 At pickup and offscreen travel (`MayTakeQuest`, `RefreshEntries`), `PlayerbotQuestGoals.CanExecuteObjectives` also skips
 non-auto-complete quests whose mechanics bots do not execute: exploration/escort/event-script quests (`QuestSpecialFlags.ExplorationOrEvent`),
-GameObject objectives without an item-use source (`ReqCreatureOrGOId < 0`), spell-cast or friendly creature objectives without a quest source item
+GameObject objectives without an item-use source (`ReqCreatureOrGOId < 0`), item objectives (`ReqItemId`) not provided by `SrcItemId`, not already held in
+inventory, not sold by any vendor (`NpcCatalog.SellsItem`), and having zero creature droppers in loaded `LootContent` (`PlayerbotDropIndex.DroppersOf`, such as
+GameObject-harvested quest 365 "Fields of Grief" or 3902 "Scavenging Deathknell"), spell-cast or friendly creature objectives without a quest source item
 (`ReqSpell != 0` or `!IsKillObjective` when `SrcItemId == 0`, such as quest 5382 "Doctor Theolen Krastinov, the Butcher"), and creature objectives whose
 spawns exist only on another continent or an instance without an entrance trigger on the bot's map. When a creature objective (`ReqCreatureOrGOId > 0`)
 is friendly or requires a spell cast and the quest provides a source item (`SrcItemId != 0`, such as quest 5441 "Lazy Peons" with Foreman's Blackjack 16114
@@ -682,13 +684,13 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
 * **Staying inside.** "Inside" means inside the circle and, for a clipped home, in its zone. Goal selection ignores creatures outside the area (`IsSkipped`; a
   bot still fights back against whatever attacks it), new quests are taken only from a giver inside the area and only if every creature that ends the quest
   and every creature it asks to kill has a spawn inside (`QuestInside`), the destinations of the world walks (quest givers, enders, kill spawns) are the
-  ones inside, and an exploring bot whose next leg would end out of the zone aims it at the centre instead.
+  ones inside, and an exploring bot inside `ExploreRadius` whose next leg would cross a clipped home's zone border deflects along the boundary (`ZoneBorderDeflectDegrees`, `DeflectZoneBorderLeg`: ±35°, ±65°, ±95°, ±125° from its heading) before falling back to the centre.
 * **Walking home.** A bot on the home map outside the radius, or inside it but out of a clipped home's zone (a bot that wandered over to Raven Hill), with
   no errand, drops its intent and walks to the centre through the ordinary route planner
   (`PlayerbotNavigation`), in route-sized legs with the same hazard guard and risk model as every other walk. **Hysteresis:** it starts at 1.0 of the
   radius and stops at **0.75** (`ReturnFraction`) and back in the zone, so it does not oscillate at the edge; the way back itself may cross other zones (it
   is never restricted). A clipped home whose zone is not known is walked by the circle alone. An exploring bot beyond **0.8** of the radius (`ExploreFraction`)
-  aims its next leg at the centre instead of further out; when that leg is refused (on the motion's loop blacklist, through a hazard, no path) the
+  aims its next leg at the centre instead of further out (while inside `ExploreFraction`, a leg that leaves a clipped home's zone deflects along the zone boundary first so a graduated start-zone home with `FreshZoneHomeRadius` 4500 follows the zone's interior instead of snapping 180° back to the level-1 start spawn); when that inward leg is refused (on the motion's loop blacklist, through a hazard, no path) the
   next ones turn 25, 50 and 75 degrees either side of it (`PlayerbotBrain.InwardFanDegrees`, `InwardLeg`), instead of asking for the refused one again on
   every think. A turned leg is at most the bot's distance × cos of the turn long, so it always ends closer to the centre than the bot (inside the home,
   also in a small one); a turn whose leg would end out of a clipped home's zone is skipped for the next one (live 2026-10-11, bot QA #154: 74 of 204 stalls 460-480 yards from the Sentinel Hill centre). A stall reported by `PlayerbotStallWatch` sets the walk aside for 30 s at once (state

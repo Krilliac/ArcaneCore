@@ -12464,15 +12464,15 @@ World.Playerbots.Population.FreshStartZoneCap = 40
 #
 #    World.Playerbots.Population.FreshZoneHomeRadius
 #        Description: The radius in yards of the graduated home, between FreshGraduateLevel and
-#                     FreshReleaseLevel (50..5000). It is clipped to the start zone, so it never
-#                     reaches the next one.
+#                     FreshReleaseLevel (50..5000). 4500 covers every starter zone end-to-end from
+#                     its level-1 spawn while ZoneClipped keeps the bot inside its start zone.
 #        Type: int
-#        Default: 1500
+#        Default: 4500
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Population.FreshZoneHomeRadius = 1500
+World.Playerbots.Population.FreshZoneHomeRadius = 4500
 
 #
 #    World.Playerbots.Population.IntervalSeconds

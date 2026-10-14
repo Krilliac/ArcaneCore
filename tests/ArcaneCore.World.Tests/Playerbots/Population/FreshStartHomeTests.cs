@@ -215,7 +215,7 @@ public sealed class FreshStartHomeTests
         await NextPassAsync(world);
         PlayerbotHome widened = world.Bots.HomeOf(bots[0])!;
         Assert.StartsWith("zone:", widened.Place);
-        Assert.Equal(1500f, widened.Radius);
+        Assert.Equal(4500f, widened.Radius);
         Assert.True(widened.ZoneClipped);
         Assert.True(world.Bots.FindBrain(bots[0])!.ActiveFilterHome!.AllowsLeaveQuests);
         Assert.StartsWith("start:", world.Bots.HomeOf(bots[1])!.Place); // the other bot is still level 1
@@ -432,7 +432,7 @@ public sealed class FreshStartHomeTests
     private static void FarFromHome(PopulationTestHost world, out float x, out float y)
     {
         StartPosition start = FreshLaunchTests.RaceStartDataStore.StartOf(1);
-        (x, y) = (start.X + 4000f, start.Y);
+        (x, y) = (start.X + 6000f, start.Y);
     }
 
     [Fact]
@@ -524,7 +524,7 @@ public sealed class FreshStartHomeTests
     {
         var options = new PlayerbotPopulationOptions();
         Assert.True(options.FreshStartHome);
-        Assert.Equal((1100, 6, 1500, 12, 40), (options.FreshStartHomeRadius, options.FreshGraduateLevel, options.FreshZoneHomeRadius, options.FreshReleaseLevel, options.FreshStartZoneCap));
+        Assert.Equal((1100, 6, 4500, 12, 40), (options.FreshStartHomeRadius, options.FreshGraduateLevel, options.FreshZoneHomeRadius, options.FreshReleaseLevel, options.FreshStartZoneCap));
         Assert.Equal((0, 10), (options.LeaveHomeLevelMargin, options.TramMinLevel));
         options.Validate();
 

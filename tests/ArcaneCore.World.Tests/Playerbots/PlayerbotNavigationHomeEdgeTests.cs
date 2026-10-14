@@ -116,4 +116,25 @@ public sealed class PlayerbotNavigationHomeEdgeTests
             return cos >= MathF.Cos(degrees * MathF.PI / 180f) ? PathResult.None(start) : PathResult.StraightLine(start, end, PathType.Normal);
         }
     }
+
+    [Fact]
+    public void DeflectZoneBorderLeg_InsideExploreRadius_DeflectsAlongBorderInsteadOfSnappingBackToStartCentre()
+    {
+        // Model Tirisfal Glades graduated home centred on Deathknell (1676, 1677) with radius 4500 (ExploreRadius 3600)
+        // and a southern zone border at X = 2200 (near Cold Hearth Manor, where stepping further south crosses into Silverpine).
+        var deathknell = new Vector3(1676f, 1677f, 35f);
+        var home = new PlayerbotHomeArea(0, deathknell, 4500f, "zone:deathknell", zoneClipped: true,
+            zones: new PlayerbotZoneLookup((x, _, _) => x <= 2200f ? 85u : 130u));
+
+        // Bot stands at Cold Hearth Manor (2185, 660), 1137 yards from Deathknell (well inside ExploreRadius 3600),
+        // heading south-southeast (angle = -pi/6) so a straight 48-yard leg crosses X > 2200 into Silverpine (zone 130).
+        var manor = new Vector3(2185f, 660f, 35f);
+        float angle = -MathF.PI / 6f;
+        Vector3 deflected = PlayerbotBrain.DeflectZoneBorderLeg(home, manor, angle, preferPositive: false, refusals: 0);
+
+        Assert.True(home.InZone(deflected.X, deflected.Y, deflected.Z), "deflected leg must remain in Tirisfal Glades");
+        Assert.True(home.DistanceTo(deflected.X, deflected.Y) <= home.ExploreRadius);
+        // Rather than snapping northwest toward Deathknell (Y > manor.Y), the deflected leg continues further across the zone (Y < manor.Y).
+        Assert.True(deflected.Y < manor.Y, $"expected deflection along the zone border (Y < {manor.Y}), got ({deflected.X:F1}, {deflected.Y:F1})");
+    }
 }

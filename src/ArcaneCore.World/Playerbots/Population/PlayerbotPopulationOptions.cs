@@ -219,8 +219,8 @@ public sealed class PlayerbotPopulationOptions
     /// <summary>The level at which a start home widens to FreshZoneHomeRadius (2..60). A leave-home quest (see LeaveHomeLevelMargin) is allowed only from here.</summary>
     public int FreshGraduateLevel { get; set; } = 6;
 
-    /// <summary>The radius in yards of the graduated home, between FreshGraduateLevel and FreshReleaseLevel (50..5000). It is clipped to the start zone, so it never reaches the next one.</summary>
-    public int FreshZoneHomeRadius { get; set; } = 1500;
+    /// <summary>The radius in yards of the graduated home, between FreshGraduateLevel and FreshReleaseLevel (50..5000). 4500 covers every starter zone end-to-end from its level-1 spawn while ZoneClipped keeps the bot inside its start zone.</summary>
+    public int FreshZoneHomeRadius { get; set; } = 4500;
 
     /// <summary>The level at which a graduated home is removed (2..60; at least FreshGraduateLevel, equal skips the widened home).</summary>
     public int FreshReleaseLevel { get; set; } = 12;

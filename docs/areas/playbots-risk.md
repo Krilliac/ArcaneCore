@@ -48,7 +48,7 @@ For each candidate the predicted fight is the target plus:
 **Risk** is the damage the bot is predicted to take killing them one at a time, quickest first (each hits until it dies: its
 template melee damage per second, or level x 1, x 2.5 for an elite, when the template has none, plus its spells: each EventAI
 CAST action (cmangos `creature_ai_scripts` action 11) deals its `spell_template` damage (school, weapon, health leech, every tick
-of a periodic damage aura, dice at their top) every `(Param3 + Param4) / 2` ms of its event, 10 s when the row gives none), as a share of the bot's current
+of a periodic damage aura, dice at their top, scaled by `creature_classlevelstats` class-1 `melee_damage` at the creature's `MaxLevel` when `SpellAttributes.ScalesWithCreatureLevel` `0x00080000` is set, vmangos `SpellCaster.cpp:1215-1225`) every `(Param3 + Param4) / 2` ms of its event, 10 s when the row gives none), as a share of the bot's current
 health. The bot's damage per second is `2 + 1.8 x level` before its first fight, and after each fight 70% of the estimate so far
 plus 30% of what it dealt in that fight's last 8 seconds (a moving average that starts from the level estimate: a window of a few
 swings moves by a third with misses and dodges, and one unlucky one taken alone put same-level creatures out of reach for good,

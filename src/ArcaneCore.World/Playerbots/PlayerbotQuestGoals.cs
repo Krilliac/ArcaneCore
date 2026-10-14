@@ -869,6 +869,18 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             }
         }
 
+        ArcaneCore.Kernel.WorldData.Loot.LootContent? loot = null;
+        for (int i = 0; i < quest.ReqItemId.Count; i++)
+        {
+            uint item = quest.ReqItemId[i];
+            uint needed = quest.ReqItemCount[i];
+            if (item == 0 || needed == 0 || item == quest.Template.SrcItemId) continue;
+            if (player.Inventory.GetItemCount(item) >= needed || services.Npcs.SellsItem(item)) continue;
+            loot ??= session?.Services.GetService<GameObjectLootFeature>()?.LootContent;
+            if (loot is not { RowCount: > 0 }) continue;
+            if (PlayerbotDropIndex.DroppersOf(loot, item).Count == 0) return false;
+        }
+
         return true;
     }
 

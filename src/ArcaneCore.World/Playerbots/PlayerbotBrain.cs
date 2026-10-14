@@ -2363,6 +2363,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// out of a clipped home's zone (a wander across the Westfall-Duskwood border inside the circle). Back in is the centre first,
     /// then, while legs are refused, a fan around it (InwardLeg). Takes the next direction of the rotation (<c>_roamDirection</c>).
     /// </summary>
+    private static readonly float[] BorderDeflectDegrees = [45f, -45f, 90f, -90f, 135f, -135f];
+
     private System.Numerics.Vector3 WanderLegEnd(Player player, System.Numerics.Vector3 from, float orientation)
     {
         int attempt = _roamDirection++;
@@ -2374,11 +2376,45 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             from.X + (MathF.Cos(angle) * ExploreLegYards),
             from.Y + (MathF.Sin(angle) * ExploreLegYards),
             from.Z);
-        if (_home is { } area && (player.Map?.MapId ?? player.MapId) == area.MapId
-            && (area.DistanceTo(from.X, from.Y) > area.ExploreRadius
-                || area.ZoneClipped && !area.InZone(destination.X, destination.Y, destination.Z)))
-            destination = InwardLeg(area, from, _exploreRefusals);
+        if (_home is { } area && (player.Map?.MapId ?? player.MapId) == area.MapId)
+        {
+            if (area.DistanceTo(from.X, from.Y) > area.ExploreRadius)
+            {
+                destination = InwardLeg(area, from, _exploreRefusals);
+            }
+            else if (area.ZoneClipped && !area.InZone(destination.X, destination.Y, destination.Z))
+            {
+                destination = DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals);
+            }
+        }
         return destination;
+    }
+
+    /// <summary>
+    /// When a wandering bot stands inside <see cref="PlayerbotHomeArea.ExploreRadius"/> and its forward leg crosses a clipped home's
+    /// zone boundary (such as the southern Tirisfal hills behind Cold Hearth Manor), try deflecting along the border first so the bot
+    /// continues across the zone rather than snapping its heading straight back toward the level-1 start spawn.
+    /// </summary>
+    internal static System.Numerics.Vector3 DeflectZoneBorderLeg(PlayerbotHomeArea area, System.Numerics.Vector3 from,
+        float baseAngle, bool preferPositive, int refusals)
+    {
+        for (int i = 0; i < BorderDeflectDegrees.Length; i++)
+        {
+            int step = (i + (Math.Max(0, refusals) * 2)) % BorderDeflectDegrees.Length;
+            int idx = preferPositive ? step : (step ^ 1);
+            float candidateAngle = baseAngle + (BorderDeflectDegrees[idx] * (MathF.PI / 180f));
+            var candidate = new System.Numerics.Vector3(
+                from.X + (MathF.Cos(candidateAngle) * ExploreLegYards),
+                from.Y + (MathF.Sin(candidateAngle) * ExploreLegYards),
+                from.Z);
+            if (area.DistanceTo(candidate.X, candidate.Y) <= area.ExploreRadius
+                && area.InZone(candidate.X, candidate.Y, candidate.Z))
+            {
+                return candidate;
+            }
+        }
+
+        return InwardLeg(area, from, refusals);
     }
 
     /// <summary>

@@ -13,6 +13,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Items;
 using ArcaneCore.World.Net;
@@ -40,6 +41,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
         {
             services.AddSingleton<IQuestContentStore>(fixture);
             services.AddSingleton<ICreatureDataStore>(fixture);
+            services.AddScoped<ILootDataStore>(_ => fixture);
             services.AddSingleton<ICharacterQuestStore>(new MemoryQuestStore());
             services.AddSingleton(new FactionTemplateCatalog(
             [
@@ -52,8 +54,9 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
         try
         {
             await host.WaitForWorldAsync(
-                () => session.Player!.Map?.FindObject(UnsupportedMechanicsFixture.GiverGuid) is Creature,
-                "quest giver spawned");
+                () => session.Player!.Map?.FindObject(UnsupportedMechanicsFixture.GiverGuid) is Creature
+                    && host.WorldServices.GetRequiredService<ArcaneCore.World.GameObjects.GameObjectLootFeature>().LootContent.RowCount > 0,
+                "quest giver spawned and loot loaded");
             await host.World.InvokeAsync(() =>
             {
                 WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
@@ -81,6 +84,14 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                 Assert.True(PlayerbotQuestGoals.CanExecuteObjectives(
                     session, player, services, content, services.Quests.Get(UnsupportedMechanicsFixture.SupportedKillQuest)!));
 
+                // When LootContent is loaded, an item objective with zero creature droppers (a GameObject-harvest quest such as
+                // 365 Fields of Grief or 3902 Scavenging Deathknell) is rejected unless the player already holds the items,
+                // whereas an item objective dropped by a creature remains executable.
+                Assert.False(PlayerbotQuestGoals.CanExecuteObjectives(
+                    session, player, services, content, services.Quests.Get(UnsupportedMechanicsFixture.GameObjectItemQuest)!));
+                Assert.True(PlayerbotQuestGoals.CanExecuteObjectives(
+                    session, player, services, content, services.Quests.Get(UnsupportedMechanicsFixture.CreatureDroppedItemQuest)!));
+
                 var options = new PlayerbotOptions { Enabled = true };
                 var destinations = new PlayerbotWorldDestinations(session, options);
                 var goals = new PlayerbotQuestGoals(session, options);
@@ -95,6 +106,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                     UnsupportedMechanicsFixture.SpellCastQuest,
                     UnsupportedMechanicsFixture.ExplorationQuest,
                     UnsupportedMechanicsFixture.OffMapCreatureQuest,
+                    UnsupportedMechanicsFixture.GameObjectItemQuest,
                 ];
                 Assert.False(destinations.HasQuestCandidate(player));
                 player.VisibleObjects.Add(UnsupportedMechanicsFixture.GiverGuid);
@@ -159,6 +171,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
             {
                 services.AddSingleton<IQuestContentStore>(fixture);
                 services.AddSingleton<ICreatureDataStore>(fixture);
+                services.AddScoped<ILootDataStore>(_ => fixture);
                 services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(spellsWithBlackjack));
                 services.AddSingleton<ICharacterQuestStore>(new MemoryQuestStore());
                 services.AddSingleton(new FactionTemplateCatalog(
@@ -176,8 +189,9 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
             try
             {
                 await host.WaitForWorldAsync(
-                    () => session.Player!.Map?.FindObject(UnsupportedMechanicsFixture.PeonGuid) is Creature,
-                    "lazy peon spawned");
+                    () => session.Player!.Map?.FindObject(UnsupportedMechanicsFixture.PeonGuid) is Creature
+                        && host.WorldServices.GetRequiredService<ArcaneCore.World.GameObjects.GameObjectLootFeature>().LootContent.RowCount > 0,
+                    "lazy peon spawned and loot loaded");
                 await host.World.InvokeAsync(() =>
                 {
                     WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
@@ -335,7 +349,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
             => PathResult.StraightLine(start, end, PathType.Normal);
     }
 
-    private sealed class UnsupportedMechanicsFixture : IQuestContentStore, ICreatureDataStore
+    private sealed class UnsupportedMechanicsFixture : IQuestContentStore, ICreatureDataStore, ILootDataStore
     {
         internal const uint GiverEntry = 11378;
         internal const uint FriendlyPeonEntry = 10556;
@@ -344,6 +358,8 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
         internal const uint FriendlyFaction = 900021;
         internal const uint HostileFaction = 900022;
         internal const uint ForemansBlackjackItem = 16114;
+        internal const uint TirisfalPumpkinItem = 2846;
+        internal const uint FamiliarClawItem = 940090;
         internal static readonly ObjectGuid GiverGuid = ObjectGuid.WithEntry(HighGuid.Unit, GiverEntry, 940001);
         internal static readonly ObjectGuid PeonGuid = ObjectGuid.WithEntry(HighGuid.Unit, FriendlyPeonEntry, 940002);
 
@@ -355,6 +371,8 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
         internal const uint OffMapCreatureQuest = 940013;
         internal const uint SupportedKillQuest = 940014;
         internal const uint ItemUseLazyPeonsQuest = 940015;
+        internal const uint GameObjectItemQuest = 365;
+        internal const uint CreatureDroppedItemQuest = 940016;
 
         public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
         {
@@ -402,15 +420,32 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                     Entry = SupportedKillQuest, Method = 2, MinLevel = 1, QuestLevel = 4, Title = "Vile Familiars",
                     ReqCreatureOrGOId1 = (int)HostileMobEntry, ReqCreatureOrGOCount1 = 1,
                 },
+                new()
+                {
+                    Entry = GameObjectItemQuest, Method = 2, MinLevel = 1, QuestLevel = 4, Title = "Fields of Grief",
+                    ReqItemId1 = TirisfalPumpkinItem, ReqItemCount1 = 10,
+                },
+                new()
+                {
+                    Entry = CreatureDroppedItemQuest, Method = 2, MinLevel = 1, QuestLevel = 4, Title = "Familiar Claws",
+                    ReqItemId1 = FamiliarClawItem, ReqItemCount1 = 4,
+                },
             ];
             uint[] allQuests =
             [
                 LazyPeonsQuest, ItemUseLazyPeonsQuest, DungeonQuest, GameObjectQuest, SpellCastQuest,
-                ExplorationQuest, OffMapCreatureQuest, SupportedKillQuest,
+                ExplorationQuest, OffMapCreatureQuest, SupportedKillQuest, GameObjectItemQuest,
             ];
             CreatureQuestRelation[] relations = [.. allQuests.Select(q => new CreatureQuestRelation { Id = GiverEntry, Quest = q })];
             return Task.FromResult(new QuestContent(templates, relations, relations));
         }
+
+        Task<LootContent> ILootDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new LootContent(
+            [
+                (LootTableKind.GameObject, new LootStoreRow(375, TirisfalPumpkinItem, -100f, 0, 1, 1)),
+                (LootTableKind.Creature, new LootStoreRow(HostileMobEntry, FamiliarClawItem, -100f, 0, 1, 1)),
+            ],
+            [new CreatureLootInfo(HostileMobEntry, HostileMobEntry, 0, 0, 0)]));
 
         Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
             [

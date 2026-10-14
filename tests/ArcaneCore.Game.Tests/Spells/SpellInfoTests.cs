@@ -60,4 +60,30 @@ public sealed class SpellInfoTests
         SpellInfo percent = spell with { ManaCostPercentage = 10 };
         Assert.Equal(40, percent.CalculatePowerCost(1, 0, 0, 60, 100, 60));
     }
+
+    [Fact]
+    public void EffectValue_ScalesWithCreatureLevel_MatchesVmangosSpellCaster()
+    {
+        // Spell 13322 Frostbolt (Darkeye Bonecaster 1522, Defias Rogue Wizard 474): SpellLevel 20, Attributes 0x00090000 (ScalesWithCreatureLevel),
+        // Effect1 SchoolDamage (BasePoints 54, BaseDice 1, DieSides 10) -> unscaled roll [55..64], scaled at level 7 by 10.3671 / 34.2057 (~0.3031) -> [16..19].
+        var damage = new SpellEffectInfo { Effect = SpellEffectName.SchoolDamage, BasePoints = 54, BaseDice = 1, DieSides = 10 };
+        var slow = new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModDecreaseSpeed, BasePoints = -41, BaseDice = 1, DieSides = 1 };
+        SpellInfo frostbolt = new()
+        {
+            Id = 13322,
+            SpellLevel = 20,
+            Attributes = (SpellAttributes)ArcaneCore.Game.Spells.Casters.CasterAttributes.ScalesWithCreatureLevel,
+            Effects = [damage, slow],
+        };
+
+        var random = new Random(7);
+        for (int i = 0; i < 20; i++)
+        {
+            Assert.InRange(SpellMath.CalculateEffectValue(frostbolt, damage, 7, random), 16, 19);
+            Assert.InRange(SpellMath.CalculateEffectValue(frostbolt, damage, 20, random), 55, 64);
+        }
+
+        // SPELL_AURA_MOD_DECREASE_SPEED is exempt from creature-level scaling (vmangos SpellCaster.cpp:1218).
+        Assert.Equal(-40, SpellMath.CalculateEffectValue(frostbolt, slow, 7, random));
+    }
 }

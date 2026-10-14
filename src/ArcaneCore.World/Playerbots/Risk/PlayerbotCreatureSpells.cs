@@ -39,7 +39,7 @@ internal static class PlayerbotCreatureSpells
     // threads at once can corrupt itself and throw or spin).
     private static readonly ConditionalWeakTable<SpellStore, ConditionalWeakTable<CreatureAiContent, ConcurrentDictionary<CacheKey, CreatureSpellThreat>>> Cache = [];
 
-    private readonly record struct CacheKey(uint Entry, uint SpawnGuid, bool DebugOnlyRows);
+    private readonly record struct CacheKey(uint Entry, uint SpawnGuid, byte CasterLevel, bool DebugOnlyRows);
 
     internal static CreatureSpellThreat Of(Creature creature, SpellStore? store)
     {
@@ -47,15 +47,15 @@ internal static class PlayerbotCreatureSpells
         EventAiContext context = ai.Engine.Context;
         CreatureAiContent content = context.Content;
         uint spawnGuid = creature.Spawn is { } spawn && content.GetGuidEvents(spawn.Guid).Count > 0 ? spawn.Guid : 0;
-        var key = new CacheKey(creature.Entry, spawnGuid, context.Options.DebugOnlyEvents);
+        var key = new CacheKey(creature.Entry, spawnGuid, creature.Level, context.Options.DebugOnlyEvents);
         ConcurrentDictionary<CacheKey, CreatureSpellThreat> cache = Cache.GetOrCreateValue(store).GetOrCreateValue(content);
         if (cache.TryGetValue(key, out CreatureSpellThreat known)) return known;
-        CreatureSpellThreat threat = Of(ai.Engine.Holders.Select(h => h.Event), store.Get);
+        CreatureSpellThreat threat = Of(ai.Engine.Holders.Select(h => h.Event), store.Get, creature.Level);
         if (cache.Count < MaxCachedEntries) cache.TryAdd(key, threat);
         return threat;
     }
 
-    internal static CreatureSpellThreat Of(IEnumerable<CreatureAiEvent> events, Func<uint, SpellInfo?> spells)
+    internal static CreatureSpellThreat Of(IEnumerable<CreatureAiEvent> events, Func<uint, SpellInfo?> spells, byte casterLevel = 0)
     {
         float dps = 0;
         int maxHit = 0;
@@ -65,7 +65,7 @@ internal static class PlayerbotCreatureSpells
             foreach (CreatureAiAction action in row.Actions)
             {
                 if (action.Type != ActionCast || action.Param1 <= 0 || spells((uint)action.Param1) is not { } spell) continue;
-                (int hit, bool kills) = Damage(spell);
+                (int hit, bool kills) = Damage(spell, casterLevel);
                 instakill |= kills;
                 if (hit <= 0) continue;
                 maxHit = Math.Max(maxHit, hit);
@@ -77,14 +77,17 @@ internal static class PlayerbotCreatureSpells
         return new CreatureSpellThreat(dps, maxHit, instakill);
     }
 
-    /// <summary>One cast's damage (dice at their top; a periodic aura's every tick) and whether it kills outright.</summary>
-    internal static (int Damage, bool Instakill) Damage(SpellInfo spell)
+    /// <summary>One cast's damage (dice at their top; a periodic aura's every tick; scaled by <paramref name="casterLevel"/> when <c>SPELL_ATTR_SCALES_WITH_CREATURE_LEVEL</c> is set) and whether it kills outright.</summary>
+    internal static (int Damage, bool Instakill) Damage(SpellInfo spell, byte casterLevel = 0)
     {
         int damage = 0;
         bool instakill = false;
         foreach (SpellEffectInfo effect in spell.Effects)
         {
-            int points = effect.BasePoints + Math.Max(1, effect.DieSides);
+            float points = effect.BasePoints + Math.Max(1, effect.DieSides);
+            if (casterLevel > 0 && SpellMath.ShouldScaleWithCreatureLevel(spell, effect))
+                points *= SpellMath.CreatureLevelScaleFactor(casterLevel, spell.SpellLevel);
+            int scaled = (int)points;
             switch (effect.Effect)
             {
                 case SpellEffectName.Instakill:
@@ -92,10 +95,10 @@ internal static class PlayerbotCreatureSpells
                     break;
                 case SpellEffectName.SchoolDamage or SpellEffectName.HealthLeech or SpellEffectName.WeaponDamage
                     or SpellEffectName.WeaponDamageNoschool or SpellEffectName.NormalizedWeaponDmg:
-                    damage += Math.Max(0, points);
+                    damage += Math.Max(0, scaled);
                     break;
                 case SpellEffectName.ApplyAura when effect.AuraType == AuraType.PeriodicDamage && effect.Amplitude > 0:
-                    damage += Math.Max(0, points) * Math.Max(1, spell.GetDuration() / (int)effect.Amplitude);
+                    damage += Math.Max(0, scaled) * Math.Max(1, spell.GetDuration() / (int)effect.Amplitude);
                     break;
             }
         }

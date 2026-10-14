@@ -15486,11 +15486,11 @@
       "kind": "scalar",
       "elementType": "int",
       "enumValues": null,
-      "default": "1500",
+      "default": "4500",
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The radius in yards of the graduated home, between FreshGraduateLevel and FreshReleaseLevel (50..5000). It is clipped to the start zone, so it never reaches the next one.",
+      "meaning": "The radius in yards of the graduated home, between FreshGraduateLevel and FreshReleaseLevel (50..5000). 4500 covers every starter zone end-to-end from its level-1 spawn while ZoneClipped keeps the bot inside its start zone.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
