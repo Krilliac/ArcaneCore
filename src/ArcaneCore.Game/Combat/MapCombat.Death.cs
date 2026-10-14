@@ -31,6 +31,7 @@ public sealed partial class MapCombat
 
         c.DeathTimer = CombatConstants.CorpseRepopTimeMs;
         UpdateCorpseReclaimDelay(player);
+        player.NeedsVisibilityUpdate = true;
     }
 
     /// <summary>
@@ -426,6 +427,7 @@ public sealed partial class MapCombat
         Hooks.RemoveGhostForm(player);
         SetGhost(player, false, wasGhost);
         player.SetRooted(false);
+        player.SetByte(UpdateFields.PlayerFieldBytes, 0, (byte)(player.GetByte(UpdateFields.PlayerFieldBytes, 0) & ~FieldByteReleaseTimer));
         player.SetUInt32(UpdateFields.PlayerSelfResSpell, 0); // "clear self-resurrection state after resurrection by another way"
 
         if (restorePercent > 0f)
@@ -434,6 +436,7 @@ public sealed partial class MapCombat
         }
 
         player.Combat.DeathTimer = 0;
+        player.Combat.ResurrectedUnflushed = true;
         player.NeedsVisibilityUpdate = true;
         player.LastEnvironmentalDeath = null; // observation-only: a death source no brain recorded must not label the next death
         player.LastMissingCasterPeriodicDeath = false;

@@ -124,6 +124,12 @@ public sealed class UnitCombat
     /// <summary>The player's corpse while released (vmangos Player::GetCorpse).</summary>
     public Corpse? Corpse { get; internal set; }
 
+    /// <summary>True while a resurrection's values update has not yet been flushed to the client in this tick.</summary>
+    internal bool ResurrectedUnflushed { get; set; }
+
+    /// <summary>World-tick timestamp of the last rate-limited life/root desync diagnostic warning for this player.</summary>
+    public uint LastLifeDesyncLogMs { get; set; }
+
     // --- PvP flag (vmangos Player::pvpInfo) -----------------------------------------
 
     /// <summary>In combat with a PvP-flagged enemy (vmangos pvpInfo.inPvPCombat).</summary>

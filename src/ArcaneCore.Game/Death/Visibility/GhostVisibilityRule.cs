@@ -85,7 +85,7 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
         }
 
         bool spiritService = (target.GetUInt32(UpdateFields.UnitNpcFlags) & SpiritServiceFlags) != 0;
-        bool viewerLiving = viewer.IsAlive || viewer.Combat.DeathTimer > 0;
+        bool viewerLiving = viewer.Combat.DeathState != DeathState.Dead;
         if (viewerLiving)
         {
             // IsInvisibleForAlive differs between a living viewer and a living spirit service: the living cannot see it.

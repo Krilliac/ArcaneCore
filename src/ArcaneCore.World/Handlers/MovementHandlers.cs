@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Locomotion;
@@ -8,6 +9,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Handlers;
 
@@ -156,6 +158,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         antiCheat?.BeforeMovement(session, player, opcode, movement);
         ApplyObserved(session, player, opcode, movement);
         antiCheat?.AfterMovement(player);
+        CheckAndHealLifeStateDesync(session, player, opcode, in movement);
         // MovementHandler.cpp:1115-1131: a free move that is not a long fall is the unstuck point (SaveNoUndermapPosition: z + 3, then + 2).
         if (!movement.HasFlag(MovementFlags.FallingFar) && !movement.HasFlag(MovementFlags.OnTransport)
             && (player.UnitFlags & (UnitFlags.RemoveClientControl | UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing)) == 0)
@@ -168,6 +171,54 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         }
 
         RelayStoredMovement(player, opcode);
+    }
+
+    /// <summary>
+    /// Detect and self-heal client/server life-state and root split-brain conditions on real clients:
+    /// if a player in <see cref="DeathState.Corpse"/> or <see cref="DeathState.JustDied"/> continues sending moving packets
+    /// after the root order was acknowledged or enforced, log a rate-limited warning, re-order <c>SMSG_FORCE_MOVE_ROOT</c>,
+    /// and force-refresh the client's life/death update fields and visibility.
+    /// </summary>
+    private static void CheckAndHealLifeStateDesync(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement)
+    {
+        if (session.IsPlayerbot)
+        {
+            return;
+        }
+
+        DeathState deathState = player.Combat.DeathState;
+        if (deathState is DeathState.Corpse or DeathState.JustDied
+            && (movement.Flags & MovementFlags.MaskMoving) != 0
+            && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root))
+        {
+            uint nowMs = session.World.NowMs;
+            if (player.Combat.LastLifeDesyncLogMs == 0 || nowMs - player.Combat.LastLifeDesyncLogMs >= 5000u)
+            {
+                player.Combat.LastLifeDesyncLogMs = nowMs == 0 ? 1u : nowMs;
+                session.Logger.LogWarning(
+                    "[{Endpoint}] client-state desync detected for '{Player}' (guid={Guid}, map={MapId}): client sent moving {Opcode} (flags=0x{Flags:X}) while in {DeathState} (health={Health}, isRooted={IsRooted}, deathTimer={DeathTimer}ms); re-ordering root and forcing life-state fields",
+                    session.RemoteEndpoint, player.Name, player.Guid.Low, player.MapId, WorldOpcodeNames.GetName(opcode), (uint)movement.Flags,
+                    deathState, player.Health, player.IsRooted, player.Combat.DeathTimer);
+                player.SetRooted(true);
+                MovementControl.Order(player, MovementChangeType.Root, true);
+                player.ForceFieldUpdate(UpdateFields.UnitFieldHealth);
+                player.ForceFieldUpdate(UpdateFields.UnitFieldBytes1);
+                player.ForceFieldUpdate(UpdateFields.PlayerFlags);
+                player.ForceFieldUpdate(UpdateFields.PlayerFieldBytes);
+                player.NeedsVisibilityUpdate = true;
+            }
+        }
+        else if (deathState == DeathState.Alive && (player.Health == 0 || (player.Flags & PlayerFlags.Ghost) != 0))
+        {
+            uint nowMs = session.World.NowMs;
+            if (player.Combat.LastLifeDesyncLogMs == 0 || nowMs - player.Combat.LastLifeDesyncLogMs >= 5000u)
+            {
+                player.Combat.LastLifeDesyncLogMs = nowMs == 0 ? 1u : nowMs;
+                session.Logger.LogWarning(
+                    "[{Endpoint}] life-state invariant violation for '{Player}' (guid={Guid}, map={MapId}): DeathState is Alive but health={Health}, flags=0x{PlayerFlags:X}",
+                    session.RemoteEndpoint, player.Name, player.Guid.Low, player.MapId, player.Health, (uint)player.Flags);
+            }
+        }
     }
 
     /// <summary>

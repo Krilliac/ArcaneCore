@@ -250,7 +250,7 @@ public sealed partial class Player : Unit
     private Updates.PacketSink? _pendingUpdatesSend;
 
     /// <summary>Set when the player moved and its visibility must be recomputed this tick.</summary>
-    internal bool NeedsVisibilityUpdate { get; set; }
+    public bool NeedsVisibilityUpdate { get; set; }
 
     /// <summary>
     /// Whether the player may speak a language. Without attached skills (the legacy stand-ins) this is the race's
@@ -426,10 +426,13 @@ public sealed partial class Player : Unit
     public void CancelLogout()
     {
         _logoutRequestedAtMs = null;
-        SetRooted(RootedByAura); // a root or stun aura keeps the root (spell system)
-        if (StandState == StandState.Sit)
+        if (Combat.DeathState is not (global::ArcaneCore.Game.Combat.DeathState.JustDied or global::ArcaneCore.Game.Combat.DeathState.Corpse))
         {
-            SetStandState(StandState.Stand);
+            SetRooted(RootedByAura); // a root or stun aura keeps the root (spell system); an unreleased corpse stays rooted
+            if (StandState == StandState.Sit)
+            {
+                SetStandState(StandState.Stand);
+            }
         }
 
         if (!StunnedByAura)

@@ -361,6 +361,13 @@ public sealed partial class WorldSession : IPlayerSession
             // WorldSession::Update skips STATUS_LOGGEDIN packets while !IsInWorld()).
             if (player.Map is null && packet.Handler.Opcode != WorldOpcode.MsgMoveWorldportAck)
             {
+                if (!IsPlayerbot && _packetGate.TryEnter(out int suppressed))
+                {
+                    _logger.LogWarning(
+                        "[{Endpoint}] dropping {Opcode} for '{Player}' (guid={Guid}) while player.Map is null (awaiting MSG_MOVE_WORLDPORT_ACK to map {MapId}; {Suppressed} prior drops suppressed)",
+                        RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode), player.Name, player.Guid.Low, player.MapId, suppressed);
+                }
+
                 continue;
             }
 

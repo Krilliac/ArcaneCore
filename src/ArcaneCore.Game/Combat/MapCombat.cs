@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
 
 namespace ArcaneCore.Game.Combat;
@@ -81,7 +82,7 @@ public sealed partial class MapCombat : IMapUpdater
 
     private void OnPlayerLoggingOut(Player player)
     {
-        if (ReferenceEquals(player.Map, _map) || ReferenceEquals(player.Combat.Corpse?.Map, _map))
+        if (ReferenceEquals(player.Map, _map) || _map.IsInTransit(player) || ReferenceEquals(player.Combat.Corpse?.Map, _map))
         {
             OnPlayerLeaving(player);
         }
@@ -297,6 +298,8 @@ public sealed partial class MapCombat : IMapUpdater
             {
                 RunScheduledRepop(player);
             }
+
+            VerifyPlayerLifeInvariants(player);
         }
         else
         {
@@ -306,6 +309,26 @@ public sealed partial class MapCombat : IMapUpdater
             }
 
             UpdateCreatureRegen(unit, diff);
+        }
+    }
+
+    private void VerifyPlayerLifeInvariants(Player player)
+    {
+        UnitCombat c = player.Combat;
+        if (c.DeathState != DeathState.Dead && (player.Flags & PlayerFlags.Ghost) != 0)
+        {
+            _map.Logger.LogWarning(
+                "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: PLAYER_FLAGS_GHOST was set in DeathState.{DeathState}; clearing ghost flag",
+                player.Name, player.Guid.Low, _map.MapId, c.DeathState);
+            player.Flags &= ~PlayerFlags.Ghost;
+            player.NeedsVisibilityUpdate = true;
+        }
+        else if (c.DeathState == DeathState.Dead && player.Health == 0)
+        {
+            _map.Logger.LogWarning(
+                "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: DeathState.Dead had Health=0; restoring ghost Health=1",
+                player.Name, player.Guid.Low, _map.MapId);
+            player.Health = 1;
         }
     }
 

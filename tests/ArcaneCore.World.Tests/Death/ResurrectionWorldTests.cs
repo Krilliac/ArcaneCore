@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Death.Resurrection;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Protocol;
 using Xunit;
 
@@ -64,5 +65,45 @@ public sealed class ResurrectionWorldTests
 
         await host.WaitForWorldAsync(() => ResurrectionRequests.Get(host.World.FindOnlinePlayer("Resptwo")!) is null, "the request to be cleared");
         Assert.False(await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Resptwo")!.IsAlive));
+    }
+
+    [Fact]
+    public async Task MovingPacketWhileDeadAtBodyWithNoPendingRoot_ReordersForceMoveRootAndHealsDesync()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("DESYNC1", "Desynced");
+        await client.CollectAsync();
+
+        (float x, float y, float z) = await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Desynced")!;
+            player.Health = 0;
+            player.Map!.Combat.KillPlayer(player);
+            // Simulate the initial root order already having been sent/lost while the client thinks it is alive.
+            _ = player.Locomotion.Pending.ResolveAll().ToList();
+            player.NeedsVisibilityUpdate = false;
+            return (player.X, player.Y, player.Z);
+        });
+        await client.CollectAsync();
+
+        var move = new MovementInfo
+        {
+            Flags = MovementFlags.Forward,
+            Time = 100,
+            X = x + 1f,
+            Y = y,
+            Z = z,
+            Orientation = 0f,
+        };
+        var writer = new PacketWriter(64);
+        move.Write(writer);
+        await client.SendAsync(WorldOpcode.MsgMoveStartForward, writer.ToArray());
+
+        await host.WaitForWorldAsync(
+            () => host.World.FindOnlinePlayer("Desynced")!.Combat.LastLifeDesyncLogMs > 0,
+            "the life-state desync guard to detect and heal the moving corpse");
+
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await client.CollectAsync();
+        Assert.Contains(packets, p => p.Opcode == WorldOpcode.SmsgForceMoveRoot);
     }
 }

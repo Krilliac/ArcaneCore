@@ -267,4 +267,111 @@ public sealed class GhostVisibilityTests
         Assert.False(rule.CanSee(ghost, creature, false, false));         // 30 yd > 45 x 0.5
         Assert.True(new GhostVisibilityRule().CanSee(ghost, creature, false, false)); // 30 yd < 45
     }
+
+    [Fact]
+    public void SameTickResurrectAndDeath_KeepsNearbyCreaturesVisible_AndFlushesAliveUpdateBeforeDeath()
+    {
+        using var rig = new Rig();
+        var session = new FakeSession(1);
+        Player dying = CombatTestKit.AddPlayer(rig.World, 1, 0, 0, session);
+        CombatTestUnit anubisath = rig.AddCreature(10, 0);
+        rig.Tick();
+        Assert.True(rig.Sees(dying, anubisath));
+
+        rig.Release(dying);
+        Assert.Equal(DeathState.Dead, dying.Combat.DeathState);
+        Assert.NotEqual(0, dying.GetByte(UpdateFields.PlayerFieldBytes, 0) & MapCombat.FieldByteReleaseTimer);
+
+        session.Sent.Clear();
+
+        // Simulate reclaiming the corpse in Phase 1a and being killed by a creature in Phase 1c of the same tick:
+        rig.Map.Combat.ResurrectPlayer(dying, 0.5f, applySickness: false);
+        rig.Map.Combat.SpawnCorpseBones(dying);
+        Assert.Equal(0, dying.GetByte(UpdateFields.PlayerFieldBytes, 0) & MapCombat.FieldByteReleaseTimer);
+
+        rig.Map.Combat.Kill(anubisath, dying);
+        Assert.Equal(DeathState.JustDied, dying.Combat.DeathState);
+        Assert.Equal(0u, dying.Combat.DeathTimer);
+        Assert.Null(dying.Combat.Corpse);
+        Assert.True(new GhostVisibilityRule().CanSee(dying, anubisath, alreadyVisible: true, detect: false));
+
+        // Flush the tick (visibility + values):
+        rig.Map.Update(50);
+
+        // 1) The living creature must remain visible (not destroyed as if the JustDied player were a corpse-less ghost).
+        Assert.True(rig.Sees(dying, anubisath));
+
+        // 2) Two separate SMSG_UPDATE_OBJECT packets must have been sent: first the resurrected alive state, then the death state.
+        int updatePackets = session.Sent.Count(p => p.Opcode == WorldOpcode.SmsgUpdateObject);
+        Assert.True(updatePackets >= 2, $"Expected at least 2 SMSG_UPDATE_OBJECT packets (alive then dead), got {updatePackets}");
+    }
+
+    [Fact]
+    public void CancellingLogoutWhileDeadAtBody_KeepsTheCorpseRooted()
+    {
+        using var rig = new Rig();
+        Player dying = rig.Add(1, 0, 0);
+        CombatTestUnit creature = rig.AddCreature(5, 0);
+        rig.Tick();
+
+        dying.BeginLogout(1000);
+        Assert.True(dying.IsRooted);
+
+        rig.Map.Combat.Kill(creature, dying);
+        Assert.Equal(DeathState.JustDied, dying.Combat.DeathState);
+        Assert.True(dying.IsRooted);
+
+        dying.CancelLogout();
+        Assert.True(dying.IsRooted);
+
+        rig.Map.Combat.KillPlayer(dying);
+        Assert.Equal(DeathState.Corpse, dying.Combat.DeathState);
+        dying.CancelLogout();
+        Assert.True(dying.IsRooted);
+    }
+
+    [Fact]
+    public void DyingPlayerDisconnectingDuringFarTeleportTransit_StillRunsRepopPlayerOnLogout()
+    {
+        using var rig = new Rig();
+        Player dying = rig.Add(1, 0, 0);
+        CombatTestUnit creature = rig.AddCreature(5, 0);
+        rig.Tick();
+
+        rig.Map.Combat.Kill(creature, dying);
+        rig.Map.Combat.KillPlayer(dying);
+        Assert.Equal(DeathState.Corpse, dying.Combat.DeathState);
+        Assert.True(dying.Combat.DeathTimer > 0);
+
+        // Simulate ExecuteTeleportFar removing the player from the map and placing it into _transit before disconnect:
+        rig.Map.RemovePlayer(dying);
+        rig.Map.BeginTransit(dying);
+        Assert.Null(dying.Map);
+        Assert.True(rig.Map.IsInTransit(dying));
+
+        rig.World.RemovePlayer(dying);
+
+        Assert.Equal(DeathState.Dead, dying.Combat.DeathState);
+        Assert.NotEqual(PlayerFlags.None, dying.Flags & PlayerFlags.Ghost);
+        Assert.Equal(1u, dying.Health);
+    }
+
+    [Fact]
+    public void LifeStateInvariants_HealStaleGhostFlagInAliveState_AndZeroHealthInDeadState()
+    {
+        using var rig = new Rig();
+        Player player = rig.Add(1, 0, 0);
+        rig.Tick();
+
+        // Stale ghost flag while Alive:
+        player.Flags |= PlayerFlags.Ghost;
+        rig.Tick();
+        Assert.Equal(PlayerFlags.None, player.Flags & PlayerFlags.Ghost);
+
+        // Zero health while Dead (ghost):
+        rig.Release(player);
+        player.Health = 0;
+        rig.Tick();
+        Assert.Equal(1u, player.Health);
+    }
 }

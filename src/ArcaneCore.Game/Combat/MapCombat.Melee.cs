@@ -4,6 +4,7 @@ using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Combat;
 
@@ -995,6 +996,15 @@ public sealed partial class MapCombat
         bool spirit = victim is Player && SpellMitigation?.TryEnterSpiritOfRedemption(victim, spell) == true;
         if (!spirit)
         {
+            if (victim is Player revivedVictim && revivedVictim.Combat.ResurrectedUnflushed)
+            {
+                revivedVictim.Combat.ResurrectedUnflushed = false;
+                _map.Logger.LogInformation(
+                    "player {Player} (guid={Guid}) died on map {MapId} in the same tick as resurrection; flushing alive SMSG_UPDATE_OBJECT before death state",
+                    revivedVictim.Name, revivedVictim.Guid.Low, _map.MapId);
+                _map.FlushPlayerValuesNow(revivedVictim);
+            }
+
             victim.Health = 0;
             SetDeathState(victim, DeathState.JustDied);
         }

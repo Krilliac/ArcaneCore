@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Locomotion;
 
@@ -43,6 +44,13 @@ internal sealed class MapLocomotion : IMapUpdater
             {
                 // "Enforce the change": the client never acknowledged it (vmangos OnFailedToAckChange, then resolve).
                 state.NoteFailedAck();
+                if (player.Session.WantsUpdateObjects)
+                {
+                    map.Logger.LogWarning(
+                        "client did not acknowledge movement change {Type} (apply={Apply}, value={Value}, counter={Counter}) for player {Player} (guid={Guid}) on map {MapId} in {DeathState}; enforcing (failedAcks={FailedAcks})",
+                        enforce.Type, enforce.Apply, enforce.NewValue, enforce.Counter, player.Name, player.Guid.Low, map.MapId, player.Combat.DeathState, state.FailedAckCount);
+                }
+
                 MovementControl.Enforce(player, enforce, sendToClient: true);
             }
         }

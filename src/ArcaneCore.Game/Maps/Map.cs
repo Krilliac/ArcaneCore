@@ -1003,6 +1003,11 @@ public sealed class Map
 
     internal bool EndTransit(Player player) => _transit.Remove(player);
 
+    /// <summary>True while <paramref name="player"/> has left this map for a far teleport and has not yet entered the destination map.</summary>
+    internal bool IsInTransit(Player player) => _transit.Contains(player);
+
+    internal ILogger Logger => _logger;
+
     /// <summary>The players whose clients currently have <paramref name="obj"/> (the inverse of their visible sets).</summary>
     internal IReadOnlyCollection<Player> ObserversOf(WorldObject obj) =>
         _observers.TryGetValue(obj.Guid, out HashSet<Player>? observers) ? observers : [];
@@ -1468,6 +1473,7 @@ public sealed class Map
 
         if (obj is Player self && ReferenceEquals(self.Map, this))
         {
+            self.Combat.ResurrectedUnflushed = false;
             AppendValues(obj, self);
         }
 
@@ -1478,6 +1484,40 @@ public sealed class Map
                 if (!ReferenceEquals(viewer, obj))
                 {
                     AppendValues(obj, viewer);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Flush any pending values update of <paramref name="player"/> (and its pending update buffer) at once,
+    /// before a same-tick state reversal (such as dying on the same tick as a resurrection) can overwrite
+    /// the intermediate fields in <c>_valuesQueue</c>.
+    /// </summary>
+    internal void FlushPlayerValuesNow(Player player)
+    {
+        if (!ReferenceEquals(player.Map, this))
+        {
+            return;
+        }
+
+        if (player.IsQueuedForUpdate)
+        {
+            _grid.TrackRadius(player);
+            SendValuesUpdate(player);
+            player.ClearChangedFields();
+            player.IsQueuedForUpdate = false;
+            _valuesQueue.Remove(player);
+        }
+
+        FlushPlayer(player);
+        if (_observers.TryGetValue(player.Guid, out HashSet<Player>? observers))
+        {
+            foreach (Player viewer in observers)
+            {
+                if (!ReferenceEquals(viewer, player))
+                {
+                    FlushPlayer(viewer);
                 }
             }
         }

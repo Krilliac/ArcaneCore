@@ -74,8 +74,10 @@ registers it.
 Per map, like the stealth rule (Player.cpp:18710-18743, Creature.cpp:2477-2509, Unit.cpp:7703-7710): a living player sees living players and
 no ghosts; a ghost sees friendly ghosts, and living players within 100 yd of its own corpse; the same raid sees ghosts at any
 distance; a game master sees everything; a living player cannot see a spirit healer or guide (npc flag 0x20/0x40), a ghost sees them and
-the living creatures within (20+25) x the creature aggro rate of its corpse. A player still waiting at its body (CORPSE state) counts as
-living. The release, the resurrection and the repop refresh the player's visibility both ways.
+the living creatures within (20+25) x the creature aggro rate of its corpse. A player still waiting at its body (`CORPSE` or `JUST_DIED` state,
+i.e. `DeathState != Dead`) counts as living. Death (`KillPlayer`), release, resurrection and repop refresh the player's visibility both ways, and
+if a player dies again in the same map tick in which it was resurrected (`ResurrectedUnflushed`), `MapCombat.Kill` flushes the alive values update
+(`Map.FlushPlayerValuesNow`) before entering `JUST_DIED` so the client never sees a coalesced ghost-to-dead update.
 
 ### Death by a creature loses durability (`ApplyDeathDurabilityLoss`)
 

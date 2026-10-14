@@ -211,6 +211,7 @@ public sealed class TeleportService
             _pending[player.Guid] = new Pending(destination, TeleportStage.Near, current, default)
             {
                 HonorlessTarget = leavesCombat,
+                StartedMs = _world.NowMs,
             };
             if (leavesCombat)
             {
@@ -231,7 +232,10 @@ public sealed class TeleportService
             return true;
         }
 
-        var pending = new Pending(destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation));
+        var pending = new Pending(destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation))
+        {
+            StartedMs = _world.NowMs,
+        };
         _pending[player.Guid] = pending;
         current.RunAfterUpdate(() => ExecuteTeleportFar(player, pending));
         return true;
@@ -264,6 +268,14 @@ public sealed class TeleportService
         }
 
         _pending.Remove(player.Guid);
+        uint elapsedNearMs = _world.NowMs - pending.StartedMs;
+        if (player.Session.WantsUpdateObjects && elapsedNearMs >= SlowTeleportAckThresholdMs)
+        {
+            _logger.LogWarning(
+                "slow near-teleport ack from {Player} (guid={Guid}) on map {MapId}: {ElapsedMs} ms to ({X:F1}, {Y:F1}, {Z:F1})",
+                player.Name, player.Guid.Low, pending.Destination.MapId, elapsedNearMs, pending.Destination.X, pending.Destination.Y, pending.Destination.Z);
+        }
+
         Map? map = player.Map;
         if (map is null || !ReferenceEquals(map, pending.SourceMap))
         {
@@ -316,6 +328,14 @@ public sealed class TeleportService
             return false;
         }
 
+        uint elapsedFarMs = _world.NowMs - pending.StartedMs;
+        if (player.Session.WantsUpdateObjects && elapsedFarMs >= SlowTeleportAckThresholdMs)
+        {
+            _logger.LogWarning(
+                "slow far-teleport worldport ack from {Player} (guid={Guid}) from map {SourceMapId} to map {DestMapId}: {ElapsedMs} ms",
+                player.Name, player.Guid.Low, pending.SourceMap.MapId, pending.Destination.MapId, elapsedFarMs);
+        }
+
         pending.Stage = TeleportStage.Arriving;
         _world.Post(() => CompleteTeleportFar(player, pending));
         return true;
@@ -326,6 +346,15 @@ public sealed class TeleportService
     {
         if (_pending.Remove(player.Guid, out Pending? pending))
         {
+            if (player.Session.WantsUpdateObjects)
+            {
+                uint elapsedMs = _world.NowMs - pending.StartedMs;
+                _logger.LogWarning(
+                    "player {Player} (guid={Guid}, deathState={DeathState}) left the world while teleport in stage {Stage} from map {SourceMapId} to map {DestMapId} ({X:F1}, {Y:F1}, {Z:F1}) after {ElapsedMs} ms",
+                    player.Name, player.Guid.Low, player.Combat.DeathState, pending.Stage, pending.SourceMap.MapId,
+                    pending.Destination.MapId, pending.Destination.X, pending.Destination.Y, pending.Destination.Z, elapsedMs);
+            }
+
             pending.SourceMap.EndTransit(player);
         }
     }
@@ -370,6 +399,7 @@ public sealed class TeleportService
         player.MapId = dest.MapId;
         player.Relocate(dest.X, dest.Y, dest.Z, dest.Orientation, _world.NowMs);
         pending.Stage = TeleportStage.Far;
+        pending.StartedMs = _world.NowMs;
         if (ship is not null)
         {
             // Still aboard: the movement block keeps the ship and the offset, and the client loads the new map at its place on
@@ -542,6 +572,8 @@ public sealed class TeleportService
         }
     }
 
+    private const uint SlowTeleportAckThresholdMs = 10_000;
+
     private sealed class Pending(TeleportDestination destination, TeleportStage stage, Map sourceMap, TeleportDestination origin)
     {
         public TeleportDestination Destination { get; } = destination;
@@ -554,5 +586,7 @@ public sealed class TeleportService
 
         /// <summary>vmangos DELAYED_CAST_HONORLESS_TARGET scheduled by a same-map teleport.</summary>
         public bool HonorlessTarget { get; init; }
+
+        public uint StartedMs { get; set; }
     }
 }
