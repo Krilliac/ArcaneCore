@@ -26,13 +26,20 @@ internal static class CcAuraHandlers
         return handlers;
     }
 
-    private static void Root(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply) =>
+    private static void Root(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply)
+    {
         CcState.RefreshRoot(system, holder.Target);
+        if (holder.Spell.School == SpellSchool.Frost)
+        {
+            UpdateFrozenState(system, holder.Target, apply);
+        }
+    }
 
     /// <summary>
     /// UNIT_FLAG_STUNNED, rooted, stand up and loot release for players (not while mounted), and the cast in
     /// progress is interrupted when another unit applied the stun (vmangos: "it appears that spell casts get
     /// interrupted even if they don't have the flag"). A stun does not land on a unit on a taxi (:3556).
+    /// Frost-school stuns and roots also maintain <see cref="AuraState.Frozen"/> (SpellAuras.cpp:3565, 3807).
     /// </summary>
     private static void Stun(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply)
     {
@@ -66,6 +73,43 @@ internal static class CcAuraHandlers
         }
 
         CcState.RefreshRoot(system, target);
+        if (holder.Spell.School == SpellSchool.Frost)
+        {
+            UpdateFrozenState(system, target, apply);
+        }
+    }
+
+    private static void UpdateFrozenState(SpellSystem system, Unit target, bool apply)
+    {
+        if (apply)
+        {
+            system.ModifyAuraState(target, AuraState.Frozen, true);
+        }
+        else if (!HasLiveFrostRootOrStun(system, target))
+        {
+            system.ModifyAuraState(target, AuraState.Frozen, false);
+        }
+    }
+
+    private static bool HasLiveFrostRootOrStun(SpellSystem system, Unit target)
+    {
+        foreach (SpellAuraHolder holder in system.GetAuras(target))
+        {
+            if (holder.IsRemoved || holder.Spell.School != SpellSchool.Frost)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.AuraSpan)
+            {
+                if (aura is { Type: AuraType.ModRoot or AuraType.ModStun })
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>UNIT_FLAG_SILENCED; the cast in progress is interrupted only when its PreventionType is SILENCE.</summary>

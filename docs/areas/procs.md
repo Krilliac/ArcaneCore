@@ -50,7 +50,7 @@ Every aura type without one procs as `HandleNULLProc` (OK).
 
 | Aura type | Handler | vmangos |
 |---|---|---|
-| ProcTriggerSpell (42) | EffectTriggerSpell (Aegis of Preservation, Mana Drain, Talisman of Ascendance, Persistent Shield remaps); the talent cases ("Talent procs": Pyroclasm, Shadowguard, Blessed Recovery, Illumination); no extra-attack spell while extra attacks are pending (except 20178); Curse of Mending / Improved Lay on Hands on the victim; Rogue Setup on the main target only; Ruthlessness and Seal Fate after the cast; positive spells on the owner, others on the victim | UnitAuraProcHandler.cpp:1147-1624 |
+| ProcTriggerSpell (42) | EffectTriggerSpell (Aegis of Preservation, Mana Drain, Talisman of Ascendance, Persistent Shield remaps); the talent and class cases ("Talent procs": Pyroclasm, Shadowguard, Blessed Recovery, Illumination, Shaman Lightning Shield 324..10432 -> 26364..26363); no extra-attack spell while extra attacks are pending (except 20178); Curse of Mending / Improved Lay on Hands on the victim; Rogue Setup on the main target only; Ruthlessness and Seal Fate after the cast; positive spells on the owner, others on the victim | UnitAuraProcHandler.cpp:1147-1624 |
 | ProcTriggerDamage (43) | the aura spell's hit roll (no reflect; a miss sends SMSG_PROCRESIST and counts), its effect value through the spell damage bonuses, non-critical spell damage | :1626-1676 |
 | AddTargetTrigger (109) | effect 0 base points as a percent (Blizzard / 8); the victim casts the trigger on itself, the owner on itself for Wolfshead Helm, Frosty Zap, Relentless Strikes | :1799-1843 |
 | ReflectSpellsSchool (74) | the spell's school must be in the aura's mask | :1778-1782 |
@@ -169,8 +169,8 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
   vmangos' lambda event does; the order (after the finisher's points are cleared) is the same.
 - The random target of Sweeping Strikes and Blade Flurry (`SelectRandomUnfriendlyTarget`) does not test the owner's sight of the unit (vmangos
   `CanSeeInWorld`: stealth and invisibility); dead, friendly, out-of-line-of-sight and (for Sweeping Strikes) PvP-enabling units are skipped.
-- Shatter's frozen test reads AURA_STATE_FROZEN and, as well, any frost-school stun or root aura on the target: vmangos sets the state from those
-  auras (SpellAuras.cpp:3565, 3807), which the ArcaneCore aura handlers do not do yet.
+- Shatter's frozen test reads `AURA_STATE_FROZEN` (which `CcAuraHandlers` maintains on Frost-school stun and root auras, matching vmangos
+  SpellAuras.cpp:3565, 3807) and, as well, any Frost-school stun or root aura directly on the target.
 - No spell batching: procs run at once (vmangos `Spell.ProcDelay` 400 ms default runs most attacker procs one batch later). The apply-time rule
   (Unit.cpp:8958, `GetAuraApplyTime() >= procTime`) is kept as "applied by this event" without a clock: `SpellSystem.BeginProcEvent` gives each
   outer event (a cast with its cast-end procs, every target's hit and the casts they trigger; a white swing with its damage, kill and weapon
@@ -199,10 +199,10 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
 - PERIODIC_HEALTH_FUNNEL (pets lane) and POWER_BURN_MANA are unsupported auras, so their ticks fire no procs yet (vmangos SpellAuras.cpp:5928,
   6300-6354); absorbs of a leech tick are not modelled (DrainAuras).
 
-- The class-specific cases inside vmangos' ProcTriggerSpell, Dummy and OverrideClassScripts handlers: Seal of Righteousness and Judgement of
-  Light/Wisdom ([class-scripts](class-scripts.md)) and the talents of "Talent procs" are delivered; Lightning Shield, the remaining dummy cases
+- The class-specific cases inside vmangos' ProcTriggerSpell, Dummy and OverrideClassScripts handlers: Seal of Righteousness, Judgement of
+  Light/Wisdom and Shaman Lightning Shield ([class-scripts](class-scripts.md)) and the talents of "Talent procs" are delivered; the remaining dummy cases
   (Clean Escape, Unstable Power, the trinkets) and the set-bonus class scripts are not yet.
-- Wyvern Sting's wake-up damage over time (24131/24134/24135 on removal, vmangos spell_hunter.cpp) is a hunter class script.
+- Wyvern Sting's wake-up damage over time (24131/24134/24135 on removal, vmangos spell_hunter.cpp) is delivered in `Hunter/CounterattackScript.cs` ([class-scripts](class-scripts.md)).
 - Pet melee and pet spells offer their events only through the same map combat and spell paths (no owner-side procs).
 - SPELL_ATTR_EX4_CLASS_TRIGGER_ONLY_ON_TARGET (ADD_TARGET_TRIGGER on the selected target only) and SPELLMOD_CHARGES on new holders.
 - Real data: the `spell_proc_event` rows (classic-db or vmangos dump) and the client's Spell.dbc; the tests use synthetic spells.

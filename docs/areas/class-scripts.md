@@ -44,7 +44,18 @@ Talents that vmangos implements as per-spell class scripts. Each is a new file o
 | Swiftmend (18562) | Cast check: the target needs a druid PERIODIC_HEAL of Rejuvenation (0x10) or Regrowth (0x40), else TARGET_AURASTATE. Effect: the one with the shortest remaining duration (the first on a tie) is consumed and 4 (Rejuvenation) or 6 (Regrowth) times its tick is added to the heal before the heal bonus (`SwiftmendHealModifier`). | `Druid/SwiftmendScript.cs` | spell_druid.cpp:101-160 |
 | Mana Tide (16191) | Periodic trigger script: a PERIODIC_TRIGGER_SPELL Mana Tide aura makes its target cast the trigger on itself with the aura's amount (dithered). The build 5875 row is APPLY_AREA_AURA_PARTY of PERIODIC_ENERGIZE (170 mana every 3 s, 20 yd) and never reaches the script; it restores mana through the area aura and the energize tick (pinned by a test). | `Shaman/ManaTideScript.cs` | spell_shaman.cpp:49-67, mangos-classic SpellAuras.cpp:1209-1213 |
 | Reckoning (20178) | ADD_EXTRA_ATTACKS script: one more extra attack on top of those pending, up to 4 (the plain effect only queues on a unit with none pending). The talent aura 20177 procs it on crits taken; the proc engine already lets 20178 proc while extra attacks are pending. | `Paladin/ReckoningScript.cs` | spell_paladin.cpp:178-206 |
-| Counterattack (19306, 20909, 20910) | Cast check: the target must be the attacker whose attack the hunter parried (the parry's combo-point marker, which moves with the reactive window's target); the CasterAuraState HUNTER_PARRY of the data gates the window. | `Hunter/CounterattackScript.cs` | spell_hunter.cpp:121-136, Unit.cpp ProcSkillsAndReactives |
+| Counterattack (19306, 20909, 20910) | Cast check: the target must be the attacker whose attack the hunter parried (the parry's combo-point marker and `UnitCombat.GetReactiveTarget(ReactiveType.HunterParry)`); the CasterAuraState HUNTER_PARRY of the data gates the window. | `Hunter/CounterattackScript.cs` | spell_hunter.cpp:121-136, Unit.cpp ProcSkillsAndReactives |
+| Mongoose Bite (1495, 14269, 14270, 14271) | Cast check: the target must be the attacker whose attack the hunter dodged (`UnitCombat.GetReactiveTarget(ReactiveType.Defense)`); the CasterAuraState DEFENSE of the data gates the window. | `Hunter/CounterattackScript.cs` | spell_hunter.cpp:138-154, Unit.cpp ProcSkillsAndReactives |
+| Wyvern Sting (19386, 24132, 24133) | Holder-removed hook (`HunterScriptsModule`): when the sleep aura with effect 0 leaves its target and the caster is a player, the caster casts the rank's wake-up poison DoT (24131, 24134, 24135) on the target as a triggered spell. | `Hunter/CounterattackScript.cs` | spell_hunter.cpp:19-46 |
+| Frost Trap Aura (13810) | Periodic trigger script (`HunterScriptsModule`): each periodic tick offers `ProcFlags.OnTrapActivation` on the caster so Entrapment (19184, 19387, 19388) procs its root (19185). | `Hunter/CounterattackScript.cs` | spell_hunter.cpp:58-77 |
+
+## Priest (`Spells/Priest`)
+
+| Piece | What it does | Code | vmangos |
+|---|---|---|---|
+| Touch of Weakness (28598) | Triggered DUMMY script: inspects the triggering proc aura rank (2652, 19261, 19262, 19264, 19265, 19266) and casts the corresponding Hex of Weakness rank (2943, 19249, 19251, 19252, 19253, 19254) on the target as a triggered spell. | `Priest/PriestSpellScripts.cs` | spell_priest.cpp:19-56 |
+| Power Word: Shield (17, 592, 600, 3747, 6065, 6066, 10898-10901, 27607) | Cast observer (`PriestCastObserver`): after the shield hits its target, the caster casts Weakened Soul (6788) on that target as a triggered spell; `PositiveSpellImmunityCheck` refuses a second shield while Weakened Soul's `MECHANIC_SHIELD` immunity is active. | `Priest/PriestSpellScripts.cs` | spell_priest.cpp:58-87, Spell.cpp:5634-5636 |
+| Holy Nova (15237, 15430, 15431, 27799-27801) | Cast observer (`PriestCastObserver`): when the damage spell finishes, the caster casts the matching Holy Nova heal rank (23455, 23458, 23459, 27803-27805) on itself as a triggered spell. | `Priest/PriestSpellScripts.cs` | spell_priest.cpp:89-131 |
 
 ## Owner-to-pet talent auras (`Pets/PetAuras`)
 
@@ -58,8 +69,9 @@ succubus 1863 variants; Stalker's Ally 28757 -> 28758. No table or importer.
   `PetAuraDummyEffectScript`); unlearning a table spell drops it (Player.cpp:3850-3852, a learn observer). AddPetAura casts the pet's aura on the current pet
   at once; RemovePetAura removes it from the pet.
 - A pet arrives (Pet::CastPetAuras, Pet.cpp:2302-2330): a new summon (`PetInitializer.InitCreateSpells`, Pet.cpp:2101, `current = false`) first ends the
-  owner's spells whose DUMMY targets TARGET_UNIT_CASTER_PET (Soul Link: a new demon ends it) and gets the others; a loaded hunter pet gets them all (current for
-  the login / teleport restore and the revive, not for Call Pet). Only a permanent pet takes them (Pet::IsPermanentPetFor: a hunter's pet, a warlock's demon).
+  owner's spells whose DUMMY targets TARGET_UNIT_CASTER_PET (Soul Link: a new demon ends it) and gets the others; a loaded hunter pet or a restored
+  temporarily-unsummoned warlock demon (`SummonService.TemporaryUnsummon.cs`, `RestoreSummonedPet`) gets them all with `current = true` (login / teleport /
+  mount restore and revive, not Call Pet). Only a permanent pet takes them (Pet::IsPermanentPetFor: a hunter's pet, a warlock's demon).
 - SPELL_EFFECT_APPLY_AREA_AURA_PET (119), which every pet aura is, is now handled: the pet carries the source and its owner within the effect radius gets the
   copy (AreaAura::Update, SpellAuras.cpp:690-706); the copy goes with the source.
 - Talent hooks (`TalentPetHooks`, World `Pets/TalentPetFeature.cs`, attached on the world thread because the talent feature attaches after the pets
@@ -72,6 +84,7 @@ succubus 1863 variants; Stalker's Ally 28757 -> 28758. No table or importer.
 |---|---|---|---|
 | Flametongue Weapon proc (10 ids) | `(value + 3.85 * fire spell damage) * 0.01 * weapon speed` of the item that procced, dithered, dealt by Flametongue Attack 10444 cast with that item as its cast item. | `Shaman/ShamanWeaponScripts.cs` | spell_shaman.cpp:19-44 |
 | Rockbiter Weapon proc (6 ids) | `value * main-hand attack time / 1000` threat (whole numbers, added raw with no school: no SPELLMOD_THREAT and no MOD_THREAT multiplier, ThreatManager.h:192 and Unit.cpp:7414-7415) where the shaman is already on the list. | `ShamanWeaponScripts.cs` | SpellEffects.cpp:4544-4561 |
+| Lightning Shield proc (324, 325, 905, 945, 8134, 10431, 10432) | `PROC_TRIGGER_SPELL` case (`BuiltInProcHandlers.ProcTriggerSpell`): maps each rank to its damage spell (26364-26367, 26369, 26370, 26363), sets `basePoints0` from the aura's modified amount, casts at the attacker, and consumes a charge. | `Procs/BuiltInProcHandlers.cs` | UnitAuraProcHandler.cpp:1504-1536 |
 
 The imbues themselves are temporary weapon enchantments (SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY, crafting lane) whose COMBAT_SPELL enchantment effect is
 procced by `SpellSystem.HandleItemCombatProc` (Rockbiter Weapon's TOTEM effect adds weapon damage in `PlayerEnchantments`); Windfury Weapon and Frostbrand
@@ -84,7 +97,9 @@ cast-time spell, so `TotemSystem.Active` drives it (ActiveTotemTests, TotemLoopb
 ## Rogue
 
 Rupture adds `attack power * min(combo points, 3) / 100` and Garrote `attack power * 0.03` to the tick amount, once, when the aura is created
-(SpellAuras.cpp:4366-4384), through `Rogue/RogueBleedScripts.cs` (`RogueScriptFeature` installs it after the combo point feature).
+(SpellAuras.cpp:4366-4384), and Eviscerate (2098, 6760, 6761, 6762, 8623, 8624, 11299, 11300, 31016; `CF_ROGUE_EVISCERATE` bit 17) adds
+`attack power * combo points * 0.03` to effect 0's direct damage (spell_rogue.cpp:19-46), through `Rogue/RogueBleedScripts.cs` (`RogueScriptFeature` installs it
+after the combo point feature).
 
 ## Warlock
 
@@ -92,13 +107,17 @@ Curse of Doom (603): a tick that kills casts Curse of Doom Effect (18662) on the
 a player owns are not targets (TARGET_IS_PLAYER / BAD_TARGETS, Spell.cpp:7584-7592). SPELL_EFFECT_SUMMON_DEMON (112, `Pets/SummonService.SummonDemon.cs`,
 SpellEffects.cpp:5796-5819) summons the Doomguard at the destination with the caster's level; once out of combat at the end of the spell's duration it
 is unsummoned (TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN), and it has no owner, so its summoner leaving does not take it away. Conflagrate needs and consumes the
-caster's Immolate (spell_warlock.cpp:58-110).
+caster's Immolate (spell_warlock.cpp:58-110). Felhunter Devour Magic (19505, 19731, 19734, 19736; `Warlock/DevourMagicScript.cs`, spell_warlock.cpp:203-237)
+casts its corresponding self-heal rank (19658, 19732, 19733, 19735) on the caster when effect 0 dispels at least one magic aura.
 
 ## Common DUMMY / SCRIPT_EFFECT scripts (`Spells/ClassScripts`)
 
 Last Stand (12976 for 30% health), Execute (dummy: base + rage * multiplier through 20647; damage: rage to 0), Bloodrage (combat on its rage),
-Deep Wounds (weapon average share over 12721), Bloodthirst (value percent of attack power), troll Berserking (haste from missing health through 26635,
-AURA_STATE_BERSERKING), Preparation, Cold Snap and Readiness (cooldown resets). vmangos SpellEffects.cpp:742-850, :1440-1458 and
+Deep Wounds (weapon average share over 12721), Bloodthirst (value percent of attack power), Shield Slam (23922-23925: adds the caster's shield block value to
+effect 1's damage, spell_warrior.cpp:58-74), Intimidating Shout (5246: target filter excludes the primary cowered target from the AoE fear and threat effects 1
+and 2, spell_warrior.cpp:19-35), Sweeping Strikes (12292: `IsRemovedOnShapeLost` is false so the buff persists across stance changes, spell_warrior.cpp:149-162),
+troll Berserking (haste from missing health through 26635, AURA_STATE_BERSERKING), Preparation, Cold Snap, Readiness and Refocus (24531: finishes cooldowns on
+Aimed Shot, Multi-Shot, Arcane Shot and Volley, spell_hunter.cpp:89-119). vmangos SpellEffects.cpp:742-850, :1440-1458 and
 scripts/spells/spell_warrior.cpp, spell_mage.cpp, spell_hunter.cpp.
 
 ## Persistent area auras (`Spells/PersistentAreaAuras`)
@@ -142,15 +161,14 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
 - Ground objects never move; the 2 s refresh window starts at the first visit; an existing holder that lacks the ground effect's aura is not given it.
 - Reckoning: this server's extra-attack queue (`UnitCombat`, combat area) makes a queued batch ready on the next unit update, so Reckoning's stacks build while
   the paladin is not swinging and are released on its next melee update; vmangos releases them after the paladin's next own swing (`AddExtraAttackOnUpdate`).
-- Counterattack reads the parried attacker from the hunter's combo target; a non-player caster is not checked (the reactive service is not reachable
-  from a script).
+- Counterattack and Mongoose Bite read the avoided attacker from `UnitCombat.GetReactiveTarget` (with Counterattack also falling back to the parry's
+  combo-point marker).
 - Pet auras: the owner's copy of an APPLY_AREA_AURA_PET aura is decided when the source is applied (vmangos re-checks the radius every update) and leaves
   with the source within one spell update when the pet is unsummoned. A revived pet does not get the auras back until the next summon or learned talent
   (vmangos Pet.cpp:658 casts them when the pet comes alive; the revive path is the creatures area's). A warlock demon removed by a respec gives no soul shard
   back (the summon does not charge it either). Mana Tide's build 5875 row does not use the script (above).
-- A warlock demon brought back after a teleport or a mount (`SummonService.TemporaryUnsummon.cs`, `RestoreSummonedPet`, outside this lane) does not take
-  the owner's pet auras yet; one call to `PetAuraService.CastPetAuras(pet, current: true)` there closes it (vmangos Pet::LoadPetFromDB, Pet.cpp:357). A
-  hunter's pet comes back through `RestoreCurrentPet` and takes them.
+- A warlock demon brought back after a teleport or a mount (`SummonService.TemporaryUnsummon.cs`, `RestoreSummonedPet`) and a hunter's pet brought back
+  through `RestoreCurrentPet` both call `PetAuraService.CastPetAuras(pet, current: true)` (vmangos Pet::LoadPetFromDB, Pet.cpp:357).
 - Real data: Spell.dbc / `spell_template` (every id above), SpellItemEnchantment.dbc for the imbues, `spell_proc_event` and
   `spell_proc_item_enchant` rows for PPM procs, and creature 11859 (Doomguard) in `creature_template`. The tests use synthetic rows with the real ids,
   families, flags and effect kinds.
@@ -158,7 +176,7 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
 ## Tests
 
 - `tests/ArcaneCore.Game.Tests/ClassSpells`: `PaladinScriptTests` (13), `PaladinHealingAndAuraTests` (4), `ShamanWeaponScriptTests` (7),
-  `ClassDummyScriptTests` (14), `CurseOfDoomTests` (7); `Rogue/RogueBleedScriptTests` (7); `Spells/PersistentAreaAuraTests` (13).
+  `ClassDummyScriptTests` (14), `CurseOfDoomTests` (7), `Wave45ClassSpellPackTests` (32); `Rogue/RogueBleedScriptTests` (7); `Spells/PersistentAreaAuraTests` (13).
 - Talent scripts: `ClassSpells/MageTalentScriptTests` (8: Ignite tick, rank share, fire-crit only, rollover on a second crit, the 5-stack refresh;
   Combustion stacks and charges, cancel, dispelled buff), `SwiftmendScriptTests` (5), `ManaTideScriptTests` (2), `ReckoningScriptTests` (3),
   `CounterattackScriptTests` (4); `Pets/TalentPetAuraTests` (8: Soul Link on the imp and the warlock and its unlearn, Soul Link ending with a pet change,

@@ -73,3 +73,27 @@ public sealed class ReadinessScript : ISpellScript
         }
     }
 }
+
+/// <summary>
+/// Refocus (24531; vmangos scripts/spells/spell_hunter.cpp:81-103): clears the hunter's Aimed Shot (bit 17), Multi-Shot (bit 12),
+/// Volley (bit 13), and Arcane Shot (bit 11) cooldowns (SpellClassMask.h:252-258).
+/// </summary>
+[SpellScript(Refocus)]
+public sealed class RefocusScript : ISpellScript
+{
+    public const uint Refocus = 24531;
+    public const uint HunterFamily = 9;
+
+    /// <summary>CF_HUNTER_ARCANE_SHOT (11) | CF_HUNTER_MULTI_SHOT (12) | CF_HUNTER_VOLLEY (13) | CF_HUNTER_AIMED_SHOT (17).</summary>
+    public const ulong RefocusShotMask = (1UL << 11) | (1UL << 12) | (1UL << 13) | (1UL << 17);
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        if (context.EffectIndex == 0 && context.Caster is Player player)
+        {
+            uint refocusId = context.Spell.Id;
+            CooldownReset.RemoveSomeCooldown(context.System, player,
+                s => s.SpellFamilyName == HunterFamily && (s.SpellFamilyFlags & RefocusShotMask) != 0 && s.Id != refocusId && CooldownReset.RecoveryTime(s) > 0);
+        }
+    }
+}

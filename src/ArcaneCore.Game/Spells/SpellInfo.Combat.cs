@@ -26,11 +26,13 @@ public sealed partial record SpellInfo
     public bool NeedsComboPoints => ((uint)AttributesEx & (uint)(SpellAttributesExCombat.FinishingMoveDamage | SpellAttributesExCombat.FinishingMoveDuration)) != 0;
 
     /// <summary>
-    /// vmangos SpellEntry::IsRemovedOnShapeLostSpell (SpellEntry.h:1180-1186): the aura is stance-bound
-    /// (Stances set, or the hard-coded spell 24864) and neither ALLOW_WHILE_NOT_SHAPESHIFTED nor NOT_SHAPESHIFT.
+    /// vmangos SpellEntry::IsRemovedOnShapeLostSpell (SpellEntry.h:1180-1186) + Sweeping Strikes (12292; spell_warrior.cpp:149-162):
+    /// the aura is stance-bound (Stances set, or the hard-coded spell 24864) and neither ALLOW_WHILE_NOT_SHAPESHIFTED nor NOT_SHAPESHIFT,
+    /// except Sweeping Strikes (12292), which clears m_isRemovedOnShapeLost on apply so the buff persists across stance changes.
     /// </summary>
     public bool IsRemovedOnShapeLost =>
-        (Stances != 0 || Id == 24864)
+        Id != 12292
+        && (Stances != 0 || Id == 24864)
         && !HasAttribute(SpellAttributesEx2Combat.AllowWhileNotShapeshifted)
         && !HasAttribute(SpellAttributesCombat.NotShapeshift);
 

@@ -1,4 +1,6 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Spells.Scripts;
 
 namespace ArcaneCore.Game.Spells.Hunter;
@@ -9,9 +11,8 @@ namespace ArcaneCore.Game.Spells.Hunter;
 /// The script adds the target rule: the cast must be at the unit whose attack was parried, vmangos <c>GetReactiveTarget(REACTIVE_HUNTER_PARRY)</c>;
 /// any other target is BAD_TARGETS.
 /// <para>
-/// The parried attacker is read from the hunter's combo target: the same parry that opens the window gives the hunter one combo point on that attacker
-/// (vmangos <c>AddComboPoints(pTarget, 1)</c> beside <c>StartReactiveTimer(REACTIVE_HUNTER_PARRY, pTarget)</c>, Unit.cpp ProcSkillsAndReactives), and
-/// a later parry moves both to the new attacker. The reactive service lives in the combat area and is not reachable from a script.
+/// The parried attacker is read from <see cref="UnitCombat.GetReactiveTarget"/> (or the hunter's combo target when set directly: the same parry that
+/// opens the window gives the hunter one combo point on that attacker in <c>Unit::ProcSkillsAndReactives</c>).
 /// </para>
 /// </summary>
 [SpellScript(19306, 20909, 20910)]
@@ -26,9 +27,99 @@ public sealed class CounterattackScript : ISpellScript
             return SpellCastResult.CastOk; // vmangos asks m_casterUnit; only a player keeps the marker here
         }
 
-        ObjectGuid parried = new(hunter.GetUInt64(UpdateFields.PlayerFieldComboTarget));
+        ObjectGuid parried = hunter.Combat.GetReactiveTarget(ReactiveType.HunterParry);
+        if (parried.IsEmpty)
+        {
+            parried = new ObjectGuid(hunter.GetUInt64(UpdateFields.PlayerFieldComboTarget));
+        }
+
         return context.Target is { } target && !parried.IsEmpty && target.Guid == parried
             ? SpellCastResult.CastOk
             : SpellCastResult.BadTargets;
     }
 }
+
+/// <summary>
+/// Mongoose Bite (1495, 14269, 14270, 14271; vmangos scripts/spells/spell_hunter.cpp:105-119, <c>HunterMongooseBiteScript::OnCheckCast</c>).
+/// The spell data requires <see cref="AuraState.Defense"/> on the caster; the script requires the explicit target to be the unit that opened the
+/// <see cref="ReactiveType.Defense"/> window (<see cref="UnitCombat.GetReactiveTarget"/>), returning <see cref="SpellCastResult.BadTargets"/> otherwise.
+/// </summary>
+[SpellScript(1495, 14269, 14270, 14271)]
+public sealed class MongooseBiteScript : ISpellScript
+{
+    public static readonly uint[] Ranks = [1495, 14269, 14270, 14271];
+
+    public SpellCastResult OnCheckCast(in SpellCastCheckContext context)
+    {
+        ObjectGuid defenseTarget = context.Caster.Combat.GetReactiveTarget(ReactiveType.Defense);
+        return context.Target is { } target && !defenseTarget.IsEmpty && target.Guid == defenseTarget
+            ? SpellCastResult.CastOk
+            : SpellCastResult.BadTargets;
+    }
+}
+
+/// <summary>
+/// Registers the hunter aura scripts (discovered <see cref="ISpellHandlerModule"/>):
+/// <list type="bullet">
+/// <item>Wyvern Sting (19386, 24132, 24133; vmangos spell_hunter.cpp:19-56, <c>HunterWyvernStingScript::OnAfterApply</c>): when the sleep aura
+/// (effect 0) is removed from its target and its caster is a player in the world, the caster casts the rank's wake-up poison DoT (24131, 24134,
+/// 24135) on the target, triggered by the aura.</item>
+/// <item>Frost Trap Aura (13810; vmangos spell_hunter.cpp:137-154, <c>HunterFrostTrapAuraScript::OnPeriodicTrigger</c>): each periodic trigger tick
+/// fires <see cref="ProcFlags.OnTrapActivation"/> on the aura's caster against the affected unit so Entrapment (19184, 19387, 19388) can proc.</item>
+/// </list>
+/// </summary>
+public sealed class HunterScriptsModule : ISpellHandlerModule
+{
+    public const uint FrostTrapAura = 13810;
+
+    /// <summary>Wyvern Sting sleep rank → wake-up DoT rank (spell_hunter.cpp:32-46).</summary>
+    public static readonly IReadOnlyDictionary<uint, uint> WyvernStingDots = new Dictionary<uint, uint>
+    {
+        [19386] = 24131,
+        [24132] = 24134,
+        [24133] = 24135,
+    };
+
+    public void Register(SpellSystem system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        system.HolderRemoved += holder => OnHolderRemoved(system, holder);
+        system.RegisterPeriodicTriggerScript(FrostTrapAura, OnFrostTrapTick);
+    }
+
+    private static void OnHolderRemoved(SpellSystem system, SpellAuraHolder holder)
+    {
+        if (holder.Auras[0] is null || !WyvernStingDots.TryGetValue(holder.Spell.Id, out uint dotSpell)
+            || system.AuraCaster(holder) is not Player caster || system.Store.Get(dotSpell) is null)
+        {
+            return;
+        }
+
+        system.CastSpellTriggeredByAura(caster, dotSpell, SpellCastTargets.ForUnit(holder.Target.Guid), holder.Spell);
+    }
+
+    private static void OnFrostTrapTick(SpellSystem system, SpellAuraHolder holder, SpellAura aura)
+    {
+        Unit? caster = system.AuraCaster(holder);
+        if (caster is not null)
+        {
+            system.ProcDamageAndSpell(caster, new ProcEvent
+            {
+                Victim = holder.Target,
+                AttackerFlags = ProcFlags.OnTrapActivation,
+                Extra = ProcFlagsEx.NormalHit,
+                Amount = 1,
+                OriginalAmount = 1,
+                AttackType = WeaponAttackType.BaseAttack,
+                ProcSpell = holder.Spell,
+            });
+        }
+
+        uint triggerSpell = holder.Spell.Effects[aura.EffectIndex].TriggerSpell;
+        if (triggerSpell != 0 && system.Store.Get(triggerSpell) is not null)
+        {
+            system.CastSpellTriggeredByAura(caster ?? holder.Target, triggerSpell, SpellCastTargets.ForUnit(holder.Target.Guid), holder.Spell);
+        }
+    }
+}
+

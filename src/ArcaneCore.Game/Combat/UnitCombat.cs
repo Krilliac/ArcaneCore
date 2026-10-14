@@ -251,6 +251,17 @@ public sealed class UnitCombat
         LastManaUseSpellId = spellId;
     }
 
+    private readonly ObjectGuid[] _reactiveTargets = new ObjectGuid[6];
+
+    /// <summary>vmangos Unit::GetReactiveTarget (Unit.h:1689): whom the reactive window was opened against (empty when closed).</summary>
+    public ObjectGuid GetReactiveTarget(ReactiveType reactive) => _reactiveTargets[(int)reactive];
+
+    /// <summary>Set or clear one reactive window's target GUID (written by <see cref="ReactiveService"/>).</summary>
+    public void SetReactiveTarget(ReactiveType reactive, ObjectGuid target) => _reactiveTargets[(int)reactive] = target;
+
+    /// <summary>Clear every reactive window's target GUID (<see cref="ReactiveService.ClearAllReactives"/>).</summary>
+    internal void ClearReactiveTargets() => Array.Clear(_reactiveTargets);
+
     internal void TickAttackTimers(uint diff)
     {
         for (int i = 0; i < _attackTimers.Length; i++)

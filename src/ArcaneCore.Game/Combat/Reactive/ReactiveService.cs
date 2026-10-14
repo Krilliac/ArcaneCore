@@ -72,6 +72,7 @@ public sealed class ReactiveService
         State state = _reactives.GetOrCreateValue(unit);
         state.Timers[(int)reactive] = ReactiveTimerStartMs;
         state.Targets[(int)reactive] = target;
+        unit.Combat.SetReactiveTarget(reactive, target);
         if (!_active.Contains(unit))
         {
             _active.Add(unit);
@@ -80,7 +81,9 @@ public sealed class ReactiveService
 
     /// <summary>vmangos Unit::GetReactiveTarget: whom the window was opened against (empty when closed).</summary>
     public ObjectGuid GetReactiveTarget(Unit unit, ReactiveType reactive)
-        => _reactives.TryGetValue(unit, out State? state) ? state.Targets[(int)reactive] : default;
+        => _reactives.TryGetValue(unit, out State? state) && !state.Targets[(int)reactive].IsEmpty
+            ? state.Targets[(int)reactive]
+            : unit.Combat.GetReactiveTarget(reactive);
 
     /// <summary>Whether a window is open.</summary>
     public bool IsReactiveOpen(Unit unit, ReactiveType reactive)
@@ -169,6 +172,7 @@ public sealed class ReactiveService
             {
                 state.Timers[r] = 0;
                 state.Targets[r] = default;
+                unit.Combat.SetReactiveTarget((ReactiveType)r, default);
                 OnWindowEnded(unit, (ReactiveType)r);
             }
             else
@@ -190,6 +194,7 @@ public sealed class ReactiveService
         ArgumentNullException.ThrowIfNull(unit);
         _reactives.Remove(unit);
         _active.Remove(unit);
+        unit.Combat.ClearReactiveTargets();
     }
 
     /// <summary>The units with an open window (diagnostics and the per-map updater).</summary>
@@ -232,6 +237,8 @@ public sealed class ReactiveService
             Array.Clear(state.Targets);
             _active.Remove(unit);
         }
+
+        unit.Combat.ClearReactiveTargets();
 
         _states.ModifyAuraState(unit, AuraState.Defense, false);
         if (unit.Class == Class.Hunter)

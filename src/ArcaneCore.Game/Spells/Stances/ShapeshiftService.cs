@@ -508,7 +508,7 @@ public sealed class ShapeshiftService
 
     /// <summary>vmangos SpellAuraHolder::m_isRemovedOnShapeLost (SpellAuras.cpp:6672): cast on itself and bound to a form.</summary>
     private static bool IsRemovedOnShapeLost(SpellAuraHolder holder)
-        => holder.CasterGuid == holder.Target.Guid && holder.Spell.IsRemovedOnShapeLost;
+        => holder.IsRemovedOnShapeLost && holder.CasterGuid == holder.Target.Guid && holder.Spell.IsRemovedOnShapeLost;
 
     /// <summary>The raw rage a stance change keeps: the Tactical Mastery class-script aura (831-835) or 0.</summary>
     private uint GetTacticalMasteryRage(Unit unit)
