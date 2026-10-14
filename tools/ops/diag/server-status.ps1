@@ -20,21 +20,27 @@ param(
     [int] $AuthPort = 3724,
     [int] $IntervalSeconds = 5,
     [string] $MetricsUrl = '',
-    [string] $RealmMetricsUrl = ''
+    [string] $RealmMetricsUrl = '',
+    [switch] $Once
 )
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'OpsEnv.ps1')
 if ([string]::IsNullOrWhiteSpace($Profile)) {
     $Profile = Get-OpsRequiredEnv -Name 'ARCANECORE_LIVE_PROFILE' -Purpose 'the live server profile directory that holds appsettings.json'
 }
-try { $Host.UI.RawUI.WindowTitle = "ArcaneCore status" } catch { }
-# One status console per World port: the newest wins, so each redeploy replaces the old window instead of adding another.
-# Only older pwsh processes running this script for the same port are closed.
-$selfStart = (Get-Process -Id $PID).StartTime
-Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='powershell.exe'" | Where-Object {
-    $_.ProcessId -ne $PID -and $_.CommandLine -match 'server-status\.ps1' -and
-    $(if ($_.CommandLine -match '-WorldPort\s+(\d+)') { [int]$Matches[1] } else { 8085 }) -eq $WorldPort -and
-    $_.CreationDate -lt $selfStart
-} | ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
+if (-not $Once) {
+    try { $Host.UI.RawUI.WindowTitle = "ArcaneCore status" } catch { }
+    # One status console per World port: the newest wins, so each redeploy replaces the old window instead of adding another.
+    # Only older pwsh processes running this script via -File for the same port are closed.
+    $selfProc = Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction SilentlyContinue
+    $parentPid = if ($selfProc) { $selfProc.ParentProcessId } else { 0 }
+    $selfStart = (Get-Process -Id $PID).StartTime
+    Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='powershell.exe'" | Where-Object {
+        $_.ProcessId -ne $PID -and $_.ProcessId -ne $parentPid -and
+        $_.CommandLine -match '-File\s+["'']?[^"'']*server-status\.ps1' -and
+        $(if ($_.CommandLine -match '-WorldPort\s+(\d+)') { [int]$Matches[1] } else { 8085 }) -eq $WorldPort -and
+        $_.CreationDate -lt $selfStart
+    } | ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
+}
 $ErrorActionPreference = 'Continue'
 
 function Get-JsonProp($obj, [string]$name) {
@@ -232,7 +238,12 @@ while ($true) {
     }
     $out.Add('')
     $out.Add("Refresh every $IntervalSeconds s. Ctrl+C closes this window; the servers keep running. Type commands in the World/Realm windows.")
-    Clear-Host
+    if (-not $Once) {
+        Clear-Host
+    }
     $out | ForEach-Object { Write-Host $_ }
+    if ($Once) {
+        break
+    }
     Start-Sleep -Seconds $IntervalSeconds
 }
