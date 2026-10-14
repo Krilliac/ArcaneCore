@@ -92,16 +92,17 @@ public sealed partial class Creature : Unit, ICombatCreature
             return false;
         }
 
-        (float x, float y, float z) = spline.PositionAt(clockMs);
+        (float x, float y, float z, float orientation) = spline.PositionAndOrientationAt(clockMs, Orientation);
         if (spline.IsFinished(clockMs))
         {
             Spline = null;
-            Relocate(spline.EndX, spline.EndY, spline.EndZ, spline.FinalOrientation ?? Orientation, serverTimeMs);
+            float finalHeading = spline.FinalOrientation ?? spline.EndOrientation(orientation);
+            Relocate(spline.EndX, spline.EndY, spline.EndZ, finalHeading, serverTimeMs);
             return true;
         }
 
-        // Keep the movement block in step so a create block shows the live position.
-        Relocate(x, y, z, Orientation, serverTimeMs);
+        // Keep the movement block and server orientation in step along multi-point splines so cone checks and create blocks track the active leg.
+        Relocate(x, y, z, orientation, serverTimeMs);
         return false;
     }
 
@@ -110,9 +111,9 @@ public sealed partial class Creature : Unit, ICombatCreature
     {
         if (Spline is { } spline)
         {
-            (float x, float y, float z) = spline.PositionAt(clockMs);
+            (float x, float y, float z, float orientation) = spline.PositionAndOrientationAt(clockMs, Orientation);
             Spline = null;
-            Relocate(x, y, z, Orientation, serverTimeMs);
+            Relocate(x, y, z, orientation, serverTimeMs);
         }
     }
 

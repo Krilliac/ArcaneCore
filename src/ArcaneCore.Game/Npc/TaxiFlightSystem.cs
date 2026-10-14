@@ -341,16 +341,79 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
             double length = Distance(a, b);
             if (remaining <= length)
             {
-                double t = length <= 0 ? 1 : remaining / length;
-                Move(flight, new Waypoint(
-                    (float)(a.X + ((b.X - a.X) * t)),
-                    (float)(a.Y + ((b.Y - a.Y) * t)),
-                    (float)(a.Z + ((b.Z - a.Z) * t))));
+                float t = length <= 0 ? 1f : (float)(remaining / length);
+                Waypoint interpolated = EvaluateCatmullRom(flight.Segments, i - 1, t, flight.Player.Orientation, out float heading);
+                Move(flight, interpolated, heading);
                 return;
             }
 
             remaining -= length;
         }
+    }
+
+    /// <summary>
+    /// Evaluate the uniform Catmull-Rom spline (with clamped endpoints) on segment <paramref name="segmentIndex"/> (<c>P1 -&gt; P2</c>)
+    /// at parameter <paramref name="t"/> in <c>[0, 1]</c>, matching the 1.12.1 client's <c>SplineFlags.Flying</c> Catmull-Rom interpolation.
+    /// For a 2-point hop (<c>segments.Count &lt; 3</c>), returns exact linear interpolation.
+    /// </summary>
+    public static Waypoint EvaluateCatmullRom(
+        IReadOnlyList<Waypoint> segments,
+        int segmentIndex,
+        float t,
+        float fallbackOrientation,
+        out float orientation)
+    {
+        ArgumentNullException.ThrowIfNull(segments);
+        t = Math.Clamp(t, 0f, 1f);
+        Waypoint p1 = segments[segmentIndex];
+        Waypoint p2 = segments[segmentIndex + 1];
+
+        if (segments.Count < 3)
+        {
+            float dx = p2.X - p1.X;
+            float dy = p2.Y - p1.Y;
+            orientation = (dx * dx) + (dy * dy) > 0.0001f
+                ? Creature.NormalizeOrientation(MathF.Atan2(dy, dx))
+                : fallbackOrientation;
+            return new Waypoint(
+                p1.X + ((p2.X - p1.X) * t),
+                p1.Y + ((p2.Y - p1.Y) * t),
+                p1.Z + ((p2.Z - p1.Z) * t));
+        }
+
+        Waypoint p0 = segmentIndex > 0 ? segments[segmentIndex - 1] : p1;
+        Waypoint p3 = segmentIndex + 2 < segments.Count ? segments[segmentIndex + 2] : p2;
+
+        float t2 = t * t;
+        float t3 = t2 * t;
+
+        // Standard Catmull-Rom basis (tau = 0.5):
+        // P(t) = 0.5 * (2*P1 + (-P0 + P2)*t + (2*P0 - 5*P1 + 4*P2 - P3)*t^2 + (-P0 + 3*P1 - 3*P2 + P3)*t^3)
+        float x = 0.5f * ((2f * p1.X)
+            + ((-p0.X + p2.X) * t)
+            + (((2f * p0.X) - (5f * p1.X) + (4f * p2.X) - p3.X) * t2)
+            + ((-p0.X + (3f * p1.X) - (3f * p2.X) + p3.X) * t3));
+        float y = 0.5f * ((2f * p1.Y)
+            + ((-p0.Y + p2.Y) * t)
+            + (((2f * p0.Y) - (5f * p1.Y) + (4f * p2.Y) - p3.Y) * t2)
+            + ((-p0.Y + (3f * p1.Y) - (3f * p2.Y) + p3.Y) * t3));
+        float z = 0.5f * ((2f * p1.Z)
+            + ((-p0.Z + p2.Z) * t)
+            + (((2f * p0.Z) - (5f * p1.Z) + (4f * p2.Z) - p3.Z) * t2)
+            + ((-p0.Z + (3f * p1.Z) - (3f * p2.Z) + p3.Z) * t3));
+
+        // Analytical tangent derivative P'(t):
+        float tx = 0.5f * ((-p0.X + p2.X)
+            + (2f * ((2f * p0.X) - (5f * p1.X) + (4f * p2.X) - p3.X) * t)
+            + (3f * (-p0.X + (3f * p1.X) - (3f * p2.X) + p3.X) * t2));
+        float ty = 0.5f * ((-p0.Y + p2.Y)
+            + (2f * ((2f * p0.Y) - (5f * p1.Y) + (4f * p2.Y) - p3.Y) * t)
+            + (3f * (-p0.Y + (3f * p1.Y) - (3f * p2.Y) + p3.Y) * t2));
+
+        orientation = (tx * tx) + (ty * ty) > 0.0001f
+            ? Creature.NormalizeOrientation(MathF.Atan2(ty, tx))
+            : fallbackOrientation;
+        return new Waypoint(x, y, z);
     }
 
     /// <summary>Relocate the player onto a taxi node of the flight's map; a node missing or on another map leaves it in place.</summary>
@@ -363,18 +426,26 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         }
     }
 
-    private void Move(Flight flight, Waypoint to)
+    private void Move(Flight flight, Waypoint to, float? tangentOrientation = null)
     {
         Player player = flight.Player;
-        float orientation = MathF.Atan2(to.Y - player.Y, to.X - player.X);
-        if (orientation < 0)
+        float orientation;
+        if (tangentOrientation is { } tangent && float.IsFinite(tangent))
         {
-            orientation += 2 * MathF.PI;
+            orientation = tangent;
+        }
+        else
+        {
+            float dx = to.X - player.X;
+            float dy = to.Y - player.Y;
+            orientation = (dx * dx) + (dy * dy) > 0.0001f
+                ? Creature.NormalizeOrientation(MathF.Atan2(dy, dx))
+                : player.Orientation;
         }
 
         // vmangos Unit::SetPosition for a player (Unit.cpp:10672) -> Player::SetPosition: a spline step moves the player, so a state emote ends.
         player.ClearEmoteState();
-        player.Relocate(to.X, to.Y, to.Z, float.IsFinite(orientation) ? orientation : player.Orientation, _nowMs());
+        player.Relocate(to.X, to.Y, to.Z, orientation, _nowMs());
         player.NeedsVisibilityUpdate = true;
         flight.Expected = to;
     }

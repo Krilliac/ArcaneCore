@@ -621,6 +621,59 @@ public sealed record CreatureSpline(
         return (position.X, position.Y, position.Z);
     }
 
+    /// <summary>
+    /// Position and smoothly blended tangent orientation at <paramref name="clockMs"/> along a single- or multi-segment spline.
+    /// Across interior corners, the heading blends smoothly across the corner bisector within a 1.25-yard window (up to 25% of each
+    /// adjacent segment) so the creature's server-side facing turns smoothly through corners rather than staying frozen on the first leg.
+    /// </summary>
+    public (float X, float Y, float Z, float Orientation) PositionAndOrientationAt(long clockMs, float fallbackOrientation)
+    {
+        float t = DurationMs == 0 ? 1f : (float)ElapsedMs(clockMs) / DurationMs;
+        (Vector3 position, _, float orientation) = LocateWithOrientation(t, fallbackOrientation);
+        return (position.X, position.Y, position.Z, orientation);
+    }
+
+    /// <summary>The tangent heading of the final non-zero leg of the spline, or <paramref name="fallbackOrientation"/> when degenerate.</summary>
+    public float EndOrientation(float fallbackOrientation)
+    {
+        var start = new Vector3(StartX, StartY, StartZ);
+        IReadOnlyList<Vector3> points = Path;
+        if (points.Count == 0)
+        {
+            return HeadingBetween(start, new Vector3(EndX, EndY, EndZ), fallbackOrientation);
+        }
+
+        for (int i = points.Count - 1; i >= 0; i--)
+        {
+            Vector3 from = i == 0 ? start : points[i - 1];
+            Vector3 to = points[i];
+            float dx = to.X - from.X;
+            float dy = to.Y - from.Y;
+            if ((dx * dx) + (dy * dy) > 0.0001f)
+            {
+                return Creature.NormalizeOrientation(MathF.Atan2(dy, dx));
+            }
+        }
+
+        return fallbackOrientation;
+    }
+
+    /// <summary>Shortest-arc angular interpolation in <c>[0, 2pi)</c>.</summary>
+    public static float LerpAngle(float from, float to, float t)
+    {
+        float diff = (to - from) % (MathF.PI * 2f);
+        if (diff > MathF.PI)
+        {
+            diff -= MathF.PI * 2f;
+        }
+        else if (diff < -MathF.PI)
+        {
+            diff += MathF.PI * 2f;
+        }
+
+        return Creature.NormalizeOrientation(from + (diff * Math.Clamp(t, 0f, 1f)));
+    }
+
     /// <summary>The points still ahead at <paramref name="clockMs"/> (destination last).</summary>
     public IReadOnlyList<Vector3> RemainingPoints(long clockMs)
     {
@@ -632,16 +685,23 @@ public sealed record CreatureSpline(
 
     private (Vector3 Position, int Segment) Locate(float t)
     {
+        (Vector3 pos, int seg, _) = LocateWithOrientation(t, 0f);
+        return (pos, seg);
+    }
+
+    private (Vector3 Position, int Segment, float Orientation) LocateWithOrientation(float t, float fallbackOrientation)
+    {
         var start = new Vector3(StartX, StartY, StartZ);
         IReadOnlyList<Vector3> points = Path;
         if (points.Count == 0)
         {
-            return (Vector3.Lerp(start, new Vector3(EndX, EndY, EndZ), t), 0); // single segment: no Points list per tick
+            var end = new Vector3(EndX, EndY, EndZ);
+            return (Vector3.Lerp(start, end, t), 0, HeadingBetween(start, end, fallbackOrientation));
         }
 
         if (points.Count == 1)
         {
-            return (Vector3.Lerp(start, points[0], t), 0);
+            return (Vector3.Lerp(start, points[0], t), 0, HeadingBetween(start, points[0], fallbackOrientation));
         }
 
         float total = 0;
@@ -660,13 +720,64 @@ public sealed record CreatureSpline(
             if (target <= segment || i == points.Count - 1)
             {
                 float f = segment <= 0 ? 1f : Math.Clamp(target / segment, 0f, 1f);
-                return (Vector3.Lerp(previous, points[i], f), i);
+                float segHeading = HeadingBetween(previous, points[i], fallbackOrientation);
+                float blended = BlendCornerHeading(start, points, i, segment, f, segHeading);
+                return (Vector3.Lerp(previous, points[i], f), i, blended);
             }
 
             target -= segment;
             previous = points[i];
         }
 
-        return (points[^1], points.Count - 1);
+        return (points[^1], points.Count - 1, EndOrientation(fallbackOrientation));
+    }
+
+    private static float BlendCornerHeading(
+        Vector3 start,
+        IReadOnlyList<Vector3> points,
+        int segmentIndex,
+        float segmentLength,
+        float f,
+        float segHeading)
+    {
+        if (segmentLength <= 0.1f)
+        {
+            return segHeading;
+        }
+
+        float window = MathF.Min(0.25f, 1.25f / segmentLength);
+        if (window <= 0.01f)
+        {
+            return segHeading;
+        }
+
+        if (segmentIndex > 0 && f < window)
+        {
+            Vector3 prevStart = segmentIndex == 1 ? start : points[segmentIndex - 2];
+            Vector3 prevEnd = points[segmentIndex - 1];
+            float prevHeading = HeadingBetween(prevStart, prevEnd, segHeading);
+            float cornerMid = LerpAngle(prevHeading, segHeading, 0.5f);
+            return LerpAngle(cornerMid, segHeading, f / window);
+        }
+
+        if (segmentIndex < points.Count - 1 && f > 1f - window)
+        {
+            Vector3 nextStart = points[segmentIndex];
+            Vector3 nextEnd = points[segmentIndex + 1];
+            float nextHeading = HeadingBetween(nextStart, nextEnd, segHeading);
+            float cornerMid = LerpAngle(segHeading, nextHeading, 0.5f);
+            return LerpAngle(segHeading, cornerMid, (f - (1f - window)) / window);
+        }
+
+        return segHeading;
+    }
+
+    private static float HeadingBetween(Vector3 from, Vector3 to, float fallback)
+    {
+        float dx = to.X - from.X;
+        float dy = to.Y - from.Y;
+        return (dx * dx) + (dy * dy) > 0.0001f
+            ? Creature.NormalizeOrientation(MathF.Atan2(dy, dx))
+            : fallback;
     }
 }

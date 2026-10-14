@@ -32,7 +32,17 @@ internal sealed class MapLocomotion : IMapUpdater
         LocomotionEnvironment environment = LocomotionEnvironment.For(_world);
         foreach (Player player in map.Players)
         {
-            if (!LocomotionStates.TryGet(player, out LocomotionState? state) || !state.Pending.HasPending)
+            if (!LocomotionStates.TryGet(player, out LocomotionState? state))
+            {
+                continue;
+            }
+
+            if (state.ActiveSpline is not null)
+            {
+                state.AdvanceSpline(diffMs);
+            }
+
+            if (!state.Pending.HasPending)
             {
                 continue;
             }
@@ -62,11 +72,15 @@ internal sealed class MapLocomotion : IMapUpdater
     /// </summary>
     public void OnPlayerRemoved(Map map, Player player)
     {
-        if (LocomotionStates.TryGet(player, out LocomotionState? state) && state.Pending.HasPending)
+        if (LocomotionStates.TryGet(player, out LocomotionState? state))
         {
-            foreach (PendingMovementChange change in state.Pending.ResolveAll())
+            state.ClearSpline();
+            if (state.Pending.HasPending)
             {
-                MovementControl.Enforce(player, change, sendToClient: false);
+                foreach (PendingMovementChange change in state.Pending.ResolveAll())
+                {
+                    MovementControl.Enforce(player, change, sendToClient: false);
+                }
             }
         }
     }

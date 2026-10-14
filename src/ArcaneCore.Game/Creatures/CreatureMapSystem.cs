@@ -423,7 +423,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             return PlannedPath.Of(PathOutcome.Deferred);
         }
 
-        PathResult path = SearchPath(new Vector3(creature.X, creature.Y, creature.Z), destination, PathOptionsFor(creature, toSpawn));
+        var start = new Vector3(creature.X, creature.Y, creature.Z);
+        PathOptions pathOptions = PathOptionsFor(creature, toSpawn);
+        PathResult path = SearchPath(start, destination, pathOptions);
         if ((path.Type & PathType.TilesPending) != 0)
         {
             NoteDeferredPath(creature);
@@ -446,6 +448,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         PathOutcome outcome = (path.Type & PathType.Incomplete) != 0 ? PathOutcome.Partial
             : (path.Type & (PathType.NotUsingPath | PathType.Shortcut)) != 0 ? PathOutcome.Direct
             : PathOutcome.Mesh;
+        if (outcome == PathOutcome.Mesh && corners.Count >= 2 && Map.Collision.MeshPoints is { } mesh)
+        {
+            corners = CreatureSplineSmoothing.VaryAndSmooth(creature, start, corners, mesh, _height.GetHeight, pathOptions, allowVariation: !toSpawn);
+        }
+
         return new PlannedPath(outcome, corners);
     }
 

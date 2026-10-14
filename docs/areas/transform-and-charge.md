@@ -51,10 +51,13 @@ feature, discovered like every `IWorldFeature`.
   of the target's z and the target can see it; the angle search walks `0, +-45, +-90, +-135, 180` degrees around the bearing and falls back to the first point
   ("BAD BAD NEWS" branch of the reference).
 * The way is the navigation path when the map's pathfinder returns a complete one ending on the contact point (`ForcedMovement.ChargePath`, the reference's
-  `generatePath = true, forceDestination = true`), else the straight line.
+  `generatePath = true, forceDestination = true`), else the straight line. Multi-corner mesh paths are smoothed with quadratic Bezier arcs via
+  `CreatureSplineSmoothing.SmoothCorners`, and segments `>= 8` yd crossing sloped or hilly ground (`>= 0.35` yd vertical deviation from the chord) are subdivided
+  along the terrain contour (`SubdivideTerrainContour`) so the `SMSG_MONSTER_MOVE` spline hugs hills and ramps instead of clipping underground.
 * One `SMSG_MONSTER_MOVE` (the creature spline layout, `CreatureMovePackets.BuildPath`, no run flag, no facing) goes to the caster's own client when it is a player
   and to everyone who sees it, duration = path length / 24 yd/s. A creature caster ends its own spline first; a creature target stops moving.
-* The caster is relocated to the end of the path at once (see "Deviations").
+* The caster is relocated to the end of the path at once (see "Deviations"), while a player's `LocomotionState.ActiveSpline` records the launched `CreatureSpline`
+  (advanced by `MapLocomotion.Update` and sampled via `LocomotionState.SampleSpline`) for live position/orientation interpolation during the flight.
 * A negative spell starts the caster's melee attack on the target (`map.Combat.Attack`). The effect never grants rage or a stun itself: a warrior's Charge spell has
   other effects (a trigger spell, an energize) that run after it through the ordinary effect loop; the tests cover exactly that composition (rage for the caster, the
   stun on the target, both through the triggered spell).

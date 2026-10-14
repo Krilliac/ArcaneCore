@@ -162,6 +162,10 @@ public static class ForcedMovement
         {
             // vmangos UpdateSplinePosition -> Player::SetPosition (Unit.cpp:10672): the spline moves the player, so a state emote ends. A creature keeps its state.
             mover.ClearEmoteState();
+            mover.Locomotion.StartSpline(new CreatureSpline(id, start.X, start.Y, start.Z, end.X, end.Y, end.Z, Run: false, heading, 0L, duration)
+            {
+                Path = points.Count > 1 ? [.. points] : [],
+            });
         }
 
         unit.Relocate(end.X, end.Y, end.Z, heading, unit.Movement.Time);
@@ -261,12 +265,120 @@ public static class ForcedMovement
 
                 if (corners.Count > 0)
                 {
-                    return corners;
+                    if (corners.Count >= 2 && collision.MeshPoints is { } mesh)
+                    {
+                        corners = CreatureSplineSmoothing.SmoothCorners(
+                            map.MapId,
+                            start,
+                            corners,
+                            mesh,
+                            (_, x, y, z) => SafeFloor(collision, x, y, z),
+                            options);
+                    }
+
+                    return SubdivideTerrainContour(collision, start, corners);
                 }
             }
+
+            return SubdivideTerrainContour(collision, start, [destination]);
         }
 
         return [destination];
+    }
+
+    private static float? SafeFloor(MapCollision collision, float x, float y, float z)
+    {
+        float h = collision.GetHeight(x, y, z);
+        return h > TerrainTile.InvalidHeight && float.IsFinite(h) ? h : null;
+    }
+
+    /// <summary>
+    /// When a charge segment (<c>&gt;= 8</c> yd) crosses uneven ground whose floor height deviates from the straight chord by at least
+    /// <c>0.35</c> yd (a hill crest, slope transition, or terrain dip), insert intermediate ground-hugging points so the client's
+    /// linear <c>SMSG_MONSTER_MOVE</c> spline follows the terrain contour rather than clipping underground. Flat or unknown terrain
+    /// adds zero points.
+    /// </summary>
+    private static IReadOnlyList<Vector3> SubdivideTerrainContour(MapCollision collision, Vector3 start, IReadOnlyList<Vector3> corners)
+    {
+        const float MinSegmentYards = 8.0f;
+        const float StepYards = 4.0f;
+        const float MinVerticalDeviationYards = 0.35f;
+        const float MaxWalkableDeltaYards = 3.5f;
+        const int MaxTotalPoints = 16;
+
+        List<Vector3>? expanded = null;
+        Vector3 prev = start;
+        for (int i = 0; i < corners.Count; i++)
+        {
+            Vector3 next = corners[i];
+            float dx = next.X - prev.X;
+            float dy = next.Y - prev.Y;
+            float dist2D = MathF.Sqrt((dx * dx) + (dy * dy));
+            int currentCount = expanded?.Count ?? i;
+            int remaining = corners.Count - i;
+
+            if (dist2D >= MinSegmentYards && currentCount + 2 + remaining <= MaxTotalPoints)
+            {
+                int steps = Math.Clamp((int)MathF.Round(dist2D / StepYards), 2, 5);
+                if (currentCount + (steps - 1) + remaining <= MaxTotalPoints
+                    && TrySampleContourSegment(collision, prev, next, steps, MinVerticalDeviationYards, MaxWalkableDeltaYards, out List<Vector3>? samples))
+                {
+                    if (expanded is null)
+                    {
+                        expanded = new List<Vector3>(corners.Count + samples.Count);
+                        for (int k = 0; k < i; k++)
+                        {
+                            expanded.Add(corners[k]);
+                        }
+                    }
+
+                    expanded.AddRange(samples);
+                }
+            }
+
+            expanded?.Add(next);
+            prev = next;
+        }
+
+        return expanded ?? corners;
+    }
+
+    private static bool TrySampleContourSegment(
+        MapCollision collision,
+        Vector3 from,
+        Vector3 to,
+        int steps,
+        float minDeviation,
+        float maxDelta,
+        out List<Vector3> samples)
+    {
+        samples = [];
+        float maxDev = 0f;
+        for (int s = 1; s < steps; s++)
+        {
+            float t = (float)s / steps;
+            Vector3 lerp = Vector3.Lerp(from, to, t);
+            float ground = collision.GetHeight(lerp.X, lerp.Y, lerp.Z + 2f);
+            if (ground <= TerrainTile.InvalidHeight || !float.IsFinite(ground))
+            {
+                return false;
+            }
+
+            float dev = MathF.Abs(ground - lerp.Z);
+            if (dev > maxDelta)
+            {
+                return false;
+            }
+
+            if (dev > maxDev)
+            {
+                maxDev = dev;
+            }
+
+            samples.Add(new Vector3(lerp.X, lerp.Y, ground));
+        }
+
+        return maxDev >= minDeviation;
     }
 
     /// <summary>

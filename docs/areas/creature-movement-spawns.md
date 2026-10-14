@@ -320,7 +320,12 @@ A pet swims and never flies whatever its template says (vmangos Creature.h:166-1
 Not copied: vmangos' pet closed-door `CutPathWithDynamicLoS` and `UNIT_STATE_ALLOW_INCOMPLETE_PATH`; the in-LOS stop of a partial chase
 (the creature keeps walking the partial path). Maps without a mesh: `WorldCollision.InstallFallback` has no terrain-step `IPathfinder` to
 install (only the seam exists), so they keep the straight line.
-Tests: `Creatures/NoStraightPathTests.cs`, plus the updated `UnreachableTargetTests`, `CreaturePathBudgetTests`, `ChargeEffectTests`.
+* **Spline smoothing, lateral variation and continuous orientation tracking (`CreatureSplineSmoothing`, `CreatureSpline.PositionAndOrientationAt`)**:
+  Multi-corner `PathOutcome.Mesh` paths returned by `CreatureMapSystem.PlanPath` are post-processed by `CreatureSplineSmoothing.VaryAndSmooth`:
+  1. **Per-creature lateral corridor variation**: on non-home paths `>= 12` yd with `>= 2` corners, interior corners receive a deterministic lateral offset (`±0.85` yd seeded from `creature.Guid.Counter`, tapered to `0` at start and destination) when `IMeshPointQuery.Raycast` and floor height (`<= 1.5` yd delta) confirm the shifted vertex is walkable.
+  2. **Quadratic Bezier corner-cutting**: interior turns `>= 15°` with arms `>= 2` yd are replaced with 3 quadratic Bezier points (`u = 0.25, 0.50, 0.75`, arm `<= 3.5` yd) validated by `IMeshPointQuery.Raycast` and height lookup, capped at `32` spline points and spaced `>= 0.5` yd apart.
+  3. **Live segment orientation & corner blending**: `Creature.AdvanceSpline` and `StopSpline` update `creature.Orientation` at every tick via `CreatureSpline.PositionAndOrientationAt` (which blends heading across interior corners within a 1.25-yd window and finishes on `EndOrientation` when `FinalOrientation` is null).
+Tests: `Creatures/NoStraightPathTests.cs`, `Creatures/CreatureSplineSmoothingTests.cs`, plus the updated `UnreachableTargetTests`, `CreaturePathBudgetTests`, `ChargeEffectTests`.
 
 ## Not done in this lane (recorded, not stubbed)
 

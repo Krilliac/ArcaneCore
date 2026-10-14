@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 
@@ -186,6 +187,58 @@ public sealed class LocomotionState
     internal void NoteWrongAck() => WrongAckCount++;
 
     internal void NoteFailedAck() => FailedAckCount++;
+
+    /// <summary>The active server-launched spline for this unit (e.g., Charge), or null when none is in flight.</summary>
+    public CreatureSpline? ActiveSpline { get; private set; }
+
+    /// <summary>Milliseconds elapsed along <see cref="ActiveSpline"/> since it was launched.</summary>
+    public long SplineElapsedMs { get; private set; }
+
+    /// <summary>Record a newly launched server spline on this unit.</summary>
+    public void StartSpline(CreatureSpline spline)
+    {
+        ArgumentNullException.ThrowIfNull(spline);
+        ActiveSpline = spline;
+        SplineElapsedMs = 0;
+    }
+
+    /// <summary>Advance <see cref="ActiveSpline"/> by <paramref name="diffMs"/> and clear it once completed.</summary>
+    public void AdvanceSpline(uint diffMs)
+    {
+        if (ActiveSpline is not { } spline)
+        {
+            return;
+        }
+
+        SplineElapsedMs += diffMs;
+        if (spline.IsFinished(spline.StartClockMs + SplineElapsedMs))
+        {
+            ActiveSpline = null;
+            SplineElapsedMs = 0;
+        }
+    }
+
+    /// <summary>Clear any active server spline (e.g., when leaving a map or teleporting).</summary>
+    public void ClearSpline()
+    {
+        ActiveSpline = null;
+        SplineElapsedMs = 0;
+    }
+
+    /// <summary>
+    /// Sample the unit's live position and smoothly blended orientation along <see cref="ActiveSpline"/> when one is in flight,
+    /// or return the unit's stored <c>(X, Y, Z, Orientation)</c> otherwise.
+    /// </summary>
+    public (float X, float Y, float Z, float Orientation) SampleSpline(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (ActiveSpline is { } spline)
+        {
+            return spline.PositionAndOrientationAt(spline.StartClockMs + SplineElapsedMs, unit.Orientation);
+        }
+
+        return (unit.X, unit.Y, unit.Z, unit.Orientation);
+    }
 }
 
 /// <summary><c>unit.Locomotion</c>: the unit's <see cref="LocomotionState"/> (created on first use).</summary>
