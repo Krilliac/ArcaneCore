@@ -769,8 +769,10 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (++_failCount < ConfirmFailures || _failDiagnosed || Suspensions is not { } suspensions) return;
         _failDiagnosed = true;
         bool steep = PlayerbotNavigation.RequiresSteepAscent(player, destination, _options, out float ascent);
+        int fromComp = -1, toComp = -1;
+        bool unreachable = !steep && PlayerbotNavigation.IsUnreachableOnFoot(player, destination, out fromComp, out toComp);
         PlayerbotHazard hazard = default;
-        if (!steep && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard, friendlyTownEnder))
+        if (!steep && !unreachable && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard, friendlyTownEnder))
         {
             // No steep ground or hazard: for a bot that may not take the tram or a lift the ender across it is the reason, but only
             // when the tram or a lift really is the way there (any other failed plan is not a transit block, and is never set aside here).
@@ -778,7 +780,16 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 ConfirmTransitBlocked(player, questId, entry, now, transit);
             return;
         }
+        if (unreachable && (!_unreachableReportedAt.TryGetValue(entry, out uint last) || unchecked(now - last) >= UnreachableReportMs)
+            && _pendingReports.Count < MaxPendingReports)
+        {
+            if (_unreachableReportedAt.Count >= MaxReportedEntries) _unreachableReportedAt.Clear();
+            _unreachableReportedAt[entry] = now;
+            UnreachableReports++;
+            _pendingReports.Enqueue(new UnreachableSkip(GoalOf?.Invoke() ?? default, entry, questId, player.MapId, spot, fromComp, toComp));
+        }
         string reason = steep ? $"the mesh route climbs {ascent:F1} yards of steep ground"
+            : unreachable ? $"destination is in disconnected region component {toComp} from {fromComp}"
             : $"the route crosses a {hazard.Kind} hazard";
         _failCount = 0;
         _failDiagnosed = false;
@@ -789,7 +800,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
         bool finished = _session.Services.GetService<QuestNpcFeature>()?.Services.StateOf(player)?.Quests.Get(questId)
             is { Status: QuestStatus.Complete, Rewarded: false };
-        bool hold = finished && !steep;
+        bool hold = finished && !steep && !unreachable;
         if (hold)
         {
             // A level gained since the first hold restarts the count (the pack that blocked the bot may be crossable now); with none, the

@@ -123,9 +123,15 @@ local hand-ins after long objective travel. It can exclude other legitimate long
 same-map distance limit. Terrain and hostile pockets have separate limits; long trips may be flown (see Flight paths).
 At pickup and offscreen travel (`MayTakeQuest`, `RefreshEntries`), `PlayerbotQuestGoals.CanExecuteObjectives` also skips
 non-auto-complete quests whose mechanics bots do not execute: exploration/escort/event-script quests (`QuestSpecialFlags.ExplorationOrEvent`),
-GameObject or spell-cast objectives (`ReqCreatureOrGOId < 0` or `ReqSpell != 0`, such as quest 5382 "Doctor Theolen Krastinov, the Butcher"),
-friendly creature objectives credited by item or spell use (`IsKillObjective`, such as quest 5441 "Lazy Peons"), and creature objectives whose
-spawns exist only on another continent or an instance without an entrance trigger on the bot's map. For a completed quest already in the log,
+GameObject objectives without an item-use source (`ReqCreatureOrGOId < 0`), spell-cast or friendly creature objectives without a quest source item
+(`ReqSpell != 0` or `!IsKillObjective` when `SrcItemId == 0`, such as quest 5382 "Doctor Theolen Krastinov, the Butcher"), and creature objectives whose
+spawns exist only on another continent or an instance without an entrance trigger on the bot's map. When a creature objective (`ReqCreatureOrGOId > 0`)
+is friendly or requires a spell cast and the quest provides a source item (`SrcItemId != 0`, such as quest 5441 "Lazy Peons" with Foreman's Blackjack 16114
+on Lazy Peon 10556), `CanExecuteObjectives` and `Pick` accept it (`IsItemUseCreatureObjective`, requiring the item to remain in the bot's inventory once
+`Incomplete` in the log); `PlayerbotQuestGoals.TryUseObjectiveItem` walks within interaction reach of visible targets (preferring sleeping targets,
+`StandState.Sleep` or `LazyPeonAI.IsAsleep`), sends `CMSG_USE_ITEM` with `PlayerbotNavigation.UseItemOnUnitPayload`, and skips woken or recently used
+targets (`IsUnavailableItemTarget`, `ItemUseTargetCooldownMs` = 60,000 ms) so `PlayerbotBrain.IsUntakeable` and `PlayerbotWorldDestinations` rotate to the
+next spawn camp. For a completed quest already in the log,
 `CompletedReturnQuest` (`CanReturnToEnder`) holds the quest in the log without selecting it as the active walking goal when its ender lies
 beyond the walking return range (`MaxDeliveryYards` outside a home, `MaxUnhomedReturnWalkYards` = 3000 for an unhomed bot) and no known,
 affordable taxi route reaches it (`PlayerbotTaxi.CanTravelByTaxi`); a leave-home quest (`PlayerbotHomeArea.QuestLeavesHome`) must also have
@@ -137,7 +143,7 @@ A far goal (a quest giver or ender, a corpse) is approached a leg at a time (`Pl
 thread on the first far goal of a map, seconds for a continent): its search finds the way across the map coarsely, round mountains and out
 of dead ends, and the leg is one path query to the farthest point of that way within `RegionLegYards` (1000) and half of `MaxRouteYards`
 (the goal itself when that near). A goal the walkable mesh does not join to the bot's place gets the way to the portal nearest it, as a
-partial path. When the query to the chosen portal is no route either, the old steps below still get their turn. Before, a far goal was approached only by points on the straight line, and in the mountains the next one lay in rock: no
+partial path; when the region search reports `NavRegionRouteStatus.Unreachable` and either no portal lies closer (`portals.Count == 0`), the bot already stands within `NearestPortalRefusalYards` (4) of the final portal, or the Detour query to the chosen/first portal fails, `RegionLeg` refuses outright instead of falling through to straight-line Detour steps into dead-end edges. When a connected region route's query to the chosen portal is no route, the old steps below still get their turn. Before, a far goal was approached only by points on the straight line, and in the mountains the next one lay in rock: no
 route at all from any bot-QA stall point of issue #191 (quest 5881, Stonetalon to Grish Longrunner at the Great Lift, 5,200 to 7,900
 yards) or #194 (quest 1418, the Swamp of Sorrows to Kargath, 3,400 yards), and every bot set those quests aside. A partial path to the goal
 itself was tried too: it reaches Grish, but from the swamp it ends at the point nearest Kargath (-9356.8, -3872.5) and goes no further,
@@ -155,8 +161,7 @@ that mesh ends. Both are read from
 the region graph's connected components (`NavRegionGraph.ComponentOf`/`ComponentSize`, labelled once per graph, then an array read),
 which is exact and needs no path search.
 
-- **Unreachable goal skip** (`PlayerbotNavigation.IsUnreachableOnFoot`, used by `PlayerbotWorldDestinations` only, not for a completed
-  quest's return): after the tram, lift and taxi trips were tried, a spawn whose region is in another component than the bot's (walking
+- **Unreachable goal skip** (`PlayerbotNavigation.IsUnreachableOnFoot`, used by `PlayerbotWorldDestinations` only, and diagnosed by `ConfirmUnclimbable` after three failed plans for a completed quest with a single ender so disconnected-component enders such as Chief Hawkwind 2980 on the Mulgore mesa are set aside and abandoned after three set-asides): after the tram, lift and taxi trips were tried, a spawn whose region is in another component than the bot's (walking
   graph, steep slopes excluded) and that stands outdoors (an indoor goal may be climbed to over steep stairs, `TryClimbIndoors`) is skipped
   without a path query, and the next spawn is judged in the same think. The answer is true only for a bot on a large part (its own
   component is not a fragment: more than `FragmentRegions` regions or more than `FragmentPolygons` polygons), and outdoors; a fragment bot
@@ -178,10 +183,11 @@ which is exact and needs no path search.
   that pass no clock never hop). A fragment is also small in area: a component of three regions with more than `FragmentPolygons` (500)
   polygons is a plaza, not a fragment. When the ground beside the fragment is a cliff or too far, as at both live pins, the stall path takes over:
   the brain's island escape (`EscapeIsland`) treats a fragment bot as an island bot and teleports it home or to its bind point.
-
-Still open, not explained by this: the Explore stalls at -1.0,-4188.3 (map 1), -6494.1,324.9 (Coldridge) and -1173,-3285 (Barrens). The
-probes found those pins on large connected regions where plans and 600-second walks to every reachable goal work. The stall detector and
-its bounds are unchanged.
+- **Dead-end pin memory and Hearthstone escalation** (`PlayerbotStallWatch.RecordPinStall` / `IsDeadEndPin`, `PlayerbotSuspensions.SuspendEntryEscalating`):
+  each stall give-up records the bot's 10-yard coordinate cell (`PinCell(mapId, floor(x/10), floor(y/10))`, bounded to 64 cells per bot). Once a cell
+  accumulates `PinStallsToEscalate` (2) stalls, `PlayerbotNavigation` refuses destinations and partial-route endpoints inside that cell (`IsDeadEndPin`),
+  `GiveUpStalledGoal` escalates the stalled target entry's suspension (`SuspendEntryEscalating`, doubling up to `MaxSuspendMs` = 80 minutes) and marks
+  repeated quest stalls unreachable for the session, and `EscapeIsland` treats the pinned bot as an island escape, teleporting it home or to its bind point.
 
 Neeka Bloodscar, #194's ender, stands at the top of the Kargath tower, whose upper flight of stairs the mesh flags steep: the walkable mesh
 ends 13 yards below her. A destination indoors (inside a model's group, `MapCollision.IsOutdoors`) is reached over steep polygons when the
