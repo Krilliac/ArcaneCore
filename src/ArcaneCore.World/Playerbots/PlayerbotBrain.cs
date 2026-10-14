@@ -740,6 +740,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 QuestId = 0;
                 TargetEntry = 0;
             }
+            else if (!player.Combat.IsInCombat && _quests.IsBackingOff(_session.World.NowMs))
+            {
+                return;
+            }
             else
             {
                 _target = null;
@@ -2454,8 +2458,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         _exploreBlockedCells[key] = unchecked(_session.World.NowMs + 60_000u);
         _exploreCandidate = null;
+        _exploreBestDistSq = float.PositiveInfinity;
         TargetEntry = 0;
     }
+
+    private float _exploreBestDistSq = float.PositiveInfinity;
 
     private bool ExploreMovementPaused(Player player, uint elapsedMs)
         => elapsedMs == 0 || _session.ManagedBudget is { Remaining: <= 0 }
@@ -2482,10 +2489,26 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (_exploreCandidate is { } current)
         {
             float dx = current.Spawn.X - player.X, dy = current.Spawn.Y - player.Y;
-            if (current.Spawn.MapId != mapId || dx * dx + dy * dy <= 65f * 65f)
+            float distSq = (dx * dx) + (dy * dy);
+            if (current.Spawn.MapId != mapId || distSq <= 65f * 65f)
             {
                 // Within sight but FindTargets found nothing to fight: this patch is depleted, gated, or unavailable.
                 BlockExploreCell(current);
+            }
+            else if (_route is { Complete: true })
+            {
+                // A previous route leg finished outside the 65-yard sight radius: if it failed to reduce flat distance by at least 4 yards,
+                // the partial route reached a terrain dead end (e.g., Coldridge ridge above cave #570) and cannot get closer.
+                float prevBest = float.IsFinite(_exploreBestDistSq) ? MathF.Sqrt(_exploreBestDistSq) : float.PositiveInfinity;
+                float curDist = MathF.Sqrt(distSq);
+                if (curDist + 4f >= prevBest)
+                {
+                    BlockExploreCell(current);
+                }
+                else
+                {
+                    _exploreBestDistSq = distSq;
+                }
             }
         }
 
@@ -2522,6 +2545,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 _exploreSearchAfter = unchecked(now + 5_000u);
                 return false;
             }
+            float initDx = _exploreCandidate.Value.Spawn.X - player.X, initDy = _exploreCandidate.Value.Spawn.Y - player.Y;
+            _exploreBestDistSq = (initDx * initDx) + (initDy * initDy);
         }
 
         PlayerbotExploreAtlas.Candidate chosen = _exploreCandidate.Value;
@@ -2530,9 +2555,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         var destination = new System.Numerics.Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z);
         PlanOutcome atlasPlan = PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out _route);
         if (atlasPlan == PlanOutcome.Pending) return true;
-        if (atlasPlan == PlanOutcome.Refused)
+        if (atlasPlan == PlanOutcome.Refused
+            || _route is not { Points.Count: > 0 }
+            || (System.Numerics.Vector3.DistanceSquared(new(player.X, player.Y, player.Z), _route.Points[^1]) <= 4f * 4f
+                && (destination.X - player.X) * (destination.X - player.X) + (destination.Y - player.Y) * (destination.Y - player.Y) > 65f * 65f))
         {
             BlockExploreCell(chosen);
+            AbandonRoute();
             PlayerbotMovementControl.Stop(_session, player);
             return true; // One path query this think. The next think tries another cell.
         }

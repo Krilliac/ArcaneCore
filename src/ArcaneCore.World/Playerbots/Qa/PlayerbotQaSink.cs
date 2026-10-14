@@ -88,7 +88,7 @@ internal static class PlayerbotQaBots
     /// real player's session is never managed, so nothing a real player does is ever reported.
     /// </summary>
     internal static QaBot? Identify(Unit? unit)
-        => unit is Player { Session: WorldSession { IsPlayerbot: true } } player ? new QaBot(KeyOf(player.Guid), (byte)player.Class) : null;
+        => unit is Player { Session: WorldSession { IsPlayerbot: true, IsInChaosProbe: false } } player ? new QaBot(KeyOf(player.Guid), (byte)player.Class) : null;
 
     /// <summary>
     /// The QA key of a bot's character: a guid made from the character guid (a bot's direct signals all share it; its log-line signals carry its

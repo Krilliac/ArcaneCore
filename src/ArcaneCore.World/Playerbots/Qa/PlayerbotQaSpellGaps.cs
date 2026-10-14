@@ -60,7 +60,9 @@ internal sealed class PlayerbotQaSpellGapAnalyzer(SpellSystem system)
                 continue;
             }
 
-            bool scripted = _spellScripts.Contains(spell.Id);
+            // Awaken Peon (19938) is handled on the target creature's AI hook (LazyPeonAI.OnSpellHit).
+            bool scripted = _spellScripts.Contains(spell.Id)
+                || spell.Id == ArcaneCore.Game.Creatures.Scripts.LazyPeonAI.SpellAwakenPeon;
             if (effect.Effect == SpellEffectName.Dummy && !scripted && !OtherEffectWorks(spell, i))
             {
                 (gaps ??= []).Add(new QaSpellGap(i, QaSpellGaps.Dummy, name, name, value, 0));

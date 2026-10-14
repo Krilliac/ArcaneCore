@@ -215,4 +215,68 @@ public sealed class PlayerbotChaosTests
         string[] turnedOff = await RunConsoleAsync(host, ".playerbot chaos off");
         Assert.Equal(["Playerbot chaos disabled."], turnedOff);
     }
+
+    [Fact]
+    public async Task ChaosProbes_AreExcludedFromBotQaIdentify_AndAwakenPeonHasNoGap()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await host.EnterWorldAsync("chaosqa", "Chaosqa");
+
+        var customTable = new OpcodeTable();
+        bool observedInProbe = false;
+        customTable.OnWorld(WorldOpcode.CmsgPing, (s, p, _) =>
+        {
+            if (s.IsInChaosProbe)
+            {
+                observedInProbe = true;
+                Assert.Null(PlayerbotQaBots.Identify(p));
+            }
+        });
+        host.Opcodes.Replace(customTable);
+
+        var options = new PlayerbotOptions
+        {
+            Enabled = true,
+            Chaos = new PlayerbotChaosOptions
+            {
+                Enabled = true,
+                ActiveChaosBots = 1,
+                ProbesPerThink = 2,
+                Seed = 42,
+                MalformedPayloads = true,
+                StateRaces = false,
+                BoundaryMovement = false,
+            },
+        };
+        var engine = new PlayerbotChaosEngine(options, customTable, NullLogger.Instance);
+        Guid botId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+
+        await host.World.InvokeAsync(() =>
+        {
+            WorldSession session = host.Registry.Sessions.Single();
+            Player player = session.Player!;
+            Assert.False(session.IsInChaosProbe);
+            int ran = engine.StepBot(botId, 0, session, player);
+            Assert.Equal(2, ran);
+            Assert.True(observedInProbe);
+            Assert.False(session.IsInChaosProbe);
+            return 0;
+        });
+
+        ArcaneCore.Game.Spells.SpellSystem spellSystem = host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().System;
+        var analyzer = new PlayerbotQaSpellGapAnalyzer(spellSystem);
+        var awakenPeon = new ArcaneCore.Game.Spells.SpellInfo
+        {
+            Id = ArcaneCore.Game.Creatures.Scripts.LazyPeonAI.SpellAwakenPeon,
+            Name = "Awaken Peon",
+            Effects =
+            [
+                new ArcaneCore.Game.Spells.SpellEffectInfo
+                {
+                    Effect = ArcaneCore.Game.Spells.SpellEffectName.Dummy,
+                },
+            ],
+        };
+        Assert.Empty(analyzer.Of(awakenPeon));
+    }
 }

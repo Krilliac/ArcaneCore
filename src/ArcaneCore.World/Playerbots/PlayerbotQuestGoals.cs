@@ -198,13 +198,16 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         return home.Contains(ender.MapId, ender.X, ender.Y, ender.Z) || dx * dx + dy * dy <= 600f * 600f;
     }
 
+    /// <summary>Whether the 2-second quest interaction backoff is currently active at <paramref name="now"/>.</summary>
+    internal bool IsBackingOff(uint now) => _backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue;
+
     internal bool Update(Player player, uint elapsedMs)
     {
         if (!_options.Enabled || !player.IsInWorld || !player.IsAlive || player.Combat.IsInCombat)
             return false;
 
         uint now = _session.World.NowMs;
-        if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue)
+        if (IsBackingOff(now))
             return false;
         if (_backoffUntil != 0)
             _backoffUntil = 0;
@@ -313,9 +316,27 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             bool returning = target.Action >= QuestAction.Complete
                 && state.Quests.Get(target.Quest.Id) is { Status: QuestStatus.Complete, Rewarded: false };
             if (_route is null)
-                planned = PlayerbotNavigation.PlanExact(player,
-                    new System.Numerics.Vector3(target.Npc.X, target.Npc.Y, target.Npc.Z), _options, ref _tileWait, now, out _route,
-                    completedQuestReturn: returning, friendlyTownEnder: returning && FriendlyTownEnder(player, target.Npc));
+            {
+                var enderPos = new System.Numerics.Vector3(target.Npc.X, target.Npc.Y, target.Npc.Z);
+                bool friendlyEnder = returning && FriendlyTownEnder(player, target.Npc);
+                planned = PlayerbotNavigation.PlanExact(player, enderPos, _options, ref _tileWait, now, out _route,
+                    completedQuestReturn: returning, friendlyTownEnder: friendlyEnder);
+                if (planned == PlanOutcome.Refused && returning)
+                {
+                    planned = PlayerbotNavigation.PlanToward(player, enderPos, _options, ref _tileWait, now, out _route,
+                        completedQuestReturn: true, friendlyTownEnder: friendlyEnder);
+                    if (planned == PlanOutcome.Route && _route is { Points.Count: > 0 } partial)
+                    {
+                        float curDistSq = System.Numerics.Vector3.DistanceSquared(new(player.X, player.Y, player.Z), enderPos);
+                        float endDistSq = System.Numerics.Vector3.DistanceSquared(partial.Points[^1], enderPos);
+                        if (endDistSq + 1f >= curDistSq)
+                        {
+                            _route = null;
+                            planned = PlanOutcome.Refused;
+                        }
+                    }
+                }
+            }
             if (planned == PlanOutcome.Pending)
             {
                 // A tile of the way is still being read: no backoff, the same giver is planned to again next think.
@@ -435,8 +456,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 continue;
             if (_stage != Stage.None && npc.Guid != _stageNpc)
                 continue;
-            if (Suspensions?.IsEntrySuspended(npc.Entry, _session.World.NowMs) == true)
-                continue;
+            bool entrySuspended = Suspensions?.IsEntrySuspended(npc.Entry, _session.World.NowMs) == true;
 
             foreach (uint id in services.Quests.EndersOf(npc.Entry))
             {
@@ -459,7 +479,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 }
             }
 
-            if (returning && !WithinReach(player, npc))
+            if (entrySuspended || (returning && !WithinReach(player, npc)))
                 continue;
 
             foreach (uint id in services.Quests.StartersOf(npc.Entry))

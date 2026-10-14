@@ -280,6 +280,8 @@ public sealed class PlayerbotChaosEngine
         Interlocked.Increment(ref _probesExecuted);
         Interlocked.Increment(ref _categoryCounts[(int)category]);
 
+        bool prevProbe = session.IsInChaosProbe;
+        session.IsInChaosProbe = true;
         try
         {
             if (session.IsManaged)
@@ -305,6 +307,10 @@ public sealed class PlayerbotChaosEngine
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             RecordFault(botId, player.Name, category, probeName, opcode, payload, ex);
+        }
+        finally
+        {
+            session.IsInChaosProbe = prevProbe;
         }
 
         // Verify post-probe state & self-heal any invariant breach.
