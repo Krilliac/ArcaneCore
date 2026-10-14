@@ -1360,6 +1360,40 @@ Deadmines content, an uncommon item to the wolf's loot, AllowedMaps [0, 1, 36] a
 plans its walks there). Without a master (the catalog's instance, `.playerbot scenario run party-master`) it fails at its first
 step: a live run has no socket master to give it.
 
+### Chaos bots
+
+`World:Playerbots:Chaos` (every key live through `.reload config` and `.playerbot chaos`) designates a bounded slice of running
+autonomous playerbots (`ActiveChaosBots`, default 4, `0..64`, plus any bot explicitly assigned with `.playerbot chaos assign`) as
+adversarial server-breakers (`PlayerbotChaosEngine`, `PlayerbotChaosOptions`, `PlayerbotChaosCommands`).
+
+* **Execution.** Each active chaos bot continues its ordinary autonomous gameplay so it visits real world states (combat, quests,
+  looting, death and resurrection), and at the end of its think (`ManagedPlayerbotFeature.ThinkCore`, phase `chaos`) dispatches
+  `ProbesPerThink` (default 2, `1..16`) adversarial probes through `WorldSession.TryManagedAction` without consuming the shared
+  `MaxActionsPerTick` budget.
+* **Probe families (`ChaosProbeCategory`).** Controlled by `MalformedPayloads` (default true), `StateRaces` (default true) and
+  `BoundaryMovement` (default true):
+  - `TruncatedWire` and `MutatedWire`: 0-byte, 1-byte, partial-GUID, all-`0xFF`, all-`0x00`, boundary-integer and random-byte frames
+    across every registered `OpcodeHandler.World` handler.
+  - `DeathAndResurrection`: out-of-order `CMSG_REPOP_REQUEST`, `CMSG_RECLAIM_CORPSE`, `CMSG_RESURRECT_RESPONSE`,
+    `CMSG_SPIRIT_HEALER_ACTIVATE` and `CMSG_SELF_RES` while alive, while already a ghost, or with bogus/self GUIDs.
+  - `CombatAndSpell`: self-attack, zero/max-GUID attack, rapid swing/stop, `CMSG_CAST_SPELL` with spell `0` / `uint.MaxValue` /
+    self-target / unknown target masks, and bogus `CMSG_CANCEL_CAST` / `CMSG_CANCEL_AURA` / `CMSG_CANCEL_CHANNELLING`.
+  - `InventoryAndBag`: self-slot swaps, out-of-range bag/slot indices (`0, 19, 23, 38, 118, 254, 255`), boundary split/destroy counts
+    and `CMSG_USE_ITEM` with mismatched item GUIDs.
+  - `QuestAndNpc`, `LootVendorEconomy` and `SocialTradeMailBg`: gossip/questgiver/trainer/binder, loot/release/vendor/repair/mail,
+    trade/duel/group/battleground packets with self, nearby or bogus GUIDs and boundary counts.
+  - `BoundaryMovement`: conflicting `MovementFlags`, extreme orientations, `NaN`/`Infinity` coordinate guard checks, and
+    `CMSG_MOVE_TIME_SKIPPED` / `CMSG_MOVE_FALL_RESET` boundary values.
+* **Containment and QA reporting.** Expected `MalformedPacket` exceptions (`ArgumentOutOfRangeException` with
+  `ParamName == MalformedPacket.ParamName`) increment `MalformedRejected` and do not fault the bot. Any other unhandled exception
+  is caught per probe, recorded in `FaultLedger.Shared` (`playerbot-chaos`), stored in `RecentFaults` (up to 32 with opcode,
+  category, probe name and hex payload), and logged as `Playerbot {BotId} chaos failed ({Type}: {Message})` so Bot QA
+  (`PlayerbotQaSignalParser`) aggregates and ranks it under `what="chaos"` without kicking or quarantining the chaos bot.
+* **Post-probe invariant checks.** After every probe, `PlayerbotChaosEngine` verifies finite player coordinates (rolling back and
+  recording a fault if any handler ever left `NaN`/`Infinity`), `MapCombat.VerifyPlayerLifeInvariants`,
+  `MapCombat.VerifyUnitCombatInvariants`, `Map.VerifyVisibleSetInvariants` and `SpellSystem.VerifySpellStateInvariants`.
+* **GM commands.** `.playerbot chaos [status|on [#activeBots] [#probesPerThink]|off|burst [#probes] [$bot]|assign $bot|unassign $bot|faults|clear [all]]`.
+
 ## MockClient playbot (external protocol client)
 
 `arcane-mock playbot` runs one external build-5875 client against an owned numeric

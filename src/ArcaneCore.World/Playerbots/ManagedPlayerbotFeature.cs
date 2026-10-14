@@ -108,12 +108,96 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private bool _homeStore;
     private Chat.HttpBotChatClient? _chatClient;
     private PlayerbotNavigationExecutor? _navigationExecutor;
+    private Chaos.PlayerbotChaosEngine? _chaos;
 
     /// <summary>World time this feature has seen, in ms (the fault backoff and window run on it).</summary>
     private long ClockMs => Interlocked.Read(ref _clockMs);
 
     /// <summary>The bots' chat service (null before <see cref="Attach"/> and after shutdown; <c>.playerbot chat status</c>).</summary>
     internal Chat.PlayerbotChat? Chat => _chat;
+
+    /// <summary>The live playerbot configuration options.</summary>
+    internal PlayerbotOptions BotOptions => _options;
+
+    /// <summary>The number of currently active bot sessions.</summary>
+    internal int RunningCount => _active.Count;
+
+    /// <summary>Adversarial server-breaker chaos engine (<c>.playerbot chaos</c>).</summary>
+    internal Chaos.PlayerbotChaosEngine Chaos => _chaos ??= new Chaos.PlayerbotChaosEngine(_options, opcodes, logger, _setAsideTime);
+
+    internal bool TryResolveBotId(string idOrName, out Guid botId, out string botName)
+    {
+        if (Guid.TryParse(idOrName, out Guid parsed))
+        {
+            if (_active.TryGetValue(parsed, out ActiveBot? active))
+            {
+                botId = parsed;
+                botName = active.Name;
+                return true;
+            }
+            PlayerbotStatus? snap = Volatile.Read(ref _snapshot).FirstOrDefault(s => s.BotId == parsed);
+            if (snap is not null)
+            {
+                botId = snap.BotId;
+                botName = snap.Name;
+                return true;
+            }
+        }
+        else
+        {
+            ActiveBot? active = _active.Values.FirstOrDefault(b => b.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase));
+            if (active is not null)
+            {
+                botId = active.Record.BotId;
+                botName = active.Name;
+                return true;
+            }
+            PlayerbotStatus? snap = Volatile.Read(ref _snapshot).FirstOrDefault(s => s.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase));
+            if (snap is not null)
+            {
+                botId = snap.BotId;
+                botName = snap.Name;
+                return true;
+            }
+        }
+
+        botId = Guid.Empty;
+        botName = string.Empty;
+        return false;
+    }
+
+    internal (int Bots, int Probes, long FaultsBefore, long FaultsAfter) RunChaosBurst(int probesPerBot, string? idOrName = null)
+    {
+        long before = Chaos.FaultsCaught;
+        ActiveBot[] bots = _active.Values.OrderBy(b => b.Record.BotId).ToArray();
+        int botCount = 0;
+        int executed = 0;
+        int maxBots = Math.Max(1, _options.Chaos.ActiveChaosBots);
+        for (int i = 0; i < bots.Length; i++)
+        {
+            ActiveBot active = bots[i];
+            if (active.Paused || active.Session.State != SessionState.InWorld || active.Session.Player is not { IsInWorld: true } player)
+                continue;
+
+            if (idOrName is not null)
+            {
+                bool match = Guid.TryParse(idOrName, out Guid id)
+                    ? active.Record.BotId == id
+                    : active.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase);
+                if (!match) continue;
+            }
+            else if (!Chaos.IsAssigned(active.Record.BotId) && botCount >= maxBots)
+            {
+                continue;
+            }
+
+            executed += Chaos.RunBurst(active.Record.BotId, active.Session, player, probesPerBot);
+            botCount++;
+            if (idOrName is not null) break;
+        }
+
+        return (botCount, executed, before, Chaos.FaultsCaught);
+    }
 
     public void Attach(WorldRuntime world)
     {
@@ -1183,7 +1267,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         _rotation.TickWithin(bots.Length, ThinkBudgetMs, index =>
         {
             if (budget.Remaining <= 0) { actionLimited = true; return false; }
-            Think(bots[index], budget);
+            Think(bots[index], budget, index);
             thinks++;
             return true;
         });
@@ -1207,12 +1291,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// bot, driver, goal and phases (<see cref="PlayerbotSlowThinkLog"/>). Both are read from the shared options at each think, so
     /// <c>.reload config</c> changes them at once (WorldConfigKeys).
     /// </summary>
-    private void Think(ActiveBot active, ManagedActionBudget budget)
+    private void Think(ActiveBot active, ManagedActionBudget budget, int botOrdinal = 0)
     {
         _probe.NodeBudget = _options.MaxThinkSearchNodes;
         _probe.Begin();
         string driver;
-        try { driver = ThinkCore(active, budget); }
+        try { driver = ThinkCore(active, budget, botOrdinal); }
         finally { _probe.End(); }
         double slowMs = _options.SlowThinkLogMs;
         bool slow = slowMs > 0 && _probe.ElapsedMs >= slowMs;
@@ -1234,7 +1318,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         => driver == "brain" ? $"{active.Brain.Goal} entry {active.Brain.TargetEntry} quest {active.Brain.QuestId}" : "n/a";
 
     /// <summary>One bot's think (world thread): its scripted controller, its bot-led group, its party AI or its brain. Returns which drove it.</summary>
-    private string ThinkCore(ActiveBot active, ManagedActionBudget budget)
+    private string ThinkCore(ActiveBot active, ManagedActionBudget budget, int botOrdinal = 0)
     {
         string driver = "idle";
         if (active.Paused || active.Session.State != SessionState.InWorld) active.GapPrimed = false;
@@ -1311,6 +1395,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         }
 
                         driver = UpdateAutonomous(active, driven, sinceLast);
+                    }
+
+                    if (_options.Chaos.Enabled && active.Session.Player is { IsInWorld: true } chaosPlayer)
+                    {
+                        PlayerbotThinkProbe.Phase("chaos");
+                        Chaos.StepBot(active.Record.BotId, botOrdinal, active.Session, chaosPlayer);
                     }
                 }
             }

@@ -1273,11 +1273,11 @@ public sealed class Map
         }
     }
 
-    private void VerifyVisibleSetInvariants(Player player)
+    public bool VerifyVisibleSetInvariants(Player player)
     {
         if (player.VisibleObjects.Count == 0)
         {
-            return;
+            return false;
         }
 
         List<ObjectGuid>? orphans = null;
@@ -1291,7 +1291,7 @@ public sealed class Map
 
         if (orphans is null)
         {
-            return;
+            return false;
         }
 
         foreach (ObjectGuid orphan in orphans)
@@ -1305,6 +1305,8 @@ public sealed class Map
                 player.PendingUpdates.AddOutOfRange(orphan);
             }
         }
+
+        return true;
     }
 
     /// <summary>Re-evaluate which players see a non-player object (vmangos WorldObject::UpdateObjectVisibility).</summary>

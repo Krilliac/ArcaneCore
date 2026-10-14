@@ -189,6 +189,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bots queue for, play and leave battlegrounds (<c>World:Playerbots:Battlegrounds</c>; live).</summary>
     public Battlegrounds.PlayerbotBattlegroundOptions Battlegrounds { get; set; } = new();
 
+    /// <summary>Adversarial server-breaker chaos bots that fuzz handlers, state machines and invariants (<c>World:Playerbots:Chaos</c>; live; off by default).</summary>
+    public Chaos.PlayerbotChaosOptions Chaos { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -267,6 +270,8 @@ public sealed class PlayerbotOptions
         Mounts.Validate();
         if (Battlegrounds is null) throw new InvalidOperationException($"{SectionName}:Battlegrounds is missing.");
         Battlegrounds.Validate();
+        if (Chaos is null) throw new InvalidOperationException($"{SectionName}:Chaos is missing.");
+        Chaos.Validate();
     }
 }
 

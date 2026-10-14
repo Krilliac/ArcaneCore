@@ -313,8 +313,9 @@ public sealed partial class MapCombat : IMapUpdater
         }
     }
 
-    private void VerifyPlayerLifeInvariants(Player player)
+    public bool VerifyPlayerLifeInvariants(Player player)
     {
+        bool healed = false;
         UnitCombat c = player.Combat;
         if (c.DeathState != DeathState.Dead && (player.Flags & PlayerFlags.Ghost) != 0)
         {
@@ -323,6 +324,7 @@ public sealed partial class MapCombat : IMapUpdater
                 player.Name, player.Guid.Low, _map.MapId, c.DeathState);
             player.Flags &= ~PlayerFlags.Ghost;
             player.NeedsVisibilityUpdate = true;
+            healed = true;
         }
         else if (c.DeathState == DeathState.Dead && (player.Flags & PlayerFlags.Ghost) == 0)
         {
@@ -331,6 +333,7 @@ public sealed partial class MapCombat : IMapUpdater
                 player.Name, player.Guid.Low, _map.MapId);
             player.Flags |= PlayerFlags.Ghost;
             player.NeedsVisibilityUpdate = true;
+            healed = true;
         }
 
         if (c.DeathState == DeathState.Dead && player.Health == 0)
@@ -339,6 +342,7 @@ public sealed partial class MapCombat : IMapUpdater
                 "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: DeathState.Dead had Health=0; restoring ghost Health=1",
                 player.Name, player.Guid.Low, _map.MapId);
             player.Health = 1;
+            healed = true;
         }
 
         if (c.DeathState == DeathState.Alive && player.Health > 0)
@@ -350,6 +354,7 @@ public sealed partial class MapCombat : IMapUpdater
                     "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: PLAYER_FIELD_BYTE_RELEASE_TIMER was set while Alive; clearing flag",
                     player.Name, player.Guid.Low, _map.MapId);
                 player.SetByte(UpdateFields.PlayerFieldBytes, 0, (byte)(fieldBytes0 & ~FieldByteReleaseTimer));
+                healed = true;
             }
 
             if (c.DeathTimer != 0)
@@ -358,6 +363,7 @@ public sealed partial class MapCombat : IMapUpdater
                     "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: DeathTimer={DeathTimer} was non-zero while Alive; clearing timer",
                     player.Name, player.Guid.Low, _map.MapId, c.DeathTimer);
                 c.DeathTimer = 0;
+                healed = true;
             }
         }
 
@@ -371,11 +377,15 @@ public sealed partial class MapCombat : IMapUpdater
                 "coordinate invariant healed for player {Player} (guid={Guid}) on map {MapId}: non-finite position ({X},{Y},{Z},o={O}); relocating to ({SafeX},{SafeY},{SafeZ},o={SafeO})",
                 player.Name, player.Guid.Low, _map.MapId, player.X, player.Y, player.Z, player.Orientation, safeX, safeY, safeZ, safeO);
             player.Relocate(safeX, safeY, safeZ, safeO, _world.NowMs);
+            healed = true;
         }
+
+        return healed;
     }
 
-    private void VerifyUnitCombatInvariants(Unit unit)
+    public bool VerifyUnitCombatInvariants(Unit unit)
     {
+        bool healed = false;
         UnitCombat c = unit.Combat;
         if (c.Victim is { } victim)
         {
@@ -385,6 +395,7 @@ public sealed partial class MapCombat : IMapUpdater
                     "combat invariant healed for unit {Guid} on map {MapId}: Victim {VictimGuid} left this map (victimMap={VictimMapId}, inWorld={InWorld}); stopping attack",
                     unit.Guid, _map.MapId, victim.Guid, victim.Map?.MapId, victim.IsInWorld);
                 AttackStop(unit);
+                healed = true;
             }
         }
 
@@ -399,6 +410,7 @@ public sealed partial class MapCombat : IMapUpdater
                         "combat invariant healed for unit {Guid} on map {MapId}: pruning stale attacker {AttackerGuid} (alive={Alive}, matchesVictim={MatchesVictim}, attackerMap={AttackerMapId})",
                         unit.Guid, _map.MapId, attacker.Guid, IsAliveState(attacker), ReferenceEquals(attacker.Combat.Victim, unit), attacker.Map?.MapId);
                     c.AttackersInternal.Remove(attacker);
+                    healed = true;
                 }
             }
         }
@@ -421,9 +433,12 @@ public sealed partial class MapCombat : IMapUpdater
                     {
                         c.ThreatenedByInternal.Remove(holder);
                     }
+                    healed = true;
                 }
             }
         }
+
+        return healed;
     }
 
     private static bool IsIdle(Unit unit)

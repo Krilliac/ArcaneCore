@@ -13,7 +13,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|home|chat|groups|battlegrounds|scenario|summon|send|follow|stay|dismiss|near|revive|fleet|population|qa>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|home|chat|groups|battlegrounds|scenario|summon|send|follow|stay|dismiss|near|revive|fleet|population|qa|chaos>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,

@@ -727,6 +727,12 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Safety:{property.Name}");
         }
 
+        // The chaos bot section is live key by key (docs/areas/playbots.md, Chaos bots).
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chaos.PlayerbotChaosOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chaos)}:{property.Name}");
+        }
+
         // Of the Locomotion section only the player speed rates are reload keys (the rest is read at start; docs/areas/rates.md).
         foreach (PropertyInfo property in typeof(ArcaneCore.Game.Locomotion.LocomotionOptions).GetProperties()
             .Where(p => p.SetMethod is { IsPublic: true } && p.Name.StartsWith("Player", StringComparison.Ordinal)))

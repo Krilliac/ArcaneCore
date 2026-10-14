@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       448 keys
+#   WORLD                       455 keys
 #
 ###############################################################################
 
@@ -10792,6 +10792,100 @@ World.Playerbots.Budget.EssentialsAllowanceCopper = 10000
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Budget.RefreshSeconds = 30
+
+#
+#    World.Playerbots.Chaos.ActiveChaosBots
+#        Description: How many running autonomous bots are automatically selected as chaos bots when
+#                     Enabled is on (0..64, default 4). Bots explicitly assigned with .playerbot
+#                     chaos assign always run probes while Enabled is on, even when this is 0. Live
+#                     through .reload config.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chaos.ActiveChaosBots = 4
+
+#
+#    World.Playerbots.Chaos.BoundaryMovement
+#        Description: Include movement packets with extreme orientations, boundary flags, rapid
+#                     start/stop/jump/heartbeat transitions and invalid spline or transport fields
+#                     (on by default). Any non-finite coordinate is rolled back if a handler fails
+#                     to reject it, and a fault is recorded. Live through .reload config.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chaos.BoundaryMovement = true
+
+#
+#    World.Playerbots.Chaos.Enabled
+#        Description: Run adversarial chaos probes on designated running playerbots (off by
+#                     default). Live through .reload config and .playerbot chaos on|off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chaos.Enabled = false
+
+#
+#    World.Playerbots.Chaos.MalformedPayloads
+#        Description: Include truncated, zero-length, oversized and random-byte malformed wire
+#                     payloads across registered world opcodes (on by default). Clean
+#                     MalformedPacket rejections are counted as expected; any other exception is
+#                     recorded as a server fault. Live through .reload config.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chaos.MalformedPayloads = true
+
+#
+#    World.Playerbots.Chaos.ProbesPerThink
+#        Description: How many adversarial packet/state probes each active chaos bot executes per
+#                     think (1..16, default 2). Live through .reload config.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chaos.ProbesPerThink = 2
+
+#
+#    World.Playerbots.Chaos.Seed
+#        Description: Deterministic PRNG seed for chaos probe selection and payload generation (0
+#                     uses a time-seeded sequence; any non-zero value replays the same sequence per
+#                     bot; -2147483648..2147483647). Live through .reload config.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chaos.Seed = 0
+
+#
+#    World.Playerbots.Chaos.StateRaces
+#        Description: Include out-of-order state-machine race probes: resurrection/release while
+#                     alive or dead, double loot/release, self-target and stale-GUID
+#                     combat/spell/trade/vendor/quest/guild/group/mail/auction/battleground packets,
+#                     and inventory slot boundary swaps (on by default). Live through .reload
+#                     config.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chaos.StateRaces = true
 
 #
 #    World.Playerbots.ChaseReplanYards

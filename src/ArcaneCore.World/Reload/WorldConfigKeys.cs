@@ -382,6 +382,18 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Battlegrounds:MaxQueueWaitMinutes", o => o.Battlegrounds.MaxQueueWaitMinutes, (o, v) => o.Battlegrounds.MaxQueueWaitMinutes = v,
             v => v is >= 1 and <= 240 ? null : "must be 1..240"),
 
+        // Not vmangos keys: adversarial chaos bots (docs/areas/playbots.md, Chaos bots). PlayerbotChaosEngine reads the shared
+        // PlayerbotOptions.Chaos at every think.
+        LivePlayerbots("Chaos:Enabled", o => o.Chaos.Enabled, (o, v) => o.Chaos.Enabled = v),
+        LivePlayerbotsValue("Chaos:ActiveChaosBots", o => o.Chaos.ActiveChaosBots, (o, v) => o.Chaos.ActiveChaosBots = v,
+            Playerbots.Chaos.PlayerbotChaosOptions.CheckActiveBots),
+        LivePlayerbotsValue("Chaos:ProbesPerThink", o => o.Chaos.ProbesPerThink, (o, v) => o.Chaos.ProbesPerThink = v,
+            Playerbots.Chaos.PlayerbotChaosOptions.CheckProbesPerThink),
+        LivePlayerbotsValue("Chaos:Seed", o => o.Chaos.Seed, (o, v) => o.Chaos.Seed = v, _ => null),
+        LivePlayerbots("Chaos:MalformedPayloads", o => o.Chaos.MalformedPayloads, (o, v) => o.Chaos.MalformedPayloads = v),
+        LivePlayerbots("Chaos:StateRaces", o => o.Chaos.StateRaces, (o, v) => o.Chaos.StateRaces = v),
+        LivePlayerbots("Chaos:BoundaryMovement", o => o.Chaos.BoundaryMovement, (o, v) => o.Chaos.BoundaryMovement = v),
+
         // Bot chat safety (docs/areas/playbots.md, Safety and provider policies): read from the same shared object at every line.
         LivePlayerbots("Chat:Safety:Enabled", o => o.Chat.Safety.Enabled, (o, v) => o.Chat.Safety.Enabled = v),
         LivePlayerbotsValue("Chat:Safety:Categories", o => o.Chat.Safety.Categories, (o, v) => o.Chat.Safety.Categories = v,
