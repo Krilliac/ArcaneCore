@@ -111,6 +111,9 @@ internal readonly record struct PlayerbotBattlegroundFacts
 
     /// <summary>The match the bot is bound to is gone (not found), whatever <see cref="Bound"/> says.</summary>
     public bool MatchGone { get; init; }
+
+    /// <summary>The walk to the battlemaster refused a route (or arrived at an empty/dead battlemaster spot).</summary>
+    public bool TravelRefused { get; init; }
 }
 
 /// <summary>
@@ -146,7 +149,8 @@ internal static class PlayerbotBattlegroundQueueMachine
 
             case PlayerbotBattlegroundPhase.Travel:
                 if (f.Taken || f.Unable || f.InPhaseMs > TravelTimeoutMs) return (PlayerbotBattlegroundPhase.Idle, PlayerbotBattlegroundAction.Release);
-                return f.InReach ? (PlayerbotBattlegroundPhase.Join, PlayerbotBattlegroundAction.Hello) : (phase, PlayerbotBattlegroundAction.None);
+                if (f.InReach) return (PlayerbotBattlegroundPhase.Join, PlayerbotBattlegroundAction.Hello);
+                return f.TravelRefused ? (PlayerbotBattlegroundPhase.Idle, PlayerbotBattlegroundAction.SetAside) : (phase, PlayerbotBattlegroundAction.None);
 
             case PlayerbotBattlegroundPhase.Join:
                 if (f.QueueSlot) return (PlayerbotBattlegroundPhase.Queued, PlayerbotBattlegroundAction.Release);

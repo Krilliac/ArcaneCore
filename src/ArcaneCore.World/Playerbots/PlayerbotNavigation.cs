@@ -830,7 +830,7 @@ internal static class PlayerbotNavigation
         // A partial answer (the corridor did not reach the destination) must at least close on the goal, and must not end at a
         // place given up after a loop or remembered as a dead-end pin. An end projected from above or below the destination stays at its spot and is exact.
         if (partial && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination)
-            && (!PartialClosesOnGoal(from, path.End, goal)
+            && (!PartialClosesOnGoal(from, path.End, goal, path.Points.Count)
                 || PlayerbotMotion.IsBlacklisted(player, path.End)
                 || IsDeadEndPin(player, path.End)))
             return false;
@@ -839,10 +839,11 @@ internal static class PlayerbotNavigation
         return route is not null;
     }
 
-    private static bool PartialClosesOnGoal(Vector3 from, Vector3 end, Vector3 goal)
+    private static bool PartialClosesOnGoal(Vector3 from, Vector3 end, Vector3 goal, int pointCount = 2)
     {
         float progress = Vector2.Distance(Flat(from), Flat(goal)) - Vector2.Distance(Flat(end), Flat(goal));
         if (progress < PartialProgressYards) return false;
+        if (pointCount >= 6 || progress >= 6f) return true;
         float travel = Vector2.Distance(Flat(from), Flat(end));
         return !(travel > PartialWallSlideTravelYards && progress < travel * PartialWallSlideProgressRatio);
     }
@@ -1007,7 +1008,7 @@ internal static class PlayerbotNavigation
                 bool reaches = Reaches(path) || EndsAt(path, destination);
                 if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0
                     || (!reaches && (Vector3.Distance(path.End, beside) <= SteepPatchYards
-                        || !PartialClosesOnGoal(start, path.End, goal))))
+                        || !PartialClosesOnGoal(start, path.End, goal, path.Points.Count))))
                 {
                     // Refused after running out of nodes short of the destination: the other starts lie a few yards away and search the
                     // same ground, so they end the same way (each up to 32 768 nodes). A search that reached it despite the cap is no such

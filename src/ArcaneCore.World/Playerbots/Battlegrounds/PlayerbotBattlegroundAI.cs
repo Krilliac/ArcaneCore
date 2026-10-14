@@ -102,6 +102,11 @@ internal sealed class PlayerbotBattlegroundAI
     /// <summary>The bot's corpse run (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
 
+    /// <summary>True when the walk to a battlemaster refused a route (or stood at the spot for 5s with no living battlemaster).</summary>
+    internal bool TravelRefused { get; private set; }
+
+    private uint _atMasterMs;
+
     private long Now => (long)_session.World.Uptime.TotalMilliseconds;
 
     /// <summary>Drop every route, target and cast intention (the coordinator lets the bot go, or it changes its phase).</summary>
@@ -112,6 +117,8 @@ internal sealed class PlayerbotBattlegroundAI
         _route = null;
         _target = null;
         _attacking = false;
+        TravelRefused = false;
+        _atMasterMs = 0;
         _spells.GroupRole = null;
         _spells.Reset();
         _recovery.Reset();
@@ -127,6 +134,7 @@ internal sealed class PlayerbotBattlegroundAI
     internal bool Travel(Player player, Vector3 at, uint elapsedMs)
     {
         if (!Think(player, elapsedMs, out uint interval)) return true;
+        TravelRefused = false;
         if (!player.IsAlive) return false;
         Goal = PlayerbotGoalKind.Battleground;
         Activity = "to-battlemaster";
@@ -140,10 +148,15 @@ internal sealed class PlayerbotBattlegroundAI
         if (Vector3.Distance(Position(player), at) <= InteractYards - 1f)
         {
             Hold(player);
+            _atMasterMs = unchecked(_atMasterMs + interval);
+            if (_atMasterMs >= 5_000) TravelRefused = true;
             return false;
         }
 
-        return WalkTo(player, at, interval, toward: true);
+        _atMasterMs = 0;
+        bool walking = WalkTo(player, at, interval, toward: true);
+        TravelRefused = !walking;
+        return walking;
     }
 
     // --- in the match ----------------------------------------------------------------------------------------------------

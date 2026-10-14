@@ -48,6 +48,13 @@ public sealed partial class QuestNpcServices
     public Func<Player, NpcInfo, bool>? UnlearnPetSkillsOffered { get; set; }
 
     /// <summary>
+    /// Whether the "I would like to go to the battleground." option (GOSSIP_OPTION_BATTLEFIELD, 12) is offered to a player by a
+    /// battlemaster creature (vmangos Player.cpp:12031-12035). The battleground area supplies it; while unset the option stays hidden
+    /// (fail closed), and selecting it closes the gossip and raises <see cref="ForeignOptionSelected"/>.
+    /// </summary>
+    public Func<Player, NpcInfo, bool>? BattlefieldOffered { get; set; }
+
+    /// <summary>
     /// The time to a spirit guide's next resurrection wave, in milliseconds (vmangos Creature::SendAreaSpiritHealerQueryOpcode
     /// reads its current channel's cast time). The battleground area spirit-healer channel does not exist yet, so by default
     /// no wave is running and the answer is 0; the battleground lane supplies the real time.
@@ -253,6 +260,7 @@ public sealed partial class QuestNpcServices
                     or GossipOption.TabardDesigner or GossipOption.Auctioneer => true,
                 GossipOption.UnlearnTalents => UnlearnTalentsOffered?.Invoke(p, npc) ?? false,
                 GossipOption.UnlearnPetSkills => UnlearnPetSkillsOffered?.Invoke(p, npc) ?? false,
+                GossipOption.Battlefield => BattlefieldOffered?.Invoke(p, npc) ?? false,
 
                 // Battlemasters and pet-skill resets need owners outside this area (talents: UnlearnTalentsOffered);
                 // without them the option is hidden (fail closed). Unknown ids are hidden as in vmangos.
@@ -415,6 +423,7 @@ public sealed partial class QuestNpcServices
                 break;
             case GossipOption.Petitioner:
             case GossipOption.TabardDesigner:
+            case GossipOption.Battlefield: // vmangos Player.cpp:12234-12236: CloseGossip, then SendBattleGroundList
             case GossipOption.UnlearnPetSkills: // vmangos Player.cpp: CloseGossip, then SendPetSkillWipeConfirm
             case GossipOption.UnlearnTalents: // vmangos Player.cpp:12242-12245: CloseGossip, then the owner sends the wipe confirmation
                 CloseGossip(p);
@@ -428,7 +437,6 @@ public sealed partial class QuestNpcServices
                 break;
             case GossipOption.Auctioneer:
             case GossipOption.StablePet:
-            case GossipOption.Battlefield:
                 ForeignOptionSelected?.Invoke(p, npc, item.OptionId);
                 break;
         }

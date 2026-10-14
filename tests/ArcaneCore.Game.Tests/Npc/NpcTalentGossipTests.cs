@@ -145,4 +145,42 @@ public sealed class NpcTalentGossipTests
         Assert.Equal(UnlearnMenu, kit.State.Menu.MenuId);
         Assert.Equal(GossipOption.UnlearnTalents, kit.State.Menu.GossipItems[0].OptionId);
     }
+
+    [Fact]
+    public void BattlefieldOption_ShowsWhenBattlefieldOfferedAllows_AndSelectingItClosesGossipAndRaisesForeignOption()
+    {
+        var battlefieldOption = new GossipMenuOption
+        {
+            MenuId = 6103,
+            Id = 0,
+            OptionIcon = 9,
+            OptionId = (byte)GossipOption.Battlefield,
+            NpcOptionNpcFlag = (uint)NpcFlags.BattleMaster,
+            OptionText = "I would like to go to the battleground.",
+        };
+        NpcContent content = NpcContent.Empty with { GossipMenuOptions = [battlefieldOption] };
+        using var kit = new NpcServiceKit(NpcFlags.Gossip | NpcFlags.BattleMaster, content);
+        kit.Npc = kit.Npc with { GossipMenuId = 6103 };
+
+        // Hidden when BattlefieldOffered is unset (fail closed).
+        kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
+        Assert.Equal(0u, OptionCount(kit.Single(WorldOpcode.SmsgGossipMessage)));
+
+        // Offered when BattlefieldOffered returns true, and selecting it closes gossip and invokes ForeignOptionSelected.
+        kit.Services.BattlefieldOffered = (_, n) => (n.NpcFlags & NpcFlags.BattleMaster) != 0;
+        var raised = new List<(Player, NpcInfo, GossipOption)>();
+        kit.Services.ForeignOptionSelected += (p, n, o) => raised.Add((p, n, o));
+
+        kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
+        Assert.Equal(1u, OptionCount(kit.Single(WorldOpcode.SmsgGossipMessage)));
+        kit.Drain();
+
+        kit.Services.GossipSelectOption(kit.Player, kit.Npc.Guid, 0, null);
+
+        Assert.Single(kit.Drain(), p => p.Opcode == WorldOpcode.SmsgGossipComplete);
+        (Player player, NpcInfo npc, GossipOption option) = Assert.Single(raised);
+        Assert.Same(kit.Player, player);
+        Assert.Equal(kit.Npc.Guid, npc.Guid);
+        Assert.Equal(GossipOption.Battlefield, option);
+    }
 }

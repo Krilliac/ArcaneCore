@@ -8,11 +8,13 @@ using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
@@ -164,6 +166,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         }
 
         InstallMatchHooks();
+        WireSpiritGuideTimer();
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps.ToArray())
@@ -255,14 +258,46 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
     /// <summary>
     /// The gossip hello of a spirit guide sends SMSG_AREA_SPIRIT_HEALER_TIME (vmangos NPCHandler.cpp:360-361) with the time left on its
-    /// Spirit Heal Channel. The NPC services are rebuilt when the content loads, so the hook is (re)installed on the tick whenever unset.
+    /// Spirit Heal Channel, and battlemasters with gossip also offer GOSSIP_OPTION_BATTLEFIELD (vmangos Player.cpp:12031-12035, 12234-12236).
+    /// The NPC services are rebuilt when the content loads, so the hooks are (re)installed on the tick whenever unset.
     /// </summary>
     private void WireSpiritGuideTimer()
     {
-        if (services.GetService<QuestNpcFeature>()?.Services is { SpiritGuideNextResurrectMs: null } npcs)
+        if (services.GetService<QuestNpcFeature>()?.Services is not { } npcs)
         {
-            npcs.SpiritGuideNextResurrectMs = SpiritGuideNextResurrectMs;
+            return;
         }
+
+        npcs.SpiritGuideNextResurrectMs ??= SpiritGuideNextResurrectMs;
+        if (npcs.BattlefieldOffered is null)
+        {
+            npcs.BattlefieldOffered = IsBattlefieldOffered;
+            npcs.ForeignOptionSelected -= OnForeignOptionSelected;
+            npcs.ForeignOptionSelected += OnForeignOptionSelected;
+        }
+    }
+
+    internal bool IsBattlefieldOffered(Player player, NpcInfo npc)
+        => (npc.NpcFlags & NpcFlags.BattleMaster) != 0
+            && _manager is { } manager
+            && Battlemasters.TryGetValue(npc.Entry, out BattlegroundType type)
+            && manager.TemplateOf(type) is not null;
+
+    internal void OnForeignOptionSelected(Player player, NpcInfo npc, GossipOption option)
+    {
+        if (option != GossipOption.Battlefield || _manager is not { } manager
+            || !Battlemasters.TryGetValue(npc.Entry, out BattlegroundType type))
+        {
+            return;
+        }
+
+        if (manager.TemplateOf(type) is not { } template || player.Level < template.MinLevel)
+        {
+            player.Session.Send(Protocol.WorldOpcode.SmsgNotification, Packets.ChatPackets.BuildNotification(BattlegroundStrings.Mangos(715)!));
+            return;
+        }
+
+        SendBattlefieldList(player, npc.Guid, type);
     }
 
     internal uint SpiritGuideNextResurrectMs(ObjectGuid guide)

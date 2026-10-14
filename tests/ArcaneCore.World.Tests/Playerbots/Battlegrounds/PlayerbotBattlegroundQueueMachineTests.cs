@@ -153,6 +153,8 @@ public sealed class PlayerbotBattlegroundQueueMachineTests
         Assert.Equal((Phase.Idle, Act.Release), Next(Phase.Travel, new() { InPhaseMs = timeout + 1 }));
         Assert.Equal((Phase.Idle, Act.Release), Next(Phase.Travel, new() { Taken = true }));
         Assert.Equal((Phase.Idle, Act.Release), Next(Phase.Travel, new() { Unable = true, InReach = true }));
+        Assert.Equal((Phase.Idle, Act.SetAside), Next(Phase.Travel, new() { TravelRefused = true }));
+        Assert.Equal((Phase.Join, Act.Hello), Next(Phase.Travel, new() { InReach = true, TravelRefused = true }));
     }
 
     [Fact]

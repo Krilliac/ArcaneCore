@@ -298,6 +298,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             BackInWorld = player.IsInWorld && !teleporting && !state.InBattleground && player.Map?.Template is not { IsBattleground: true },
             InPhaseMs = unchecked(Now - t.PhaseSinceMs),
             MatchGone = bound && match is null,
+            TravelRefused = t.Phase == PlayerbotBattlegroundPhase.Travel && t.AI?.TravelRefused == true,
         };
     }
 
@@ -376,7 +377,15 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
             case PlayerbotBattlegroundAction.SetAside:
                 SetAside(t.BotId, t.Type);
-                Note($"{t.Name} got no queue slot for {t.Type}: set aside");
+                Note(facts.TravelRefused ? $"{t.Name} could not walk to the {t.Type} battlemaster: set aside" : $"{t.Name} got no queue slot for {t.Type}: set aside");
+                break;
+
+            case PlayerbotBattlegroundAction.Release:
+                if (t.Phase == PlayerbotBattlegroundPhase.Travel && facts.InPhaseMs > PlayerbotBattlegroundQueueMachine.TravelTimeoutMs)
+                {
+                    SetAside(t.BotId, t.Type);
+                    Note($"{t.Name} timed out walking to the {t.Type} battlemaster: set aside");
+                }
                 break;
         }
     }
@@ -591,7 +600,10 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         {
             if (master.Type != type) continue;
             float distance = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), master.At);
-            if (distance > nearest || !PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)) continue;
+            if (distance > nearest
+                || !PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
+                || PlayerbotNavigation.IsUnreachableOnFoot(player, master.At, out _, out _))
+                continue;
             nearest = distance;
             best = master;
         }
