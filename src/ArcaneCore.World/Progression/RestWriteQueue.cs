@@ -1,8 +1,10 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Progression;
@@ -29,6 +31,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     private readonly Channel<Work> _channel = Channel.CreateUnbounded<Work>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Lock _gate = new();
     private readonly Dictionary<int, Unsaved> _characters = [];
+    private Exception? _terminalFailure;
     private Task? _consumer;
     private Task? _stop;
     private RetainedRetryTimer? _retry;
@@ -58,6 +61,21 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     /// <summary>Writes queued or in progress.</summary>
     public int Pending => Volatile.Read(ref _pending);
 
+    /// <summary>Terminal failure that halted the queue (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
+
+    /// <summary>Raised once when the queue enters terminal failure (for example on <see cref="CharacterOwnershipRejectedException"/>).</summary>
+    public event Action<Exception>? FatalFailure;
+
     /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
     internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
 
@@ -77,7 +95,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     {
         lock (_gate)
         {
-            return _characters.Values.Any(u => u.Failure is not null);
+            return _terminalFailure is null && _characters.Values.Any(u => u.Failure is not null);
         }
     }
 
@@ -91,7 +109,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             unsaved.Version++;
             if (_stopped)
             {
-                unsaved.Failure = new InvalidOperationException("the rest write queue is stopped; the change was not persisted");
+                unsaved.Failure = _terminalFailure ?? new InvalidOperationException("the rest write queue is stopped; the change was not persisted");
                 logger.LogError("rested state of character {Character} arrived after the queue stopped; not persisted", characterId);
                 return;
             }
@@ -159,7 +177,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     /// <summary>Queue a fire-and-forget retry of a retained write (logout).</summary>
     public void RequestRetry(int characterId)
     {
-        if (_consumer is not null)
+        if (_consumer is not null && !_stopped)
         {
             _channel.Writer.TryWrite(new Work(characterId, Kind.Retry, null));
         }
@@ -191,16 +209,23 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
         int[] failed;
         Exception? first;
+        Exception? terminal;
         lock (_gate)
         {
+            terminal = _terminalFailure;
             KeyValuePair<int, Unsaved>[] failures = [.. _characters.Where(c => c.Value.Failure is not null).OrderBy(c => c.Key)];
             failed = [.. failures.Select(c => c.Key)];
-            first = failures.Length > 0 ? failures[0].Value.Failure : null;
+            first = failures.Length > 0 ? failures[0].Value.Failure : terminal;
         }
 
         if (failed.Length > 0)
         {
             throw new InvalidOperationException($"rested-state writes did not drain for characters {string.Join(", ", failed)}", first);
+        }
+
+        if (terminal is not null)
+        {
+            throw new InvalidOperationException("rest write queue stopped after terminal ownership rejection", terminal);
         }
     }
 
@@ -214,19 +239,51 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         return unsaved;
     }
 
-    private Task RetainedFailureTask(int characterId)
+    private Exception? RetainedFailureOf(int characterId)
     {
-        Exception? failure;
         lock (_gate)
         {
-            failure = _characters.TryGetValue(characterId, out Unsaved? unsaved) ? unsaved.Failure : null;
+            return _characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.Failure is not null
+                ? unsaved.Failure
+                : _terminalFailure;
         }
-
-        return failure is null ? Task.CompletedTask : Task.FromException(NotDurable(characterId, failure));
     }
+
+    private Task RetainedFailureTask(int characterId)
+        => RetainedFailureOf(characterId) is { } failure ? Task.FromException(NotDurable(characterId, failure)) : Task.CompletedTask;
 
     private static InvalidOperationException NotDurable(int characterId, Exception failure)
         => new($"rested-state writes for character {characterId} are not durable", failure);
+
+    private void FailTerminal(CharacterOwnershipRejectedException ex, IServiceProvider? scopedServices)
+    {
+        bool first = false;
+        lock (_gate)
+        {
+            if (_terminalFailure is null)
+            {
+                _terminalFailure = ex;
+                _stopped = true;
+                first = true;
+            }
+        }
+
+        if (!first)
+        {
+            return;
+        }
+
+        logger.LogCritical(ex, "rest write queue entered terminal failure after character ownership rejection");
+        try
+        {
+            scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        FatalFailure?.Invoke(ex);
+    }
 
     private async Task ConsumeAsync()
     {
@@ -252,19 +309,13 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                         break;
                     case Kind.FlushCharacter:
                         await ExecuteAsync(work.CharacterId, onlyIfFailed: true, clearQueued: false).ConfigureAwait(false);
-                        Exception? failure;
-                        lock (_gate)
+                        if (RetainedFailureOf(work.CharacterId) is { } failure)
                         {
-                            failure = _characters.TryGetValue(work.CharacterId, out Unsaved? unsaved) ? unsaved.Failure : null;
-                        }
-
-                        if (failure is null)
-                        {
-                            work.Done?.TrySetResult();
+                            work.Done?.TrySetException(NotDurable(work.CharacterId, failure));
                         }
                         else
                         {
-                            work.Done?.TrySetException(NotDurable(work.CharacterId, failure));
+                            work.Done?.TrySetResult();
                         }
 
                         break;
@@ -362,6 +413,12 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                 unsaved.Queued = false;
             }
 
+            if (_terminalFailure is { } terminal)
+            {
+                unsaved.Failure ??= terminal;
+                return terminal;
+            }
+
             if (onlyIfFailed && unsaved.Failure is null)
             {
                 return null;
@@ -375,15 +432,21 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         Exception? failure = null;
         for (int attempt = 1; attempt <= attempts; attempt++)
         {
+            using IServiceScope scope = scopes.CreateScope();
             try
             {
-                using IServiceScope scope = scopes.CreateScope();
                 if (scope.ServiceProvider.GetService<ICharacterRestStore>() is { } store)
                 {
                     await store.SaveAsync(characterId, state).ConfigureAwait(false);
                 }
 
                 failure = null;
+                break;
+            }
+            catch (CharacterOwnershipRejectedException ex)
+            {
+                failure = ex;
+                FailTerminal(ex, scope.ServiceProvider);
                 break;
             }
             catch (Exception ex)

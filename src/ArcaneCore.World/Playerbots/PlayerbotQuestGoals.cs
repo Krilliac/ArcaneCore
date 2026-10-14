@@ -58,6 +58,16 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     internal uint PreferredCreatureEntry { get; private set; }
     internal string StageName => _stage.ToString();
 
+    /// <summary>The last turn-in refusal recorded for a completed quest at its ender (quest, ender entry, human reason, compact QA code).</summary>
+    internal (uint QuestId, uint EnderEntry, string Reason, string Code)? LastTurnInRefusal { get; private set; }
+
+    private uint _approachFailQuest;
+    private uint _approachFailEntry;
+    private System.Numerics.Vector3 _approachFailSpot;
+    private int _approachFailCount;
+    private const int ApproachConfirmFailures = 3;
+    private const float ApproachSpotYards = 3f;
+
     /// <summary>The bot's home area, or null. New quests are taken only inside it; distant completed returns may be abandoned.</summary>
     internal PlayerbotHomeArea? Home { get; set; }
 
@@ -75,6 +85,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// </summary>
     internal uint ReturnQuest { get; set; }
 
+    /// <summary>Maximum flat walking distance to a completed quest's ender for an unhomed bot when no taxi route reaches it.</summary>
+    internal const float MaxUnhomedReturnWalkYards = 3_000f;
+
     internal bool HasCandidate(Player player) => FindCandidate(player) is not null;
 
     internal uint CompletedReturnQuest(Player player)
@@ -86,8 +99,28 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             .Where(row => row.Value is { Status: QuestStatus.Complete, Rewarded: false }
                 && services.IsRewardable(row.Key) && !IsRefused(row.Key))
             .Where(row => services.Quests.CreatureEndersOf(row.Key)
-                .Any(entry => content.GetSpawns(player.MapId, entry).Any(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn))))
+                .Any(entry => content.GetSpawns(player.MapId, entry).Any(spawn => CanReturnToEnder(player, spawn))))
             .Select(row => row.Key).FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="player"/> should pursue a completed-quest return to <paramref name="spawn"/> right now: the ender is
+    /// present on the bot's map and either within walking return range (inside the home or within 600 yards, or within
+    /// <see cref="PlayerbotOptions.MaxDeliveryYards"/> for a homed bot / <see cref="MaxUnhomedReturnWalkYards"/> for an unhomed bot, or
+    /// with the distance limit disabled) or reachable by a known, affordable flight path (<see cref="PlayerbotTaxi.CanTravelByTaxi"/>).
+    /// Otherwise the completed quest stays held in the log until the bot is closer or learns the taxi nodes.
+    /// </summary>
+    internal bool CanReturnToEnder(Player player, CreatureSpawn spawn)
+    {
+        if (spawn.MapId != player.MapId || !PlayerbotWorldDestinations.IsPresent(player, spawn)) return false;
+        if (Home is { } home && ReasonableReturnTrip(home, player.MapId, player.X, player.Y, spawn)) return true;
+        float maxWalk = Home is not null
+            ? _options.MaxDeliveryYards
+            : (_options.MaxDeliveryYards > 0f ? Math.Max(_options.MaxDeliveryYards, MaxUnhomedReturnWalkYards) : 0f);
+        if (maxWalk <= 0f) return true;
+        float dx = spawn.X - player.X, dy = spawn.Y - player.Y;
+        if ((dx * dx) + (dy * dy) <= maxWalk * maxWalk) return true;
+        return PlayerbotTaxi.CanTravelByTaxi(_session, player, player.MapId, new System.Numerics.Vector3(spawn.X, spawn.Y, spawn.Z), _options);
     }
 
     /// <summary>
@@ -167,15 +200,21 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             return false;
         if (_backoffUntil != 0)
             _backoffUntil = 0;
+        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         if (_stage != Stage.None && _stageDeadline != 0 && unchecked(now - _stageDeadline) <= int.MaxValue)
         {
+            if (_stage is Stage.CompleteResponse or Stage.RewardRequest or Stage.RewardOffer or Stage.RewardChoice or Stage.RewardConfirmation)
+            {
+                string reason = services?.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? $"turn-in timed out in stage {_stage}";
+                RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
+                return false;
+            }
             Refuse(_stageQuest, now);
             ClearStage();
             _backoffUntil = unchecked(now + 2_000);
             return false;
         }
 
-        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         if (services?.StateOf(player) is not { Loaded: true } state)
             return false;
         RefreshObjectiveEntry(player, services, state);
@@ -201,7 +240,16 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (_stage == Stage.AcceptDetails && packet.Opcode == WorldOpcode.SmsgQuestgiverQuestDetails)
                 { _stage = Stage.Accept; confirmed = true; }
                 else if (_stage == Stage.CompleteResponse && packet.Opcode == WorldOpcode.SmsgQuestgiverRequestItems)
-                { _stage = Stage.RewardRequest; confirmed = true; }
+                {
+                    if (!QuestPackets.IsRequestItemsCompletable(packet.Payload))
+                    {
+                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? "quest requirements not met at ender";
+                        RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "IncompleteAtEnder"), now);
+                        return false;
+                    }
+                    _stage = Stage.RewardRequest;
+                    confirmed = true;
+                }
                 else if ((_stage is Stage.CompleteResponse or Stage.RewardOffer) && packet.Opcode == WorldOpcode.SmsgQuestgiverOfferReward)
                 { _stage = Stage.RewardChoice; confirmed = true; }
             }
@@ -234,19 +282,47 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             }
             if (planned == PlanOutcome.Refused)
             {
+                if (returning)
+                {
+                    NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now);
+                    return false;
+                }
                 Backoff(now);
                 return false;
             }
 
             Goal = PlayerbotGoalKind.Quest;
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
+            {
                 _route = null;
+                if (returning && NoteCloseApproachFailure(player, target.Quest.Id, target.Npc.Entry, now))
+                    return false;
+            }
+            else if (returning && System.Numerics.Vector3.DistanceSquared(
+                new System.Numerics.Vector3(player.X, player.Y, player.Z), _approachFailSpot) > ApproachSpotYards * ApproachSpotYards)
+            {
+                _approachFailCount = 0;
+            }
             return true;
         }
 
         _route = null;
+        _approachFailCount = 0;
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
+
+        if (target.Action >= QuestAction.Complete
+            && services.InteractableNpc(player, target.Npc.Guid, NpcFlags.QuestGiver, out string? interactRefusal) is null)
+        {
+            if (target.Npc.IsInCombat)
+            {
+                Backoff(now);
+                return false;
+            }
+            RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, interactRefusal ?? "ender not interactable",
+                TurnInRefusalCode(interactRefusal, "EnderNotInteractable"), now, suspendEntry: true);
+            return false;
+        }
 
         byte[] questRequest = QuestPayload(target.Npc.Guid.Value, target.Quest.Id);
         switch (target.Action)
@@ -277,9 +353,21 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 }
                 return true;
             case QuestAction.RewardChoice:
+                uint choice = RewardChoice(player, target.Quest);
                 if (_session.TryManagedAction(WorldOpcode.CmsgQuestgiverChooseReward,
-                        QuestChoicePayload(target.Npc.Guid.Value, target.Quest.Id, RewardChoice(player, target.Quest))))
-                { _stage = Stage.RewardConfirmation; ArmStage(target); }
+                        QuestChoicePayload(target.Npc.Guid.Value, target.Quest.Id, choice)))
+                {
+                    if (!player.IsQuestSettlementPending && state.Quests.Get(target.Quest.Id)?.Rewarded != true)
+                    {
+                        _ = _session.DrainManagedPackets(WorldOpcode.SmsgQuestgiverOfferReward,
+                            WorldOpcode.SmsgQuestgiverQuestFailed, WorldOpcode.SmsgQuestgiverQuestInvalid);
+                        string reason = services.DiagnoseTurnInRefusal(player, target.Npc.Guid, target.Quest.Id, choice) ?? "reward choice refused";
+                        RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, reason, TurnInRefusalCode(reason, "RewardRefused"), now);
+                        return false;
+                    }
+                    _stage = Stage.RewardConfirmation;
+                    ArmStage(target);
+                }
                 return true;
             default:
                 return false;
@@ -522,6 +610,65 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     }
 
     /// <summary>
+    /// Whether the bot implements the objective mechanics <paramref name="quest"/> requires when accepted: an auto-complete quest needs
+    /// none; otherwise bots skip exploration/escort/event-script quests (<see cref="QuestSpecialFlags.ExplorationOrEvent"/>), spell-cast
+    /// or GameObject objectives (<c>ReqSpell</c> nonzero or <c>ReqCreatureOrGOId</c> negative, such as quest 5382 "Doctor Theolen
+    /// Krastinov, the Butcher"), friendly creature objectives that must be credited by item or spell use rather than combat
+    /// (<see cref="IsKillObjective(WorldSession?, Player, QuestNpcServices, CreatureContent?, uint)"/>), and creature objectives whose
+    /// spawns exist only on another continent or an instance without an entrance trigger on the bot's map.
+    /// </summary>
+    internal static bool CanExecuteObjectives(WorldSession? session, Player player, QuestNpcServices services,
+        ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content, Quest quest)
+    {
+        if (quest.IsAutoComplete) return true;
+        if (quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent)) return false;
+        for (int i = 0; i < quest.ReqCreatureOrGOId.Count; i++)
+        {
+            if (quest.ReqSpell[i] != 0) return false;
+            uint required = quest.ReqCreatureOrGOCount[i];
+            int target = quest.ReqCreatureOrGOId[i];
+            if (required == 0 || target == 0) continue;
+            if (target < 0) return false;
+            uint entry = (uint)target;
+            if (!IsKillObjective(session, player, services, content, entry)) return false;
+            if (content is not null && !HasReachableSpawn(session, player, content, entry))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool HasReachableSpawn(WorldSession? session, Player player,
+        ArcaneCore.Kernel.WorldData.Creatures.CreatureContent content, uint entry)
+    {
+        if (content.GetSpawns(player.MapId, entry).Count > 0) return true;
+        if (!HasAnySpawn(content, entry)) return true;
+        if (session?.World is not { } world) return false;
+        ArcaneCore.Game.Maps.Templates.WorldMaps maps = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(world);
+        var here = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        foreach (uint mapId in content.MapsWithSpawns)
+        {
+            if (maps.Registry.Find(mapId) is not { IsDungeon: true }) continue;
+            if (content.GetSpawns(mapId, entry).Count == 0) continue;
+            if (Groups.PlayerbotGroupCoordinator.EntranceTo(maps, player.MapId, mapId, here) is not null) return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasAnySpawn(ArcaneCore.Kernel.WorldData.Creatures.CreatureContent content, uint entry)
+    {
+        foreach (uint map in content.MapsWithSpawns)
+        {
+            if (content.GetSpawns(map, entry).Count > 0) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Whether creatures of <paramref name="entry"/> are something the bot can kill for a quest's creature objective: not friendly to
     /// it. A friendly objective is credited another way, an item or a spell used on it (quest 5441 "Lazy Peons": the Foreman's
     /// Blackjack on a sleeping peon of the bot's own faction), which the bot does not do; hunted, it walked from peon to peon it could
@@ -529,13 +676,19 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// death). An entry whose reaction cannot be resolved stays an objective.
     /// </summary>
     internal bool IsKillObjective(Player player, QuestNpcServices services, uint entry)
-        => _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content.FindTemplate(entry) is not { } template
-            || IsKillable(player, template.Faction, _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates,
+        => IsKillObjective(_session, player, services,
+            _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content, entry);
+
+    internal static bool IsKillObjective(WorldSession? session, Player player, QuestNpcServices services,
+        ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content, uint entry)
+        => (content ?? session?.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content)?.FindTemplate(entry) is not { } template
+            || IsKillable(player, template.Faction,
+                session?.Services.GetService<QuestNpcFeature>()?.FactionTemplates ?? session?.Services.GetService<FactionTemplateCatalog>(),
                 services.Deps.Reputation as ArcaneCore.Game.Reputation.INpcReactionSource);
 
     /// <summary>
     /// Whether a creature of faction template <paramref name="npcFactionTemplate"/> is not friendly to <paramref name="player"/>
-    /// (<see cref="IsKillObjective"/>): its reputation reaction below Friendly, or without reputation its template neither resolved
+    /// (<see cref="IsKillObjective(Player, QuestNpcServices, uint)"/>): its reputation reaction below Friendly, or without reputation its template neither resolved
     /// as friendly. Unresolved: true.
     /// </summary>
     internal static bool IsKillable(Player player, uint npcFactionTemplate, FactionTemplateCatalog? factions,
@@ -569,6 +722,64 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     /// <summary>Sets <paramref name="questId"/> aside for <see cref="RefusedQuestMs"/>: neither this controller nor quest travel (<see cref="IsRefused"/>) takes it up.</summary>
     internal void SetAside(uint questId) => Refuse(questId, _session.World.NowMs);
+
+    internal void RecordTurnInRefusal(Player player, uint questId, uint enderEntry, string reason, string code, uint now, bool suspendEntry = false)
+        => RefuseTurnIn(player, questId, enderEntry, reason, code, now, suspendEntry);
+
+    private bool NoteCloseApproachFailure(Player player, uint questId, uint enderEntry, uint now)
+    {
+        var spot = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        if (questId != _approachFailQuest || enderEntry != _approachFailEntry
+            || System.Numerics.Vector3.DistanceSquared(spot, _approachFailSpot) > ApproachSpotYards * ApproachSpotYards)
+        {
+            _approachFailQuest = questId;
+            _approachFailEntry = enderEntry;
+            _approachFailSpot = spot;
+            _approachFailCount = 0;
+        }
+        if (++_approachFailCount < ApproachConfirmFailures) return false;
+        _approachFailCount = 0;
+        RefuseTurnIn(player, questId, enderEntry, "no exact route to visible ender", "NoRouteToVisibleEnder", now, suspendEntry: true);
+        return true;
+    }
+
+    private void RefuseTurnIn(Player player, uint questId, uint enderEntry, string reason, string code, uint now, bool suspendEntry = false)
+    {
+        LastTurnInRefusal = (questId, enderEntry, reason, code);
+        Refuse(questId, now);
+        Suspensions?.SuspendQuest(questId, now);
+        if (suspendEntry && enderEntry != 0) Suspensions?.SuspendEntry(enderEntry, now);
+        if (ReturnQuest == questId) ReturnQuest = 0;
+        QuestId = 0;
+        TargetEntry = 0;
+        Backoff(now);
+        if (_session.Services.GetService<Microsoft.Extensions.Logging.ILogger<PlayerbotQuestGoals>>() is { } log)
+        {
+            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(log,
+                "Playerbot {Bot} sets aside completed quest {Quest} at ender {Entry} ({X:F1},{Y:F1},{Z:F1} map {Map}): turn-in refused ({Reason})",
+                player.Name, questId, enderEntry, player.X, player.Y, player.Z, player.MapId, reason);
+        }
+    }
+
+    internal static string TurnInRefusalCode(string? reason, string fallback)
+    {
+        if (string.IsNullOrEmpty(reason)) return fallback;
+        if (reason.Contains("inventory full", StringComparison.OrdinalIgnoreCase)) return "InventoryFull";
+        if (reason.Contains("missing required delivery item", StringComparison.OrdinalIgnoreCase)) return "MissingDeliveryItem";
+        if (reason.Contains("not enough money", StringComparison.OrdinalIgnoreCase)) return "NotEnoughMoney";
+        if (reason.Contains("duplicate unique", StringComparison.OrdinalIgnoreCase)) return "DuplicateUniqueItem";
+        if (reason.Contains("reputation", StringComparison.OrdinalIgnoreCase)) return "ReputationRefused";
+        if (reason.Contains("out of interaction range", StringComparison.OrdinalIgnoreCase)) return "OutOfRange";
+        if (reason.Contains("no exact route", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("no walkable close approach", StringComparison.OrdinalIgnoreCase)) return "NoRouteToVisibleEnder";
+        if (reason.Contains("objectives incomplete", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("status is not Complete", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("requirements not met", StringComparison.OrdinalIgnoreCase)) return "IncompleteAtEnder";
+        if (reason.Contains("dead", StringComparison.OrdinalIgnoreCase)) return "EnderDead";
+        if (reason.Contains("hostile", StringComparison.OrdinalIgnoreCase)) return "EnderHostile";
+        if (reason.Contains("combat", StringComparison.OrdinalIgnoreCase)) return "EnderInCombat";
+        return fallback;
+    }
 
     private void Refuse(uint questId, uint now)
     {

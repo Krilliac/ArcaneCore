@@ -479,7 +479,7 @@ internal static class SpellVariants
             learned++;
         }
 
-        if (learned > 0) feature.Persistence.SaveTaxiMask((int)player.Guid.Low, state.TaxiMask);
+        if (learned > 0) feature.Persistence.SaveTaxiMask((int)player.Guid.Low, state.TaxiMask, player.CharacterOwnership);
         context.Reply($"Discovered {learned} taxi nodes.");
         return true;
     }

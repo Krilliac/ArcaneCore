@@ -5,18 +5,21 @@ using ArcaneCore.Game.Stats;
 namespace ArcaneCore.Game.Spells.Rogue;
 
 /// <summary>
-/// The attack power terms of the rogue bleeds at the 1.12 build (vmangos <c>Aura::CalculateDotDamage</c>, SpellAuras.cpp:4341-4396, the
-/// branch after client 1.11.2; patch 1.12.0 notes "Rupture now increases in potency with greater attack power" and "Garrote now increases
-/// in potency with greater attack power"):
+/// The attack power terms of the rogue bleeds and Eviscerate at the 1.12 build (vmangos <c>Aura::CalculateDotDamage</c>, SpellAuras.cpp:4341-4396,
+/// and <c>RogueEviscerateScript::OnEffectExecute</c>, scripts/spells/spell_rogue.cpp:19-46, the branches after client 1.11.2; patch 1.12.0 notes
+/// "Rupture now increases in potency with greater attack power", "Garrote now increases in potency with greater attack power" and "Eviscerate now
+/// increases in potency with greater attack power"):
 /// <list type="bullet">
 /// <item>Rupture (family Rogue, CF_ROGUE_RUPTURE bit 20): the tick amount gets <c>attack power * min(combo points, 3) / 100</c>, so only the
 /// first three points add attack power, like Rip's first four.</item>
 /// <item>Garrote (family Rogue, CF_ROGUE_GARROTE bit 8): the tick amount gets <c>attack power * 0.03</c>, no combo points.</item>
+/// <item>Eviscerate (2098, 6760, 6761, 6762, 8623, 8624, 11299, 11300, 31016; family Rogue, CF_ROGUE_EVISCERATE bit 17): effect 0's damage gets
+/// <c>attack power * combo points * 0.03</c> for player casters.</item>
 /// </list>
-/// vmangos computes the term once, when the aura is created (HandlePeriodicDamage calls CalculateDotDamage on apply and every later
+/// vmangos computes the bleed term once, when the aura is created (HandlePeriodicDamage calls CalculateDotDamage on apply and every later
 /// tick reads <c>m_modifier.m_amount</c>, :5861-5866), from the caster's total melee attack power (<c>GetTotalAttackPowerValue(BASE_ATTACK)</c>)
 /// and the combo points the finisher still holds. The term is added after the EffectPointsPerComboPoint scaling, as in the reference.
-/// Only player casters get the Rupture term (<c>caster->IsPlayer()</c>); Garrote's applies to any caster with attack power fields.
+/// Only player casters get the Rupture and Eviscerate terms (<c>caster->IsPlayer()</c>); Garrote's applies to any caster with attack power fields.
 /// Register it after <see cref="ComboPointService.Install"/> so the combo value scaling comes first.
 /// </summary>
 public sealed class RogueBleedScripts : ISpellValueModifier
@@ -30,11 +33,20 @@ public sealed class RogueBleedScripts : ISpellValueModifier
     /// <summary>vmangos CF_ROGUE_GARROTE (SpellClassMask.h:215).</summary>
     public const int GarroteFlagBit = 8;
 
+    /// <summary>vmangos CF_ROGUE_EVISCERATE (SpellClassMask.h:224).</summary>
+    public const int EviscerateFlagBit = 17;
+
+    /// <summary>Eviscerate ranks 1-9 (spell_rogue.cpp:19).</summary>
+    public static readonly uint[] EviscerateRanks = [2098, 6760, 6761, 6762, 8623, 8624, 11299, 11300, 31016];
+
     /// <summary>Only the first three combo points add attack power to Rupture (SpellAuras.cpp:4372-4374).</summary>
     public const int MaxRuptureComboPoints = 3;
 
     /// <summary>Garrote's share of the attack power per tick (SpellAuras.cpp:4381).</summary>
     public const float GarroteAttackPowerFactor = 0.03f;
+
+    /// <summary>Eviscerate's share of the attack power per combo point (spell_rogue.cpp:35).</summary>
+    public const float EviscerateAttackPowerFactor = 0.03f;
 
     private readonly ComboPointService _combos;
 
@@ -54,6 +66,9 @@ public sealed class RogueBleedScripts : ISpellValueModifier
 
     public static bool IsGarrote(SpellInfo spell) => spell.IsFitToFamily(RogueFamily, GarroteFlagBit);
 
+    public static bool IsEviscerate(SpellInfo spell)
+        => spell.IsFitToFamily(RogueFamily, EviscerateFlagBit) || Array.IndexOf(EviscerateRanks, spell.Id) >= 0;
+
     /// <summary>Unit::GetTotalAttackPowerValue(BASE_ATTACK) (Unit.cpp:8037-8061) from the unit's fields.</summary>
     internal static float MeleeAttackPower(Unit unit) => StatFormulas.TotalAttackPower(
         unit.GetInt32(UpdateFields.UnitFieldAttackPower),
@@ -64,8 +79,23 @@ public sealed class RogueBleedScripts : ISpellValueModifier
     public int Modify(SpellValueKind kind, in SpellValueContext context, int value)
     {
         SpellInfo spell = context.Spell;
-        if (kind != SpellValueKind.EffectValue || context.EffectIndex < 0 || context.EffectIndex >= spell.Effects.Count
-            || spell.Effects[context.EffectIndex].AuraType != AuraType.PeriodicDamage)
+        if (kind != SpellValueKind.EffectValue || context.EffectIndex < 0 || context.EffectIndex >= spell.Effects.Count)
+        {
+            return value;
+        }
+
+        if (context.EffectIndex == 0 && IsEviscerate(spell))
+        {
+            if (context.Caster is not Player player || context.Target is null)
+            {
+                return value;
+            }
+
+            int combo = _combos.GetComboPoints(player);
+            return combo > 0 ? (int)(value + (MeleeAttackPower(player) * combo * EviscerateAttackPowerFactor)) : value;
+        }
+
+        if (spell.Effects[context.EffectIndex].AuraType != AuraType.PeriodicDamage)
         {
             return value;
         }

@@ -64,59 +64,78 @@ public sealed class WorldDbInitializer(IServiceProvider services, ILogger<WorldD
     {
         using IServiceScope scope = services.CreateScope();
         WorldDbContext db = scope.ServiceProvider.GetRequiredService<WorldDbContext>();
+        SchemaUpgradeOptions options = DatabaseStartup.OptionsFrom(services);
 
-        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, DatabaseStartup.OptionsFrom(services), logger, cancellationToken).ConfigureAwait(false);
-
-        if (!await db.PlayerCreateInfo.AnyAsync(cancellationToken).ConfigureAwait(false))
-        {
-            var positions = StartPositions.ToDictionary(p => p.Race);
-            foreach ((byte race, byte[] classes) in RaceClasses)
+        await SchemaBootstrapper.EnsureAsync(
+            db,
+            WorldDbContext.Schema,
+            options,
+            logger,
+            cancellationToken,
+            async ct =>
             {
-                var pos = positions[race];
-                foreach (byte cls in classes)
+                bool added = false;
+                if (!await db.PlayerCreateInfo.AnyAsync(ct).ConfigureAwait(false))
                 {
-                    db.PlayerCreateInfo.Add(new PlayerCreateInfoRow
+                    var positions = StartPositions.ToDictionary(p => p.Race);
+                    foreach ((byte race, byte[] classes) in RaceClasses)
                     {
-                        Race = race,
-                        Class = cls,
-                        MapId = pos.Map,
-                        ZoneId = pos.Zone,
-                        X = pos.X,
-                        Y = pos.Y,
-                        Z = pos.Z,
-                        Orientation = pos.O,
-                    });
+                        var pos = positions[race];
+                        foreach (byte cls in classes)
+                        {
+                            db.PlayerCreateInfo.Add(new PlayerCreateInfoRow
+                            {
+                                Race = race,
+                                Class = cls,
+                                MapId = pos.Map,
+                                ZoneId = pos.Zone,
+                                X = pos.X,
+                                Y = pos.Y,
+                                Z = pos.Z,
+                                Orientation = pos.O,
+                            });
+                        }
+                    }
+
+                    added = true;
                 }
-            }
-        }
 
-        if (!await db.RaceInfo.AnyAsync(cancellationToken).ConfigureAwait(false))
-        {
-            foreach ((byte race, uint male, uint female, uint faction) in RaceDisplays)
-            {
-                db.RaceInfo.Add(new RaceInfoRow { Race = race, Gender = 0, DisplayId = male, FactionTemplate = faction });
-                db.RaceInfo.Add(new RaceInfoRow { Race = race, Gender = 1, DisplayId = female, FactionTemplate = faction });
-            }
-        }
+                if (!await db.RaceInfo.AnyAsync(ct).ConfigureAwait(false))
+                {
+                    foreach ((byte race, uint male, uint female, uint faction) in RaceDisplays)
+                    {
+                        db.RaceInfo.Add(new RaceInfoRow { Race = race, Gender = 0, DisplayId = male, FactionTemplate = faction });
+                        db.RaceInfo.Add(new RaceInfoRow { Race = race, Gender = 1, DisplayId = female, FactionTemplate = faction });
+                    }
 
-        if (!await db.ClassInfo.AnyAsync(cancellationToken).ConfigureAwait(false))
-        {
-            foreach ((byte cls, uint health, uint mana, byte power) in ClassStats)
-            {
-                db.ClassInfo.Add(new ClassInfoRow { Class = cls, BaseHealth = health, BaseMana = mana, PowerType = power });
-            }
-        }
+                    added = true;
+                }
 
-        // The vmangos 5875 Warden scans (World.Warden.WardenCheckSeed), into an empty table only: a table an admin edited is left alone.
-        if (!await db.Set<World.Warden.WardenCheckRow>().AnyAsync(cancellationToken).ConfigureAwait(false))
-        {
-            db.Set<World.Warden.WardenCheckRow>().AddRange(World.Warden.WardenCheckSeed.Rows.Select(r => new World.Warden.WardenCheckRow
-            {
-                Id = r.Id, Type = r.Type, Str = r.Str, Data = r.Data, Address = r.Address, Length = r.Length, Result = r.Result,
-                Flags = r.Flags, Penalty = r.Penalty, BuildMin = r.BuildMin, BuildMax = r.BuildMax, Comment = r.Comment,
-            }));
-        }
+                if (!await db.ClassInfo.AnyAsync(ct).ConfigureAwait(false))
+                {
+                    foreach ((byte cls, uint health, uint mana, byte power) in ClassStats)
+                    {
+                        db.ClassInfo.Add(new ClassInfoRow { Class = cls, BaseHealth = health, BaseMana = mana, PowerType = power });
+                    }
 
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    added = true;
+                }
+
+                // The vmangos 5875 Warden scans (World.Warden.WardenCheckSeed), into an empty table only: a table an admin edited is left alone.
+                if (!await db.Set<World.Warden.WardenCheckRow>().AnyAsync(ct).ConfigureAwait(false))
+                {
+                    db.Set<World.Warden.WardenCheckRow>().AddRange(World.Warden.WardenCheckSeed.Rows.Select(r => new World.Warden.WardenCheckRow
+                    {
+                        Id = r.Id, Type = r.Type, Str = r.Str, Data = r.Data, Address = r.Address, Length = r.Length, Result = r.Result,
+                        Flags = r.Flags, Penalty = r.Penalty, BuildMin = r.BuildMin, BuildMax = r.BuildMax, Comment = r.Comment,
+                    }));
+                    added = true;
+                }
+
+                if (added)
+                {
+                    await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                }
+            }).ConfigureAwait(false);
     }
 }

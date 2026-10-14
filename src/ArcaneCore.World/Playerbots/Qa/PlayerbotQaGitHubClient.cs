@@ -8,8 +8,12 @@ using System.Text.RegularExpressions;
 
 namespace ArcaneCore.World.Playerbots.Qa;
 
-/// <summary>An issue found or made on GitHub.</summary>
-internal sealed record QaIssueRef(int Number, bool Open, string Url);
+/// <summary>An issue found or made on GitHub. <paramref name="StateReason"/> is GitHub's closing reason (<c>completed</c>, <c>not_planned</c>); null when open or not reported.</summary>
+internal sealed record QaIssueRef(int Number, bool Open, string Url, string? StateReason = null)
+{
+    /// <summary>The issue was closed as not planned (a won't-fix): a regression never reopens it.</summary>
+    public bool NotPlanned => string.Equals(StateReason, "not_planned", StringComparison.OrdinalIgnoreCase);
+}
 
 /// <summary>A GitHub call failed for good (after the retries). The message carries the status and a redacted, truncated body, never the token.</summary>
 internal sealed class PlayerbotQaPublishException(string message, bool transient, Exception? inner = null) : Exception(message, inner)
@@ -286,7 +290,8 @@ internal sealed partial class PlayerbotQaGitHubClient : IQaIssueTransport
         if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("number", out JsonElement number) || !number.TryGetInt32(out int n) || n <= 0) return null;
         bool open = item.TryGetProperty("state", out JsonElement state) && state.ValueKind == JsonValueKind.String && state.GetString() == "open";
         string url = item.TryGetProperty("html_url", out JsonElement html) && html.ValueKind == JsonValueKind.String ? html.GetString() ?? string.Empty : string.Empty;
-        return new QaIssueRef(n, open, url);
+        string? reason = item.TryGetProperty("state_reason", out JsonElement why) && why.ValueKind == JsonValueKind.String ? why.GetString() : null;
+        return new QaIssueRef(n, open, url, reason);
     }
 
     [GeneratedRegex(@"<(?<url>[^>]+)>\s*;\s*rel=""next""", RegexOptions.CultureInvariant)]

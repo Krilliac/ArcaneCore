@@ -180,4 +180,71 @@ public sealed class PlayerbotQaDeathReportTests
         Assert.Contains("damage-over-time killing tick", body, StringComparison.Ordinal);
         Assert.Contains("null killing-blow source", body, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void DeathLoopFinding_UpgradesCauseFromUnknownToContentDifficulty_WhenLaterFoldedSampleRevealsLevelGapOrElite()
+    {
+        var aggregator = new PlayerbotQaAggregator(10, 3, new byte[16]);
+        var facts = new FakeFacts();
+
+        // First sample: level 30 bot dies to level 31 normal creature 7865 -> Unknown.
+        string first = QaData.BotLine(QaData.Bot1, "Firstbot",
+            "death loop: died 3 times in 90s within 60 yd of 1.0,2.0,3.0 map 0 attackers=7865"
+            + " qa[level=30,race=Human,team=Alliance,class=Warrior,goal=Quest,quest=681,graveyard=4,distance=172.5,source=Creature,attackerFacts=7865:31:30:31:0:0:1]");
+        aggregator.Ingest(QaData.Parse(first), facts, QaData.T0);
+        QaFindingView initial = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(QaCause.Unknown, initial.Cause);
+
+        // Second sample folds in (shares attacker 7865, adds elite/higher-level 7866 from a different cell key):
+        string second = QaData.BotLine(QaData.Bot2, "Secondbot",
+            "death loop: died 3 times in 90s within 60 yd of 60.0,2.0,3.0 map 0 attackers=7865/7866"
+            + " qa[level=30,race=Human,team=Alliance,class=Mage,goal=Quest,quest=681,graveyard=4,distance=180.0,source=Creature,attackerFacts=7865:31:30:31:0:0:1/7866:35:34:35:1:0:1]");
+        aggregator.Ingest(QaData.Parse(second), facts, QaData.T0.AddMinutes(1));
+
+        QaFindingView updated = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(QaCause.ContentDifficulty, updated.Cause);
+        Assert.Contains("7866 is an elite (level 34-35)", updated.CauseDetail, StringComparison.Ordinal);
+        Assert.Contains("7866 is level 35 against bot level 30", updated.CauseDetail, StringComparison.Ordinal);
+        Assert.Contains("7865: level 31 (template 30-31)", updated.CauseDetail, StringComparison.Ordinal);
+
+        // Third sample on the original key (own == true) with only normal 7865 must not overwrite ContentDifficulty back to Unknown.
+        string third = QaData.BotLine(QaData.Bot3, "Thirdbot",
+            "death loop: died 3 times in 90s within 60 yd of 1.0,2.0,3.0 map 0 attackers=7865"
+            + " qa[level=30,race=Human,team=Alliance,class=Rogue,goal=Quest,quest=681,graveyard=4,distance=172.5,source=Creature,attackerFacts=7865:31:30:31:0:0:1]");
+        aggregator.Ingest(QaData.Parse(third), facts, QaData.T0.AddMinutes(2));
+
+        QaFindingView afterThird = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(QaCause.ContentDifficulty, afterThird.Cause);
+        Assert.Contains("7866 is an elite (level 34-35)", afterThird.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DeathLoopFinding_UpgradesToContentDifficulty_WhenAccumulatedAttackersAcrossBridgedSignalsReachThree()
+    {
+        var aggregator = new PlayerbotQaAggregator(10, 3, new byte[16]);
+        var facts = new FakeFacts();
+
+        // Loop A: normal attacker 100 (Unknown).
+        string a = QaData.BotLine(QaData.Bot1, "BotA",
+            "death loop: died 3 times in 90s within 60 yd of 10.0,10.0,0.0 map 0 attackers=100"
+            + " qa[level=20,race=Human,team=Alliance,class=Warrior,goal=Explore,quest=0,graveyard=1,distance=50.0,source=Creature,attackerFacts=100:20:20:20:0:0:1]");
+        // Loop B in the same zone cell: normal attacker 200 (Unknown).
+        string b = QaData.BotLine(QaData.Bot2, "BotB",
+            "death loop: died 3 times in 90s within 60 yd of 20.0,10.0,0.0 map 0 attackers=200"
+            + " qa[level=20,race=Human,team=Alliance,class=Mage,goal=Explore,quest=0,graveyard=1,distance=50.0,source=Creature,attackerFacts=200:20:20:20:0:0:1]");
+        aggregator.Ingest(QaData.Parse(a), facts, QaData.T0);
+        aggregator.Ingest(QaData.Parse(b), facts, QaData.T0.AddMinutes(1));
+        Assert.Equal(2, aggregator.Snapshot().Count);
+        Assert.All(aggregator.Snapshot(), f => Assert.Equal(QaCause.Unknown, f.Cause));
+
+        // Bridging signal shares 100 and 200 and adds normal attacker 300 -> merges A and B, union has 3 attackers -> ContentDifficulty.
+        string bridge = QaData.BotLine(QaData.Bot3, "BotC",
+            "death loop: died 3 times in 90s within 60 yd of 15.0,10.0,0.0 map 0 attackers=100/200/300"
+            + " qa[level=20,race=Human,team=Alliance,class=Priest,goal=Explore,quest=0,graveyard=1,distance=50.0,source=Creature,attackerFacts=300:20:20:20:0:0:1]");
+        aggregator.Ingest(QaData.Parse(bridge), facts, QaData.T0.AddMinutes(2));
+
+        QaFindingView merged = Assert.Single(aggregator.Snapshot());
+        Assert.Equal(QaCause.ContentDifficulty, merged.Cause);
+        Assert.Contains("3 different attackers (100/200/300)", merged.CauseDetail, StringComparison.Ordinal);
+    }
 }

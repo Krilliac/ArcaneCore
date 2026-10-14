@@ -144,6 +144,13 @@ internal static partial class PlayerbotQaFingerprint
             QaSignalKind.SpellNoEffect => $"spellnoeffect|{SpellKey(s)}",
             // The ledger signature id (FaultLedger.Record): one finding per signature; the fingerprint is derived from it, so a restored file still verifies.
             QaSignalKind.ServerFault => $"serverfault|{Token(s.FaultId)}",
+            // A failed run is the instance map, the wing, the stage it failed at, the boss it was heading for and the reason: never the group, a bot or a time.
+            QaSignalKind.RunFailed => string.Create(CultureInfo.InvariantCulture,
+                $"runfailed|map={s.Map}|wing={s.Segment}|stage={Token(s.Stage)}|boss={s.Target}|reason={Token(s.Reason)}"),
+            // A tick hang is the phase and the kind of work in it (a feature, a map, a command source), never its duration or timestamp.
+            QaSignalKind.TickHang => $"tickhang|phase={Token(s.Stage)}|item={Token(s.Reason)}",
+            // The goal and what it names, never the bot's place: every bot that skips the same entry meets the same unjoined ground.
+            QaSignalKind.UnreachableGoal => string.Create(CultureInfo.InvariantCulture, $"unreachable|goal={s.Goal}|quest={s.Quest}|target={s.Target}"),
             _ => throw new ArgumentOutOfRangeException(nameof(s)),
         });
     }

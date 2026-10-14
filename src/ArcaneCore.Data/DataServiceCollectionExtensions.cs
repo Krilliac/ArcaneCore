@@ -68,11 +68,38 @@ public static class DataServiceCollectionExtensions
                 provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SqliteWriteTimeoutMs,
                 provider.GetRequiredService<SlowCommandInterceptor>(), PragmaLogger(provider), CheckpointOptions(provider)));
 
+        AddCharacterWriteFence(services, configuration);
         services.AddScoped<ICharacterStore, EfCharacterStore>();
         services.AddScoped<IAccountDataStore, EfAccountDataStore>();
         services.AddSingleton<CharacterDbInitializer>();
         DataModules.AddServices(services, DatabaseComponent.Characters);
         return services;
+    }
+
+    /// <summary>The one key that turns the characters write fence on; the world host's claim and the fence read the same switch.</summary>
+    public const string FencingEnabledKey = "Cluster:Fencing:Enabled";
+
+    /// <summary>
+    /// Registers the process-wide ownership holder and, when <see cref="FencingEnabledKey"/> is true, attaches the write fence to every
+    /// characters context. Off (the default) adds nothing to the context options, and the stores add no transaction and no ownership statement for an untokened save, so the statement kinds are the same as train 16 issued (a CharacterWriteFenceTests case captures them); the world host watches the ownership row every Cluster:Fencing:ClaimWatchIntervalSeconds (default 10 s, independent of autosave) instead, so an unfenced world can keep writing for up to that interval after a fenced world claims the database.
+    /// </summary>
+    private static void AddCharacterWriteFence(IServiceCollection services, IConfiguration configuration)
+    {
+        CharacterOwnershipContext holder = services
+            .Where(d => d.ServiceType == typeof(CharacterOwnershipContext)).Select(d => d.ImplementationInstance).OfType<CharacterOwnershipContext>().FirstOrDefault()
+            ?? new CharacterOwnershipContext();
+        services.TryAddSingleton(holder);
+        services.TryAddSingleton<ICharacterOwnershipContext>(holder);
+
+        var transactions = new CharacterWriteFenceInterceptor(holder);
+        var commands = new CharacterWriteFenceCommandInterceptor();
+        services.ConfigureDbContext<CharacterDbContext>(builder =>
+        {
+            if (bool.TryParse(configuration[FencingEnabledKey], out bool enabled) && enabled)
+            {
+                builder.AddInterceptors(transactions, commands);
+            }
+        });
     }
 
     /// <summary>Static world content (world daemon, content importer).</summary>

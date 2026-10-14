@@ -785,11 +785,11 @@ internal sealed class PlayerbotRisk
     /// a death-loop zone, and every creature hazard still hold.
     /// </summary>
     internal PlayerbotHazard? Blocking(Player player, IReadOnlyList<Vector3> points, bool strong = true,
-        bool completedReturn = false, bool crossBesidePlaceMarks = false)
+        bool completedReturn = false, bool crossBesidePlaceMarks = false, bool chase = false)
     {
         if (!Enabled || !player.IsAlive || Retreat.Active) return null;
         uint now = _session.World.NowMs;
-        PlayerbotHazard? hit = Hazards.FirstOnRoute(player.MapId, points, now, strong, completedReturn);
+        PlayerbotHazard? hit = Hazards.FirstOnRoute(player.MapId, points, now, strong, completedReturn, chase);
         if (!crossBesidePlaceMarks || hit is not { } first || !IsPlaceMarkBesideRoad(first, points)) return hit;
         return NextAfterBesidePlaceMarks(player, points, now, strong, completedReturn);
     }

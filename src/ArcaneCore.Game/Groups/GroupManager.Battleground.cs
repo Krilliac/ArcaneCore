@@ -45,7 +45,7 @@ public sealed partial class GroupManager
 
         if (raid is null)
         {
-            raid = new Group(_nextId++)
+            raid = new Group(AllocateGroupId())
             {
                 IsCreated = true,
                 Type = GroupType.Raid,

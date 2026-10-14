@@ -40,7 +40,7 @@ vmangos routes a map without a navmesh (or `mmap.enabled = 0`) to `BuildPathWith
 pathfinder; `WorldCollision.PathfinderFor(mapId)` picks the primary when it has data for the map (an
 `IMapAwarePathfinder` says so via `HasNavigationData`; any other enabled pathfinder is assumed to) and the
 fallback otherwise. `MapCollision.FindPath` goes through it. The default fallback is the straight line, so
-behaviour is unchanged until the creature-ai lane installs its terrain-step pathfinder. The fallback survives
+behaviour is unchanged: no terrain-step `IPathfinder` exists yet to install (only this seam; `w44-path-no-straight` found none). The fallback survives
 `WorldCollision.Install`. The mover reaches whoever answers in `PathOptions.Mover`.
 
 ### Unloaded tiles shortcut (NavMesh.HaveTileAt)

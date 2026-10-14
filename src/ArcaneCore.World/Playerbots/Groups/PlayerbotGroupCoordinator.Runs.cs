@@ -15,6 +15,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -493,8 +494,53 @@ public sealed partial class PlayerbotGroupCoordinator
     {
         if (group.Run is not { } run) return;
         if (group.Succeeded && run.Step == PlayerbotRunStep.Leave) run.Apply(PlayerbotRunSignal.Left);
+        string? reason = run.Complete ? null : run.Reason ?? group.Reason ?? "disbanded";
+        PlayerbotRunMeters.Count(PlayerbotRunMeters.OutcomeOf(run.Complete, reason));
         if (run.Complete) _runsCompleted++;
-        else _runsGivenUp++;
+        else
+        {
+            _runsGivenUp++;
+            ReportRunFailed(group, run, reason!);
+        }
+    }
+
+    /// <summary>
+    /// Whether a run that ended with <paramref name="reason"/> points at content or code and so belongs in bot QA: no path to the entrance or the boss, a step that
+    /// really timed out (gather, travel, enter, regroup, run), a boss that is not where the content says, a stalled group, or a group that wiped out its wipes.
+    /// Operator and lifecycle ends are not findings (a bot stopped, scaled down, taken over or leashed: <c>leader-stopped</c>, <c>leader-left</c>, <c>leader-gone</c>;
+    /// <c>too-few</c>, <c>invites-unanswered</c>, <c>disbanded</c>, <c>aborted</c>); they still count in the runs metric.
+    /// </summary>
+    internal static bool PointsAtContentOrCode(string reason)
+        => reason.StartsWith("no-path", StringComparison.Ordinal) || reason.EndsWith("timeout", StringComparison.Ordinal)
+            || reason is "objective-missing" or "stalled" or "wiped";
+
+    /// <summary>
+    /// Report a run that ended for a content or code reason (<see cref="PointsAtContentOrCode"/>) to bot QA, straight to the sink (docs/areas/playbots-qa.md): the
+    /// instance map and wing, the stage it failed at, the boss it was heading for and the reason. No group, bot or character is named. Once per run (the disband
+    /// that calls this happens once), never per tick, and nothing is built while QA is off; a failure of the report is swallowed so it cannot reach the world tick.
+    /// </summary>
+    private void ReportRunFailed(BotGroup group, PlayerbotRunMachine run, string reason)
+    {
+        try
+        {
+            if (!PointsAtContentOrCode(reason)) return;
+            if (services.GetService<IPlayerbotQaSink>() is not { Enabled: true } sink) return;
+            PlayerbotRunStep stage = run.Step == PlayerbotRunStep.GiveUp ? run.FailedStep : run.Step;
+            string stageName = stage.ToString().ToLowerInvariant();
+            uint boss = stage is PlayerbotRunStep.Clear or PlayerbotRunStep.Boss ? run.CurrentBoss?.Entry ?? 0 : 0;
+            PlayerbotRunPlan plan = run.Plan;
+            sink.Report(new QaSignal
+            {
+                Kind = QaSignalKind.RunFailed, AtUtc = DateTime.UtcNow, Map = plan.MapId, Segment = plan.Segment, Stage = stageName, Target = boss, Reason = reason,
+                Detail = plan.MapName,
+                Message = string.Create(CultureInfo.InvariantCulture,
+                    $"{(plan.Raid ? "raid" : "dungeon")} run ended: {reason} in {plan.MapName} (map {plan.MapId} wing {plan.Segment}) at {stageName}, {run.Killed}/{run.BossCount} bosses dead, {run.Wipes} wipes"),
+            });
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogDebug(ex, "Playerbot group {Group}: the run failure could not be reported to bot QA", group.Id);
+        }
     }
 
     /// <summary>

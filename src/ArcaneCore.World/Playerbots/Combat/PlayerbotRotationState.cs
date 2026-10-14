@@ -65,6 +65,9 @@ internal sealed record RotationUnit
     /// <summary>Dispel types of the beneficial auras an enemy could have purged.</summary>
     public uint HelpfulDispelMask { get; init; }
 
+    /// <summary>Has a crowd-control aura that breaks on damage (vmangos HasBreakableByDamageCrowdControlAura: Polymorph, Sap, Gouge, ...).</summary>
+    public bool IsCrowdControlled { get; init; }
+
     /// <summary>Names of the auras on the unit (rank-independent).</summary>
     public IReadOnlySet<string> Auras { get; init; } = NoAuras;
 
@@ -128,11 +131,11 @@ internal sealed class RotationState
 
     public RotationUnit? PetUnit { get; init; }
 
-    /// <summary>The pet's victim is <see cref="Victim"/>.</summary>
-    public bool PetOnVictim { get; init; }
-
-    /// <summary>The pet is attacking something while the bot is out of combat.</summary>
+    /// <summary>The pet has a combat victim.</summary>
     public bool PetFighting { get; init; }
+
+    /// <summary>The pet's current victim is under a crowd-control aura that breaks on damage.</summary>
+    public bool PetFightingCrowdControlled { get; init; }
 
     /// <summary>A hunter whose current pet is stabled away (Call Pet can bring it).</summary>
     public bool CanCallPet { get; init; }

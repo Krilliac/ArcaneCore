@@ -18,10 +18,10 @@ namespace ArcaneCore.Game.Pets;
 /// <see cref="AttackTarget"/>: the base <c>AttackStart</c> is not virtual), <c>CanAttack</c>,
 /// <c>SelectNextTarget</c>, <c>KilledUnit</c>, <c>AttackedBy</c>, <c>OwnerAttackedBy</c>,
 /// <c>OwnerAttacked</c>, <c>MovementInform</c>, <c>MoveInLineOfSight</c> (an aggressive pet attacks a hostile unit that comes into
-/// its aggro radius; the creature area's relocation notify brings it creatures as well as players) and the imp's lack of a melee
-/// attack. Not ported (each needs data or primitives another area owns, docs/integration/pets.md): positive and ally autocast
-/// (<c>Spell::CanAutoCast</c>, <c>UpdateAllies</c>), taunt, the threat-list retarget of creature-owned
-/// pets and crowd-control checks (<c>HasAuraPetShouldAvoidBreaking</c>). It also drives a charmed or possessed creature (docs/areas/unit-control.md):
+/// its aggro radius; the creature area's relocation notify brings it creatures as well as players), crowd-control checks
+/// (<c>HasAuraPetShouldAvoidBreaking</c>) and the imp's lack of a melee attack. Not ported (each needs data or primitives another area
+/// owns, docs/integration/pets.md): positive and ally autocast (<c>Spell::CanAutoCast</c>, <c>UpdateAllies</c>), taunt, and the
+/// threat-list retarget of creature-owned pets. It also drives a charmed or possessed creature (docs/areas/unit-control.md):
 /// the charm info and master come from the charm when the creature is not a pet, and while a player possesses it (UNIT_FLAG_POSSESSED)
 /// only the melee part runs (no return movement, no autocast), as in vmangos <c>PetAI::UpdateAI</c>.
 /// </para>
@@ -325,6 +325,12 @@ public sealed class PetAI : CreatureAI
             return charm.IsCommandAttack;
         }
 
+        // CC - mobs under crowd control can be attacked if owner commanded (PetAI.cpp:729-731)
+        if (_spells()?.HasAuraPetShouldAvoidBreaking(target) == true)
+        {
+            return charm.IsCommandAttack;
+        }
+
         // Returning - pets ignore attacks only if owner clicked follow
         if (charm.IsReturning)
         {
@@ -389,6 +395,7 @@ public sealed class PetAI : CreatureAI
             return (null, SelectResult.FailNoOwner);
         }
 
+        SpellSystem? spells = _spells();
         if (owner is Creature ownerCreature)
         {
             // Owner is creature and is evading. We must not re-aggro.
@@ -406,7 +413,8 @@ public sealed class PetAI : CreatureAI
                     continue;
                 }
 
-                if (attacker.Combat.IsInCombat && Fight?.Hooks.CanAttack(Me, attacker) == true)
+                if (attacker.Combat.IsInCombat && Fight?.Hooks.CanAttack(Me, attacker) == true
+                    && spells?.HasAuraPetShouldAvoidBreaking(attacker) != true)
                 {
                     return (attacker, SelectResult.Success);
                 }
@@ -416,7 +424,8 @@ public sealed class PetAI : CreatureAI
         if (owner.Combat.IsInCombat)
         {
             if (owner.Combat.Victim is { } ownerVictim
-                && (!charm.IsAtStay || MapCombat.CanReachWithMeleeAutoAttack(Me, ownerVictim)))
+                && (!charm.IsAtStay || MapCombat.CanReachWithMeleeAutoAttack(Me, ownerVictim))
+                && spells?.HasAuraPetShouldAvoidBreaking(ownerVictim) != true)
             {
                 return (ownerVictim, SelectResult.Success);
             }
@@ -429,7 +438,8 @@ public sealed class PetAI : CreatureAI
                     continue;
                 }
 
-                if (attacker.Combat.IsInCombat && Fight?.Hooks.CanAttack(Me, attacker) == true)
+                if (attacker.Combat.IsInCombat && Fight?.Hooks.CanAttack(Me, attacker) == true
+                    && spells?.HasAuraPetShouldAvoidBreaking(attacker) != true)
                 {
                     return (attacker, SelectResult.Success);
                 }
@@ -554,7 +564,7 @@ public sealed class PetAI : CreatureAI
     private void Autocast(CharmInfo charm)
     {
         if (_spells() is not { } spells || spells.GetState(Me.Guid)?.CurrentCast is not null
-            || Me.Combat.Victim is not { IsAlive: true } victim || Fight?.Hooks.CanAttack(Me, victim) != true)
+            || Me.Combat.Victim is not { IsAlive: true } victim || !CanAttack(victim, charm))
         {
             return;
         }

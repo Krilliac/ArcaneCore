@@ -68,15 +68,27 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         var options = new PlayerbotOptions();
         var times = new List<double>();
         float walked = 0, left = float.PositiveInfinity;
+        TileWait[] wait = [new TileWait()];
         for (int leg = 0; leg < 25 && left > QuestNpcServices.InteractionDistance; leg++)
         {
-            (PlayerbotRoute? route, Vector3 at) = await terrain.Host.OnWorldAsync(() =>
+            PlayerbotRoute? route = null;
+            Vector3 at = default;
+            double elapsedMs = 0;
+            PlanOutcome outcome = PlanOutcome.Pending;
+            while (outcome == PlanOutcome.Pending)
             {
-                var watch = Stopwatch.StartNew();
-                bool planned = PlayerbotNavigation.TryPlanToward(terrain.Player, ender, options, out PlayerbotRoute? next);
-                times.Add(watch.Elapsed.TotalMilliseconds);
-                return (planned ? next : null, new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z));
-            });
+                (outcome, route, at, elapsedMs) = await terrain.Host.OnWorldAsync(() =>
+                {
+                    var watch = Stopwatch.StartNew();
+                    PlanOutcome res = PlayerbotNavigation.PlanToward(terrain.Player, ender, options, ref wait[0], terrain.Host.World.NowMs, out PlayerbotRoute? next);
+                    return (res, next, new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z), watch.Elapsed.TotalMilliseconds);
+                });
+                if (outcome != PlanOutcome.Pending) break;
+                await Task.Delay(20);
+                await terrain.Host.World.AdvanceClockAsync(100);
+            }
+
+            times.Add(elapsedMs);
             Assert.True(route is not null, $"{stall}: leg {leg}: no route from {at}, {Vector3.Distance(at, ender):F0} yards from the ender");
             Vector3 end = route!.Points[^1];
             output.WriteLine($"leg {leg}: {at} -> {end}: {route.Distance:F0} yards, {route.Points.Count} corners, {times[^1]:F1} ms");

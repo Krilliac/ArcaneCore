@@ -649,7 +649,8 @@ internal static class PlayerbotMotion
         float ground = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
         if (!ValidHeight(ground) || MathF.Abs(ground - candidate.Z) > 2f)
             return null;
-        if (!map.Collision.IsInLineOfSight(from.X, from.Y, from.Z + 2, candidate.X, candidate.Y, ground + 2)) return null;
+        // Doodads (fences, trees, rocks) block a stepped leg too: the server does not collide a managed bot's movement.
+        if (!PlayerbotMoveCheck.LineClear(map.Collision, from, candidate with { Z = ground })) return null;
         return candidate with { Z = ground + 0.05f };
     }
 

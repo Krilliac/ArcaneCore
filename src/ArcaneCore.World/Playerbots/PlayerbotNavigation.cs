@@ -24,6 +24,7 @@ internal sealed class PlayerbotRoute
     /// road then does not take this walk away (<see cref="PlayerbotRisk.Blocking"/>).
     /// </summary>
     internal bool CrossBesidePlaceMarks { get; set; }
+
     internal PlayerbotRoute(IReadOnlyList<Vector3> points, float distance, bool navigated = false)
     {
         Points = points;
@@ -207,11 +208,11 @@ internal static class PlayerbotNavigation
     /// <paramref name="wait"/> (<see cref="TileWait.MaxMs"/>): past it a pending answer is returned as <see cref="PlanOutcome.Refused"/>.
     /// </summary>
     internal static PlanOutcome PlanExact(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
-        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false, bool chase = false)
     {
         long mark = PendingMark;
         return Outcome(TryPlan(player, destination, options, out route, completedQuestReturn: completedQuestReturn,
-            friendlyTownEnder: friendlyTownEnder), mark, ref wait, now, ref route);
+            friendlyTownEnder: friendlyTownEnder, chase: chase), mark, ref wait, now, ref route);
     }
 
     /// <summary><see cref="TryPlanFar"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
@@ -227,7 +228,7 @@ internal static class PlayerbotNavigation
         out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
     {
         long mark = PendingMark;
-        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder), mark, ref wait, now, ref route);
+        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, now), mark, ref wait, now, ref route);
     }
 
     private static PlanOutcome Outcome(bool planned, long mark, ref TileWait wait, uint now, ref PlayerbotRoute? route)
@@ -242,12 +243,26 @@ internal static class PlayerbotNavigation
         return PendingSince(mark) && wait.Hold(now) ? PlanOutcome.Pending : PlanOutcome.Refused;
     }
 
+    internal static bool TryPlanTowardPrepared(Player player, Vector3 goal, PlayerbotOptions options,
+        PlayerbotAsyncNavigationPlan plan, out PlayerbotRoute? route, out bool deferred, bool completedQuestReturn = false,
+        bool friendlyTownEnder = false, uint? nowMs = null)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        plan.ResetPass();
+        using IDisposable scope = plan.Activate();
+        bool planned = TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, nowMs);
+        deferred = plan.Deferred || plan.Exhausted || plan.NextRequest is not null;
+        if (deferred) route = null;
+        return planned && !deferred;
+    }
+
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
-        out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false, bool friendlyTownEnder = false,
+        bool chase = false)
         => Plan(player, destination, destination, options, partial: false, trial, out route, out _,
-            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder);
+            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder, chase: chase);
 
     /// <summary>
     /// A route to <paramref name="destination"/> with no hazard check at all: only the escape from a ring of strong creatures
@@ -282,9 +297,29 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
-        bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        bool completedQuestReturn = false, bool friendlyTownEnder = false, uint? nowMs = null)
+    {
+        long pending = PendingMark;
+        bool planned = PlanTowardSteps(player, goal, options, out route, completedQuestReturn, friendlyTownEnder);
+        // A far goal that got no route, or only a few yards of one, may mean the bot stands on a fragment of mesh no walk leaves: the
+        // one straight move off it, when the ground beside it is the mesh's large part (TryFragmentHop). Asked only then (never on a
+        // pending tile read, which is no verdict on the route), never per tick.
+        if (nowMs is { } hopNow && !PendingSince(pending) && (!planned || route is { Distance: < FragmentRouteYards }) && Finite(goal)
+            && Vector2.Distance(new(player.X, player.Y), new(goal.X, goal.Y)) > FragmentGoalYards
+            && TryFragmentHop(player, options, hopNow, out PlayerbotRoute? hop))
+        {
+            route = hop;
+            return true;
+        }
+
+        return planned;
+    }
+
+    private static bool PlanTowardSteps(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
+        bool completedQuestReturn, bool friendlyTownEnder)
     {
         route = null;
+        if (PlayerbotAsyncNavigationPlan.Current?.Exhausted == true) return false;
         Vector3 origin = new(player.X, player.Y, player.Z);
         if (!Finite(goal) || !Finite(origin)) return false;
         float distance = Vector3.Distance(origin, goal);
@@ -321,6 +356,127 @@ internal static class PlayerbotNavigation
                 completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
             if (!straightRefused || PendingSince(pending) || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
         }
+    }
+
+    /// <summary>
+    /// A component of the map's region graph (<see cref="NavRegionGraph.ComponentSize"/>) of at most this many regions is a fragment of mesh:
+    /// the ridge pocket above the Valley of Trials (-137.6, -4265.7, map 1) is 3 regions, the sliver inside Ironforge (-4715.7, -871.2,
+    /// map 0) is 1 (bot QA cluster C3, probes in <c>PlayerbotDeadEndPinProbeTests</c>); the mesh's real parts are thousands.
+    /// </summary>
+    internal const int FragmentRegions = 3;
+
+    /// <summary>
+    /// A fragment is also small in area: a component of at most <see cref="FragmentRegions"/> regions that holds more polygons than this
+    /// is a real place (a plaza of three regions), not a sliver. The ridge pocket is 26 polygons (3 regions) and the Ironforge sliver is
+    /// 2 polygons (1 region); the main continents are 563,799 and 1,457,700 polygons (<c>PlayerbotMeshFragmentTerrainTests</c>).
+    /// </summary>
+    internal const int FragmentPolygons = 500;
+
+    /// <summary>A plan toward a goal farther than this (flat yards) that is refused or shorter than <see cref="FragmentRouteYards"/> asks whether the bot stands on a fragment.</summary>
+    internal const float FragmentGoalYards = 60f;
+
+    /// <summary>The route length (yards) under which a plan toward a far goal counts as no progress (a fragment's own few yards).</summary>
+    internal const float FragmentRouteYards = 30f;
+
+    /// <summary>How far (flat yards) from a fragment the hop looks for ground of a large component, and the rings it looks in.</summary>
+    internal const float FragmentHopYards = 20f;
+
+    private static readonly float[] HopRings = [3f, 6f, 10f, 14f, 18f, FragmentHopYards];
+
+    private const int HopDirections = 8;
+
+    /// <summary>The shortest time between two hop searches of one bot (ms, the bot clock the plan was asked at: the world's NowMs), so a fragment with no ground beside it costs a search per window, not per plan.</summary>
+    internal const int HopRetryMs = 5_000;
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, System.Runtime.CompilerServices.StrongBox<long>> HopRetry = new();
+
+    private static readonly PathOptions WalkingLocate = new() { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+
+    /// <summary>
+    /// Whether the bot stands on a fragment of navigation mesh: the walking region graph (steep slopes excluded) puts its place in a
+    /// component of at most <see cref="FragmentRegions"/> regions, so no walk leaves it. False when the graph is not built yet or the
+    /// bot is on no region. A region lookup and an array read; allocation-free.
+    /// </summary>
+    internal static bool IsOnMeshFragment(Player player)
+    {
+        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return false;
+        int region = nav.RegionAt(graph, PlayerbotMotion.CurrentPosition(player), WalkingLocate);
+        return region >= 0 && IsFragment(graph, region);
+    }
+
+    private static bool IsFragment(NavRegionGraph graph, int region)
+        => graph.ComponentSize(region) <= FragmentRegions && graph.ComponentPolygons(region) <= FragmentPolygons;
+
+    /// <summary>
+    /// The one straight move off a fragment (<see cref="IsOnMeshFragment"/>): a stepped terrain leg (floor within a yard per yard, in
+    /// sight: <see cref="TryTerrainRoute"/>, so a climb above a step or a wall refuses it, a drop is taken as the terrain slopes) to the
+    /// nearest point within <see cref="FragmentHopYards"/> that lies on a polygon of a large component. Eight directions in six rings,
+    /// nearest ring first. Not asked again for <see cref="HopRetryMs"/> after a miss. World thread.
+    /// </summary>
+    private static bool TryFragmentHop(Player player, PlayerbotOptions options, uint now, out PlayerbotRoute? route)
+    {
+        route = null;
+        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph
+            || !PlayerbotMapPolicy.MayMoveOn(player, options))
+            return false;
+        Vector3 here = PlayerbotMotion.CurrentPosition(player);
+        if (!Finite(here)) return false;
+        int own = nav.RegionAt(graph, here, WalkingLocate);
+        if (own < 0 || !IsFragment(graph, own)) return false;
+        System.Runtime.CompilerServices.StrongBox<long> retry = HopRetry.GetValue(player, static _ => new System.Runtime.CompilerServices.StrongBox<long>(-1));
+        if (retry.Value >= 0 && unchecked((int)(now - (uint)retry.Value)) < HopRetryMs) return false;
+        long mark = PendingMark;
+        foreach (float ring in HopRings)
+            for (int direction = 0; direction < HopDirections; direction++)
+            {
+                float angle = direction * 2f * MathF.PI / HopDirections;
+                Vector3 target = new(here.X + (MathF.Cos(angle) * ring), here.Y + (MathF.Sin(angle) * ring), here.Z);
+                int region = nav.RegionAt(graph, target, WalkingLocate);
+                if (region < 0 || IsFragment(graph, region)) continue;
+                if (TryTerrainRoute(here, target, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
+                        (a, b) => PlayerbotMoveCheck.LineClear(map.Collision, a, b), out PlayerbotRoute? hop) && hop is not null)
+                {
+                    route = hop;
+                    retry.Value = now;
+                    return true;
+                }
+            }
+
+        // A ring point whose tile is still being read answered -1 for that, not for a cliff: the window is spent only on a verdict.
+        if (!PendingSince(mark)) retry.Value = now;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="goal"/> is a place no walk reaches from where the bot stands, by the map's region graph alone (no path
+    /// search, no tile read beyond the two lookups): the walking graph (steep slopes excluded) puts the bot and the goal in different
+    /// components, and the goal is outdoors (an indoor goal may be reached over steep stairs, <see cref="TryClimbIndoors"/>). False
+    /// when the graph is not built yet or either place is on no region. Transport (tram, lift, taxi) is the caller's to try first.
+    /// Live case: Chief Hawkwind's platform from the Valley of Trials ridge, 4,900 yards away, drew an 847-yard leg and a 3,349-yard
+    /// walk toward a goal no walk reaches.
+    /// </summary>
+    internal static bool IsUnreachableOnFoot(Player player, Vector3 goal, out int fromComponent, out int toComponent)
+    {
+        fromComponent = toComponent = -1;
+        if (!Finite(goal) || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return false;
+        Vector3 here = PlayerbotMotion.CurrentPosition(player);
+        int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate);
+        if (from < 0 || to < 0) return false;
+        fromComponent = graph.ComponentOf(from);
+        toComponent = graph.ComponentOf(to);
+        // Only a bot on a large walkable part may call a goal unreachable: on a fragment or indoors the bot's own component says nothing
+        // about the world, and PlanToward's escapes (TryLeaveSteepGround, FromBeside, TryFragmentHop, the indoor climb) must run first.
+        // A bot on steep ground is not told apart: the lookup snaps it to a walking region within a few yards (horizontally, or just above
+        // or below), and it is judged from that region; one with none in reach has from < 0 and gets false above. The lookup is the
+        // graph's, so the answer costs no path search.
+        return fromComponent != toComponent && !IsFragment(graph, from)
+            && map.Collision.IsOutdoors(goal.X, goal.Y, goal.Z + 1f)
+            && map.Collision.IsOutdoors(here.X, here.Y, here.Z + 1f);
     }
 
     /// <summary>The shortest step <see cref="TryPlanToward"/> shortens its point to before it gives up.</summary>
@@ -397,14 +553,27 @@ internal static class PlayerbotNavigation
     /// stepper refused that line.</param>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial, bool trial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false,
-        bool friendlyTownEnder = false)
+        bool friendlyTownEnder = false, bool chase = false)
     {
+        if (PlayerbotAsyncNavigationPlan.Current?.Deferred == true)
+        {
+            route = null;
+            straightRefused = false;
+            return false;
+        }
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes) || route is null) return false;
         bool crossBeside = completedQuestReturn && friendlyTownEnder;
         route.CompletedQuestReturn = completedQuestReturn;
         route.CrossBesidePlaceMarks = crossBeside;
+        route.Chase = chase;
+        if (PlayerbotAsyncNavigationPlan.Current?.Deferred == true)
+        {
+            route = null;
+            straightRefused = false;
+            return false;
+        }
         if (!Guards.TryGetValue(player, out PlayerbotRisk? risk)
-            || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside) is not { } hazard) return true;
+            || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not { } hazard) return true;
 
         // The way passes through a hazard: walk round it (by a corner before it and one past it, on either side), or not at all.
         PlayerbotRoute direct = route;
@@ -437,9 +606,10 @@ internal static class PlayerbotNavigation
                 bool[] legs = [.. Enumerable.Repeat(first.Navigated, first.Points.Count - 1),
                     .. Enumerable.Repeat(middle.Navigated, middle.Points.Count - 1), .. Enumerable.Repeat(last.Navigated, last.Points.Count - 1)];
                 var detour = new PlayerbotRoute(points, length, legs);
-                if (risk.Blocking(player, detour.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside) is not null) continue;
+                if (risk.Blocking(player, detour.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not null) continue;
                 detour.CompletedQuestReturn = completedQuestReturn;
                 detour.CrossBesidePlaceMarks = crossBeside;
+                detour.Chase = chase;
                 route = detour;
                 return true;
             }
@@ -447,7 +617,9 @@ internal static class PlayerbotNavigation
         // A detour leg that waited for a tile still being read is no evidence of a ring: the caller asks again once it is in.
         if (PendingSince(detourMark)) return false;
         // A goal's walk refused: evidence for the ring escape (PlayerbotRisk.Refused), which judges whether the bot is boxed in.
-        if (!trial) risk.Refused(player, hazard);
+        PlayerbotAsyncNavigationPlan? currentPlan = PlayerbotAsyncNavigationPlan.Current;
+        if (!trial && (currentPlan is null || (!currentPlan.Deferred && !currentPlan.Exhausted)))
+            risk.Refused(player, hazard);
         return false;
     }
 
@@ -457,8 +629,7 @@ internal static class PlayerbotNavigation
         PathResult path = PlayerbotThinkProbe.Find(map.Collision, from, to, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
             Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true, NonBlockingTiles = true });
         if ((path.Type & PathType.NotUsingPath) != 0)
-            return TryTerrainRoute(from, to, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
-                (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out PlayerbotRoute? terrain) ? terrain : null;
+            return PlayerbotMoveCheck.TerrainRoute(map, from, to, options, out PlayerbotRoute? terrain) ? terrain : null;
         return IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards) && (path.Type & PathType.Incomplete) == 0
             ? new PlayerbotRoute(path.Points, path.Length, navigated: true) : null;
     }
@@ -493,9 +664,8 @@ internal static class PlayerbotNavigation
         // before using that route; absent heights, steep terrain and known model obstructions refuse it.
         if ((path.Type & PathType.NotUsingPath) != 0)
         {
-            straightRefused = !TryTerrainRoute(start, destination, options,
-                (x, y, z) => map.Collision.GetHeight(x, y, z),
-                (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out route);
+            // A route over a doodad or off the mesh is refused; TryPlanToward then plans a shorter chunk, which ends before the obstacle.
+            straightRefused = !PlayerbotMoveCheck.TerrainRoute(map, start, destination, options, out route);
             return !straightRefused;
         }
 
@@ -565,7 +735,7 @@ internal static class PlayerbotNavigation
     {
         long before = PathSearchCounters.CappedSearches;
         PathResult path = QueryOnce(map, from, to, options, partial, steep, searchNodes);
-        capped = PathSearchCounters.CappedSearches != before;
+        capped = PathSearchCounters.CappedSearches != before || PlayerbotThinkProbe.ConsumeLastQueryCapped();
         return path;
     }
 
@@ -742,6 +912,9 @@ internal static class PlayerbotNavigation
                 float floor = map.Collision.GetHeight(x, y, start.Z + 2f);
                 if (InvalidHeight(floor) || MathF.Abs(floor - start.Z) > 2.5f) continue;
                 Vector3 beside = new(x, y, floor + 0.05f);
+                // The doodad-blind line of sight, on purpose: the start stands on a fragment of mesh, which is often a rock or a root (a
+                // doodad), and a doodad-aware sight from inside it is blocked in every direction. This is a hop of at most 5 yards onto
+                // ground the mesh joins; the legs that follow are the mesh's own, and the doodad-aware leg check applies to stepped routes.
                 if (!map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2, beside.X, beside.Y, beside.Z + 2)) continue;
                 PathResult path = Query(map, beside, destination, options, partial, steep: false, out bool capped);
                 if ((path.Type & PathType.TilesPending) != 0) return null;
@@ -758,9 +931,8 @@ internal static class PlayerbotNavigation
                     continue;
                 }
 
-                if (Bounded([start, .. path.Points], options, reaches) is not { } joined || joined.Points.Count > options.MaxPathPoints + 1) continue;
-                bool[] legs = [false, .. Enumerable.Repeat(true, joined.Points.Count - 2)];
-                return new PlayerbotRoute(joined.Points, joined.Distance, legs);
+                if (Bounded([start, .. path.Points], options, reaches) is { } joined && joined.Points.Count <= options.MaxPathPoints + 1)
+                    return joined;
             }
         }
 
@@ -996,7 +1168,8 @@ internal static class PlayerbotNavigation
             List<Vector3> rest = [PlayerbotMotion.CurrentPosition(player), .. route.Points.Skip(route.NextPoint)];
             if (risk.Blocking(player, rest, strong: !risk.IsEscape(route),
                 completedReturn: route.CompletedQuestReturn,
-                crossBesidePlaceMarks: route.CrossBesidePlaceMarks) is not null)
+                crossBesidePlaceMarks: route.CrossBesidePlaceMarks,
+                chase: route.Chase) is not null)
             {
                 PlayerbotMovementControl.Stop(session, player);
                 return false;
@@ -1067,8 +1240,7 @@ internal static class PlayerbotNavigation
         {
             float floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
             if (!Finite(candidate) || InvalidHeight(floor) || MathF.Abs(floor - candidate.Z) > 2f
-                || !map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2,
-                    candidate.X, candidate.Y, floor + 2)) return null;
+                || !PlayerbotMoveCheck.LineClear(map.Collision, start, candidate with { Z = floor })) return null;
             return new Vector3(candidate.X, candidate.Y, floor + 0.05f);
         }, out next, out nextPoint);
 
@@ -1092,6 +1264,7 @@ internal static class PlayerbotNavigation
             if (InvalidHeight(floor) || MathF.Abs(floor - previous.Z) > 1f) return false;
             next.Z = floor + 0.05f;
             if (!clear(previous, next)) return false;
+
             length += Vector3.Distance(previous, next);
             if (!float.IsFinite(length) || length > options.MaxRouteYards) return false;
             points.Add(next);

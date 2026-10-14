@@ -99,6 +99,35 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
         Assert.Contains("ender 963 (Gryan Stoutmantle), on another map (1; the bot is on map 0)", f.CauseDetail, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void EnderTripStall_AtTheEnder_SaysTheBotReachedItsEnderInsteadOfWalkingToIt()
+    {
+        // #388 / #328: the ender stands within 10 yd of the bot (-9928.2, 47.6), so the bot reached its ender rather than stalling mid-route.
+        FakeFacts facts = GryanTrip(new QaEnderFact(963, "Gryan Stoutmantle", 0, -9928.2f + 7f, 47.6f, 32.6f));
+        QaFindingView f = IngestOne(ReturnTripLine, facts);
+
+        Assert.Contains("the bot reached its ender 963 (Gryan Stoutmantle) but could not complete the turn-in, nearest spawn 7 yd from the bot on map 0",
+            f.CauseDetail, StringComparison.Ordinal);
+        Assert.DoesNotContain("the bot was walking to its ender", f.CauseDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnderTripStall_WithTurnInRefusal_NamesTheRefusalReason()
+    {
+        FakeFacts facts = GryanTrip(new QaEnderFact(963, "Gryan Stoutmantle", 0, -9928.2f, 47.6f, 32.6f));
+        string lineWithRefusal = ReturnTripLine.Replace(
+            "attackerFacts=none]",
+            "attackerFacts=none,turnInRefusal=InventoryFull]",
+            StringComparison.Ordinal);
+        QaSignal parsed = QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander", lineWithRefusal));
+        Assert.Equal("InventoryFull", parsed.Bot?.TurnInRefusal);
+        Assert.EndsWith(",turnInRefusal=InventoryFull]", parsed.Bot!.ToLogSuffix(), StringComparison.Ordinal);
+
+        QaFindingView f = IngestOne(lineWithRefusal, facts);
+        Assert.Contains("the bot reached its ender 963 (Gryan Stoutmantle) and turn-in was refused (inventory full), nearest spawn 0 yd from the bot on map 0",
+            f.CauseDetail, StringComparison.Ordinal);
+    }
+
     /// <summary>The line the real no-route stall of the walk home logs (PlayerbotQuestReturnStallMarkTests): the plan failed, so target=0.</summary>
     private const string NoRouteTripLine = "stalled 10s: goal=Quest target=0 quest=900001 at -8949.0,-132.0,83.5 map 0 return-trip qa[level=10,race=Human,team=Alliance,class=Warrior,goal=Quest,quest=900001,graveyard=0,distance=unknown,source=None,attackerFacts=none]";
 

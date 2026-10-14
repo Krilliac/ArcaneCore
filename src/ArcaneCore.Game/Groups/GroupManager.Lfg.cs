@@ -26,7 +26,7 @@ public sealed partial class GroupManager
             return null;
         }
 
-        var group = new Group(_nextId++)
+        var group = new Group(AllocateGroupId())
         {
             LeaderGuid = leader.Guid,
             LeaderName = leader.Name,

@@ -135,11 +135,12 @@ Ported from `AI/PetAI.cpp`: `UpdateAI` (a valid victim is kept, otherwise the pe
 with the owner's low GUID, sent once its spline is finalized and never while the pet cannot move, as
 `FollowMovementGenerator::Update` does), `DoAttack` (chase, or hold position while staying), `AttackStart` (as `AttackTarget`: the base
 `CreatureAI.AttackStart` is not virtual), `CanAttack` in vmangos' order (passive, PvP-flagged targets,
+breakable crowd control via `SpellSystem.HasAuraPetShouldAvoidBreaking` unless `IsCommandAttack`,
 returning, stay, switching targets, follow), `SelectNextTarget` and `KilledUnit` (the pet's own attackers,
-then the owner's victim and attackers), `AttackedBy`, `OwnerAttackedBy`, `OwnerAttacked` and the imp's
-missing melee attack (entry 416). `PetMapSystem` feeds the owner hooks from the map's damage event
+then the owner's victim and attackers, skipping breakable crowd-controlled units), `AttackedBy`, `OwnerAttackedBy`, `OwnerAttacked` and the imp's
+missing melee attack (entry 416). When a spell with `SpellAuraInterruptFlags.Damage` lands a breakable crowd-control aura (`ModConfuse`, `ModStun`, `Transform`), `SpellSystem.StopPetsAttackingCrowdControlledTarget` stops any pets attacking that unit, clears `IsCommandAttack` and interrupts any in-flight harmful pet cast at it (`Spell.cpp:1566-1577`, `Unit.cpp:10831-10864`). `PetMapSystem` feeds the owner hooks from the map's damage event
 (vmangos `Unit::AttackedBy`, `Unit::Attack`, `SetInCombatWithVictim`: `Unit.cpp:4541`, `4563`, `6080`);
-`CMSG_PET_ACTION` attack goes through `AttackTarget`. Autocast: while the pet fights, a harmful, ready
+`CMSG_PET_ACTION` attack goes through `AttackTarget`. Autocast: while the pet fights and `CanAttack` still allows the victim, a harmful, ready
 spell with autocast on goes at the victim, chosen at random among those that qualify, with the aggro growl
 (10%: the special-spell talk) for the owner (the harmful half of `PetAI.cpp:226-330`).
 
@@ -295,7 +296,7 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
   what the spell system checks; `PetBroken` and the tame-failure packet belong to taming.
 * **PetAI gaps.** Not ported: positive and ally autocast (`Spell::CanAutoCast`, `UpdateAllies`: Blood Pact,
   Fire Shield, Devour Magic and the like never autocast), taunt targets, the threat-list retarget of
-  creature-owned pets, crowd-control checks (`HasAuraPetShouldAvoidBreaking`), possession, the caster
+  creature-owned pets, possession, the caster
   chase distance of a spell-only pet (`SetCasterChaseDistance`), and aggro on sight: the creature area does
   not model creature-versus-creature aggro, so an aggressive pet reacts to attacks on itself and on its
   owner, not to a hostile that merely stands nearby. Also from the creature area: a same-faction creature

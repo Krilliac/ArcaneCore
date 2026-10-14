@@ -169,6 +169,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _pathNodesThisTick = 0;
         _timing = default;
         long t = Stopwatch.GetTimestamp();
+        RunDeferredMoves();
         SendCatchUpMoves();
         t = Lap(t, out _timing.CatchUp);
         UpdateLinkedFollowers();
@@ -219,7 +220,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         UpdateTiming t = _timing;
         string text = $"creatures {TickMs(t.Creatures)} ms over {t.Updated}/{t.Walked} active (ai {TickMs(t.Ai)}, motion {TickMs(t.Motion)}), path searches {TickMs(t.Path)} ms in {t.Searches} searches from any stage, "
             + $"catch-up moves {TickMs(t.CatchUp)}, linked followers {TickMs(t.Linked)}, spawn groups {TickMs(t.SpawnGroups)}, pending ai {TickMs(t.PendingAi)}, "
-            + $"relay scripts {TickMs(t.Relay)}, forced despawns {TickMs(t.Despawns)}, observers {TickMs(t.AfterUpdate)}";
+            + $"relay scripts {TickMs(t.Relay)}, forced despawns {TickMs(t.Despawns)}, observers {TickMs(t.AfterUpdate)}, "
+            + $"path outcomes so far: {NoPathPaths} no-path, {DirectFallbackPaths} straight authored routes, {DeferredPathSearches} deferred, {HomePathTeleports} home teleports";
         if (t.SlowestCreatureTicks > 0)
         {
             text += $"; slowest creature entry {t.SlowestEntry} {TickMs(t.SlowestCreatureTicks)} ms, top generator {t.SlowestGenerator?.Name ?? "none"}";
@@ -237,7 +239,16 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     // --- ICreatureMover -----------------------------------------------------------------------
 
     void ICreatureMover.MoveTo(Creature creature, float x, float y, float z, bool run, float? finalOrientation)
-        => MoveTo(creature, x, y, z, run, finalOrientation);
+        => MoveStraight(creature, x, y, z, run, finalOrientation);
+
+    PlannedPath ICreatureMover.PlanPath(Creature creature, Vector3 destination, bool toSpawn) => PlanPath(creature, destination, toSpawn);
+
+    void ICreatureMover.TeleportHome(Creature creature, float x, float y, float z, float orientation)
+    {
+        HomePathTeleports++;
+        CreaturePathStats.AddHomeTeleport();
+        NearTeleport(creature, x, y, z, orientation);
+    }
 
     void ICreatureMover.MovePath(Creature creature, IReadOnlyList<Vector3> path, bool run, SplineFacing facing)
         => MovePath(creature, path, run, facing);
@@ -261,11 +272,89 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     float? ICreatureMover.GetHeight(uint mapId, float x, float y, float z) => _height.GetHeight(mapId, x, y, z);
 
-    /// <summary>Launch a spline from the creature's current position and tell its observers.</summary>
+    /// <summary>Wander, flee and fear choose their points with steep slopes excluded (vmangos RandomMovementGenerator.cpp:52, FleeingMovementGenerator.cpp:54).</summary>
+    private static readonly PathOptions MeshPointOptions = new() { ExcludeFlags = NavTerrain.SteepSlopes };
+
+    bool ICreatureMover.TryGetRandomMeshPoint(Creature creature, Vector3 center, float radius, out Vector3 point)
+    {
+        point = center;
+        return Map.Collision.MeshPoints is { } mesh && mesh.TryGetRandomPointAround(creature.MapId, center, radius, _random, MeshPointOptions, out point);
+    }
+
+    bool ICreatureMover.TryRaycastMesh(Creature creature, Vector3 from, Vector3 to, out Vector3 reached)
+    {
+        reached = to;
+        if (Map.Collision.MeshPoints is not { } mesh)
+        {
+            return false;
+        }
+
+        MeshRaycastResult ray = mesh.Raycast(creature.MapId, from, to, MeshPointOptions);
+        if (!ray.Available)
+        {
+            return false;
+        }
+
+        reached = ray.Point;
+        return true;
+    }
+
+    /// <summary>
+    /// Move the creature to (x, y, z) the way a scripted move should: along the map's navmesh (<see cref="FindPath"/>), the straight line only where
+    /// the mesh has no data or no path (an authored destination, as vmangos). When this update's search budget is spent the move waits for a later
+    /// update (<see cref="DeferredMoveCount"/>); a newer move or spline of the creature replaces the waiting one. Tell the observers.
+    /// </summary>
     public void MoveTo(Creature creature, float x, float y, float z, bool run, float? finalOrientation)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        IReadOnlyList<Vector3> path = FindPath(creature, new Vector3(x, y, z));
+        if (path.Count == 0)
+        {
+            _deferredMoves[creature] = new DeferredMove(x, y, z, run, finalOrientation);
+            return;
+        }
+
+        MovePath(creature, path, run, finalOrientation is { } angle ? SplineFacing.ToAngle(angle) : SplineFacing.None);
+    }
+
+    /// <summary>Launch a straight spline from the creature's current position to (x, y, z) and tell its observers. No pathfinding.</summary>
+    public void MoveStraight(Creature creature, float x, float y, float z, bool run, float? finalOrientation)
     {
         _onePoint[0] = new Vector3(x, y, z); // no list per move (wave 17 allocation leftover)
         MovePath(creature, _onePoint, run, finalOrientation is { } angle ? SplineFacing.ToAngle(angle) : SplineFacing.None);
+    }
+
+    private readonly record struct DeferredMove(float X, float Y, float Z, bool Run, float? FinalOrientation);
+
+    private readonly Dictionary<Creature, DeferredMove> _deferredMoves = [];
+    private readonly List<KeyValuePair<Creature, DeferredMove>> _deferredScratch = [];
+
+    /// <summary>Scripted moves waiting for path budget.</summary>
+    public int DeferredMoveCount => _deferredMoves.Count;
+
+    /// <summary>
+    /// Re-issue the scripted moves that waited for budget, first in the update so they are served before the creatures' own searches.
+    /// A creature that died or left the map drops its move.
+    /// </summary>
+    private void RunDeferredMoves()
+    {
+        if (_deferredMoves.Count == 0)
+        {
+            return;
+        }
+
+        _deferredScratch.Clear();
+        _deferredScratch.AddRange(_deferredMoves);
+        _deferredMoves.Clear();
+        foreach ((Creature creature, DeferredMove move) in _deferredScratch)
+        {
+            if (creature.IsAlive && creature.IsInWorld && _creatures.ContainsKey(creature.Guid))
+            {
+                MoveTo(creature, move.X, move.Y, move.Z, move.Run, move.FinalOrientation);
+            }
+        }
+
+        _deferredScratch.Clear();
     }
 
     /// <summary>
@@ -281,6 +370,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             return;
         }
 
+        if (_deferredMoves.Count > 0)
+        {
+            _deferredMoves.Remove(creature); // a newer move replaces one that was waiting for budget
+        }
+
         uint id = ++_splineCounter;
         var start = new Vector3(creature.X, creature.Y, creature.Z);
         CreatureSpline spline = creature.StartSpline(path, run, facing, id, _clockMs);
@@ -290,40 +384,68 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     }
 
     /// <summary>
-    /// The path from the creature to <paramref name="destination"/>: every corner after the start,
-    /// the end last. It asks the map's <see cref="IPathfinder"/> (<c>map.Collision</c>,
-    /// feat/vmap-los: the navmesh when mmaps are installed, else a straight line). When there is
-    /// no usable path (<see cref="PathType.NoPath"/>) the creature goes straight, as vmangos chase
-    /// does with <c>PATHFIND_NOPATH</c> outside instances.
+    /// The path of an AUTHORED route (waypoint, point, formation, scripted move) from the creature to <paramref name="destination"/>: every
+    /// corner after the start, the end last. It asks the map's <see cref="IPathfinder"/> (<c>map.Collision</c>: the navmesh when mmaps are
+    /// installed, else a straight line). When the mesh has no path (<see cref="PathType.NoPath"/>) the route is walked straight: vmangos
+    /// does the same for these moves (<c>MoveSplineInit::Move(PathFinder*)</c> takes the shortcut of a NOPATH finder), because the author
+    /// chose the destination; each such answer counts in <see cref="DirectFallbackPaths"/>. When the update's search budget is spent the
+    /// result is EMPTY and nothing walks: the caller asks again on a later update. The motions that decide for themselves what no path means
+    /// (chase, flee, confused, wander, home) use <see cref="PlanPath"/>.
     /// </summary>
     public IReadOnlyList<Vector3> FindPath(Creature creature, Vector3 destination)
     {
+        PlannedPath plan = PlanPath(creature, destination);
+        switch (plan.Outcome)
+        {
+            case PathOutcome.Deferred:
+                return plan.Corners;
+            case PathOutcome.NoPath:
+                DirectFallbackPaths++;
+                CreaturePathStats.AddDirectFallback();
+                return [destination];
+            default:
+                return plan.Corners;
+        }
+    }
+
+    /// <summary>
+    /// Search a path and report how it ended (<see cref="PathOutcome"/>) without substituting a straight line for a missing one. The corners
+    /// are the whole path in one multi-point spline (vmangos MoveSplineInit::MovebyPath) so a move does not re-launch at every corner.
+    /// World thread. Allocates the corner list.
+    /// </summary>
+    internal PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false)
+    {
         ArgumentNullException.ThrowIfNull(creature);
-        var start = new Vector3(creature.X, creature.Y, creature.Z);
         if (!HasPathBudget)
         {
-            // Over the tick's budget and the caller cannot wait (waypoint, flee, home, formation). DELIBERATE DEGRADATION: the
-            // straight line, which may cut through walls or terrain. vmangos goes straight only on PATHFIND_NOPATH, never for budget
-            // exhaustion; this is the price of bounding the world thread for requests that cannot be deferred.
-            DirectFallbackPaths++;
-            return [destination];
+            NoteDeferredPath(creature);
+            return PlannedPath.Of(PathOutcome.Deferred);
         }
 
-        PathResult path = SearchPath(start, destination);
+        PathResult path = SearchPath(new Vector3(creature.X, creature.Y, creature.Z), destination, PathOptionsFor(creature, toSpawn));
+        if ((path.Type & PathType.TilesPending) != 0)
+        {
+            NoteDeferredPath(creature);
+            return PlannedPath.Of(PathOutcome.Deferred);
+        }
+
         if (!path.HasPath)
         {
-            return [destination];
+            NoPathPaths++;
+            CreaturePathStats.AddNoPath();
+            return PlannedPath.Of(PathOutcome.NoPath);
         }
 
-        // The whole path goes into one multi-point spline (vmangos MoveSplineInit::MovebyPath),
-        // so chase, flee, home and point moves do not re-launch at every corner.
         var corners = new List<Vector3>(path.Points.Count - 1);
         for (int i = 1; i < path.Points.Count; i++)
         {
             corners.Add(path.Points[i]);
         }
 
-        return corners;
+        PathOutcome outcome = (path.Type & PathType.Incomplete) != 0 ? PathOutcome.Partial
+            : (path.Type & (PathType.NotUsingPath | PathType.Shortcut)) != 0 ? PathOutcome.Direct
+            : PathOutcome.Mesh;
+        return new PlannedPath(outcome, corners);
     }
 
     // --- per-tick creature path-search budget ------------------------------------------------------
@@ -333,7 +455,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     /// <summary>
     /// The most path searches and A* nodes creature movement may spend in one map update (reset at the start of <see cref="Update"/>).
-    /// Searches past it are deferred (chase, follow) or answered with the straight line (see <see cref="DirectFallbackPaths"/>).
+    /// A request past it is deferred to a later update (<see cref="DeferredPathSearches"/>); no motion walks straight for want of budget.
     /// </summary>
     public CreaturePathBudget PathBudget { get; set; } = CreaturePathBudget.Default;
 
@@ -343,11 +465,20 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// <summary>A* nodes those searches created.</summary>
     public long PathNodesThisTick => _pathNodesThisTick;
 
-    /// <summary>Chase/follow re-paths put off to a later update because the budget was spent (diagnostics, tests).</summary>
+    /// <summary>Path requests (any motion) put off to a later update because the budget was spent (diagnostics, tests).</summary>
     public long DeferredPathSearches { get; private set; }
 
-    /// <summary>Non-deferrable path requests answered with the straight line because the budget was spent (diagnostics, tests).</summary>
+    /// <summary>
+    /// Authored routes (waypoint, point, formation, scripted move) walked along the straight line because the mesh had no path for them
+    /// (<see cref="FindPath"/>; diagnostics, tests). A spent budget never counts here: it defers.
+    /// </summary>
     public long DirectFallbackPaths { get; private set; }
+
+    /// <summary>Searches that ended <see cref="PathType.NoPath"/>, for any motion (diagnostics, tests).</summary>
+    public long NoPathPaths { get; private set; }
+
+    /// <summary>Evade/home returns done by teleport because no whole mesh path led home (diagnostics, tests).</summary>
+    public long HomePathTeleports { get; private set; }
 
     /// <summary>Whether another search fits the tick's budget. The last search may overshoot the node budget by one search's cap.</summary>
     public bool HasPathBudget => _pathSearchesThisTick < PathBudget.MaxSearches && _pathNodesThisTick < PathBudget.MaxNodes;
@@ -361,15 +492,38 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     internal void NoteDeferredPath(Creature creature)
     {
         DeferredPathSearches++;
+        CreaturePathStats.AddDeferred();
         _pathFirstDeferred ??= creature;
     }
 
+    private static readonly PathOptions[] s_moverOptions = BuildMoverOptions(0f);
+    private static readonly PathOptions[] s_spawnOptions = BuildMoverOptions(PathOptions.VmangosEndTolerance);
+
+    private static PathOptions[] BuildMoverOptions(float tolerance)
+    {
+        var all = new PathOptions[16]; // InhabitType bits 0-2, plus 8 for a pet
+        for (uint inhabit = 0; inhabit < all.Length; inhabit++)
+        {
+            all[inhabit] = new PathOptions { Mover = PathMover.FromInhabit(inhabit & 7, isPet: (inhabit & 8) != 0), EndTolerance = tolerance };
+        }
+
+        return all;
+    }
+
+    /// <summary>
+    /// The query options of a creature: its own locomotion (<c>InhabitType</c>, vmangos PathInfo::createFilter), so a flier gets the flier
+    /// exception (a hole in the mesh is a flying shortcut, not NoPath) and a walker keeps off water it cannot swim. A return home
+    /// (<paramref name="toSpawn"/>) also takes vmangos' 7 yd end tolerance.
+    /// </summary>
+    private static PathOptions PathOptionsFor(Creature creature, bool toSpawn)
+        => (toSpawn ? s_spawnOptions : s_moverOptions)[(creature.Template.InhabitType & 7) | (creature.IsPet ? 8 : 0)];
+
     /// <summary>One counted search through the map's pathfinder. World thread.</summary>
-    private PathResult SearchPath(Vector3 start, Vector3 destination)
+    private PathResult SearchPath(Vector3 start, Vector3 destination, PathOptions? options = null)
     {
         PathSearchTotals before = PathSearchCounters.Current;
         long started = Stopwatch.GetTimestamp();
-        PathResult path = Map.Collision.FindPath(start, destination);
+        PathResult path = Map.Collision.FindPath(start, destination, options);
         _timing.Path += Stopwatch.GetTimestamp() - started;
         PathSearchTotals spent = PathSearchCounters.Current - before;
         _timing.Searches += (int)spent.Searches;
@@ -384,6 +538,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     public void StopMoving(Creature creature)
     {
         ArgumentNullException.ThrowIfNull(creature);
+        if (_deferredMoves.Count > 0)
+        {
+            _deferredMoves.Remove(creature); // a queued scripted move is stale once the creature is stopped or teleported
+        }
+
         if (!creature.IsMoving)
         {
             return;

@@ -24,6 +24,7 @@ How to read the tables:
 - [`Battleground`](#battleground)
 - [`CharacterCreation`](#charactercreation)
 - [`ClientData`](#clientdata)
+- [`Cluster:Fencing`](#clusterfencing)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
 - [`Creatures`](#creatures)
@@ -285,6 +286,16 @@ How to read the tables:
 | `ClientData:DbcDirectory` | `string` | `""` | - | A directory holding the client's DBFilesClient *.dbc files (build 5875, extracted by the developer; none ships with the server). Set, every DBC consumer whose own path key (for example `Combat:ShapeshiftFormDbcPath`) is unset or empty reads the file of that name in this directory (for example SpellShapeshiftForm.dbc); a key that is set still wins. Each file is checked at start against the vmangos layout (field count and record size) and logged on one line: loaded, missing or format mismatch. A missing or mismatched file is not handed to its consumer, which keeps its built-in table or stays off, with a warning. Empty (the default): only the per-file keys are read, as before. |
 | `ClientData:Strict` | `bool` | `false` | - | Make a client data problem fatal: a missing or mismatched DBC under `DbcDirectory`, a configured per-file path whose file is missing or has another layout, or a `DbcDirectory` that does not exist refuses start-up (exit code 78, like any configuration error) instead of a warning. Default false. |
 
+## `Cluster:Fencing`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Fencing:ClaimWatchIntervalSeconds` | `int` | `10` | - | With fencing disabled, how often the world reads the characters ownership row to notice that a fenced world has claimed the database, in seconds (1 to 300). Independent of autosave; an unfenced world can keep writing for up to this long after a claim. |
+| `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. |
+| `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. |
+| `Cluster:Fencing:TakeoverEpoch` | `long?` | `null` | - | The positive ownership epoch to compare and swap during an explicit takeover; pair with `TakeoverIncarnation`. |
+| `Cluster:Fencing:TakeoverIncarnation` | `Guid?` | `null` | - | The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with `TakeoverEpoch`. |
+
 ## `Combat`
 
 | Key | Type | Default | Reload | Meaning |
@@ -401,6 +412,7 @@ How to read the tables:
 | `Database:SqliteWriteTimeoutMs` | `int` | `5000` | - | SQLite only, characters database only: the longest (0..60000 ms, default 5000; rounded up to whole seconds) any command on a characters connection waits for another connection's write lock before it fails as "database is locked". It is written into the connection string's Default Timeout (30 s) when smaller, and replaces 0 (unlimited), so it bounds every command including EF's first one and its `BEGIN IMMEDIATE`, and through the busy-timeout clamp SQLite's own wait. Without it a writer holding the file for a minute held each save queue's single consumer for the full 30 s per attempt. Failed saves are retained and retried by their queues. 0 keeps the connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md). |
 | `Database:Upgrade:LockTimeoutSeconds` | `int` | `60` | - | How long a start waits for another process's schema work, in seconds; must be 1..86400 or the start is refused as a configuration error. |
 | `Database:Upgrade:Policy` | `SchemaPolicy` | `Always` | - | What a start may do to the schema. `Always` (default) creates and upgrades; `CreateOnly` creates an empty database but refuses to upgrade an existing one (the retail-like setting for production, where `arcane-db upgrade` applies updates); `Never` only verifies. See docs/ops/database-upgrade.md. Values: `Always`, `CreateOnly`, `Never`. |
+| `Database:Upgrade:ValidateOnly` | `bool` | `false` | - | When true, serving nodes run startup schema checks in validate-only mode: zero DDL and zero seed inserts are executed, and startup fails closed if any component schema is missing, behind, or ahead of the build's current version. Default is `false`. See docs/ops/database-upgrade.md. |
 | `Database:World:ConnectionString` | `string` | `""` | - | The connection string of this component's database. The shipped files carry the development placeholder user `arcane`; change it for any real deployment. |
 | `Database:World:Provider` | `DatabaseProvider` | `MariaDb` | - | The relational engine of this component's database (`Database:Auth`, `Database:Characters` or `Database:World`). Values: `MariaDb`, `MySql`, `PostgreSql`, `Sqlite`. |
 | `Database:World:SqliteBusyTimeoutMs` | `int?` | `null` | - | SQLite only: this component's busy timeout in milliseconds (0..60000), overriding `Database:SqliteBusyTimeoutMs`. Unset inherits it. Other engines ignore it. |
@@ -1255,6 +1267,7 @@ How to read the tables:
 |---|---|---|---|---|
 | `World:Playerbots:AllowLocalLlm` | `bool` | `false` | - | Let a local language model choose among the bot's candidate goals (off by default; the rules choose otherwise). |
 | `World:Playerbots:AllowedMaps` | `uint[]` | `[0, 1]` | - | The maps bots may act and travel on (non-empty, no duplicates; a configured list replaces the default continents 0 and 1). |
+| `World:Playerbots:AsyncNavigationEnabled` | `bool` | `false` | restart | Run far playerbot navigation queries on the bounded private worker (off by default during rollout). Restart required: the worker is created when the feature attaches. |
 | `World:Playerbots:Battlegrounds:Enabled` | `bool` | `true` | live | Let free bots queue for battlegrounds (on by default). Off: no bot starts a queue; bots already walking to a battlemaster, queued or in a match finish. |
 | `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `int` | `20` | live | The most bots in one battleground (0..80; 0 queues none). Bots waiting for one battleground type and level bracket never exceed it, a team never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many. |
 | `World:Playerbots:Battlegrounds:MaxQueueWaitMinutes` | `int` | `30` | live | Minutes a bot waits in a queue before it leaves it (1..240); it then does not queue for that type again for 10 minutes. |
@@ -1457,6 +1470,7 @@ How to read the tables:
 | `World:Playerbots:Qa:GitHub:MinOccurrences` | `int` | `3` | - | A finding is reported once it was seen this many times (1..1000000). |
 | `World:Playerbots:Qa:GitHub:Publish` | `bool` | `false` | - | Really create issues and comments (off by default = dry run: the would-be issues are written to `qa/pending-issues/` and logged, nothing is sent). |
 | `World:Playerbots:Qa:GitHub:ReopenClosed` | `bool` | `false` | - | Reopen a finding's issue when it was closed and the finding keeps happening (off by default: a closed issue is recorded as known and left alone). |
+| `World:Playerbots:Qa:GitHub:ReopenOnRegression` | `bool` | `true` | - | Reopen a closed issue, with one comment (the new build, the occurrences on it, the distinct bots and a sample), when its finding recurs on a build other than the one it was observed closed on (a regression; a recurrence on the same build is a person's won't-fix and is left alone). Acts only while publishing is on, under the comment cap; never closes anything. |
 | `World:Playerbots:Qa:GitHub:Repository` | `string` | `""` | - | The repository, `owner/repo` (required while enabled). |
 | `World:Playerbots:Qa:GitHub:RequestTimeoutSeconds` | `int` | `15` | - | Seconds one GitHub request may take (1..120). |
 | `World:Playerbots:Qa:GitHub:TokenEnvironmentVariable` | `string` | `"ARCANECORE_GITHUB_TOKEN"` | - | The name of the environment variable that holds a fine-grained token with Issues read and write on the repository (the value is never read from configuration and never logged). |
@@ -1465,6 +1479,7 @@ How to read the tables:
 | `World:Playerbots:Qa:MaxSamples` | `int` | `5` | - | The newest evidence samples kept per finding (1..20). |
 | `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
 | `World:Playerbots:Qa:StaleHours` | `int` | `24` | - | Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever). |
+| `World:Playerbots:Qa:TickHangWarmupMinutes` | `int` | `5` | - | Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5). |
 
 ## `World:Social`
 

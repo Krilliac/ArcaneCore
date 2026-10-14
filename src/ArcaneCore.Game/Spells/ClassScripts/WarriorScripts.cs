@@ -156,12 +156,62 @@ public sealed class BerserkingScript : ISpellScript
     }
 }
 
-/// <summary>Registers the warrior value modifiers (discovered <see cref="ISpellHandlerModule"/>): Bloodthirst's attack power damage.</summary>
+/// <summary>
+/// Shield Slam (23922, 23923, 23924, 23925; spell_warrior.cpp:58-74): effect 1's damage adds the caster's shield block value.
+/// </summary>
+public sealed class ShieldSlamDamage : ISpellValueModifier
+{
+    public static readonly uint[] Ranks = [23922, 23923, 23924, 23925];
+
+    public int Modify(SpellValueKind kind, in SpellValueContext context, int value)
+        => kind == SpellValueKind.EffectValue
+            && context.EffectIndex == 1
+            && (Array.IndexOf(Ranks, context.Spell.Id) >= 0 || Rules.Dispel.DispelRules.IsShieldSlam(context.Spell))
+            ? value + (int)GetShieldBlockValue(context.Caster)
+            : value;
+
+    public static uint GetShieldBlockValue(Unit caster)
+    {
+        if (caster.Map?.FindUpdater<MapCombat>() is { Stats: not null } mapCombat)
+        {
+            return mapCombat.ShieldBlockValue(caster);
+        }
+
+        if (caster is Player player)
+        {
+            return Stats.StatFormulas.ShieldBlockValue(
+                player.StatState.ShieldBlockFlat + player.StatState.ShieldBlockAuraFlat,
+                player.GetUInt32(UpdateFields.UnitFieldStat0),
+                player.StatState.ShieldBlockPct);
+        }
+
+        return caster.Map?.FindUpdater<MapCombat>() is { } combat
+            ? combat.ShieldBlockValue(caster)
+            : CombatHooks.Default.GetShieldBlockValue(caster);
+    }
+}
+
+/// <summary>
+/// Registers the warrior value modifiers and target filters (discovered <see cref="ISpellHandlerModule"/>):
+/// Bloodthirst's attack power damage, Shield Slam's block value damage, and Intimidating Shout's main-target exclusion on effects 1 and 2.
+/// </summary>
 public sealed class WarriorScriptsModule : ISpellHandlerModule
 {
+    public const uint IntimidatingShout = 5246;
+
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
         system.RegisterValueModifier(new BloodthirstDamage());
+        system.RegisterValueModifier(new ShieldSlamDamage());
+        system.RegisterSpellTargetFilter(IntimidatingShout, FilterIntimidatingShout);
     }
+
+    /// <summary>
+    /// Intimidating Shout (5246; spell_warrior.cpp:19-35): the primary target is cowered in place by effect 0 and must not be added to
+    /// the AoE fear / threat target lists of effects 1 and 2.
+    /// </summary>
+    public static bool FilterIntimidatingShout(SpellCast cast, SpellEffectInfo effect, Unit target)
+        => ReferenceEquals(effect, cast.Spell.Effects[0]) || cast.Targets.Unit.IsEmpty || target.Guid != cast.Targets.Unit;
 }
+

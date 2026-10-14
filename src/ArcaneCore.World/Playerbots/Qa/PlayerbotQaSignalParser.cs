@@ -29,6 +29,11 @@ internal static partial class PlayerbotQaSignalParser
         RegexOptions.CultureInvariant)]
     private static partial Regex StallPattern();
 
+    /// <summary>The skip of a goal no walk reaches (PlayerbotBrain.UnreachableReport): the goal, what it names, where the bot stood and the two components.</summary>
+    [GeneratedRegex(@"^Playerbot (?<bot>\S+) \((?<name>[^)]*)\) goal unreachable on foot: goal=(?<goal>\w{1,32}) target=(?<t>\d{1,10}) quest=(?<q>\d{1,10}) at " + Xyz + @" map (?<m>\d{1,10}) components=(?<c>\d{1,9}/\d{1,9})",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex UnreachablePattern();
+
     [GeneratedRegex(@"^Playerbot (?<bot>\S+) \((?<name>[^)]*)\) death loop: died (?<n>\d{1,6}) times in (?<s>\d{1,9})s within (?<yd>\d{1,5}) yd of " + Xyz + @" map (?<m>\d{1,10}) attackers=(?<a>none|\d{1,10}(?:/\d{1,10})*)",
         RegexOptions.CultureInvariant)]
     private static partial Regex DeathLoopPattern();
@@ -98,6 +103,19 @@ internal static partial class PlayerbotQaSignalParser
                 Bot = QaBotObservation.FromLog(message),
                 OutsideHome = message.EndsWith(OutsideHomeSuffix, StringComparison.Ordinal),
                 ReturnTrip = qa >= 0 && message.AsSpan(0, qa).EndsWith(ReturnTripToken, StringComparison.Ordinal),
+            };
+            return true;
+        }
+
+        m = UnreachablePattern().Match(message);
+        if (m.Success)
+        {
+            if (!Position(m, out float x, out float y, out float z) || !U(m, "t", out uint target) || !U(m, "q", out uint quest) || !U(m, "m", out uint map)) return false;
+            signal = new QaSignal
+            {
+                Kind = QaSignalKind.UnreachableGoal, AtUtc = atUtc, BotKey = Key(m, botKey), Goal = m.Groups["goal"].Value, Target = target, Quest = quest,
+                HasPosition = true, Map = map, X = x, Y = y, Z = z, Detail = "components " + m.Groups["c"].Value, Message = Clean(message, m),
+                Bot = QaBotObservation.FromLog(message),
             };
             return true;
         }

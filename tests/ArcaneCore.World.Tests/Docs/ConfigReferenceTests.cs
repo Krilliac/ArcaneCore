@@ -237,6 +237,10 @@ public sealed class ConfigReferenceTests
             Assert.DoesNotContain("/home/", entry.Default, StringComparison.Ordinal);
             Assert.DoesNotContain("/tmp", entry.Default, StringComparison.Ordinal);
         }
+
+        ConfigEntry ownerNode = Production.Entries.Single(e => e.Path == "Cluster:Fencing:OwnerNode");
+        Assert.Equal("\"<machine-name>\"", ownerNode.Default);
+        Assert.Null(ownerNode.RawDefault);
     }
 
     [Fact]

@@ -21,8 +21,10 @@ public enum TickAlertKind
 /// <summary>
 /// One slow-tick report: the same facts as the log line it accompanies. <see cref="InProgress"/> is true for a hang report made while the
 /// tick is still running (as opposed to the after-the-fact report of a completed hang), so a subscriber can dedup the two separately.
+/// <see cref="HostVerdict"/> is the host-load sampler's verdict for the slow window (<see cref="HostLoadVerdict.Unknown"/> without a sampler) and <see cref="Hangs"/> the hangs
+/// a completed-hang report stands for (one report can cover several hangs that ended between two checks; 1 for the others).
 /// </summary>
-public readonly record struct TickAlert(TickAlertKind Kind, string Text, string Detail, bool InProgress = false);
+public readonly record struct TickAlert(TickAlertKind Kind, string Text, string Detail, bool InProgress = false, HostLoadVerdict HostVerdict = HostLoadVerdict.Unknown, int Hangs = 1);
 
 /// <summary>
 /// The world-tick frame monitor. The tick thread calls <see cref="OnTick"/> once at the start of
@@ -208,7 +210,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
                 string host = HostText(nowMicros - last);
                 _logger.LogCritical(WatchdogEvents.TickHang, "world tick has been running for {RunningMs} ms (hang threshold {HangMs} ms, interval {IntervalMs} ms){Detail}{Host}",
                     Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros), running, host);
-                Alert(TickAlertKind.Hang, $"The world tick is hung (running {Micros.ToMillis(nowMicros - last)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms{running}{host}", inProgress: true);
+                Alert(TickAlertKind.Hang, $"The world tick is hung (running {Micros.ToMillis(nowMicros - last)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms{running}{host}", inProgress: true, hostVerdict: HostVerdict(nowMicros - last));
             }
         }
 
@@ -221,7 +223,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
             string host = HostText(stats.Max);
             _logger.LogCritical(WatchdogEvents.TickHang, "world tick exceeded the hang threshold {HangMs} ms: slowest recent frame {SlowestMs} ms, {New} new hang(s), {Total} since start{Detail}{Host}",
                 Micros.ToMillis(_hangMicros), Micros.ToMillis(stats.Max), hangs - _hangsReported, hangs, after, host);
-            Alert(TickAlertKind.Hang, $"The world tick stalled ({Micros.ToMillis(stats.Max)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms, {hangs - _hangsReported} new hang(s), {hangs} since start{after}{host}");
+            Alert(TickAlertKind.Hang, $"The world tick stalled ({Micros.ToMillis(stats.Max)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms, {hangs - _hangsReported} new hang(s), {hangs} since start{after}{host}", hostVerdict: HostVerdict(stats.Max), hangs: (int)Math.Min(int.MaxValue, hangs - _hangsReported));
             ArrayPool<long>.Shared.Return(buffer);
             _hangCounter.Add(hangs - _hangsReported);
             _hangsReported = hangs;
@@ -304,7 +306,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         return stats;
     }
 
-    private void Alert(TickAlertKind kind, string text, string detail, bool inProgress = false)
+    private void Alert(TickAlertKind kind, string text, string detail, bool inProgress = false, HostLoadVerdict hostVerdict = HostLoadVerdict.Unknown, int hangs = 1)
     {
         if (Alerted is not { } alerted)
         {
@@ -313,7 +315,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
         try
         {
-            alerted(new TickAlert(kind, text, detail, inProgress));
+            alerted(new TickAlert(kind, text, detail, inProgress, hostVerdict, hangs));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -336,6 +338,19 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         catch (Exception ex)
         {
             return $"; hang detail unavailable ({ex.GetType().Name})";
+        }
+    }
+
+    /// <summary>The host-load verdict of the window of a slow tick (watchdog thread), or Unknown without a sampler or a baseline.</summary>
+    private HostLoadVerdict HostVerdict(long windowMicros)
+    {
+        try
+        {
+            return HostLoad?.Report(windowMicros)?.Verdict ?? HostLoadVerdict.Unknown;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return HostLoadVerdict.Unknown;
         }
     }
 

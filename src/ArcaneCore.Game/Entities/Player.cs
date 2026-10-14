@@ -107,6 +107,9 @@ public sealed partial class Player : Unit
 
     public IPlayerSession Session { get; }
 
+    /// <summary>The world authority carried by this live character's snapshots.</summary>
+    public CharacterOwnershipToken? CharacterOwnership { get; set; }
+
     /// <summary>Equipment, bags, bank and keyring (items area, <see cref="Items.PlayerInventory"/>).</summary>
     public Items.PlayerInventory Inventory { get; }
 
@@ -514,7 +517,7 @@ public sealed partial class Player : Unit
             (int)Guid.Low, mapId, ZoneId, x, y, z, orientation, Level,
             Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
             inventory, Death.PlayerLife.Capture(this), Inventory.BankBagSlotCount,
-            Drunk: ArcaneCore.Game.Spells.SpellSystem.GetDrunkValue(this));
+            Drunk: ArcaneCore.Game.Spells.SpellSystem.GetDrunkValue(this), Ownership: CharacterOwnership);
 
     private static uint Pack(uint action, byte type) => (action & 0x00FFFFFF) | ((uint)type << 24);
 

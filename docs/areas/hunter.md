@@ -49,7 +49,7 @@ Not done in this lane, with the primitive they wait on:
 
 - **Auto Shot / wand Shoot / Throw (H5): delivered by the ranged lane (wave 4), see `docs/areas/ranged/auto-repeat.md`; the paragraph below is the original note.** Needs the spell-breadth lane's auto-repeat slot (`CMSG_CANCEL_AUTO_REPEAT_SPELL`, breakage matrix) and the stats lane's ranged attack time from the weapon with haste. The pieces it will use are in place: weapon and ammo checks, ammo use, the projectile trailer, the ranged cooldown term, `GetCastTime(autoRepeat)`, and the wind-up rules written down in `docs/integration/hunter.md`. `CheckCast` does **not** yet return `MOVING` for an auto-repeat cast by a moving player (vmangos `Spell.cpp:5395-5403`).
 - **Ranged haste values** (`RangedAttackSpeedPct` seam, aura 140), **quiver haste (aura 141)** and its AmmoType 0 rule (needs the attack-time percent primitive and equip spells of equipped bags), Rapid Fire, Aspect of the Hawk, Trueshot Aura values.
-- **Aspect / sting / tracker stacking classes** (`SpellSpecific`), Aspect of the Cheetah / Pack daze, Entrapment, Mongoose Bite's reactive target (Counterattack's is done, below), Raptor Strike / Wing Clip next-swing, Volley, Distracting Shot and Disengage threat, hunter `spell_bonus_data` terms: spell-breadth, warrior and content-import lanes.
+- **Aspect / sting / tracker stacking classes** (`SpellSpecific`), Aspect of the Cheetah / Pack daze, Raptor Strike / Wing Clip next-swing, Volley, Distracting Shot and Disengage threat, hunter `spell_bonus_data` terms: spell-breadth, warrior and content-import lanes. (Entrapment's Frost Trap Aura 13810 `ON_TRAP_ACTIVATION` periodic proc, Mongoose Bite's reactive Defense target check, Wyvern Sting's wake-up DoT and Refocus 24531 are delivered in `Spells/Hunter/CounterattackScript.cs` and `Spells/ClassScripts/CooldownResetScripts.cs`, below.)
 - **Pets** (Mend Pet, Call / Revive / Dismiss Pet, Tame Beast, Beast Lore, Eyes of the Beast, Bestial Wrath, Intimidation) and the Feign Death pet-combat rule.
 - **Hunter's Mark** "always visible to its caster" and "ends when the caster dies" (visibility owner, single-cast registry).
 - **Feign Death consumers:** creature aggro-on-sight ignores the state until the creature AI reads `IsFeigningDeath`; the movement lane's can-not-move predicate and the roughly twenty interaction handlers (`BreakFeignDeath`) are listed in `docs/integration/hunter.md`. A creature owned by a player is not skipped in the resist loop (no owner concept yet).
@@ -72,10 +72,15 @@ Not possible from the references; to run against the developer's 5875 client dat
 - Tracking spells: aura 44 / 45 / 151 and `MiscValue` (creature type masks).
 - SpellRange indices of the ranged abilities (the minimum range of the dead zone; the design example of 5 yd is unverified, retail is commonly quoted as 8 yd).
 
-## Hunter talents (lane `tb-t3-talent-class-scripts-pets`)
+## Hunter talents and scripts (lanes `tb-t3-talent-class-scripts-pets`, `w45-spell-class-pack`)
 
-- **Counterattack** (19306, 20909, 20910; vmangos spell_hunter.cpp:121-136): besides the data's CasterAuraState HUNTER_PARRY, the target must be the attacker
-  whose attack the hunter parried (`Spells/Hunter/CounterattackScript.cs`, read from the parry's combo-point marker); any other target is BAD_TARGETS.
+- **Counterattack** (19306, 20909, 20910; vmangos spell_hunter.cpp:121-136) and **Mongoose Bite** (1495, 14269, 14270, 14271; spell_hunter.cpp:138-154):
+  besides the data's CasterAuraState `HUNTER_PARRY` / `DEFENSE`, the target must be the attacker whose attack the hunter parried or dodged
+  (`Spells/Hunter/CounterattackScript.cs`, read from `UnitCombat.GetReactiveTarget`); any other target is `BAD_TARGETS`.
+- **Wyvern Sting** (19386 -> 24131, 24132 -> 24134, 24133 -> 24135; spell_hunter.cpp:19-46): when the sleep aura with effect 0 leaves its target and the
+  caster is a player, the caster casts the matching wake-up poison DoT on the target as a triggered spell (`HunterScriptsModule`).
+- **Frost Trap Aura** (13810; spell_hunter.cpp:58-77): each periodic trigger tick fires `ProcFlags.OnTrapActivation` on the caster so Entrapment procs.
+- **Refocus** (24531; spell_hunter.cpp:89-119): finishes cooldowns on Aimed Shot, Multi-Shot, Arcane Shot and Volley (`Spells/ClassScripts/CooldownResetScripts.cs`).
 - **Spirit Bond** (19578, 20895): the talent's DUMMY aura gives the pet 19579 / 24529 (APPLY_AREA_AURA_PET of OBS_MOD_HEALTH, the hunter gets the copy);
   a called or restored pet takes it (`Pets/PetAuras`, docs/areas/class-scripts.md).
 - **A respec removes the pet** (vmangos Player.cpp:4144-4146): `TalentPetHooks` saves it out of slot like Dismiss Pet and unsummons it, so Call Pet brings it

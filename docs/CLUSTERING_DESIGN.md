@@ -312,6 +312,18 @@ resolve transfers; evacuate supported residents or perform normal logout; flush
 all feature queues; release leases; acknowledge drain; then terminate the owned
 process. A launch, heartbeat, or signal alone is not readiness or completed drain.
 
+### Host supervisor and console layout (M15.4)
+
+A single clustered host runs **3 executables** across **6 to 9 OS processes**:
+`ArcaneCore.Realm`, `ArcaneCore.World` (selected by role: `combined | gateway | worker | social | coordinator`),
+and the host supervisor (`ClusterHostSupervisor` in `src/ArcaneCore.World/Cluster/Supervision/`).
+Bots remain in-process on the `worker` that owns their map; there is no separate bot-world executable.
+
+- **Default merged console (`Merged`).** By default, the supervisor spawns every child windowless (`CreateNoWindow = true`, redirected `stdout`/`stderr`), writes every line to that child's per-process log file, and multiplexes output into the single supervisor console prefixed with its `[<name>]` role tag (for example `[realm]`, `[gateway:1]`, `[worker:EK]`, `[worker:Kalimdor]`, `[worker:Instances]`, `[social]`, `[coordinator]`).
+- **Per-process console switch.** Each supervised child configures `Cluster:Supervisor:Processes:<name>:Console` as `merged` (default), `window` (own OS console window with `CreateNoWindow = false`), or `none` (silent background process, log file only).
+- **Unconditional error/exception visibility.** Regardless of whether a child is configured for `merged`, `window`, or `none`, any `stderr` output or error/exception line (`ERROR`, `FATAL`, `CRIT`, `[ERR]`, `[FTL]`, `Unhandled exception`, `Exception:`) is always surfaced in the supervisor's merged console alongside its `[<name>]` prefix and written to the child's log file so crashes or faults are never hidden.
+- **Lifecycle, backoff, and capacity admission.** Unexpected child exits trigger capped exponential restart backoff (`1 s -> 2 s -> 4 s -> ... -> 60 s` maximum) and increment the child's incarnation and restart counters. Before launch, `CheckCapacityAdmission` enforces `MaxConcurrentProcesses`, `MaxTotalAllocatedMemoryMb`, `MinFreeMemoryReserveMb`, and single-writer map ownership across workers. `DrainAndStopAsync` drains and terminates only supervisor-owned child processes and never restarts a drained child.
+
 ## Auxiliary services
 
 Status: planned design, requested 2026-10-10; nothing in this section is built.
@@ -562,7 +574,7 @@ The roadmap owns phase status. The technical closure criteria are:
 |---|---|---|
 | M15.0 — integration/data owner | Inventory feature transfer state; separate connection/simulation responsibilities around existing seams; design and implement durable epochs, ID reservation, save acknowledgement/recovery and coordinated schema initialization | Existing local behavior and mock remain green; concurrent claims, old-owner saves, ID allocation and exhausted write retries have meaningful tests on SQLite/MariaDB/PostgreSQL |
 | M15.1 — transport/session owner | Versioned contracts, gateway hosting and one separate game worker; retain combined World hosting and a local contract adapter; realm replicas and account-generation claims | Real owned subprocess registration/receive loop/readiness; actual SRP/M2/world cipher; two gateways replace duplicate sessions consistently; one-worker mock lifecycle remains equivalent |
-| M15.2 — realm services/game owner | Routed identity/presence/social authority; scoped feature registration; true distinct Map instances and durable instance bindings | Cross-gateway social delivery and logout ordering, concurrent names/group/guild IDs, isolated instances, restart recovery and all existing feature tests |
+| M15.2 — realm services/game owner | Routed identity/presence/social authority; one fenced realm auction/mail authority; scoped feature registration; true distinct Map instances and durable instance bindings | Cross-gateway social delivery and logout ordering, concurrent names/group/guild IDs, single auction/mail scheduling and custody ownership, isolated instances, restart recovery and all existing feature tests |
 | M15.3 — transfer/game/data owners | Complete feature state capture/install, durable transfer decisions, fenced residency, deadlines and acknowledgement routing; static multiple-worker map placement | Seamless 5875 TCP connection across workers; quests/timers, inventory, casts/auras/cooldowns and corpse semantics preserved; duplicate/lost/reordered/late messages and crashes at every handoff stage cannot activate two owners |
 | M15.4 — operations/recovery owner | Host daemon/coordinator supervision, distinct readiness/drain, capacity admission, restart reconciliation and placement of new/empty maps; live map relocation only after complete map snapshots | Kill only fixture-owned subprocesses at defined stages; coordinator/worker/gateway/social/storage partitions, cold starts, drains and constrained-host overload recover with bounded resources and measured data loss policy |
 | M15.5 — tooling/compatibility owner | Job contracts for existing CLIs/import/codegen/mock, content revision rollout, mixed-version policy, upgrade/rollback runbook and cluster diagnostics | Offline tools retain CLI use; live content replacement is refused or coordinated; Windows/Linux and private cross-host tests; deterministic output artifacts; compatible rollout and safe local-mode rollback |

@@ -188,13 +188,7 @@ public sealed class CreatureRespawnStoreTests : IAsyncLifetime
         // MariaDB commits DDL implicitly, PostgreSQL DDL is transactional: either way a second EnsureAsync over the finished schema changes nothing.
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
         int previous = CreatureRespawnDataModule.Version - 1;
-        SchemaDefinition prefix = new()
-        {
-            Component = CharacterDbContext.Schema.Component,
-            CurrentVersion = previous,
-            Version1Tables = CharacterDbContext.Schema.Version1Tables,
-            Steps = [.. CharacterDbContext.Schema.Steps.Where(s => s.Version <= previous)],
-        };
+        SchemaDefinition prefix = SchemaProbe.ThroughVersion(CharacterDbContext.Schema, previous);
 
         await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
         {

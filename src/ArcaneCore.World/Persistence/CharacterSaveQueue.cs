@@ -62,6 +62,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private long _lastReportCheck;
     private long _lastWarning;
     private bool _warning;
+    private Exception? _terminalFailure;
+
+    /// <summary>Raised once when a durable ownership fence rejects a write.</summary>
+    public event Action<Exception>? FatalFailure;
 
     // Test seam: observe the hand-off to waiters before the consumer takes another slot.
     internal Action? BeforeWaitersCompletedForTesting { get; set; }
@@ -127,6 +131,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         bool announceQuarantine = false;
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             if (_quarantined.Contains(state.Id))
             {
                 quarantined = true;
@@ -175,6 +180,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     {
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             ObjectDisposedException.ThrowIf(_stopped, this);
             _held.Add(characterId);
         }
@@ -196,6 +202,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         var waiter = new Waiter(new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously), settlement: true, cancellationToken);
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             ObjectDisposedException.ThrowIf(_stopped, this);
             if (_quarantined.Contains(state.Id))
             {
@@ -228,6 +235,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         var waiter = new Waiter(new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously), settlement: false, cancellationToken);
         lock (_gate)
         {
+            ThrowIfTerminalLocked();
             ObjectDisposedException.ThrowIf(_stopped, this);
             _consumer ??= Task.Run(ConsumeAsync);
             if (cancellationToken.IsCancellationRequested)
@@ -391,6 +399,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         InvalidOperationException? notDrained = null;
         lock (_gate)
         {
+            if (_terminalFailure is { } terminal)
+            {
+                throw new InvalidOperationException("character saves stopped after a terminal ownership failure", terminal);
+            }
             if (_failed.Count > 0)
             {
                 notDrained = new InvalidOperationException($"character saves did not drain for characters {string.Join(", ", _failed.Keys.Order())}",
@@ -548,6 +560,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         {
             // A quarantined barrier is an ordered drain only. Fresh login must load
             // authoritative storage before the owner explicitly resumes this ID.
+            if (_terminalFailure is not null)
+            {
+                return false;
+            }
             if (_quarantined.Contains(id))
             {
                 if (trustedSettlement)
@@ -602,6 +618,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 }
 
                 return false;
+            }
+            catch (CharacterOwnershipRejectedException ex)
+            {
+                EnterTerminalFailure(state, ex);
+                throw;
             }
             catch (Exception ex) when (DatabaseTransience.IsBusy(ex) && !IsStopping()) // also with a cancelled token: the lock wait ended, the snapshot must still be retried
             {
@@ -661,6 +682,60 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         }
     }
 
+    private void ThrowIfTerminalLocked()
+    {
+        if (_terminalFailure is { } failure)
+            throw new InvalidOperationException("character save queue has a terminal ownership failure", failure);
+    }
+
+    /// <summary>Stops the queue for good because the durable owner of the characters database is not this world (the unfenced world found a claim): every queued snapshot is parked and <see cref="FatalFailure"/> is raised once. Safe from any thread.</summary>
+    public void FailTerminal(Exception failure) => EnterTerminalFailure(null, failure);
+
+    private void EnterTerminalFailure(CharacterState? current, Exception failure)
+    {
+        List<Waiter> waiters = [];
+        bool publish;
+        lock (_gate)
+        {
+            publish = _terminalFailure is null;
+            _terminalFailure ??= failure;
+            _stopped = true;
+            if (current is not null) _failed[current.Id] = new FailedSave(current, failure, Deferred: false, Terminal: true);
+
+            // No queued snapshot may be replayed under an unknown owner. Keep each one in the
+            // diagnostic failure ledger, but remove it from all scheduling lanes.
+            foreach (Slot slot in _slots.Values)
+            {
+                if (slot.State is { } state)
+                {
+                    _failed[state.Id] = new FailedSave(state, failure, Deferred: false, Terminal: true);
+                    slot.State = null;
+                }
+
+                waiters.AddRange(slot.Waiters);
+                slot.Waiters.Clear();
+                slot.NormalHint = false;
+                slot.PriorityHint = false;
+                Refresh(slot);
+            }
+            _priorityHints.Clear();
+            _normalHints.Clear();
+        }
+
+        foreach (Waiter waiter in waiters)
+        {
+            waiter.Registration.Dispose();
+            waiter.Done.TrySetException(failure);
+        }
+
+        if (publish)
+        {
+            try { FatalFailure?.Invoke(failure); }
+            catch (Exception callbackError) when (callbackError is not OutOfMemoryException)
+            { _logger.LogError(callbackError, "character save queue fatal-failure callback failed"); }
+        }
+    }
+
     // ---- slot bookkeeping (every method below runs under _gate) ----
 
     /// <summary>
@@ -671,7 +746,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     {
         foreach ((int id, FailedSave failed) in _failed)
         {
-            if (!failed.Deferred || _quarantined.Contains(id))
+            if (!failed.Deferred || failed.Terminal || _quarantined.Contains(id))
             {
                 continue;
             }
@@ -915,13 +990,21 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         }
     }
 
-    private static CharacterState Merge(CharacterState newer, CharacterState failed) => newer with
+    private static CharacterState Merge(CharacterState newer, CharacterState failed)
     {
-        ActionButtons = newer.ActionButtons ?? failed.ActionButtons,
-        Home = newer.Home ?? failed.Home,
-        Inventory = newer.Inventory ?? failed.Inventory,
-        Life = newer.Life ?? failed.Life, // always complete when present, so the newest one wins
-    };
+        if (!Equals(newer.Ownership, failed.Ownership))
+        {
+            return newer;
+        }
+
+        return newer with
+        {
+            ActionButtons = newer.ActionButtons ?? failed.ActionButtons,
+            Home = newer.Home ?? failed.Home,
+            Inventory = newer.Inventory ?? failed.Inventory,
+            Life = newer.Life ?? failed.Life, // always complete when present, so the newest one wins
+        };
+    }
 
     private static CharacterState Copy(CharacterState state) => state with
     {
@@ -936,7 +1019,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         }).ToArray()), inventory.AmmoId) : null,
     };
 
-    private sealed record FailedSave(CharacterState State, Exception Failure, bool Deferred = false);
+    private sealed record FailedSave(CharacterState State, Exception Failure, bool Deferred = false, bool Terminal = false);
 
     /// <summary>Someone awaiting a character's write: a settlement pre-reward save (its own snapshot) or a barrier.</summary>
     private sealed class Waiter(TaskCompletionSource done, bool settlement, CancellationToken token)

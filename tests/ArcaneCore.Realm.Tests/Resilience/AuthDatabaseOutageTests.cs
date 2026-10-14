@@ -163,12 +163,13 @@ public sealed class AuthDatabaseOutageTests
         await server.StartAsync(CancellationToken.None);
         try
         {
-            // Every client gets the fail-closed refusal within the query timeout (plus slack for the test box).
+            // Every client gets the fail-closed refusal well before SQLite's 30 s Default Timeout. The first challenge tries the
+            // IP-ban list load and then falls back to the single-row read, so it can wait two query timeouts (plus scope disposal).
             for (int i = 0; i < FailureThreshold; i++)
             {
                 var watch = Stopwatch.StartNew();
                 Assert.Equal((byte)AuthResult.FailDbBusy, await ChallengeResultAsync(port, "TESTER" + i));
-                Assert.True(watch.Elapsed < TimeSpan.FromMilliseconds(QueryTimeoutMs + 3000), $"refusal took {watch.Elapsed}");
+                Assert.True(watch.Elapsed < TimeSpan.FromMilliseconds((QueryTimeoutMs * 2) + 6000), $"refusal took {watch.Elapsed}");
             }
 
             Assert.Equal(CircuitState.Open, auth.State);

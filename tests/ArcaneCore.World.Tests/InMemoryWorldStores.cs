@@ -13,6 +13,7 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
     private int _nextId;
     private int _saves;
     private readonly ConcurrentDictionary<int, int> _savesByCharacter = new();
+    public Func<CharacterState, Task>? SaveOverride { get; set; }
 
     public Task<IReadOnlyList<CharacterRecord>> GetByAccountAsync(int accountId, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<CharacterRecord>>(
@@ -47,6 +48,8 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
 
     public Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
     {
+        if (SaveOverride is { } overrideSave)
+            return overrideSave(state);
         if (_characters.TryGetValue(state.Id, out CharacterRecord? c))
         {
             lock (c)

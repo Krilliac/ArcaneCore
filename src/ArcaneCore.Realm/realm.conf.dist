@@ -27,7 +27,7 @@
 # SECTIONS
 #
 #   AUTH                        15 keys
-#   DATABASE                    16 keys
+#   DATABASE                    17 keys
 #   DIAGNOSTICS                 8 keys
 #   LOGGING                     16 keys
 #   NET                         16 keys
@@ -505,6 +505,20 @@ Database.Upgrade.LockTimeoutSeconds = 60
 #        Docs: docs/reference/configuration.md#database
 #
 Database.Upgrade.Policy = Always
+
+#
+#    Database.Upgrade.ValidateOnly
+#        Description: When true, serving nodes run startup schema checks in validate-only mode: zero
+#                     DDL and zero seed inserts are executed, and startup fails closed if any
+#                     component schema is missing, behind, or ahead of the build's current version.
+#                     Default is false. See docs/ops/database-upgrade.md.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Upgrade.ValidateOnly = false
 
 ###############################################################################
 # DIAGNOSTICS

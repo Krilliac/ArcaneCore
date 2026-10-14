@@ -16,6 +16,21 @@ public readonly record struct PathMover(bool CanWalk, bool CanSwim, bool CanFly,
     /// <summary>A ground-bound player (walks and swims).</summary>
     public static PathMover Player { get; } = new(CanWalk: true, CanSwim: true, CanFly: false, IsPlayer: true);
 
+    /// <summary>The mover of a creature with the given <c>InhabitType</c> bits (1 ground, 2 water, 4 air; 0 counts as ground). A pet always swims and never flies, whatever its template says (vmangos Creature.h:166-167).</summary>
+    public static PathMover FromInhabit(uint inhabit, bool isPet = false)
+    {
+        if ((inhabit & 7) == 0)
+        {
+            inhabit = 1;
+        }
+
+        return new PathMover((inhabit & 1) != 0, isPet || (inhabit & 2) != 0, !isPet && (inhabit & 4) != 0, IsPlayer: false);
+    }
+
+    /// <summary>The mover of <paramref name="unit"/>: the player mover for a player, the creature's <c>InhabitType</c> for a creature.</summary>
+    public static PathMover For(Entities.Unit unit)
+        => unit is Creatures.Creature creature ? FromInhabit(creature.Template.InhabitType, creature.IsPet) : Player;
+
     /// <summary>
     /// The navmesh polygon flags this mover may use (vmangos <c>createFilter</c>): ground when it
     /// walks; water when it swims, plus magma and slime for creatures ("creatures don't take

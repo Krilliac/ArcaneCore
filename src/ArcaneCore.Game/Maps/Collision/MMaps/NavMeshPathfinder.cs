@@ -5,6 +5,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.Game.Maps.Collision.MMaps;
 
+/// <summary>Immutable identity of one navmesh data source; it carries no live collision state.</summary>
+public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Identity);
+
 /// <summary>
 /// The navmesh-backed <see cref="IPathfinder"/> (vmangos <c>MMapManager</c> + <c>PathFinder</c>):
 /// one <see cref="NavMesh"/> per map from <c>NNN.mmap</c>, tiles loaded and released with the
@@ -20,7 +23,7 @@ namespace ArcaneCore.Game.Maps.Collision.MMaps;
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifecycle, ICollisionTilePrefetch
+public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, ICollisionTileLifecycle, ICollisionTilePrefetch
 {
     /// <summary>vmangos <c>PathFinder</c> search box half-extents (Recast x, y, z) for the nearest polygon.</summary>
     public static readonly Vector3 NearExtents = new(3, 5, 3);
@@ -30,19 +33,40 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
     private readonly string _directory;
     private readonly ILogger _logger;
+    public NavMeshDatasetDescriptor Dataset { get; }
     private readonly Dictionary<uint, NavMesh?> _meshes = [];
     private readonly TilePrefetchCache<NavMeshTile> _prefetch = new();
 
     public NavMeshPathfinder(string directory, ILogger? logger = null, int maxConcurrentTileReads = DefaultConcurrentTileReads)
+        : this(directory, logger, Guid.NewGuid(), maxConcurrentTileReads)
+    {
+    }
+
+    private NavMeshPathfinder(string directory, ILogger? logger, Guid identity, int maxConcurrentTileReads = DefaultConcurrentTileReads)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
-        _directory = directory;
+        _directory = Path.GetFullPath(directory);
         _logger = logger ?? NullLogger.Instance;
         MaxConcurrentTileReads = Math.Clamp(maxConcurrentTileReads, 1, 16);
         _tileReadSlots = new SemaphoreSlim(MaxConcurrentTileReads, MaxConcurrentTileReads);
+        Dataset = new(_directory, identity);
     }
 
     public bool Enabled => true;
+
+    /// <summary>
+    /// A private, serially used ground-navigation context over the same immutable data directory.
+    /// No live tiles, query state, prefetch jobs or collision-model service are shared with the owner.
+    /// </summary>
+    public NavMeshPathfinder CreateIndependent() => CreateIndependent(Dataset, _logger);
+
+    /// <summary>Create a private context for a detached request without consulting live collision services.</summary>
+    public static NavMeshPathfinder CreateIndependent(NavMeshDatasetDescriptor dataset, ILogger? logger = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dataset.Directory);
+        if (dataset.Identity == Guid.Empty) throw new ArgumentException("dataset identity is required", nameof(dataset));
+        return new(dataset.Directory, logger, dataset.Identity);
+    }
 
     /// <summary>
     /// The collision-model line test a flier's straight shortcut needs (vmangos
@@ -86,7 +110,11 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         => LoadTile(mapId, tileX, tileY, out _);
 
     private bool LoadTile(uint mapId, int tileX, int tileY, out bool prefetchHit)
+        => LoadTile(mapId, tileX, tileY, CancellationToken.None, out prefetchHit);
+
+    private bool LoadTile(uint mapId, int tileX, int tileY, CancellationToken cancellationToken, out bool prefetchHit)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         prefetchHit = false;
         if (GetNavMesh(mapId) is not { } mesh)
         {
@@ -115,6 +143,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         {
             return false;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         try
         {
@@ -354,17 +384,18 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         {
             _queryStamp++;
             _queryLoads = 0;
-            EnsureTile(graph.MapId, at, options.NonBlockingTiles);
+            EnsureTile(graph.MapId, at, options.NonBlockingTiles, options.CancellationToken);
         }
 
         Vector3 recast = NavMeshFormat.ToRecast(at);
-        return mesh.HaveTileAt(recast) && TryLocate(mesh, recast, options, out NavPolyRef poly, out _, out _)
+        return mesh.HaveTileAt(recast) && TryLocate(mesh, recast, options, 0f, out NavPolyRef poly, out _, out _)
             ? graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly) : -1;
     }
 
     public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
     {
         options ??= PathOptions.Default;
+        options.CancellationToken.ThrowIfCancellationRequested();
         if (!IsFinite(start) || !IsFinite(end))
         {
             return PathResult.None(start);
@@ -390,8 +421,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         _trackPendingThisQuery = nonBlocking;
         try
         {
-            EnsureTile(mapId, start, nonBlocking);
-            EnsureTile(mapId, end, nonBlocking);
+            EnsureTile(mapId, start, nonBlocking, options.CancellationToken);
+            EnsureTile(mapId, end, nonBlocking, options.CancellationToken);
             if (nonBlocking && QueryTileStillOpen())
             {
                 // An endpoint's tile is still being read: the search cannot even locate it (an endpoint on an unloaded tile would
@@ -401,8 +432,9 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
 
             mesh.TileLoader = (x, y) =>
             {
+                options.CancellationToken.ThrowIfCancellationRequested();
                 Vector3 center = NavMeshFormat.ToWorld(mesh.TileCenter(x, y));
-                return EnsureTile(mapId, center, nonBlocking) ? mesh.GetTile(x, y) : null;
+                return EnsureTile(mapId, center, nonBlocking, options.CancellationToken) ? mesh.GetTile(x, y) : null;
             };
             PathResult result = FindPath(mesh, mapId, start, end, options);
             // A tile the search wanted was not in yet. A whole path found without it stands (the tile could only have offered another
@@ -416,6 +448,59 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             _trackPendingThisQuery = false;
             mesh.TileLoader = null;
         }
+    }
+
+    /// <summary>
+    /// <see cref="IMeshPointQuery.TryGetRandomPointAround"/> over the loaded tiles (no tile is read). Unavailable (false, nothing drawn
+    /// from <paramref name="random"/>) when the map has no mesh, the tile under <paramref name="center"/> is not loaded, no polygon lies
+    /// within <see cref="NearExtents"/> of it, or an argument is unusable. The start polygon is the one a path from
+    /// <paramref name="center"/> would start on, so the point is reachable by <see cref="FindPath(uint, Vector3, Vector3, PathOptions?)"/>.
+    /// </summary>
+    public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+    {
+        point = center;
+        if (random is null || !IsFinite(center) || !float.IsFinite(radius) || radius <= 0 || GetNavMesh(mapId) is not { } mesh)
+        {
+            return false;
+        }
+
+        options ??= PathOptions.Default;
+        Vector3 centerRc = NavMeshFormat.ToRecast(center);
+        if (!mesh.HaveTileAt(centerRc) || !mesh.TryFindNearestPoly(centerRc, NearExtents, options, out NavPolyRef startPoly, out Vector3 onMesh))
+        {
+            return false;
+        }
+
+        if (!NavMeshQuery.TryRandomPointAround(mesh, startPoly, onMesh, radius, options, random, out Vector3 found))
+        {
+            return false;
+        }
+
+        point = NavMeshFormat.ToWorld(found);
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="IMeshPointQuery.Raycast"/> over the loaded tiles (no tile is read). Unavailable when the map has no mesh, the tile under
+    /// <paramref name="start"/> is not loaded, or the start is farther than <see cref="NearExtents"/> from any polygon. Only the horizontal
+    /// direction matters; the returned point's height is the mesh's.
+    /// </summary>
+    public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+    {
+        if (!IsFinite(start) || !IsFinite(end) || GetNavMesh(mapId) is not { } mesh)
+        {
+            return MeshRaycastResult.Unavailable(end);
+        }
+
+        options ??= PathOptions.Default;
+        Vector3 startRc = NavMeshFormat.ToRecast(start);
+        if (!mesh.HaveTileAt(startRc) || !mesh.TryFindNearestPoly(startRc, NearExtents, options, out NavPolyRef startPoly, out Vector3 onMesh))
+        {
+            return MeshRaycastResult.Unavailable(end);
+        }
+
+        NavMeshQuery.RayResult ray = NavMeshQuery.Raycast(mesh, startPoly, onMesh, NavMeshFormat.ToRecast(end), options);
+        return new MeshRaycastResult(true, ray.Hit, ray.Fraction, NavMeshFormat.ToWorld(ray.Point));
     }
 
     /// <summary>
@@ -444,8 +529,9 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     /// the pool (<see cref="PollTileRead"/>), a tile whose read has not finished counts as pending
     /// (<see cref="PathSearchCounters.TilesPending"/>) and is false, and one whose read has finished is installed.
     /// </summary>
-    private bool EnsureTile(uint mapId, Vector3 at, bool nonBlocking)
+    private bool EnsureTile(uint mapId, Vector3 at, bool nonBlocking, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (Terrain.TerrainTile.TileOf(at.X, at.Y) is not { } terrain || GetNavMesh(mapId) is not { } mesh)
         {
             return false;
@@ -523,7 +609,10 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
         _queryLoads++;
         long loadStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         bool prefetchHit = readTile is not null;
-        bool loaded = readTile is not null ? InstallReadTile(mapId, terrain.X, terrain.Y, readTile) : LoadTile(mapId, terrain.X, terrain.Y, out prefetchHit);
+        bool loaded = readTile is not null
+            ? InstallReadTile(mapId, terrain.X, terrain.Y, readTile)
+            : LoadTile(mapId, terrain.X, terrain.Y, cancellationToken, out prefetchHit);
+        cancellationToken.ThrowIfCancellationRequested();
         PathSearchCounters.RecordTileLoad(System.Diagnostics.Stopwatch.GetTimestamp() - loadStarted,
             mapId, terrain.X, terrain.Y, prefetchHit, loaded);
         if (!loaded)
@@ -725,8 +814,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
             forceDestination = true;
         }
 
-        if (!TryLocate(mesh, startRc, options, out NavPolyRef startPoly, out Vector3 startOnMesh, out _)
-            || !TryLocate(mesh, endRc, options, out NavPolyRef endPoly, out Vector3 endOnMesh, out bool endFar))
+        if (!TryLocate(mesh, startRc, options, 0f, out NavPolyRef startPoly, out Vector3 startOnMesh, out _)
+            || !TryLocate(mesh, endRc, options, options.EndTolerance, out NavPolyRef endPoly, out Vector3 endOnMesh, out bool endFar))
         {
             // PathFinder.cpp:190-198: a hole in the mesh is a flying shortcut for a flier, NOPATH otherwise.
             return PathResult.StraightLine(start, end, flier ? PathType.Normal | PathType.NotUsingPath | PathType.FlyPath : PathType.NoPath);
@@ -785,9 +874,23 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, ICollisionTileLifec
     private static bool InRange(Vector3 a, Vector3 b, float r, float h)
         => (((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y))) <= r * r && MathF.Abs(a.Z - b.Z) <= h;
 
-    private static bool TryLocate(NavMesh mesh, Vector3 position, PathOptions options, out NavPolyRef poly, out Vector3 onMesh, out bool far)
+    private static bool TryLocate(NavMesh mesh, Vector3 position, PathOptions options, float tolerance, out NavPolyRef poly, out Vector3 onMesh, out bool far)
     {
         far = false;
+        if (tolerance > 0)
+        {
+            // vmangos FindWalkPoly (PathFinder.cpp:128-141): extents {5, 10, 5}, and a polygon whose nearest point is more than 3 above the query point is refused;
+            // "far" is the farFromPoly test of BuildPolyPath (3D distance past tolerance).
+            if (!mesh.TryFindNearestPoly(position, new Vector3(5, 10, 5), options, out poly, out onMesh) || onMesh.Y > position.Y + 3.0f)
+            {
+                far = true;
+                return false;
+            }
+
+            far = Vector3.DistanceSquared(onMesh, position) > tolerance * tolerance;
+            return true;
+        }
+
         if (mesh.TryFindNearestPoly(position, NearExtents, options, out poly, out onMesh))
         {
             far = NavMeshTile.DistanceXzSquared(onMesh, position) > 0.01f || MathF.Abs(onMesh.Y - position.Y) > NearExtents.Y;

@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.ClassScripts;
+using ArcaneCore.Game.Spells.Hunter;
 using ArcaneCore.Game.Spells.Paladin;
+using ArcaneCore.Game.Spells.Priest;
 using ArcaneCore.Game.Spells.Shaman;
 using ArcaneCore.Game.Spells.Warlock;
 using ArcaneCore.World.Combat;
@@ -27,6 +29,10 @@ public sealed class ClassScriptWiringTests
             Assert.IsType<HolyShockScript>(scripts.Find(20473));
             Assert.IsType<HolyLightScript>(scripts.Find(635));
             Assert.IsType<CurseOfDoomScript>(scripts.Find(CurseOfDoomScript.CurseOfDoom));
+            Assert.IsType<DevourMagicScript>(scripts.Find(19505));
+            Assert.IsType<TouchOfWeaknessScript>(scripts.Find(TouchOfWeaknessScript.TouchOfWeakness));
+            Assert.IsType<MongooseBiteScript>(scripts.Find(1495));
+            Assert.IsType<RefocusScript>(scripts.Find(RefocusScript.Refocus));
             Assert.IsType<FlametongueProcScript>(scripts.Find(8026));
             Assert.IsType<RockbiterProcScript>(scripts.Find(20865));
             Assert.IsType<ExecuteDummyScript>(scripts.Find(5308));
@@ -36,6 +42,7 @@ public sealed class ClassScriptWiringTests
             Assert.IsType<JudgementOfLightWisdomProc>(spells.FindProcScript(20185));
             Assert.IsType<ConsecrationScript>(spells.FindPeriodicDamageScript(26573));
             Assert.IsType<CurseOfDoomScript>(spells.FindPeriodicDamageScript(CurseOfDoomScript.CurseOfDoom));
+            Assert.True(spells.HasPeriodicTriggerScript(HunterScriptsModule.FrostTrapAura));
             Assert.True(spells.HasEffectHandler(SpellEffectName.PersistentAreaAura));
             Assert.True(spells.HasEffectHandler(SpellEffectName.SummonDemon));
             Assert.NotNull(host.WorldServices.GetRequiredService<RogueScriptFeature>().Scripts);

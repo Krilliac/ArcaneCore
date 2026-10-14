@@ -121,6 +121,16 @@ In the read-only schema-53 world snapshot, 484 of 3,221 quests with creature giv
 fall beyond it; the shortest is quest 165 at 1312.7 yards. The default retains those six exclusions while allowing
 local hand-ins after long objective travel. It can exclude other legitimate long deliveries, and 0 opts out of the
 same-map distance limit. Terrain and hostile pockets have separate limits; long trips may be flown (see Flight paths).
+At pickup and offscreen travel (`MayTakeQuest`, `RefreshEntries`), `PlayerbotQuestGoals.CanExecuteObjectives` also skips
+non-auto-complete quests whose mechanics bots do not execute: exploration/escort/event-script quests (`QuestSpecialFlags.ExplorationOrEvent`),
+GameObject or spell-cast objectives (`ReqCreatureOrGOId < 0` or `ReqSpell != 0`, such as quest 5382 "Doctor Theolen Krastinov, the Butcher"),
+friendly creature objectives credited by item or spell use (`IsKillObjective`, such as quest 5441 "Lazy Peons"), and creature objectives whose
+spawns exist only on another continent or an instance without an entrance trigger on the bot's map. For a completed quest already in the log,
+`CompletedReturnQuest` (`CanReturnToEnder`) holds the quest in the log without selecting it as the active walking goal when its ender lies
+beyond the walking return range (`MaxDeliveryYards` outside a home, `MaxUnhomedReturnWalkYards` = 3000 for an unhomed bot) and no known,
+affordable taxi route reaches it (`PlayerbotTaxi.CanTravelByTaxi`); a leave-home quest (`PlayerbotHomeArea.QuestLeavesHome`) must also have
+any spawned starter on the home map inside that home so a quest begun in another zone (such as Silverpine quest 428) is not treated as a
+leave-home quest of a later home.
 
 A far goal (a quest giver or ender, a corpse) is approached a leg at a time (`PlayerbotNavigation.TryPlanToward`). Beyond
 `MaxPathPoints - 2` yards the map's region graph leads (`NavRegionGraph`, [collision-pathing](collision-pathing.md); built off the world
@@ -134,6 +144,45 @@ itself was tried too: it reaches Grish, but from the swamp it ends at the point 
 while the way leads west and north by Deadwind Pass, Redridge, the Burning Steppes and Blackrock Mountain. Now every stall point's legs
 reach the ender: 9 to 13 legs of 6,500 to 9,400 yards, each plan 5 to 80 ms (`FromAnIssueStallPoint_...`, real terrain).
 
+Fragments of mesh and goals no walk reaches (bot QA cluster C3: the same stall point across bots and goals). Real-terrain probes
+(`PlayerbotDeadEndPinProbeTests`) found two kinds behind some of the pins. A *fragment*: the ridge pocket above the Valley of Trials
+(-137.6,-4265.7 map 1; issues #379, #402; 3 regions, a Detour search exhausts after 26 nodes) and the sliver inside Ironforge
+(-4715.7,-871.2 map 0; #381, #537; 1 region, 2 nodes): nothing on the mesh is reachable from them, so a bot there was given the fragment's
+own few yards or a refusal for every goal. A *goal no walk reaches*: Chief Hawkwind's platform in Mulgore from the Durotar ridge, 4,900
+yards away. The platform is reachable in the game (a player gets there); the bots' *walking* mesh, which excludes steep slopes, does not
+join it to Durotar, so it is a region of its own there. A bot was given an 847-yard leg and a 3,349-yard walk toward it that no walk on
+that mesh ends. Both are read from
+the region graph's connected components (`NavRegionGraph.ComponentOf`/`ComponentSize`, labelled once per graph, then an array read),
+which is exact and needs no path search.
+
+- **Unreachable goal skip** (`PlayerbotNavigation.IsUnreachableOnFoot`, used by `PlayerbotWorldDestinations` only, not for a completed
+  quest's return): after the tram, lift and taxi trips were tried, a spawn whose region is in another component than the bot's (walking
+  graph, steep slopes excluded) and that stands outdoors (an indoor goal may be climbed to over steep stairs, `TryClimbIndoors`) is skipped
+  without a path query, and the next spawn is judged in the same think. The answer is true only for a bot on a large part (its own
+  component is not a fragment: more than `FragmentRegions` regions or more than `FragmentPolygons` polygons), and outdoors; a fragment bot
+  or an indoor bot gets false, so `PlanToward`'s own escapes (`TryLeaveSteepGround`, `FromBeside`, the fragment hop, the stall path) run.
+  A bot on steep ground is not told apart: the region lookup snaps it to a walking region within about 3 yards (horizontally, or just above
+  or below) and it is judged from that region; with none in reach the answer is false. With no other spawn of the entry left, the entry
+  is set aside. The quest follows only when none of its open objectives (creature, game object, item, as the bot's quest log has them)
+  can still be served: for a hunted objective the quests of the log that the entry serves (as a creature objective or an item's dropper)
+  are judged, for a giver or ender trip the quest of the trip. Neither counts towards abandoning the quest (`SuspendQuest(..., countsAsSetAside: false)`). Every other planner caller plans as before.
+- **The skip is reported**: one warning per entry and bot per 600 seconds, `Playerbot <id> (<name>) goal unreachable on foot: goal=G
+  target=T quest=Q at x,y,z map M components=a/b` (`ManagedPlayerbotFeature.LogUnreachable`); the goal is the one held when the skip was
+  met, and every skip of one think is queued (at most 8 waiting) and logged. Bot QA parses it as its own kind,
+  `UnreachableGoal` (label `unreachable goal`, cause `MissingData`), keyed by goal, quest and target, never by the bot's place; the stall
+  detector and its bounds are untouched.
+- **Fragment escape** (every `TryPlanToward` caller, asked only when a plan toward a goal farther than 60 yards is refused or only a route
+  under 30 yards, never per tick): a bot whose component has at most `FragmentRegions` (3) regions takes one straight hop, a stepped
+  terrain leg (`TryTerrainRoute`: floor within a yard per yard, in sight) to the nearest point within 20 yards on a larger component, tried
+  at most once per 5 seconds of the world clock (a miss caused by a navigation tile still being read does not spend the window; callers
+  that pass no clock never hop). A fragment is also small in area: a component of three regions with more than `FragmentPolygons` (500)
+  polygons is a plaza, not a fragment. When the ground beside the fragment is a cliff or too far, as at both live pins, the stall path takes over:
+  the brain's island escape (`EscapeIsland`) treats a fragment bot as an island bot and teleports it home or to its bind point.
+
+Still open, not explained by this: the Explore stalls at -1.0,-4188.3 (map 1), -6494.1,324.9 (Coldridge) and -1173,-3285 (Barrens). The
+probes found those pins on large connected regions where plans and 600-second walks to every reachable goal work. The stall detector and
+its bounds are unchanged.
+
 Neeka Bloodscar, #194's ender, stands at the top of the Kargath tower, whose upper flight of stairs the mesh flags steep: the walkable mesh
 ends 13 yards below her. A destination indoors (inside a model's group, `MapCollision.IsOutdoors`) is reached over steep polygons when the
 walkable mesh ends within `ClimbReachYards` (20, flat) of it and the way over steep polygons is at most `ClimbExtraYards` (60) longer
@@ -146,6 +195,22 @@ Navigation-mesh tiles load with the map's grids round the players, so that point
 answers a straight line (vmangos `PathFinder`'s `HaveTiles` shortcut) that the terrain stepper refuses over any hill; the step is then
 halved (down to 24 yards) until it stays on the loaded mesh, and walking it loads the next tile. Before, the bot stood at such a tile edge
 for good: the wave-8 rehearsal's quest-35 stall (Dawnrover 107 yards north of the Elwynn tile boundary, 610 yards from Guard Thomas).
+
+**Legs that do not come from a mesh corridor are checked for doodads and the mesh edge** (`PlayerbotMoveCheck`). The mesh proves its own
+corridors walkable; nothing else did, and the line of sight they were checked with ignores M2 doodads (the vmangos default for spells), so
+bots walked through fences, trees and rocks: the server does not collide a managed bot's movement packets. The legs concerned are the
+stepped terrain route (`TryTerrainRoute`: no mesh, or an endpoint tile not loaded), its per-step check (`PlayerbotMotion.Validate`,
+`TryStepOnMap`), the walk to a follow-drop edge and the retreat trail
+(`PlayerbotRetreat.TrailRoute`). Each is checked with (a) a line of sight at chest height (1.2 yards) **including doodads**
+(`ignoreM2: false`; spell line of sight is unchanged, the shared default stays) and (b) where a mesh is loaded under the leg, the mesh
+raycast (`IMeshPointQuery.Raycast`): a leg that leaves the mesh (a hole, a building's footprint, a wall edge) stops there. A leg whose
+start is off the mesh, or whose ray ends where no mesh tile is loaded beyond (tested with a second, zero-length query one yard past the
+edge), is not judged by the mesh and keeps (a) alone. A blocked leg of the retreat trail (`TryClip`) is cut half a yard before the obstacle (bisection of the segment, 6
+steps) when at least 1.5 yards of progress remain, else refused; a stepped terrain route is refused whole instead of
+cut, and `TryPlanToward` then plans a shorter chunk (down to 24 yards), so the mesh's own shorter step stays preferred. Cost: one raycast and one vmap query per leg when the route is planned, a few
+more only when blocked; the per-tick step check uses the line of sight alone; no allocation beyond the route. Tests:
+`PlayerbotMoveCheckTests` (stand-in line of sight with an M2-only wall, a mesh hole, a border with no tile) and
+`ADoodadFenceNearKharanos_BlocksAStraightLeg_TheDefaultSightLetsThrough` (real Dun Morogh fence, `ARCANECORE_TEST_TERRAIN_DIR`).
 
 Every bot route excludes the mesh's steep polygons (`NavTerrain.SteepSlopes`). A bot standing on steep ground, or on a patch of walkable
 polygons among them, got no route at all (no path, or a partial path ending at the patch's edge) and stood there for good: Ironwander on
@@ -540,8 +605,9 @@ whether to help someone who tagged a mob first. Code: `PlayerbotContention.cs`, 
   someone else's, attackable), so a tapped kobold does not keep the camp from being left; the walk then goes to the nearest spawn not visited. When every known spawn of the entry is visited (or
   unreachable) the bot has no destination for it until the earliest visit ends and explores meanwhile. Before, the nearest spawn was
   picked again on arrival: live 2026-10-12 (bot QA #368, "stall: goal Grind target 80") 54 bots stalled 177 times at the empty kobold camp of
-  quest 21, some nine times each. A stall of a Grind goal that has no target creature also sets the entry aside for that bot for 10 minutes
-  (`PlayerbotSuspensions`, as for a quest goal), so the quest's objective is passed over instead of planned again; it is the bot's own
+  quest 21, some nine times each. A stall of a Grind or Combat goal that has no target creature also sets the entry aside for that bot for 10 minutes
+  (`PlayerbotSuspensions`, as for a quest goal; defensive target selection also falls back from `Combat.Attackers` to `Combat.ThreatenedBy`,
+  `docs/areas/playbots-combat.md`), so the quest's objective is passed over instead of planned again; it is the bot's own
   set-aside, not shared with other bots (an entry set aside for everyone would also stop bots killing it where it stands in sight).
 
 ### Flight paths

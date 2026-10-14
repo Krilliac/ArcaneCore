@@ -1,8 +1,10 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Npc;
@@ -41,6 +43,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Lock _gate = new();
     private readonly Dictionary<int, Unsaved> _characters = [];
+    private Exception? _terminalFailure;
     private Task? _consumer;
     private Task? _stop;
     private RetainedRetryTimer? _retry;
@@ -72,6 +75,21 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
+    /// <summary>Terminal failure that halted the queue (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
+
+    /// <summary>Raised once when the queue enters terminal failure (for example on <see cref="CharacterOwnershipRejectedException"/>).</summary>
+    public event Action<Exception>? FatalFailure;
+
     /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
     internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
 
@@ -82,9 +100,17 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             return;
         }
 
-        _retry = new RetainedRetryTimer(RetainedRetryInterval, () => RetainedCharacters.Count > 0, () => _channel.Writer.TryWrite(new Work(0, Kind.Sweep, null)));
+        _retry = new RetainedRetryTimer(RetainedRetryInterval, HasAnyRetained, () => _channel.Writer.TryWrite(new Work(0, Kind.Sweep, null)));
         _retry.Start();
         _consumer = Task.Run(ConsumeAsync);
+    }
+
+    private bool HasAnyRetained()
+    {
+        lock (_gate)
+        {
+            return _terminalFailure is null && _characters.Values.Any(c => c.Failure is not null);
+        }
     }
 
     /// <summary>Queue saving the route of a character that logged out mid-flight; replaces any older request.</summary>
@@ -147,7 +173,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
     /// <summary>Queue a fire-and-forget retry of the character's retained write (logout).</summary>
     public void RequestRetry(int characterId)
     {
-        if (_consumer is not null)
+        if (_consumer is not null && !_stopped)
         {
             _channel.Writer.TryWrite(new Work(characterId, Kind.Retry, null));
         }
@@ -183,16 +209,23 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
         int[] failed;
         Exception? first;
+        Exception? terminal;
         lock (_gate)
         {
+            terminal = _terminalFailure;
             KeyValuePair<int, Unsaved>[] failures = [.. _characters.Where(c => c.Value.Failure is not null).OrderBy(c => c.Key)];
             failed = [.. failures.Select(c => c.Key)];
-            first = failures.Length > 0 ? failures[0].Value.Failure : null;
+            first = failures.Length > 0 ? failures[0].Value.Failure : terminal;
         }
 
         if (failed.Length > 0)
         {
             throw new InvalidOperationException($"taxi route writes did not drain for characters {string.Join(", ", failed)}", first);
+        }
+
+        if (terminal is not null)
+        {
+            throw new InvalidOperationException("taxi route write queue stopped after terminal ownership rejection", terminal);
         }
     }
 
@@ -210,7 +243,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             unsaved.Failure = null; // the new request supersedes the failed one and is itself attempted
             if (_stopped)
             {
-                unsaved.Failure = new InvalidOperationException("the taxi route write queue is stopped; the change was not persisted");
+                unsaved.Failure = _terminalFailure ?? new InvalidOperationException("the taxi route write queue is stopped; the change was not persisted");
                 logger.LogError("taxi route change for character {Character} arrived after the queue stopped; not persisted", characterId);
                 return;
             }
@@ -232,19 +265,51 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    private Task RetainedFailureTask(int characterId)
+    private Exception? RetainedFailureOf(int characterId)
     {
-        Exception? failure;
         lock (_gate)
         {
-            failure = _characters.TryGetValue(characterId, out Unsaved? unsaved) ? unsaved.Failure : null;
+            return _characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.Failure is not null
+                ? unsaved.Failure
+                : _terminalFailure;
         }
-
-        return failure is null ? Task.CompletedTask : Task.FromException(NotDurable(characterId, failure));
     }
+
+    private Task RetainedFailureTask(int characterId)
+        => RetainedFailureOf(characterId) is { } failure ? Task.FromException(NotDurable(characterId, failure)) : Task.CompletedTask;
 
     private static InvalidOperationException NotDurable(int characterId, Exception failure)
         => new($"taxi route writes for character {characterId} are not durable", failure);
+
+    private void FailTerminal(CharacterOwnershipRejectedException ex, IServiceProvider? scopedServices)
+    {
+        bool first = false;
+        lock (_gate)
+        {
+            if (_terminalFailure is null)
+            {
+                _terminalFailure = ex;
+                _stopped = true;
+                first = true;
+            }
+        }
+
+        if (!first)
+        {
+            return;
+        }
+
+        logger.LogCritical(ex, "taxi route write queue entered terminal failure after character ownership rejection");
+        try
+        {
+            scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        FatalFailure?.Invoke(ex);
+    }
 
     private async Task ConsumeAsync()
     {
@@ -270,19 +335,13 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                         break;
                     case Kind.FlushCharacter:
                         await ExecuteAsync(work.CharacterId, onlyIfFailed: true, clearQueued: false).ConfigureAwait(false);
-                        Exception? failure;
-                        lock (_gate)
+                        if (RetainedFailureOf(work.CharacterId) is { } failure)
                         {
-                            failure = _characters.TryGetValue(work.CharacterId, out Unsaved? unsaved) ? unsaved.Failure : null;
-                        }
-
-                        if (failure is null)
-                        {
-                            work.Done?.TrySetResult();
+                            work.Done?.TrySetException(NotDurable(work.CharacterId, failure));
                         }
                         else
                         {
-                            work.Done?.TrySetException(NotDurable(work.CharacterId, failure));
+                            work.Done?.TrySetResult();
                         }
 
                         break;
@@ -381,6 +440,16 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 unsaved.Queued = false;
             }
 
+            if (_terminalFailure is { } terminal)
+            {
+                if (unsaved.Operation is not null)
+                {
+                    unsaved.Failure ??= terminal;
+                }
+
+                return terminal;
+            }
+
             if ((onlyIfFailed && unsaved.Failure is null) || unsaved.Operation is not { } current)
             {
                 Release(characterId, unsaved);
@@ -404,7 +473,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     // Only the request that failed is retained; a newer one replaced it and is queued itself.
                     if (_characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.Operation?.Generation == operation.Generation)
                     {
-                        if (!sweep && operation.Abandon is not null && !DatabaseTransience.IsBusy(ex))
+                        if (!sweep && operation.Abandon is not null && !DatabaseTransience.IsBusy(ex) && ex is not CharacterOwnershipRejectedException)
                         {
                             // Give the route up rather than keep it: the owner relocates the character and the row goes. Not when the database is merely locked by
                             // another writer: that says nothing about the route, so it is kept and retried. A retry sweep never abandons: it only leaves the entry retained.
@@ -478,9 +547,9 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
     {
         for (int attempt = 1; ; attempt++)
         {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             try
             {
-                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<ICharacterTaxiFlightStore>() is not { } store)
                 {
                     return; // hosts without persistence keep nothing
@@ -497,6 +566,11 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 }
 
                 return;
+            }
+            catch (CharacterOwnershipRejectedException ex)
+            {
+                FailTerminal(ex, scope.ServiceProvider);
+                throw;
             }
             catch (Exception ex) when (attempt < attempts)
             {

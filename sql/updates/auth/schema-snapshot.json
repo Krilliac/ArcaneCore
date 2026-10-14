@@ -36,6 +36,7 @@
       "previous": null
     }
   },
+  "seeds": [],
   "files": {
     "mariadb/base_v0005.sql": "73601929a1f6ea5b6c432414560e2a0b2465332c2c1f05d56a6fdb5b71081ccb",
     "postgresql/base_v0005.sql": "05634eff236df86f585c4d6a64da2a62375eecf2d214408b0dcb77cd260b0315",

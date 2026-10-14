@@ -49,7 +49,7 @@ public sealed class ChargeEffects : ISpellHandlerModule
             map.FindUpdater<Creatures.CreatureMapSystem>()?.StopMoving(creature);
         }
 
-        ForcedMovement.LaunchSpline(caster, ForcedMovement.ChargePath(caster, destination), ForcedMovement.ChargeSpeed);
+        ForcedMovement.LaunchSpline(caster, ForcedMovement.ChargePath(caster, destination, target), ForcedMovement.ChargeSpeed);
 
         // "not all charge effects used in negative spells"
         if (!context.Spell.IsPositiveSpell(context.System.Store.Get))
@@ -107,6 +107,9 @@ public sealed class ChargeEffects : ISpellHandlerModule
                 {
                     case SpellEffectName.Charge when IsRooted(caster):
                         return SpellCastResult.Rooted;
+                    case SpellEffectName.Charge when !context.Triggered && context.Target is { } chargeTarget
+                        && ForcedMovement.ChargeHasNoPath(caster, chargeTarget):
+                        return SpellCastResult.Nopath;
                     case SpellEffectName.Leap or SpellEffectName.TeleportUnitsFaceCaster:
                         if ((caster.UnitFlags & UnitFlags.TaxiFlight) != 0)
                         {

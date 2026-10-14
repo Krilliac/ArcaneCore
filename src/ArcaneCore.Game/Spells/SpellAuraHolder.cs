@@ -123,6 +123,7 @@ public sealed class SpellAuraHolder
 
         MaxDuration = IsPermanent ? -1 : duration;
         Duration = MaxDuration;
+        IsRemovedOnShapeLost = CasterGuid == Target.Guid && spell.IsRemovedOnShapeLost;
     }
 
     public SpellInfo Spell { get; }
@@ -130,6 +131,9 @@ public sealed class SpellAuraHolder
     public Unit Target { get; }
 
     public ObjectGuid CasterGuid { get; }
+
+    /// <summary>vmangos SpellAuraHolder::m_isRemovedOnShapeLost (SpellAuras.cpp:6672, spell_warrior.cpp:155).</summary>
+    public bool IsRemovedOnShapeLost { get; set; }
 
     /// <summary>The item instance behind an item-owned aura; empty for ordinary casts. The same value as <see cref="CastItemGuid"/>.</summary>
     public ObjectGuid ItemGuid

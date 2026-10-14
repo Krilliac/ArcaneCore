@@ -29,7 +29,7 @@ namespace ArcaneCore.World.Playerbots;
 /// </summary>
 internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
     PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default, PlayerbotSharedSetAsides? shared = null,
-    PlayerbotClaims? claims = null)
+    PlayerbotClaims? claims = null, PlayerbotNavigationExecutor? navigationExecutor = null)
 {
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -100,7 +100,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotBudget _budget = new(session, options);
     private readonly PlayerbotRidingTrips _riding = new(session, options);
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
-    private readonly PlayerbotWorldDestinations _destinations = new(session, options);
+    private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotHomeReturn _homeReturn = new();
@@ -249,10 +249,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); return true; });
         }
         _planningStop.Cancel();
+        _destinations.Dispose();
         _planningStop.Dispose();
     }
 
     internal PlayerbotGoalKind Goal => _goal;
+    internal void CancelNavigationPlanning() => _destinations.CancelPlanning();
     internal Creature? InspectionTarget => _target;
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
@@ -265,6 +267,24 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     /// <summary>Stalls reported so far.</summary>
     internal int StallCount => _stall.Count;
+
+    /// <summary>
+    /// The skips of goals no walk reaches reported since the last call, each as the log line bot QA parses (<see cref="PlayerbotQaSignalParser"/>):
+    /// the goal held when it was met, what it names, where the bot stood and the two region-graph components. One think can skip several
+    /// entries; every one is returned (<see cref="PlayerbotWorldDestinations.TryTakeUnreachable"/>).
+    /// </summary>
+    internal IReadOnlyList<string> TakeUnreachableReports()
+    {
+        if (!_destinations.HasUnreachableReports) return [];
+        var lines = new List<string>();
+        while (_destinations.TryTakeUnreachable(out PlayerbotWorldDestinations.UnreachableSkip skip))
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"goal unreachable on foot: goal={skip.Goal} target={skip.Entry} quest={skip.Quest} at {skip.At.X:F1},{skip.At.Y:F1},{skip.At.Z:F1} map {skip.Map} components={skip.FromComponent}/{skip.ToComponent}"));
+        return lines;
+    }
+
+    /// <summary>The last turn-in refusal recorded by the quest controller (inspection and tests).</summary>
+    internal (uint QuestId, uint EnderEntry, string Reason, string Code)? LastTurnInRefusal => _quests.LastTurnInRefusal;
 
     /// <summary>Context for the warning the QA log tap parses; no bot identity or issue-key fields are added.</summary>
     internal string QaReportContext(Player player, string report)
@@ -279,14 +299,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         float? distance = graveyard is not null && graveyard.MapId == _lastQaDeathMap
             ? System.Numerics.Vector3.Distance(_lastQaDeathPosition,
                 new System.Numerics.Vector3(graveyard.X, graveyard.Y, graveyard.Z)) : null;
+        uint reportQuest = death ? _lastQaDeathQuest : QuestFromReport(report) ?? QuestId;
+        string? turnInRefusal = !death && reportQuest != 0 && _quests.LastTurnInRefusal is { } refusal && refusal.QuestId == reportQuest
+            ? refusal.Code : null;
         var observation = new QaBotObservation(player.Level, player.Race.ToString(), player.Team.ToString(), player.Class.ToString(),
             death ? _lastQaDeathGoal : GoalFromReport(report) ?? _goal.ToString(),
-            death ? _lastQaDeathQuest : QuestFromReport(report) ?? QuestId,
+            reportQuest,
             graveyard?.Id ?? 0, distance, death ? _lastQaDeathSource : "None",
             death ? [.. _recentDeathAttackerFacts.Values.Where(f => entries.Contains(f.Entry)).OrderBy(f => f.Entry)] : [],
             death ? [.. _recentDeathSources.Where(d => d.Map == _lastQaDeathMap
                 && System.Numerics.Vector3.Distance(d.Position, _lastQaDeathPosition) <= PlayerbotStallWatch.DeathLoopYards)
-                .Select(d => d.Source)] : null);
+                .Select(d => d.Source)] : null,
+            turnInRefusal);
         // A stall of the walk home to a completed quest's ender, as captured at its give-up (StallReturnQuest): the report names the quest
         // that was being returned. A stall on the way to take a quest from an NPC that also ends it is not marked
         // (PlayerbotQaSignalParser.ReturnTripToken).
@@ -365,12 +389,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
         _destinations.SetQuestAside ??= _quests.SetAside;
         _destinations.TeleportToBind ??= TeleportToBindPointForQuest;
+        _destinations.GoalOf ??= () => _goal;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _town.Budget = _trainers.Budget = _riding.Budget = _budget; _economy.SpendBudget = _budget;
         _riding.Suspensions = _suspensions;
         _quests.Contention ??= _contention;
         _quests.OnContentionExhausted ??= RaiseContentionExhausted;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
+        _destinations.ValidatePlanning(player);
         if (!player.IsInWorld) return;
         PlayerbotThinkProbe.Phase("brain");
         WatchKills(player);
@@ -382,6 +408,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         bool dead = !player.IsAlive;
         if (dead)
         {
+            _destinations.Stop();
             _waterRoute = null;
             _waterRetryAt = 0;
             _stall.Reset();
@@ -587,7 +614,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (player.IsAlive) PlayerbotTaxi.Discover(_session, player, _options);
 
         PlayerbotThinkProbe.Phase("stall watch");
-        if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
+        if (_destinations.IsPlanning)
+        {
+            _stall.Reset();
+        }
+        else if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
             GiveUpStalledGoal(player);
 
@@ -679,7 +710,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (_quests.ReturnQuest != completedReturn)
         {
             _quests.ReturnQuest = completedReturn;
-            if (completedReturn != 0) TargetEntry = 0;
+            TargetEntry = 0;
+            if (completedReturn == 0) QuestId = 0;
         }
         if (completedReturn != 0)
         {
@@ -698,18 +730,36 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
             if (!player.Combat.IsInCombat && _quests.Update(player, interval))
             { QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
-            _target = null;
-            AbandonRoute();
-            PlayerbotThinkProbe.Phase("quest destinations");
-            // The trip's target is the ender the destinations chose for this quest, or none yet: never the entry of an earlier goal. A
-            // failed plan leaves both TargetEntry values as they were, and the stall watch then reported, and GiveUpStalledGoal set aside,
-            // a creature this trip has nothing to do with (GitHub #186: quest 1111's return stalled with target 4147, a Saltstone Basilisk
-            // the bot had been fighting, and 11259, the ender of quest 5361 it had been walking to before).
-            _destinations.Update(player, 0, interval, completedReturn);
-            TargetEntry = _destinations.QuestId == completedReturn ? _destinations.TargetEntry : 0u;
-            // Wait/retry at the real giver while combat or a normal interaction
-            // refusal remains. A completed quest must not reopen opportunistic grind.
-            return;
+            if (_quests.IsRefused(completedReturn))
+            {
+                _quests.ReturnQuest = 0;
+                QuestId = 0;
+                TargetEntry = 0;
+            }
+            else
+            {
+                _target = null;
+                AbandonRoute();
+                PlayerbotThinkProbe.Phase("quest destinations");
+                // The trip's target is the ender the destinations chose for this quest, or none yet: never the entry of an earlier goal. A
+                // failed plan leaves both TargetEntry values as they were, and the stall watch then reported, and GiveUpStalledGoal set aside,
+                // a creature this trip has nothing to do with (GitHub #186: quest 1111's return stalled with target 4147, a Saltstone Basilisk
+                // the bot had been fighting, and 11259, the ender of quest 5361 it had been walking to before).
+                _destinations.Update(player, 0, interval, completedReturn);
+                if (_quests.IsRefused(completedReturn))
+                {
+                    _quests.ReturnQuest = 0;
+                    QuestId = 0;
+                    TargetEntry = 0;
+                }
+                else
+                {
+                    TargetEntry = _destinations.QuestId == completedReturn ? _destinations.TargetEntry : 0u;
+                    // Wait/retry at the real giver while combat or a normal interaction
+                    // refusal remains. A completed quest must not reopen opportunistic grind.
+                    return;
+                }
+            }
         }
 
         // A bot with no target holds no claim (the paths below that clear the target and wander, travel or explore leave it here).
@@ -993,13 +1043,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (position is PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee)
             {
                 PlayerbotThinkProbe.Phase("chase");
+                // An enemy already fighting the bot (or holding it on its threat list) has been weighed by ObserveFight: no hazard mark
+                // may refuse or stop the chase and leave the bot standing in combat without a target.
+                if (fightingBot) PlayerbotNavigation.Guard(player, null);
                 var chaseGoal = new System.Numerics.Vector3(target.X, target.Y, target.Z);
                 // A route walked to its end, or whose end the target has left by more than ChaseReplanYards, is planned again in
                 // this think (it was dropped here at the next think, and planned at the one after: two think gaps per re-chase).
                 if (_route is null || ChaseRouteStale(player, _route, chaseGoal))
                 {
                     PlanOutcome chase = PlayerbotNavigation.PlanExact(player, chaseGoal, _options, ref _tileWait,
-                        _session.World.NowMs, out PlayerbotRoute? fresh);
+                        _session.World.NowMs, out PlayerbotRoute? fresh, chase: true);
                     if (chase == PlanOutcome.Pending)
                     {
                         // A tile of the way is being read: keep the target, ask again next think, and keep walking the route still in
@@ -1016,6 +1069,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                         _target = null;
                         AbandonRoute();
                         PlayerbotMovementControl.Stop(_session, player);
+                        if (fightingBot) _goal = PlayerbotGoalKind.Combat;
                         return;
                     }
 
@@ -1174,7 +1228,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 // A grind walk with no creature in sight (the destinations' spawn walk) has no target to set aside: set the entry it
                 // was walking to aside, or the next decision plans the same camp again (live 2026-10-12, bot QA #368: 177 stalls
                 // at the empty kobold camp of quest 21). The quest's objective is then not hunted until the set-aside ends.
-                else if (_goal == PlayerbotGoalKind.Grind && TargetEntry != 0) _suspensions.SuspendEntry(TargetEntry, now);
+                else if (_goal is PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat && TargetEntry != 0) _suspensions.SuspendEntry(TargetEntry, now);
                 break;
             case PlayerbotGoalKind.Home:
                 _homeReturn.MarkBlocked(now);
@@ -1254,7 +1308,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
-        if (!PlayerbotNavigation.IsOnMeshIsland(player, _options)) return false;
+        // A fragment of mesh (the region graph's component of a few regions, PlayerbotNavigation.IsOnMeshFragment) is an island whose
+        // one straight hop off (TryPlanToward) found no ground beside it, or was not walkable: the same escape applies.
+        if (!PlayerbotNavigation.IsOnMeshIsland(player, _options) && !PlayerbotNavigation.IsOnMeshFragment(player)) return false;
         onIsland = true;
         uint now = _session.World.NowMs;
         // Home first, but only when the teleport home would be made: a refused TryTeleport would set the walk of a bot inside its home
@@ -1366,6 +1422,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private void DropIntent()
     {
+        _destinations.CancelPlanning();
         _target = null;
         AbandonRoute();
         _exploreCandidate = null;
@@ -1693,15 +1750,25 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private static bool IsStranger(Player player, Player other, GroupManager? groups)
         => other.Guid != player.Guid && groups?.AreInSameGroup(player.Guid, other.Guid) != true;
 
-    private static Creature? FindDefensiveAttacker(Player player)
+    private Creature? FindDefensiveAttacker(Player player)
     {
         if (player.Map is not { } map) return null;
-        return player.Combat.Attackers
+        // A creature swinging at the bot comes first; if none is, any living creature that still holds the bot on its
+        // threat list (fighting a pet, a party/camp fellow, or held at range) is the fight keeping Combat.IsInCombat on.
+        return FirstDefensiveCandidate(player, map, player.Combat.Attackers)
+            ?? FirstDefensiveCandidate(player, map, player.Combat.ThreatenedBy);
+    }
+
+    private Creature? FirstDefensiveCandidate(Player player, Map map, IEnumerable<Unit> units)
+    {
+        return units
             .OfType<Creature>()
-            .Where(creature => creature.IsInWorld && creature.IsAlive
+            .Where(creature => creature.IsInWorld && creature.IsAlive && !creature.IsInEvadeMode
                 && ReferenceEquals(creature.Map, map)
                 && map.Combat.Hooks.CanAttack(player, creature))
-            .OrderBy(creature => Distance(player, creature))
+            .OrderBy(IsUnreachable)
+            .ThenBy(creature => ReferenceEquals(creature, _target) ? 0 : 1)
+            .ThenBy(creature => Distance(player, creature))
             .FirstOrDefault();
     }
 

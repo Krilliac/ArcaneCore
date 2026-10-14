@@ -276,12 +276,18 @@ internal sealed class PlayerbotSuspensions
         if (entry != 0) { Add(_entries, entry, nowMs); Interlocked.Increment(ref _version); }
     }
 
-    internal void SuspendQuest(uint quest, uint nowMs)
+    /// <param name="countsAsSetAside">False for a set-aside that says nothing about abandoning the quest (a walk refused as a proven dead
+    /// end): the count gates abandoning completed quests (<see cref="MaxReturnSetAsides"/>).</param>
+    internal void SuspendQuest(uint quest, uint nowMs, bool countsAsSetAside = true)
     {
         if (quest == 0) return;
         Add(_quests, quest, nowMs);
-        if (_questSetAsides.Count >= 256 && !_questSetAsides.ContainsKey(quest)) _questSetAsides.Clear();
-        _questSetAsides[quest] = _questSetAsides.GetValueOrDefault(quest) + 1;
+        if (countsAsSetAside)
+        {
+            if (_questSetAsides.Count >= 256 && !_questSetAsides.ContainsKey(quest)) _questSetAsides.Clear();
+            _questSetAsides[quest] = _questSetAsides.GetValueOrDefault(quest) + 1;
+        }
+
         Interlocked.Increment(ref _version);
     }
 

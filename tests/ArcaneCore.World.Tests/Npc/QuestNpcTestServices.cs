@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.Extensions.DependencyInjection;
@@ -114,7 +115,7 @@ internal sealed class MemoryQuestStore : ICharacterQuestStore
     }
 
     public async Task SaveQuestsAsync(int characterId, IReadOnlyList<CharacterQuestStatus> upserts,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
     {
         WriteEntered?.TrySetResult();
         if (AllowWrite is { } release)
@@ -131,7 +132,8 @@ internal sealed class MemoryQuestStore : ICharacterQuestStore
         Interlocked.Increment(ref _saveCalls);
     }
 
-    public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask, CancellationToken cancellationToken = default)
+    public Task SaveTaxiMaskAsync(int characterId, IReadOnlyList<uint> mask,
+        CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
     {
         if (FailWrite)
         {

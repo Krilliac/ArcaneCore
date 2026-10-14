@@ -48,6 +48,10 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_world_maps_loaded` | gauge | maps and instances at the last sample |
 | `arcanecore_nav_tile_installs_total` | counter | navigation mesh tiles installed on the thread that needed them: path-query reads and grid tile loads, nearly all on the world thread; the slow-map-update line shows the same count per update |
 | `arcanecore_nav_tile_install_time_milliseconds_total` | counter | time those installations took (a tile read under disk contention can take seconds) |
+| `arcanecore_creature_path_straight_fallbacks_total` | counter | authored creature routes (waypoint, point, formation, scripted move) walked along a straight line because the navmesh had no path |
+| `arcanecore_creature_path_no_path_total` | counter | creature path searches that found no path (chase stands, flee/wander wait, home teleports). A chaser standing at an unreachable target searches every 100 ms, so it adds about 10 per second to this counter |
+| `arcanecore_creature_path_deferred_total` | counter | creature path requests put off to a later update because the per-update search budget was spent, or whose tiles were still being read (`TilesPending`) |
+| `arcanecore_creature_path_home_teleports_total` | counter | evade returns done by teleport because no whole mesh path led home |
 | `arcanecore_db_save_queue_depth` | gauge | characters with a snapshot queued or being written; the queue keeps one per character (TC `db_queue_*`) |
 | `arcanecore_db_save_queue_oldest_age_milliseconds` | gauge | age of the longest-waiting character snapshot, queued or in its write; 0 when none (the `World:SaveQueueWarnAgeMs` check, [persistence](../areas/persistence.md)) |
 | `arcanecore_map_players` / `_creatures` / `_objects` `{map,instance}` | gauge | per map, sampled every `MapSampleIntervalSeconds` on the world thread (TC `map_creatures`, `map_players`) |
@@ -64,6 +68,9 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_announce_total{category,severity,outcome,staff_direct}` | counter | operational announcements and what became of each (`sent`, `disabled`, `below_minimum`, `off`, `staff_direct`, `rate_limited`, `duplicate`); `staff_direct` is true when the caller sent the staff line itself (Warden, anti-cheat), and the outcome `staff_direct` means the staff were told directly and there was no world line to send |
 | `arcanecore_faults_distinct` | gauge | distinct fault signatures in the ledger (reset by `.server faults reset`) |
 | `arcanecore_invariant_failures_total` | counter | failed `Invariant.Assert`/`Check` calls since start |
+| `arcanecore_botqa_findings{kind,state}` | gauge | bot QA findings held, per finding kind (the slug of its GitHub label, e.g. `run-failed`, `tick-hang`) and publication state (`pending`, `dryrun`, `published`, `knownclosed`, `failed`); every combination is exported, zeros included. Registered only with `Ops:Metrics:Enabled` and QA enabled (docs/areas/playbots-qa.md) |
+| `arcanecore_botqa_occurrences_total{kind}` | counter | occurrences folded into bot QA findings, per kind (a polled server fault counts its new occurrences; the start-up spell coverage counts none) |
+| `arcanecore_playerbot_runs_total{outcome}` | counter | dungeon and raid runs that ended, when their group disbands: `outcome` = `completed`, `given_up`, `timeout` (the run ended on a reason ending in `timeout`: gather, travel, enter, regroup or run step; operator stops are `given_up`) |
 | `arcanecore_gc_collections_total{generation}` | counter | `GC.CollectionCount` |
 | `arcanecore_gc_heap_size_bytes`, `arcanecore_gc_allocated_bytes_total`, `arcanecore_gc_pause_time_seconds_total` | gauge/counter | GC and allocation |
 | `arcanecore_threadpool_queue_length`, `arcanecore_process_working_set_bytes` | gauge | runtime |

@@ -101,6 +101,8 @@ Retry triggers, all per character:
   idempotent and returns the same failure to a second caller, so disposing the feature after
   stopping it reports the failure again (as the quest feature does).
 
+Ownership fencing (`docs/CHARACTER_FENCING_ACCEPTANCE.md`): `SaveFactions` and `SaveWatchedFaction` capture `Player.CharacterOwnership` at mutation time into a token-scoped overlay and never coalesce across distinct ownership tokens. `EfCharacterReputationStore.SaveFactionsAsync` and `SaveWatchedFactionAsync` verify the token inside the write transaction (`CharacterWriteFence.BeginTransactionAsync` + `CharacterOwnershipGuard.VerifyUnlessFencedAsync`), issuing no extra SQL when fencing is disabled and `ownership` is null. A `CharacterOwnershipRejectedException` (stale or missing token under an active fence) is terminal after a single attempt: `ReputationWriteQueue` does not run the 3-attempt transient backoff, marks the overlay rejected so logout, background sweep, login, and shutdown drains never retry it, retains the failure so login and shutdown still fail closed, and stops the host via `IHostApplicationLifetime`. `DeleteDeletedCharacterAsync` remains token-independent (`CharacterWriteFence.Exempt()`).
+
 `FlushAsync` stays a pure ordered barrier (character creation and deletion use it): it neither
 retries nor throws, so one character's persistent failure cannot stall unrelated creations or
 deletions. Deletion is never blocked by retained writes: `DeleteCharacter` discards whatever was
@@ -112,8 +114,7 @@ Limits (honest):
 
 - Retention is in process only. A crash, or storage still down at graceful shutdown, loses the
   retained gain; shutdown makes that loss loud, a crash cannot. No spill-to-disk journal exists.
-- There is no periodic background retry: an online player with a retained failure and no further
-  reputation change is retried only at logout, relog or shutdown.
+- The background sweep (`RetainedRetryInterval`, default 30 s) retries only transient failures (never ownership rejections), one attempt per character.
 - A character with an unrecovered write cannot log in until storage recovers (user-visible refusal).
 - A change arriving after the queue stopped is only logged and held in memory; the host stops the
   world before its features, so this does not happen in the daemon.
@@ -125,9 +126,10 @@ Limits (honest):
   affected character.
 
 Proof: `ReputationWriteDurabilityTests`, `ReputationWriteRetentionTests` (queue over real EF/SQLite
-with injected failures, simulated restart), `ReputationWorldTests` (socket: refused relog until
-recovery then gain and watched faction restored, logout retry, deletion with a retained failure)
-and `ReputationStoreTests.Replay_IsIdempotent_OnEveryProvider`.
+with injected failures, simulated restart), `ReputationOwnershipFencingTests` and `ReputationOwnershipPersistenceTests`
+(stale-token rollback, mutation-time token capture, non-coalescing across tokens, single-attempt terminal host stop),
+`ReputationWorldTests` (socket: refused relog until recovery then gain and watched faction restored, logout retry,
+deletion with a retained failure) and `ReputationStoreTests.Replay_IsIdempotent_OnEveryProvider`.
 
 ## Configuration
 

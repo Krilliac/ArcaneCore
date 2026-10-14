@@ -34,11 +34,12 @@
 #   BATTLEGROUND                8 keys
 #   CHARACTERCREATION           13 keys
 #   CLIENTDATA                  2 keys
+#   CLUSTER                     5 keys
 #   COMBAT                      11 keys
 #   CONDITIONS                  2 keys
 #   CRAFTING                    1 keys
 #   CREATURES                   64 keys
-#   DATABASE                    24 keys
+#   DATABASE                    25 keys
 #   DIAGNOSTICS                 11 keys
 #   ECONOMY                     29 keys
 #   ENCHANTING                  3 keys
@@ -75,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       445 keys
+#   WORLD                       448 keys
 #
 ###############################################################################
 
@@ -1647,6 +1648,76 @@ ClientData.DbcDirectory = ""
 ClientData.Strict = false
 
 ###############################################################################
+# CLUSTER
+###############################################################################
+
+#----------------------------------------------------------------------------
+# Cluster:Fencing
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.Fencing.ClaimWatchIntervalSeconds
+#        Description: With fencing disabled, how often the world reads the characters ownership row
+#                     to notice that a fenced world has claimed the database, in seconds (1 to 300).
+#                     Independent of autosave; an unfenced world can keep writing for up to this
+#                     long after a claim.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+Cluster.Fencing.ClaimWatchIntervalSeconds = 10
+
+#
+#    Cluster.Fencing.Enabled
+#        Description: Enable durable character ownership fencing at world startup; disabled by
+#                     default.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+Cluster.Fencing.Enabled = false
+
+#
+#    Cluster.Fencing.OwnerNode
+#        Description: The durable owner identity; defaults to the current machine name and must be
+#                     stable while the world owns the database.
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+# Cluster.Fencing.OwnerNode =
+
+#
+#    Cluster.Fencing.TakeoverEpoch
+#        Description: The positive ownership epoch to compare and swap during an explicit takeover;
+#                     pair with TakeoverIncarnation.
+#        Type: long?
+#        Default: (not set)
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+# Cluster.Fencing.TakeoverEpoch =
+
+#
+#    Cluster.Fencing.TakeoverIncarnation
+#        Description: The non-empty ownership incarnation to compare and swap during an explicit
+#                     takeover; pair with TakeoverEpoch.
+#        Type: Guid?
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterfencing
+#
+# Cluster.Fencing.TakeoverIncarnation =
+
+###############################################################################
 # COMBAT
 ###############################################################################
 
@@ -3021,6 +3092,20 @@ Database.Upgrade.LockTimeoutSeconds = 60
 #        Docs: docs/reference/configuration.md#database
 #
 Database.Upgrade.Policy = Always
+
+#
+#    Database.Upgrade.ValidateOnly
+#        Description: When true, serving nodes run startup schema checks in validate-only mode: zero
+#                     DDL and zero seed inserts are executed, and startup fails closed if any
+#                     component schema is missing, behind, or ahead of the build's current version.
+#                     Default is false. See docs/ops/database-upgrade.md.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Upgrade.ValidateOnly = false
 
 #
 #    Database.World.ConnectionString
@@ -10550,6 +10635,19 @@ World.Playerbots.AllowLocalLlm = false
 # World.Playerbots.AllowedMaps.1 = 1
 
 #
+#    World.Playerbots.AsyncNavigationEnabled
+#        Description: Run far playerbot navigation queries on the bounded private worker (off by
+#                     default during rollout). Restart required: the worker is created when the
+#                     feature attaches.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Restart (.reload config keeps the old value and reports that a restart is needed)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.AsyncNavigationEnabled = false
+
+#
 #    World.Playerbots.Battlegrounds.Enabled
 #        Description: Let free bots queue for battlegrounds (on by default). Off: no bot starts a
 #                     queue; bots already walking to a battlemaster, queued or in a match finish.
@@ -13112,6 +13210,21 @@ World.Playerbots.Qa.GitHub.Publish = false
 World.Playerbots.Qa.GitHub.ReopenClosed = false
 
 #
+#    World.Playerbots.Qa.GitHub.ReopenOnRegression
+#        Description: Reopen a closed issue, with one comment (the new build, the occurrences on it,
+#                     the distinct bots and a sample), when its finding recurs on a build other than
+#                     the one it was observed closed on (a regression; a recurrence on the same
+#                     build is a person's won't-fix and is left alone). Acts only while publishing
+#                     is on, under the comment cap; never closes anything.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.ReopenOnRegression = true
+
+#
 #    World.Playerbots.Qa.GitHub.Repository
 #        Description: The repository, owner/repo (required while enabled).
 #        Type: string
@@ -13207,6 +13320,19 @@ World.Playerbots.Qa.SignalQueueCapacity = 4096
 #        Docs: docs/reference/configuration.md#worldplayerbotsqa
 #
 World.Playerbots.Qa.StaleHours = 24
+
+#
+#    World.Playerbots.Qa.TickHangWarmupMinutes
+#        Description: Minutes after the world starts ticking during which a tick hang is not
+#                     reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first
+#                     tick (0..1440, default 5).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.TickHangWarmupMinutes = 5
 
 #----------------------------------------------------------------------------
 # World:Social

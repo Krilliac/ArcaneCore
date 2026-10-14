@@ -39,7 +39,7 @@ public static class CreaturePathing
             Vector3 corner = path.Points[i];
             if (Vector3.Distance(start, corner) > ReachedDistance)
             {
-                system.MoveTo(creature, corner.X, corner.Y, corner.Z, run, finalOrientation: null);
+                system.MoveStraight(creature, corner.X, corner.Y, corner.Z, run, finalOrientation: null);
                 break;
             }
         }

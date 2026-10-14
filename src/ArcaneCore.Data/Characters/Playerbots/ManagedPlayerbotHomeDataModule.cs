@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -111,8 +112,9 @@ public sealed class EfManagedPlayerbotHomeStore(CharacterDbContext db) : IManage
     }
 
     public async Task<bool> ClearAsync(Guid botId, CancellationToken cancellationToken = default)
-        => botId != Guid.Empty && await db.Set<ManagedPlayerbotHomeRow>().Where(row => row.BotId == botId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false) == 1;
+        => botId != Guid.Empty && await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<ManagedPlayerbotHomeRow>().Where(row => row.BotId == botId).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false) == 1;
 
     private static void Validate(PlayerbotHome home)
     {

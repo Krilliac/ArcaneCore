@@ -101,6 +101,12 @@ public sealed class MapCollision : IMapUpdater
         return IsInLineOfSight(source.X, source.Y, source.Z + DefaultEyeHeight, x, y, z + DefaultEyeHeight);
     }
 
+    /// <summary>
+    /// The mesh point queries (random point, raycast) of the pathfinder that answers for this map, or null when it has none (no
+    /// navigation data for the map, or a pathfinder without them): callers then keep their own behaviour.
+    /// </summary>
+    public IMeshPointQuery? MeshPoints => _services.PathfinderFor(Map.MapId) as IMeshPointQuery;
+
     /// <summary>A path on this map (no navigation data: the world's fallback pathfinder, by default a straight line).</summary>
     public PathResult FindPath(Vector3 start, Vector3 end, PathOptions? options = null)
         => _services.PathfinderFor(Map.MapId).FindPath(Map.MapId, start, end, options);

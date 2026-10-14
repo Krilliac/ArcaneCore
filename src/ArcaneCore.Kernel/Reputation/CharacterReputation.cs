@@ -1,3 +1,5 @@
+using ArcaneCore.Kernel.Characters;
+
 namespace ArcaneCore.Kernel.Reputation;
 
 /// <summary>
@@ -19,10 +21,12 @@ public interface ICharacterReputationStore
     Task<CharacterReputationData> LoadAsync(int characterId, CancellationToken cancellationToken = default);
 
     /// <summary>Insert or replace the given faction rows; a missing character is ignored (deleted while queued).</summary>
-    Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts, CancellationToken cancellationToken = default);
+    Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts, CancellationToken cancellationToken = default,
+        CharacterOwnershipToken? ownership = null);
 
     /// <summary>Persist the watched reputation-list slot (-1 for none); a missing character is ignored.</summary>
-    Task SaveWatchedFactionAsync(int characterId, int watchedFaction, CancellationToken cancellationToken = default);
+    Task SaveWatchedFactionAsync(int characterId, int watchedFaction, CancellationToken cancellationToken = default,
+        CharacterOwnershipToken? ownership = null);
 
     /// <summary>Remove every reputation row of a character (a reused id at creation).</summary>
     Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default);

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Npc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -97,6 +98,7 @@ public sealed class EfCharacterTaxiFlightStore(CharacterDbContext db) : ICharact
     }
 
     public Task DeleteAsync(int characterId, CancellationToken cancellationToken = default)
-        => db.Set<CharacterTaxiFlightRow>().Where(r => r.CharacterId == characterId)
-            .ExecuteDeleteAsync(cancellationToken);
+        => CharacterWrites.InTransactionAsync(
+            db, () => db.Set<CharacterTaxiFlightRow>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken);
 }

@@ -97,6 +97,42 @@ public interface IMapAwarePathfinder : IPathfinder
     bool HasNavigationData(uint mapId);
 }
 
+/// <summary>
+/// Optional: a pathfinder that can pick points on its navigation mesh and walk a ray along it (Detour
+/// <c>findRandomPointAroundCircle</c> and <c>raycast</c>; vmangos <c>Map::GetWalkRandomPosition</c> (Map.cpp:3332) and
+/// <c>Map::GetWalkHitPosition</c>, used by <c>FleeingMovementGenerator.cpp:108</c>). Used by creature wander and flee to choose destinations that are on the mesh instead
+/// of a terrain-height point that may lie inside a building. Every query answers "unavailable" (false /
+/// <see cref="MeshRaycastResult.Available"/> false) when the map has no mesh, the tile under the query is not loaded or the start is not
+/// on the mesh, so the caller keeps its own behaviour; none throws. Positions are world coordinates; world thread.
+/// </summary>
+public interface IMeshPointQuery
+{
+    /// <summary>
+    /// A random point on the mesh within <paramref name="radius"/> (horizontal) of <paramref name="center"/>, on a polygon reachable from
+    /// the polygon under <paramref name="center"/> across loaded tiles. Deterministic for a given <paramref name="random"/> state; the
+    /// generator is not touched when the answer is unavailable. False when unavailable.
+    /// </summary>
+    bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point);
+
+    /// <summary>
+    /// Walk the mesh surface from <paramref name="start"/> toward <paramref name="end"/> (horizontal) until the segment ends or leaves the
+    /// mesh (a wall edge, a polygon the filter refuses, a tile that is not loaded).
+    /// </summary>
+    MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null);
+}
+
+/// <summary>
+/// The answer of <see cref="IMeshPointQuery.Raycast"/>. <see cref="Fraction"/> is the share of the horizontal segment walked (1: it
+/// reached <c>end</c>), measured from the start's position on the mesh; <see cref="Point"/> is where it stopped, on the mesh surface.
+/// </summary>
+/// <param name="Available">False when no answer could be given (no mesh, tile not loaded, start off the mesh); the rest is meaningless.</param>
+/// <param name="Hit">True when the ray stopped at the mesh boundary before reaching its end.</param>
+public readonly record struct MeshRaycastResult(bool Available, bool Hit, float Fraction, Vector3 Point)
+{
+    /// <summary>No answer.</summary>
+    public static MeshRaycastResult Unavailable(Vector3 end) => new(false, false, 1f, end);
+}
+
 /// <summary>vmangos <c>PathType</c> (PathFinder.h).</summary>
 [Flags]
 public enum PathType
@@ -170,6 +206,9 @@ public sealed record PathOptions
     /// <summary>Shared default instance.</summary>
     public static PathOptions Default { get; } = new();
 
+    /// <summary>Cooperatively stops a private navigation query; the default leaves existing callers uncancelled.</summary>
+    public CancellationToken CancellationToken { get; init; } = System.Threading.CancellationToken.None;
+
     /// <summary>
     /// The unit the path is for. When set, the include flags come from its capabilities
     /// (<see cref="PathMover.IncludeFlags"/>, vmangos <c>createFilter</c>) and <see cref="IncludeFlags"/> is ignored.
@@ -218,6 +257,17 @@ public sealed record PathOptions
     /// disk contention took 5.6 s of one world tick, live 2026-10-12).
     /// </summary>
     public bool NonBlockingTiles { get; init; }
+
+    /// <summary>vmangos <c>BuildPolyPath</c> "farFromPoly" distance (PathFinder.cpp:209): an endpoint farther than this from its polygon makes the path incomplete.</summary>
+    public const float VmangosEndTolerance = 7.0f;
+
+    /// <summary>
+    /// 0 (default): an endpoint is located within <see cref="MMaps.NavMeshPathfinder.NearExtents"/> (3 yd) and the path is <see cref="PathType.Incomplete"/>
+    /// as soon as it is 0.1 yd off its polygon. Above 0 (vmangos, <see cref="VmangosEndTolerance"/>): the destination is located within 5 yd
+    /// horizontally (PathFinder.cpp:128 FindWalkPoly extents) and is only "far" past this distance, so a point a few yards off the mesh whose
+    /// polygon the corridor reaches is a whole path ending at the nearest mesh point.
+    /// </summary>
+    public float EndTolerance { get; init; }
 }
 
 /// <summary>A path answer: its classification and its corner points (world coordinates).</summary>

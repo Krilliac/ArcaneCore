@@ -85,7 +85,7 @@ internal static class SchemaReferenceRenderer
             parts.Add("repairs the model's indexes of " + string.Join(", ", indexes.Select(t => "`" + t + "`")));
         }
 
-        if (changes.Any(c => c is not (CreateTableChange or AddColumnChange or EnsureIndexesChange)))
+        if (changes.Any(c => c is not (CreateTableChange or AddColumnChange or EnsureIndexesChange or EnsureRowChange)))
         {
             parts.Add("other changes (see the module)");
         }

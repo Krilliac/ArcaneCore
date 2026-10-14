@@ -584,6 +584,127 @@ public sealed class PlayerbotQuestGoalsTests
         });
     }
 
+    [Fact]
+    public async Task CompletedQuestWhoseTurnInIsRefusedForFullBags_RecordsDiagnosticAndSetsTheQuestAsideImmediately()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 25, Name = "Worn Shortsword", Class = (uint)ItemClass.Weapon, Quality = 1, Stackable = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 2092, Name = "Worn Dagger", Class = (uint)ItemClass.Weapon, Quality = 1, Stackable = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9502, Name = "Filler", Class = (uint)ItemClass.TradeGoods, Quality = 1, Stackable = 1 });
+        using IDisposable itemScope = items.Use();
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        var suspensions = new PlayerbotSuspensions();
+        goals.Suspensions = suspensions;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            quest.Feature.Services.ReplaceQuests(new QuestStore(new QuestContent(
+                [new QuestTemplate
+                {
+                    Entry = QuestInteractionFixture.QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, LimitTime = 30,
+                    Title = "Synthetic quest", Details = "Accept a bounded journal task.", RequestItemsText = "Finish the synthetic task.",
+                    ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1u, RewItemId1 = 25, RewItemCount1 = 1u,
+                }],
+                [new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.QuestId }],
+                [new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.QuestId }])));
+
+            Player player = session.Player!;
+            var accept = new PacketWriter(12);
+            accept.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            accept.WriteUInt32(QuestInteractionFixture.QuestId);
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, accept.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
+
+            while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
+
+            int chooseRewardSent = 0;
+            session.ManagedDispatchObserver = opcode =>
+            {
+                if (opcode == WorldOpcode.CmsgQuestgiverChooseReward) chooseRewardSent++;
+            };
+
+            for (int think = 0; think < 5; think++)
+            {
+                session.ManagedBudget = new ManagedActionBudget(1);
+                goals.Update(player, 500);
+            }
+
+            Assert.Equal(1, chooseRewardSent);
+            Assert.False(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded);
+            Assert.True(goals.IsRefused(QuestInteractionFixture.QuestId));
+            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
+            Assert.NotNull(goals.LastTurnInRefusal);
+            Assert.Equal(QuestInteractionFixture.QuestId, goals.LastTurnInRefusal!.Value.QuestId);
+            Assert.Equal("InventoryFull", goals.LastTurnInRefusal!.Value.Code);
+            Assert.Contains("inventory full", goals.LastTurnInRefusal!.Value.Reason, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0u, goals.CompletedReturnQuest(player));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task CompletedQuestWithVisibleEnderAndBlockedCloseApproach_SetsQuestAsideAfterThreeFailedApproaches()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var accept = new PacketWriter(12);
+            accept.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            accept.WriteUInt32(QuestInteractionFixture.QuestId);
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, accept.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+
+            var giver = (ArcaneCore.Game.Creatures.Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 40f, player.Y, player.Z, 0); // visible ender within 100 yd (#388 at 7 yd, #342 at 64 yd, #548 at 68 yd)
+            Assert.Contains(QuestInteractionFixture.Guid, player.VisibleObjects);
+            WorldCollision.Of(quest.Host.World).Install(lineOfSight: new BlockedFloor(player.Z), pathfinder: new BlockedPathfinder());
+
+            var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+            try
+            {
+                for (int think = 0; think < 3; think++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    brain.Update(500);
+                }
+
+                Assert.True(brain.QuestGoals.IsRefused(QuestInteractionFixture.QuestId));
+                Assert.True(brain.Suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
+                Assert.True(brain.Suspensions.IsEntrySuspended(QuestInteractionFixture.Entry, quest.Host.World.NowMs));
+                Assert.NotNull(brain.LastTurnInRefusal);
+                Assert.Equal(QuestInteractionFixture.QuestId, brain.LastTurnInRefusal!.Value.QuestId);
+                Assert.NotEqual(PlayerbotGoalKind.Quest, brain.Goal);
+            }
+            finally { brain.Stop(); }
+            return true;
+        });
+    }
+
+    private sealed class BlockedFloor(float height) : ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, bool ignoreM2 = true) => false;
+        public bool TryGetObjectHit(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, float modifyDistance, out System.Numerics.Vector3 hit)
+        { hit = from; return true; }
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => height;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        { info = default; return false; }
+    }
+
+    private sealed class BlockedPathfinder : IPathfinder
+    {
+        public bool Enabled => true;
+        public PathResult FindPath(uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, PathOptions? options = null)
+            => new(PathType.Incomplete, [start, start]);
+    }
+
     private static async Task RunQuestStagesAsync(Action<QuestNpcFeature> configure)
     {
         await using QuestHost quest = await QuestHost.StartAsync();

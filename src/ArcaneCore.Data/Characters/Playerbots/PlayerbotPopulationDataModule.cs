@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -66,30 +67,35 @@ public sealed class EfPlayerbotPopulationStore(CharacterDbContext db) : IPlayerb
         if (member.BotId == Guid.Empty || member.CharacterId <= 0 || member.CreatedUnix < 0 || member.UpdatedUnix < member.CreatedUnix)
             throw new ArgumentException("Population member identity or timestamps are invalid.", nameof(member));
 
-        int changed = await db.Set<PlayerbotPopulationMemberRow>().Where(row => row.BotId == member.BotId && row.CharacterId == member.CharacterId)
-            .ExecuteUpdateAsync(update => update
-                .SetProperty(row => row.ZoneId, member.ZoneId)
-                .SetProperty(row => row.Band, member.Band)
-                .SetProperty(row => row.UpdatedUnix, member.UpdatedUnix), cancellationToken).ConfigureAwait(false);
-        if (changed == 1) return;
-        if (await db.Set<PlayerbotPopulationMemberRow>().AnyAsync(row => row.BotId == member.BotId || row.CharacterId == member.CharacterId, cancellationToken)
-            .ConfigureAwait(false))
-            throw new InvalidOperationException("The population member identity is already owned by another row.");
-        db.Set<PlayerbotPopulationMemberRow>().Add(new PlayerbotPopulationMemberRow
+        await CharacterWrites.InTransactionAsync(db, async () =>
         {
-            BotId = member.BotId, CharacterId = member.CharacterId, ZoneId = member.ZoneId, Band = member.Band,
-            CreatedUnix = member.CreatedUnix, UpdatedUnix = member.UpdatedUnix,
-        });
-        try
-        {
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            db.ChangeTracker.Clear();
-        }
+            int changed = await db.Set<PlayerbotPopulationMemberRow>().Where(row => row.BotId == member.BotId && row.CharacterId == member.CharacterId)
+                .ExecuteUpdateAsync(update => update
+                    .SetProperty(row => row.ZoneId, member.ZoneId)
+                    .SetProperty(row => row.Band, member.Band)
+                    .SetProperty(row => row.UpdatedUnix, member.UpdatedUnix), cancellationToken).ConfigureAwait(false);
+            if (changed == 1) return;
+            if (await db.Set<PlayerbotPopulationMemberRow>().AnyAsync(row => row.BotId == member.BotId || row.CharacterId == member.CharacterId, cancellationToken)
+                .ConfigureAwait(false))
+                throw new InvalidOperationException("The population member identity is already owned by another row.");
+            db.Set<PlayerbotPopulationMemberRow>().Add(new PlayerbotPopulationMemberRow
+            {
+                BotId = member.BotId, CharacterId = member.CharacterId, ZoneId = member.ZoneId, Band = member.Band,
+                CreatedUnix = member.CreatedUnix, UpdatedUnix = member.UpdatedUnix,
+            });
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                db.ChangeTracker.Clear();
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> DeleteAsync(Guid botId, CancellationToken cancellationToken = default)
-        => await db.Set<PlayerbotPopulationMemberRow>().Where(row => row.BotId == botId).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false) == 1;
+        => await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<PlayerbotPopulationMemberRow>().Where(row => row.BotId == botId).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false) == 1;
 }

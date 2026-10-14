@@ -36,7 +36,7 @@ internal sealed class SyntheticNavWorld : IAsyncDisposable
 
     /// <summary>Write <paramref name="tiles"/> (file coordinates and tile) for map 0 and start the world on them.</summary>
     public static async Task<SyntheticNavWorld> StartAsync(NavMeshFixture fixture, (int X, int Y, CellTile Tile)[] tiles, ILineOfSight? lineOfSight = null,
-        (int X, int Y, CellTile Tile)[]? unloadedTiles = null, Action<NavMeshPathfinder>? configure = null)
+        (int X, int Y, CellTile Tile)[]? unloadedTiles = null, Action<NavMeshPathfinder>? configure = null, Action<IServiceCollection>? configureServices = null)
     {
         fixture.WriteParams(0);
         foreach ((int x, int y, CellTile tile) in tiles)
@@ -73,7 +73,11 @@ internal sealed class SyntheticNavWorld : IAsyncDisposable
             Assert.True(nav.LoadTile(0, x, y));
         Assert.NotNull(await nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!);
 
-        WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<IWorldFeature, ManualClock>();
+            configureServices?.Invoke(services);
+        });
         await host.OnWorldAsync(() => WorldCollision.Of(host.World).Install(lineOfSight: lineOfSight, pathfinder: nav));
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         return new SyntheticNavWorld(host, session, nav);

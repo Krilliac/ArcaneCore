@@ -1061,14 +1061,15 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// and choose again, with one stall report for bot QA (<see cref="TakeStalls"/>); a further bound without progress gives the goal up and
     /// dissolves the group (reason <c>stalled</c>; the goal is set aside for every member). Never a group with a real player in it, nor a
     /// stranded bot's walk out (<see cref="BotGroup.Solo"/>, it has its own bound), nor the states that wait on a bound of their own:
-    /// forming (the invitations), a wipe (the survivors' retreats), leaving (the walk out, then <see cref="BringOut"/>; a finished run is not
-    /// failed for its stragglers), the leader waiting at the objective's spawn
-    /// (<see cref="ObjectiveMissing"/>) and disbanding. True when the group was dissolved.
+    /// forming (the invitations), gathering and regrouping (the leader holds for its members under their step bounds), a wipe (the survivors'
+    /// retreats), leaving (the walk out, then <see cref="BringOut"/>; a finished run is not failed for its stragglers), the leader waiting at the
+    /// objective's spawn (<see cref="ObjectiveMissing"/>) and disbanding. True when the group was dissolved.
     /// </summary>
     private bool WatchStall(BotGroup group, Player leader, uint now)
     {
         if (group.Solo || group.Members.Any(m => m.Real) || group.MissingSinceMs != 0
-            || group.State is PlayerbotGroupState.Forming or PlayerbotGroupState.Wiped or PlayerbotGroupState.Leaving or PlayerbotGroupState.Disbanding)
+            || group.State is PlayerbotGroupState.Forming or PlayerbotGroupState.Gathering or PlayerbotGroupState.Regrouping
+                or PlayerbotGroupState.Wiped or PlayerbotGroupState.Leaving or PlayerbotGroupState.Disbanding)
         {
             group.Stall.Reset();
             return false;

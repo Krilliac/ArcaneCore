@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Life;
+using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -145,8 +146,9 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
     public async Task CompleteAsync(Guid operationId, CancellationToken cancellationToken = default)
     {
         string key = operationId.ToString("D");
-        await db.Set<CharacterDeletionRow>().Where(r => r.OperationId == key)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await CharacterWrites.InTransactionAsync(
+            db, () => db.Set<CharacterDeletionRow>().Where(r => r.OperationId == key).ExecuteDeleteAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -228,18 +230,32 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
 
     public async Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
     {
-        if (!await StageStateAsync(state, cancellationToken).ConfigureAwait(false))
+        // Fence off and no token: no explicit transaction and no ownership statement, the SQL of before the fence (SaveChanges wraps itself).
+        bool unfenced = state.Ownership is null && !CharacterWrites.IsFenced(db);
+        bool own = !unfenced && db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
+        await using IDbContextTransaction? transaction = own
+            ? await CharacterWriteFence.BeginTransactionAsync(db, state.Ownership, cancellationToken).ConfigureAwait(false)
+            : null;
+        try
         {
-            return;
+            if (await StageStateAsync(state, cancellationToken, beganFenced: own).ConfigureAwait(false))
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            if (transaction is not null)
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
-
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        db.ChangeTracker.Clear();
+        finally
+        {
+            db.ChangeTracker.Clear();
+        }
     }
 
-    /// <summary>Stage state and inventory on this context, leaving the commit to the caller.</summary>
-    internal async Task<bool> StageStateAsync(CharacterState state, CancellationToken cancellationToken)
+    /// <summary>
+    /// Stage state and inventory on this context, leaving the commit to the caller. <paramref name="beganFenced"/> is true only when the caller
+    /// began the transaction itself through <see cref="CharacterWriteFence"/> with this state's token, so the interceptor has already verified it.
+    /// </summary>
+    internal async Task<bool> StageStateAsync(CharacterState state, CancellationToken cancellationToken, bool beganFenced = false)
     {
+        await CharacterOwnershipGuard.VerifyUnlessFencedAsync(db, state.Ownership, beganFenced, cancellationToken).ConfigureAwait(false);
         CharacterRecord? character = await db.Characters
             .FirstOrDefaultAsync(c => c.Id == state.Id, cancellationToken)
             .ConfigureAwait(false);

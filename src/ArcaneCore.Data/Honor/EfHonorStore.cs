@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Honor;
 using Microsoft.EntityFrameworkCore;
 
@@ -93,30 +94,37 @@ public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, 
     public async Task ResetAsync(int characterId, CancellationToken cancellationToken = default)
     {
         // HonorMgr::Reset clears the honor numbers but not the character flags (PvP, City Protector).
-        await db.Set<HonorCpRow>().Where(r => r.CharacterId == characterId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        await db.Set<CharacterHonorRow>().Where(r => r.CharacterId == characterId)
-            .ExecuteUpdateAsync(
-                s => s.SetProperty(r => r.RankPoints, 0f)
-                    .SetProperty(r => r.HighestRank, (byte)0)
-                    .SetProperty(r => r.Standing, 0u)
-                    .SetProperty(r => r.LastWeekHk, 0u)
-                    .SetProperty(r => r.LastWeekCp, 0f)
-                    .SetProperty(r => r.StoredHk, 0)
-                    .SetProperty(r => r.StoredDk, 0),
-                cancellationToken).ConfigureAwait(false);
+        await CharacterWrites.InTransactionAsync(db, async () =>
+        {
+            await db.Set<HonorCpRow>().Where(r => r.CharacterId == characterId)
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await db.Set<CharacterHonorRow>().Where(r => r.CharacterId == characterId)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(r => r.RankPoints, 0f)
+                        .SetProperty(r => r.HighestRank, (byte)0)
+                        .SetProperty(r => r.Standing, 0u)
+                        .SetProperty(r => r.LastWeekHk, 0u)
+                        .SetProperty(r => r.LastWeekCp, 0f)
+                        .SetProperty(r => r.StoredHk, 0)
+                        .SetProperty(r => r.StoredDk, 0),
+                    cancellationToken).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {
-        await db.Set<HonorCpRow>().Where(r => r.CharacterId == characterId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        await db.Set<CharacterHonorRow>().Where(r => r.CharacterId == characterId)
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await CharacterWrites.InTransactionAsync(db, async () =>
+        {
+            await db.Set<HonorCpRow>().Where(r => r.CharacterId == characterId)
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await db.Set<CharacterHonorRow>().Where(r => r.CharacterId == characterId)
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // the deletion lifetime fence is token-independent
         await db.Set<HonorCpRow>()
             .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);

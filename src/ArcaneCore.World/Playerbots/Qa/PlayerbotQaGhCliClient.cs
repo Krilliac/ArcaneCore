@@ -196,7 +196,7 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
     {
         string label = _options.Labels.Length > 0 ? _options.Labels[0] : "bot-qa";
         int limit = Math.Max(1, _options.MaxListPages) * ItemsPerPage;
-        QaProcessResult result = await RunAsync(["issue", "list", "--repo", _repository, "--label", label, "--state", "all", "--json", "number,state,body,url", "--limit",
+        QaProcessResult result = await RunAsync(["issue", "list", "--repo", _repository, "--label", label, "--state", "all", "--json", "number,state,stateReason,body,url", "--limit",
             limit.ToString(CultureInfo.InvariantCulture)], "issue list", cancellationToken).ConfigureAwait(false);
         using JsonDocument doc = Parse(result.StdOut);
         if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new PlayerbotQaPublishException("gh issue list did not print a JSON array", transient: false);
@@ -211,7 +211,7 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
 
     public async Task<(QaIssueRef Issue, string Body)?> GetIssueAsync(int number, CancellationToken cancellationToken)
     {
-        QaProcessResult result = await RunAsync(["issue", "view", number.ToString(CultureInfo.InvariantCulture), "--repo", _repository, "--json", "number,state,body,url"],
+        QaProcessResult result = await RunAsync(["issue", "view", number.ToString(CultureInfo.InvariantCulture), "--repo", _repository, "--json", "number,state,stateReason,body,url"],
             "issue view", cancellationToken, allowNotFound: true).ConfigureAwait(false);
         if (result.ExitCode != 0) return null;
         using JsonDocument doc = Parse(result.StdOut);
@@ -349,7 +349,9 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
         bool open = item.TryGetProperty("state", out JsonElement state) && state.ValueKind == JsonValueKind.String
             && string.Equals(state.GetString(), "open", StringComparison.OrdinalIgnoreCase);
         string url = item.TryGetProperty("url", out JsonElement u) && u.ValueKind == JsonValueKind.String ? u.GetString() ?? string.Empty : string.Empty;
-        return new QaIssueRef(n, open, url);
+        // gh prints the reason in capitals with an underscore (NOT_PLANNED, COMPLETED).
+        string? reason = item.TryGetProperty("stateReason", out JsonElement why) && why.ValueKind == JsonValueKind.String ? why.GetString() : null;
+        return new QaIssueRef(n, open, url, reason);
     }
 
     [GeneratedRegex(@"^https://[A-Za-z0-9.\-]+/[^/\s]+/[^/\s]+/issues/(?<n>[0-9]{1,9})$", RegexOptions.CultureInvariant)]

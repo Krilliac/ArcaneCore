@@ -22,10 +22,27 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
     {
         await using Terrain terrain = await Terrain.StartAsync();
         await terrain.PlaceAsync(AshenvaleStall, 1);
+        var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
+        bool pending = true;
+        for (int attempt = 0; attempt < 50 && pending; attempt++)
+        {
+            pending = await terrain.Host.OnWorldAsync(() =>
+            {
+                long mark = PlayerbotNavigation.PendingMark;
+                _ = PlayerbotNavigation.TryPlanToward(terrain.Player, JeneuSancrea, options, out _);
+                _ = PlayerbotNavigation.RequiresSteepAscent(terrain.Player, JeneuSancrea, options, out _);
+                return PlayerbotNavigation.PendingSince(mark);
+            });
+            if (pending)
+            {
+                await Task.Delay(20);
+                await terrain.Host.World.AdvanceClockAsync(100);
+            }
+        }
+
         await terrain.Host.OnWorldAsync(() =>
         {
             var map = terrain.Player.Map!;
-            var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
             Assert.False(PlayerbotNavigation.TryPlanToward(terrain.Player, JeneuSancrea, options, out _));
             Assert.True(PlayerbotNavigation.RequiresSteepAscent(terrain.Player, JeneuSancrea, options, out float ascent));
             output.WriteLine($"steep ascent {ascent:F1} yards within the diagnosis budget {PlayerbotNavigation.DiagnosisSearchNodes}");

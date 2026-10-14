@@ -303,29 +303,18 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     // --- unreachable target ------------------------------------------------------------------------
 
     /// <summary>
-    /// <see cref="ICreaturePathQuery"/>: <see cref="FindPath"/> plus the pathfinder's verdict. No path and a partial path
+    /// <see cref="ICreaturePathQuery"/>: <see cref="PlanPath"/> plus the pathfinder's verdict. No path and a partial path
     /// (<see cref="PathType.Incomplete"/>, the route ends at the point nearest the destination) are unreachable; a straight line
-    /// without navigation data, a shortcut and a complete path are reachable. World thread; no allocation beyond the path itself.
-    /// The caller checks <see cref="HasPathBudget"/> first and defers (<c>TargetedMovementGenerator.Step</c>); this always searches.
+    /// without navigation data, a shortcut and a complete path are reachable. No path answers NO corners (vmangos
+    /// <c>TargetedMovementGenerator::_setTargetLocation</c> returns on <c>PATHFIND_NOPATH</c>, TargetedMovementGenerator.cpp:188-189): the
+    /// chaser stands and asks again on its next re-check. World thread; no allocation beyond the path itself.
+    /// The caller checks <see cref="HasPathBudget"/> first and defers (<c>TargetedMovementGenerator.Step</c>).
     /// </summary>
     IReadOnlyList<Vector3> ICreaturePathQuery.FindPath(Creature creature, Vector3 destination, out bool reachable)
     {
-        var start = new Vector3(creature.X, creature.Y, creature.Z);
-        PathResult path = SearchPath(start, destination);
-        if (!path.HasPath)
-        {
-            reachable = false;
-            return [destination];
-        }
-
-        reachable = (path.Type & PathType.Incomplete) == 0;
-        var corners = new List<Vector3>(path.Points.Count - 1);
-        for (int i = 1; i < path.Points.Count; i++)
-        {
-            corners.Add(path.Points[i]);
-        }
-
-        return corners;
+        PlannedPath plan = PlanPath(creature, destination);
+        reachable = plan.Outcome is PathOutcome.Mesh or PathOutcome.Direct or PathOutcome.Deferred;
+        return plan.Corners;
     }
 
     bool ICreaturePathQuery.HasPathBudget => HasPathBudget;

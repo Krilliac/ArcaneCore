@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
@@ -15,6 +16,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Groups;
+using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.GroupTestWorld;
@@ -560,6 +562,158 @@ public sealed class PlayerbotRunWorldTests
             Assert.Equal(1, world.Coordinator.Totals.Failed);
             return true;
         });
+    }
+
+    // --- bot QA and metrics ------------------------------------------------------------------------------------------
+
+    private static (List<string> Outcomes, MeterListener Listener) ListenToRuns()
+    {
+        var outcomes = new List<string>();
+        var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Meter.Name == "ArcaneCore.Playerbots.Runs" && instrument.Name == "arcanecore.playerbot.runs") l.EnableMeasurementEvents(instrument);
+            },
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (KeyValuePair<string, object?> tag in tags)
+                if (tag.Key == "outcome") lock (outcomes) outcomes.Add((string)tag.Value!);
+        });
+        listener.Start();
+        return (outcomes, listener);
+    }
+
+    private static Task<GroupTestWorld> StartWithQaAsync(PlayerbotQaSignalBus bus, Action<PlayerbotOptions>? configure = null)
+        => GroupTestWorld.StartAsync([], configure, dungeon: true, services =>
+        {
+            Register(services);
+            services.AddSingleton<IPlayerbotQaSink>(new PlayerbotQaSink(bus));
+        }, Bosses());
+
+    [Fact]
+    public async Task AnOperatorStop_CountsAsAGivenUpRun_ButReportsNothingToBotQa()
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        (List<string> outcomes, MeterListener listener) = ListenToRuns();
+        using MeterListener _ = listener;
+        await using GroupTestWorld world = await StartWithQaAsync(bus);
+        await AddPartyAsync(world, "Qaz");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+
+        // A GM stop, a scale-down, a shutdown or a controller taking over ends a run through Forget: not a finding about content or code.
+        await world.OnWorldAsync(() =>
+        {
+            world.Coordinator.Forget(group.LeaderBotId);
+            return true;
+        });
+
+        Assert.Equal("leader-stopped", group.Run!.Reason);
+        var signals = new List<QaSignal>();
+        bus.Drain(signals, 16);
+        Assert.Empty(signals);
+        Assert.Equal(1, world.Coordinator.RunTotals.GivenUp);
+        lock (outcomes) Assert.Contains("given_up", outcomes);
+    }
+
+    [Theory]
+    [InlineData("travel-timeout", "timeout")]
+    [InlineData("no-path-to-entrance", "given_up")]
+    public async Task ARunGivenUpForAContentReason_ReportsOneRunFailedSignalToBotQa_WithNoBotOrGroupIdentity_AndCountsItByOutcome(string reason, string outcome)
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        (List<string> outcomes, MeterListener listener) = ListenToRuns();
+        using MeterListener _ = listener;
+        await using GroupTestWorld world = await StartWithQaAsync(bus);
+        (Guid Id, string Name)[] members = await AddPartyAsync(world, "Qat");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+        // A run lasts under a minute here and MaxRunMinutes cannot go below 10 (validated), so the fault the group AI raises is injected the way its own are
+        // (RunFault, applied by Advance): the same Finish, disband and report path as a real gather or travel timeout or a no-path.
+        await world.OnWorldAsync(() =>
+        {
+            group.RunFault = reason;
+            return true;
+        });
+
+        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+
+        var signals = new List<QaSignal>();
+        bus.Drain(signals, 16);
+        Assert.True(signals.Count == 1, world.Trace());
+        QaSignal signal = signals[0];
+        Assert.Equal(QaSignalKind.RunFailed, signal.Kind);
+        Assert.Equal(reason, signal.Reason);
+        Assert.Equal(DungeonEntry.Deadmines, signal.Map);
+        Assert.False(string.IsNullOrEmpty(signal.Stage));
+        Assert.Null(signal.BotKey);
+        Assert.Equal(0, signal.BotClass);
+        string everything = signal.Message + "|" + signal.Detail + "|" + signal.Stage + "|" + signal.Reason + "|" + PlayerbotQaFingerprint.Key(signal);
+        Assert.All(members, m => Assert.DoesNotContain(m.Name, everything, StringComparison.Ordinal));
+        Assert.Equal($"{reason} in {signal.Detail} at {signal.Stage}", PlayerbotQaAggregator.Subject(signal, null));
+        Assert.Equal(1, world.Coordinator.RunTotals.GivenUp);
+        lock (outcomes) Assert.Contains(outcome, outcomes);
+    }
+
+    [Theory]
+    [InlineData("no-path-to-entrance", true)]
+    [InlineData("no-path-to-boss", true)]
+    [InlineData("gather-timeout", true)]
+    [InlineData("travel-timeout", true)]
+    [InlineData("enter-refused-or-timeout", true)]
+    [InlineData("regroup-timeout", true)]
+    [InlineData("run-timeout", true)]
+    [InlineData("objective-missing", true)]
+    [InlineData("stalled", true)]
+    [InlineData("wiped", true)]
+    [InlineData("leader-stopped", false)]
+    [InlineData("leader-left", false)]
+    [InlineData("leader-gone", false)]
+    [InlineData("too-few", false)]
+    [InlineData("invites-unanswered", false)]
+    [InlineData("disbanded", false)]
+    [InlineData("aborted", false)]
+    public void OnlyContentAndCodeReasons_AreFindings(string reason, bool finding)
+        => Assert.Equal(finding, PlayerbotGroupCoordinator.PointsAtContentOrCode(reason));
+
+    [Fact]
+    public void ARealStepTimeout_GivesUpTheMachineAtItsStep_AndIsCountedAsATimeout()
+    {
+        var run = new PlayerbotRunMachine(new PlayerbotRunPlan(36, "The Deadmines", 0, 1, false, 5, 1, 36, default, default, 10, [], []), 3);
+        run.Apply(PlayerbotRunSignal.Timeout("travel"));
+
+        Assert.Equal(PlayerbotRunStep.GiveUp, run.Step);
+        Assert.Equal(PlayerbotRunStep.Travel, run.FailedStep);
+        Assert.Equal("travel-timeout", run.Reason);
+        Assert.Equal(PlayerbotRunMeters.Timeout, PlayerbotRunMeters.OutcomeOf(run.Complete, run.Reason));
+        Assert.Equal(PlayerbotRunMeters.GivenUp, PlayerbotRunMeters.OutcomeOf(false, "no-path-to-boss"));
+        Assert.Equal(PlayerbotRunMeters.Completed, PlayerbotRunMeters.OutcomeOf(true, null));
+    }
+
+    [Fact]
+    public async Task AGivenUpRun_WithBotQaOff_ChangesNothing()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        await AddPartyAsync(world, "Qao");
+        world.Coordinator.RunRoll = () => 0d;
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        world.Coordinator.RunRoll = () => 1d;
+
+        await world.OnWorldAsync(() =>
+        {
+            world.Coordinator.Forget(group.LeaderBotId);
+            return true;
+        });
+
+        Assert.Empty(world.Coordinator.Groups);
+        Assert.Equal((0, 1), world.Coordinator.RunTotals);
     }
 
     // --- the world ---------------------------------------------------------------------------------------------------

@@ -16,7 +16,8 @@ namespace ArcaneCore.Game.Creatures;
 /// </para>
 /// Limits: the point is uniform over the disc at the height provider's ground Z (or the anchor Z), with no navmesh
 /// reachability test (the reference routes it through the frame's RandomPoint); the route goes through
-/// <see cref="ICreatureMover.FindPath"/> like every other creature move.
+/// <see cref="ICreatureMover.PlanPath"/>: with no path (the point is in a wall or a house) the creature waits 1-1.5 s and picks another point
+/// (ArcaneCore's choice, not vmangos': ConfusedMovementGenerator.cpp:72-86 checks no path).
 /// Thread affinity: world thread (the creature's map). Allocation: one object per confuse application; a leg allocates
 /// what the mover's path does, at most once per 800 ms.
 /// </summary>
@@ -100,8 +101,23 @@ internal sealed class ConfusedMovementGenerator : ICreatureMovementGenerator
         float x = _anchorX + (float)(distance * Math.Cos(angle));
         float y = _anchorY + (float)(distance * Math.Sin(angle));
         float z = mover.GetHeight(creature.MapId, x, y, _anchorZ) ?? _anchorZ;
-        mover.MovePath(creature, mover.FindPath(creature, new Vector3(x, y, z)), run: false, SplineFacing.None);
-        _staggerMs = mover.URand(StaggerIntervalMinMs, StaggerIntervalMaxMs);
+        PlannedPath plan = mover.PlanPath(creature, new Vector3(x, y, z));
+        switch (plan.Outcome)
+        {
+            case PathOutcome.NoPath:
+                // ArcaneCore's choice: vmangos ConfusedMovementGenerator (cpp:72-86) has no NOPATH check and staggers along the shortcut; here a point with
+                // no path waits 1-1.5 s (the wait of FearMovementGenerator.cpp:43-46) and another is picked, so the creature never staggers through a wall.
+                _staggerMs = mover.URand(FleeingMovementGenerator.NoPathRetryMinMs, FleeingMovementGenerator.NoPathRetryMaxMs);
+                break;
+            case PathOutcome.Deferred:
+                _staggerMs = 0; // the search budget is spent: ask again on the next update
+                break;
+            default:
+                mover.MovePath(creature, plan.Corners, run: false, SplineFacing.None);
+                _staggerMs = mover.URand(StaggerIntervalMinMs, StaggerIntervalMaxMs);
+                break;
+        }
+
         return true;
     }
 }

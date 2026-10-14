@@ -393,6 +393,7 @@
       "previous": null
     }
   },
+  "seeds": [],
   "files": {
     "mariadb/base_v0053.sql": "ef623e1ff269900749e87b0750bab5076541565e541e4215d6291fc288a75b74",
     "postgresql/base_v0053.sql": "f73dd6d2f76295623ac74a43a9edfc59b99d22f39ca93b7a43501c6946690306",

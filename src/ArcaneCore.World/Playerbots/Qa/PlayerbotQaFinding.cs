@@ -71,6 +71,12 @@ internal sealed record QaPublication(QaPublicationState State, int Issue = 0, st
     };
 }
 
+/// <summary>How many occurrences of a finding the server saw on one build (<see cref="QaFindingView.BuildCounts"/>).</summary>
+internal readonly record struct QaBuildCount(string Build, long Count);
+
+/// <summary>A build this store has run and when it first saw it (UTC): what makes one build "newer" than another, since build strings do not order.</summary>
+internal sealed record QaBuildSeen(string Build, DateTime FirstSeenUtc);
+
 /// <summary>One piece of evidence: where and when, who attacked, and the redacted log line.</summary>
 internal sealed record QaSample(DateTime AtUtc, bool HasPosition, uint Map, float X, float Y, float Z, uint[] Attackers, string Message)
 {
@@ -186,6 +192,47 @@ internal sealed record QaFindingView
     /// <summary>A death loop without attackers: the death source of its first signal (<c>Environment</c>, <c>Unobserved</c>...); empty otherwise.</summary>
     public string DeathSource { get; init; } = string.Empty;
 
+    /// <summary>The build (<see cref="PlayerbotQaIssueComposer.BuildVersion"/>) that met the finding first. Null in files written before format 2: the build is unknown.</summary>
+    public string? FirstBuild { get; init; }
+
+    /// <summary>The build that met the finding last. Null in files written before format 2.</summary>
+    public string? LastBuild { get; init; }
+
+    /// <summary>
+    /// Occurrences per build, most recent build first, at most <see cref="QaFinding.MaxTrackedBuilds"/> entries (the build now running and the one before it);
+    /// the counts of older builds are dropped. Empty in files written before format 2.
+    /// </summary>
+    public IReadOnlyList<QaBuildCount> BuildCounts { get; init; } = [];
+
+    /// <summary>
+    /// The build that was running when the finding was first observed KnownClosed (its issue closed by a person); null while it is not KnownClosed.
+    /// A recurrence on any other build is a regression (<see cref="PlayerbotQaGitHubOptions.ReopenOnRegression"/>).
+    /// </summary>
+    public string? ClosedBuild { get; init; }
+
+    /// <summary>When the store first saw <see cref="ClosedBuild"/>, stamped as it was set: a regression is judged on it, so it holds after the build leaves the registry. Null in older data.</summary>
+    public DateTime? ClosedBuildSeenUtc { get; init; }
+
+    /// <summary>When the store first saw <see cref="ReportedBuild"/> (stamped as it was set). Null in older data.</summary>
+    public DateTime? ReportedBuildSeenUtc { get; init; }
+
+    /// <summary>The finding's issue was closed as not planned (a decision): a regression never reopens it, so nothing is looked up for it again.</summary>
+    public bool NotPlanned { get; init; }
+
+    /// <summary>The build that was running when the publisher last created, reopened or commented on the finding's issue (the issue was open then).</summary>
+    public string? ReportedBuild { get; init; }
+
+    /// <summary>Occurrences seen on <paramref name="build"/>, among the builds still tracked (0 when unknown).</summary>
+    public long CountOnBuild(string build)
+    {
+        foreach (QaBuildCount entry in BuildCounts ?? [])
+        {
+            if (string.Equals(entry.Build, build, StringComparison.Ordinal)) return entry.Count;
+        }
+
+        return 0;
+    }
+
     [JsonIgnore]
     public string ShortId => PlayerbotQaFingerprint.ShortId(Id);
 
@@ -205,7 +252,7 @@ internal sealed record QaFindingView
     public bool QuestIsGoal => Goal.Length == 0 || QuestIsGoalOf(Kind, Goal);
 
     internal static bool QuestIsGoalOf(QaSignalKind kind, string goal)
-        => kind is not (QaSignalKind.Stall or QaSignalKind.DeathLoop) || string.Equals(goal, "Quest", StringComparison.Ordinal);
+        => kind is not (QaSignalKind.Stall or QaSignalKind.DeathLoop or QaSignalKind.UnreachableGoal) || string.Equals(goal, "Quest", StringComparison.Ordinal);
 
     internal static string LabelOf(QaSignalKind kind) => Enum.IsDefined(kind) ? QaKinds.Of(kind).Label : kind.ToString();
 
@@ -227,7 +274,11 @@ internal sealed record QaFindingView
 }
 
 /// <summary>What a publish attempt changed about a finding.</summary>
-internal sealed record QaPublicationUpdate(QaPublication Publication, DateTime? LastCommentUtc = null, long? OccurrencesReported = null);
+/// <param name="Publication">The new state.</param>
+/// <param name="LastCommentUtc">When a comment was added (also stamps the finding's reported build).</param>
+/// <param name="OccurrencesReported">The occurrences now told to GitHub.</param>
+/// <param name="Reported">The issue was created or reopened without a comment: stamps the finding's reported build all the same.</param>
+internal sealed record QaPublicationUpdate(QaPublication Publication, DateTime? LastCommentUtc = null, long? OccurrencesReported = null, bool Reported = false, bool? NotPlanned = null);
 
 /// <summary>The mutable aggregate behind a <see cref="QaFindingView"/>; owned by <see cref="PlayerbotQaAggregator"/> and touched only under its lock.</summary>
 internal sealed class QaFinding
@@ -235,6 +286,71 @@ internal sealed class QaFinding
     internal const int MaxTrackedBots = 512;
 
     internal const int MaxAttackers = 32;
+
+    /// <summary>The builds a finding keeps a count for: the current one and the previous one (older counts are dropped, so the list never grows).</summary>
+    internal const int MaxTrackedBuilds = 2;
+
+    /// <summary>The longest build string kept (a longer one, from an edited file, is cut).</summary>
+    internal const int MaxBuildChars = 128;
+
+    public string? FirstBuild { get; set; }
+
+    public string? LastBuild { get; set; }
+
+    /// <summary>Most recent build first; at most <see cref="MaxTrackedBuilds"/> entries.</summary>
+    public List<QaBuildCount> BuildCounts { get; } = [];
+
+    public string? ClosedBuild { get; set; }
+
+    public DateTime? ClosedBuildSeenUtc { get; set; }
+
+    public DateTime? ReportedBuildSeenUtc { get; set; }
+
+    public bool NotPlanned { get; set; }
+
+    public string? ReportedBuild { get; set; }
+
+    /// <summary>Count <paramref name="occurrences"/> on <paramref name="build"/>: it becomes the most recent build, and only the newest <see cref="MaxTrackedBuilds"/> stay.</summary>
+    public void AddBuild(string build, long occurrences)
+    {
+        FirstBuild ??= build;
+        LastBuild = build;
+        if (BuildCounts.Count > 0 && string.Equals(BuildCounts[0].Build, build, StringComparison.Ordinal))
+        {
+            // The common case: the current build is already first. A struct replaced in place, no allocation.
+            BuildCounts[0] = new QaBuildCount(build, Math.Max(0, BuildCounts[0].Count) + occurrences);
+            return;
+        }
+
+        long total = occurrences;
+        int at = BuildCounts.FindIndex(entry => string.Equals(entry.Build, build, StringComparison.Ordinal));
+        if (at >= 0)
+        {
+            total = Math.Max(0, BuildCounts[at].Count) + occurrences;
+            BuildCounts.RemoveAt(at);
+        }
+
+        BuildCounts.Insert(0, new QaBuildCount(build, total));
+        if (BuildCounts.Count > MaxTrackedBuilds) BuildCounts.RemoveRange(MaxTrackedBuilds, BuildCounts.Count - MaxTrackedBuilds);
+    }
+
+    /// <summary>Fold the build stamps of a finding merged into this one (<paramref name="fromNewer"/>: it was seen more recently). Call before the seen times are merged.</summary>
+    public void AbsorbBuilds(QaFinding from, bool fromNewer)
+    {
+        if (from.FirstBuild is not null && (FirstBuild is null || from.FirstSeenUtc < FirstSeenUtc)) FirstBuild = from.FirstBuild;
+        if (from.LastBuild is not null && (LastBuild is null || fromNewer)) LastBuild = from.LastBuild;
+        var sums = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (QaBuildCount entry in BuildCounts.Concat(from.BuildCounts)) sums[entry.Build] = sums.GetValueOrDefault(entry.Build) + entry.Count;
+        QaBuildCount[] merged = [.. sums.Select(p => new QaBuildCount(p.Key, p.Value))
+            .OrderBy(e => string.Equals(e.Build, LastBuild, StringComparison.Ordinal) ? 0 : 1).ThenByDescending(e => e.Count).ThenBy(e => e.Build, StringComparer.Ordinal)
+            .Take(MaxTrackedBuilds)];
+        BuildCounts.Clear();
+        BuildCounts.AddRange(merged);
+    }
+
+    /// <summary>A build string as kept: null when blank, cut at <see cref="MaxBuildChars"/>.</summary>
+    internal static string? CleanBuild(string? build)
+        => string.IsNullOrWhiteSpace(build) ? null : build.Length <= MaxBuildChars ? build : build[..MaxBuildChars];
 
     /// <summary>
     /// The most attacker entries a death-loop finding collects from its signals. A real loop has one to three; a finding that reaches this many is an
@@ -322,6 +438,15 @@ internal sealed class QaFinding
     /// <summary>A death loop's attackers: the non-zero entries of every signal folded in (at most <see cref="MaxAttackers"/>); a loop that shares one of them is this loop.</summary>
     public SortedSet<uint> Attackers { get; } = [];
 
+    /// <summary>Observed creature facts across every signal folded into this death loop, keyed by creature entry.</summary>
+    public Dictionary<uint, QaAttackerFact> AttackerFacts { get; } = [];
+
+    /// <summary>Minimum positive bot level observed against each attacker entry in this death loop.</summary>
+    public Dictionary<uint, int> AttackerBotLevels { get; } = [];
+
+    /// <summary>Minimum positive bot level observed across any signal in this death loop (0 when none).</summary>
+    public int MinBotLevel { get; set; }
+
     /// <summary>A stall's coarse identity (<see cref="PlayerbotQaFingerprint.StallGroup"/>); empty for other kinds. In memory only: recomputed on load.</summary>
     public string Group { get; set; } = string.Empty;
 
@@ -333,6 +458,41 @@ internal sealed class QaFinding
     /// <summary>Different bots seen (saturates at <see cref="MaxTrackedBots"/> tracked ids; a bot-less signal's own count counts too).</summary>
     public int DistinctBots => Math.Max(Bots.Count, AnonymousBots);
 
+    public void RecordLoopObservation(IReadOnlyCollection<uint> attackers, QaBotObservation? bot)
+    {
+        if (bot is null) return;
+        if (bot.Level > 0 && (MinBotLevel == 0 || bot.Level < MinBotLevel)) MinBotLevel = bot.Level;
+        foreach (uint entry in attackers)
+        {
+            if (entry != 0 && bot.Level > 0 && (!AttackerBotLevels.TryGetValue(entry, out int prev) || bot.Level < prev))
+            {
+                AttackerBotLevels[entry] = bot.Level;
+            }
+        }
+
+        foreach (QaAttackerFact fact in bot.AttackerFacts ?? [])
+        {
+            if (fact.Entry == 0) continue;
+            if (bot.Level > 0 && (!AttackerBotLevels.TryGetValue(fact.Entry, out int prevLevel) || bot.Level < prevLevel))
+            {
+                AttackerBotLevels[fact.Entry] = bot.Level;
+            }
+
+            AttackerFacts[fact.Entry] = AttackerFacts.TryGetValue(fact.Entry, out QaAttackerFact? existing)
+                ? MergeAttackerFact(existing, fact)
+                : fact;
+        }
+    }
+
+    internal static QaAttackerFact MergeAttackerFact(QaAttackerFact a, QaAttackerFact b) => new(
+        a.Entry,
+        Math.Max(a.Level, b.Level),
+        Math.Min(a.MinLevel, b.MinLevel),
+        Math.Max(a.MaxLevel, b.MaxLevel),
+        (b.Rank is >= 1 and <= 3 && a.Rank is < 1 or > 3) ? b.Rank : Math.Max(a.Rank, b.Rank),
+        a.Guard || b.Guard,
+        a.Hostile || b.Hostile);
+
     public QaFindingView ToView() => new()
     {
         Id = Id, Key = Key, Kind = Kind, Subject = Subject, Goal = Goal, Count = Count, DistinctBots = DistinctBots, FirstSeenUtc = FirstSeenUtc,
@@ -341,5 +501,7 @@ internal sealed class QaFinding
         OccurrencesReported = OccurrencesReported, Spell = Spell, SpellName = SpellName, SpellRank = SpellRank, EffectIndex = EffectIndex,
         EffectName = EffectName, EffectValue = EffectValue, Aura = Aura, Reason = Reason, ReasonDetail = ReasonDetail, Item = Item, Npc = Npc,
         GameObject = GameObject, ClassMask = ClassMask, Coverage = Coverage, Anchor = Anchor, Attackers = [.. Attackers], DeathSource = DeathSource,
+        FirstBuild = FirstBuild, LastBuild = LastBuild, BuildCounts = [.. BuildCounts], ClosedBuild = ClosedBuild, ReportedBuild = ReportedBuild,
+        ClosedBuildSeenUtc = ClosedBuildSeenUtc, ReportedBuildSeenUtc = ReportedBuildSeenUtc, NotPlanned = NotPlanned,
     };
 }

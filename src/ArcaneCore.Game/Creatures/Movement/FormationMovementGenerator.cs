@@ -99,7 +99,14 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
         var leaderAt = new Vector3(leader.X, leader.Y, leader.Z);
         if (Vector2.Distance(new Vector2(here.X, here.Y), new Vector2(leaderAt.X, leaderAt.Y)) > MoveToMasterDistance + slot.Distance)
         {
-            mover.MovePath(creature, mover.FindPath(creature, leaderAt), run: true, SplineFacing.None); // HandleMasterDistanceCheck
+            IReadOnlyList<Vector3> toLeader = mover.FindPath(creature, leaderAt);
+            if (toLeader.Count == 0)
+            {
+                _recheckMs = 0; // the search budget is spent: ask again on the next update
+                return;
+            }
+
+            mover.MovePath(creature, toLeader, run: true, SplineFacing.None); // HandleMasterDistanceCheck
             return;
         }
 
@@ -146,7 +153,13 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
         }
 
         IReadOnlyList<Vector3> path = mover.FindPath(creature, destination);
-        if (path.Count > 0 && Vector3.DistanceSquared(path[^1], here) > 0.01f)
+        if (path.Count == 0)
+        {
+            _recheckMs = 0; // the search budget is spent: ask again on the next update
+            return;
+        }
+
+        if (Vector3.DistanceSquared(path[^1], here) > 0.01f)
         {
             mover.MovePath(creature, path, run, leaderMoving ? SplineFacing.None : SplineFacing.ToAngle(heading));
         }

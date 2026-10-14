@@ -59,6 +59,15 @@ internal abstract class PlayerbotClassRotation
         return DispelFriends(state) ?? Upkeep(state);
     }
 
+    /// <summary>
+    /// A pet command to send in the same think as <paramref name="chosen"/> (null: nothing, or the think chose no action). A
+    /// rotation returns one action and a cast in progress ends the think, so a pet command that yields to a cast is never sent
+    /// by a bot that stands and casts back to back. A class that sends its pet overrides this with <see cref="SendIdlePet"/>.
+    /// (vmangos PartyBotAI does not do this in combat: it commands the pet out of combat when the pet has no victim, :2208-2216.
+    /// This is a deliberate, narrower departure for bots whose think can only hold one action.) Default: none.
+    /// </summary>
+    public virtual RotationAction? PetCompanion(RotationState state, RotationAction? chosen) => null;
+
     /// <summary>Where the bot fights from (yards from its victim).</summary>
     public virtual float PreferredRange(RotationState state) => MeleeRange;
 
@@ -93,7 +102,7 @@ internal abstract class PlayerbotClassRotation
     protected static int AttackersWithin(RotationState s, float range) => s.Attackers.Count(a => a.IsAlive && a.Distance <= range);
 
     protected static RotationUnit? FirstAttackerOtherThan(RotationState s, RotationUnit? except)
-        => s.Attackers.FirstOrDefault(a => a.IsAlive && a.Guid != except?.Guid);
+        => s.Attackers.FirstOrDefault(a => a.IsAlive && !a.IsCrowdControlled && a.Guid != except?.Guid);
 
     /// <summary>Whether a class fights with weapons (vmangos CombatBotBaseAI::IsPhysicalDamageClass).</summary>
     protected static bool IsPhysicalClass(byte playerClass) => (Class)playerClass is Class.Warrior or Class.Paladin or Class.Rogue
@@ -259,14 +268,37 @@ internal abstract class PlayerbotClassRotation
 
     /// <summary>
     /// The pet joins the bot's fight (vmangos PartyBotAI: SetIsCommandAttack + AttackStart on the bot's victim) once the bot is
-    /// fighting or the pull target is within 30 yards; between fights a pet still fighting is called back to follow.
+    /// fighting or the pull target is within 30 yards, unless the victim is under breakable crowd control; a pet fighting a
+    /// crowd-controlled unit is redirected to the bot's non-CC victim or called back to follow, as is a pet still fighting between fights.
     /// </summary>
     protected static RotationAction? CommandPet(RotationState s)
     {
         if (s.Pet != RotationPetStatus.Alive) return null;
-        if (s.Victim is { IsAlive: true } victim && !s.PetOnVictim && (s.InCombat || victim.Distance <= FriendlyRange))
+        // A pet with a non-CC victim of its own is left to it (vmangos :2208-2216 commands a pet only when !pPet->GetVictim());
+        // a pet on a crowd-controlled target is redirected to the bot's non-CC victim or called back to follow.
+        if (s.Victim is { IsAlive: true, IsCrowdControlled: false } victim
+            && (!s.PetFighting || s.PetFightingCrowdControlled)
+            && (s.InCombat || victim.Distance <= FriendlyRange))
             return RotationAction.PetAttack(victim);
-        return !s.InCombat && s.Victim is null && s.PetFighting ? RotationAction.PetFollow() : null;
+        return s.PetFightingCrowdControlled || (!s.InCombat && s.Victim is null && s.PetFighting)
+            ? RotationAction.PetFollow() : null;
+    }
+
+    /// <summary>
+    /// The pet command to send beside <paramref name="chosen"/>: an idle pet is sent to attack (or a pet on a crowd-controlled
+    /// target is redirected or called back to follow) beside a cast or an empty think, never beside a cast aimed at the pet itself
+    /// (Health Funnel, Mend Pet, a heal), which the command would interrupt.
+    /// </summary>
+    protected static RotationAction? SendIdlePet(RotationState s, RotationAction? chosen)
+    {
+        if (chosen is { } action)
+        {
+            if (action.Kind != RotationActionKind.Cast) return null;
+            if (s.PetUnit is { } pet && action.Target == pet.Guid) return null;
+        }
+        RotationAction? command = CommandPet(s);
+        return command is { Kind: RotationActionKind.PetAttack }
+            || command is { Kind: RotationActionKind.PetFollow } && s.PetFightingCrowdControlled ? command : null;
     }
 
     // --- shared rotations -------------------------------------------------------------------------------------------------

@@ -280,7 +280,7 @@ given up (`wiped`), so a run gets `MaxWipes` - 1 retries (`Wipes >= MaxWipes` gi
 for a raid, from formation), `no-path-to-entrance` / `no-path-to-boss` (the leader could not plan a way for 30 seconds), `too-few` (fewer
 than two bots left), `leader-gone`, or `leader-stopped` (the leader's bot stopped: `Forget`). A follower that stops leaves the group and
 the run goes on. A given-up run walks out of the instance first, then disbands; every bot still in it sets the wing aside. Totals:
-`completed` and `given-up` in the runs line.
+`completed` and `given-up` in the runs line. A run that ends for a content or code reason (`no-path-*`, a real step timeout, `objective-missing`, `stalled`, `wiped`) is also reported to bot QA as a `run failed` finding (docs/areas/playbots-qa.md; operator and lifecycle ends such as `leader-stopped`, `leader-left`, `leader-gone`, `too-few`, `invites-unanswered` and `disbanded` are not): its instance map, wing, the stage it failed at, the boss it was heading for and the reason, never the group or a bot, so repeated give-ups at one stage aggregate into one issue. Metric: `arcanecore_playerbot_runs_total{outcome}` with `completed`, `given_up` and `timeout` (a reason ending in `timeout`: `gather-timeout`, `travel-timeout`, `enter-refused-or-timeout`, `regroup-timeout`, `run-timeout`; every other end, operator stops included, is `given_up`) (docs/ops/metrics.md).
 
 After a completed run has left the instance, its leader sends `CMSG_RESET_INSTANCES` while the group still exists, then every bot
 disbands. This is observability: the leader asks the way a client would and the coordinator records each `SMSG_INSTANCE_RESET` or

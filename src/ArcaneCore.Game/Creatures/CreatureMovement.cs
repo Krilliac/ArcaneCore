@@ -40,14 +40,55 @@ internal interface ICreatureMover
     /// <summary>Stop a moving creature where it is (stop packet).</summary>
     void StopMoving(Creature creature);
 
-    /// <summary>A path from the creature to <paramref name="destination"/> (pathfinder seam; straight line by default).</summary>
+    /// <summary>
+    /// The path of an authored route (waypoint, point, formation, scripted move) from the creature to <paramref name="destination"/>:
+    /// the mesh path, or the straight line when the mesh has no path (vmangos moves such a spline along the shortcut,
+    /// <c>MoveSplineInit::Move(PathFinder*)</c>). EMPTY when the map's search budget is spent: the caller asks again on a later update,
+    /// it never walks straight for want of budget.
+    /// </summary>
     IReadOnlyList<Vector3> FindPath(Creature creature, Vector3 destination);
+
+    /// <summary>
+    /// Search a path for a motion that decides itself what no path means (<see cref="PathOutcome"/>). The default, for a mover without
+    /// a pathfinder, is <see cref="FindPath"/> labelled <see cref="PathOutcome.Direct"/>. <paramref name="toSpawn"/> (a return home) uses the
+    /// vmangos end tolerance (<see cref="Maps.Collision.PathOptions.EndTolerance"/>): a spawn point a few yards off the mesh still has a whole path.
+    /// </summary>
+    PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false) => new(PathOutcome.Direct, FindPath(creature, destination));
+
+    /// <summary>
+    /// Put the creature at the spot at once (vmangos <c>Unit::NearTeleportTo</c>), as an evade return does when no whole path leads home.
+    /// The default only relocates.
+    /// </summary>
+    void TeleportHome(Creature creature, float x, float y, float z, float orientation)
+        => creature.Relocate(x, y, z, orientation, creature.Movement.Time);
 
     /// <summary>A uniform random number in [0, 1).</summary>
     double NextDouble();
 
     /// <summary>A uniform random integer in [min, max] (vmangos urand).</summary>
     int URand(int min, int max);
+
+    /// <summary>
+    /// A random point on the navmesh within <paramref name="radius"/> of <paramref name="center"/> that the creature can walk to
+    /// (steep slopes excluded, vmangos <c>MOVE_EXCLUDE_STEEP_SLOPES</c>). False when there is no mesh data for the spot: the caller keeps its
+    /// own point choice. Nothing is drawn from the random source in that case.
+    /// </summary>
+    bool TryGetRandomMeshPoint(Creature creature, Vector3 center, float radius, out Vector3 point)
+    {
+        point = center;
+        return false;
+    }
+
+    /// <summary>
+    /// Walk the navmesh from <paramref name="from"/> toward <paramref name="to"/> (steep slopes count as walls): <paramref name="reached"/>
+    /// is where the creature may go, on the mesh; it is <paramref name="to"/> projected onto the mesh when nothing is in the way. False when
+    /// there is no mesh data for the spot (<paramref name="reached"/> is then <paramref name="to"/>).
+    /// </summary>
+    bool TryRaycastMesh(Creature creature, Vector3 from, Vector3 to, out Vector3 reached)
+    {
+        reached = to;
+        return false;
+    }
 
     /// <summary>Ground height near (x, y, z), or null when unknown.</summary>
     float? GetHeight(uint mapId, float x, float y, float z);

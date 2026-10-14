@@ -16,6 +16,7 @@ internal static class BuiltInProcHandlers
     private const uint FamilyWarlock = 5;
     private const uint FamilyPriest = 6;
     private const uint FamilyPaladin = 10;
+    private const uint FamilyShaman = 11;
 
     private const uint PyroclasmIcon = 1137;
     private const uint PyroclasmStunSpell = 18093;
@@ -26,10 +27,23 @@ internal static class BuiltInProcHandlers
     private const uint RuthlessnessPointSpell = 14157;
     private const uint SealFatePointSpell = 14189;
 
-    /// <summary>CF_PALADIN_HOLY_SHOCK (SpellClassMask.h:296), CF_WARLOCK_RAIN_OF_FIRE and CF_WARLOCK_HELLFIRE (:100-101).</summary>
+    /// <summary>CF_PALADIN_HOLY_SHOCK (SpellClassMask.h:296), CF_WARLOCK_RAIN_OF_FIRE and CF_WARLOCK_HELLFIRE (:100-101), CF_SHAMAN_LIGHTNING_SHIELD (:328).</summary>
     private const ulong PaladinHolyShockFlag = 1UL << 21;
     private const ulong WarlockRainOfFireFlag = 1UL << 5;
     private const ulong WarlockHellfireFlag = 1UL << 6;
+    private const ulong ShamanLightningShieldFlag = 1UL << 10;
+
+    /// <summary>Lightning Shield rank → its damage spell (UnitAuraProcHandler.cpp:1504-1536).</summary>
+    internal static readonly IReadOnlyDictionary<uint, uint> LightningShieldSpells = new Dictionary<uint, uint>
+    {
+        [324] = 26364,
+        [325] = 26365,
+        [905] = 26366,
+        [945] = 26367,
+        [8134] = 26369,
+        [10431] = 26370,
+        [10432] = 26363,
+    };
 
     /// <summary>Shadowguard rank → its damage spell (UnitAuraProcHandler.cpp:1286-1306).</summary>
     private static readonly Dictionary<uint, uint> ShadowguardSpells = new()
@@ -185,6 +199,15 @@ internal static class BuiltInProcHandlers
                 basePoints0 = NonZero((int)original.ManaCost);
                 triggerSpellId = IlluminationManaSpell;
                 target = c.Owner;
+                break;
+            case FamilyShaman when (aura.SpellFamilyFlags & ShamanLightningShieldFlag) != 0 || LightningShieldSpells.ContainsKey(aura.Id):
+                if (!LightningShieldSpells.TryGetValue(aura.Id, out triggerSpellId))
+                {
+                    return AuraProcResult.Failed; // "Spell %u not handled in LShield"
+                }
+
+                basePoints0 = NonZero(c.Aura.Amount);
+                target = c.Target;
                 break;
         }
 

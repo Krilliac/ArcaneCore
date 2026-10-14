@@ -1,0 +1,177 @@
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster.Social;
+using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.World.Cluster.Social;
+using ArcaneCore.World.Cluster.Tooling;
+using ArcaneCore.World.Cluster.Transfer;
+using ArcaneCore.World.Clustering;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Xunit;
+using static ArcaneCore.World.Tests.Gm.Audit.TicketTests;
+
+namespace ArcaneCore.World.Tests.Cluster.Tooling;
+
+/// <summary>Tests for the <c>.cluster</c> and <c>.arcane cluster</c> GM/operator inspection commands.</summary>
+public sealed class ClusterCommandTests
+{
+    private static WorldTestHost StartWithClusterServices(
+        ClusterMapPlacementTable? placement = null,
+        IRealmAuthorityLeaseStore? leases = null,
+        IRealmPresenceDirectory? presence = null,
+        bool fencingEnabled = true)
+    {
+        placement ??= CreateDefaultPlacement();
+        leases ??= CreateDefaultLeases();
+        presence ??= new InMemoryRealmPresenceDirectory();
+        var router = new InMemoryClusterSocialRouter(presence);
+        var fencing = new CharacterFencingOptions
+        {
+            Enabled = fencingEnabled,
+            OwnerNode = "world-node-alpha",
+            ClaimWatchIntervalSeconds = 10,
+        };
+
+        return WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<IOptions<CharacterFencingOptions>>(Microsoft.Extensions.Options.Options.Create(fencing));
+            services.AddSingleton(placement);
+            services.AddSingleton<IClusterMapRouter>(placement);
+            services.AddSingleton(leases);
+            services.AddSingleton(presence);
+            services.AddSingleton<IClusterSocialRouter>(router);
+        });
+    }
+
+    private static ClusterMapPlacementTable CreateDefaultPlacement()
+    {
+        var table = new ClusterMapPlacementTable();
+        var ek = new WorkerNodeId("worker:EK");
+        var kal = new WorkerNodeId("worker:Kalimdor");
+        var inst = new WorkerNodeId("worker:instances");
+        table.RegisterWorker(ek, isReady: true, maxPlayerCapacity: 1200, activePlayerCount: 478, maxInstanceCapacity: 10, activeInstanceCount: 1);
+        table.RegisterWorker(kal, isReady: true, maxPlayerCapacity: 1200, activePlayerCount: 532, maxInstanceCapacity: 10, activeInstanceCount: 1);
+        table.RegisterWorker(inst, isReady: true, maxPlayerCapacity: 500, activePlayerCount: 15, maxInstanceCapacity: 100, activeInstanceCount: 2);
+        table.AssignStaticMap(0, ek);
+        table.AssignStaticMap(1, kal);
+        table.TryBindInstance(36, 1, inst, out _);
+        return table;
+    }
+
+    private static IRealmAuthorityLeaseStore CreateDefaultLeases()
+    {
+        var store = new InMemoryRealmAuthorityLeaseStore();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        TimeSpan ttl = TimeSpan.FromMinutes(10);
+        Guid inc = Guid.NewGuid();
+        store.TryAcquire(RealmAuthorityScopes.Economy, "coordinator:primary", inc, ttl, now);
+        store.TryAcquire(RealmAuthorityScopes.Social, "social:primary", inc, ttl, now);
+        store.TryAcquire(RealmAuthorityScopes.Instances, "coordinator:primary", inc, ttl, now);
+        return store;
+    }
+
+    private static async Task<WorldTestClient> Staff(WorldTestHost host, AccountSecurity security, string account = "STAFF", string name = "Staffer")
+    {
+        WorldTestClient client = await host.EnterWorldAsync(account, name, security);
+        await client.CollectAsync();
+        return client;
+    }
+
+    [Fact]
+    public async Task ClusterCommands_RequireGameMaster_AndDiagRequiresAdministrator()
+    {
+        await using WorldTestHost host = StartWithClusterServices();
+        await using WorldTestClient mod = await Staff(host, AccountSecurity.Moderator, "MOD", "Moddy");
+        await using WorldTestClient gm = await Staff(host, AccountSecurity.GameMaster, "GMA", "Gmaaa");
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADM", "Admiral");
+
+        foreach (string cmd in new[] { ".cluster", ".cluster status", ".cluster node", ".cluster routes", ".cluster nodes", ".cluster leases", ".cluster social", ".arcane cluster" })
+        {
+            Assert.Equal("This command is not available to you.", (await LinesAsync(mod, cmd))[0]);
+        }
+
+        Assert.Equal("This command is not available to you.", (await LinesAsync(gm, ".cluster diag"))[0]);
+        Assert.Equal("This command is not available to you.", (await LinesAsync(gm, ".arcane cluster diag"))[0]);
+
+        string[] gmStatus = await LinesAsync(gm, ".cluster");
+        Assert.Contains(gmStatus, l => l.StartsWith("Cluster node: world-node-alpha", StringComparison.Ordinal));
+
+        string[] adminDiag = await LinesAsync(admin, ".cluster diag");
+        Assert.Single(adminDiag);
+        Assert.StartsWith("cluster-diag realm=1 node=world-node-alpha", adminDiag[0], StringComparison.Ordinal);
+        Assert.Contains("fleetCompat=fleet_compatible", adminDiag[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ClusterStatus_AndNode_ReportCurrentPlayerPlacementAndOwnershipToken()
+    {
+        await using WorldTestHost host = StartWithClusterServices();
+        var worldToken = new CharacterOwnershipToken("world", 7, Guid.Parse("11111111-2222-3333-4444-555555555555"));
+        host.World.CharacterOwnership = worldToken;
+
+        await using WorldTestClient gm = await Staff(host, AccountSecurity.GameMaster, "GMA", "Gmaaa");
+
+        string[] statusLines = await LinesAsync(gm, ".cluster status");
+        Assert.Equal(5, statusLines.Length);
+        Assert.Contains("Cluster node: world-node-alpha | role=Combined", statusLines[0], StringComparison.Ordinal);
+        Assert.Contains("Ownership fence: enabled | worldToken=world:epoch=7:inc=11111111-2222-3333-4444-555555555555", statusLines[1], StringComparison.Ordinal);
+        Assert.Contains("You / target: Gmaaa", statusLines[2], StringComparison.Ordinal);
+        Assert.Contains("worker=worker:EK", statusLines[2], StringComparison.Ordinal);
+        Assert.Contains("Authority leases: world=world-node-alpha(epoch=7) | economy=coordinator:primary(token=1) | social=social:primary(token=1) | instances=coordinator:primary(token=1)", statusLines[4], StringComparison.Ordinal);
+
+        string[] nodeLines = await LinesAsync(gm, ".cluster node Gmaaa");
+        Assert.Equal(4, nodeLines.Length);
+        Assert.Contains("Host node: world-node-alpha", nodeLines[0], StringComparison.Ordinal);
+        Assert.Contains("Character: Gmaaa", nodeLines[1], StringComparison.Ordinal);
+        Assert.Contains("Placement: node=world-node-alpha -> worker=worker:EK | map 0", nodeLines[2], StringComparison.Ordinal);
+        Assert.Contains("effectiveToken=world:epoch=7:inc=11111111-2222-3333-4444-555555555555", nodeLines[3], StringComparison.Ordinal);
+
+        Assert.Equal("Player not found!", (await LinesAsync(gm, ".cluster node NobodyHere"))[0]);
+    }
+
+    [Fact]
+    public async Task ClusterRoutes_Nodes_Leases_Social_AndArcaneExtension_ReportRoutingAndTopology()
+    {
+        await using WorldTestHost host = StartWithClusterServices();
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADM", "Admiral");
+
+        string[] routeLines = await LinesAsync(admin, ".cluster routes");
+        Assert.Contains("Placement table: 2 static map route(s), 1 bound instance(s).", routeLines);
+        Assert.Contains(routeLines, l => l.Contains("route static map 0", StringComparison.Ordinal) && l.Contains("-> worker:EK", StringComparison.Ordinal));
+        Assert.Contains(routeLines, l => l.Contains("route static map 1", StringComparison.Ordinal) && l.Contains("-> worker:Kalimdor", StringComparison.Ordinal));
+        Assert.Contains(routeLines, l => l.Contains("route instance map 36 inst 1", StringComparison.Ordinal) && l.Contains("-> worker:instances", StringComparison.Ordinal));
+        Assert.Contains(routeLines, l => l.StartsWith("map 0 inst 0", StringComparison.Ordinal) && l.Contains("-> worker:EK: 1 player(s) (1h/0b)", StringComparison.Ordinal));
+
+        string[] filteredRoutes = await LinesAsync(admin, ".cluster routes 0");
+        Assert.DoesNotContain(filteredRoutes, l => l.Contains("route static map 1", StringComparison.Ordinal));
+        Assert.Contains(filteredRoutes, l => l.Contains("route static map 0", StringComparison.Ordinal));
+
+        string[] nodesLines = await LinesAsync(admin, ".cluster nodes");
+        Assert.Contains(nodesLines, l => l.StartsWith("Local host: node=world-node-alpha role=Combined state=Active", StringComparison.Ordinal));
+        Assert.Contains("Registered placement workers: 3", nodesLines);
+        Assert.Contains(nodesLines, l => l.StartsWith("worker worker:EK: ready=True draining=False players=478/1200", StringComparison.Ordinal));
+        Assert.Contains(nodesLines, l => l.StartsWith("worker worker:Kalimdor: ready=True draining=False players=532/1200", StringComparison.Ordinal));
+        Assert.Contains(nodesLines, l => l.StartsWith("worker worker:instances: ready=True draining=False players=15/500", StringComparison.Ordinal));
+
+        string[] leasesLines = await LinesAsync(admin, ".cluster leases");
+        Assert.Equal(3, leasesLines.Length);
+        Assert.StartsWith("Character fencing: enabled=True ownerNode=world-node-alpha", leasesLines[0], StringComparison.Ordinal);
+        Assert.StartsWith("Authority leases:", leasesLines[1], StringComparison.Ordinal);
+        Assert.StartsWith("Write-behind queues:", leasesLines[2], StringComparison.Ordinal);
+
+        string[] socialLines = await LinesAsync(admin, ".cluster social");
+        Assert.Equal(3, socialLines.Length);
+        Assert.StartsWith("Realm presence: online=1 (1 human, 0 bots)", socialLines[0], StringComparison.Ordinal);
+        Assert.Contains("worker:EK=1 | worker:Kalimdor=0 | worker:instances=0", socialLines[1], StringComparison.Ordinal);
+        Assert.Contains("router=InMemoryClusterSocialRouter", socialLines[2], StringComparison.Ordinal);
+
+        // Verify .arcane cluster delegates to the same subcommands
+        string[] arcaneRoutes = await LinesAsync(admin, ".arcane cluster routes 0");
+        Assert.Equal(filteredRoutes, arcaneRoutes);
+
+        string[] arcaneDiag = await LinesAsync(admin, ".arcane cluster diag");
+        Assert.Single(arcaneDiag);
+        Assert.StartsWith("cluster-diag realm=1 node=world-node-alpha", arcaneDiag[0], StringComparison.Ordinal);
+    }
+}

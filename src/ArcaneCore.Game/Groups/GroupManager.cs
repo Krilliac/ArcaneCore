@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 
@@ -24,6 +25,27 @@ public sealed partial class GroupManager(SocialContext context)
     private readonly HashSet<ObjectGuid> _pendingPetName = [];
     private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingPetAuras = [];
     private uint _nextId = 1;
+
+    /// <summary>
+    /// Optional durable block allocator for group IDs when cluster ID range reservation is enabled.
+    /// </summary>
+    public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
+
+    private uint AllocateGroupId()
+    {
+        if (IdBlockAllocator is { } allocator)
+        {
+            uint allocated = allocator.Next();
+            if (allocated >= _nextId && allocated < uint.MaxValue)
+                _nextId = allocated + 1;
+            return allocated;
+        }
+
+        if (_nextId == 0)
+            throw new IdRangeExhaustedException(IdRangeScopes.Group, "group ID space exhausted");
+
+        return _nextId++;
+    }
 
     /// <summary>Clock seam for deterministic offline-leader tests; world time in Unix seconds.</summary>
     internal Func<long> UnixSecondsClock { get; set; } = static () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -229,7 +251,7 @@ public sealed partial class GroupManager(SocialContext context)
                 return;
             }
 
-            group = new Group(_nextId++)
+            group = new Group(AllocateGroupId())
             {
                 LeaderGuid = inviter.Guid,
                 LeaderName = inviter.Name,

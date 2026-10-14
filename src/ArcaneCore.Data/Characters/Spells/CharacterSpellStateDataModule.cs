@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -228,6 +229,7 @@ public sealed class EfCharacterSpellStateStore(CharacterDbContext db) : ICharact
     /// </summary>
     public async Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {
+        using IDisposable exempt = CharacterWriteFence.Exempt(); // deletes only the rows of an id with no characters row: the deletion lifetime fence is token-independent
         await db.Set<CharacterSpellCooldownRow>()
             .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);

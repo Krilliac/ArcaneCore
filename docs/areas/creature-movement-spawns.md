@@ -48,8 +48,35 @@ live spline inside the create block (`packet_builder.cpp:152-200`).
 * `MovementGeneratorType` numbers follow `Movement/MotionMaster.h:36-59` (Confused 5, Chase 6, Home 7, Point 9, Fleeing 10, Follow 15); the
   values are internal (never persisted or sent; grep of casts found none).
 
-Limits: no navmesh random point and no steep-slope exclusion (vmangos `MOVE_PATHFINDING | MOVE_EXCLUDE_STEEP_SLOPES`; the pathfinder
-has no random-point query, so the point is uniform over the disc at the height provider's Z); no flying circle path (`:28-44`: needs
+* **Wander and flee points are chosen on the navmesh** (lane `w44-path-mesh-points`). `NavMeshPathfinder` implements `IMeshPointQuery`
+  (`Maps/Collision/CollisionContracts.cs`; reached through `map.Collision.MeshPoints`, which is null for a map without a navmesh).
+  `TryGetRandomPointAround` meets the contract of Detour's `findRandomPointAroundCircle` but is this port's own algorithm: it gathers the
+  polygons reachable from the one under the centre across edges that touch the circle (loaded tiles only, at most 256), draws a point
+  uniformly over the disc (two `Random` draws per attempt), and accepts it when one of those polygons contains it; a point over a hole or
+  over an unconnected polygon is drawn again, up to 16 times, then the answer is the start position. Drawing over the disc rather than over
+  the polygons (as Detour does, with a rejection step that is also this port's addition) keeps a 1-3 yd wander radius on 12 yd polygons spread
+  over the disc instead of piling creatures up at the spawn. `Raycast` is Detour's `raycast` along the mesh surface
+  (`NavMeshQuery.TryRandomPointAround` / `NavMeshQuery.Raycast`). Both take the creature's `Random` (a seed fixes the result), build no
+  collection per call (per-thread scratch lists; `NavMeshPointQueryTests` measures the allocation), read no tile, never throw, and answer
+  "unavailable" (no mesh for the map, tile not loaded, centre more than 3 yd from a polygon) without drawing any random numbers.
+  Wander (`RandomMovementGenerator`) takes the point from `ICreatureMover.TryGetRandomMeshPoint` (around the spawn point, within the wander
+  distance, steep slopes excluded as vmangos `MOVE_EXCLUDE_STEEP_SLOPES`) and walks to it with `FindPath` + `MovePath`, so a townsfolk or
+  guard no longer cuts through a house. That path search counts against the per-tick creature path budget; on exhaustion the leg waits
+  for the next update (see "No path, no straight line" below). Flee (`FleeingMovementGenerator.MoveAway`) casts the leg
+  with `ICreatureMover.TryRaycastMesh`, capped at 30 yd (`MeshFleeCap`), so it ends where the mesh ends or a steep slope or wall begins
+  (vmangos `Map::GetWalkHitPosition` from `FleeingMovementGenerator.cpp:108`); a leg that would be shorter than 1 yd (a wall right in
+  front) is not issued: another direction is drawn, up to 4 times, and if all are blocked the creature stays and tries again after its
+  pause. When the query is unavailable both keep the previous choice exactly (terrain-height point, straight `MoveTo`), including the order
+  of the random draws, so meshless maps and unloaded tiles behave as before. What a creature does when the mesh has no path is
+  in "No path, no straight line" below.
+  Where this differs from vmangos `Map::GetWalkRandomPosition` (`Map.cpp:3332`): vmangos takes Detour's random point only as a
+  direction, walks `maxRadius * rand` along it, raycasts, steps 0.5 yd back along the hit normal, snaps to the closest point on the last
+  polygon and lifts Z to the vmap height when that is higher; this port uses the sampled on-mesh point itself (at the mesh height, no vmap
+  lift, no step back from walls). Tests: `Collision/NavMeshPointQueryTests.cs` (synthetic tiles; the raycast is compared with DotRecast on
+  seeded mazes), `Collision/NavMeshPointQueryRealTerrainTests.cs` (Goldshire inn, `ARCANECORE_TEST_TERRAIN_DIR`),
+  `Creatures/MeshPointMovementTests.cs` (a wander circle and a flee line that contain a house-sized hole).
+
+Limits: wander and flee choose on the mesh only where a navmesh tile is loaded (vmangos the same), and only for walkers: the query excludes nothing but steep slopes, so a swimming creature (which vmangos filters by `moveAllowedFlags`) has no water-only choice and may pick shore or water points alike; no flying circle path (`:28-44`: needs
 the Flying spline flag plumbed through `ICreatureMover.MovePath`); no timed random / pause-time API (nothing consumes it until waypoint
 node wander exists); vmangos' `Interrupt`/`Finalize` walk-mode reset (`:83-93`) is not sent separately because every spline launch
 already syncs the mode.
@@ -112,8 +139,7 @@ needs a Characters schema module).
   to the maximum at once.
 * `Creatures:Movement:EvadeRestoresFullHealth=true` restores the old instant reset (not retail).
 
-Limits: the Home leg still goes straight when the pathfinder finds no path (vmangos teleports with `NearTeleportTo`,
-`HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse); `RemoveAurasAtReset`, the low-health aura-state
+Limits: a Home leg whose mesh path is missing or partial teleports home (see "No path, no straight line" below); `RemoveAurasAtReset`, the low-health aura-state
 reset (`:39-42`) and `LoadCreatureAddon(true)` on arrival (`:94`) are not done (aura lane / addon reload).
 
 ### 5. Waypoint paths by entry, and the waypoint generator (slice `waypoint-path-data` + `waypoint-generator-core`)
@@ -269,6 +295,33 @@ formula or the count) is TrinityCore's/AzerothCore's dynamic respawn rate. `Crea
 - **GM:** `.spawninfo dynamic` (GameMaster) prints whether it is on, the players counted at your position, the multiplier, and example delays.
 - **Not done:** a respawn already scheduled is not re-evaluated when more players arrive later (the count is taken once, at death).
 
+### 9. No path, no straight line (lane `w44-path-no-straight`)
+
+Every creature path is `CreatureMapSystem.PlanPath`, which says how the search ended (`PathOutcome`: `Mesh`, `Direct`, `Partial`, `NoPath`,
+`Deferred`) instead of quietly substituting a straight line. `Direct` is the pathfinder's answer for a map with no mesh, an endpoint on a tile
+that is not loaded, or pathing off (vmangos `PathFinder.cpp:86-105`, `NORMAL | NOT_USING_PATH`); that straight line is legitimate. The old
+comment that "vmangos goes straight on NOPATH" described only the authored-route case below.
+
+| Motion | `NoPath` | `Deferred` (per-update search budget spent) |
+|---|---|---|
+| Chase, follow, pet follow | no move; `IsReachable` false; re-asked every 100 ms; the unreachable-target timer evades (3 s soft, 24 s home) (`TargetedMovementGenerator.cpp:188-189`) | keeps its spline, re-paths next update (as before) |
+| Partial path (`Incomplete`) | walked to the point nearest the target, then stands; unreachable as before | - |
+| Flee / fear, confused | waits 1-1.5 s, then a new point (`FleeingMovementGenerator.cpp:60-63`, `FearMovementGenerator.cpp:43-46`; confused: ArcaneCore's choice, vmangos ConfusedMovementGenerator.cpp:72-86 checks no path) | retries next update |
+| Home / evade | teleport home (`NearTeleportTo`, `HomeMovementGenerator.cpp:58-71`); a partial path teleports too; `Direct` runs | retries; teleports after 3 s |
+| Random wander | the leg is skipped, a new point 1-1.5 s later | retries next update |
+| Waypoint, point, formation, scripted `MoveTo` (authored) | straight line, as vmangos (`MoveSplineInit::Move(PathFinder*)` takes the shortcut of a NOPATH finder); counted in `DirectFallbackPaths` | retries next update (scripted moves wait in a per-map queue served first in the next update) |
+| Charge (spell) | a NON-triggered cast fails with SPELL_FAILED_NOPATH when the caster is on the ground (not in water, within 1.6 yd of the floor) and the path to the target is NoPath or Incomplete (vmangos Spell.cpp:5909-5934). Unlike vmangos, which runs CheckCast for triggered casts too but tests NOPATH only under strict, a triggered charge skips the check; it then makes no move on NoPath (PointMovementGenerator.cpp:237-238). A caster in water, or a swimmer charging a target in water, is exempt from the check AND gets the straight line from `ChargePath` (vmangos' swimming shortcut, PathFinder.cpp:197-201): both read `ForcedMovement.ChargeSwims`, so a cast that passes always launches a spline. A whole path that ends short of the contact point (target 0.5-7 yd off the mesh) is walked to its end, then straight on only with line of sight. The path uses the caster's locomotion (player mover, creature InhabitType) | not budgeted |
+
+A spent budget never walks a creature straight. `CreatureMapSystem.MoveTo` (scripts) now paths; `MoveStraight` is the raw spline.
+Observability: `CreatureMapSystem.NoPathPaths / DirectFallbackPaths / DeferredPathSearches / HomePathTeleports` and the process-wide
+`CreaturePathStats` (the slow-map-update line prints the per-map counts; metrics `arcanecore.creature.path.*`, docs/ops/metrics.md).
+Every creature search carries the creature's `PathMover` (`InhabitType`), so a flier crosses a hole in the mesh as a flying shortcut instead of standing on NoPath. A return home uses `PathOptions.EndTolerance` = 7 yd (vmangos `farFromPoly`, PathFinder.cpp:209-235): a spawn point up to 5 yd off the mesh whose polygon the corridor reaches is walked to; only NoPath or a corridor that does not reach it teleports. The shared classification (0.1 yd) is unchanged for other callers.
+A pet swims and never flies whatever its template says (vmangos Creature.h:166-167: CanSwim = IsPet || water bit, CanFly = !IsPet && air bit); `PathMover.FromInhabit(inhabit, isPet)` and the per-creature option tables (indexed by InhabitType bits plus a pet bit) follow that. Side effect of giving creatures their own mover: a creature with InhabitType 1 (ground only) cannot path through water polygons, so a target standing in deep water is unreachable for it (it stands, then evades); only swimmers and pets reach it. The end-tolerance search is vmangos `FindWalkPoly`: 5 yd around and 10 up and down, a polygon more than 3 above the point refused, 3D distance past 7 yd is partial.
+Not copied: vmangos' pet closed-door `CutPathWithDynamicLoS` and `UNIT_STATE_ALLOW_INCOMPLETE_PATH`; the in-LOS stop of a partial chase
+(the creature keeps walking the partial path). Maps without a mesh: `WorldCollision.InstallFallback` has no terrain-step `IPathfinder` to
+install (only the seam exists), so they keep the straight line.
+Tests: `Creatures/NoStraightPathTests.cs`, plus the updated `UnreachableTargetTests`, `CreaturePathBudgetTests`, `ChargeEffectTests`.
+
 ## Not done in this lane (recorded, not stubbed)
 
 * **Spawn flags** (`RANDOM_RESPAWN_TIME` x urand(90,110)/100, `DYNAMIC_RESPAWN_TIME`, `DEAD`, `DISABLED`, `ACTIVE`, `EVADE_OUT_HOME_AREA`, ...; `ObjectDefines.h:127-134`) and
@@ -280,9 +333,9 @@ formula or the count) is TrinityCore's/AzerothCore's dynamic respawn rate. `Crea
 * **Interaction pause** (`Creature::PauseOutOfCombatMovement`) touches the NPC and quest handlers owned by other lanes.
 * **Stuck/unreachable evade** belongs to the threat-and-aggro lane (`Creature.cpp:~998-1043` sits beside its leash code); leash radius, 3 s leash checks and
   `NO_LEASH_EVADE` already exist on the base.
-* **Home-leg teleport fallback** when no path exists (`HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse), `RemoveAurasAtReset`,
+* ~~Home-leg teleport fallback~~ (done, see "No path" below); `RemoveAurasAtReset`,
   addon reload on arrival.
-* **Wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`; node scripts run since world 45), navmesh random wander points and flying
+* **Wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`; node scripts run since world 45), flying
   wander circles, the spline in the create block (`packet_builder.cpp:152-200`), a GM `.wp show`/`.creature movement` inspection command.
 * **Real-client verification** of the destination-relative spline offsets and the walk/run toggle packets. Both references agree, so the retail layout is the
   default, but the only oracle in the tests is bytes derived by hand from the references.

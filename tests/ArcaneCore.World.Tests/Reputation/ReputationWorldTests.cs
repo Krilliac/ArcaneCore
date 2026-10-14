@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Reputation;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Protocol;
@@ -372,7 +373,8 @@ internal sealed class MemoryReputationStore : ICharacterReputationStore
         }
     }
 
-    public Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts, CancellationToken cancellationToken = default)
+    public Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts,
+        CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
     {
         BeforeWrite();
         lock (_lock)
@@ -386,7 +388,8 @@ internal sealed class MemoryReputationStore : ICharacterReputationStore
         return Task.CompletedTask;
     }
 
-    public Task SaveWatchedFactionAsync(int characterId, int watchedFaction, CancellationToken cancellationToken = default)
+    public Task SaveWatchedFactionAsync(int characterId, int watchedFaction,
+        CancellationToken cancellationToken = default, CharacterOwnershipToken? ownership = null)
     {
         BeforeWrite();
         lock (_lock)

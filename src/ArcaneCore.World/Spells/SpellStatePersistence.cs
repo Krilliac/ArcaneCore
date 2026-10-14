@@ -1,7 +1,9 @@
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Characters;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Spells;
@@ -20,12 +22,29 @@ public sealed class SpellStatePersistence
     private readonly object _lock = new();
     private readonly Dictionary<int, Task> _chains = [];
     private readonly Dictionary<int, SpellStateSnapshot> _unsaved = [];
+    private readonly Dictionary<int, Exception> _lastFailure = [];
+    private Exception? _terminalFailure;
 
     public SpellStatePersistence(IServiceScopeFactory? scopes, ILogger logger)
     {
         _scopes = scopes;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
+
+    /// <summary>Terminal failure that halted persistence (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
+
+    /// <summary>Raised once when persistence enters terminal failure (for example on <see cref="CharacterOwnershipRejectedException"/>).</summary>
+    public event Action<Exception>? FatalFailure;
 
     /// <summary>Queue a save of <paramref name="snapshot"/> for one character (world thread; never blocks).</summary>
     public void Save(int characterId, SpellStateSnapshot snapshot)
@@ -54,6 +73,11 @@ public sealed class SpellStatePersistence
         await FlushCharacterAsync(characterId).ConfigureAwait(false);
         lock (_lock)
         {
+            if (_terminalFailure is { } terminal)
+            {
+                throw new InvalidOperationException($"spell state writes for character {characterId} are not durable", terminal);
+            }
+
             if (_unsaved.TryGetValue(characterId, out SpellStateSnapshot? pending))
             {
                 return pending;
@@ -78,6 +102,53 @@ public sealed class SpellStatePersistence
         }
     }
 
+    /// <summary>
+    /// Wait for the queued saves of one character, retry an unsaved snapshot once if needed (unless terminal),
+    /// and throw <see cref="InvalidOperationException"/> if the character's spell state is still not durable.
+    /// </summary>
+    public async Task FlushCharacterDurableAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        await FlushCharacterAsync(characterId).WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (_scopes is null)
+        {
+            return;
+        }
+
+        Task? retryChain = null;
+        lock (_lock)
+        {
+            if (_terminalFailure is null && _unsaved.TryGetValue(characterId, out SpellStateSnapshot? pending))
+            {
+                Task previous = _chains.GetValueOrDefault(characterId) ?? Task.CompletedTask;
+                retryChain = _chains[characterId] = previous.ContinueWith(_ => WriteAsync(characterId, pending),
+                    CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+            }
+        }
+
+        if (retryChain is not null)
+        {
+            await retryChain.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        Exception? failure = null;
+        lock (_lock)
+        {
+            if (_unsaved.ContainsKey(characterId))
+            {
+                failure = _lastFailure.GetValueOrDefault(characterId) ?? _terminalFailure ?? new InvalidOperationException("spell state snapshot remained unsaved");
+            }
+            else if (_terminalFailure is not null)
+            {
+                failure = _terminalFailure;
+            }
+        }
+
+        if (failure is not null)
+        {
+            throw new InvalidOperationException($"spell state writes for character {characterId} are not durable", failure);
+        }
+    }
+
     /// <summary>Wait for every queued save (shutdown, tests).</summary>
     public async Task FlushAsync()
     {
@@ -99,6 +170,15 @@ public sealed class SpellStatePersistence
         }
     }
 
+    /// <summary>The last write failure for a character whose snapshot is still unsaved, if any.</summary>
+    public Exception? LastFailure(int characterId)
+    {
+        lock (_lock)
+        {
+            return _lastFailure.GetValueOrDefault(characterId) ?? _terminalFailure;
+        }
+    }
+
     /// <summary>Drop a deleted character's saved state (memory and tables).</summary>
     public void DeleteCharacter(int characterId)
     {
@@ -110,6 +190,7 @@ public sealed class SpellStatePersistence
         lock (_lock)
         {
             _unsaved.Remove(characterId);
+            _lastFailure.Remove(characterId);
             Task previous = _chains.GetValueOrDefault(characterId) ?? Task.CompletedTask;
             _chains[characterId] = previous.ContinueWith(_ => DeleteAsync(characterId),
                 CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
@@ -184,14 +265,61 @@ public sealed class SpellStatePersistence
             })]);
     }
 
-    private async Task WriteAsync(int characterId, SpellStateSnapshot snapshot)
+    private void FailTerminal(CharacterOwnershipRejectedException ex, IServiceProvider? scopedServices)
     {
+        bool first = false;
+        lock (_lock)
+        {
+            if (_terminalFailure is null)
+            {
+                _terminalFailure = ex;
+                first = true;
+            }
+        }
+
+        if (!first)
+        {
+            return;
+        }
+
+        _logger.LogCritical(ex, "spell state persistence entered terminal failure after character ownership rejection");
         try
         {
-            await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
+            scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        FatalFailure?.Invoke(ex);
+    }
+
+    private async Task WriteAsync(int characterId, SpellStateSnapshot snapshot)
+    {
+        lock (_lock)
+        {
+            if (_terminalFailure is { } terminal)
+            {
+                _lastFailure[characterId] = terminal;
+                return;
+            }
+        }
+
+        await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
+        try
+        {
             if (scope.ServiceProvider.GetService<ICharacterSpellStateStore>() is not { } store)
             {
                 // No store: the state lives in memory for this process only.
+                lock (_lock)
+                {
+                    if (_unsaved.TryGetValue(characterId, out SpellStateSnapshot? current) && ReferenceEquals(current, snapshot))
+                    {
+                        _unsaved.Remove(characterId);
+                        _lastFailure.Remove(characterId);
+                    }
+                }
+
                 return;
             }
 
@@ -201,24 +329,51 @@ public sealed class SpellStatePersistence
                 if (_unsaved.TryGetValue(characterId, out SpellStateSnapshot? current) && ReferenceEquals(current, snapshot))
                 {
                     _unsaved.Remove(characterId);
+                    _lastFailure.Remove(characterId);
                 }
             }
         }
+        catch (CharacterOwnershipRejectedException ex)
+        {
+            lock (_lock)
+            {
+                _lastFailure[characterId] = ex;
+            }
+
+            FailTerminal(ex, scope.ServiceProvider);
+        }
         catch (Exception ex)
         {
+            lock (_lock)
+            {
+                _lastFailure[characterId] = ex;
+            }
+
             _logger.LogError(ex, "Saving the cooldowns and auras of character {Character} failed; kept in memory", characterId);
         }
     }
 
     private async Task DeleteAsync(int characterId)
     {
+        lock (_lock)
+        {
+            if (_terminalFailure is not null)
+            {
+                return;
+            }
+        }
+
+        await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
         try
         {
-            await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
             if (scope.ServiceProvider.GetService<ICharacterSpellStateStore>() is { } store)
             {
                 await store.DeleteCharacterAsync(characterId).ConfigureAwait(false);
             }
+        }
+        catch (CharacterOwnershipRejectedException ex)
+        {
+            FailTerminal(ex, scope.ServiceProvider);
         }
         catch (Exception ex)
         {

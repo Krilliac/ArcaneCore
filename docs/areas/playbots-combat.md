@@ -9,9 +9,9 @@ How a managed playerbot fights like its class. The rest of the bot (goals, movem
 |---|---|---|
 | `Combat/PlayerbotAbilities.cs` | `PopulateSpellData` (:136-1827) | Each class ability by its exact Spell.dbc name at the highest known rank ("Rank N", else the higher id); passive and hidden spells skipped; direct and periodic heal lists, strongest first. A direct heal is an effect Heal, or a ScriptEffect (Holy Light, Flash of Light) whose heal is another spell (read from a per-store index of the spell store: the lowest-id rank-less Heal spell of the same name, family and icon); its reach (self-only, friend, chain friend, party) comes from the effect's TargetA, so Healing Wave and Chain Heal (target 45) count. Deviation from vmangos, which lists every Heal-effect spell: group heals (Prayer of Healing, Holy Nova: target 20 with a radius) stay out of the single-target list, and a heal that lands on its caster is never picked for a friend. |
 | `Combat/PlayerbotRole.cs` | `AutoAssignRole` (:58-118) | Tank / melee / ranged / healer from the talent spell the bot knows: Shield Slam, Holy Shield, Sanctity Aura, Shadowform, Elemental Mastery, Stormstrike, Moonkin Form, Leader of the Pack. A later rank of the same spell counts. |
-| `Combat/PlayerbotRotationState.cs` | | A plain snapshot of one decision: the bot, its victim (or pull target), its group, attackers, pet, totems, power, combo points, form and consumables, plus a `CanCast(spell, unit)` check. |
+| `Combat/PlayerbotRotationState.cs` | | A plain snapshot of one decision: the bot, its victim (or pull target), its group, attackers, pet (`PetFighting`, `PetFightingCrowdControlled`), totems, power, combo points, form and consumables, whether each unit carries a breakable crowd-control aura (`IsCrowdControlled`), plus a `CanCast(spell, unit)` check. |
 | `Combat/PlayerbotCombatView.cs` | `CanTryToCastSpell` (:2807-2860) | Builds the snapshot on the world thread. `CanCast`: spell and category cooldowns, global cooldown, caster/target aura state, power cost, shapeshift gate, reagents, equipped item class/subclass, ammunition for a bow/gun/crossbow, and range (the `SpellSystem.CheckRange` formula). It only avoids pointless requests; the ordinary handlers still decide. |
-| `Combat/PlayerbotClassRotation.cs` | `CombatBotBaseAI` helpers | Shared steps: heal target (`SelectHealTarget`, `SelectPeriodicHealTarget`), most efficient heal, buff target (single vs group version), friendly dispel and purge, pet commands, wand, emergency potion/bandage, taunt condition. |
+| `Combat/PlayerbotClassRotation.cs` | `CombatBotBaseAI` helpers | Shared steps: heal target (`SelectHealTarget`, `SelectPeriodicHealTarget`), most efficient heal, buff target (single vs group version), friendly dispel and purge, pet commands (`CommandPet` and `SendIdlePet` avoid commanding a pet onto a breakable crowd-controlled target and redirect or recall a pet fighting a crowd-controlled unit; `FirstAttackerOtherThan` skips crowd-controlled attackers), wand, emergency potion/bandage, taunt condition. |
 | `Combat/Playerbot<Class>Rotation.cs` (9) | `UpdateInCombatAI_<Class>` / `UpdateOutOfCombatAI_<Class>` (PartyBotAI.cpp:1163-3039) | The class priority lists. |
 | `PlayerbotCombatSpells.cs` | `DoCastSpell`, `OnPacketReceived` (:544) | Runs a rotation and submits its action as an ordinary CMSG_CAST_SPELL, CMSG_USE_ITEM or CMSG_PET_ACTION; acceptance is read from SMSG_SPELL_START/GO or the cast, next-swing and auto-repeat slots. |
 
@@ -95,7 +95,10 @@ ranged weapon and Auto Shot closes to 30 and holds, and fights in melee (Wing Cl
 8-yard dead zone. A ranged bot the enemy already reached in melee swings back; a ranged bot that found nothing to cast for 8 s at
 a target not fighting it closes to melee. Nobody ranged otherwise runs in: an out-of-mana caster wands (the rotation) or, between
 fights, drinks (the existing rest). Its victim is not `Combat.Victim` (no melee swing), so a living target that has the bot on its
-threat list keeps being its fight through the combat linger.
+threat list keeps being its fight through the combat linger, and `FindDefensiveAttacker` falls back from `Combat.Attackers` to
+`Combat.ThreatenedBy` (reachable first) when no creature is swinging directly at the bot (`PlayerbotDefensiveTargetTests`:
+bot QA #443, #539). A combat chase to an engaged or chosen target is not refused by a single death or retreat place mark the bot
+already stands in.
 
 "In melee" is the server's own swing reach (`MapCombat.CanReachWithMeleeAutoAttack`: 2D distance within the combat reach and
 less than 6 yards of height), or the 4-yard 3D distance. Judged by the 3D distance alone, a target up a slope (2 yards away, 3.9 up)

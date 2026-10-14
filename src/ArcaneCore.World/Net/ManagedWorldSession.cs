@@ -83,18 +83,18 @@ public sealed partial class WorldSession
 
     internal async Task<bool> DispatchManagedSessionAsync(WorldOpcode opcode, byte[] payload)
     {
-        if (!_managed || _kick.IsCancellationRequested || payload.Length > MaxClientPacketSize - 4
+        if (!_managed || _kick.IsCancellationRequested || !IsCurrentSession || payload.Length > MaxClientPacketSize - 4
             || opcode is not (WorldOpcode.CmsgCharCreate or WorldOpcode.CmsgPlayerLogin or WorldOpcode.CmsgCharEnum)
             || !_opcodes.TryGet(opcode, out OpcodeHandler? handler) || handler.Session is null
             || !handler.AllowsState(_state)) return false;
         CapturePacket(true, opcode, payload);
         await handler.Session(this, payload).ConfigureAwait(false);
-        return !_kick.IsCancellationRequested;
+        return !_kick.IsCancellationRequested && IsCurrentSession;
     }
 
     internal bool TryManagedAction(WorldOpcode opcode, byte[] payload)
     {
-        if (!_managed || !World.IsWorldThread || _kick.IsCancellationRequested || _state != SessionState.InWorld
+        if (!_managed || !World.IsWorldThread || _kick.IsCancellationRequested || !IsCurrentSession || _state != SessionState.InWorld
             || Player is not { } player || player.IsQuestSettlementPending
             || payload.Length > MaxClientPacketSize - 4
             || !_opcodes.TryGet(opcode, out OpcodeHandler? handler) || handler.World is null
@@ -106,7 +106,7 @@ public sealed partial class WorldSession
         ManagedDispatchObserver?.Invoke(opcode);
         _currentPacketReceivedMs = (uint)Kernel.Logging.Clock.Milliseconds();
         handler.World(this, player, payload);
-        return _state == SessionState.InWorld;
+        return _state == SessionState.InWorld && IsCurrentSession;
     }
 
     /// <summary>
@@ -115,10 +115,10 @@ public sealed partial class WorldSession
     /// </summary>
     internal bool TryManagedMovement(WorldOpcode opcode, in MovementInfo movement)
     {
-        if (!_managed || !World.IsWorldThread || _kick.IsCancellationRequested || _state != SessionState.InWorld
+        if (!_managed || !World.IsWorldThread || _kick.IsCancellationRequested || !IsCurrentSession || _state != SessionState.InWorld
             || Player is not { } player || player.IsQuestSettlementPending || player.Map is null) return false;
         if (ManagedBudget is { } budget && !budget.TryTake()) return false;
-        return MovementHandlers.MoveManagedBot(this, player, opcode, movement) && _state == SessionState.InWorld;
+        return MovementHandlers.MoveManagedBot(this, player, opcode, movement) && _state == SessionState.InWorld && IsCurrentSession;
     }
 
     private PlayerbotOptions? _botOptions;

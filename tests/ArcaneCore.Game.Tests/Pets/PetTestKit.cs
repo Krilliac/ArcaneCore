@@ -50,6 +50,7 @@ internal sealed class PetTestKit : IDisposable
     public const uint PetPassiveSpell = 910042;
     public const uint ImpSpell = 910043;
     public const uint LearnShieldSpell = 910044;
+    public const uint PolymorphSpell = 910045;
 
     public const int TotemDurationMs = 30_000;
 
@@ -191,6 +192,13 @@ internal sealed class PetTestKit : IDisposable
             Duration = new SpellDuration(-1, 0, -1),
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,
+        },
+        Spell(PolymorphSpell, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, aura: AuraType.Transform)) with
+        {
+            AuraInterruptFlags = SpellAuraInterruptFlags.Damage,
+            Duration = new SpellDuration(20_000, 0, 20_000),
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
         },
     ];
 }
