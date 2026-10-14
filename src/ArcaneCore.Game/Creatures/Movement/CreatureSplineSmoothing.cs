@@ -248,8 +248,8 @@ public static class CreatureSplineSmoothing
             return false;
         }
 
-        float arm = MathF.Min(MaxCornerCutArmYards, 0.35f * MathF.Min(inLen, outLen));
-        if (arm < 1.25f)
+        float arm = MathF.Min(MaxCornerCutArmYards, 0.38f * MathF.Min(inLen, outLen));
+        if (arm < 1.50f)
         {
             return false;
         }
@@ -257,18 +257,18 @@ public static class CreatureSplineSmoothing
         Vector3 p0 = Vector3.Lerp(b, a, arm / inLen);
         Vector3 p2 = Vector3.Lerp(b, c, arm / outLen);
 
-        if (!TryEvalBezierPoint(mapId, p0, b, p2, 0.25f, getHeight, out q1)
+        if (!TryEvalBezierPoint(mapId, p0, b, p2, 0.20f, getHeight, out q1)
             || !TryEvalBezierPoint(mapId, p0, b, p2, 0.50f, getHeight, out q2)
-            || !TryEvalBezierPoint(mapId, p0, b, p2, 0.75f, getHeight, out q3))
+            || !TryEvalBezierPoint(mapId, p0, b, p2, 0.80f, getHeight, out q3))
         {
             return false;
         }
 
-        // Keep points at least ~0.9 yards apart so 11/11/10-bit quarter-yard offsets in SMSG_MONSTER_MOVE stay smooth and distinct.
-        if (Vector3.DistanceSquared(a, q1) < 0.81f
-            || Vector3.DistanceSquared(q1, q2) < 0.81f
-            || Vector3.DistanceSquared(q2, q3) < 0.81f
-            || Vector3.DistanceSquared(q3, c) < 0.81f)
+        // Keep points at least ~1.1 yards apart so 11/11/10-bit quarter-yard offsets in SMSG_MONSTER_MOVE stay smooth and distinct.
+        if (Vector3.DistanceSquared(a, q1) < 1.21f
+            || Vector3.DistanceSquared(q1, q2) < 1.21f
+            || Vector3.DistanceSquared(q2, q3) < 1.21f
+            || Vector3.DistanceSquared(q3, c) < 1.21f)
         {
             return false;
         }

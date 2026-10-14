@@ -210,7 +210,8 @@ internal static class PlayerbotMotion
             current = Validate(map, state.Route!, state.Route!.NextPoint, reached, state.Anchor, position) ?? state.Anchor;
         }
 
-        while (route.NextPoint < route.Points.Count - 1 && Vector2.Distance(Flat(current), Flat(route.Points[route.NextPoint])) <= 0.05f)
+        float skipDistance = moving ? 0.30f : 0.05f;
+        while (route.NextPoint < route.Points.Count - 1 && Vector2.Distance(Flat(current), Flat(route.Points[route.NextPoint])) <= skipDistance)
             route.NextPoint++;
         // The first stretch must be walkable before anything is announced.
         Vector3 probe = Walk(route, current, route.NextPoint, MathF.Max(0.1f, MathF.Min(speed * 0.5f, 2f)),
@@ -505,19 +506,9 @@ internal static class PlayerbotMotion
             }
 
             float segmentHeading = Normalize(MathF.Atan2(segment.Y, segment.X));
-            if (AngleBetween(segmentHeading, newHeading) > TurnRadians)
-            {
+            newHeading = segmentHeading;
+            if (AngleBetween(segmentHeading, heading) > TurnRadians)
                 turned = true;
-                newHeading = segmentHeading;
-                // On a normal world tick (remaining <= 1 yd past the vertex), stop right at the corner vertex so the turn
-                // heartbeat reports the exact corner position where observer clients' straight-line dead reckoning along the
-                // old heading arrived, avoiding sideways position snaps across corners.
-                if (walked > 0f && remaining <= 1.0f) break;
-            }
-            else
-            {
-                newHeading = segmentHeading;
-            }
 
             if (remaining <= 1e-4f) break;
             if (remaining < length)

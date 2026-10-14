@@ -153,7 +153,7 @@ public sealed class PlayerbotRouteSmoothingTests
     }
 
     [Fact]
-    public void Walk_OnWorldTickStepAcrossATurnVertex_StopsAtTheCornerVertex_WithNewSegmentHeading()
+    public void Walk_OnWorldTickStepAcrossATurnVertex_PreservesFullTravelDistance_WithNewSegmentHeading()
     {
         var start = new Vector3(0f, 0f, Floor);
         var corner = new Vector3(5f, 0f, Floor);
@@ -173,13 +173,42 @@ public sealed class PlayerbotRouteSmoothingTests
             out bool arrived,
             out bool turned);
 
-        // Instead of overshooting 0.15 yards north onto leg 2 while observer clients dead-reckoned east,
-        // Walk stops at the exact corner vertex and reports leg 2's heading (+pi/2).
+        // Walk preserves the full 0.35 yards of travel (0.20 yd to corner + 0.15 yd onto leg 2) so the server
+        // never snaps the bot backwards against observer clients' dead reckoning, and reports leg 2's heading (+pi/2).
         Assert.True(turned);
         Assert.False(arrived);
         Assert.Equal(2, newNextPoint);
-        Assert.Equal(corner, pos);
+        Assert.Equal(5f, pos.X, 3);
+        Assert.Equal(0.15f, pos.Y, 3);
         Assert.Equal(MathF.PI / 2f, newHeading, 3);
+    }
+
+    [Fact]
+    public void Walk_AcrossMultipleGentleCurveSubSegments_DetectsCumulativeTurnFromInitialHeading()
+    {
+        // Three 2-yard chords bending by 0.14 rad (~8 deg) each: individual step < TurnRadians (0.20),
+        // but after two steps the total turn from initial heading (0 rad) is 0.28 rad > TurnRadians.
+        var p0 = new Vector3(0f, 0f, Floor);
+        var p1 = new Vector3(2f, 0f, Floor);
+        var p2 = p1 + new Vector3(2f * MathF.Cos(0.14f), 2f * MathF.Sin(0.14f), 0f);
+        var p3 = p2 + new Vector3(2f * MathF.Cos(0.28f), 2f * MathF.Sin(0.28f), 0f);
+        var route = new PlayerbotRoute([p0, p1, p2, p3], 6f, navigated: true);
+
+        PlayerbotMotion.Walk(
+            route,
+            p0,
+            nextPoint: 1,
+            distance: 4.5f,
+            heading: 0f,
+            out int newNextPoint,
+            out float newHeading,
+            out bool arrived,
+            out bool turned);
+
+        Assert.True(turned);
+        Assert.False(arrived);
+        Assert.Equal(3, newNextPoint);
+        Assert.Equal(0.28f, newHeading, 2);
     }
 
     private static float SampleYAtX(IReadOnlyList<Vector3> points, float x)

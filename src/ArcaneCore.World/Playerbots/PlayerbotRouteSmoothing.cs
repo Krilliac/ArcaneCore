@@ -45,10 +45,10 @@ internal static class PlayerbotRouteSmoothing
     internal const float MinCornerLegYards = 6.0f;
 
     /// <summary>Maximum distance trimmed back from a sharp vertex along each adjacent leg when forming a corner spline (flat yards).</summary>
-    internal const float MaxCornerTrimYards = 3.8f;
+    internal const float MaxCornerTrimYards = 4.6f;
 
-    /// <summary>Minimum turn angle (~15 degrees) that triggers corner spline smoothing.</summary>
-    internal const float MinCornerRadians = 0.26f;
+    /// <summary>Minimum turn angle (~23 degrees) that triggers corner spline smoothing.</summary>
+    internal const float MinCornerRadians = 0.40f;
 
     /// <summary>Maximum turn angle (~150 degrees) eligible for corner spline smoothing (hairpins stay sharp).</summary>
     internal const float MaxCornerRadians = 2.62f;
@@ -192,29 +192,47 @@ internal static class PlayerbotRouteSmoothing
         if (spine.Count < 3)
             return null;
 
-        var result = new List<Vector3>(spine.Count) { spine[0].Point };
-        bool anyOffset = false;
+        int n = spine.Count;
+        Span<float> desiredOffsets = n <= 96 ? stackalloc float[n] : new float[n];
+        Span<float> safeScales = n <= 96 ? stackalloc float[n] : new float[n];
+        desiredOffsets.Clear();
+        safeScales.Clear();
 
-        for (int i = 1; i < spine.Count - 1; i++)
+        for (int i = 1; i < n - 1; i++)
         {
             (Vector3 basePt, Vector2 normal, float s) = spine[i];
             if (normal.LengthSquared() < 0.5f || !map.Collision.IsOutdoors(basePt.X, basePt.Y, basePt.Z + 1f))
-            {
-                if (IsChordSafe(map, result[^1], basePt))
-                    result.Add(basePt);
                 continue;
-            }
 
             float startRamp = SmoothRamp(s / EndpointTaperYards);
             float endRamp = SmoothRamp((totalFlat - s) / EndpointTaperYards);
             float envelope = startRamp * endRamp;
 
-            // Spatial phase derived from world coordinates + along-route distance so nearby bots with different GUIDs weave independently.
             float spatialArg = (s * weaveInvWavelength) + ((basePt.X + basePt.Y) * 0.04f) + weavePhase;
             float desiredOffset = envelope * (laneOffset + (weaveAmplitude * MathF.Sin(spatialArg)));
+            if (MathF.Abs(desiredOffset) < 0.08f)
+                continue;
 
-            if (MathF.Abs(desiredOffset) >= 0.08f
-                && TrySelectSafeOffsetPoint(map, result[^1], basePt, spine[i + 1].Point, normal, desiredOffset, out Vector3 shifted))
+            desiredOffsets[i] = desiredOffset;
+            safeScales[i] = ProbeMaxSafePointScale(map, basePt, normal, desiredOffset);
+        }
+
+        // Smooth scale transitions across adjacent interior spine points so an obstacle near one point
+        // tapers the lateral lane gradually instead of snapping back to the centerline and rebounding (chicane).
+        for (int i = 2; i < n - 1; i++)
+            safeScales[i] = MathF.Min(safeScales[i], safeScales[i - 1] + 0.5f);
+        for (int i = n - 3; i >= 1; i--)
+            safeScales[i] = MathF.Min(safeScales[i], safeScales[i + 1] + 0.5f);
+
+        var result = new List<Vector3>(n) { spine[0].Point };
+        bool anyOffset = false;
+
+        for (int i = 1; i < n - 1; i++)
+        {
+            (Vector3 basePt, Vector2 normal, _) = spine[i];
+            float targetOffset = desiredOffsets[i] * safeScales[i];
+            if (MathF.Abs(targetOffset) >= 0.08f
+                && TrySelectSafeOffsetPoint(map, result[^1], basePt, normal, targetOffset, out Vector3 shifted))
             {
                 result.Add(shifted);
                 anyOffset = true;
@@ -233,17 +251,45 @@ internal static class PlayerbotRouteSmoothing
         return anyOffset && result.Count >= 3 ? result : null;
     }
 
+    private static float ProbeMaxSafePointScale(
+        Map map,
+        Vector3 basePt,
+        Vector2 normal,
+        float desiredOffset)
+    {
+        ReadOnlySpan<float> scales = [1.0f, 0.6f, 0.3f];
+        foreach (float scale in scales)
+        {
+            float off = desiredOffset * scale;
+            if (MathF.Abs(off) < 0.08f)
+                continue;
+
+            Vector3 candidate = new(
+                basePt.X + (normal.X * off),
+                basePt.Y + (normal.Y * off),
+                basePt.Z);
+
+            if (!map.Collision.IsOutdoors(candidate.X, candidate.Y, candidate.Z + 1f))
+                continue;
+            if (!TrySnapHeight(map, candidate, out _))
+                continue;
+
+            return scale;
+        }
+
+        return 0f;
+    }
+
     private static bool TrySelectSafeOffsetPoint(
         Map map,
         Vector3 prevAccepted,
         Vector3 basePt,
-        Vector3 nextBasePt,
         Vector2 normal,
         float desiredOffset,
         out Vector3 chosen)
     {
-        // Try full offset first, then half-offset on the same side, then a small clearance offset on the opposite side if an obstacle is near.
-        ReadOnlySpan<float> scales = [1.0f, 0.5f, -0.4f];
+        // Only try same-side offsets (never negative/opposite-side scales, which cause left-right slalom chicanes).
+        ReadOnlySpan<float> scales = [1.0f, 0.6f, 0.3f];
         foreach (float scale in scales)
         {
             float off = desiredOffset * scale;
@@ -260,8 +306,6 @@ internal static class PlayerbotRouteSmoothing
             if (!TrySnapHeight(map, candidate, out Vector3 snapped))
                 continue;
             if (!IsChordSafe(map, prevAccepted, snapped))
-                continue;
-            if (!IsChordSafe(map, snapped, nextBasePt))
                 continue;
 
             chosen = snapped;
@@ -328,8 +372,8 @@ internal static class PlayerbotRouteSmoothing
         if (angle < MinCornerRadians || angle > MaxCornerRadians)
             return false;
 
-        float trim = MathF.Min(MaxCornerTrimYards, 0.30f * MathF.Min(lenIn, lenOut));
-        if (trim < 1.5f)
+        float trim = MathF.Min(MaxCornerTrimYards, 0.38f * MathF.Min(lenIn, lenOut));
+        if (trim < 2.0f)
             return false;
 
         Vector3 rawA = Vector3.Lerp(corner, prev, trim / lenIn);
