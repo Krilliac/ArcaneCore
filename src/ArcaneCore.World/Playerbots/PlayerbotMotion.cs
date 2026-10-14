@@ -39,8 +39,8 @@ internal static class PlayerbotMotion
     /// <summary>A real client heartbeats about every 500 ms while moving.</summary>
     internal const uint HeartbeatIntervalMs = 500;
 
-    /// <summary>A route turn sharper than this (about 10 degrees) is reported at once with the new orientation.</summary>
-    internal const float TurnRadians = 0.17f;
+    /// <summary>A route turn sharper than this (about 5.7 degrees) is reported at once with the new orientation, so curved spline arcs stream smooth heading updates.</summary>
+    internal const float TurnRadians = 0.10f;
 
     /// <summary>How long a destination involved in a loop is refused.</summary>
     internal const uint LoopBlacklistMs = 60_000;

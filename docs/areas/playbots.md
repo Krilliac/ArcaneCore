@@ -75,9 +75,14 @@ town, trainer, combat, loot and recovery goals within the shared per-tick action
 
 Movement is separate from both: `PlayerbotMotion` advances every bot's current route every
 world tick (before any think, outside the action budget) and reports it the way a 1.12 client
-does — START, heartbeats every 500 ms and at turns, STOP — so observers see smooth running
+does — START, heartbeats every 500 ms and at turns (`TurnRadians` = 0.10 rad), STOP — so observers see smooth running
 whatever the think interval. Brain, goals and scripted controllers only choose routes
-(`PlayerbotNavigation.TryPlan` / `TryAdvance`). It also gives up navigation loops. Details and
+(`PlayerbotNavigation.TryPlan` / `TryAdvance`). On navigated mesh routes (`IMeshPointQuery` present),
+`PlayerbotRouteSmoothing.VaryAndSmooth` applies a deterministic per-bot lateral lane offset (`±2.2` yards)
+and gentle sinusoidal weave (`±0.85` yards) along outdoor corridors at least 18 yards long (tapered at start and
+destination, skipped on combat chases) so multiple bots walking the same road spread naturally instead of marching single-file,
+and replaces sharp interior polygon turns with 4-point quadratic Bezier arcs verified against floor height, doodad-aware
+line of sight (`PlayerbotMoveCheck.LineClear`), and navmesh raycasts. `PlayerbotMotion` also gives up navigation loops. Details and
 the 2026-10-07 root causes: `docs/integration/playerbot-movement-and-tick-health.md`; whether
 real terrain/collision/navmesh data is needed: `docs/integration/maps-vmaps-mmaps.md`.
 

@@ -590,8 +590,21 @@ internal static class PlayerbotNavigation
             straightRefused = false;
             return false;
         }
-        if (!Guards.TryGetValue(player, out PlayerbotRisk? risk)
-            || risk.Blocking(player, route.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not { } hazard) return true;
+        Guards.TryGetValue(player, out PlayerbotRisk? risk);
+        if (risk?.Blocking(player, route.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not { } hazard)
+        {
+            if (!trial && route.Navigated && player.Map is { } smoothMap && smoothMap.Collision.MeshPoints is not null)
+            {
+                PlayerbotRoute smoothed = PlayerbotRouteSmoothing.VaryAndSmooth(player, smoothMap, route, varyLateral: !chase);
+                if (!ReferenceEquals(smoothed, route)
+                    && risk?.Blocking(player, smoothed.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is null)
+                {
+                    route = smoothed;
+                }
+            }
+
+            return true;
+        }
 
         // The way passes through a hazard: walk round it (by a corner before it and one past it, on either side), or not at all.
         PlayerbotRoute direct = route;
