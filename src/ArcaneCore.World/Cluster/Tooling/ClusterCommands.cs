@@ -184,7 +184,7 @@ public sealed class ClusterCommands : ICommandGroup
             Player target = context.SelectedPlayerOrSelf() ?? context.Player;
             uint instanceId = target.Map?.InstanceId ?? 0;
             string mapName = MapName(context.World, target.MapId, target.Map);
-            string workerId = ResolveWorkerForMap(services, target.MapId, instanceId);
+            string workerId = ResolveWorkerForMap(services, context.World, target.MapId, instanceId);
             context.Reply(string.Create(
                 c,
                 $"You / target: {target.Name} (guid {target.Guid.Counter}, acct {target.AccountId}) | map {target.MapId} [{mapName}] inst {instanceId} zone {target.ZoneId} -> worker={workerId} | charToken={FormatToken(target.CharacterOwnership ?? worldToken)}"));
@@ -221,6 +221,17 @@ public sealed class ClusterCommands : ICommandGroup
             $"Routing summary: {loadedMaps.Length} map(s) loaded, {online.Length} online ({online.Length - botNames.Count} human, {botNames.Count} bots) | {DefaultWorkerEasternKingdoms}: {ekTotal} ({ekTotal - ekBots}h/{ekBots}b) | {DefaultWorkerKalimdor}: {kalTotal} ({kalTotal - kalBots}h/{kalBots}b) | {DefaultWorkerInstances}: {instMaps} map(s), {instTotal} ({instTotal - instBots}h/{instBots}b)"));
 
         context.Reply(FormatLeasesSummaryLine(services, nodeId, worldToken));
+
+        if (services.GetService<ClusterNodeBridgeFeature>() is { } bridge
+            && bridge.SnapshotNodes() is { Count: > 0 } bridgeNodes)
+        {
+            int connected = bridgeNodes.Count(n => n.IsConnected);
+            string nodeSummary = string.Join(", ", bridgeNodes.Select(n => $"{n.NodeId}@{n.EndPoint.Port}:{(n.IsConnected ? "UP" : "DOWN")}"));
+            context.Reply(string.Create(
+                c,
+                $"Cluster bridge: {connected}/{bridgeNodes.Count} node(s) connected to WorldServer [{nodeSummary}]"));
+        }
+
         return true;
     }
 
@@ -269,7 +280,7 @@ public sealed class ClusterCommands : ICommandGroup
 
         uint instanceId = target.Map?.InstanceId ?? 0;
         string mapName = MapName(context.World, target.MapId, target.Map);
-        string workerId = ResolveWorkerForMap(services, target.MapId, instanceId);
+        string workerId = ResolveWorkerForMap(services, context.World, target.MapId, instanceId);
         HashSet<string> botNames = GetRunningBotNames(services);
         bool isBot = botNames.Contains(target.Name);
 
@@ -303,7 +314,7 @@ public sealed class ClusterCommands : ICommandGroup
             filterMapId = mapId;
         }
 
-        ClusterMapPlacementTable? table = services.GetService<ClusterMapPlacementTable>();
+        ClusterMapPlacementTable? table = ResolvePlacementTable(services, context.World);
         if (table is not null)
         {
             IReadOnlyList<(uint MapId, WorkerNodeId WorkerId)> staticMaps = table.SnapshotStaticMaps();
@@ -362,7 +373,7 @@ public sealed class ClusterCommands : ICommandGroup
             maps.Select(map =>
             {
                 string name = MapName(context.World, map.MapId, map);
-                string worker = ResolveWorkerForMap(services, map.MapId, map.InstanceId);
+                string worker = ResolveWorkerForMap(services, context.World, map.MapId, map.InstanceId);
                 countsByMap.TryGetValue((map.MapId, map.InstanceId), out (int Total, int Bots) playerBreakdown);
                 int humans = Math.Max(0, map.PlayerCount - playerBreakdown.Bots);
                 return string.Create(
@@ -393,7 +404,20 @@ public sealed class ClusterCommands : ICommandGroup
             c,
             $"Local host: node={localNodeId} role={localRole} state=Active ready=true draining=false players={onlineCount} ({onlineCount - botNames.Count}h/{botNames.Count}b) maps={mapCount}"));
 
-        ClusterMapPlacementTable? table = services.GetService<ClusterMapPlacementTable>();
+        if (services.GetService<ClusterNodeBridgeFeature>() is { } bridge
+            && bridge.SnapshotNodes() is { Count: > 0 } bridgeNodes)
+        {
+            int connected = bridgeNodes.Count(n => n.IsConnected);
+            context.Reply(string.Create(c, $"Connected cluster nodes: {connected}/{bridgeNodes.Count}"));
+            foreach (ConnectedClusterNodeStatus n in bridgeNodes)
+            {
+                context.Reply(string.Create(
+                    c,
+                    $"node {n.NodeId}: role={n.RoleLabel} endpoint={n.EndPoint} state={(n.IsConnected ? "CONNECTED" : "DISCONNECTED")} maps=[{n.MapsSummary}] epoch={n.WorkerOwnerEpoch} heartbeats={n.RpcHeartbeats}"));
+            }
+        }
+
+        ClusterMapPlacementTable? table = ResolvePlacementTable(services, context.World);
         if (table is not null)
         {
             IReadOnlyList<ClusterWorkerStatus> workers = table.SnapshotWorkers();
@@ -534,7 +558,7 @@ public sealed class ClusterCommands : ICommandGroup
                 IsFencedWriter: true),
         };
 
-        if (services.GetService<ClusterMapPlacementTable>() is { } table)
+        if (ResolvePlacementTable(services, context.World) is { } table)
         {
             foreach (ClusterWorkerStatus w in table.SnapshotWorkers())
             {
@@ -626,9 +650,26 @@ public sealed class ClusterCommands : ICommandGroup
         };
     }
 
-    private static string ResolveWorkerForMap(IServiceProvider services, uint mapId, uint instanceId)
+    private static ClusterMapPlacementTable? ResolvePlacementTable(IServiceProvider services, WorldRuntime world)
     {
-        if (services.GetService<ClusterMapPlacementTable>() is { } table)
+        _ = world;
+        if (services.GetService<ClusterMapPlacementTable>() is { } explicitTable)
+        {
+            return explicitTable;
+        }
+
+        if (services.GetService<ClusterNodeBridgeFeature>() is { } bridge
+            && bridge.Placement.SnapshotWorkers().Count > 0)
+        {
+            return bridge.Placement;
+        }
+
+        return null;
+    }
+
+    private static string ResolveWorkerForMap(IServiceProvider services, WorldRuntime world, uint mapId, uint instanceId)
+    {
+        if (ResolvePlacementTable(services, world) is { } table)
         {
             if (instanceId > 0 && table.TryGetInstanceBinding(mapId, instanceId, out WorkerNodeId boundWorker))
             {

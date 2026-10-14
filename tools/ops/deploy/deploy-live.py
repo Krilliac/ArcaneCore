@@ -319,6 +319,10 @@ def main() -> int:
     if not args.no_transports:
         config["World"].setdefault("Transports", {})["Enabled"] = True
         changed["World:Transports:Enabled"] = True
+    metrics_cfg = config.setdefault("Ops", {}).setdefault("Metrics", {})
+    if metrics_cfg.get("Enabled"):
+        metrics_cfg.setdefault("PrometheusPrefix", "http://localhost:9464/metrics/")
+        metrics_cfg.setdefault("RealmPrometheusPrefix", "http://localhost:9465/metrics/")
     for item in args.set or []:
         key, _, raw = item.partition("=")
         if not key or not _:

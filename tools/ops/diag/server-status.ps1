@@ -1,14 +1,15 @@
 <#
 .SYNOPSIS
-  Live status console for an ArcaneCore profile: realm list, Realm/World processes and World metrics. It refreshes every few
+  Live status console for an ArcaneCore profile: realm list, Realm/World/Cluster processes and World/Realm metrics. It refreshes every few
   seconds and is read-only.
 .DESCRIPTION
   - Realm list: the `realmlist` rows the logon server serves to clients, read from the profile's auth.db with SQLite opened
     read-only (mode=ro). The auth DB path comes from appsettings.json Database:Auth.
-  - Processes: who listens on the World and Auth ports, their uptime, working set and CPU.
+  - Processes: who listens on the World, Auth, and Cluster Node ports (19081..19087), their uptime, working set and CPU.
   - World metrics: scraped from Ops:Metrics:PrometheusPrefix (default http://localhost:9464/metrics/) when Ops:Metrics is enabled.
     Shows players, sessions and maps, the save queue, caught faults / invariant failures / unhandled client opcodes, and tick rate, mean and p95 tick time over the refresh window (from the
     arcanecore_world_tick_duration histogram deltas). Without metrics it says so instead of inventing numbers.
+  - Realm metrics: scraped from Ops:Metrics:RealmPrometheusPrefix (default http://localhost:9465/metrics/) when Ops:Metrics is enabled.
   Type console commands in the World and Realm windows (docs/areas/server-console.md); this window only displays.
 .EXAMPLE
   pwsh -NoExit -File tools/ops/diag/server-status.ps1 -Profile $env:ARCANECORE_LIVE_PROFILE
@@ -18,7 +19,8 @@ param(
     [int] $WorldPort = 8085,
     [int] $AuthPort = 3724,
     [int] $IntervalSeconds = 5,
-    [string] $MetricsUrl = ''
+    [string] $MetricsUrl = '',
+    [string] $RealmMetricsUrl = ''
 )
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'OpsEnv.ps1')
 if ([string]::IsNullOrWhiteSpace($Profile)) {
@@ -34,18 +36,35 @@ Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='powershell.exe'"
     $_.CreationDate -lt $selfStart
 } | ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
 $ErrorActionPreference = 'Continue'
+
+function Get-JsonProp($obj, [string]$name) {
+    if ($null -eq $obj) { return $null }
+    $prop = $obj.PSObject.Properties[$name]
+    if ($null -eq $prop) { return $null }
+    return $prop.Value
+}
+
 $settingsPath = Join-Path $Profile 'appsettings.json'
 $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
-if (-not $MetricsUrl) {
-    $prefix = $settings.Ops.Metrics.PrometheusPrefix
-    $MetricsUrl = if ($prefix) { $prefix -replace '\+|\*', 'localhost' } else { 'http://localhost:9464/metrics/' }
+$opsSection = Get-JsonProp $settings 'Ops'
+$metricsSection = Get-JsonProp $opsSection 'Metrics'
+
+if ([string]::IsNullOrWhiteSpace($MetricsUrl)) {
+    $prefix = [string](Get-JsonProp $metricsSection 'PrometheusPrefix')
+    $MetricsUrl = if (-not [string]::IsNullOrWhiteSpace($prefix)) { $prefix -replace '\+|\*', 'localhost' } else { 'http://localhost:9464/metrics/' }
 }
-$metricsOn = [bool]$settings.Ops.Metrics.Enabled
+if ([string]::IsNullOrWhiteSpace($RealmMetricsUrl)) {
+    $realmPrefix = [string](Get-JsonProp $metricsSection 'RealmPrometheusPrefix')
+    $RealmMetricsUrl = if (-not [string]::IsNullOrWhiteSpace($realmPrefix)) { $realmPrefix -replace '\+|\*', 'localhost' } else { 'http://localhost:9465/metrics/' }
+}
+$metricsOn = [bool](Get-JsonProp $metricsSection 'Enabled')
 
 function AuthDbPath {
-    $cs = [string]$settings.Database.Auth
-    if ($cs -match '(?i)Data Source=([^;]+)') {
-        $p = $Matches[1].Trim('"')
+    $dbSection = Get-JsonProp $settings 'Database'
+    $authSection = Get-JsonProp $dbSection 'Auth'
+    $cs = if ($null -ne (Get-JsonProp $authSection 'ConnectionString')) { [string](Get-JsonProp $authSection 'ConnectionString') } else { [string]$authSection }
+    if ($cs -match '(?i)Data Source=([^;}]+)') {
+        $p = $Matches[1].Trim().Trim('"')
         if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path $Profile $p }
         return $p
     }
@@ -62,13 +81,22 @@ $realmScript = Join-Path ([System.IO.Path]::GetTempPath()) "arcanecore-status-re
 Set-Content -Path $realmScript -Value $realmQuery -Encoding utf8
 
 function ListenerProc([int] $port) {
-    $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $c) { return $null }
-    return Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue
+    try {
+        $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop | Select-Object -First 1
+        if ($c) { return Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue }
+    } catch {
+        $lines = & netstat -ano 2>$null
+        foreach ($line in $lines) {
+            if ($line -match "^\s*TCP\s+\S+:$port\s+\S+\s+LISTENING\s+(\d+)\s*$") {
+                return Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    return $null
 }
 
-function Scrape {
-    try { return (Invoke-WebRequest -Uri $MetricsUrl -TimeoutSec 3 -UseBasicParsing).Content } catch { return $null }
+function Scrape([string] $url) {
+    try { return (Invoke-WebRequest -Uri $url -TimeoutSec 3 -UseBasicParsing).Content } catch { return $null }
 }
 
 function Sum([string] $text, [string] $name) {
@@ -97,7 +125,19 @@ function FindName([string] $text, [string] $stem) {
     return $null
 }
 
-$prev = $null; $prevAt = $null
+$servicesList = @(
+    @{ N = 'Realm';            P = $AuthPort;  Role = 'logon' },
+    @{ N = 'World';            P = $WorldPort; Role = 'world' },
+    @{ N = 'worker:EK';        P = 19081;      Role = 'map 0 (EK)' },
+    @{ N = 'worker:Kalimdor';  P = 19082;      Role = 'map 1 (Kalimdor)' },
+    @{ N = 'worker:instances'; P = 19083;      Role = '28 instance/BG maps' },
+    @{ N = 'gateway';          P = 19084;      Role = 'session router' },
+    @{ N = 'social';           P = 19085;      Role = 'presence & chat' },
+    @{ N = 'coordinator';      P = 19086;      Role = 'economy & instances' },
+    @{ N = 'supervisor';       P = 19087;      Role = 'diagnostics & fence' }
+)
+
+$prev = $null
 while ($true) {
     $now = Get-Date
     $out = [System.Collections.Generic.List[string]]::new()
@@ -117,13 +157,16 @@ while ($true) {
     } else { $out.Add("  auth DB not found ($db)") }
     $out.Add('')
 
-    $out.Add('PROCESSES')
-    foreach ($svc in @(@{ N = 'Realm'; P = $AuthPort }, @{ N = 'World'; P = $WorldPort })) {
+    $out.Add('PROCESSES & CLUSTER CONSOLES')
+    foreach ($svc in $servicesList) {
         $p = ListenerProc $svc.P
         if ($p) {
             $up = (New-TimeSpan -Start $p.StartTime -End $now)
-            $out.Add(('  {0,-6} pid {1,-7} port {2,-5} up {3:d\.hh\:mm\:ss}   mem {4,7:N0} MB   cpu {5,8:N0}s' -f $svc.N, $p.Id, $svc.P, $up, ($p.WorkingSet64 / 1MB), $p.CPU))
-        } else { $out.Add(('  {0,-6} NOT LISTENING on port {1}' -f $svc.N, $svc.P)) }
+            $cpuSec = if ($null -ne $p.CPU) { $p.CPU } else { 0.0 }
+            $out.Add(('  {0,-16} pid {1,-7} port {2,-5} up {3:d\.hh\:mm\:ss}   mem {4,7:N0} MB   cpu {5,8:N0}s   [{6}]' -f $svc.N, $p.Id, $svc.P, $up, ($p.WorkingSet64 / 1MB), $cpuSec, $svc.Role))
+        } else {
+            $out.Add(('  {0,-16} NOT LISTENING on port {1,-5} [{2}]' -f $svc.N, $svc.P, $svc.Role))
+        }
     }
     $out.Add('')
 
@@ -131,7 +174,7 @@ while ($true) {
     if (-not $metricsOn) {
         $out.Add('  Ops:Metrics:Enabled is false in appsettings.json: no metrics (set it true and restart the World).')
     } else {
-        $text = Scrape
+        $text = Scrape $MetricsUrl
         if (-not $text) { $out.Add('  no answer from the scrape endpoint') }
         else {
             $players = Sum $text 'arcanecore_world_players_online'
@@ -146,7 +189,7 @@ while ($true) {
             $unhandled = Sum $text 'arcanecore_net_opcode_unhandled_total'
             if ($null -eq $distinct) { $out.Add('  faults: not exported by this build') }
             else {
-                $out.Add(('  faults {0} ({1} distinct)   invariant failures {2}   unhandled client opcodes {3}   (.server faults / .server wiring)' -f `
+                $out.Add(('  faults {0} ({1} distinct)   invariant failures {2}   unhandled client opcodes {3}   (.server faults / .server wiring / .cluster status)' -f `
                     $(if ($null -eq $faults) { 0 } else { $faults }), $distinct,
                     $(if ($null -eq $invariants) { 'n/a' } else { $invariants }), $(if ($null -eq $unhandled) { 0 } else { $unhandled })))
             }
@@ -167,6 +210,24 @@ while ($true) {
                 if ($null -ne $cur.netOut -and $null -ne $prev.netOut) { $out.Add(('  net out {0:N1} KB/s' -f (($cur.netOut - $prev.netOut) / 1KB / $secs))) }
             } else { $out.Add('  tick rate: waiting for a second sample') }
             $prev = $cur
+        }
+    }
+    $out.Add('')
+
+    $out.Add("REALM METRICS ($RealmMetricsUrl)")
+    if (-not $metricsOn) {
+        $out.Add('  Ops:Metrics:Enabled is false in appsettings.json.')
+    } else {
+        $realmText = Scrape $RealmMetricsUrl
+        if (-not $realmText) { $out.Add('  no answer from the realm scrape endpoint') }
+        else {
+            $rFaults = Sum $realmText 'arcanecore_faults_total'
+            $rDistinct = Sum $realmText 'arcanecore_faults_distinct'
+            $rUnhandled = Sum $realmText 'arcanecore_net_opcode_unhandled_total'
+            $out.Add(('  endpoint online   faults {0} ({1} distinct)   unhandled logon opcodes {2}' -f `
+                $(if ($null -eq $rFaults) { 0 } else { $rFaults }),
+                $(if ($null -eq $rDistinct) { 0 } else { $rDistinct }),
+                $(if ($null -eq $rUnhandled) { 0 } else { $rUnhandled })))
         }
     }
     $out.Add('')
