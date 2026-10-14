@@ -1,9 +1,50 @@
 using System.Buffers;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops.Watchdog.Counters;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Kernel.Ops.Watchdog;
+
+/// <summary>What the tick monitor may do to the process when a tick stays hung past <c>Ops:Watchdog:TickMonitor:ActionHangMs</c>; a seam so tests see the decision without stopping or aborting the test runner.</summary>
+public interface ITickHangActuator
+{
+    /// <summary>Stop the host with <see cref="ExitCodes.Failure"/>.</summary>
+    void Stop(string reason);
+
+    /// <summary>Write a synchronous crash report and terminate the deadlocked process immediately with <see cref="ExitCodes.UnhandledException"/> so a supervisor restarts it.</summary>
+    void FailFast(string reason);
+}
+
+/// <summary>The real runtime actuator for a fatal world-tick hang.</summary>
+public sealed class RuntimeTickHangActuator(IHostApplicationLifetime? lifetime = null) : ITickHangActuator
+{
+    public void Stop(string reason)
+    {
+        ExitCodes.Current = ExitCodes.Failure;
+        lifetime?.StopApplication();
+    }
+
+    public void FailFast(string reason)
+    {
+        ExitCodes.Current = ExitCodes.UnhandledException;
+        try
+        {
+            var timeout = new TimeoutException(reason);
+            string report = CrashHandler.Current?.Render(CrashKind.Unhandled, timeout)
+                ?? $"FATAL TICK HANG: {reason}";
+            Console.Error.WriteLine(report);
+            Console.Error.Flush();
+        }
+        catch
+        {
+            // Never let a failing report block termination of a deadlocked process.
+        }
+
+        Environment.Exit(ExitCodes.UnhandledException);
+    }
+}
 
 /// <summary>The tick-body statistics of the simulation's own recorder, when one exists. <see cref="Samples"/> == 0: not available.</summary>
 public readonly record struct TickBodySummary(int Samples, long P50Micros, long P99Micros, long MaxMicros, long Overruns);
@@ -42,16 +83,19 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
     private readonly TickMonitorOptions _options;
     private readonly WatchdogClock _clock;
+    private readonly ITickHangActuator _actuator;
     private readonly ILogger _logger;
     private readonly TickRing _ring;
     private readonly Counter _frames;
     private readonly Counter _overrunCounter;
     private readonly Counter _hangCounter;
+    private readonly Counter _actionCounter;
     private readonly Counter _frameP99;
     private readonly Counter _frameMax;
     // Until StartTicking resolves them, nothing counts as an overrun or a hang.
     private long _budgetMicros = long.MaxValue;
     private long _hangMicros = long.MaxValue;
+    private long _actionHangMicros = long.MaxValue;
     private long _intervalMicros;
 
     // Written by the tick thread only.
@@ -66,24 +110,27 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     private long _hangsReported;
     private long _lastOverrunReportMicros = NoTick;
     private long _hangReportedForStart = NoTick;
+    private long _actionFiredForStart = NoTick;
     private long _nextSummaryMicros = NoTick;
     private volatile bool _started;
     private volatile bool _stopped;
 
-    public TickMonitor(WatchdogOptions options, WatchdogClock clock, CounterRegistry counters, ILogger<TickMonitor> logger)
-        : this(options.TickMonitor, clock, counters, logger)
+    public TickMonitor(WatchdogOptions options, WatchdogClock clock, CounterRegistry counters, ILogger<TickMonitor> logger, ITickHangActuator? actuator = null)
+        : this(options.TickMonitor, clock, counters, logger, actuator)
     {
     }
 
-    public TickMonitor(TickMonitorOptions options, WatchdogClock clock, CounterRegistry counters, ILogger logger)
+    public TickMonitor(TickMonitorOptions options, WatchdogClock clock, CounterRegistry counters, ILogger logger, ITickHangActuator? actuator = null)
     {
         _options = options;
         _clock = clock;
+        _actuator = actuator ?? new RuntimeTickHangActuator();
         _logger = logger;
         _ring = new TickRing(options.RingCapacity);
         _frames = counters.GetOrAdd("watchdog.tick.frames");
         _overrunCounter = counters.GetOrAdd("watchdog.tick.overruns");
         _hangCounter = counters.GetOrAdd("watchdog.tick.hangs");
+        _actionCounter = counters.GetOrAdd("watchdog.tick.actions");
         _frameP99 = counters.GetOrAdd("watchdog.tick.frame_p99_us", CounterKind.Gauge);
         _frameMax = counters.GetOrAdd("watchdog.tick.frame_max_us", CounterKind.Gauge);
         _overrunLimiter = new LogRateLimiter(Micros.FromSeconds(options.WarnIntervalSeconds));
@@ -124,11 +171,16 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
     public long HangMicros => _hangMicros;
 
+    public long ActionHangMicros => _actionHangMicros;
+
     /// <summary>Frames longer than the budget so far.</summary>
     public long Overruns => Volatile.Read(ref _overruns);
 
     /// <summary>Frames longer than the hang threshold that have completed.</summary>
     public long HangsCompleted => Volatile.Read(ref _hangsCompleted);
+
+    /// <summary>Fatal hang actions fired so far.</summary>
+    public long ActionsFired => _actionCounter.Value;
 
     /// <summary>Microseconds since the last tick started, or null before the first tick.</summary>
     public long? MicrosSinceLastTick
@@ -150,6 +202,9 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         _intervalMicros = Micros.FromMillis(Math.Max(1, tickIntervalMs));
         _budgetMicros = _options.BudgetMs > 0 ? Micros.FromMillis(_options.BudgetMs) : 2 * _intervalMicros;
         _hangMicros = _options.HangMs > 0 ? Micros.FromMillis(_options.HangMs) : long.MaxValue;
+        _actionHangMicros = _options.ActionHangMs > 0 && _options.Action != TickHangAction.None
+            ? Micros.FromMillis(_options.ActionHangMs)
+            : long.MaxValue;
         _started = true;
     }
 
@@ -211,6 +266,31 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
                 _logger.LogCritical(WatchdogEvents.TickHang, "world tick has been running for {RunningMs} ms (hang threshold {HangMs} ms, interval {IntervalMs} ms){Detail}{Host}",
                     Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros), running, host);
                 Alert(TickAlertKind.Hang, $"The world tick is hung (running {Micros.ToMillis(nowMicros - last)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms{running}{host}", inProgress: true, hostVerdict: HostVerdict(nowMicros - last));
+            }
+        }
+
+        // 1b. Fatal hang action: when a single tick remains wedged past ActionHangMs and the host-load sampler does not blame GC pauses or machine CPU starvation.
+        if (!_stopped && last != NoTick && nowMicros - last > _actionHangMicros && _actionFiredForStart != last)
+        {
+            HostLoadVerdict verdict = HostVerdict(nowMicros - last);
+            if (verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses))
+            {
+                _actionFiredForStart = last;
+                _actionCounter.Increment();
+                string running = DetailText(inProgress: true);
+                string host = HostText(nowMicros - last);
+                string reason = $"world tick has been hung for {Micros.ToMillis(nowMicros - last)} ms (action threshold {Micros.ToMillis(_actionHangMicros)} ms, action {_options.Action}){running}{host}";
+                _logger.LogCritical(WatchdogEvents.TickAction, "world tick has been hung for {RunningMs} ms (action threshold {ActionHangMs} ms): executing {Action}{Detail}{Host}",
+                    Micros.ToMillis(nowMicros - last), Micros.ToMillis(_actionHangMicros), _options.Action, running, host);
+                switch (_options.Action)
+                {
+                    case TickHangAction.Stop:
+                        _actuator.Stop(reason);
+                        break;
+                    case TickHangAction.FailFast:
+                        _actuator.FailFast(reason);
+                        break;
+                }
             }
         }
 

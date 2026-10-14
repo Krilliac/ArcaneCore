@@ -170,6 +170,17 @@ public sealed class WatchdogHostTests
         Assert.Contains("Ops:Watchdog:Counters:DumpIntervalSeconds", keys);
         Assert.Equal(ConfigSeverity.Warning, Assert.Single(issues, i => i.Key == "Ops:Watchdog:Memory:ActionHeapBytes").Severity);
         Assert.Equal(8, issues.Count);
+
+        var badTickAction = new WatchdogOptions();
+        badTickAction.TickMonitor.Action = TickHangAction.FailFast; // with ActionHangMs 0: a warning
+        ConfigIssue tickWarn = Assert.Single(WatchdogOptionsValidation.Problems(badTickAction));
+        Assert.Equal("Ops:Watchdog:TickMonitor:ActionHangMs", tickWarn.Key);
+        Assert.Equal(ConfigSeverity.Warning, tickWarn.Severity);
+
+        badTickAction.TickMonitor.ActionHangMs = 1000; // < HangMs (2000): an error
+        ConfigIssue tickErr = Assert.Single(WatchdogOptionsValidation.Problems(badTickAction));
+        Assert.Equal("Ops:Watchdog:TickMonitor:ActionHangMs", tickErr.Key);
+        Assert.Equal(ConfigSeverity.Error, tickErr.Severity);
     }
 
     [Fact]

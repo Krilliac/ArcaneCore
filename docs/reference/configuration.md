@@ -707,6 +707,8 @@ How to read the tables:
 | `Ops:Watchdog:ThreadPool:ProbeIntervalSeconds` | `int` | `5` | - | Seconds between probes. 1-3600. Default 5. |
 | `Ops:Watchdog:ThreadPool:WarnDelayMs` | `int` | `200` | - | A probe that waits longer than this (milliseconds) for a pool thread is a rate-limited warning with the pool counts. Default 200. |
 | `Ops:Watchdog:ThreadPool:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two starvation warnings. Default 30. |
+| `Ops:Watchdog:TickMonitor:Action` | `TickHangAction` | `None` | - | What happens when a tick has run longer than `ActionHangMs`. Default None (log only; `Stop` stops the host with exit code 1; `FailFast` terminates immediately with exit code 70 so a supervisor restarts a deadlocked world thread). Values: `None`, `Log`, `Stop`, `FailFast`. |
+| `Ops:Watchdog:TickMonitor:ActionHangMs` | `int` | `0` | - | A frame running longer than this triggers `Action` (when `Action` is not `TickHangAction.None` and the host-load sampler does not blame GC pauses or machine starvation). 0 disables the action whatever `Action` says. Default 0. |
 | `Ops:Watchdog:TickMonitor:BudgetMs` | `int` | `0` | - | A frame longer than this is an overrun. 0 = twice the configured tick interval (100 ms at the retail 50 ms tick), tolerating sleep jitter. Default 0. |
 | `Ops:Watchdog:TickMonitor:Enabled` | `bool` | `true` | - | `false`: no tick is recorded, no overrun or hang is reported and the heartbeat does not depend on the tick. Default true. |
 | `Ops:Watchdog:TickMonitor:GatesHeartbeat` | `bool` | `true` | - | `true`: the heartbeat is withheld while a tick has run longer than `HangMs`, so a supervisor watchdog restarts a hung world. Default true. |

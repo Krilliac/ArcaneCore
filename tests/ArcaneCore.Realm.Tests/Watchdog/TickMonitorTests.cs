@@ -424,4 +424,102 @@ public sealed class TickMonitorTests
 
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
+
+    private sealed class FakeTickHangActuator : ITickHangActuator
+    {
+        public List<string> Calls { get; } = [];
+
+        public void Stop(string reason) => Calls.Add("stop:" + reason);
+
+        public void FailFast(string reason) => Calls.Add("failfast:" + reason);
+    }
+
+    private sealed class FakeHostLoadProbe : IHostLoadProbe
+    {
+        public HostLoadReading Current { get; set; }
+
+        public HostLoadReading Read() => Current;
+    }
+
+    [Theory]
+    [InlineData(TickHangAction.Stop, "stop:")]
+    [InlineData(TickHangAction.FailFast, "failfast:")]
+    public void ActionHang_FiresActuatorOncePerHungTick_AndResetsForNextTick(TickHangAction action, string expectedPrefix)
+    {
+        var actuator = new FakeTickHangActuator();
+        var options = new TickMonitorOptions
+        {
+            HangMs = 2000,
+            ActionHangMs = 10_000,
+            Action = action,
+        };
+        var monitor = new TickMonitor(options, _clock, _counters, _log, actuator);
+        monitor.HangDetail = _ => "phase=Maps, running=map 0 instance 0 for 12000 ms";
+        monitor.StartTicking(50);
+
+        Tick(monitor, 5, 50);
+        monitor.OnTick(_clock.NowMicros);
+
+        // At 3s: HangMs (2s) triggered, but below ActionHangMs (10s).
+        _clock.AdvanceMs(3_000);
+        monitor.Check(_clock.NowMicros);
+        Assert.Empty(actuator.Calls);
+        Assert.Empty(_log.Of(WatchdogEvents.TickAction));
+
+        // At 12s: ActionHangMs (10s) exceeded -> fires once.
+        _clock.AdvanceMs(9_000);
+        monitor.Check(_clock.NowMicros);
+        string call = Assert.Single(actuator.Calls);
+        Assert.StartsWith(expectedPrefix, call, StringComparison.Ordinal);
+        Assert.Contains("12000 ms", call, StringComparison.Ordinal);
+        Assert.Contains("phase=Maps", call, StringComparison.Ordinal);
+        LogLine actionLine = Assert.Single(_log.Of(WatchdogEvents.TickAction));
+        Assert.Equal(LogLevel.Critical, actionLine.Level);
+        Assert.Equal(1, monitor.ActionsFired);
+        Assert.Equal(1, _counters.Find("watchdog.tick.actions")!.Value);
+
+        // Still on the same hung tick at 20s: does not fire a second time.
+        _clock.AdvanceMs(8_000);
+        monitor.Check(_clock.NowMicros);
+        Assert.Single(actuator.Calls);
+        Assert.Equal(1, monitor.ActionsFired);
+
+        // If the tick ever recovers and a subsequent tick hangs past ActionHangMs, it can fire again.
+        monitor.OnTick(_clock.NowMicros);
+        _clock.AdvanceMs(11_000);
+        monitor.Check(_clock.NowMicros);
+        Assert.Equal(2, actuator.Calls.Count);
+        Assert.Equal(2, monitor.ActionsFired);
+    }
+
+    [Fact]
+    public void ActionHang_SuppressedWhenHostLoadBlamesHostStarvedOrGcPauses()
+    {
+        var actuator = new FakeTickHangActuator();
+        var probe = new FakeHostLoadProbe
+        {
+            Current = new HostLoadReading(0, true, 0, 0, 0, 0, 0, 0, 12, 0, 24),
+        };
+        var sampler = new HostLoadSampler(new HostLoadOptions(), 1000, _clock, probe);
+        sampler.Check(_clock.NowMicros);
+
+        var options = new TickMonitorOptions
+        {
+            HangMs = 2000,
+            ActionHangMs = 5000,
+            Action = TickHangAction.FailFast,
+        };
+        var monitor = new TickMonitor(options, _clock, _counters, _log, actuator) { HostLoad = sampler };
+        monitor.StartTicking(50);
+        Tick(monitor, 2, 50);
+        monitor.OnTick(_clock.NowMicros);
+
+        // Advance 6s while machine is 100% busy with other processes (HostStarved).
+        _clock.AdvanceMs(6_000);
+        probe.Current = new HostLoadReading(1 * 10_000_000L, true, 144 * 10_000_000L, 144 * 10_000_000L, 0, 0, 0, 0, 12, 0, 24);
+        monitor.Check(_clock.NowMicros);
+
+        Assert.Empty(actuator.Calls);
+        Assert.Equal(0, monitor.ActionsFired);
+    }
 }

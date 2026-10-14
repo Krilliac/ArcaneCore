@@ -60,6 +60,28 @@ public sealed class TickMonitorOptions
 
     /// <summary><c>true</c>: the heartbeat is withheld while a tick has run longer than <see cref="HangMs"/>, so a supervisor watchdog restarts a hung world. Default true.</summary>
     public bool GatesHeartbeat { get; set; } = true;
+
+    /// <summary>A frame running longer than this triggers <see cref="Action"/> (when <see cref="Action"/> is not <see cref="TickHangAction.None"/> and the host-load sampler does not blame GC pauses or machine starvation). 0 disables the action whatever <see cref="Action"/> says. Default 0.</summary>
+    public int ActionHangMs { get; set; }
+
+    /// <summary>What happens when a tick has run longer than <see cref="ActionHangMs"/>. Default None (log only; <c>Stop</c> stops the host with exit code 1; <c>FailFast</c> terminates immediately with exit code 70 so a supervisor restarts a deadlocked world thread).</summary>
+    public TickHangAction Action { get; set; } = TickHangAction.None;
+}
+
+/// <summary>What the tick monitor does when a tick runs longer than <c>Ops:Watchdog:TickMonitor:ActionHangMs</c>.</summary>
+public enum TickHangAction
+{
+    /// <summary>Nothing beyond the hang line and withholding the heartbeat.</summary>
+    None = 0,
+
+    /// <summary>A Critical log line at <c>ActionHangMs</c>.</summary>
+    Log = 1,
+
+    /// <summary>Stop the host with exit code 1.</summary>
+    Stop = 2,
+
+    /// <summary>Write a synchronous crash report and terminate immediately with exit code 70 so a supervisor restarts the deadlocked process.</summary>
+    FailFast = 3,
 }
 
 /// <summary>Host-load sampler (<c>Ops:Watchdog:HostLoad</c>): process and machine CPU, GC counts and pause time, thread-pool depth, sampled on the monitoring thread and differenced over the window of a slow tick.</summary>

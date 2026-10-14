@@ -1,18 +1,23 @@
 <#
 .SYNOPSIS
-  Live status console for an ArcaneCore profile: realm list, Realm/World/Cluster processes and World/Realm metrics. It refreshes every few
-  seconds and is read-only.
+  Live status console (and optional auto-recovery supervisor) for an ArcaneCore profile: realm list, Realm/World/Cluster processes,
+  watchdog heartbeat and World/Realm metrics.
 .DESCRIPTION
   - Realm list: the `realmlist` rows the logon server serves to clients, read from the profile's auth.db with SQLite opened
     read-only (mode=ro). The auth DB path comes from appsettings.json Database:Auth.
   - Processes: who listens on the World, Auth, and Cluster Node ports (19081..19087), their uptime, working set and CPU.
+  - Watchdog & Supervisor (-Supervise): monitors `Ops:Watchdog:Heartbeat:FilePath` (default `logs/world.heartbeat`) and the
+    Realm/World processes recorded in `standard-processes.json`. Automatically restarts a crashed or `.server restart` (exit code 2)
+    daemon, kills and restarts a World process whose heartbeat file stays stale past `-HangKillSeconds` (default 90 s), refuses to
+    restart intentional `.server shutdown` (exit code 0 / `stopping` state) or config errors (exit code 78), pauses while
+    `deploying.lock` exists, and trips a circuit breaker after 5 restarts within 180 s.
   - World metrics: scraped from Ops:Metrics:PrometheusPrefix (default http://localhost:9464/metrics/) when Ops:Metrics is enabled.
     Shows players, sessions and maps, the save queue, caught faults / invariant failures / unhandled client opcodes, and tick rate, mean and p95 tick time over the refresh window (from the
     arcanecore_world_tick_duration histogram deltas). Without metrics it says so instead of inventing numbers.
   - Realm metrics: scraped from Ops:Metrics:RealmPrometheusPrefix (default http://localhost:9465/metrics/) when Ops:Metrics is enabled.
-  Type console commands in the World and Realm windows (docs/areas/server-console.md); this window only displays.
+  Type console commands in the World and Realm windows (docs/areas/server-console.md); this window displays status (and supervises when -Supervise is passed).
 .EXAMPLE
-  pwsh -NoExit -File tools/ops/diag/server-status.ps1 -Profile $env:ARCANECORE_LIVE_PROFILE
+  pwsh -NoExit -File tools/ops/diag/server-status.ps1 -Profile $env:ARCANECORE_LIVE_PROFILE -Supervise
 #>
 param(
     [string] $Profile = '',
@@ -21,6 +26,8 @@ param(
     [int] $IntervalSeconds = 5,
     [string] $MetricsUrl = '',
     [string] $RealmMetricsUrl = '',
+    [switch] $Supervise,
+    [int] $HangKillSeconds = 90,
     [switch] $Once
 )
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'OpsEnv.ps1')
@@ -28,7 +35,7 @@ if ([string]::IsNullOrWhiteSpace($Profile)) {
     $Profile = Get-OpsRequiredEnv -Name 'ARCANECORE_LIVE_PROFILE' -Purpose 'the live server profile directory that holds appsettings.json'
 }
 if (-not $Once) {
-    try { $Host.UI.RawUI.WindowTitle = "ArcaneCore status" } catch { }
+    try { $Host.UI.RawUI.WindowTitle = if ($Supervise) { "ArcaneCore status [SUPERVISOR]" } else { "ArcaneCore status" } } catch { }
     # One status console per World port: the newest wins, so each redeploy replaces the old window instead of adding another.
     # Only older pwsh processes running this script via -File for the same port are closed.
     $selfProc = Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction SilentlyContinue
@@ -54,6 +61,14 @@ $settingsPath = Join-Path $Profile 'appsettings.json'
 $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
 $opsSection = Get-JsonProp $settings 'Ops'
 $metricsSection = Get-JsonProp $opsSection 'Metrics'
+$watchdogSection = Get-JsonProp $opsSection 'Watchdog'
+$hbSection = Get-JsonProp $watchdogSection 'Heartbeat'
+$hbRelPath = [string](Get-JsonProp $hbSection 'FilePath')
+if ([string]::IsNullOrWhiteSpace($hbRelPath)) { $hbRelPath = 'logs/world.heartbeat' }
+$heartbeatPath = if ([System.IO.Path]::IsPathRooted($hbRelPath)) { $hbRelPath } else { Join-Path $Profile $hbRelPath }
+$supervisorLogPath = Join-Path $Profile 'logs\supervisor.log'
+$deployLockPath = Join-Path $Profile 'deploying.lock'
+$metaPath = Join-Path $Profile 'standard-processes.json'
 
 if ([string]::IsNullOrWhiteSpace($MetricsUrl)) {
     $prefix = [string](Get-JsonProp $metricsSection 'PrometheusPrefix')
@@ -64,6 +79,93 @@ if ([string]::IsNullOrWhiteSpace($RealmMetricsUrl)) {
     $RealmMetricsUrl = if (-not [string]::IsNullOrWhiteSpace($realmPrefix)) { $realmPrefix -replace '\+|\*', 'localhost' } else { 'http://localhost:9465/metrics/' }
 }
 $metricsOn = [bool](Get-JsonProp $metricsSection 'Enabled')
+
+function Write-SupervisorLog([string] $msg) {
+    $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+    $line = "$stamp $msg"
+    $script:lastSupervisorNote = $line
+    try {
+        $dir = Split-Path -Parent $supervisorLogPath
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        Add-Content -Path $supervisorLogPath -Value $line -Encoding utf8
+    } catch { }
+}
+
+function Read-HeartbeatInfo {
+    if (-not (Test-Path $heartbeatPath)) { return $null }
+    try {
+        $item = Get-Item -LiteralPath $heartbeatPath -ErrorAction Stop
+        $raw = (Get-Content -LiteralPath $heartbeatPath -Raw -ErrorAction Stop).Trim()
+        $ageSec = [Math]::Max(0.0, ((Get-Date).ToUniversalTime() - $item.LastWriteTimeUtc).TotalSeconds)
+        if ($raw -match '^(\S+)\s+pid=(\d+)\s+(\S+)$') {
+            return @{ Stamp = $Matches[1]; Pid = [int]$Matches[2]; State = $Matches[3]; AgeSec = $ageSec; Raw = $raw }
+        }
+        return @{ Stamp = '?'; Pid = 0; State = $raw; AgeSec = $ageSec; Raw = $raw }
+    } catch {
+        return $null
+    }
+}
+
+$watchedProcs = @{}
+$intentionalStop = @{ Realm = $false; World = $false }
+$restartHistory = @{
+    Realm = [System.Collections.Generic.List[datetime]]::new()
+    World = [System.Collections.Generic.List[datetime]]::new()
+}
+$lastSupervisorNote = 'none'
+
+function Restart-SupervisedService([string] $svcName, [string] $reason) {
+    $nowUtc = (Get-Date).ToUniversalTime()
+    $hist = $restartHistory[$svcName]
+    for ($i = $hist.Count - 1; $i -ge 0; $i--) {
+        if (($nowUtc - $hist[$i]).TotalSeconds -gt 180.0) { $hist.RemoveAt($i) }
+    }
+    if ($hist.Count -ge 5) {
+        Write-SupervisorLog "CIRCUIT BREAKER OPEN for ${svcName}: 5 restarts in 180s (last reason: $reason)"
+        return
+    }
+    if (-not (Test-Path $metaPath)) {
+        Write-SupervisorLog "cannot restart ${svcName} ($reason): $metaPath not found"
+        return
+    }
+    try {
+        $meta = Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json
+        $svcMeta = $meta.services.$svcName
+        $dll = [string]$svcMeta.dll
+        if ([string]::IsNullOrWhiteSpace($dll) -or -not (Test-Path -LiteralPath $dll)) {
+            Write-SupervisorLog "cannot restart ${svcName} ($reason): dll not found ($dll)"
+            return
+        }
+        $logDir = Join-Path $Profile 'logs'
+        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+        $logFile = Join-Path $logDir ("{0}-supervised.log" -f $svcName.ToLowerInvariant())
+        $psi = [System.Diagnostics.ProcessStartInfo]::new('dotnet', "`"$dll`"")
+        $psi.WorkingDirectory = $Profile
+        $psi.UseShellExecute = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
+        $envPrevEnabled = $env:Logging__ArcaneCore__File__Enabled
+        $envPrevPath = $env:Logging__ArcaneCore__File__Path
+        try {
+            $env:Logging__ArcaneCore__File__Enabled = 'true'
+            $env:Logging__ArcaneCore__File__Path = $logFile
+            $proc = [System.Diagnostics.Process]::Start($psi)
+        } finally {
+            $env:Logging__ArcaneCore__File__Enabled = $envPrevEnabled
+            $env:Logging__ArcaneCore__File__Path = $envPrevPath
+        }
+        if ($null -ne $proc) {
+            try { $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::AboveNormal } catch { }
+            $watchedProcs[$svcName] = $proc
+            $intentionalStop[$svcName] = $false
+            $hist.Add($nowUtc)
+            $svcMeta.pid = $proc.Id
+            $meta | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $metaPath -Encoding utf8
+            Write-SupervisorLog "restarted ${svcName} as pid $($proc.Id) (reason: $reason)"
+        }
+    } catch {
+        Write-SupervisorLog "failed to restart ${svcName} ($reason): $($_.Exception.Message)"
+    }
+}
 
 function AuthDbPath {
     $dbSection = Get-JsonProp $settings 'Database'
@@ -169,9 +271,15 @@ while ($true) {
     $out.Add('')
 
     $out.Add('PROCESSES & CLUSTER CONSOLES')
+    $activeListeners = @{}
     foreach ($svc in $servicesList) {
         $p = ListenerProc $svc.P
+        $activeListeners[$svc.N] = $p
         if ($p) {
+            if ($svc.N -eq 'Realm' -or $svc.N -eq 'World') {
+                $watchedProcs[$svc.N] = $p
+                $intentionalStop[$svc.N] = $false
+            }
             $up = (New-TimeSpan -Start $p.StartTime -End $now)
             $cpuSec = if ($null -ne $p.CPU) { [double]$p.CPU } else { 0.0 }
             $nextCpu[$p.Id] = $cpuSec
@@ -190,6 +298,63 @@ while ($true) {
     }
     $prevCpu = $nextCpu
     $prevCpuAt = $now
+    $out.Add('')
+
+    $hbInfo = Read-HeartbeatInfo
+    $deployLocked = Test-Path -LiteralPath $deployLockPath
+    if ($Supervise -and -not $deployLocked) {
+        foreach ($svcName in @('Realm', 'World')) {
+            $listener = $activeListeners[$svcName]
+            if ($null -ne $listener) {
+                if ($svcName -eq 'World' -and $null -ne $hbInfo -and $hbInfo.Pid -eq $listener.Id -and $hbInfo.State -ne 'stopping' -and $hbInfo.AgeSec -gt $HangKillSeconds) {
+                    Write-SupervisorLog "World pid $($listener.Id) heartbeat stale for $([int]$hbInfo.AgeSec)s (> ${HangKillSeconds}s); killing and restarting"
+                    Stop-Process -Id $listener.Id -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 1
+                    Restart-SupervisedService 'World' "heartbeat stale ($([int]$hbInfo.AgeSec)s)"
+                }
+                continue
+            }
+            # Not listening on its port: check if a recently spawned process is still warming up before binding its socket.
+            $existing = $watchedProcs[$svcName]
+            if ($null -ne $existing -and -not $existing.HasExited) {
+                $warmupLimit = if ($svcName -eq 'World') { 180.0 } else { 60.0 }
+                if (($now - $existing.StartTime).TotalSeconds -lt $warmupLimit) {
+                    continue
+                }
+            }
+            if ($intentionalStop[$svcName]) {
+                continue
+            }
+            $shouldRestart = $true
+            $reason = 'listener down'
+            if ($null -ne $existing -and $existing.HasExited) {
+                $code = $existing.ExitCode
+                if ($code -eq 0 -or $code -eq 78) {
+                    $intentionalStop[$svcName] = $true
+                    $shouldRestart = $false
+                    Write-SupervisorLog "${svcName} pid $($existing.Id) exited with code $code (clean shutdown or config error); not restarting"
+                } else {
+                    $reason = "pid $($existing.Id) exited with code $code"
+                }
+            } elseif ($svcName -eq 'World' -and $null -ne $hbInfo -and $hbInfo.State -eq 'stopping') {
+                $intentionalStop['World'] = $true
+                $shouldRestart = $false
+            }
+            if ($shouldRestart) {
+                Restart-SupervisedService $svcName $reason
+            }
+        }
+    }
+
+    $out.Add('WATCHDOG & SUPERVISOR')
+    $supState = if ($deployLocked) { 'PAUSED (deploying.lock present)' } elseif ($Supervise) { "ACTIVE (auto-restart on crash/exit!=0,78; hang kill > ${HangKillSeconds}s)" } else { 'READ-ONLY (pass -Supervise to enable auto-recovery)' }
+    $out.Add("  supervisor: $supState")
+    if ($null -ne $hbInfo) {
+        $out.Add(('  heartbeat:  pid={0}   state={1}   age={2:N1}s   ({3})' -f $hbInfo.Pid, $hbInfo.State, $hbInfo.AgeSec, $heartbeatPath))
+    } else {
+        $out.Add("  heartbeat:  not present ($heartbeatPath)")
+    }
+    $out.Add("  last event: $lastSupervisorNote")
     $out.Add('')
 
     $out.Add("WORLD METRICS ($MetricsUrl)")

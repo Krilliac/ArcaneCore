@@ -31,11 +31,27 @@ public sealed class WatchdogOptionsValidation : IValidateOptions<WatchdogOptions
         Range(issues, $"{Root}:TickMonitor:RingCapacity", o.TickMonitor.RingCapacity, TickRing.MinCapacity, TickRing.MaxCapacity, $"{TickRing.MinCapacity}-{TickRing.MaxCapacity} ticks");
         NonNegative(issues, $"{Root}:TickMonitor:BudgetMs", o.TickMonitor.BudgetMs);
         NonNegative(issues, $"{Root}:TickMonitor:HangMs", o.TickMonitor.HangMs);
+        NonNegative(issues, $"{Root}:TickMonitor:ActionHangMs", o.TickMonitor.ActionHangMs);
         Range(issues, $"{Root}:TickMonitor:WarnIntervalSeconds", o.TickMonitor.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
         NonNegative(issues, $"{Root}:TickMonitor:SummaryIntervalSeconds", o.TickMonitor.SummaryIntervalSeconds);
         if (o.TickMonitor.HangMs > 0 && o.TickMonitor.BudgetMs > 0 && o.TickMonitor.HangMs <= o.TickMonitor.BudgetMs)
         {
             issues.Add(Error($"{Root}:TickMonitor:HangMs", $"{o.TickMonitor.HangMs} is not above BudgetMs ({o.TickMonitor.BudgetMs}).", "a hang must be longer than an overrun; use a larger HangMs or 0 to disable hang detection"));
+        }
+
+        if (!Enum.IsDefined(o.TickMonitor.Action))
+        {
+            issues.Add(Error($"{Root}:TickMonitor:Action", $"'{o.TickMonitor.Action}' is not a tick hang action.", "use " + string.Join(", ", Enum.GetNames<TickHangAction>())));
+        }
+
+        if (o.TickMonitor.ActionHangMs > 0 && o.TickMonitor.HangMs > 0 && o.TickMonitor.ActionHangMs < o.TickMonitor.HangMs)
+        {
+            issues.Add(Error($"{Root}:TickMonitor:ActionHangMs", $"{o.TickMonitor.ActionHangMs} is below HangMs ({o.TickMonitor.HangMs}).", "the fatal hang action threshold must be at least HangMs, or 0 to disable the action"));
+        }
+
+        if (o.TickMonitor.Action != TickHangAction.None && o.TickMonitor.ActionHangMs == 0)
+        {
+            issues.Add(Warn($"{Root}:TickMonitor:ActionHangMs", $"TickMonitor:Action is {o.TickMonitor.Action} but ActionHangMs is 0, so the action never fires.", "set the hang duration in milliseconds at which it fires, or set Action to None"));
         }
 
         Range(issues, $"{Root}:Memory:SampleIntervalSeconds", o.Memory.SampleIntervalSeconds, 1, 3600, "1-3600 seconds");
@@ -98,6 +114,8 @@ public sealed class WatchdogOptionsValidation : IValidateOptions<WatchdogOptions
         options.TickMonitor.RingCapacity = Int(issues, section, "TickMonitor:RingCapacity", options.TickMonitor.RingCapacity);
         options.TickMonitor.BudgetMs = Int(issues, section, "TickMonitor:BudgetMs", options.TickMonitor.BudgetMs);
         options.TickMonitor.HangMs = Int(issues, section, "TickMonitor:HangMs", options.TickMonitor.HangMs);
+        options.TickMonitor.ActionHangMs = Int(issues, section, "TickMonitor:ActionHangMs", options.TickMonitor.ActionHangMs);
+        options.TickMonitor.Action = EnumValue(issues, section, "TickMonitor:Action", options.TickMonitor.Action);
         options.TickMonitor.WarnIntervalSeconds = Int(issues, section, "TickMonitor:WarnIntervalSeconds", options.TickMonitor.WarnIntervalSeconds);
         options.TickMonitor.SummaryIntervalSeconds = Int(issues, section, "TickMonitor:SummaryIntervalSeconds", options.TickMonitor.SummaryIntervalSeconds);
         options.TickMonitor.GatesHeartbeat = Bool(issues, section, "TickMonitor:GatesHeartbeat", options.TickMonitor.GatesHeartbeat);

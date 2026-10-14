@@ -54,6 +54,7 @@ public static class WatchdogServiceCollectionExtensions
     public static IServiceCollection AddTickWatchdog(this IServiceCollection services)
     {
         services.AddOpsWatchdog();
+        services.TryAddSingleton<ITickHangActuator>(sp => new RuntimeTickHangActuator(sp.GetService<IHostApplicationLifetime>()));
         services.TryAddSingleton<TickMonitor>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWatchdogMonitor, TickMonitor>(sp => sp.GetRequiredService<TickMonitor>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILivenessSource, TickMonitor>(sp => sp.GetRequiredService<TickMonitor>()));

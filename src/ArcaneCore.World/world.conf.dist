@@ -56,7 +56,7 @@
 #   NAMES                       2 keys
 #   NET                         16 keys
 #   NPCSERVICES                 8 keys
-#   OPS                         55 keys
+#   OPS                         57 keys
 #   PAGETEXT                    1 keys
 #   PERFORMANCELOG              4 keys
 #   PETS                        7 keys
@@ -5785,6 +5785,33 @@ Ops.Watchdog.ThreadPool.WarnDelayMs = 200
 #        Docs: docs/reference/configuration.md#opswatchdog
 #
 Ops.Watchdog.ThreadPool.WarnIntervalSeconds = 30
+
+#
+#    Ops.Watchdog.TickMonitor.Action
+#        Description: What happens when a tick has run longer than ActionHangMs. Default None (log
+#                     only; Stop stops the host with exit code 1; FailFast terminates immediately
+#                     with exit code 70 so a supervisor restarts a deadlocked world thread). Values:
+#                     None, Log, Stop, FailFast.
+#        Type: TickHangAction
+#        Default: None
+#        Allowed: None | Log | Stop | FailFast
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.TickMonitor.Action = None
+
+#
+#    Ops.Watchdog.TickMonitor.ActionHangMs
+#        Description: A frame running longer than this triggers Action (when Action is not
+#                     TickHangAction.None and the host-load sampler does not blame GC pauses or
+#                     machine starvation). 0 disables the action whatever Action says. Default 0.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.TickMonitor.ActionHangMs = 0
 
 #
 #    Ops.Watchdog.TickMonitor.BudgetMs

@@ -231,214 +231,233 @@ def main() -> int:
     snapshot("before", roles=("Auth", "Characters"))
     save()
 
-    if not args.servers_stopped:
-        # 1. Graceful World shutdown through a temporary operator (fresh random password, demoted afterwards).
-        env = dict(os.environ, ARCANE_ACCOUNT_PASSWORD=secrets.token_hex(8))
-        try:
-            run([old_account_tool, "set-password", args.operator], "operator-password", env=env)
-            run([old_account_tool, "set-gmlevel", args.operator, "administrator"], "operator-promote", env=env)
-            script = out / "shutdown.chat"
-            script.write_text(".server shutdown 10\n", encoding="utf-8")
-            with (out / "shutdown-client.log").open("x", encoding="utf-8") as log:
-                c = subprocess.Popen([str(client_tool), "live", "--account", args.operator, "--password-env", "ARCANE_ACCOUNT_PASSWORD",
-                                      "--realm", f"127.0.0.1:{args.auth_port}", "--character", args.operator_character, "--script-file", str(script),
-                                      "--duration-s", "25"], cwd=profile, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                     stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
-                c.wait(timeout=75)
-            deadline = time.monotonic() + args.shutdown_timeout_s
-            while time.monotonic() < deadline and not gone(old_world):
+    deploy_lock = profile / "deploying.lock"
+    deploy_lock.write_text(f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} {args.label}\n", encoding="utf-8")
+    try:
+        if not args.servers_stopped:
+            # 1. Graceful World shutdown through a temporary operator (fresh random password, demoted afterwards).
+            env = dict(os.environ, ARCANE_ACCOUNT_PASSWORD=secrets.token_hex(8))
+            try:
+                run([old_account_tool, "set-password", args.operator], "operator-password", env=env)
+                run([old_account_tool, "set-gmlevel", args.operator, "administrator"], "operator-promote", env=env)
+                script = out / "shutdown.chat"
+                script.write_text(".server shutdown 10\n", encoding="utf-8")
+                with (out / "shutdown-client.log").open("x", encoding="utf-8") as log:
+                    c = subprocess.Popen([str(client_tool), "live", "--account", args.operator, "--password-env", "ARCANE_ACCOUNT_PASSWORD",
+                                          "--realm", f"127.0.0.1:{args.auth_port}", "--character", args.operator_character, "--script-file", str(script),
+                                          "--duration-s", "25"], cwd=profile, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                         stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+                    c.wait(timeout=75)
+                deadline = time.monotonic() + args.shutdown_timeout_s
+                while time.monotonic() < deadline and not gone(old_world):
+                    time.sleep(1)
+                assert gone(old_world), "World did not exit gracefully; not force-killing."
+            finally:
+                run([old_account_tool, "set-gmlevel", args.operator, "player"], "operator-demote", check=False)
+            report["world_stopped"] = True
+            save()
+
+            # 2. Stop the Realm (stateless logon server).
+            ps(f"Stop-Process -Id {old_realm}")
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and not gone(old_realm):
                 time.sleep(1)
-            assert gone(old_world), "World did not exit gracefully; not force-killing."
-        finally:
-            run([old_account_tool, "set-gmlevel", args.operator, "player"], "operator-demote", check=False)
-        report["world_stopped"] = True
+            assert gone(old_realm)
+            report["realm_stopped"] = True
+            snapshot("after-stop")
+        else:
+            report.update(world_stopped="already", realm_stopped="already")
+            snapshot("after-stop")
+        # The baseline for the checks below is what the stopped servers left, not what was read before the stop: with the population
+        # manager on, the running World creates and parks bots between the first read and the shutdown.
+        report.update(characters_stopped=characters(), bots_stopped=bots(), population_stopped=population_members())
         save()
 
-        # 2. Stop the Realm (stateless logon server).
-        ps(f"Stop-Process -Id {old_realm}")
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline and not gone(old_realm):
+        # 3. Schema: status, upgrade (a no-op when nothing is pending), check.
+        (out / "backups").mkdir()
+        # arcane-db reads the appsettings.json beside its own binary (a MySQL default), not the working directory's: name the profile's.
+        cfg_arg = ["--config", str(settings_path)]
+        run([dbtool, "status", "--no-fail-on-pending"] + cfg_arg, "01-status")
+        run([dbtool, "upgrade", "--confirm-backup", "--backup-dir", out / "backups"] + cfg_arg, "02-upgrade")
+        report["check_rc"] = run([dbtool, "check"] + cfg_arg, "03-check", check=False)
+        assert report["check_rc"] == 0, "arcane-db check reported drift; see 03-check.log"
+        assert characters() == report["characters_stopped"] and bots() == report["bots_stopped"], "the schema upgrade changed characters or bots"
+        save()
+
+        # 4. Content refresh of the world database (the script backs it up, checks the DBC hashes, refuses a database in use) and, with
+        #    -AppSettings, the optional client data keys (set-optional-data.ps1 keeps its own appsettings.json.<stamp>.bak beside the file).
+        shutil.copyfile(settings_path, out / "appsettings.before.json")
+        # The refresh script refuses a world.db anyone else holds (exclusive open). arcane-db's check exits a moment earlier and Windows may not
+        # have released its handle yet: wait up to 30 s for exclusive access before handing over.
+        for _ in range(30):
+            if ps(f"try {{ $f=[System.IO.File]::Open('{paths['World']}','Open','ReadWrite','None'); $f.Dispose(); exit 0 }} catch {{ exit 1 }}").returncode == 0:
+                break
             time.sleep(1)
-        assert gone(old_realm)
-        report["realm_stopped"] = True
-        snapshot("after-stop")
-    else:
-        report.update(world_stopped="already", realm_stopped="already")
-        snapshot("after-stop")
-    # The baseline for the checks below is what the stopped servers left, not what was read before the stop: with the population
-    # manager on, the running World creates and parks bots between the first read and the shutdown.
-    report.update(characters_stopped=characters(), bots_stopped=bots(), population_stopped=population_members())
-    save()
-
-    # 3. Schema: status, upgrade (a no-op when nothing is pending), check.
-    (out / "backups").mkdir()
-    # arcane-db reads the appsettings.json beside its own binary (a MySQL default), not the working directory's: name the profile's.
-    cfg_arg = ["--config", str(settings_path)]
-    run([dbtool, "status", "--no-fail-on-pending"] + cfg_arg, "01-status")
-    run([dbtool, "upgrade", "--confirm-backup", "--backup-dir", out / "backups"] + cfg_arg, "02-upgrade")
-    report["check_rc"] = run([dbtool, "check"] + cfg_arg, "03-check", check=False)
-    assert report["check_rc"] == 0, "arcane-db check reported drift; see 03-check.log"
-    assert characters() == report["characters_stopped"] and bots() == report["bots_stopped"], "the schema upgrade changed characters or bots"
-    save()
-
-    # 4. Content refresh of the world database (the script backs it up, checks the DBC hashes, refuses a database in use) and, with
-    #    -AppSettings, the optional client data keys (set-optional-data.ps1 keeps its own appsettings.json.<stamp>.bak beside the file).
-    shutil.copyfile(settings_path, out / "appsettings.before.json")
-    # The refresh script refuses a world.db anyone else holds (exclusive open). arcane-db's check exits a moment earlier and Windows may not
-    # have released its handle yet: wait up to 30 s for exclusive access before handing over.
-    for _ in range(30):
-        if ps(f"try {{ $f=[System.IO.File]::Open('{paths['World']}','Open','ReadWrite','None'); $f.Dispose(); exit 0 }} catch {{ exit 1 }}").returncode == 0:
-            break
-        time.sleep(1)
-    else:
-        raise RuntimeError(f"{paths['World']} is still held open after 30 s (another process, or a leaked handle in this script); nothing was refreshed")
-    refresh = ["powershell", "-NoProfile", "-File", refresh_script, "-WorldDatabase", paths["World"], "-DbcDirectory", dbc_dir,
-               "-Dump", dump_path, "-Importer", importer, "-BackupDirectory", out / "content-refresh-backups", "-Report", out / "04-refresh-report.json"]
-    if not args.no_optional_data:
-        refresh += ["-AppSettings", settings_path]
-    run(refresh, "04-refresh")
-    report["refreshed"] = True
-    save()
-
-    # 5. Configuration, on top of what the refresh wrote (the file before step 4 is kept as appsettings.before.json).
-    config = load_config()
-    changed = {}
-    config.setdefault("ClientData", {})["DbcDirectory"] = str(dbc_dir)
-    changed["ClientData:DbcDirectory"] = str(dbc_dir)
-    if terrain_arg:
-        config.setdefault("World", {}).setdefault("Maps", {})["DataDirectory"] = terrain_arg
-        changed["World:Maps:DataDirectory"] = terrain_arg
-    if not args.no_elevators:
-        path = str(dbc_dir / "TransportAnimation.dbc")
-        config.setdefault("GameObjects", {})["TransportAnimationDbcPath"] = path
-        changed["GameObjects:TransportAnimationDbcPath"] = path
-    if args.mangos_defense_wear:
-        items = config.setdefault("Items", {})
-        items.update(DurabilityLossChanceParry=0.05, DurabilityLossChanceBlock=0.05, DurabilityLossChanceAbsorb=0.5)
-        changed["Items:DurabilityLossChanceParry/Block/Absorb"] = "0.05/0.05/0.5"
-    if not args.no_transports:
-        config["World"].setdefault("Transports", {})["Enabled"] = True
-        changed["World:Transports:Enabled"] = True
-    metrics_cfg = config.setdefault("Ops", {}).setdefault("Metrics", {})
-    if metrics_cfg.get("Enabled"):
-        metrics_cfg.setdefault("PrometheusPrefix", "http://localhost:9464/metrics/")
-        metrics_cfg.setdefault("RealmPrometheusPrefix", "http://localhost:9465/metrics/")
-    for item in args.set or []:
-        key, _, raw = item.partition("=")
-        if not key or not _:
-            sys.exit(f"--set expects Section:Key=value, got {item!r}")
-        try:
-            value = json.loads(raw)
-        except ValueError:
-            value = raw
-        node = config
-        parts = key.split(":")
-        for part in parts[:-1]:
-            node = node.setdefault(part, {})
-        node[parts[-1]] = value
-        changed[key] = value
-    settings_path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    report["config_changed"] = changed
-    before_cfg = json.loads((out / "appsettings.before.json").read_text(encoding="utf-8-sig"))
-
-    def flatten(o, prefix: str = "") -> dict:
-        if isinstance(o, dict):
-            r = {}
-            for k, v in o.items():
-                r.update(flatten(v, f"{prefix}:{k}" if prefix else k))
-            return r
-        return {prefix: o}
-
-    fb, fa = flatten(before_cfg), flatten(config)
-    report["config_diff"] = {k: [fb.get(k, "(not set)"), fa.get(k, "(not set)")] for k in sorted(set(fb) | set(fa)) if fb.get(k) != fa.get(k)}
-    snapshot("before-start")
-    save()
-
-    # 6. Start Realm, then World.
-    def log_path(name: str) -> Path:
-        return out / "logs" / f"{name}.log" if args.visible_consoles else out / f"{name}.log"
-
-    # Live servers share the box with agent builds/test runs; AboveNormal keeps their ticks ahead of that work.
-    LIVE_PRIORITY = subprocess.ABOVE_NORMAL_PRIORITY_CLASS
-
-    def start(dll: Path, name: str):
-        if args.visible_consoles:
-            env = dict(os.environ)
-            env["Logging__ArcaneCore__File__Enabled"] = "true"
-            env["Logging__ArcaneCore__File__Path"] = str(log_path(name))
-            log_path(name).parent.mkdir(exist_ok=True)
-            return subprocess.Popen(["dotnet", str(dll)], cwd=profile, env=env, creationflags=subprocess.CREATE_NEW_CONSOLE | LIVE_PRIORITY)
-        log = (out / f"{name}.log").open("x", encoding="utf-8")
-        return subprocess.Popen(["dotnet", str(dll)], cwd=profile, stdout=log, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL,
-                                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | LIVE_PRIORITY)
-
-    def log_text(name: str) -> str:
-        p = log_path(name)
-        return p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
-
-    realm = start(realm_dll, "realm")
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline and listener_pid(args.auth_port) != realm.pid:
-        assert realm.poll() is None, "Realm exited; see realm.log"
-        time.sleep(1)
-    assert listener_pid(args.auth_port) == realm.pid, "Realm not listening"
-    world = start(world_dll, "world")
-    report.update(new_realm=realm.pid, new_world=world.pid)
-    save()
-    enabled = sum(1 for b in report["bots_stopped"] if b[4])
-    # Only World:Playerbots:MaxBots run at once (StartCoreAsync takes the first MaxBots enabled bots); the population manager can leave
-    # more enabled than that (live-w37-r1: 1005 enabled, 1000 started), so wait for the bots the server will actually start.
-    max_bots = int(load_config().get("World", {}).get("Playerbots", {}).get("MaxBots", 8))
-    expected_started = min(enabled, max_bots)
-    report.update(enabled_bots=enabled, max_bots=max_bots, expected_started=expected_started)
-    deadline = time.monotonic() + 300
-    while time.monotonic() < deadline:
-        assert world.poll() is None, f"World exited {world.returncode}; see world.log"
-        text = log_text("world")
-        if listener_pid(args.world_port) == world.pid and text.count("Started managed playerbot") >= expected_started:
-            break
-        time.sleep(2)
-    else:
-        raise RuntimeError("World listener or bot restoration unconfirmed; see world.log")
-    # Nothing the stopped servers left may be lost or altered; the population manager may add bots and park its own members
-    # (DesiredEnabled of a population member may change), so additions are allowed and population members' DesiredEnabled is ignored.
-    now_chars = {tuple(c) for c in characters()}
-    lost_chars = [c for c in report["characters_stopped"] if tuple(c) not in now_chars]
-    assert not lost_chars, f"characters lost or changed: {lost_chars[:5]}"
-    pop = set(report["population_stopped"]) | set(population_members())
-    now_bots = {tuple(b[:4]): b[4] for b in bots()}
-    lost_bots = [b for b in report["bots_stopped"] if tuple(b[:4]) not in now_bots]
-    assert not lost_bots, f"managed bots lost or changed: {lost_bots[:5]}"
-    flipped = [b for b in report["bots_stopped"] if b[0] not in pop and now_bots[tuple(b[:4])] != b[4]]
-    assert not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}"
-    text = log_text("world")
-    expected_lines = ["Terrain: reading .map files from", "Collision: vmaps from", "Collision: navmeshes from", "elevators and trams:",
-                      "Started managed playerbot", "loaded 44 maps, 1081 areas", "loaded 122 graveyards and 191 graveyard-zone links"]
-    if not args.no_transports:
-        expected_lines.append("Transports: 9 routes, 9 ships sailing")
-    if not args.no_optional_data:
-        expected_lines += ["Loaded 172 item sets", "Loaded 2012 random properties and 772 item_enchantment_template entries",
-                           "Loaded 1427 page texts", "Enchanting: 1460 enchantments",
-                           "appearance is checked against 3603 CharSections and 136 CharacterFacialHairStyles rows"]
-    report["world_log_checks"] = {k: (k in text) for k in expected_lines}
-    report["world_log_counts"] = {k: text.count(k) for k in ("unknown target map", "not existing zone id", " WARN ", " ERROR ", " FATAL ")}
-    report.update(healthy=True, finished=datetime.datetime.now(datetime.timezone.utc).isoformat())
-    save()
-    if args.status_console:
-        subprocess.Popen(["pwsh", "-NoProfile", "-NoExit", "-File", args.status_console, "-Profile", str(profile),
-                          "-WorldPort", str(args.world_port), "-AuthPort", str(args.auth_port)],
-                         creationflags=subprocess.CREATE_NEW_CONSOLE)
-        report["status_console"] = args.status_console
+        else:
+            raise RuntimeError(f"{paths['World']} is still held open after 30 s (another process, or a leaked handle in this script); nothing was refreshed")
+        refresh = ["powershell", "-NoProfile", "-File", refresh_script, "-WorldDatabase", paths["World"], "-DbcDirectory", dbc_dir,
+                   "-Dump", dump_path, "-Importer", importer, "-BackupDirectory", out / "content-refresh-backups", "-Report", out / "04-refresh-report.json"]
+        if not args.no_optional_data:
+            refresh += ["-AppSettings", settings_path]
+        run(refresh, "04-refresh")
+        report["refreshed"] = True
         save()
-    meta_path = profile / "standard-processes.json"
-    if meta_path.is_file():
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        (out / "standard-processes.before.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        meta["services"]["World"] = dict(pid=world.pid, dll=str(world_dll))
-        meta["services"]["Realm"] = dict(pid=realm.pid, dll=str(realm_dll))
-        meta["qualification"] = args.label
-        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        # 5. Configuration, on top of what the refresh wrote (the file before step 4 is kept as appsettings.before.json).
+        config = load_config()
+        changed = {}
+        config.setdefault("ClientData", {})["DbcDirectory"] = str(dbc_dir)
+        changed["ClientData:DbcDirectory"] = str(dbc_dir)
+        if terrain_arg:
+            config.setdefault("World", {}).setdefault("Maps", {})["DataDirectory"] = terrain_arg
+            changed["World:Maps:DataDirectory"] = terrain_arg
+        if not args.no_elevators:
+            path = str(dbc_dir / "TransportAnimation.dbc")
+            config.setdefault("GameObjects", {})["TransportAnimationDbcPath"] = path
+            changed["GameObjects:TransportAnimationDbcPath"] = path
+        if args.mangos_defense_wear:
+            items = config.setdefault("Items", {})
+            items.update(DurabilityLossChanceParry=0.05, DurabilityLossChanceBlock=0.05, DurabilityLossChanceAbsorb=0.5)
+            changed["Items:DurabilityLossChanceParry/Block/Absorb"] = "0.05/0.05/0.5"
+        if not args.no_transports:
+            config["World"].setdefault("Transports", {})["Enabled"] = True
+            changed["World:Transports:Enabled"] = True
+        metrics_cfg = config.setdefault("Ops", {}).setdefault("Metrics", {})
+        if metrics_cfg.get("Enabled"):
+            metrics_cfg.setdefault("PrometheusPrefix", "http://localhost:9464/metrics/")
+            metrics_cfg.setdefault("RealmPrometheusPrefix", "http://localhost:9465/metrics/")
+        watchdog_cfg = config.setdefault("Ops", {}).setdefault("Watchdog", {})
+        hb_cfg = watchdog_cfg.setdefault("Heartbeat", {})
+        hb_cfg["Mode"] = "File"
+        hb_cfg["FilePath"] = "logs/world.heartbeat"
+        hb_cfg["IntervalSeconds"] = 5
+        changed["Ops:Watchdog:Heartbeat:Mode/FilePath/IntervalSeconds"] = "File/logs/world.heartbeat/5"
+        tm_cfg = watchdog_cfg.setdefault("TickMonitor", {})
+        tm_cfg.setdefault("ActionHangMs", 60000)
+        tm_cfg.setdefault("Action", "FailFast")
+        changed["Ops:Watchdog:TickMonitor:ActionHangMs/Action"] = f"{tm_cfg['ActionHangMs']}/{tm_cfg['Action']}"
+        for item in args.set or []:
+            key, _, raw = item.partition("=")
+            if not key or not _:
+                sys.exit(f"--set expects Section:Key=value, got {item!r}")
+            try:
+                value = json.loads(raw)
+            except ValueError:
+                value = raw
+            node = config
+            parts = key.split(":")
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node[parts[-1]] = value
+            changed[key] = value
+        settings_path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        report["config_changed"] = changed
+        before_cfg = json.loads((out / "appsettings.before.json").read_text(encoding="utf-8-sig"))
+
+        def flatten(o, prefix: str = "") -> dict:
+            if isinstance(o, dict):
+                r = {}
+                for k, v in o.items():
+                    r.update(flatten(v, f"{prefix}:{k}" if prefix else k))
+                return r
+            return {prefix: o}
+
+        fb, fa = flatten(before_cfg), flatten(config)
+        report["config_diff"] = {k: [fb.get(k, "(not set)"), fa.get(k, "(not set)")] for k in sorted(set(fb) | set(fa)) if fb.get(k) != fa.get(k)}
+        snapshot("before-start")
+        save()
+
+        # 6. Start Realm, then World.
+        def log_path(name: str) -> Path:
+            return out / "logs" / f"{name}.log" if args.visible_consoles else out / f"{name}.log"
+
+        # Live servers share the box with agent builds/test runs; AboveNormal keeps their ticks ahead of that work.
+        LIVE_PRIORITY = subprocess.ABOVE_NORMAL_PRIORITY_CLASS
+
+        def start(dll: Path, name: str):
+            if args.visible_consoles:
+                env = dict(os.environ)
+                env["Logging__ArcaneCore__File__Enabled"] = "true"
+                env["Logging__ArcaneCore__File__Path"] = str(log_path(name))
+                log_path(name).parent.mkdir(exist_ok=True)
+                return subprocess.Popen(["dotnet", str(dll)], cwd=profile, env=env,
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                                        creationflags=subprocess.CREATE_NEW_CONSOLE | LIVE_PRIORITY)
+            log = (out / f"{name}.log").open("x", encoding="utf-8")
+            return subprocess.Popen(["dotnet", str(dll)], cwd=profile, stdout=log, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL,
+                                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | LIVE_PRIORITY)
+
+        def log_text(name: str) -> str:
+            p = log_path(name)
+            return p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
+
+        realm = start(realm_dll, "realm")
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and listener_pid(args.auth_port) != realm.pid:
+            assert realm.poll() is None, "Realm exited; see realm.log"
+            time.sleep(1)
+        assert listener_pid(args.auth_port) == realm.pid, "Realm not listening"
+        world = start(world_dll, "world")
+        report.update(new_realm=realm.pid, new_world=world.pid)
+        save()
+        enabled = sum(1 for b in report["bots_stopped"] if b[4])
+        # Only World:Playerbots:MaxBots run at once (StartCoreAsync takes the first MaxBots enabled bots); the population manager can leave
+        # more enabled than that (live-w37-r1: 1005 enabled, 1000 started), so wait for the bots the server will actually start.
+        max_bots = int(load_config().get("World", {}).get("Playerbots", {}).get("MaxBots", 8))
+        expected_started = min(enabled, max_bots)
+        report.update(enabled_bots=enabled, max_bots=max_bots, expected_started=expected_started)
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            assert world.poll() is None, f"World exited {world.returncode}; see world.log"
+            text = log_text("world")
+            if listener_pid(args.world_port) == world.pid and text.count("Started managed playerbot") >= expected_started:
+                break
+            time.sleep(2)
+        else:
+            raise RuntimeError("World listener or bot restoration unconfirmed; see world.log")
+        # Nothing the stopped servers left may be lost or altered; the population manager may add bots and park its own members
+        # (DesiredEnabled of a population member may change), so additions are allowed and population members' DesiredEnabled is ignored.
+        now_chars = {tuple(c) for c in characters()}
+        lost_chars = [c for c in report["characters_stopped"] if tuple(c) not in now_chars]
+        assert not lost_chars, f"characters lost or changed: {lost_chars[:5]}"
+        pop = set(report["population_stopped"]) | set(population_members())
+        now_bots = {tuple(b[:4]): b[4] for b in bots()}
+        lost_bots = [b for b in report["bots_stopped"] if tuple(b[:4]) not in now_bots]
+        assert not lost_bots, f"managed bots lost or changed: {lost_bots[:5]}"
+        flipped = [b for b in report["bots_stopped"] if b[0] not in pop and now_bots[tuple(b[:4])] != b[4]]
+        assert not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}"
+        text = log_text("world")
+        expected_lines = ["Terrain: reading .map files from", "Collision: vmaps from", "Collision: navmeshes from", "elevators and trams:",
+                          "Started managed playerbot", "loaded 44 maps, 1081 areas", "loaded 122 graveyards and 191 graveyard-zone links"]
+        if not args.no_transports:
+            expected_lines.append("Transports: 9 routes, 9 ships sailing")
+        if not args.no_optional_data:
+            expected_lines += ["Loaded 172 item sets", "Loaded 2012 random properties and 772 item_enchantment_template entries",
+                               "Loaded 1427 page texts", "Enchanting: 1460 enchantments",
+                               "appearance is checked against 3603 CharSections and 136 CharacterFacialHairStyles rows"]
+        report["world_log_checks"] = {k: (k in text) for k in expected_lines}
+        report["world_log_counts"] = {k: text.count(k) for k in ("unknown target map", "not existing zone id", " WARN ", " ERROR ", " FATAL ")}
+        report.update(healthy=True, finished=datetime.datetime.now(datetime.timezone.utc).isoformat())
+        save()
+        meta_path = profile / "standard-processes.json"
+        if meta_path.is_file():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            (out / "standard-processes.before.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            meta["services"]["World"] = dict(pid=world.pid, dll=str(world_dll))
+            meta["services"]["Realm"] = dict(pid=realm.pid, dll=str(realm_dll))
+            meta["qualification"] = args.label
+            meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        deploy_lock.unlink(missing_ok=True)
+        if args.status_console:
+            subprocess.Popen(["pwsh", "-NoProfile", "-NoExit", "-File", args.status_console, "-Profile", str(profile),
+                              "-WorldPort", str(args.world_port), "-AuthPort", str(args.auth_port), "-Supervise"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                             creationflags=subprocess.CREATE_NEW_CONSOLE)
+            report["status_console"] = args.status_console
+            save()
+    finally:
+        deploy_lock.unlink(missing_ok=True)
     missing_lines = [k for k, ok in report["world_log_checks"].items() if not ok]
     print(json.dumps(dict(healthy=True, world=world.pid, realm=realm.pid, characters=len(characters()),
                           bots=len(bots()), enabled_bots=enabled, missing_log_lines=missing_lines,

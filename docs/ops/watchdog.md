@@ -90,10 +90,18 @@ recorder are appended to each line so both views are on one line.
 - **Summary**: every `SummaryIntervalSeconds` an `Information` line (event `TickSummary`, 7103) with p50/p90/p99/max over the ring, overruns, hangs
   and frames since start. 0 disables it.
 - **Heartbeat gate**: with `GatesHeartbeat` (default true) the tick monitor is a liveness source: while a tick has run longer than `HangMs`
-  the heartbeat is withheld, so a systemd watchdog restarts a world whose thread hung although the process still answers. Before the first
+  the heartbeat is withheld, so a systemd watchdog or external supervisor (`server-status.ps1 -Supervise`) restarts a world whose thread hung although the process still answers. Before the first
   tick (database load, feature attach) and after the world stopped on purpose (`StopAsync`, so a long final save drain is not killed) the
   source reports alive.
-- Counters: `watchdog.tick.frames`, `watchdog.tick.overruns`, `watchdog.tick.hangs`, gauges `watchdog.tick.frame_p99_us`, `watchdog.tick.frame_max_us`.
+- **Terminal hang action** (opt-in): when a single tick remains wedged for `ActionHangMs` (0 = never, whatever `Action` says; must be at least
+  `HangMs` when non-zero) and `HostLoadSampler` does not attribute the stall to OS CPU starvation (`HostStarved`) or GC pauses (`GcPauses`),
+  the configured `Action` fires at most once for that hung tick, always with a `Critical` line (event `TickAction`, 7104) carrying the
+  in-progress hang detail (`phase=<Phase>, running=<work>`): `Log` only logs; `Stop` sets `ExitCodes.Current = 1` and signals
+  `IHostApplicationLifetime.StopApplication()`; `FailFast` writes a synchronous crash report to `Console.Error` and calls
+  `Environment.Exit(70)` (`ExitCodes.UnhandledException`) so a supervisor immediately restarts a process whose world thread is permanently
+  deadlocked without waiting on a stuck graceful-shutdown drain. `Action` set with `ActionHangMs` 0 is a configuration warning (the action
+  never fires).
+- Counters: `watchdog.tick.frames`, `watchdog.tick.overruns`, `watchdog.tick.hangs`, `watchdog.tick.actions`, gauges `watchdog.tick.frame_p99_us`, `watchdog.tick.frame_max_us`.
 
 ### 2. Memory pressure (`Ops:Watchdog:Memory`)
 
@@ -187,6 +195,8 @@ and a host-start failure in the realm daemon. Byte values are plain numbers of b
 | `Ops:Watchdog:TickMonitor:RingCapacity` | `4096` | Ring slots (power of two, 16-1048576); the percentiles cover the last capacity-1 frames. | Out of range: error. |
 | `Ops:Watchdog:TickMonitor:BudgetMs` | `0` | Overrun threshold; 0 = twice the tick interval. | Negative: error. |
 | `Ops:Watchdog:TickMonitor:HangMs` | `2000` | Hang threshold; 0 disables hang detection and the heartbeat gate. | Not above `BudgetMs`: error. |
+| `Ops:Watchdog:TickMonitor:ActionHangMs` | `0` | Terminal hang threshold at which `Action` fires; 0 = never. | Negative, or positive when `HangMs` is 0, or below `HangMs`: error. |
+| `Ops:Watchdog:TickMonitor:Action` | `None` | `None`, `Log`, `Stop`, `FailFast`. | Unknown name: error. Set with `ActionHangMs` 0: warning, never fires. |
 | `Ops:Watchdog:TickMonitor:WarnIntervalSeconds` | `30` | Rate limit of the overrun and hang-in-progress lines. | Out of 1-86400: error. |
 | `Ops:Watchdog:TickMonitor:SummaryIntervalSeconds` | `300` | Frame summary period; 0 = none. | Negative: error. |
 | `Ops:Watchdog:TickMonitor:GatesHeartbeat` | `true` | A hung tick withholds the heartbeat. | `false`: the heartbeat ignores the tick. |

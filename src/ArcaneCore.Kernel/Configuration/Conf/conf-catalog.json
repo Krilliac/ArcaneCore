@@ -7130,6 +7130,43 @@
       "isCollection": false
     },
     {
+      "path": "Ops:Watchdog:TickMonitor:Action",
+      "section": "Ops:Watchdog",
+      "type": "TickHangAction",
+      "kind": "scalar",
+      "elementType": "TickHangAction",
+      "enumValues": [
+        "None",
+        "Log",
+        "Stop",
+        "FailFast"
+      ],
+      "default": "None",
+      "defaultEntries": [],
+      "daemons": "Both",
+      "reload": "start",
+      "meaning": "What happens when a tick has run longer than `ActionHangMs`. Default None (log only; `Stop` stops the host with exit code 1; `FailFast` terminates immediately with exit code 70 so a supervisor restarts a deadlocked world thread). Values: `None`, `Log`, `Stop`, `FailFast`.",
+      "allowed": "None | Log | Stop | FailFast",
+      "docs": "docs/reference/configuration.md#opswatchdog",
+      "isCollection": false
+    },
+    {
+      "path": "Ops:Watchdog:TickMonitor:ActionHangMs",
+      "section": "Ops:Watchdog",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "0",
+      "defaultEntries": [],
+      "daemons": "Both",
+      "reload": "start",
+      "meaning": "A frame running longer than this triggers `Action` (when `Action` is not `TickHangAction.None` and the host-load sampler does not blame GC pauses or machine starvation). 0 disables the action whatever `Action` says. Default 0.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#opswatchdog",
+      "isCollection": false
+    },
+    {
       "path": "Ops:Watchdog:TickMonitor:BudgetMs",
       "section": "Ops:Watchdog",
       "type": "int",

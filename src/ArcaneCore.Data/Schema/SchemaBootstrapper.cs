@@ -302,6 +302,20 @@ public static class SchemaBootstrapper
         {
             logger?.LogWarning("{Component}: SQLite journal mode is {Mode}, not WAL (another connection may hold the file); concurrent writes can fail with 'database is locked'",
                 definition.Component, mode);
+            return;
+        }
+
+        // Best-effort post-crash WAL recovery: if a prior daemon exited abruptly without running its final checkpoint,
+        // fold any committed WAL frames back into the main database file before traffic starts.
+        try
+        {
+            await using var checkpoint = connection.CreateCommand();
+            checkpoint.CommandText = "PRAGMA wal_checkpoint(PASSIVE);";
+            await checkpoint.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
+        {
+            logger?.LogDebug(ex, "{Component}: post-startup SQLite WAL passive checkpoint skipped", definition.Component);
         }
     }
 
