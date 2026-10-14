@@ -380,8 +380,7 @@ def main() -> int:
                 env["Logging__ArcaneCore__File__Enabled"] = "true"
                 env["Logging__ArcaneCore__File__Path"] = str(log_path(name))
                 log_path(name).parent.mkdir(exist_ok=True)
-                return subprocess.Popen(["dotnet", str(dll)], cwd=profile, env=env,
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                return subprocess.Popen(["dotnet", str(dll)], cwd=profile, env=env, close_fds=True,
                                         creationflags=subprocess.CREATE_NEW_CONSOLE | LIVE_PRIORITY)
             log = (out / f"{name}.log").open("x", encoding="utf-8")
             return subprocess.Popen(["dotnet", str(dll)], cwd=profile, stdout=log, stderr=subprocess.STDOUT,
@@ -452,8 +451,7 @@ def main() -> int:
         if args.status_console:
             subprocess.Popen(["pwsh", "-NoProfile", "-NoExit", "-File", args.status_console, "-Profile", str(profile),
                               "-WorldPort", str(args.world_port), "-AuthPort", str(args.auth_port), "-Supervise"],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
-                             creationflags=subprocess.CREATE_NEW_CONSOLE)
+                             close_fds=True, creationflags=subprocess.CREATE_NEW_CONSOLE)
             report["status_console"] = args.status_console
             save()
     finally:
