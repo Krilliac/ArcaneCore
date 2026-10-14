@@ -1,18 +1,26 @@
 using System.Numerics;
+using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Creatures.Scripts;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Creatures;
+using ArcaneCore.World.Items;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Npc;
+using ArcaneCore.World.Tests.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -53,8 +61,8 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                 QuestNpcServices services = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services;
                 CreatureContent content = host.WorldServices.GetRequiredService<CreatureWorldFeature>().Content!;
 
-                // #379 Lazy Peons (friendly target 10556 requiring blackjack item/spell), #414 Doctor Theolen Krastinov
-                // (Dungeon Type 81, instance-only target 11261, GameObject targets), spell-cast objectives, and
+                // #379 Lazy Peons without a source item, #414 Doctor Theolen Krastinov
+                // (Dungeon Type 81, instance-only target 11261, GameObject targets), spell-cast objectives without a source item, and
                 // ExplorationOrEvent quests are rejected by CanExecuteObjectives.
                 Assert.False(PlayerbotQuestGoals.CanExecuteObjectives(
                     session, player, services, content, services.Quests.Get(UnsupportedMechanicsFixture.LazyPeonsQuest)!));
@@ -106,6 +114,123 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
         {
             session.Kick();
             await session.ManagedClosed;
+        }
+    }
+
+    [Fact]
+    public async Task ItemUseCreatureQuest_WithSourceItem_IsAcceptedAndExecutedViaCmsgUseItem()
+    {
+        var fixture = new UnsupportedMechanicsFixture();
+        var itemContent = new ItemTestContent();
+        itemContent.Templates.Templates.Add(
+            new ItemTemplate
+            {
+                Entry = UnsupportedMechanicsFixture.ForemansBlackjackItem,
+                Class = 12,
+                Name = "Foreman's Blackjack",
+                DisplayId = 1,
+                Quality = 1,
+                Stackable = 1,
+                Spells = [new ItemSpell(LazyPeonAI.SpellAwakenPeon, ItemSpellTriggers.OnUse, 0, 0, -1, 0, -1)],
+            }.Normalized());
+        SpellContent baseSpells = SpellTestServices.Content();
+        SpellContent spellsWithBlackjack = baseSpells with
+        {
+            Spells =
+            [
+                .. baseSpells.Spells,
+                new SpellTemplateRow
+                {
+                    Id = LazyPeonAI.SpellAwakenPeon,
+                    SpellName = "Awaken Peon",
+                    RangeIndex = 4,
+                    Effect1 = 3,
+                    EffectBaseDice1 = 1,
+                    EffectDieSides1 = 1,
+                    EffectImplicitTargetA1 = 25,
+                },
+            ],
+        };
+
+        WorldTestHost host;
+        using (itemContent.Use())
+        {
+            host = WorldTestHost.Start(configureServices: services =>
+            {
+                services.AddSingleton<IQuestContentStore>(fixture);
+                services.AddSingleton<ICreatureDataStore>(fixture);
+                services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(spellsWithBlackjack));
+                services.AddSingleton<ICharacterQuestStore>(new MemoryQuestStore());
+                services.AddSingleton(new FactionTemplateCatalog(
+                [
+                    new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 8),
+                    new FactionTemplateRecord(UnsupportedMechanicsFixture.FriendlyFaction, 0, 0, OwnMask: 2, FriendlyMask: 3, HostileMask: 0),
+                    new FactionTemplateRecord(UnsupportedMechanicsFixture.HostileFaction, 0, 0, OwnMask: 8, FriendlyMask: 0, HostileMask: 3),
+                ]));
+            });
+        }
+
+        await using (host)
+        {
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(
+                    () => session.Player!.Map?.FindObject(UnsupportedMechanicsFixture.PeonGuid) is Creature,
+                    "lazy peon spawned");
+                await host.World.InvokeAsync(() =>
+                {
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                    Player player = session.Player!;
+                    QuestNpcServices services = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services;
+                    CreatureContent content = host.WorldServices.GetRequiredService<CreatureWorldFeature>().Content!;
+                    PlayerNpcState state = services.StateOf(player)!;
+                    Quest quest = services.Quests.Get(UnsupportedMechanicsFixture.ItemUseLazyPeonsQuest)!;
+
+                    // Before acceptance, SrcItemId != 0 makes the friendly creature objective executable.
+                    Assert.True(PlayerbotQuestGoals.CanExecuteObjectives(session, player, services, content, quest));
+
+                    // Once Incomplete in the player's log, CanExecuteObjectives requires the source item to still be in inventory.
+                    QuestStatusData killRow = state.Quests.GetOrAdd(UnsupportedMechanicsFixture.SupportedKillQuest);
+                    killRow.Status = QuestStatus.Complete;
+                    killRow.Rewarded = true;
+                    QuestStatusData row = state.Quests.GetOrAdd(UnsupportedMechanicsFixture.ItemUseLazyPeonsQuest);
+                    state.Quests.SetSlot(state.Quests.FindSlot(0), UnsupportedMechanicsFixture.ItemUseLazyPeonsQuest);
+                    row.Status = QuestStatus.Incomplete;
+                    Assert.False(PlayerbotQuestGoals.CanExecuteObjectives(session, player, services, content, quest));
+
+                    Assert.Equal(
+                        ArcaneCore.Game.Items.InventoryResult.Ok,
+                        player.Inventory.AddItem(UnsupportedMechanicsFixture.ForemansBlackjackItem, 1, out _));
+                    Assert.True(PlayerbotQuestGoals.CanExecuteObjectives(session, player, services, content, quest));
+
+                    var options = new PlayerbotOptions { Enabled = true };
+                    var goals = new PlayerbotQuestGoals(session, options);
+
+                    Creature peon = (Creature)player.Map!.FindObject(UnsupportedMechanicsFixture.PeonGuid)!;
+                    LazyPeonAI ai = Assert.IsType<LazyPeonAI>(peon.AI);
+                    Assert.True(ai.IsAsleep);
+                    Assert.False(goals.IsUnavailableItemTarget(peon));
+
+                    // Move peon within interaction reach and make it visible; Update refreshes the objective and uses the blackjack via CmsgUseItem.
+                    peon.Relocate(player.X + 2f, player.Y, player.Z, peon.Orientation, host.World.NowMs);
+                    player.VisibleObjects.Add(peon.Guid);
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    Assert.True(goals.Update(player, 500));
+                    Assert.Equal(UnsupportedMechanicsFixture.FriendlyPeonEntry, goals.PreferredCreatureEntry);
+                    Assert.Equal(UnsupportedMechanicsFixture.ForemansBlackjackItem, goals.PreferredItemUseId);
+
+                    Assert.False(ai.IsAsleep);
+                    Assert.Equal(1u, row.CreatureOrGOCount[0]);
+                    Assert.True(goals.IsUnavailableItemTarget(peon));
+                    return true;
+                });
+            }
+            finally
+            {
+                session.Kick();
+                await session.ManagedClosed;
+            }
         }
     }
 
@@ -218,7 +343,9 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
         internal const uint HostileMobEntry = 3101;
         internal const uint FriendlyFaction = 900021;
         internal const uint HostileFaction = 900022;
+        internal const uint ForemansBlackjackItem = 16114;
         internal static readonly ObjectGuid GiverGuid = ObjectGuid.WithEntry(HighGuid.Unit, GiverEntry, 940001);
+        internal static readonly ObjectGuid PeonGuid = ObjectGuid.WithEntry(HighGuid.Unit, FriendlyPeonEntry, 940002);
 
         internal const uint LazyPeonsQuest = 5441;
         internal const uint DungeonQuest = 5382;
@@ -227,6 +354,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
         internal const uint ExplorationQuest = 940012;
         internal const uint OffMapCreatureQuest = 940013;
         internal const uint SupportedKillQuest = 940014;
+        internal const uint ItemUseLazyPeonsQuest = 940015;
 
         public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
         {
@@ -234,7 +362,13 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
             [
                 new()
                 {
-                    Entry = LazyPeonsQuest, Method = 2, MinLevel = 1, QuestLevel = 4, Title = "Lazy Peons",
+                    Entry = LazyPeonsQuest, Method = 2, MinLevel = 1, QuestLevel = 4, Title = "Lazy Peons (No Source Item)",
+                    ReqCreatureOrGOId1 = (int)FriendlyPeonEntry, ReqCreatureOrGOCount1 = 5,
+                },
+                new()
+                {
+                    Entry = ItemUseLazyPeonsQuest, Method = 2, MinLevel = 1, QuestLevel = 4, Title = "Lazy Peons",
+                    SrcItemId = ForemansBlackjackItem, SrcItemCount = 1,
                     ReqCreatureOrGOId1 = (int)FriendlyPeonEntry, ReqCreatureOrGOCount1 = 5,
                 },
                 new()
@@ -271,7 +405,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
             ];
             uint[] allQuests =
             [
-                LazyPeonsQuest, DungeonQuest, GameObjectQuest, SpellCastQuest,
+                LazyPeonsQuest, ItemUseLazyPeonsQuest, DungeonQuest, GameObjectQuest, SpellCastQuest,
                 ExplorationQuest, OffMapCreatureQuest, SupportedKillQuest,
             ];
             CreatureQuestRelation[] relations = [.. allQuests.Select(q => new CreatureQuestRelation { Id = GiverEntry, Quest = q })];

@@ -277,6 +277,78 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         Assert.True(Vector2.Distance(new(x, y), new(30, 5)) < 1f, $"the bot moved to {x},{y}");
     }
 
+    [Fact]
+    public async Task ARepeatedlyStalledBotInTheSameDeadEndPinCell_EscalatesSuspension_RemembersPinCell_AndTeleportsToBindPoint()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Pocket(4), new FloorLineOfSight());
+        var pinPos = new Vector3(30, 5, 0);
+        var bindPos = new Vector3(5, 5, 0);
+        await world.PlaceAsync(pinPos);
+        var options = new PlayerbotOptions { Enabled = true };
+        var brain = new PlayerbotBrain(world.Session, options);
+        await world.Host.OnWorldAsync(() =>
+        {
+            world.Player.Home = new HomeBind(0, 12, bindPos.X, bindPos.Y, bindPos.Z);
+            PlayerbotNavigation.SetStallWatch(world.Player, brain.StallWatch);
+
+            // First stall in cell (3, 0): stays in place, ordinary 10-minute entry suspension (strike 1), not yet a dead-end pin.
+            brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+            brain.GiveUpStalledGoal(world.Player, shareable: false);
+            Assert.Equal(1, brain.StallWatch.PinStallCount(0, pinPos.X, pinPos.Y));
+            Assert.False(brain.StallWatch.IsDeadEndPin(0, pinPos.X, pinPos.Y));
+            Assert.Equal(1, brain.Suspensions.EntryStrikeCount(266));
+            Assert.False(brain.Suspensions.IsQuestUnreachable(65));
+
+            // Second stall in the same 10-yard cell: marks cell as a dead-end pin, escalates suspension (strike 2 = 2x duration),
+            // marks repeated quest unreachable, and triggers Hearthstone/bind recovery off the dead-end pin.
+            brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+            brain.GiveUpStalledGoal(world.Player, shareable: false);
+            Assert.Equal(2, brain.StallWatch.PinStallCount(0, pinPos.X, pinPos.Y));
+            Assert.True(brain.StallWatch.IsDeadEndPin(0, pinPos.X, pinPos.Y));
+            Assert.True(PlayerbotNavigation.IsDeadEndPin(world.Player, pinPos));
+            Assert.Equal(2, brain.Suspensions.EntryStrikeCount(266));
+            Assert.True(brain.Suspensions.IsEntrySuspended(266, world.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1_000));
+            Assert.True(brain.Suspensions.IsQuestUnreachable(65));
+            return true;
+        });
+
+        for (int tick = 0; tick < 100; tick++)
+        {
+            await world.Host.OnWorldAsync(() => { PlayerbotMovementControl.Update(world.Session, world.Player); return true; });
+            await world.Host.World.AdvanceClockAsync(50);
+        }
+
+        Assert.True(Vector2.Distance(new(world.Player.X, world.Player.Y), new(bindPos.X, bindPos.Y)) < 1f,
+            $"expected bot at bind point {bindPos}, actual ({world.Player.X},{world.Player.Y})");
+
+        // Route planning back into the remembered dead-end pin cell is refused.
+        bool refused = await world.Host.OnWorldAsync(() =>
+        {
+            TileWait wait = default;
+            return PlayerbotNavigation.PlanToward(world.Player, pinPos, options, ref wait, world.Host.World.NowMs, out _) == PlanOutcome.Refused;
+        });
+        Assert.True(refused, "navigation into a remembered dead-end pin cell must be refused");
+    }
+
+    [Fact]
+    public async Task RegionLeg_RefusesUnreachableGoal_WhenNoCloserPortalExists()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        // Stand at the northernmost tile (X=20, Y=115) or eastern edge of tile A (X=37, Y=5) closest to UnreachableSpawn (X=75, Y=5):
+        // no portal in component A is closer to UnreachableSpawn than (37, 5, 0) already is.
+        var nearCliffEdge = new Vector3(37, 5, 0);
+        await world.PlaceAsync(nearCliffEdge);
+        await WaitUntilUnreachableAsync(world);
+        var options = new PlayerbotOptions { Enabled = true, MaxPathPoints = 20 };
+        PlanOutcome outcome = await world.Host.OnWorldAsync(() =>
+        {
+            TileWait wait = default;
+            return PlayerbotNavigation.PlanToward(world.Player, UnreachableSpawn, options, ref wait, world.Host.World.NowMs,
+                out _, completedQuestReturn: true);
+        });
+        Assert.Equal(PlanOutcome.Refused, outcome);
+    }
+
     private sealed class Content(CreatureContent content) : ICreatureDataStore
     {
         public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);

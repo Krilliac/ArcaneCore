@@ -268,6 +268,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>Stalls reported so far.</summary>
     internal int StallCount => _stall.Count;
 
+    /// <summary>The stall watch (inspection and tests).</summary>
+    internal PlayerbotStallWatch StallWatch => _stall;
+
     /// <summary>
     /// The skips of goals no walk reaches reported since the last call, each as the log line bot QA parses (<see cref="PlayerbotQaSignalParser"/>):
     /// the goal held when it was met, what it names, where the bot stood and the two region-graph components. One think can skip several
@@ -399,6 +402,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _destinations.ValidatePlanning(player);
         if (!player.IsInWorld) return;
         PlayerbotThinkProbe.Phase("brain");
+        PlayerbotNavigation.SetStallWatch(player, _stall);
         WatchKills(player);
         SyncHomeFilters(player);
         _recovery.UnsafeBody ??= JudgeBody;
@@ -957,13 +961,15 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             PlayerbotThinkProbe.Phase("choose target");
             Creature? previousTarget = _target;
-            uint preferred = _quests.PreferredCreatureEntry;
+            uint preferred = _quests.PreferredItemUseId != 0 ? 0u : _quests.PreferredCreatureEntry;
             _contention.ReleaseClaim();
             _contention.EndAssist();
             _contention.BlockedSeen = 0;
-            _target = _options.Risk.Enabled
-                ? Risk.ChooseTarget(player, preferred, IsSkipped, questObjective: preferred != 0, _contention)
-                : FindTarget(player, preferred, IsSkipped, _contention);
+            _target = _quests.PreferredItemUseId != 0
+                ? null
+                : (_options.Risk.Enabled
+                    ? Risk.ChooseTarget(player, preferred, IsSkipped, questObjective: preferred != 0, _contention)
+                    : FindTarget(player, preferred, IsSkipped, _contention));
             if (_target is not null) _contention.Claim(player.Guid.Value, _target, _session.World.NowMs);
             else if (preferred != 0 && _contention.BlockedSeen > 0 && !AnyFreeOfEntry(player, preferred)) _contention.NoteContested(preferred, _session.World.NowMs);
             _rangedIdleMs = 0;
@@ -978,9 +984,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (_destinations.Update(player, _quests.PreferredCreatureEntry, interval))
                 {
                     AbandonRoute();
-                    _goal = _quests.PreferredCreatureEntry != 0 ? PlayerbotGoalKind.Grind : PlayerbotGoalKind.Quest;
+                    _goal = _quests.PreferredCreatureEntry != 0 && _quests.PreferredItemUseId == 0
+                        ? PlayerbotGoalKind.Grind : PlayerbotGoalKind.Quest;
                     TargetEntry = _destinations.TargetEntry;
                     if (_destinations.QuestId != 0) QuestId = _destinations.QuestId;
+                    else if (_quests.PreferredItemUseQuestId != 0) QuestId = _quests.PreferredItemUseQuestId;
                     return;
                 }
                 if (_destinations.WaitingForTiles) return; // the route's tiles are being read: keep the goal, plan again next think
@@ -1209,6 +1217,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal void GiveUpStalledGoal(Player player, bool shareable = true)
     {
         uint now = _session.World.NowMs;
+        int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y);
+        bool deadEndPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
         StallReturnQuest = _goal == PlayerbotGoalKind.Quest && QuestId != 0 && QuestId == _quests.ReturnQuest ? QuestId : 0;
         StallOutsideHome = _home is { } home && !home.Contains(player);
         if (shareable && !StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
@@ -1218,17 +1228,29 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             case PlayerbotGoalKind.Quest:
                 _suspensions.SuspendQuest(QuestId, now);
-                _suspensions.SuspendEntry(TargetEntry, now);
+                if (deadEndPin)
+                {
+                    _suspensions.SuspendEntryEscalating(TargetEntry, now);
+                    if (QuestId != 0 && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
+                        _suspensions.MarkUnreachableQuest(QuestId);
+                }
+                else
+                {
+                    _suspensions.SuspendEntry(TargetEntry, now);
+                }
                 break;
             case PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount:
-                _suspensions.SuspendEntry(TargetEntry, now);
+                if (deadEndPin) _suspensions.SuspendEntryEscalating(TargetEntry, now);
+                else _suspensions.SuspendEntry(TargetEntry, now);
                 break;
             case PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat or PlayerbotGoalKind.Loot:
                 if (_target is { } target) MarkUnreachable(target);
                 // A grind walk with no creature in sight (the destinations' spawn walk) has no target to set aside: set the entry it
                 // was walking to aside, or the next decision plans the same camp again (live 2026-10-12, bot QA #368: 177 stalls
                 // at the empty kobold camp of quest 21). The quest's objective is then not hunted until the set-aside ends.
-                else if (_goal is PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat && TargetEntry != 0) _suspensions.SuspendEntry(TargetEntry, now);
+                if (deadEndPin && TargetEntry != 0) _suspensions.SuspendEntryEscalating(TargetEntry, now);
+                else if (_target is null && _goal is PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat && TargetEntry != 0)
+                    _suspensions.SuspendEntry(TargetEntry, now);
                 break;
             case PlayerbotGoalKind.Home:
                 _homeReturn.MarkBlocked(now);
@@ -1251,7 +1273,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         PlayerbotMovementControl.Stop(_session, player);
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
         // on an island too; suppressing the shared set-aside must not suppress local escape.
-        EscapeIsland(player, out _);
+        EscapeIsland(player, out _, deadEndPin);
     }
 
     /// <summary>The rings of explore-atlas cells (160 yards each) around an unhomed bot that must hold a creature of its level before it is not stranded (about 480 yards).</summary>
@@ -1304,14 +1326,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// there, and stalled within two minutes of every login). True when the bot was moved.
     /// </para>
     /// </summary>
-    private bool EscapeIsland(Player player, out bool onIsland)
+    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false)
     {
         onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
         // A fragment of mesh (the region graph's component of a few regions, PlayerbotNavigation.IsOnMeshFragment) is an island whose
         // one straight hop off (TryPlanToward) found no ground beside it, or was not walkable: the same escape applies.
-        if (!PlayerbotNavigation.IsOnMeshIsland(player, _options) && !PlayerbotNavigation.IsOnMeshFragment(player)) return false;
-        onIsland = true;
+        // A repeated stall in the same 10-yard dead-end pin cell (deadEndPin) also triggers this escape when local walking did not free the bot.
+        bool island = PlayerbotNavigation.IsOnMeshIsland(player, _options) || PlayerbotNavigation.IsOnMeshFragment(player);
+        if (!island && !deadEndPin) return false;
+        onIsland = island;
         uint now = _session.World.NowMs;
         // Home first, but only when the teleport home would be made: a refused TryTeleport would set the walk of a bot inside its home
         // aside as blocked (PlayerbotHomeReturn.Refuse), and the bind point is the way out then, as from an unsafe landing.
@@ -1327,7 +1351,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
         }
 
-        return TryTeleportToBindPoint(player, "stalled on ground no route leaves", urgent: false);
+        return TryTeleportToBindPoint(player,
+            deadEndPin && !island ? "stalled repeatedly at a dead-end pin" : "stalled on ground no route leaves",
+            urgent: false);
     }
 
     /// <summary>What counts as progress for the stall watch besides moving.</summary>
@@ -1808,9 +1834,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     /// <summary>Whether a live creature in sight is no target for the bot (the grind filter's rules; <see cref="PlayerbotWorldDestinations.Untakeable"/>).</summary>
     internal bool IsUntakeable(Player player, Creature creature)
-        => IsSkipped(creature) || _contention.IsSetAside(creature.Guid.Value, _session.World.NowMs)
-            || IsSomeoneElses(player, creature, GroupsOf(player))
-            || player.Map is { } map && !map.Combat.Hooks.CanAttack(player, creature);
+        => _quests.PreferredItemUseId != 0 && creature.Entry == _quests.PreferredCreatureEntry
+            ? IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
+                || _contention.IsEntrySuspended(creature.Entry, _session.World.NowMs)
+                || _home is { } home && creature.MapId == home.MapId && !home.Contains(creature)
+                || _quests.IsUnavailableItemTarget(creature, _session.World.NowMs)
+            : IsSkipped(creature) || _contention.IsSetAside(creature.Guid.Value, _session.World.NowMs)
+                || IsSomeoneElses(player, creature, GroupsOf(player))
+                || player.Map is { } map && !map.Combat.Hooks.CanAttack(player, creature);
 
     /// <summary>
     /// A creature the goals do not choose now: unreachable, of an entry set aside (stall, death loop), or outside the bot's home area
@@ -1822,6 +1853,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private bool IsSkipped(Creature creature)
         => IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
             || _contention.IsEntrySuspended(creature.Entry, _session.World.NowMs)
+            || _quests.PreferredItemUseId != 0 && creature.Entry == _quests.PreferredCreatureEntry
             || _home is { } home && creature.MapId == home.MapId && !home.Contains(creature);
 
     /// <summary>

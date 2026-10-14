@@ -181,6 +181,47 @@ internal sealed class PlayerbotStallWatch
         return true;
     }
 
+    /// <summary>Size (yards) of the coordinate cell in which repeated stalls of one bot are counted as a dead-end pin.</summary>
+    internal const float PinCellYards = 10f;
+
+    /// <summary>Stalls of the same bot in one <see cref="PinCellYards"/> cell that mark the cell a dead-end pin and escalate recovery.</summary>
+    internal const int PinStallsToEscalate = 2;
+
+    internal const int MaxPinCells = 64;
+
+    internal readonly record struct PinCell(uint MapId, int CellX, int CellY);
+
+    private readonly Dictionary<PinCell, int> _pinStalls = [];
+    private readonly Queue<PinCell> _pinOrder = [];
+
+    internal static PinCell CellOf(uint mapId, float x, float y)
+        => new(mapId, (int)MathF.Floor(x / PinCellYards), (int)MathF.Floor(y / PinCellYards));
+
+    /// <summary>Record a stall give-up at <c>(x, y)</c> on <paramref name="mapId"/> and return how many times this bot has stalled in that 10-yard cell.</summary>
+    internal int RecordPinStall(uint mapId, float x, float y)
+    {
+        if (!float.IsFinite(x) || !float.IsFinite(y)) return 0;
+        PinCell cell = CellOf(mapId, x, y);
+        if (!_pinStalls.TryGetValue(cell, out int count))
+        {
+            if (_pinStalls.Count >= MaxPinCells && _pinOrder.TryDequeue(out PinCell oldest))
+                _pinStalls.Remove(oldest);
+            _pinOrder.Enqueue(cell);
+        }
+
+        count++;
+        _pinStalls[cell] = count;
+        return count;
+    }
+
+    /// <summary>How many times this bot has stalled inside the 10-yard cell containing <c>(x, y)</c> on <paramref name="mapId"/>.</summary>
+    internal int PinStallCount(uint mapId, float x, float y)
+        => float.IsFinite(x) && float.IsFinite(y) ? _pinStalls.GetValueOrDefault(CellOf(mapId, x, y)) : 0;
+
+    /// <summary>Whether the 10-yard cell containing <c>(x, y)</c> on <paramref name="mapId"/> has stalled this bot at least <see cref="PinStallsToEscalate"/> times.</summary>
+    internal bool IsDeadEndPin(uint mapId, float x, float y)
+        => PinStallCount(mapId, x, y) >= PinStallsToEscalate;
+
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and
     /// counted like one this watch found, so the feature logs it and the caller gives the goal up. Progress clears it as usual.
@@ -214,11 +255,15 @@ internal sealed class PlayerbotSuspensions
     /// <summary>How long a stalled goal's target is set aside.</summary>
     internal const uint SuspendMs = 600_000;
 
+    /// <summary>The longest a repeated dead-end pin stall sets an entry aside (<see cref="SuspendEntryEscalating"/>).</summary>
+    internal const uint MaxSuspendMs = 8 * SuspendMs;
+
     private const int Max = 64;
     private readonly Dictionary<uint, uint> _entries = [];
     private readonly Dictionary<uint, uint> _quests = [];
     private readonly HashSet<uint> _unreachableQuests = [];
     private readonly Dictionary<uint, int> _questSetAsides = [];
+    private readonly Dictionary<uint, int> _entryStrikes = [];
 
     /// <summary>
     /// The set-asides of one quest after which a completed quest that is held against the usual rules (a graduated home's leave-home quest,
@@ -240,6 +285,8 @@ internal sealed class PlayerbotSuspensions
     internal bool IsQuestSuspended(uint quest, uint nowMs)
         => quest != 0 && (_unreachableQuests.Contains(quest) || Active(_quests, quest, nowMs)
             || Shared?.IsQuestSetAside(quest, nowMs) == true);
+
+    internal bool IsQuestUnreachable(uint quest) => quest != 0 && _unreachableQuests.Contains(quest);
 
     /// <summary>Never take again a completed quest this bot abandoned after three unreachable-ender diagnoses.</summary>
     internal void MarkUnreachableQuest(uint quest)
@@ -273,7 +320,29 @@ internal sealed class PlayerbotSuspensions
 
     internal void SuspendEntry(uint entry, uint nowMs)
     {
-        if (entry != 0) { Add(_entries, entry, nowMs); Interlocked.Increment(ref _version); }
+        if (entry == 0) return;
+        if (_entryStrikes.Count >= 256 && !_entryStrikes.ContainsKey(entry)) _entryStrikes.Clear();
+        _entryStrikes[entry] = Math.Max(1, _entryStrikes.GetValueOrDefault(entry));
+        Add(_entries, entry, nowMs);
+        Interlocked.Increment(ref _version);
+    }
+
+    internal int EntryStrikeCount(uint entry) => _entryStrikes.GetValueOrDefault(entry);
+
+    /// <summary>
+    /// Set <paramref name="entry"/> aside with doubling backoff (<c>2 * SuspendMs</c> up to <see cref="MaxSuspendMs"/>) when a bot
+    /// repeatedly stalls on it at a dead-end pin.
+    /// </summary>
+    internal uint SuspendEntryEscalating(uint entry, uint nowMs)
+    {
+        if (entry == 0) return 0;
+        if (_entryStrikes.Count >= 256 && !_entryStrikes.ContainsKey(entry)) _entryStrikes.Clear();
+        int strikes = Math.Max(2, _entryStrikes.GetValueOrDefault(entry) + 1);
+        _entryStrikes[entry] = strikes;
+        uint duration = (uint)Math.Min((ulong)SuspendMs << Math.Min(strikes - 1, 3), MaxSuspendMs);
+        Add(_entries, entry, nowMs, duration);
+        Interlocked.Increment(ref _version);
+        return duration;
     }
 
     /// <param name="countsAsSetAside">False for a set-aside that says nothing about abandoning the quest (a walk refused as a proven dead
@@ -346,13 +415,13 @@ internal sealed class PlayerbotSuspensions
         return false;
     }
 
-    private static void Add(Dictionary<uint, uint> set, uint key, uint nowMs)
+    private static void Add(Dictionary<uint, uint> set, uint key, uint nowMs, uint durationMs = SuspendMs)
     {
         if (key == 0) return;
         foreach (uint expired in set.Where(entry => unchecked((int)(entry.Value - nowMs)) <= 0).Select(entry => entry.Key).ToArray())
             set.Remove(expired);
         if (set.Count >= Max && !set.ContainsKey(key)) set.Remove(set.OrderBy(entry => entry.Value).First().Key);
-        set[key] = unchecked(nowMs + SuspendMs);
+        set[key] = unchecked(nowMs + durationMs);
     }
 }
 

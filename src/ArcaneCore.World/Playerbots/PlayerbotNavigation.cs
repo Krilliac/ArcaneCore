@@ -172,6 +172,7 @@ internal struct TileWait
 internal static class PlayerbotNavigation
 {
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotRisk> Guards = [];
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotStallWatch> StallWatches = [];
 
     /// <summary>
     /// The risk whose hazards (<see cref="PlayerbotHazards"/>) every route of this bot must keep out of (null: none). The brain sets
@@ -182,6 +183,16 @@ internal static class PlayerbotNavigation
         if (risk is null) Guards.Remove(player);
         else Guards.AddOrUpdate(player, risk);
     }
+
+    /// <summary>The stall watch whose dead-end pin cells (<see cref="PlayerbotStallWatch.IsDeadEndPin"/>) routes of this bot must not end in.</summary>
+    internal static void SetStallWatch(Player player, PlayerbotStallWatch? watch)
+    {
+        if (watch is null) StallWatches.Remove(player);
+        else StallWatches.AddOrUpdate(player, watch);
+    }
+
+    internal static bool IsDeadEndPin(Player player, Vector3 point)
+        => StallWatches.TryGetValue(player, out PlayerbotStallWatch? watch) && watch.IsDeadEndPin(player.MapId, point.X, point.Y);
 
     /// <summary>The detour offsets tried past a hazard on the way, on either side (yards beyond its radius).</summary>
     private static readonly float[] HazardDetourYards = [5f, 15f];
@@ -508,6 +519,9 @@ internal static class PlayerbotNavigation
     /// Deadwind Pass, Redridge, the Burning Steppes and Blackrock Mountain: twelve legs, 9,400 yards).
     /// </para>
     /// </summary>
+    /// <summary>Within this distance (yards) of the final portal of an unreachable region route, <see cref="RegionLeg"/> refuses instead of falling back to straight-line steps into the dead end.</summary>
+    internal const float NearestPortalRefusalYards = 4f;
+
     private static bool? RegionLeg(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
         bool completedQuestReturn, bool friendlyTownEnder)
     {
@@ -520,7 +534,10 @@ internal static class PlayerbotNavigation
         int from = nav.RegionAt(graph, start, locate), to = nav.RegionAt(graph, goal, locate);
         if (from < 0 || to < 0) return null;
         NavRegionRouteStatus status = graph.FindRoute(from, start, to, goal, RegionSearchNodes, out List<Vector3> portals);
-        if (portals.Count == 0) return null;
+        bool unreachable = status == NavRegionRouteStatus.Unreachable && from != to && !IsFragment(graph, from)
+            && map.Collision.IsOutdoors(goal.X, goal.Y, goal.Z + 1f);
+        if (portals.Count == 0) return unreachable ? false : null;
+        if (unreachable && Vector3.Distance(start, portals[^1]) <= NearestPortalRefusalYards) return false;
         if (status == NavRegionRouteStatus.Found) portals.Add(goal);
 
         int pick = 0;
@@ -534,7 +551,8 @@ internal static class PlayerbotNavigation
 
         // The portal is a point on the walkable mesh joined to the bot's: the query reaches it, or closes on it partially. When neither
         // query is a route (a blacklisted portal, a hazard in the way) the graph does not decide: the goal-first query and the
-        // straight-line steps still get their turn.
+        // straight-line steps still get their turn, unless the goal lies in an unreachable region component and the bot cannot even
+        // progress toward the nearest portal.
         long pending = PendingMark;
         if (Plan(player, portals[pick], portals[pick], options, partial: true, trial: false, out route, out _,
             completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
@@ -542,7 +560,7 @@ internal static class PlayerbotNavigation
         if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, trial: false, out route, out _,
             completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
         route = null;
-        return null;
+        return unreachable ? false : null;
     }
 
     /// <summary>
@@ -648,8 +666,8 @@ internal static class PlayerbotNavigation
         if (!PlayerbotMapPolicy.MayMoveOn(player, options))
             return false;
 
-        // A destination given up after a loop is refused for a while, so the goal picks another one.
-        if (PlayerbotMotion.IsBlacklisted(player, destination))
+        // A destination given up after a loop or remembered as a dead-end pin is refused, so the goal picks another one.
+        if (PlayerbotMotion.IsBlacklisted(player, destination) || IsDeadEndPin(player, destination))
             return false;
 
         // A moving bot plans from where it is now, not from its last heartbeat.
@@ -752,10 +770,11 @@ internal static class PlayerbotNavigation
         if (!IsUsablePath(path, options.MaxPathPoints, float.PositiveInfinity))
             return false;
         // A partial answer (the corridor did not reach the destination) must at least close on the goal, and must not end at a
-        // place given up after a loop. An end projected from above or below the destination stays at its spot and is exact.
+        // place given up after a loop or remembered as a dead-end pin. An end projected from above or below the destination stays at its spot and is exact.
         if (partial && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination)
             && (Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(from), Flat(goal)) - PartialProgressYards
-                || PlayerbotMotion.IsBlacklisted(player, path.End)))
+                || PlayerbotMotion.IsBlacklisted(player, path.End)
+                || IsDeadEndPin(player, path.End)))
             return false;
 
         route = Bounded(path.Points, options, complete: Reaches(path) || EndsAt(path, destination));
@@ -1287,6 +1306,18 @@ internal static class PlayerbotNavigation
         writer.WriteByte(slot);
         writer.WriteByte(0);
         ArcaneCore.Game.Spells.SpellCastTargets.ForSelf().Write(writer);
+        return writer.ToArray();
+    }
+
+    internal static byte[] UseItemOnUnitPayload(byte bag, byte slot, ObjectGuid unit, byte spellIndex = 0)
+    {
+        var writer = new PacketWriter(16);
+        writer.WriteByte(bag);
+        writer.WriteByte(slot);
+        writer.WriteByte(spellIndex);
+        var targets = ArcaneCore.Game.Spells.SpellCastTargets.ForUnit(unit);
+        writer.WriteUInt16((ushort)targets.Mask);
+        writer.WritePackedGuid(unit.Value);
         return writer.ToArray();
     }
 

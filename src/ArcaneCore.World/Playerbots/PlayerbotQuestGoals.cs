@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
@@ -56,7 +57,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     internal uint QuestId { get; private set; }
     internal uint TargetEntry { get; private set; }
     internal uint PreferredCreatureEntry { get; private set; }
+    internal uint PreferredItemUseId { get; private set; }
+    internal uint PreferredItemUseQuestId { get; private set; }
     internal string StageName => _stage.ToString();
+
+    /// <summary>How long a creature on which the bot just used a quest item is skipped before it can be targeted again.</summary>
+    internal const uint ItemUseTargetCooldownMs = 60_000;
+    private readonly Dictionary<ObjectGuid, uint> _recentlyUsedItemTargets = [];
+    private ObjectGuid _itemUseTargetGuid;
 
     /// <summary>The last turn-in refusal recorded for a completed quest at its ender (quest, ender entry, human reason, compact QA code).</summary>
     internal (uint QuestId, uint EnderEntry, string Reason, string Code)? LastTurnInRefusal { get; private set; }
@@ -258,7 +266,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
         QuestTarget? target = FindCandidate(player, services, state);
         if (target is null)
-            return _stage != Stage.None;
+            return _stage != Stage.None || TryUseObjectiveItem(player, elapsedMs, now);
 
         QuestId = target.Quest.Id;
         TargetEntry = target.Npc.Entry;
@@ -489,6 +497,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         public uint Entry;
         public uint Quest;
         public uint Progress;
+        public uint ItemUseId;
         public ulong Key;
     }
 
@@ -516,6 +525,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
 
         PreferredCreatureEntry = chosen.Entry;
+        PreferredItemUseId = chosen.ItemUseId;
+        PreferredItemUseQuestId = chosen.ItemUseId != 0 ? chosen.Quest : 0u;
     }
 
     private Objective Pick(Player player, QuestNpcServices services, PlayerNpcState state, uint now)
@@ -539,8 +550,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             {
                 int entry = quest.ReqCreatureOrGOId[index];
                 uint required = quest.ReqCreatureOrGOCount[index];
-                if (entry > 0 && status.CreatureOrGOCount[index] < required && Huntable(player, services, content, questId, (uint)entry, now))
+                if (entry <= 0 || status.CreatureOrGOCount[index] >= required)
+                    continue;
+                if (quest.ReqSpell[index] == 0 && Huntable(player, services, content, questId, (uint)entry, now))
                     Consider(ref best, bot, questId, (uint)entry, status.CreatureOrGOCount[index]);
+                else if (IsItemUseCreatureObjective(quest, index)
+                    && player.Inventory.GetItemCount(quest.Template.SrcItemId) > 0
+                    && ItemUseHuntable(content, questId, (uint)entry, now))
+                    Consider(ref best, bot, questId, (uint)entry, status.CreatureOrGOCount[index], quest.Template.SrcItemId);
             }
 
             // An item objective is hunted at the creatures that drop the item.
@@ -581,11 +598,164 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             && IsKillObjective(player, services, entry)
             && (Home is not { } home || content is not null && home.HasSpawnInside(content, entry));
 
-    private static void Consider(ref Objective best, ulong bot, uint questId, uint entry, uint progress)
+    private bool ItemUseHuntable(ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content, uint questId, uint entry, uint now)
+        => HeldForGroup?.Invoke(questId, entry) != true
+            && Suspensions?.IsEntrySuspended(entry, now) != true
+            && Contention?.IsEntrySuspended(entry, now) != true
+            && (Home is not { } home || content is not null && home.HasSpawnInside(content, entry));
+
+    private static void Consider(ref Objective best, ulong bot, uint questId, uint entry, uint progress, uint itemUseId = 0)
     {
         ulong key = PlayerbotContention.Mix(bot, ((ulong)questId << 32) | entry);
         if (best.Entry != 0 && key >= best.Key) return;
-        best = new Objective { Entry = entry, Quest = questId, Progress = progress, Key = key };
+        best = new Objective { Entry = entry, Quest = questId, Progress = progress, ItemUseId = itemUseId, Key = key };
+    }
+
+    /// <summary>
+    /// Whether <paramref name="quest"/> objective slot <paramref name="index"/> is a creature objective credited by using the quest's
+    /// supplied source item (<c>SrcItemId != 0</c>) on the creature (such as quest 5441 "Lazy Peons": item 16114 Foreman's Blackjack on
+    /// creature 10556 Lazy Peon).
+    /// </summary>
+    internal static bool IsItemUseCreatureObjective(Quest quest, int index)
+        => quest.Template.SrcItemId != 0
+            && index >= 0 && index < quest.ReqCreatureOrGOId.Count
+            && quest.ReqCreatureOrGOId[index] > 0
+            && quest.ReqCreatureOrGOCount[index] > 0;
+
+    internal static bool IsItemUseCreatureObjective(Player player, QuestNpcServices services, Quest quest, int index)
+    {
+        if (!IsItemUseCreatureObjective(quest, index)) return false;
+        if (services.StateOf(player) is { Loaded: true } state
+            && state.Quests.Get(quest.Id) is { Status: QuestStatus.Incomplete })
+            return player.Inventory.GetItemCount(quest.Template.SrcItemId) > 0;
+        return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="creature"/> has already had the quest objective item used on it within
+    /// <see cref="ItemUseTargetCooldownMs"/> or is an awake Lazy Peon (<see cref="ArcaneCore.Game.Creatures.Scripts.LazyPeonAI"/>).
+    /// </summary>
+    internal bool IsUnavailableItemTarget(Creature creature, uint nowMs = 0)
+    {
+        if (creature.AI is ArcaneCore.Game.Creatures.Scripts.LazyPeonAI { IsAsleep: false })
+            return true;
+        if (!_recentlyUsedItemTargets.TryGetValue(creature.Guid, out uint until))
+            return false;
+        uint checkMs = nowMs != 0 ? nowMs : (uint)(_session.World?.NowMs ?? 0);
+        if (unchecked((int)(until - checkMs)) > 0)
+            return true;
+        _recentlyUsedItemTargets.Remove(creature.Guid);
+        return false;
+    }
+
+    private bool TryUseObjectiveItem(Player player, uint elapsedMs, uint now)
+    {
+        if (PreferredItemUseId == 0 || PreferredCreatureEntry == 0 || player.Map is not { } map)
+            return false;
+        ArcaneCore.Game.Items.Item? item = null;
+        foreach (ArcaneCore.Game.Items.Item candidateItem in player.Inventory.AllItems)
+        {
+            if (candidateItem.Entry == PreferredItemUseId)
+            {
+                item = candidateItem;
+                break;
+            }
+        }
+        if (item is null)
+            return false;
+
+        foreach (ObjectGuid expired in _recentlyUsedItemTargets.Where(entry => unchecked((int)(entry.Value - now)) <= 0).Select(entry => entry.Key).ToArray())
+            _recentlyUsedItemTargets.Remove(expired);
+
+        Creature? best = null;
+        bool bestSleeping = false;
+        float bestDistSq = float.MaxValue;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (map.FindObject(guid) is not Creature creature
+                || creature.Entry != PreferredCreatureEntry
+                || !creature.IsAlive || !creature.IsInWorld
+                || !ReferenceEquals(creature.Map, map)
+                || (creature.UnitFlags & UnitFlags.NotSelectable) != 0
+                || IsUnavailableItemTarget(creature, now))
+                continue;
+
+            bool sleeping = creature.StandState == StandState.Sleep
+                || creature.AI is ArcaneCore.Game.Creatures.Scripts.LazyPeonAI { IsAsleep: true };
+            float dx = creature.X - player.X, dy = creature.Y - player.Y, dz = creature.Z - player.Z;
+            float distSq = (dx * dx) + (dy * dy) + (dz * dz);
+            if (!float.IsFinite(distSq)) continue;
+            if (best is null || (sleeping && !bestSleeping) || (sleeping == bestSleeping && distSq < bestDistSq))
+            {
+                best = creature;
+                bestSleeping = sleeping;
+                bestDistSq = distSq;
+            }
+        }
+
+        if (best is null)
+            return false;
+
+        QuestId = PreferredItemUseQuestId;
+        TargetEntry = best.Entry;
+        Goal = PlayerbotGoalKind.Quest;
+        if (best.Guid != _itemUseTargetGuid || _stageNpc != default)
+        {
+            _itemUseTargetGuid = best.Guid;
+            _route = null;
+        }
+
+        float reach = QuestNpcServices.InteractionDistance + best.BoundingRadius + player.BoundingRadius;
+        if (!(float.IsFinite(bestDistSq) && float.IsFinite(reach) && reach > 0f && bestDistSq < reach * reach))
+        {
+            PlanOutcome planned = PlanOutcome.Route;
+            if (_route is null)
+                planned = PlayerbotNavigation.PlanExact(player, new System.Numerics.Vector3(best.X, best.Y, best.Z),
+                    _options, ref _tileWait, now, out _route);
+            if (planned == PlanOutcome.Pending)
+                return true;
+            if (planned == PlanOutcome.Refused)
+            {
+                _recentlyUsedItemTargets[best.Guid] = unchecked(now + ItemUseTargetCooldownMs);
+                _route = null;
+                return false;
+            }
+            if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
+                _route = null;
+            return true;
+        }
+
+        _route = null;
+        if (player.StandState != StandState.Stand)
+        {
+            _session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand));
+            return true;
+        }
+        if (!PlayerbotMovementControl.Stop(_session, player))
+            return true;
+        if (_session.Services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is
+            { State: ArcaneCore.Game.Spells.SpellCastState.Preparing or ArcaneCore.Game.Spells.SpellCastState.Casting })
+            return true;
+
+        float angle = MathF.Atan2(best.Y - player.Y, best.X - player.X);
+        PlayerbotMotion.Face(_session, player, angle);
+
+        byte spellIndex = 0;
+        for (byte i = 0; i < item.Template.Spells.Count; i++)
+        {
+            if (item.Template.Spells[i] is { SpellId: > 0, Trigger: 0 })
+            {
+                spellIndex = i;
+                break;
+            }
+        }
+
+        if (_session.TryManagedAction(WorldOpcode.CmsgUseItem,
+            PlayerbotNavigation.UseItemOnUnitPayload(item.BagSlot, item.Slot, best.Guid, spellIndex)))
+        {
+            _recentlyUsedItemTargets[best.Guid] = unchecked(now + ItemUseTargetCooldownMs);
+        }
+        return true;
     }
 
     /// <summary>
@@ -611,11 +781,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     /// <summary>
     /// Whether the bot implements the objective mechanics <paramref name="quest"/> requires when accepted: an auto-complete quest needs
-    /// none; otherwise bots skip exploration/escort/event-script quests (<see cref="QuestSpecialFlags.ExplorationOrEvent"/>), spell-cast
-    /// or GameObject objectives (<c>ReqSpell</c> nonzero or <c>ReqCreatureOrGOId</c> negative, such as quest 5382 "Doctor Theolen
-    /// Krastinov, the Butcher"), friendly creature objectives that must be credited by item or spell use rather than combat
-    /// (<see cref="IsKillObjective(WorldSession?, Player, QuestNpcServices, CreatureContent?, uint)"/>), and creature objectives whose
-    /// spawns exist only on another continent or an instance without an entrance trigger on the bot's map.
+    /// none; otherwise bots skip exploration/escort/event-script quests (<see cref="QuestSpecialFlags.ExplorationOrEvent"/>), GameObject
+    /// objectives (<c>ReqCreatureOrGOId</c> negative, such as quest 5382 "Doctor Theolen Krastinov, the Butcher"), spell-cast or friendly
+    /// creature objectives that are not backed by a quest source item (<see cref="IsItemUseCreatureObjective(Player, QuestNpcServices, Quest, int)"/>),
+    /// and creature objectives whose spawns exist only on another continent or an instance without an entrance trigger on the bot's map.
     /// </summary>
     internal static bool CanExecuteObjectives(WorldSession? session, Player player, QuestNpcServices services,
         ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content, Quest quest)
@@ -624,13 +793,22 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent)) return false;
         for (int i = 0; i < quest.ReqCreatureOrGOId.Count; i++)
         {
-            if (quest.ReqSpell[i] != 0) return false;
             uint required = quest.ReqCreatureOrGOCount[i];
             int target = quest.ReqCreatureOrGOId[i];
+            if (quest.ReqSpell[i] != 0)
+            {
+                if (required == 0 || target <= 0 || !IsItemUseCreatureObjective(player, services, quest, i))
+                    return false;
+                uint spellEntry = (uint)target;
+                if (content is not null && !HasReachableSpawn(session, player, content, spellEntry))
+                    return false;
+                continue;
+            }
             if (required == 0 || target == 0) continue;
             if (target < 0) return false;
             uint entry = (uint)target;
-            if (!IsKillObjective(session, player, services, content, entry)) return false;
+            if (!IsKillObjective(session, player, services, content, entry)
+                && !IsItemUseCreatureObjective(player, services, quest, i)) return false;
             if (content is not null && !HasReachableSpawn(session, player, content, entry))
             {
                 return false;
