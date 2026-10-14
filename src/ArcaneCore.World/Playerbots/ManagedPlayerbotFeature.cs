@@ -109,6 +109,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private Chat.HttpBotChatClient? _chatClient;
     private PlayerbotNavigationExecutor? _navigationExecutor;
     private Chaos.PlayerbotChaosEngine? _chaos;
+    private AI.Inference.PlayerbotInferenceEngine? _inferenceEngine;
+    private AI.Inference.PlayerbotBatchCoordinator? _batchCoordinator;
 
     /// <summary>World time this feature has seen, in ms (the fault backoff and window run on it).</summary>
     private long ClockMs => Interlocked.Read(ref _clockMs);
@@ -124,6 +126,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>Adversarial server-breaker chaos engine (<c>.playerbot chaos</c>).</summary>
     internal Chaos.PlayerbotChaosEngine Chaos => _chaos ??= new Chaos.PlayerbotChaosEngine(_options, opcodes, logger, _setAsideTime);
+
+    /// <summary>Zero-allocation batched ONNX / SIMD inference engine (null when <c>World:Playerbots:Inference:Enabled</c> is false).</summary>
+    internal AI.Inference.PlayerbotInferenceEngine? InferenceEngine => _inferenceEngine;
+
+    /// <summary>Zero-allocation batched inference coordinator (null when <c>World:Playerbots:Inference:Enabled</c> is false).</summary>
+    internal AI.Inference.PlayerbotBatchCoordinator? BatchCoordinator => _batchCoordinator;
 
     internal bool TryResolveBotId(string idOrName, out Guid botId, out string botName)
     {
@@ -203,6 +211,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         _options.Validate();
         if (_options.AllowLocalLlm) _planner = new PlayerbotLocalPlanner(_options);
+        if (_options.Inference.Enabled)
+        {
+            _inferenceEngine = new AI.Inference.PlayerbotInferenceEngine(
+                _options.Inference.ModelPath,
+                _options.Inference.GpuDeviceId,
+                _options.Inference.EnableTensorRt,
+                _options.Inference.TensorRtCachePath);
+            _batchCoordinator = new AI.Inference.PlayerbotBatchCoordinator();
+        }
         _chat = new Chat.PlayerbotChat(_options,
             services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()),
             services.GetService<Chat.IBotChatEnvironment>() ?? new Chat.ProcessBotChatEnvironment(),
@@ -1050,6 +1067,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         finally { _operations.Release(); }
         if (_planner is { } planner) { _planner = null; await planner.DisposeAsync().ConfigureAwait(false); }
+        if (_inferenceEngine is { } inferenceEngine) { _inferenceEngine = null; _batchCoordinator = null; inferenceEngine.Dispose(); }
         if (_navigationExecutor is { } navigationExecutor) { _navigationExecutor = null; await navigationExecutor.DisposeAsync().ConfigureAwait(false); }
         if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
         _chatClient?.Dispose();
@@ -1257,6 +1275,25 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             try { fields.Update(running, elapsedMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             { logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
+        }
+
+        if (_options.Inference.Enabled && _inferenceEngine is { } inferenceEngine && _batchCoordinator is { } batchCoordinator && bots.Length > 0)
+        {
+            Span<AI.Inference.PlayerbotBatchSlot> slots = stackalloc AI.Inference.PlayerbotBatchSlot[AI.Inference.PlayerbotInferenceEngine.MaxBatchSize];
+            int slotCount = 0;
+            for (int i = 0; i < bots.Length && slotCount < slots.Length; i++)
+            {
+                ActiveBot active = bots[i];
+                if (active.Paused || active.Session.State != SessionState.InWorld || active.Session.Player is not { IsInWorld: true } botPlayer)
+                    continue;
+                slots[slotCount++] = AI.Inference.PlayerbotBatchSlot.FromPlayer(botPlayer);
+            }
+            if (slotCount > 0)
+            {
+                try { _ = batchCoordinator.UpdatePlayerbotsTick(slots[..slotCount], inferenceEngine); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                { logger.LogWarning(ex, "Playerbot batch inference pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
+            }
         }
 
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
