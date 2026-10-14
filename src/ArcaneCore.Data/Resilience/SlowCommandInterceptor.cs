@@ -98,15 +98,53 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
     }
 
     public override void CommandFailed(DbCommand command, CommandErrorEventData eventData)
-        => Check(command, eventData, failed: true);
+        => CheckFailed(command, eventData, CancellationToken.None);
 
     public override Task CommandFailedAsync(DbCommand command, CommandErrorEventData eventData, CancellationToken cancellationToken = default)
     {
-        Check(command, eventData, failed: true);
+        CheckFailed(command, eventData, cancellationToken);
         return Task.CompletedTask;
     }
 
-    private void Check(DbCommand command, CommandEndEventData eventData, bool failed)
+    private void CheckFailed(DbCommand command, CommandErrorEventData eventData, CancellationToken cancellationToken)
+    {
+        if (ThresholdMs <= 0 || IsRoutineCancellation(eventData.Exception, cancellationToken))
+        {
+            return;
+        }
+
+        if (eventData.Duration.TotalMilliseconds >= ThresholdMs)
+        {
+            Check(command, eventData, failed: true, eventData.Exception);
+            return;
+        }
+
+        string sql = command.CommandText ?? string.Empty;
+        string prefix = SqlPrefix(sql, out string kind);
+        string caller = SlowTransactionInterceptor.CallerHint();
+        int suppressed = Admit("fail|" + caller + "|" + prefix);
+        if (suppressed < 0)
+        {
+            return;
+        }
+
+        string diagnosis = eventData.Exception is null ? "failed" : DatabaseTransience.DescribeException(eventData.Exception);
+        _logger.LogWarning(
+            "database command failed on {Context}: {DurationMs} ms ({Diagnosis}; {Mode}; {Kind}): {Sql}. Called from {Caller}. {Suppressed} identical warnings suppressed since the previous warning for this caller",
+            eventData.Context?.GetType().Name ?? "(unknown context)",
+            (long)eventData.Duration.TotalMilliseconds,
+            diagnosis,
+            command.Transaction is null ? "autocommit, no transaction" : "inside a transaction",
+            kind,
+            prefix,
+            caller,
+            suppressed);
+    }
+
+    private static bool IsRoutineCancellation(Exception? exception, CancellationToken cancellationToken)
+        => cancellationToken.IsCancellationRequested || exception is OperationCanceledException;
+
+    private void Check(DbCommand command, CommandEndEventData eventData, bool failed, Exception? exception = null)
     {
         if (ThresholdMs <= 0 || eventData.Duration.TotalMilliseconds < ThresholdMs)
         {
@@ -122,9 +160,12 @@ public sealed class SlowCommandInterceptor : DbCommandInterceptor
             return;
         }
 
+        string outcome = failed
+            ? (exception is null ? "failed" : $"failed [{DatabaseTransience.DescribeException(exception)}]")
+            : "completed";
         _logger.LogWarning(
             "slow database command on {Context}: {DurationMs} ms ({Outcome}; {Mode}; {Kind}; warns at {ThresholdMs} ms): {Sql}. The wait is inside the database (a held write lock or slow I/O), so other writers may have failed as locked. Called from {Caller}. {Suppressed} identical warnings suppressed since the previous warning for this caller",
-            eventData.Context?.GetType().Name ?? "(unknown context)", (long)eventData.Duration.TotalMilliseconds, failed ? "failed" : "completed",
+            eventData.Context?.GetType().Name ?? "(unknown context)", (long)eventData.Duration.TotalMilliseconds, outcome,
             command.Transaction is null ? "autocommit, no transaction" : "inside a transaction", kind, ThresholdMs, prefix, caller, suppressed);
     }
 

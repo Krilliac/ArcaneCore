@@ -162,3 +162,16 @@ internal sealed class GuardedBanStore(Func<IBanStore> inner, DatabaseGuard guard
             inner,
             cancellationToken).AsTask();
 }
+
+/// <summary>
+/// Diagnostic classification for guarded auth-database store calls, combining <see cref="DatabaseTransience.DescribeException"/>
+/// with the store operation context.
+/// </summary>
+internal static class GuardedAuthDiagnostics
+{
+    public static string DescribeStoreFault(string storeOperation, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return $"store={storeOperation} {DatabaseTransience.DescribeException(exception)}";
+    }
+}

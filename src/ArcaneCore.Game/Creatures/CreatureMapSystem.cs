@@ -6,6 +6,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells.Rules.CrowdControl;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
@@ -91,6 +92,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _ai = aiServices ?? CreatureAiServices.Default;
         _persistence = respawnPersistence;
         _respawnClock = respawnClock ?? SystemRespawnClock.Instance;
+        _executeRelayStep = ExecuteRelayStepSafely;
         SubscribeAi();
 
         uint maxGuid = 0;
@@ -181,6 +183,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         t = Lap(t, out _timing.SpawnGroups);
         UpdatePendingAi();
         t = Lap(t, out _timing.PendingAi);
+        UpdateStrippedFlagSafeguard(diffMs);
         UpdateRelayScripts();
         t = Lap(t, out _timing.Relay);
         UpdateForcedDespawns();
@@ -686,87 +689,104 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             // which the corpse timers count down (Creature::Update CORPSE, Creature.cpp:901-914); motion and AI get the tick.
             uint sinceLast = creature.LastUpdateClockMs < 0 ? diffMs : (uint)Math.Min(_clockMs - creature.LastUpdateClockMs, uint.MaxValue);
             creature.LastUpdateClockMs = _clockMs;
-            switch (creature.DeathState)
+            try
             {
-                case CreatureDeathState.Alive:
-                    creature.AdvanceSpline(_clockMs, now);
-                    if (creature.PacifiedMs > 0)
-                    {
-                        creature.PacifiedMs = creature.PacifiedMs <= diffMs ? 0 : creature.PacifiedMs - diffMs; // vmangos Creature::Update
-                    }
-
-                    // A possessed creature is moved by its possessor's client (vmangos HandleMoverRelocation): its AI still runs (PetAI's
-                    // possessed branch keeps the melee victim) but no leash or generator of its own moves it. Fear and confuse do: vmangos
-                    // ModConfuseSpell starts their generator whoever controls the unit, UpdateMotion runs it (UNIT_STATE_POSSESSED is not in
-                    // UNIT_STATE_CAN_NOT_MOVE) and the client gets the control back when it ends (UpdateControl).
-                    if ((creature.UnitFlags & UnitFlags.Possessed) != 0)
-                    {
-                        TimedUpdateAi(creature, diffMs);
-                        if (creature.DeathState == CreatureDeathState.Alive && _creatures.ContainsKey(creature.Guid))
+                switch (creature.DeathState)
+                {
+                    case CreatureDeathState.Alive:
+                        creature.AdvanceSpline(_clockMs, now);
+                        if (creature.PacifiedMs > 0)
                         {
-                            UpdatePossessedCrowdControl(creature, diffMs);
+                            creature.PacifiedMs = creature.PacifiedMs <= diffMs ? 0 : creature.PacifiedMs - diffMs; // vmangos Creature::Update
                         }
 
-                        break;
-                    }
-
-                    // vmangos Creature::Update (Creature.cpp:1037-1043): the leash or the 24 s unreachable count evades, and a creature
-                    // that has not reached its victim for 3 s does not run its AI.
-                    if (!CheckHardLeash(creature, diffMs) && !UpdateUnreachableTarget(creature, diffMs))
-                    {
-                        TimedUpdateAi(creature, diffMs);
-                    }
-
-                    if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
-                    {
-                        break; // the script killed or despawned it
-                    }
-
-                    SyncCrowdControlMovement(creature);
-
-                    // The default (idle/random/waypoint) generator does not run in combat;
-                    // chase, flee, home and point generators on top of it always do.
-                    if (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default))
-                    {
-                        if (creature.Motion.CurrentType == MovementGeneratorType.Random)
+                        // A possessed creature is moved by its possessor's client (vmangos HandleMoverRelocation): its AI still runs (PetAI's
+                        // possessed branch keeps the melee victim) but no leash or generator of its own moves it. Fear and confuse do: vmangos
+                        // ModConfuseSpell starts their generator whoever controls the unit, UpdateMotion runs it (UNIT_STATE_POSSESSED is not in
+                        // UNIT_STATE_CAN_NOT_MOVE) and the client gets the control back when it ends (UpdateControl).
+                        if ((creature.UnitFlags & UnitFlags.Possessed) != 0)
                         {
-                            _randomMotionScratch.Add(creature);
+                            TimedUpdateAi(creature, diffMs);
+                            if (creature.DeathState == CreatureDeathState.Alive && _creatures.ContainsKey(creature.Guid))
+                            {
+                                UpdatePossessedCrowdControl(creature, diffMs);
+                            }
+
+                            break;
+                        }
+
+                        // vmangos Creature::Update (Creature.cpp:1037-1043): the leash or the 24 s unreachable count evades, and a creature
+                        // that has not reached its victim for 3 s does not run its AI.
+                        if (!CheckHardLeash(creature, diffMs) && !UpdateUnreachableTarget(creature, diffMs))
+                        {
+                            TimedUpdateAi(creature, diffMs);
+                        }
+
+                        if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
+                        {
+                            break; // the script killed or despawned it
+                        }
+
+                        SyncCrowdControlMovement(creature);
+
+                        // The default (idle/random/waypoint) generator does not run in combat;
+                        // chase, flee, home and point generators on top of it always do.
+                        if (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default))
+                        {
+                            if (creature.Motion.CurrentType == MovementGeneratorType.Random)
+                            {
+                                _randomMotionScratch.Add(creature);
+                            }
+                            else
+                            {
+                                long motionStart = Stopwatch.GetTimestamp();
+                                creature.Motion.Update(diffMs);
+                                _timing.Motion += Stopwatch.GetTimestamp() - motionStart;
+                            }
+                        }
+
+                        CheckNoMeleePanicEnded(creature);
+                        CheckCalledGuard(creature);
+
+                        break;
+
+                    case CreatureDeathState.Corpse:
+                        // vmangos Creature::Update CORPSE: decay over, or a DB spawn's respawn time reached.
+                        bool respawnDue = creature.Spawn is not null && creature.RespawnAtMs <= _clockMs;
+                        creature.SkinningForOthersMs = creature.SkinningForOthersMs <= sinceLast ? 0 : creature.SkinningForOthersMs - sinceLast; // Creature.cpp:911-914
+                        if (creature.CorpseDecayMs <= sinceLast || respawnDue)
+                        {
+                            RemoveCorpse(creature);
                         }
                         else
                         {
-                            long motionStart = Stopwatch.GetTimestamp();
-                            creature.Motion.Update(diffMs);
-                            _timing.Motion += Stopwatch.GetTimestamp() - motionStart;
+                            creature.CorpseDecayMs -= sinceLast;
                         }
-                    }
 
-                    CheckNoMeleePanicEnded(creature);
-                    CheckCalledGuard(creature);
+                        break;
 
-                    break;
+                    case CreatureDeathState.Dead:
+                        if (creature.Spawn is not null && creature.RespawnAtMs <= _clockMs && PoolKeepsOnRespawn(creature) && LinkAllowsSpawn(creature))
+                        {
+                            Respawn(creature);
+                        }
 
-                case CreatureDeathState.Corpse:
-                    // vmangos Creature::Update CORPSE: decay over, or a DB spawn's respawn time reached.
-                    bool respawnDue = creature.Spawn is not null && creature.RespawnAtMs <= _clockMs;
-                    creature.SkinningForOthersMs = creature.SkinningForOthersMs <= sinceLast ? 0 : creature.SkinningForOthersMs - sinceLast; // Creature.cpp:911-914
-                    if (creature.CorpseDecayMs <= sinceLast || respawnDue)
-                    {
-                        RemoveCorpse(creature);
-                    }
-                    else
-                    {
-                        creature.CorpseDecayMs -= sinceLast;
-                    }
-
-                    break;
-
-                case CreatureDeathState.Dead:
-                    if (creature.Spawn is not null && creature.RespawnAtMs <= _clockMs && PoolKeepsOnRespawn(creature) && LinkAllowsSpawn(creature))
-                    {
-                        Respawn(creature);
-                    }
-
-                    break;
+                        break;
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault(
+                    "CreatureMapSystem.UpdateCreature",
+                    ex,
+                    "Creature update fault for {Guid} (entry={Entry}, name={Name}, map={MapId}, pos=({X:F2},{Y:F2},{Z:F2}))",
+                    creature.Guid,
+                    creature.Entry,
+                    creature.Template.Name,
+                    Map.MapId,
+                    creature.X,
+                    creature.Y,
+                    creature.Z);
             }
 
             long creatureTicks = Stopwatch.GetTimestamp() - creatureStart;
@@ -785,7 +805,25 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 && (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default)))
             {
                 long motionStart = Stopwatch.GetTimestamp();
-                creature.Motion.Update(diffMs);
+                try
+                {
+                    creature.Motion.Update(diffMs);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault(
+                        "CreatureMapSystem.UpdateCreatureMotion",
+                        ex,
+                        "Creature random motion update fault for {Guid} (entry={Entry}, name={Name}, map={MapId}, pos=({X:F2},{Y:F2},{Z:F2}))",
+                        creature.Guid,
+                        creature.Entry,
+                        creature.Template.Name,
+                        Map.MapId,
+                        creature.X,
+                        creature.Y,
+                        creature.Z);
+                }
+
                 long motionTicks = Stopwatch.GetTimestamp() - motionStart;
                 _timing.Motion += motionTicks;
                 if (motionTicks > _timing.SlowestCreatureTicks)

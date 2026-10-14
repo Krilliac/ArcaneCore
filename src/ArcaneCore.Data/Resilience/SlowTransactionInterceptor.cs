@@ -89,11 +89,11 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor, IDisp
     }
 
     public override void TransactionFailed(DbTransaction transaction, TransactionErrorEventData eventData)
-        => End(transaction, eventData.Context, "failed", eventData.Duration);
+        => Fail(transaction, eventData, CancellationToken.None);
 
     public override Task TransactionFailedAsync(DbTransaction transaction, TransactionErrorEventData eventData, CancellationToken cancellationToken = default)
     {
-        End(transaction, eventData.Context, "failed", eventData.Duration);
+        Fail(transaction, eventData, cancellationToken);
         return Task.CompletedTask;
     }
 
@@ -103,6 +103,38 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor, IDisp
         {
             _open.AddOrUpdate(transaction, new Stamp(Stopwatch.GetTimestamp()));
         }
+    }
+
+    private void Fail(DbTransaction transaction, TransactionErrorEventData eventData, CancellationToken cancellationToken)
+    {
+        bool hadStamp = _open.TryGetValue(transaction, out Stamp? stamp);
+        if (hadStamp)
+        {
+            _open.Remove(transaction); // reported at most once: a later end/dispose event of the same transaction finds no stamp
+        }
+
+        if (ThresholdMs <= 0 || cancellationToken.IsCancellationRequested || eventData.Exception is OperationCanceledException)
+        {
+            return;
+        }
+
+        TimeSpan open = hadStamp && stamp is not null ? Stopwatch.GetElapsedTime(stamp.Ticks) : eventData.Duration;
+        string diagnosis = eventData.Exception is null ? "failed" : DatabaseTransience.DescribeException(eventData.Exception);
+        if (open.TotalMilliseconds >= ThresholdMs)
+        {
+            LogSlowEnd(eventData.Context, $"failed [{diagnosis}]", open, eventData.Duration);
+            return;
+        }
+
+        _logger.LogWarning(
+            "database transaction {Action} failed on {Context}: {DurationMs} ms open ({EndMs} ms in {Action}; {Diagnosis}). Called from {Caller}",
+            eventData.Action,
+            eventData.Context?.GetType().Name ?? "(unknown context)",
+            (long)open.TotalMilliseconds,
+            (long)eventData.Duration.TotalMilliseconds,
+            eventData.Action,
+            diagnosis,
+            CallerHint());
     }
 
     private void End(DbTransaction transaction, DbContext? context, string outcome, TimeSpan endCall)
@@ -119,6 +151,11 @@ public sealed class SlowTransactionInterceptor : DbTransactionInterceptor, IDisp
             return;
         }
 
+        LogSlowEnd(context, outcome, open, endCall);
+    }
+
+    private void LogSlowEnd(DbContext? context, string outcome, TimeSpan open, TimeSpan endCall)
+    {
         long openMs = (long)open.TotalMilliseconds;
         long endMs = Math.Clamp((long)endCall.TotalMilliseconds, 0, openMs);
         _logger.LogWarning(

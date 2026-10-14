@@ -1,12 +1,18 @@
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
@@ -153,10 +159,158 @@ public sealed class PlayerbotRecoveryTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Theory]
+    [InlineData(true, true, PlayerbotSpiritHealerStep.DetourToHealer)]
+    [InlineData(true, false, PlayerbotSpiritHealerStep.DetourToHealer)]
+    [InlineData(false, true, PlayerbotSpiritHealerStep.ResumeCorpseRun)]
+    [InlineData(false, false, PlayerbotSpiritHealerStep.Fault)]
+    internal void DecideSpiritHealer_WhenGraveyardWalkStalls_TriesDetourBeforeCorpseOrFault(
+        bool detourLeft, bool bodyRunLeft, PlayerbotSpiritHealerStep expected)
+        => Assert.Equal(expected, PlayerbotRecovery.DecideSpiritHealer(
+            healerKnown: false, healerInReach: false, graveyardKnown: true, stalled: true,
+            bodyRunLeft: bodyRunLeft, detourLeft: detourLeft));
+
+    /// <summary>
+    /// Live w46 (2026-10-14, Maesgrer in Mulgore at (-3066.7, 10.5, 84.0) map 1): the ghost took the spirit healer instead of an unsafe
+    /// body, stalled walking to graveyard 34 (205 yd away, healer out of sight), resumed the corpse run which also stalled in the same
+    /// mountain pocket, and then stalled again on the spirit-healer fallback. Instead of faulting immediately with
+    /// <see cref="PlayerbotRecovery.SpiritHealerFailed"/> at the trapped coordinates, recovery relocates the ghost once to the graveyard
+    /// safe loc, and if the spirit healer is 12.13 yd away (beyond <see cref="PlayerbotRecovery.ServerReachProbeYards"/>) and walking
+    /// those final yards also stalls, relocates the ghost directly onto the spirit healer before ever faulting.
+    /// </summary>
+    [Fact]
+    public async Task TrappedGhost_RelocatesToGraveyardAndSpiritHealer_BeforeFaulting()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(
+            configureServices: services => services.AddSingleton<IWorldFeature, ManualClockFeature>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Player player = session.Player!;
+            WorldSafeLoc? graveyard = null;
+            Creature? healer = null;
+            PlayerbotRecovery? recovery = null;
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new BlockedPathfinder());
+                player.Health = 0;
+                player.Map!.Combat.KillPlayer(player);
+                Assert.True(player.Map!.Combat.RepopPlayer(player));
+                player.Combat.Corpse!.SetPosition(player.X + 250f, player.Y - 700f, player.Z - 75f, 0);
+                graveyard = new WorldSafeLoc(34, player.MapId, player.X + 122f, player.Y - 163f, player.Z - 18f, 0f, "Mulgore");
+                recovery = new PlayerbotRecovery(session, new PlayerbotOptions { Enabled = true, MaxRouteYards = 200, AllowedMaps = [0, 1] })
+                {
+                    GraveyardLookup = (_, _) => graveyard,
+                };
+                recovery.TakeSpiritHealer();
+                return true;
+            });
+
+            bool resumedCorpseRun = false;
+            bool relocatedToGraveyard = false;
+            for (int think = 0; think < 200 && !relocatedToGraveyard; think++)
+            {
+                await host.OnWorldAsync(() =>
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    recovery!.Update(player, 500);
+                    resumedCorpseRun |= recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.ResumeCorpseRun;
+                    relocatedToGraveyard = recovery.GraveyardRelocated;
+                    return true;
+                });
+                if (!relocatedToGraveyard)
+                    await host.World.AdvanceClockAsync(2_500);
+            }
+
+            Assert.True(resumedCorpseRun, "expected the ghost to try resuming the corpse run before relocating");
+            Assert.True(relocatedToGraveyard, "expected the trapped ghost to relocate to the graveyard safe loc");
+            await host.OnWorldAsync(() =>
+            {
+                Assert.True(Vector3.Distance(new(player.X, player.Y, player.Z), new(graveyard!.X, graveyard.Y, graveyard.Z)) < 0.5f);
+                Assert.False(recovery!.HealerRelocated);
+                // Spawn a spirit healer 12.13 yards from the graveyard safe loc (as at Mulgore graveyard 34), visible to the ghost.
+                healer = Dungeon.DungeonBotHost.AddCreature(
+                    player.Map!, 40565u, graveyard.X - 4.44f, graveyard.Y + 11.21f, graveyard.Z + 1.30f,
+                    (uint)NpcFlags.SpiritHealer, host.World.NowMs, faction: 1);
+                player.VisibleObjects.Add(healer.Guid);
+                return true;
+            });
+
+            // Next tick after graveyard relocation: progress was reset so stalled is false and the ghost walks toward the healer.
+            await host.World.AdvanceClockAsync(500);
+            await host.OnWorldAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(4);
+                recovery!.Update(player, 500);
+                Assert.Equal(PlayerbotSpiritHealerStep.WalkToHealer, recovery.LastSpiritHealerStep);
+                Assert.False(recovery.HealerRelocated);
+                return true;
+            });
+
+            // When walking the final 12.13 yards to the healer also stalls, the ghost relocates directly onto the healer.
+            bool relocatedToHealer = false;
+            for (int think = 0; think < 100 && !relocatedToHealer; think++)
+            {
+                await host.World.AdvanceClockAsync(2_500);
+                await host.OnWorldAsync(() =>
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    recovery!.Update(player, 500);
+                    relocatedToHealer = recovery.HealerRelocated;
+                    return true;
+                });
+            }
+
+            Assert.True(relocatedToHealer, "expected the ghost to relocate onto the spirit healer after the 12-yard walk stalled");
+            await host.OnWorldAsync(() =>
+            {
+                Assert.True(Vector3.Distance(new(player.X, player.Y, player.Z), new(healer!.X, healer.Y, healer.Z))
+                    <= PlayerbotRecovery.SpiritHealerReachYards);
+                // Remove the healer so activation cannot revive the ghost: a further stall must still fault rather than loop forever.
+                player.VisibleObjects.Remove(healer.Guid);
+                return true;
+            });
+
+            InvalidOperationException? fault = null;
+            for (int think = 0; think < 100 && fault is null; think++)
+            {
+                await host.World.AdvanceClockAsync(2_500);
+                fault = await host.OnWorldAsync(() =>
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    try
+                    {
+                        recovery!.Update(player, 500);
+                        return null;
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        return ex;
+                    }
+                });
+            }
+
+            Assert.NotNull(fault);
+            Assert.Equal(PlayerbotRecovery.SpiritHealerFailed, fault!.Message);
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     private sealed class TestDeathClock(long seconds) : DeathClock
     {
         public long Seconds { get; set; } = seconds;
         public override long UnixSeconds => Seconds;
+    }
+
+    private sealed class ManualClockFeature : IWorldFeature
+    {
+        public void Attach(WorldRuntime world) => world.UseManualClock();
+    }
+
+    private sealed class BlockedPathfinder : IPathfinder
+    {
+        public bool Enabled => true;
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null) => PathResult.None(start);
     }
 
     private sealed class FlatFloor : ILineOfSight

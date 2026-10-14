@@ -146,6 +146,16 @@ public sealed class ServerFaultCommands : ICommandExtension
         reply(string.Create(CultureInfo.InvariantCulture,
             $"Count {fault.Count}; first {fault.FirstSeen.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC, last {fault.LastSeen.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC ({Age(now - fault.LastSeen)} ago)"));
         reply("Message: " + (fault.SampleMessage.Length == 0 ? "(none)" : fault.SampleMessage.ReplaceLineEndings(" ")));
+        if (!string.IsNullOrEmpty(fault.SampleStack))
+        {
+            reply("Stack: " + fault.SampleStack);
+        }
+
+        if (!string.IsNullOrEmpty(fault.SampleChain) && fault.SampleChain.Contains(" <- ", StringComparison.Ordinal))
+        {
+            reply("Chain: " + fault.SampleChain);
+        }
+
         if (fault.Frames.Count == 0)
         {
             reply("Frames: (none inside ArcaneCore)");

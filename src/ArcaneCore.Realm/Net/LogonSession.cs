@@ -235,6 +235,117 @@ public sealed class LogonSession(
                 await RefuseDatabaseUnavailableAsync(command, ex, cancellationToken).ConfigureAwait(false);
                 return;
             }
+            catch (Exception ex) when (IsExpectedDisconnect(ex))
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                RecordSessionFault(command, ex);
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="exception"/> is an expected client network disconnect or cancellation
+    /// (<see cref="SocketException"/>, <see cref="IOException"/>, <see cref="EndOfStreamException"/>,
+    /// <see cref="OperationCanceledException"/>, <see cref="ObjectDisposedException"/>) rather than an
+    /// unexpected protocol, auth, crypto, or database fault.
+    /// </summary>
+    internal static bool IsExpectedDisconnect(Exception exception)
+        => exception is OperationCanceledException
+            or EndOfStreamException
+            or IOException
+            or SocketException
+            or ObjectDisposedException;
+
+    /// <summary>
+    /// Classifies an unexpected session fault (<see cref="CryptographicException"/>, <see cref="FormatException"/>,
+    /// <see cref="InvalidOperationException"/>, <see cref="ArgumentOutOfRangeException"/>, <see cref="ResilienceException"/>, etc.),
+    /// records it into <see cref="FaultLedger.Shared"/> with session stage, opcode, endpoint, and condensed stack trace,
+    /// and tags <see cref="Exception.Data"/> so outer catch blocks do not double-record it.
+    /// </summary>
+    private void RecordSessionFault(AuthCommand command, Exception exception)
+    {
+        string stage = DescribeStage(command);
+        string category = ClassifyFaultCategory(exception);
+        string site = $"logon/{stage}/{category}";
+        FaultRecording recording = FaultLedger.Shared.Record(site, exception);
+        string stack = CondensedStack(site, exception);
+        TagFaultContext(exception, recording.Id, stage, command, stack);
+        logger.LogError(
+            exception,
+            "[{Endpoint}] unexpected {Category} fault in logon session (stage={Stage}, opcode=0x{Opcode:X2}/{Command}, account='{Account}', faultId={FaultId}, count={Count}, stack={Stack})",
+            remoteEndpoint,
+            category,
+            stage,
+            _inboundCommand,
+            command,
+            LogSafe.Escape(_username),
+            recording.Id,
+            recording.Count,
+            stack);
+    }
+
+    private string DescribeStage(AuthCommand command)
+        => command switch
+        {
+            AuthCommand.LogonChallenge => "logon-challenge",
+            AuthCommand.LogonProof when _offeredPatch is not null => "logon-proof-patch",
+            AuthCommand.LogonProof when _promptPin => "logon-proof-pin",
+            AuthCommand.LogonProof when _isAutocreate => "logon-proof-autocreate",
+            AuthCommand.LogonProof => "logon-proof",
+            AuthCommand.ReconnectChallenge => "reconnect-challenge",
+            AuthCommand.ReconnectProof => "reconnect-proof",
+            AuthCommand.RealmList => _authenticated ? "realm-list" : "realm-list-unauthenticated",
+            AuthCommand.XferAccept => "xfer-accept",
+            AuthCommand.XferResume => "xfer-resume",
+            AuthCommand.XferCancel => "xfer-cancel",
+            _ => $"unknown-0x{_inboundCommand:X2}",
+        };
+
+    internal static string ClassifyFaultCategory(Exception exception)
+        => exception switch
+        {
+            ResilienceException => "resilience",
+            CryptographicException => "crypto",
+            FormatException => "format",
+            ArgumentOutOfRangeException or ArgumentException or IndexOutOfRangeException => "protocol-bounds",
+            InvalidOperationException => "state",
+            System.Data.Common.DbException => "database",
+            _ => "unexpected",
+        };
+
+    internal static string CondensedStack(string site, Exception exception)
+    {
+        FaultLedger.SignatureOf(site, exception, out _, out IReadOnlyList<string> frames);
+        if (frames.Count > 0)
+        {
+            return string.Join(" <- ", frames);
+        }
+
+        return exception.TargetSite?.DeclaringType is { } declaring
+            ? $"{declaring.Name}.{exception.TargetSite.Name}"
+            : exception.GetType().Name;
+    }
+
+    private void TagFaultContext(Exception exception, string faultId, string stage, AuthCommand command, string stack)
+    {
+        try
+        {
+            if (!exception.Data.IsReadOnly)
+            {
+                exception.Data["arcanecore.logon.recorded"] = faultId;
+                exception.Data["arcanecore.logon.stage"] = stage;
+                exception.Data["arcanecore.logon.opcode"] = $"0x{_inboundCommand:X2}/{command}";
+                exception.Data["arcanecore.logon.endpoint"] = remoteEndpoint;
+                exception.Data["arcanecore.logon.stack"] = stack;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Fault metadata tagging must never mask the original exception.
         }
     }
 
@@ -246,17 +357,40 @@ public sealed class LogonSession(
     /// </summary>
     private async Task RefuseDatabaseUnavailableAsync(AuthCommand command, ResilienceException reason, CancellationToken cancellationToken)
     {
+        string stage = DescribeStage(command);
+        string site = $"logon/{stage}/resilience";
+        FaultRecording recording = FaultLedger.Shared.Record(site, reason);
+        string stack = CondensedStack(site, reason);
+        TagFaultContext(reason, recording.Id, stage, command, stack);
         ResetChallengeState();
         _closeRequested = true;
-        logger.LogWarning("[{Endpoint}] auth database unavailable ({Reason}); refusing logon (fail closed)", remoteEndpoint, reason.Message);
-        switch (command)
+        logger.LogWarning(
+            "[{Endpoint}] auth database unavailable ({Reason}; stage={Stage}, opcode=0x{Opcode:X2}/{Command}, faultId={FaultId}, stack={Stack}); refusing logon (fail closed)",
+            remoteEndpoint,
+            reason.Message,
+            stage,
+            _inboundCommand,
+            command,
+            recording.Id,
+            stack);
+        try
         {
-            case AuthCommand.LogonChallenge:
-                await SendChallengeFailureAsync(AuthResult.FailDbBusy, cancellationToken).ConfigureAwait(false);
-                break;
-            case AuthCommand.LogonProof:
-                await SendProofFailureAsync(AuthResult.FailDbBusy, cancellationToken).ConfigureAwait(false);
-                break;
+            switch (command)
+            {
+                case AuthCommand.LogonChallenge:
+                    await SendChallengeFailureAsync(AuthResult.FailDbBusy, cancellationToken).ConfigureAwait(false);
+                    break;
+                case AuthCommand.LogonProof:
+                    await SendProofFailureAsync(AuthResult.FailDbBusy, cancellationToken).ConfigureAwait(false);
+                    break;
+                case AuthCommand.ReconnectChallenge:
+                    await SendReconnectFailureAsync(AuthResult.FailDbBusy, cancellationToken).ConfigureAwait(false);
+                    break;
+            }
+        }
+        catch (Exception ex) when (IsExpectedDisconnect(ex))
+        {
+            // Peer disconnected before the fail-closed refusal packet could be written.
         }
     }
 
@@ -769,8 +903,22 @@ public sealed class LogonSession(
                 || !string.Equals(entry.Platform, platform, StringComparison.OrdinalIgnoreCase)) continue;
             if (entry.Hash.Length != 40) continue;
             byte[] hash;
-            try { hash = Convert.FromHexString(entry.Hash); }
-            catch (FormatException) { continue; }
+            try
+            {
+                hash = Convert.FromHexString(entry.Hash);
+            }
+            catch (FormatException ex)
+            {
+                FaultRecording recording = FaultLedger.Shared.Record("logon/verify-version/format", ex);
+                logger.LogWarning(
+                    "[{Endpoint}] malformed IntegrityHashes hex for build {Build} {Os}/{Platform} (faultId={FaultId}); skipping entry",
+                    remoteEndpoint,
+                    entry.Build,
+                    entry.Os,
+                    entry.Platform,
+                    recording.Id);
+                continue;
+            }
             if (hash.AsSpan().IndexOfAnyExcept((byte)0) < 0) return true; // zero = not filled server side
             if (CryptographicOperations.FixedTimeEquals(ClientIntegrity.VersionProof(publicKey, hash), proof))
                 return true;

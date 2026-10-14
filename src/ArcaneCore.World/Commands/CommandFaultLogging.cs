@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -15,10 +16,37 @@ internal static class CommandFaultLogging
 {
     internal const string Category = "ArcaneCore.World.Commands";
 
-    /// <summary>Record <paramref name="error"/> at <paramref name="site"/> and log it with <paramref name="what"/> (a short name of the command).</summary>
+    /// <summary>Record <paramref name="error"/> at <paramref name="site"/> and log it with <paramref name="what"/> (a short name of the command) and invoker state.</summary>
     internal static void Log(CommandContext context, string site, Exception error, string what)
     {
         ILogger logger = context.Session.Services.GetService<ILoggerFactory>()?.CreateLogger(Category) ?? NullLogger.Instance;
-        logger.LogFault(site, error, "Command {Command} failed", what);
+        if (context.IsConsole)
+        {
+            logger.LogFault(
+                site,
+                error,
+                "Command {Command} failed for {Invoker} (console, security={Security}, exception={ExceptionType})",
+                what,
+                CommandContext.ConsoleName,
+                context.Security,
+                error.GetType().Name);
+            return;
+        }
+
+        Player invoker = context.Player;
+        logger.LogFault(
+            site,
+            error,
+            "Command {Command} failed for {Invoker} (account={AccountId}, guid={Guid}, security={Security}, map={MapId}, pos=({X:F1},{Y:F1},{Z:F1}), exception={ExceptionType})",
+            what,
+            invoker.Name,
+            context.Session.AccountId,
+            invoker.Guid.Low,
+            context.Security,
+            invoker.MapId,
+            invoker.X,
+            invoker.Y,
+            invoker.Z,
+            error.GetType().Name);
     }
 }

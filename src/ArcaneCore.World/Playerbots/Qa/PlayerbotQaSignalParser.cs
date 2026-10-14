@@ -13,6 +13,7 @@ namespace ArcaneCore.World.Playerbots.Qa;
 internal static partial class PlayerbotQaSignalParser
 {
     internal const int MaxMessageChars = 600;
+    internal const int MaxDiagChars = 2048;
 
     /// <summary>The end of a stall line of a bot that stood outside its home (ManagedPlayerbotFeature.LogStall).</summary>
     internal const string OutsideHomeSuffix = "; it gives up that goal outside its home";
@@ -22,6 +23,9 @@ internal static partial class PlayerbotQaSignalParser
     /// the target is then the ender the bot was going to turn in at. A stall on the way to take a quest from an NPC that also ends it lacks it.
     /// </summary>
     internal const string ReturnTripToken = " return-trip";
+
+    /// <summary>The delimiter before the single-line diagnostic snapshot appended to stall, unreachable, and fault lines.</summary>
+    internal const string DiagDelimiter = "; diag: ";
 
     private const string Xyz = @"(?<x>-?\d{1,9}(?:\.\d{1,3})?),(?<y>-?\d{1,9}(?:\.\d{1,3})?),(?<z>-?\d{1,9}(?:\.\d{1,3})?)";
 
@@ -87,9 +91,23 @@ internal static partial class PlayerbotQaSignalParser
         return first == 'r' && message.StartsWith("relay script ", StringComparison.Ordinal) && TryRelay(message, atUtc, out signal);
     }
 
-    private static bool TryBot(string message, DateTime atUtc, Guid? botKey, out QaSignal? signal)
+    private static bool TryBot(string rawMessage, DateTime atUtc, Guid? botKey, out QaSignal? signal)
     {
         signal = null;
+        string message = rawMessage;
+        string? diag = null;
+        int diagIdx = rawMessage.IndexOf(DiagDelimiter, StringComparison.Ordinal);
+        if (diagIdx >= 0)
+        {
+            string beforeDiag = rawMessage[..diagIdx];
+            if (!beforeDiag.Contains(" failed (", StringComparison.Ordinal) || beforeDiag.EndsWith(')'))
+            {
+                diag = CapDiag(rawMessage[(diagIdx + DiagDelimiter.Length)..].Trim());
+                if (diag.Length == 0) diag = null;
+                message = beforeDiag;
+            }
+        }
+
         Match m = StallPattern().Match(message);
         if (m.Success)
         {
@@ -103,6 +121,7 @@ internal static partial class PlayerbotQaSignalParser
                 Bot = QaBotObservation.FromLog(message),
                 OutsideHome = message.EndsWith(OutsideHomeSuffix, StringComparison.Ordinal),
                 ReturnTrip = qa >= 0 && message.AsSpan(0, qa).EndsWith(ReturnTripToken, StringComparison.Ordinal),
+                Diag = diag,
             };
             return true;
         }
@@ -116,6 +135,7 @@ internal static partial class PlayerbotQaSignalParser
                 Kind = QaSignalKind.UnreachableGoal, AtUtc = atUtc, BotKey = Key(m, botKey), Goal = m.Groups["goal"].Value, Target = target, Quest = quest,
                 HasPosition = true, Map = map, X = x, Y = y, Z = z, Detail = "components " + m.Groups["c"].Value, Message = Clean(message, m),
                 Bot = QaBotObservation.FromLog(message),
+                Diag = diag,
             };
             return true;
         }
@@ -141,6 +161,7 @@ internal static partial class PlayerbotQaSignalParser
                 Kind = QaSignalKind.DeathLoop, AtUtc = atUtc, BotKey = Key(m, botKey), HasPosition = true, Map = map, X = x, Y = y, Z = z,
                 Attackers = [.. attackers.Distinct().Order()], Seconds = seconds, Count = deaths, Message = Clean(message, m),
                 Bot = observation, Goal = observation?.Goal ?? string.Empty, Quest = observation?.Quest ?? 0,
+                Diag = diag,
             };
             return true;
         }
@@ -153,6 +174,7 @@ internal static partial class PlayerbotQaSignalParser
             {
                 Kind = QaSignalKind.Quarantine, AtUtc = atUtc, BotKey = Key(m, botKey), Detail = Cap(fault), FaultCode = CodeOf(fault),
                 Count = I(m, "n", out int n) ? n : 0, Message = Clean(message, m),
+                Diag = diag,
             };
             return true;
         }
@@ -165,6 +187,7 @@ internal static partial class PlayerbotQaSignalParser
             {
                 Kind = QaSignalKind.Disabled, AtUtc = atUtc, BotKey = Key(m, botKey), Detail = Cap(fault), FaultCode = CodeOf(fault),
                 Count = I(m, "n", out int n) ? n : 0, Message = Clean(message, m),
+                Diag = diag,
             };
             return true;
         }
@@ -173,10 +196,26 @@ internal static partial class PlayerbotQaSignalParser
         if (m.Success)
         {
             string text = m.Groups["msg"].Value;
+            string cleanLine = message;
+            if (diag is null)
+            {
+                int innerDiagIdx = text.IndexOf(DiagDelimiter, StringComparison.Ordinal);
+                if (innerDiagIdx >= 0)
+                {
+                    diag = CapDiag(text[(innerDiagIdx + DiagDelimiter.Length)..].Trim());
+                    if (diag.Length == 0) diag = null;
+                    string cleanMsg = text[..innerDiagIdx];
+                    Group msgGroup = m.Groups["msg"];
+                    cleanLine = message[..msgGroup.Index] + cleanMsg + message[(msgGroup.Index + msgGroup.Length)..];
+                    text = cleanMsg;
+                }
+            }
+
             signal = new QaSignal
             {
                 Kind = QaSignalKind.ActionFault, AtUtc = atUtc, BotKey = Key(m, botKey), Goal = m.Groups["what"].Value,
-                ExceptionType = m.Groups["type"].Value, Detail = Cap(text), FaultCode = CodeOf(text), Message = Clean(message, m),
+                ExceptionType = m.Groups["type"].Value, Detail = Cap(text), FaultCode = CodeOf(text), Message = Clean(cleanLine, m),
+                Diag = diag,
             };
             return true;
         }
@@ -255,6 +294,8 @@ internal static partial class PlayerbotQaSignalParser
     }
 
     private static string Cap(string text) => text.Length <= MaxMessageChars ? text : text[..MaxMessageChars];
+
+    private static string CapDiag(string text) => text.Length <= MaxDiagChars ? text : text[..MaxDiagChars];
 
     private static string CodeOf(string text) => FaultCodePattern().Match(text) is { Success: true } code ? code.Value : string.Empty;
 

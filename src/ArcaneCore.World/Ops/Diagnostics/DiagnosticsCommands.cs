@@ -1,5 +1,10 @@
+using System.Diagnostics;
 using System.Globalization;
+using ArcaneCore.Data.Resilience;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Resilience;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Core;
 using Microsoft.Extensions.DependencyInjection;
@@ -7,9 +12,9 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.World.Ops.Diagnostics;
 
 /// <summary>
-/// Memory and GC diagnostics for a live server, as sub-commands of the existing <c>.debug</c> root (docs/ops/diagnostics.md):
-/// <c>.debug gc</c> (game master), <c>.debug alloc start|report|stop</c> and <c>.debug dump</c> (administrator). They have no vmangos
-/// equivalent. All of them work from the server console too (it has Administrator authority); none needs a character.
+/// Memory, GC and runtime self-diagnosis commands for a live server, as sub-commands of the existing <c>.debug</c> root (docs/ops/diagnostics.md):
+/// <c>.debug gc</c> and <c>.debug selfcheck</c> (game master), <c>.debug alloc start|report|stop</c> and <c>.debug dump</c> (administrator).
+/// They have no vmangos equivalent. All of them work from the server console too (it has Administrator authority); none needs a character.
 /// </summary>
 public sealed class DiagnosticsCommands : ICommandExtension
 {
@@ -20,6 +25,9 @@ public sealed class DiagnosticsCommands : ICommandExtension
         new("gc", AccountSecurity.GameMaster,
             "Syntax: .debug gc\nPrint the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode.",
             Gc, RetailLevel: 3),
+        new("selfcheck", AccountSecurity.GameMaster,
+            "Syntax: .debug selfcheck\nInspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers.",
+            SelfCheck, RetailLevel: 3),
         new("alloc", AccountSecurity.Administrator,
             "Syntax: .debug alloc $subcommand\nSample what the server allocates, by type, for a while: start, report, stop.",
             Children:
@@ -44,6 +52,55 @@ public sealed class DiagnosticsCommands : ICommandExtension
         foreach (string line in GcReport.Format(GcReport.Capture()))
         {
             context.Reply(line);
+        }
+
+        return true;
+    }
+
+    private static bool SelfCheck(CommandContext context, string args)
+    {
+        if (args.Trim().Length != 0)
+        {
+            return false;
+        }
+
+        FaultLedger ledger = context.Session.Services.GetService<FaultLedger>() ?? FaultLedger.Shared;
+        foreach (string line in SelfDiagnosisReport.Format(SelfDiagnosisReport.Capture(ledger)))
+        {
+            context.Reply(line);
+        }
+
+        WorldRuntime world = context.World;
+        TickPosition pos = world.CurrentPosition;
+        long posElapsedMs = pos.SinceTimestamp > 0
+            ? Math.Max(0L, (Stopwatch.GetTimestamp() - pos.SinceTimestamp) * 1000L / Stopwatch.Frequency)
+            : 0L;
+        context.Reply(string.Create(CultureInfo.InvariantCulture,
+            $"World tick: phase={pos.Phase}, work={pos.DescribeWork()}, elapsed={posElapsedMs} ms, pendingCommands={world.PendingCommandCount}, lateTicks={world.Scheduler.LateTicks}, skippedTicks={world.Scheduler.SkippedTicks}"));
+
+        var isolated = new List<string>();
+        foreach (Map map in world.Maps)
+        {
+            foreach (IMapUpdater updater in map.IsolatedUpdaters)
+            {
+                isolated.Add(string.Create(CultureInfo.InvariantCulture, $"map {map.MapId}#{map.InstanceId}:{updater.GetType().Name}"));
+            }
+        }
+
+        context.Reply(isolated.Count == 0
+            ? "World updaters: ok (0 isolated)"
+            : "World updaters: WARNING isolated=" + string.Join(", ", isolated));
+
+        if (context.Session.Services.GetService<DatabaseCircuits>() is { } circuits)
+        {
+            var summary = new List<string>(circuits.All.Count);
+            foreach (CircuitBreaker breaker in circuits.All)
+            {
+                summary.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{breaker.Name}={breaker.State}(failures={breaker.ConsecutiveFailures},rejected={breaker.Rejected})"));
+            }
+
+            context.Reply("Database circuits: " + string.Join(", ", summary));
         }
 
         return true;

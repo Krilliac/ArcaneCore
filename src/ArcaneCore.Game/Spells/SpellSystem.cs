@@ -1,5 +1,7 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells.Mods;
@@ -279,17 +281,43 @@ public sealed partial class SpellSystem
 
         if (state.AutoRepeatCast is { } autoRepeat)
         {
-            UpdateAutoRepeat(state, autoRepeat); // before the casts, as Unit::_UpdateSpells does (Unit.cpp:2673-2674)
+            try
+            {
+                UpdateAutoRepeat(state, autoRepeat); // before the casts, as Unit::_UpdateSpells does (Unit.cpp:2673-2674)
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                RecordSpellScriptFault("UpdateAutoRepeat", ex, autoRepeat.Spell, autoRepeat.Caster, ResolveUnitTarget(autoRepeat.Caster, autoRepeat.Targets, autoRepeat.Spell));
+                CancelAutoRepeat(state.Unit);
+            }
         }
 
         if (state.CurrentCast is { } cast)
         {
-            UpdateCast(cast, diffMs);
+            try
+            {
+                UpdateCast(cast, diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                RecordSpellScriptFault("UpdateCast", ex, cast.Spell, cast.Caster, ResolveUnitTarget(cast.Caster, cast.Targets, cast.Spell));
+                Finish(cast);
+            }
         }
 
         VerifySpellStateInvariants(state);
-        UpdateAuras(state, diffMs);
-        UpdateAreaAuras(state);
+        try
+        {
+            UpdateAuras(state, diffMs);
+            UpdateAreaAuras(state);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            SpellAuraHolder? activeHolder = state.Auras.FirstOrDefault(h => !h.IsRemoved);
+            Unit? auraCaster = activeHolder is not null ? Units.Find(state.Unit, activeHolder.CasterGuid) : null;
+            RecordSpellScriptFault("UpdateAuras", ex, activeHolder?.Spell, auraCaster ?? state.Unit, state.Unit);
+        }
+
         ExpireCooldowns(state, now);
         if (state.IsIdle)
         {
@@ -376,8 +404,17 @@ public sealed partial class SpellSystem
         }
 
         Unit? unitTarget = ResolveUnitTarget(caster, targets, spell);
-        SpellCastResult result = CheckCast(state, spell, targets, unitTarget, triggered, strict: true,
-            castItem: castItem, triggeringSpell: triggeringSpell, itemCategory: itemCategory);
+        SpellCastResult result;
+        try
+        {
+            result = CheckCast(state, spell, targets, unitTarget, triggered, strict: true,
+                castItem: castItem, triggeringSpell: triggeringSpell, itemCategory: itemCategory);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            RecordSpellScriptFault("Prepare.CheckCast", ex, spell, caster, unitTarget);
+            throw;
+        }
         if (result != SpellCastResult.CastOk)
         {
             SendCastResult(caster, spell, result, triggered);
@@ -414,7 +451,16 @@ public sealed partial class SpellSystem
         // vmangos Spell::prepare removes ACTION/LOOTING auras (and Stealth) before the cast bar runs (Spell.cpp:3443-3456).
         InterruptAtCastStart(cast);
 
-        NotifyPrepared(cast);
+        try
+        {
+            NotifyPrepared(cast);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            RecordSpellScriptFault("Prepare.NotifyPrepared", ex, spell, caster, unitTarget);
+            throw;
+        }
+
         if (castTime == 0)
         {
             return Cast(cast);
@@ -447,6 +493,9 @@ public sealed partial class SpellSystem
         }
 
         Unit? unitTarget = ResolveUnitTarget(caster, cast.Targets, spell);
+        Unit? currentFaultTarget = unitTarget;
+        try
+        {
         SpellCastResult result = CheckCast(state, spell, cast.Targets, unitTarget, cast.IsTriggered, strict: false, skipCooldown: true,
             castItem: cast.CastItem, triggeringSpell: cast.TriggeringSpell, itemCategory: cast.ItemCategory);
         InventoryRewardStage? reagentStage = null;
@@ -607,6 +656,7 @@ public sealed partial class SpellSystem
 
         foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
         {
+            currentFaultTarget = target;
             // vmangos Spell::DoAllEffectOnTarget (Spell.cpp:1129-1137): a persistent area aura runs once on the ground (HandleGroundEffects below),
             // never on the units its selector listed in SMSG_SPELL_GO.
             int unitMask = WithoutGroundEffects(spell, entry.EffectMask);
@@ -692,6 +742,13 @@ public sealed partial class SpellSystem
         }
 
         return SpellCastResult.CastOk;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            RecordSpellScriptFault("Cast", ex, spell, caster, currentFaultTarget);
+            Finish(cast);
+            throw;
+        }
     }
 
     private void UpdateCast(SpellCast cast, uint diffMs)
@@ -1796,6 +1853,36 @@ public sealed partial class SpellSystem
     }
 
     // --- helpers ------------------------------------------------------------------------
+
+    internal static string DescribeSpellUnitForDiagnostics(Unit? unit)
+        => unit switch
+        {
+            null => "null",
+            Player p => $"{p.Guid} (Name={p.Name}, Level={p.Level}, Map={p.MapId})",
+            Creature c => $"{c.Guid} (Name={c.Template.Name}, Entry={c.Entry}, Level={c.Level}, Map={c.MapId})",
+            _ => $"{unit.Guid} (Name={unit.GetType().Name}, Entry={unit.Guid.Entry}, Level={unit.Level}, Map={unit.MapId})",
+        };
+
+    internal void RecordSpellScriptFault(string phase, Exception ex, SpellInfo? spell, Unit? caster, Unit? target)
+    {
+        uint spellId = spell?.Id ?? 0;
+        string spellName = spell?.Name ?? "<unknown>";
+        string casterDesc = DescribeSpellUnitForDiagnostics(caster);
+        string targetDesc = DescribeSpellUnitForDiagnostics(target);
+        ex.Data["SpellId"] = spellId;
+        ex.Data["SpellName"] = spellName;
+        ex.Data["Caster"] = casterDesc;
+        ex.Data["Target"] = targetDesc;
+        _logger.LogFault(
+            "spell-script",
+            ex,
+            "Spell script fault in {Phase} (SpellId={SpellId}, SpellName={SpellName}, Caster={Caster}, Target={Target})",
+            phase,
+            spellId,
+            spellName,
+            casterDesc,
+            targetDesc);
+    }
 
     private static bool IsQuestSettlementPending(Unit? unit)
         => unit is Player { IsQuestSettlementPending: true };

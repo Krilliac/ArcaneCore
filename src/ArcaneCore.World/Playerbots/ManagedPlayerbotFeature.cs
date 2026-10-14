@@ -1260,7 +1260,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 ActiveBot? leader = bots.FirstOrDefault(bot => bot.Record.BotId == botId);
                 string? context = leader?.Session.Player is { } player ? leader.Brain.QaReportContext(player, report) : null;
-                LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null, context);
+                string? diag = leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null;
+                LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null, context, diag: diag);
             }
         }
         // Battlegrounds (PlayerbotBattlegroundCoordinator): the queue machines, the demand and the free bots' choices, after the groups
@@ -1516,14 +1517,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             string? report = active.Brain.StallReport;
             bool awaitRelease = report?.StartsWith("death loop:", StringComparison.Ordinal) == true && !driven.IsAlive
                 && !driven.RepopDestinationResolved;
+            bool willLogStall = report is not null && !awaitRelease && active.Brain.StallCount != active.StallsLogged;
             (active.StallsLogged, bool sharedLogged) = LogStall(logger, active.Record.BotId, active.Name, active.Brain.StallCount,
                 active.StallsLogged, report, active.Brain.StallOutsideHome, active.Brain.SharedSetAside,
-                report is not null && !awaitRelease && active.Brain.StallCount != active.StallsLogged
-                    ? active.Brain.QaReportContext(driven, report) : null,
-                awaitRelease);
+                willLogStall ? active.Brain.QaReportContext(driven, report!) : null,
+                awaitRelease,
+                willLogStall ? active.Brain.FormatDiagnosticSnapshot(driven) : null);
             if (sharedLogged) active.Brain.SharedSetAside = null;
-            foreach (string skipped in active.Brain.TakeUnreachableReports())
-                LogUnreachable(logger, active.Record.BotId, active.Name, skipped, active.Brain.QaReportContext(driven, skipped));
+            IReadOnlyList<string> unreachable = active.Brain.TakeUnreachableReports();
+            if (unreachable.Count > 0)
+            {
+                string diag = active.Brain.FormatDiagnosticSnapshot(driven);
+                foreach (string skipped in unreachable)
+                    LogUnreachable(logger, active.Record.BotId, active.Name, skipped, active.Brain.QaReportContext(driven, skipped), diag);
+            }
             return "brain";
         }
     }
@@ -1533,8 +1540,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <c>QaSignalKind.UnreachableGoal</c>). The destinations report each entry once per window and queue every report of a think, so
     /// each skip is logged exactly once, none lost to a later one.
     /// </summary>
-    internal static void LogUnreachable(ILogger logger, Guid botId, string name, string report, string? qaContext)
-        => logger.LogWarning("Playerbot {BotId} ({Name}) {Report}", botId, name, report + qaContext);
+    internal static void LogUnreachable(ILogger logger, Guid botId, string name, string report, string? qaContext, string? diag = null)
+        => logger.LogWarning("Playerbot {BotId} ({Name}) {Report}", botId, name,
+            string.IsNullOrEmpty(diag) ? report + qaContext : report + qaContext + "; diag: " + diag);
 
     /// <summary>
     /// The warnings of a bot's stall (bot QA parses them, PlayerbotQaSignalParser): a new stall once (<paramref name="stallCount"/> moved
@@ -1546,15 +1554,27 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <paramref name="everyone"/> was logged (the caller clears it then). A death loop's report is never marked outside the home.
     /// </summary>
     internal static (int StallsLogged, bool SharedLogged) LogStall(ILogger logger, Guid botId, string name, int stallCount, int stallsLogged,
-        string? stall, bool outsideHome, PlayerbotSharedSetAside? everyone, string? qaContext = null, bool awaitRelease = false)
+        string? stall, bool outsideHome, PlayerbotSharedSetAside? everyone, string? qaContext = null, bool awaitRelease = false, string? diag = null)
     {
         if (stallCount != stallsLogged && stall is not null && !awaitRelease)
         {
             stallsLogged = stallCount;
             // The mark belongs to a living stall: a death loop counts as a stall too and its report comes first, while the flag still
             // holds the last give-up (PlayerbotStallWatch.Report).
-            if (outsideHome && stall.StartsWith("stalled ", StringComparison.Ordinal)) logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal outside its home", botId, name, stall + qaContext);
-            else logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal", botId, name, stall + qaContext);
+            if (outsideHome && stall.StartsWith("stalled ", StringComparison.Ordinal))
+            {
+                if (string.IsNullOrEmpty(diag))
+                    logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal outside its home", botId, name, stall + qaContext);
+                else
+                    logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal outside its home; diag: {Diag}", botId, name, stall + qaContext, diag);
+            }
+            else
+            {
+                if (string.IsNullOrEmpty(diag))
+                    logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal", botId, name, stall + qaContext);
+                else
+                    logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal; diag: {Diag}", botId, name, stall + qaContext, diag);
+            }
         }
 
         if (everyone is not { } shared) return (stallsLogged, false);
@@ -1905,20 +1925,43 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // but only the first FaultLogLimit of one signature carry the exception (Error, with the stack trace): a storm of one fault is then a
         // short Warning line per bot instead of a stack trace per bot, so it cannot flood the console.
         FaultRecording recording = FaultLedger.Shared.Record("playerbot", ex);
+        string diag = PlayerbotTraceLog.FormatExceptionDiag(ex, active.Session.Player, active.Brain);
+        bool hasDiag = !string.IsNullOrEmpty(diag);
         // Error, not Warning: an action fault is an exception the server did not expect, and Error is what the console colours red. The
         // line text ("Playerbot {BotId} {What} failed ({Type}: {Message})") is what PlayerbotQaSignalParser matches; the level is not part of it.
         if (recording.ShouldLog && recording.Suppressed > 0)
         {
             // like FaultLedger.Log: a repeat after held-back occurrences says how many it stands for (the QA parser accepts the suffix)
-            logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message}) ({Suppressed} more since)", active.Record.BotId, what, ex.GetType().Name, ex.Message, recording.Suppressed);
+            if (hasDiag)
+            {
+                logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message}) ({Suppressed} more since); diag: {Diag}", active.Record.BotId, what, ex.GetType().Name, ex.Message, recording.Suppressed, diag);
+            }
+            else
+            {
+                logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message}) ({Suppressed} more since)", active.Record.BotId, what, ex.GetType().Name, ex.Message, recording.Suppressed);
+            }
         }
         else if (recording.ShouldLog)
         {
-            logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+            if (hasDiag)
+            {
+                logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message}); diag: {Diag}", active.Record.BotId, what, ex.GetType().Name, ex.Message, diag);
+            }
+            else
+            {
+                logger.LogError(ex, "Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+            }
         }
         else
         {
-            logger.LogWarning("Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+            if (hasDiag)
+            {
+                logger.LogWarning("Playerbot {BotId} {What} failed ({Type}: {Message}); diag: {Diag}", active.Record.BotId, what, ex.GetType().Name, ex.Message, diag);
+            }
+            else
+            {
+                logger.LogWarning("Playerbot {BotId} {What} failed ({Type}: {Message})", active.Record.BotId, what, ex.GetType().Name, ex.Message);
+            }
         }
 
         Interlocked.CompareExchange(ref active.FaultCode, $"{what}: {ex.Message}", null);

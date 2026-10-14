@@ -50,13 +50,14 @@ public sealed class FaultAnnouncerFeature(IServiceProvider services) : IWorldFea
         bool fatal = notice.Terminating || notice.Site == "unhandled";
         bool unobserved = !fatal && notice.Site == "unobserved-task";
         string more = notice.Suppressed > 0 ? $", {notice.Suppressed} repeats held back" : string.Empty;
+        string stack = string.IsNullOrEmpty(notice.CondensedStack) ? string.Empty : $" [stack: {notice.CondensedStack}]";
         _announcer!.Announce(
             AnnounceCategory.Faults,
             fatal ? AnnounceSeverity.Critical : unobserved ? AnnounceSeverity.Error : AnnounceSeverity.Warning,
             fatal ? $"Unhandled server exception: {notice.ExceptionType}"
                 : unobserved ? $"Unobserved task exception: {notice.ExceptionType}"
                 : $"Server fault: {notice.ExceptionType} at {notice.Site}",
-            $"{notice.Message}; seen {notice.Count} time(s){more}",
+            $"{notice.Message}; seen {notice.Count} time(s){more}{stack}",
             [new AnnounceField("fault", notice.Id)],
             gmOnly: true,
             dedupKey: notice.Id);

@@ -541,7 +541,15 @@ public sealed class WorldRuntime : IDisposable
         // features and is also timed per handler ("WorldTick:<Type>"); the watchdog's handler stays first and is a few stores.
         SetPosition(TickPhase.WorldTick, null, commandsEnd);
         RaiseWorldTick(diffMs);
-        Scripts.World.OnUpdate(diffMs);
+        try
+        {
+            Scripts.World.OnUpdate(diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("world-script", ex, "world script {Hook} failed (diff={DiffMs} ms, online={Online}, maps={Maps})",
+                nameof(Scripting.IWorldHooks.OnUpdate), diffMs, _online.Count, _maps.Count);
+        }
         long worldTickEnd = Stopwatch.GetTimestamp();
         long worldTickBytesEnd = GC.GetAllocatedBytesForCurrentThread();
 
@@ -567,18 +575,37 @@ public sealed class WorldRuntime : IDisposable
                 {
                     map.Update(diffMs, diagnostics);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    _logger.LogFault("map-update", ex, "map {MapId} update failed", map.MapId);
+                    _logger.LogFault("map-update", ex,
+                        "map {MapId} instance {InstanceId} update failed (diff={DiffMs} ms, players={Players}, objects={Objects})",
+                        map.MapId, map.InstanceId, diffMs, map.PlayerCount, map.ObjectCount);
                 }
 
                 if (MapUpdated is { } mapUpdated)
                 {
-                    mapUpdated(map, Micros(Stopwatch.GetTimestamp() - mapStart));
+                    try
+                    {
+                        mapUpdated(map, Micros(Stopwatch.GetTimestamp() - mapStart));
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        _logger.LogFault("map-observer", ex, "MapUpdated observer failed for map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
+                    }
                 }
 
                 LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics, gcBeforeMap);
-                if (diagnostics is not null) observeMap?.Invoke(map, diagnostics);
+                if (diagnostics is not null && observeMap is not null)
+                {
+                    try
+                    {
+                        observeMap(map, diagnostics);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        _logger.LogFault("map-observer", ex, "map diagnostics observer failed for map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
+                    }
+                }
             }
         }
         finally
@@ -763,6 +790,7 @@ public sealed class WorldRuntime : IDisposable
 
         foreach (Action<uint> handler in handlers.GetInvocationList().Cast<Action<uint>>())
         {
+            string name = TickWorkNames.Of(handler);
             long start = Stopwatch.GetTimestamp();
             long startBytes = GC.GetAllocatedBytesForCurrentThread();
             SetPosition(TickPhase.Features, handler, start);
@@ -770,17 +798,26 @@ public sealed class WorldRuntime : IDisposable
             {
                 handler(diffMs);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _logger.LogFault("updated-handler", ex, "{Event} handler failed for {Subject}", nameof(Updated), diffMs);
+                _logger.LogFault("updated-handler", ex, "{Event} handler {Handler} failed for {Subject}", nameof(Updated), name, diffMs);
             }
 
-            string name = TickWorkNames.Of(handler);
             long micros = Micros(Stopwatch.GetTimestamp() - start);
             long bytes = GC.GetAllocatedBytesForCurrentThread() - startBytes;
             Stats.RecordFeature(name, micros, bytes);
             NoteSlowest(name, micros);
-            FeatureObserver?.Invoke(name, micros, bytes);
+            if (FeatureObserver is { } featureObserver)
+            {
+                try
+                {
+                    featureObserver(name, micros, bytes);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("tick-observer", ex, "FeatureObserver failed for feature {Feature}", name);
+                }
+            }
         }
     }
 
@@ -802,9 +839,9 @@ public sealed class WorldRuntime : IDisposable
             {
                 handler(diffMs);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _logger.LogFault("worldtick", ex, "{Event} handler failed for {Subject}", nameof(WorldTick), diffMs);
+                _logger.LogFault("worldtick", ex, "{Event} handler {Handler} failed for {Subject}", nameof(WorldTick), TickWorkNames.Of(handler), diffMs);
             }
 
             Type? type = handler.Method.DeclaringType;
@@ -841,10 +878,10 @@ public sealed class WorldRuntime : IDisposable
             {
                 handler(subject);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 object? description = subject is Player player ? player.Name : subject;
-                _logger.LogFault("event-handler", ex, "{Event} handler failed for {Subject}", name, description);
+                _logger.LogFault("event-handler", ex, "{Event} handler {Handler} failed for {Subject}", name, TickWorkNames.Of(handler), description);
             }
         }
     }
@@ -904,9 +941,11 @@ public sealed class WorldRuntime : IDisposable
             {
                 command();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _logger.LogFault("world-command", ex, "world command failed");
+                _logger.LogFault("world-command", ex,
+                    "world command {Command}.{Method} (#{Run}, pending={Pending}) failed",
+                    TickWorkNames.Of(command), command.Method.Name, run, _commands.Count);
             }
 
             if (drainAll)
@@ -933,7 +972,16 @@ public sealed class WorldRuntime : IDisposable
         {
             if (!player.IsQuestSettlementPending)
             {
-                _saveQueue.Enqueue(player.CreateSnapshot(now));
+                try
+                {
+                    _saveQueue.Enqueue(player.CreateSnapshot(now));
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("character-save-snapshot", ex,
+                        "failed to snapshot player {Player} ({Guid}) on map {MapId} at ({X:F1},{Y:F1},{Z:F1})",
+                        player.Name, player.Guid, player.MapId, player.X, player.Y, player.Z);
+                }
             }
         }
     }
@@ -953,8 +1001,17 @@ public sealed class WorldRuntime : IDisposable
                 continue;
             }
 
-            _saveQueue.Enqueue(player.CreateSnapshot(now));
-            queued++;
+            try
+            {
+                _saveQueue.Enqueue(player.CreateSnapshot(now));
+                queued++;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("character-save-snapshot", ex,
+                    "failed to snapshot player {Player} ({Guid}) on map {MapId} at ({X:F1},{Y:F1},{Z:F1})",
+                    player.Name, player.Guid, player.MapId, player.X, player.Y, player.Z);
+            }
         }
 
         return queued;
@@ -972,7 +1029,15 @@ public sealed class WorldRuntime : IDisposable
         long last = _clock.ElapsedMilliseconds;
         long lastStartTicks = -1;
         _logger.LogInformation("World thread started ({Interval} ms tick, {Timer} timer, late after {Tolerance} ms)", interval, waiter.Mode, tolerance);
-        Scripts.World.OnStartup();
+        try
+        {
+            Scripts.World.OnStartup();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("world-script", ex, "world script {Hook} failed (diff={DiffMs} ms, online={Online}, maps={Maps})",
+                nameof(Scripting.IWorldHooks.OnStartup), 0u, _online.Count, _maps.Count);
+        }
 
         while (!_stopSignal.IsSet)
         {
@@ -1012,8 +1077,29 @@ public sealed class WorldRuntime : IDisposable
                 Stats.RecordSlowTick(LastTickPhases, _topNames, _topMicros, _topCount, durationMicros);
             }
 
-            TickObserver?.Invoke(durationMicros, tickBytes, LastTickPhases);
-            TickCompleted?.Invoke(durationMicros, tickBytes, LastTickPhases);
+            if (TickObserver is { } tickObserver)
+            {
+                try
+                {
+                    tickObserver(durationMicros, tickBytes, LastTickPhases);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("tick-observer", ex, "TickObserver failed (duration={DurationMicros} us)", durationMicros);
+                }
+            }
+
+            if (TickCompleted is { } tickCompleted)
+            {
+                try
+                {
+                    tickCompleted(durationMicros, tickBytes, LastTickPhases);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("tick-observer", ex, "TickCompleted observer failed (duration={DurationMicros} us)", durationMicros);
+                }
+            }
             if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.TickDuration
                 && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
             {

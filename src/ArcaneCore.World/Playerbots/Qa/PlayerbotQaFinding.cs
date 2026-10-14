@@ -81,6 +81,8 @@ internal sealed record QaBuildSeen(string Build, DateTime FirstSeenUtc);
 internal sealed record QaSample(DateTime AtUtc, bool HasPosition, uint Map, float X, float Y, float Z, uint[] Attackers, string Message)
 {
     public QaBotObservation? Bot { get; init; }
+
+    public string? Diag { get; init; }
 }
 
 /// <summary>
@@ -120,6 +122,9 @@ internal sealed record QaFindingView
     public DateTime LastSeenUtc { get; init; }
 
     public IReadOnlyList<QaSample> Samples { get; init; } = [];
+
+    /// <summary>The most recent diagnostic snapshot (<see cref="QaSignal.Diag"/>) captured for this finding.</summary>
+    public string? LastDiag { get; init; }
 
     public uint Quest { get; init; }
 
@@ -384,6 +389,8 @@ internal sealed class QaFinding
 
     public List<QaSample> Samples { get; } = [];
 
+    public string? LastDiag { get; set; }
+
     public uint Quest { get; set; }
 
     public uint Target { get; set; }
@@ -496,7 +503,7 @@ internal sealed class QaFinding
     public QaFindingView ToView() => new()
     {
         Id = Id, Key = Key, Kind = Kind, Subject = Subject, Goal = Goal, Count = Count, DistinctBots = DistinctBots, FirstSeenUtc = FirstSeenUtc,
-        LastSeenUtc = LastSeenUtc, Samples = [.. Samples], Quest = Quest, Target = Target, Map = Map, QuestTitle = QuestTitle, Cause = Cause,
+        LastSeenUtc = LastSeenUtc, Samples = [.. Samples], LastDiag = LastDiag, Quest = Quest, Target = Target, Map = Map, QuestTitle = QuestTitle, Cause = Cause,
         CauseDetail = CauseDetail, Severity = Severity, Publication = Publication, LastCommentUtc = LastCommentUtc,
         OccurrencesReported = OccurrencesReported, Spell = Spell, SpellName = SpellName, SpellRank = SpellRank, EffectIndex = EffectIndex,
         EffectName = EffectName, EffectValue = EffectValue, Aura = Aura, Reason = Reason, ReasonDetail = ReasonDetail, Item = Item, Npc = Npc,

@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 210 |
-| `Administrator` | 6 | 320 |
+| `GameMaster` | 3 | 211 |
+| `Administrator` | 6 | 321 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -56,6 +56,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug scriptcoverage` | 3 | GameMaster | declared retail level | Syntax: .debug scriptcoverage [$map] Count the creatures spawned on the map (default: every dungeon) whose template names a ScriptName or an AIName, and how many ScriptNames have no implementation; the unresolved ones are listed. |
 | `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. |
 | `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
+| `.debug selfcheck` | 3 | GameMaster | declared retail level | Syntax: .debug selfcheck Inspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers. |
 | `.debug alloc` ... | 6 | Administrator | declared retail level | Syntax: .debug alloc $subcommand Sample what the server allocates, by type, for a while: start, report, stop. |
 | `.debug alloc start` | 6 | Administrator | declared retail level | Syntax: .debug alloc start [seconds=30] Start sampling allocations (the runtime's GCAllocationTick event, about one per 100 KB) for 1-600 seconds; it stops by itself. One sample at a time. |
 | `.debug alloc report` | 6 | Administrator | declared retail level | Syntax: .debug alloc report [top=15] List the biggest allocating types of the running or last sample, separately for the small, large and pinned object heaps: sampled MiB, MiB per second and share. The numbers are sampled estimates. |

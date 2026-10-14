@@ -11,6 +11,7 @@ All commands extend the `.debug` root, work from the server console (Administrat
 | Command | Permission | Cost |
 |---|---|---|
 | `.debug gc` | Game master (level 3) | Microseconds: runtime counter reads, on the calling thread. |
+| `.debug selfcheck` | Game master (level 3) | Microseconds: runtime, thread-pool, GC, fault-ledger, invariant, tick, and circuit-breaker health check. |
 | `.debug alloc start [seconds=30]` / `report [top=15]` / `stop` | Administrator (level 6) | Measured as noise-level on the world process, see below; only while a sample runs. |
 | `.debug dump [full\|heap\|mini]` | Administrator (level 6), and only when `Ops:Diagnostics:Dumps:Enabled` is set | Suspends the process while it is written. |
 

@@ -842,7 +842,7 @@ internal sealed class PlayerbotLoopDetector
     /// <summary>The running-in-place check: this window, this much running, and never farther than the radius.</summary>
     internal const uint AreaWindowMs = 15_000;
     internal const float AreaMinTravelYards = 50f;
-    internal const float AreaRadiusYards = 10f;
+    internal const float AreaRadiusYards = 14f;
 
     private readonly List<(uint Ms, Vector3 Destination)> _destinations = [];
     private readonly List<(uint Ms, Vector3 Position, float Travelled)> _samples = [];

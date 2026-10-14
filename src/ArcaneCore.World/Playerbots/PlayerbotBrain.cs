@@ -95,6 +95,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private long _lootStartedMs;
     private readonly Queue<(WorldOpcode Opcode, byte[] Payload)> _lootActions = new();
     private bool _lootResponseReceived;
+    private readonly HashSet<ObjectGuid> _lootedCorpses = [];
     private readonly PlayerbotQuestGoals _quests = new(session, options);
     private readonly PlayerbotTownGoals _town = new(session, options);
     private readonly PlayerbotEconomy _economy = new(session, options);
@@ -175,6 +176,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotEquipment _equipment = new(session);
     private readonly PlayerbotStallWatch _stall = new();
     private readonly PlayerbotSuspensions _suspensions = new() { Shared = shared };
+    private readonly PlayerbotTraceLog _trace = new();
+
+    /// <summary>Recent decision, route, and loop transitions for QA diagnostics.</summary>
+    internal PlayerbotTraceLog Trace => _trace;
+
+    /// <summary>The last <see cref="PlayerbotThinkProbe"/> phase seen while this brain was updating.</summary>
+    internal string LastThinkPhase { get; private set; } = "start";
+
+    /// <summary>Single-line diagnostic snapshot of the bot's state and recent trace history.</summary>
+    internal string FormatDiagnosticSnapshot(Player player) => _trace.FormatSnapshot(player, this);
 
     /// <summary>A goal this bot's stall set aside for every bot (<see cref="PlayerbotSharedSetAsides.Report"/>), until the feature logs it.</summary>
     internal PlayerbotSharedSetAside? SharedSetAside { get; set; }
@@ -404,6 +415,21 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _destinations.ValidatePlanning(player);
         if (!player.IsInWorld) return;
         PlayerbotThinkProbe.Phase("brain");
+        LastThinkPhase = "brain";
+        _trace.ObserveState(this, _session.World.NowMs);
+        try
+        {
+            UpdateCore(player, elapsedMs);
+        }
+        finally
+        {
+            if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
+            _trace.ObserveState(this, _session.World.NowMs);
+        }
+    }
+
+    private void UpdateCore(Player player, uint elapsedMs)
+    {
         PlayerbotNavigation.SetStallWatch(player, _stall);
         WatchKills(player);
         SyncHomeFilters(player);
@@ -630,6 +656,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         if (PlayerbotMotion.ConsumeLoop(player))
         {
+            _trace.Record(_session.World.NowMs, "loop-consumed");
             // The motion gave up a loop (PlayerbotMotion): drop this intent, skip its target for a while, and let the
             // goals choose again; the looped destinations are refused by PlayerbotNavigation.TryPlan meanwhile.
             if (_target is { } looped) MarkUnreachable(looped);
@@ -686,6 +713,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
+        if (!player.Combat.IsInCombat
+            && PlayerbotHomeArea.IsNullIsland(player.MapId, player.X, player.Y)
+            && TryEscapeNullIsland(player))
+        {
+            return;
+        }
+
         if (_lootOpened && _target is { } pendingLoot)
         {
             if (!PlayerbotMovementControl.Stop(_session, player)) return;
@@ -693,14 +727,17 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 if (!_lootResponseReceived) _session.TryManagedAction(WorldOpcode.CmsgLootRelease,
                     PlayerbotNavigation.GuidPayload(pendingLoot.Guid.Value));
+                RememberLootedCorpse(pendingLoot.Guid);
                 _lootOpened = false;
                 _lootResponseReceived = false;
                 _target = null;
+                TargetEntry = 0;
                 AbandonRoute();
                 _attacking = false;
+                _goal = PlayerbotGoalKind.Explore;
                 Rest(player);
             }
-            else _lootResponseReceived = LootManagedPackets(pendingLoot.Guid.Value);
+            else _lootResponseReceived = LootManagedPackets(player, pendingLoot.Guid.Value);
             return;
         }
 
@@ -1152,6 +1189,34 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _attacking = false;
             _lootOpened = false;
             TargetEntry = 0;
+            _goal = PlayerbotGoalKind.Explore;
+            return;
+        }
+
+        bool hasBagSpace = HasFreeBagSlot(player);
+        if (!hasBagSpace)
+        {
+            _trace.Record(_session.World.NowMs, "loot-bag-full");
+        }
+
+        bool hasGoldOnCorpse = _session.Services.GetService<GameObjects.GameObjectLootFeature>()
+            ?.FindSystem(player.Map!)
+            ?.Loot
+            ?.FindLoot(target.Guid) is { Gold: > 0 };
+
+        if (_lootedCorpses.Contains(target.Guid)
+            || Distance(player, target) > 5f
+            || (!hasBagSpace && !hasGoldOnCorpse))
+        {
+            RememberLootedCorpse(target.Guid);
+            _target = null;
+            AbandonRoute();
+            _attacking = false;
+            _lootOpened = false;
+            _lootResponseReceived = false;
+            TargetEntry = 0;
+            _goal = PlayerbotGoalKind.Explore;
+            Rest(player);
             return;
         }
 
@@ -1159,7 +1224,19 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _goal = PlayerbotGoalKind.Loot;
         _lootOpened = _session.TryManagedAction(WorldOpcode.CmsgLoot,
             PlayerbotNavigation.GuidPayload(target.Guid.Value));
-        if (_lootOpened) _lootStartedMs = (long)_session.World.Uptime.TotalMilliseconds;
+        if (_lootOpened)
+        {
+            RememberLootedCorpse(target.Guid);
+            _lootStartedMs = (long)_session.World.Uptime.TotalMilliseconds;
+        }
+        else
+        {
+            RememberLootedCorpse(target.Guid);
+            _target = null;
+            AbandonRoute();
+            TargetEntry = 0;
+            _goal = PlayerbotGoalKind.Explore;
+        }
         return;
     }
 
@@ -1236,6 +1313,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal void GiveUpStalledGoal(Player player, bool shareable = true)
     {
         uint now = _session.World.NowMs;
+        _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
         int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y);
         bool deadEndPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
         StallReturnQuest = _goal == PlayerbotGoalKind.Quest && QuestId != 0 && QuestId == _quests.ReturnQuest ? QuestId : 0;
@@ -1352,7 +1430,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // A fragment of mesh (the region graph's component of a few regions, PlayerbotNavigation.IsOnMeshFragment) is an island whose
         // one straight hop off (TryPlanToward) found no ground beside it, or was not walkable: the same escape applies.
         // A repeated stall in the same 10-yard dead-end pin cell (deadEndPin) also triggers this escape when local walking did not free the bot.
-        bool island = PlayerbotNavigation.IsOnMeshIsland(player, _options) || PlayerbotNavigation.IsOnMeshFragment(player);
+        bool island = PlayerbotHomeArea.IsNullIsland(player.MapId, player.X, player.Y)
+            || PlayerbotNavigation.IsOnMeshIsland(player, _options)
+            || PlayerbotNavigation.IsOnMeshFragment(player);
         if (!island && !deadEndPin) return false;
         onIsland = island;
         uint now = _session.World.NowMs;
@@ -1553,19 +1633,63 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _needsRest = false;
     }
 
-    private bool LootManagedPackets(ulong target)
+    private static bool HasFreeBagSlot(Player player)
+        => PlayerbotTownGoals.FreeBagSlots(player) > 0;
+
+    private void RememberLootedCorpse(ObjectGuid guid)
     {
+        if (_lootedCorpses.Count >= 64)
+        {
+            _lootedCorpses.Clear();
+        }
+        _lootedCorpses.Add(guid);
+    }
+
+    private bool TryEscapeNullIsland(Player player)
+    {
+        uint now = _session.World.NowMs;
+        if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 })
+        {
+            return false;
+        }
+
+        _stall.Reset();
+        _trace.Record(now, "null-island-escape");
+        if (_home is { } home && !PlayerbotHomeArea.IsNullIsland(home.MapId, home.Centre.X, home.Centre.Y))
+        {
+            _homeReturn.Evaluate(player, home, now);
+            if (_homeReturn.TryTeleport(_session, player, home, _options, PlayerbotHomeTeleportReason.Island, now, urgent: true))
+            {
+                DropIntent();
+                _goal = PlayerbotGoalKind.Home;
+                return true;
+            }
+        }
+
+        return TryTeleportToBindPoint(player, "spawned at null-island (0, 0, 0)", urgent: true);
+    }
+
+    private bool LootManagedPackets(Player player, ulong target)
+    {
+        bool hasBagSpace = HasFreeBagSlot(player);
+        if (!hasBagSpace)
+        {
+            _trace.Record(_session.World.NowMs, "loot-bag-full");
+        }
+
         bool opened = false;
         foreach (ManagedSessionPacket packet in _session.DrainManagedPackets(WorldOpcode.SmsgLootResponse))
         {
-            if (packet.Opcode != WorldOpcode.SmsgLootResponse || packet.Payload.Length < 14)
+            if (packet.Opcode != WorldOpcode.SmsgLootResponse || packet.Payload.Length < 9)
                 continue;
 
             var reader = new PacketReader(packet.Payload);
-            if (reader.ReadUInt64() != target || reader.ReadByte() != 1)
+            if (reader.ReadUInt64() != target)
                 continue;
             opened = true;
-            _ = reader.ReadUInt32();
+            if (reader.ReadByte() != 1 || packet.Payload.Length < 14)
+                continue;
+            uint coins = reader.ReadUInt32();
             byte count = reader.ReadByte();
             for (int index = 0; index < count && reader.Remaining >= 22; index++)
             {
@@ -1576,12 +1700,27 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 _ = reader.ReadUInt32();
                 _ = reader.ReadInt32();
                 byte slotType = reader.ReadByte();
-                if (slotType == 0)
+                if (slotType == 0 && hasBagSpace)
                     _lootActions.Enqueue((WorldOpcode.CmsgAutostoreLootItem, [slot]));
             }
 
-            _lootActions.Enqueue((WorldOpcode.CmsgLootMoney, []));
+            if (coins > 0)
+            {
+                _lootActions.Enqueue((WorldOpcode.CmsgLootMoney, []));
+            }
             _lootActions.Enqueue((WorldOpcode.CmsgLootRelease, PlayerbotNavigation.GuidPayload(target)));
+        }
+
+        foreach (ManagedSessionPacket packet in _session.DrainManagedPackets(WorldOpcode.SmsgLootReleaseResponse))
+        {
+            if (packet.Opcode == WorldOpcode.SmsgLootReleaseResponse && packet.Payload.Length >= 8)
+            {
+                var reader = new PacketReader(packet.Payload);
+                if (reader.ReadUInt64() == target)
+                {
+                    opened = true;
+                }
+            }
         }
         return opened;
     }
@@ -2358,6 +2497,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         else
         {
             _exploreRefusals++;
+            if (_exploreRefusals == 1) _trace.Record(_session.World.NowMs, "wander-refused");
             PlayerbotMovementControl.Stop(_session, player);
         }
     }
@@ -2483,7 +2623,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         // Short valid routes on a small island can move a bot more than the stall watch's 10-yard
         // progress bound while keeping it trapped. Diagnose once when exploration stays confined.
-        if (_earlyExploreIslandChecked || unchecked(now - _exploreIslandSince) < 15_000u) return false;
+        bool onNullIsland = PlayerbotHomeArea.IsNullIsland(player.MapId, player.X, player.Y);
+        if (_earlyExploreIslandChecked || (!onNullIsland && unchecked(now - _exploreIslandSince) < 15_000u)) return false;
         if (player.Map is not { InstanceId: 0 }) return false;
         // The check's path searches (up to IslandDirections, counted as the think's fallbacks) are this think's work: the caller plans
         // no route of its own after it.

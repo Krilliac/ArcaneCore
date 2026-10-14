@@ -329,4 +329,73 @@ public sealed class FaultLedgerTests
 
         public void Advance(TimeSpan span) => _now += span;
     }
+
+    [Fact]
+    public void FormatCondensedStack_And_FormatExceptionChain_IncludeCallChainAndInnerCauses()
+    {
+        Exception? caught = null;
+        try
+        {
+            F1();
+        }
+        catch (Exception inner)
+        {
+            try
+            {
+                throw new InvalidOperationException("outer failure", inner);
+            }
+            catch (Exception outer)
+            {
+                caught = outer;
+            }
+        }
+
+        string stack = FaultLedger.FormatCondensedStack(caught!);
+        Assert.Contains("FaultLedgerTests.F7", stack, StringComparison.Ordinal);
+        Assert.Contains("<-", stack, StringComparison.Ordinal);
+
+        string chain = FaultLedger.FormatExceptionChain(caught!);
+        Assert.Contains("InvalidOperationException: outer failure <- InvalidOperationException: deep", chain, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecordAndLog_PopulateSampleStack_SampleChain_NoticeCondensedStack_AndLogMetadata()
+    {
+        var ledger = new FaultLedger();
+        var log = new CapturingLogger();
+        FaultNotice? noticed = null;
+        ledger.FaultNoticed += n => noticed = n;
+
+        Exception ex = ThrowA("stack-check");
+        ledger.Log(log, LogLevel.Error, "test-site", ex, "failed op");
+
+        FaultSnapshot snap = Assert.Single(ledger.Snapshot());
+        Assert.NotEmpty(snap.SampleStack);
+        Assert.Contains("FaultLedgerTests.ThrowA", snap.SampleStack, StringComparison.Ordinal);
+        Assert.Contains("InvalidOperationException: stack-check", snap.SampleChain, StringComparison.Ordinal);
+
+        Assert.NotNull(noticed);
+        Assert.Equal(snap.SampleStack, noticed!.CondensedStack);
+
+        string entry = Assert.Single(log.Entries);
+        Assert.Contains($"[fault={snap.Id} count=1 stack=", entry, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SelfDiagnosisReport_And_CrashReport_IncludeRecentFaultsWithStacks()
+    {
+        var ledger = new FaultLedger();
+        ledger.Record("diag-site", ThrowA("diag-boom"));
+
+        SelfDiagnosisValues diag = SelfDiagnosisReport.Capture(ledger);
+        Assert.Equal(1, diag.TotalFaults);
+        Assert.Equal(1, diag.DistinctFaults);
+        IReadOnlyList<string> lines = SelfDiagnosisReport.Format(diag);
+        Assert.Contains(lines, l => l.Contains("diag-site", StringComparison.Ordinal) && l.Contains("FaultLedgerTests.ThrowA", StringComparison.Ordinal));
+
+        FaultLedger.Shared.Record("crash-report-site", ThrowA("crash-boom"));
+        string crashText = CrashReport.Render(CrashKind.Unhandled, ThrowA("fatal"), [], DateTime.UtcNow);
+        Assert.Contains("[faults]", crashText, StringComparison.Ordinal);
+        Assert.Contains("crash-report-site", crashText, StringComparison.Ordinal);
+    }
 }

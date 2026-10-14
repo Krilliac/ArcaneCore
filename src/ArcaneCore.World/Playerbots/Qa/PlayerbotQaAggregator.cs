@@ -299,8 +299,9 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     finding.RecordLoopObservation(signal.Attackers, signal.Bot);
                 }
 
+                if (!string.IsNullOrEmpty(signal.Diag)) finding.LastDiag = signal.Diag;
                 finding.Samples.Add(new QaSample(signal.AtUtc, signal.HasPosition, signal.Map, signal.X, signal.Y, signal.Z, [.. signal.Attackers], signal.Message)
-                    { Bot = signal.Bot });
+                    { Bot = signal.Bot, Diag = signal.Diag });
                 while (finding.Samples.Count > maxSamples) finding.Samples.RemoveAt(0);
             }
 
@@ -598,7 +599,9 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
 
     private void Absorb(QaFinding into, QaFinding from)
     {
-        into.AbsorbBuilds(from, from.LastSeenUtc > into.LastSeenUtc);
+        bool fromNewer = from.LastSeenUtc > into.LastSeenUtc;
+        into.AbsorbBuilds(from, fromNewer);
+        if (!string.IsNullOrEmpty(from.LastDiag) && (string.IsNullOrEmpty(into.LastDiag) || fromNewer)) into.LastDiag = from.LastDiag;
         into.Count += from.Count;
         if (from.FirstSeenUtc < into.FirstSeenUtc) into.FirstSeenUtc = from.FirstSeenUtc;
         if (from.LastSeenUtc > into.LastSeenUtc) into.LastSeenUtc = from.LastSeenUtc;
@@ -994,6 +997,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                     // Files before 2026-10-12 have no anchor: the first saved sample with a position, else the centre of the key's cell.
                     Anchor = view.Anchor ?? (view.Samples ?? []).Where(sm => sm.HasPosition).Select(sm => new QaAnchor(sm.Map, sm.X, sm.Y)).FirstOrDefault()
                         ?? PlayerbotQaFingerprint.CellCentreOfKey(view.Key),
+                    LastDiag = view.LastDiag ?? (view.Samples ?? []).Select(sm => sm.Diag).LastOrDefault(d => !string.IsNullOrEmpty(d)),
                 };
                 foreach (QaBuildCount entry in (view.BuildCounts ?? []).Where(e => QaFinding.CleanBuild(e.Build) is not null && e.Count > 0)
                     .DistinctBy(e => QaFinding.CleanBuild(e.Build), StringComparer.Ordinal).Take(QaFinding.MaxTrackedBuilds))

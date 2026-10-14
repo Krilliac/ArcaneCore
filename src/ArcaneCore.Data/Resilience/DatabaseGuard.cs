@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Resilience;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -148,6 +149,11 @@ public sealed class DatabaseGuard
         catch (Exception ex) when (ex is not ResilienceException && !cancellationToken.IsCancellationRequested && DatabaseTransience.IsTransient(ex))
         {
             throw new DependencyUnavailableException(DatabaseCircuits.Describe(component), ex);
+        }
+        catch (Exception ex) when (ex is not ResilienceException and not OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            FaultLedger.Shared.Record($"db-{component.ToString().ToLowerInvariant()}", ex);
+            throw;
         }
     }
 

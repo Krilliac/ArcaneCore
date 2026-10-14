@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Globalization;
 using ArcaneCore.Kernel.Resilience;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -76,5 +77,116 @@ public static class DatabaseTransience
         }
 
         return TransientFailure.IsTransient(exception);
+    }
+
+    /// <summary>
+    /// Inspects the exception chain (<see cref="SqliteException.SqliteErrorCode"/>, <see cref="SqliteException.SqliteExtendedErrorCode"/>,
+    /// <see cref="DbException.SqlState"/>, <see cref="DbException.ErrorCode"/>, <see cref="DbUpdateConcurrencyException"/>,
+    /// <see cref="DbUpdateException"/>, <see cref="TimeoutException"/>, <see cref="OperationCanceledException"/>) and returns a
+    /// structured, credential-safe diagnostic summary (<c>type=... code=... sqlState=... transient=... busy=...</c>).
+    /// </summary>
+    public static string DescribeException(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        SqliteException? sqlite = FindInChain<SqliteException>(exception);
+        DbException? db = sqlite ?? FindInChain<DbException>(exception);
+        bool isConcurrency = FindInChain<DbUpdateConcurrencyException>(exception) is not null;
+        bool isUpdate = FindInChain<DbUpdateException>(exception) is not null;
+        bool isTimeout = FindInChain<TimeoutException>(exception) is not null || FindInChain<TimeoutRejectedException>(exception) is not null;
+        bool isCanceled = FindInChain<OperationCanceledException>(exception) is not null;
+
+        string typeName = db is not null && !ReferenceEquals(db, exception)
+            ? $"{exception.GetType().Name}->{db.GetType().Name}"
+            : exception.GetType().Name;
+
+        string code;
+        if (sqlite is not null)
+        {
+            code = sqlite.SqliteExtendedErrorCode != 0 && sqlite.SqliteExtendedErrorCode != sqlite.SqliteErrorCode
+                ? $"{sqlite.SqliteErrorCode}/{sqlite.SqliteExtendedErrorCode}"
+                : sqlite.SqliteErrorCode.ToString(CultureInfo.InvariantCulture);
+        }
+        else if (db is not null && db.ErrorCode != 0)
+        {
+            code = db.ErrorCode.ToString(CultureInfo.InvariantCulture);
+        }
+        else if (isConcurrency)
+        {
+            code = "concurrency";
+        }
+        else if (isUpdate)
+        {
+            code = "db-update";
+        }
+        else if (isTimeout)
+        {
+            code = "timeout";
+        }
+        else if (isCanceled)
+        {
+            code = "canceled";
+        }
+        else
+        {
+            code = "none";
+        }
+
+        string sqlState = db is not null && !string.IsNullOrWhiteSpace(db.SqlState) ? db.SqlState : "none";
+        bool transient = !isCanceled && IsTransient(exception);
+        bool busy = IsBusy(exception);
+
+        return $"type={typeName} code={code} sqlState={sqlState} transient={(transient ? "true" : "false")} busy={(busy ? "true" : "false")}";
+    }
+
+    /// <summary>
+    /// Formats the provider error code on <paramref name="exception"/> (<see cref="SqliteException.SqliteErrorCode"/>,
+    /// <see cref="SqliteException.SqliteExtendedErrorCode"/>, <see cref="DbException.SqlState"/>, <see cref="DbException.ErrorCode"/>),
+    /// or null when the exception carries no provider code.
+    /// </summary>
+    public static string? FormatProviderCode(Exception? exception)
+    {
+        return exception switch
+        {
+            SqliteException sqlite when sqlite.SqliteExtendedErrorCode != 0 && sqlite.SqliteExtendedErrorCode != sqlite.SqliteErrorCode
+                => $"SqliteErrorCode={sqlite.SqliteErrorCode}, Extended={sqlite.SqliteExtendedErrorCode}",
+            SqliteException sqlite
+                => $"SqliteErrorCode={sqlite.SqliteErrorCode}",
+            DbException db when !string.IsNullOrWhiteSpace(db.SqlState) && db.ErrorCode != 0
+                => $"SqlState={db.SqlState}, ErrorCode={db.ErrorCode}",
+            DbException db when !string.IsNullOrWhiteSpace(db.SqlState)
+                => $"SqlState={db.SqlState}",
+            DbException db when db.ErrorCode != 0
+                => $"ErrorCode={db.ErrorCode}",
+            _ => null,
+        };
+    }
+
+    private static TException? FindInChain<TException>(Exception exception, int depth = 0)
+        where TException : Exception
+    {
+        Exception? current = exception;
+        for (int d = depth; current is not null && d < TransientFailure.MaxDepth; d++)
+        {
+            if (current is TException matched)
+            {
+                return matched;
+            }
+
+            if (current is AggregateException aggregate)
+            {
+                foreach (Exception inner in aggregate.InnerExceptions)
+                {
+                    if (FindInChain<TException>(inner, d + 1) is { } nested)
+                    {
+                        return nested;
+                    }
+                }
+            }
+
+            current = current.InnerException;
+        }
+
+        return null;
     }
 }

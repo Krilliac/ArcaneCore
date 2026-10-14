@@ -43,7 +43,10 @@ public sealed partial class WorldSession
     /// </summary>
     private bool ContainWorldHandlerFault(WorldOpcode opcode, byte[] payload, Player player, Exception exception)
     {
-        string cause = $"{WorldOpcodeNames.GetName(opcode)} handler threw for '{player.Name}'";
+        string category = ClassifyHandlerException(exception);
+        string cause = string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{WorldOpcodeNames.GetName(opcode)} handler threw {exception.GetType().Name} ({category}, payload={payload.Length}B) for '{player.Name}' (guid={player.Guid.Low}, map={player.MapId}, pos=({player.X:F1},{player.Y:F1},{player.Z:F1}))");
         if (_kick.IsCancellationRequested)
         {
             // Dropped anyway: nobody will read a reply. Still a fault worth counting.
@@ -56,22 +59,35 @@ public sealed partial class WorldSession
         {
             // State-changing (or unreviewed) handler: it may have half-applied its effect, and absorbing the fault
             // would let the client repeat it. The player has been told; now the session goes.
-            _logger.LogError("[{Endpoint}] {Opcode} handler fault is not containable; disconnecting '{Player}'",
-                RemoteEndpoint, WorldOpcodeNames.GetName(opcode), player.Name);
+            _logger.LogError(
+                "[{Endpoint}] {Opcode} handler fault ({ExceptionType}, {Category}) is not containable; disconnecting '{Player}' (guid={Guid}, map={MapId})",
+                RemoteEndpoint, WorldOpcodeNames.GetName(opcode), exception.GetType().Name, category, player.Name, player.Guid.Low, player.MapId);
             Kick();
             return false;
         }
 
         if (!_handlerFaults.TryAcquire(Environment.TickCount64))
         {
-            _logger.LogError("[{Endpoint}] {Count} handler faults within {Seconds} s; disconnecting '{Player}'",
-                RemoteEndpoint, HandlerFaultStorm, HandlerFaultStormWindowMs / 1000, player.Name);
+            _logger.LogError(
+                "[{Endpoint}] {Count} handler faults within {Seconds} s (last {Opcode}: {ExceptionType}); disconnecting '{Player}' (guid={Guid}, map={MapId})",
+                RemoteEndpoint, HandlerFaultStorm, HandlerFaultStormWindowMs / 1000, WorldOpcodeNames.GetName(opcode), exception.GetType().Name, player.Name, player.Guid.Low, player.MapId);
             Kick();
             return false;
         }
 
         return true;
     }
+
+    /// <summary>Classify a handler exception for operator triage (malformed packet vs bounds/range vs state/argument fault).</summary>
+    internal static string ClassifyHandlerException(Exception exception) => exception switch
+    {
+        var ex when MalformedPacket.Is(ex) => "malformed-packet",
+        IndexOutOfRangeException or ArgumentOutOfRangeException or OverflowException => "bounds-or-range",
+        ArgumentException or FormatException => "invalid-argument",
+        InvalidOperationException or KeyNotFoundException => "invalid-state",
+        NullReferenceException => "null-reference",
+        _ => "unclassified-fault",
+    };
 
     /// <summary>Session task: whether a fault in this session handler is answered here instead of leaving the session.</summary>
     private bool IsContainedSessionFault(WorldOpcode opcode)
@@ -84,7 +100,13 @@ public sealed partial class WorldSession
     private bool ContainSessionHandlerFault(WorldOpcode opcode, Exception exception)
     {
         ClientErrorContext context = ContextForSessionPacket(opcode)!.Value;
-        ClientError.Internal(this, context, $"{WorldOpcodeNames.GetName(opcode)} handler threw for account '{AccountName}'", _logger, exception);
+        string category = ClassifyHandlerException(exception);
+        ClientError.Internal(
+            this,
+            context,
+            $"{WorldOpcodeNames.GetName(opcode)} handler threw {exception.GetType().Name} ({category}) for account '{AccountName}' (id={AccountId})",
+            _logger,
+            exception);
         if (!_handlerFaults.TryAcquire(Environment.TickCount64))
         {
             _logger.LogError("[{Endpoint}] {Count} handler faults within {Seconds} s; disconnecting account '{Account}'",

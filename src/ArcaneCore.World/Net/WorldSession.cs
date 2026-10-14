@@ -407,8 +407,9 @@ public sealed partial class WorldSession : IPlayerSession
                 // The controlled outcome of PacketReader: the packet did not fit its layout. Contained
                 // here so a client fault never reaches the map update. A server bug in a handler is
                 // not a client fault: see the next clause.
-                _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting",
-                    RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode));
+                _logger.LogWarning(
+                    "[{Endpoint}] malformed {Opcode} ({PayloadBytes} bytes, {Reason}) for '{Player}' (guid={Guid}, map={MapId}); disconnecting",
+                    RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode), packet.Payload.Length, ex.Message, player.Name, player.Guid.Low, player.MapId);
                 Kick();
                 return;
             }
@@ -721,7 +722,9 @@ public sealed partial class WorldSession : IPlayerSession
         }
         catch (Exception ex) when (IsMalformed(ex))
         {
-            _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+            _logger.LogWarning(
+                "[{Endpoint}] malformed {Opcode} ({PayloadBytes} bytes, {Reason}, state={State}, account={Account}); disconnecting",
+                RemoteEndpoint, WorldOpcodeNames.GetName(opcode), payload.Length, ex.Message, _state, AccountName);
             return false;
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or ArcaneCore.Kernel.Diagnostics.InvariantViolationException) && IsContainedSessionFault(opcode))

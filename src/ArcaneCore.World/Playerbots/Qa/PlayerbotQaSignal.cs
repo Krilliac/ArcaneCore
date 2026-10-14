@@ -138,6 +138,9 @@ internal sealed record QaSignal
     /// <summary>The log line with the bot id and name removed (a direct signal: a short description).</summary>
     public string Message { get; init; } = string.Empty;
 
+    /// <summary>Optional single-line diagnostic snapshot (<c>; diag: ...</c>) captured when the signal was logged.</summary>
+    public string? Diag { get; init; }
+
     // The optional ids of a direct signal (IPlayerbotQaSink); zero or empty when the kind has none. They are part of the finding (and of the
     // fingerprint where the kind says so), never a bot's identity.
 

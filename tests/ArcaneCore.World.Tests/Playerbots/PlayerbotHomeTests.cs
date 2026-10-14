@@ -607,6 +607,46 @@ public sealed class PlayerbotHomeTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task Brain_OutsideHome_SlidingAlongWallWithoutNetHomewardProgress_MarksWalkBlockedAndAutoTeleports()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                var options = new PlayerbotOptions { Enabled = true };
+                var area = new PlayerbotHomeArea(player.Map!.MapId, new Vector3(player.X + 300f, player.Y, player.Z), 100f, "Test");
+
+                // 1. An incomplete partial path that slides 20 yards sideways along a wall while closing on the home centre by only ~2.3 yards
+                // (< 25% of travel) is refused outright by PlayerbotNavigation.PlanToward.
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new LongIncompleteWallSlidePathfinder());
+                Assert.False(PlayerbotNavigation.TryPlanToward(player, area.Centre, options, out _));
+
+                // 2. Even when 8-yard wall-hugging routes are returned and the bot moves every tick (> 0.05 yards), failing to close on
+                // the home centre by at least ProgressYards (4 yards) does not reset _failures; after MaxFailures (3) routes the walk is
+                // marked WalkBlocked and ReturnMode.Auto teleports the bot home.
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new NonProgressingWallRoutesPathfinder());
+                var brain = new PlayerbotBrain(session, options) { Home = area };
+                int ticks = 0;
+                while (brain.HomeReturn.Teleports == 0 && ticks++ < 30)
+                {
+                    PlayerbotMotion.ElapseForTests(player, 1_000);
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    brain.Update(1_000);
+                }
+
+                Assert.Equal(1, brain.HomeReturn.Teleports);
+                Assert.Equal(PlayerbotHomeTeleportReason.WalkBlocked, brain.HomeReturn.LastTeleport);
+                brain.Stop();
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     private static PlayerbotStatus Status(Guid id, string name)
         => new(id, name, ManagedPlayerbotState.Running, true, PlayerbotGoalKind.Explore, 0, 0, 0, 0, null);
 
@@ -625,5 +665,25 @@ public sealed class PlayerbotHomeTests
     {
         public long Seconds { get; set; } = seconds;
         public override long UnixSeconds => Seconds;
+    }
+
+    private sealed class LongIncompleteWallSlidePathfinder : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => Vector3.Distance(start, end) < 1f
+                ? new PathResult(PathType.Normal, [start, end])
+                : new PathResult(PathType.Incomplete, [start, new Vector3(start.X + 3f, start.Y + 20f, start.Z)]);
+    }
+
+    private sealed class NonProgressingWallRoutesPathfinder : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => Vector3.Distance(start, end) < 1f
+                ? new PathResult(PathType.Normal, [start, end])
+                : new PathResult(PathType.Normal, [start, new Vector3(start.X + 0.5f, start.Y + 8f, start.Z)]);
     }
 }

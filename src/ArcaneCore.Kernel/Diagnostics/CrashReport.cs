@@ -23,7 +23,8 @@ public enum CrashKind
 /// <summary>
 /// Renders the text of a crash report: the exception with its managed stack and inner exceptions,
 /// process and runtime facts, the crashing thread, GC and working-set numbers, the invariant
-/// counters, and whatever the daemon's <see cref="ICrashContextProvider"/>s add. Pure: builds a string,
+/// counters, the recent caught faults from <see cref="FaultLedger.Shared"/>, and whatever the daemon's
+/// <see cref="ICrashContextProvider"/>s add. Pure: builds a string,
 /// touches no global state, so tests check its content directly. The process-wide numbers come from
 /// <see cref="Process.GetCurrentProcess"/> and <see cref="GC"/>; each is read inside its own guard so
 /// one failing probe never hides the exception that matters.
@@ -51,6 +52,7 @@ public static class CrashReport
         AppendThread(sb);
         AppendMemory(sb);
         AppendInvariants(sb);
+        AppendFaults(sb);
         foreach (ICrashContextProvider provider in providers)
         {
             AppendProvider(sb, provider);
@@ -153,6 +155,37 @@ public static class CrashReport
 
             sb.Append("  ").Append(failure.Count).Append("x ").Append(failure.Member).Append(" (").Append(failure.File).Append(':').Append(failure.Line).Append("): ")
                 .Append(failure.LastMessage).Append('\n');
+        }
+    }
+
+    private static void AppendFaults(StringBuilder sb)
+    {
+        sb.Append("[faults]\n");
+        try
+        {
+            FaultLedger ledger = FaultLedger.Shared;
+            sb.Append("  total: ").Append(ledger.Total.ToString(CultureInfo.InvariantCulture))
+                .Append(", distinct: ").Append(ledger.Distinct.ToString(CultureInfo.InvariantCulture)).Append('\n');
+            int shown = 0;
+            foreach (FaultSnapshot fault in ledger.Snapshot())
+            {
+                if (shown++ == 5)
+                {
+                    sb.Append("  ... more signatures omitted\n");
+                    break;
+                }
+
+                string stack = !string.IsNullOrEmpty(fault.SampleStack)
+                    ? fault.SampleStack
+                    : fault.Frames.Count > 0 ? string.Join(" <- ", fault.Frames) : "(none)";
+                sb.Append("  ").Append(fault.Id).Append(' ').Append(fault.Count.ToString(CultureInfo.InvariantCulture))
+                    .Append("x ").Append(fault.Site).Append(' ').Append(fault.ExceptionType)
+                    .Append(" [stack: ").Append(stack).Append("]: ").Append(fault.SampleMessage).Append('\n');
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            sb.Append("  (unavailable: ").Append(ex.GetType().Name).Append(")\n");
         }
     }
 

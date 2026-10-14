@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -766,6 +767,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         TargetEntry = entry;
         QuestId = questId;
         if (SetQuestAside is null || player.Combat.IsInCombat) return;
+        Creature? ender = FindArrivedEnder(player, entry, out float distance);
+        if (ender is { Combat.IsInCombat: true }) return;
         Vector3 spot = new(player.X, player.Y, player.Z);
         if (questId != _arrivedQuest || Vector3.DistanceSquared(spot, _arrivedSpot) > SpotYards * SpotYards)
         {
@@ -780,8 +783,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         SetQuestAside.Invoke(questId);
         ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
         log?.LogWarning(
-            "Playerbot {Bot} sets aside completed quest {Quest} at arrived ender {Entry} ({X:F1},{Y:F1},{Z:F1} map {Map}): ender in sight within 4 yd but turn-in did not start",
-            player.Name, questId, entry, player.X, player.Y, player.Z, player.MapId);
+            "Playerbot {Bot} sets aside completed quest {Quest} at arrived ender {Entry} ({X:F1},{Y:F1},{Z:F1} map {Map}): ender in sight within 4 yd (dist={Distance:F1} yd, npcFlags=0x{NpcFlags:X}, inCombat={InCombat}) but turn-in did not start",
+            player.Name, questId, entry, player.X, player.Y, player.Z, player.MapId,
+            ender is not null ? distance : -1f, ender?.NpcFlags ?? 0, ender?.Combat.IsInCombat ?? false);
     }
 
     private void ConfirmUnclimbable(Player player, Vector3 destination, uint questId, uint entry, uint now, bool friendlyTownEnder)
@@ -1110,10 +1114,30 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     }
 
     private bool VisibleTarget(Player player, uint entry, uint returnQuestId)
-        => player.VisibleObjects.Any(guid => player.Map?.FindObject(guid) is Creature creature
-            && creature.Entry == entry && creature.IsInWorld && creature.IsAlive
-            && (returnQuestId == 0 || Vector3.Distance(new(player.X, player.Y, player.Z),
-                new(creature.X, creature.Y, creature.Z)) <= 4f));
+        => returnQuestId != 0
+            ? FindArrivedEnder(player, entry, out _) is not null
+            : player.VisibleObjects.Any(guid => player.Map?.FindObject(guid) is Creature creature
+                && creature.Entry == entry && creature.IsInWorld && creature.IsAlive);
+
+    private static Creature? FindArrivedEnder(Player player, uint entry, out float distance)
+    {
+        Vector3 playerPos = new(player.X, player.Y, player.Z);
+        Creature? best = null;
+        distance = float.MaxValue;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (player.Map?.FindObject(guid) is not Creature { IsInWorld: true, IsAlive: true } creature
+                || creature.Entry != entry)
+                continue;
+            float d = Vector3.Distance(playerPos, new(creature.X, creature.Y, creature.Z));
+            if (d <= 4f && d < distance)
+            {
+                best = creature;
+                distance = d;
+            }
+        }
+        return best;
+    }
 
     /// <summary>Remember the ordinary quest trip just committed to; return and objective trips are not ours to settle.</summary>
     private void ArmTrip(uint entry, uint questId, uint returnQuestId, uint preferredCreatureEntry)

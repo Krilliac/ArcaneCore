@@ -2,11 +2,13 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -203,7 +205,22 @@ public sealed class ScriptHookRegistry
 
         foreach (Action handler in handlers.GetInvocationList().Cast<Action>())
         {
-            try { handler(); } catch (Exception ex) { Logger.LogError(ex, "script hook change handler failed"); }
+            try
+            {
+                handler();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                string subscriber = handler.Target?.GetType().FullName ?? handler.Method.DeclaringType?.FullName ?? "Action";
+                if (Logger is not null)
+                {
+                    Logger.LogFault("script-hook", ex, "script hook {Subscriber}.{Method} failed (subject={Subject})", subscriber, nameof(HooksChanged), "HooksChanged");
+                }
+                else
+                {
+                    FaultLedger.Shared.Record("script-hook", ex);
+                }
+            }
         }
     }
 
@@ -226,8 +243,55 @@ public sealed class ScriptHookRegistry
         return names;
     }
 
-    internal void Failed(Exception ex, object hook, string name)
-        => Logger.LogError(ex, "script hook {Hook}.{Method} failed", hook.GetType().Name, name);
+    internal void Failed(Exception ex, object hook, string name, string subject = "world")
+    {
+        string subscriber = hook.GetType().FullName ?? hook.GetType().Name;
+        if (Logger is not null)
+        {
+            Logger.LogFault("script-hook", ex, "script hook {Hook}.{Method} failed (subscriber={Subscriber}, subject={Subject})", hook.GetType().Name, name, subscriber, subject);
+        }
+        else
+        {
+            FaultLedger.Shared.Record("script-hook", ex);
+        }
+    }
+
+    internal static string DescribePlayer(Player? player)
+        => player is null ? "player=null" : $"player={player.Guid} (name={player.Name}, level={player.Level}, map={player.MapId})";
+
+    internal static string DescribeUnit(Unit? unit)
+        => unit switch
+        {
+            null => "unit=null",
+            Player p => DescribePlayer(p),
+            Creature c => $"creature={c.Guid} (entry={c.Entry}, name={c.Template.Name}, map={c.MapId})",
+            _ => $"unit={unit.Guid} (entry={unit.Guid.Entry}, map={unit.MapId})",
+        };
+
+    internal static string DescribeItem(Item? item)
+        => item is null ? "item=null" : $"item={item.Guid} (entry={item.Entry}, name={item.Template.Name})";
+
+    internal static string DescribeCast(SpellCast? cast, bool completed)
+        => cast is null
+            ? $"cast=null (completed={completed})"
+            : $"spell={cast.Spell.Id} ({cast.Spell.Name}), caster=({DescribeUnit(cast.Caster)}), target={cast.Targets.Unit}, completed={completed}";
+
+    internal static string DescribeGroup(Group? group, ObjectGuid? member = null)
+        => group is null
+            ? "group=null"
+            : member is { } m
+                ? $"group={group.Id} (leader={group.LeaderGuid}, member={m})"
+                : $"group={group.Id} (leader={group.LeaderGuid}, members={group.MemberCount})";
+
+    internal static string DescribeGuild(Guild? guild, uint characterId)
+        => guild is null ? $"guild=null (characterId={characterId})" : $"guild={guild.Id} (name={guild.Name}, characterId={characterId})";
+
+    internal static string DescribeBattleground(Battleground? bg, Team? winner = null)
+        => bg is null
+            ? "battleground=null"
+            : winner is { } w
+                ? $"battleground={bg.InstanceId} (type={bg.Type}, map={bg.MapId}, winner={w})"
+                : $"battleground={bg.InstanceId} (type={bg.Type}, map={bg.MapId})";
 
     /// <summary>Append <paramref name="hook"/> to <paramref name="slot"/> when its class overrides <paramref name="name"/>; 1 when it did.</summary>
     internal static int AddIf<T>(ref T[] slot, T hook, HashSet<string> overrides, string name)
@@ -320,7 +384,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IPlayerHooks h in _login)
         {
-            try { h.OnLogin(player); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnLogin)); }
+            try { h.OnLogin(player); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IPlayerHooks.OnLogin), ScriptHookRegistry.DescribePlayer(player)); }
         }
     }
 
@@ -328,7 +392,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IPlayerHooks h in _logout)
         {
-            try { h.OnLogout(player); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnLogout)); }
+            try { h.OnLogout(player); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IPlayerHooks.OnLogout), ScriptHookRegistry.DescribePlayer(player)); }
         }
     }
 
@@ -336,7 +400,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IPlayerHooks h in _level)
         {
-            try { h.OnLevelChanged(player, oldLevel); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnLevelChanged)); }
+            try { h.OnLevelChanged(player, oldLevel); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IPlayerHooks.OnLevelChanged), $"{ScriptHookRegistry.DescribePlayer(player)}, oldLevel={oldLevel}"); }
         }
     }
 
@@ -344,7 +408,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IPlayerHooks h in _kill)
         {
-            try { h.OnKill(killer, victim); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnKill)); }
+            try { h.OnKill(killer, victim); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IPlayerHooks.OnKill), $"killer=({ScriptHookRegistry.DescribePlayer(killer)}), victim=({ScriptHookRegistry.DescribeUnit(victim)})"); }
         }
     }
 
@@ -352,7 +416,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IPlayerHooks h in _killed)
         {
-            try { h.OnKilled(victim, killer); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnKilled)); }
+            try { h.OnKilled(victim, killer); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IPlayerHooks.OnKilled), $"victim=({ScriptHookRegistry.DescribePlayer(victim)}), killer=({ScriptHookRegistry.DescribeUnit(killer)})"); }
         }
     }
 
@@ -362,7 +426,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
         bool allowed = true;
         foreach (IPlayerHooks h in _chat)
         {
-            try { allowed &= h.OnChat(player, message); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnChat)); }
+            try { allowed &= h.OnChat(player, message); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IPlayerHooks.OnChat), $"{ScriptHookRegistry.DescribePlayer(player)}, chat={message}"); }
         }
 
         return allowed;
@@ -374,7 +438,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
         bool allowed = true;
         foreach (IPlayerHooks h in _addon)
         {
-            try { allowed &= h.OnAddonMessage(player, message); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnAddonMessage)); }
+            try { allowed &= h.OnAddonMessage(player, message); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IPlayerHooks.OnAddonMessage), $"{ScriptHookRegistry.DescribePlayer(player)}, prefix={message.Prefix}"); }
         }
 
         return allowed;
@@ -384,7 +448,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IPlayerHooks h in _duelStart)
         {
-            try { h.OnDuelStart(first, second); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnDuelStart)); }
+            try { h.OnDuelStart(first, second); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IPlayerHooks.OnDuelStart), $"first=({ScriptHookRegistry.DescribePlayer(first)}), second=({ScriptHookRegistry.DescribePlayer(second)})"); }
         }
     }
 
@@ -392,7 +456,7 @@ public sealed class PlayerHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IPlayerHooks h in _duelEnd)
         {
-            try { h.OnDuelEnd(winner, loser, type); } catch (Exception ex) { owner.Failed(ex, h, nameof(IPlayerHooks.OnDuelEnd)); }
+            try { h.OnDuelEnd(winner, loser, type); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IPlayerHooks.OnDuelEnd), $"winner=({ScriptHookRegistry.DescribePlayer(winner)}), loser=({ScriptHookRegistry.DescribePlayer(loser)}), type={type}"); }
         }
     }
 }
@@ -411,7 +475,7 @@ public sealed class WorldHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IWorldHooks h in _startup)
         {
-            try { h.OnStartup(); } catch (Exception ex) { owner.Failed(ex, h, nameof(IWorldHooks.OnStartup)); }
+            try { h.OnStartup(); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IWorldHooks.OnStartup), "world:startup"); }
         }
     }
 
@@ -425,7 +489,7 @@ public sealed class WorldHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IWorldHooks h in _reload)
         {
-            try { h.OnConfigReload(); } catch (Exception ex) { owner.Failed(ex, h, nameof(IWorldHooks.OnConfigReload)); }
+            try { h.OnConfigReload(); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IWorldHooks.OnConfigReload), "world:config-reload"); }
         }
     }
 
@@ -433,7 +497,7 @@ public sealed class WorldHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IWorldHooks h in _update)
         {
-            try { h.OnUpdate(diffMs); } catch (Exception ex) { owner.Failed(ex, h, nameof(IWorldHooks.OnUpdate)); }
+            try { h.OnUpdate(diffMs); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IWorldHooks.OnUpdate), $"world:update(diffMs={diffMs})"); }
         }
     }
 }
@@ -461,7 +525,7 @@ public sealed class UnitHookDispatch(ScriptHookRegistry owner)
         foreach (IUnitHooks h in _damage)
         {
             uint before = damage;
-            try { h.OnDamage(attacker, victim, ref damage); } catch (Exception ex) { damage = before; owner.Failed(ex, h, nameof(IUnitHooks.OnDamage)); }
+            try { h.OnDamage(attacker, victim, ref damage); } catch (Exception ex) when (ex is not OutOfMemoryException) { damage = before; owner.Failed(ex, h, nameof(IUnitHooks.OnDamage), $"attacker=({ScriptHookRegistry.DescribeUnit(attacker)}), victim=({ScriptHookRegistry.DescribeUnit(victim)}), damage={before}"); }
         }
 
         return damage;
@@ -471,7 +535,7 @@ public sealed class UnitHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IUnitHooks h in _death)
         {
-            try { h.OnDeath(victim, killer); } catch (Exception ex) { owner.Failed(ex, h, nameof(IUnitHooks.OnDeath)); }
+            try { h.OnDeath(victim, killer); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IUnitHooks.OnDeath), $"victim=({ScriptHookRegistry.DescribeUnit(victim)}), killer=({ScriptHookRegistry.DescribeUnit(killer)})"); }
         }
     }
 }
@@ -497,7 +561,7 @@ public sealed class ItemHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IItemHooks h in _equip)
         {
-            try { h.OnEquip(player, item, slot); } catch (Exception ex) { owner.Failed(ex, h, nameof(IItemHooks.OnEquip)); }
+            try { h.OnEquip(player, item, slot); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IItemHooks.OnEquip), $"{ScriptHookRegistry.DescribePlayer(player)}, {ScriptHookRegistry.DescribeItem(item)}, slot={slot}"); }
         }
     }
 
@@ -505,7 +569,7 @@ public sealed class ItemHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IItemHooks h in _unequip)
         {
-            try { h.OnUnequip(player, item, slot); } catch (Exception ex) { owner.Failed(ex, h, nameof(IItemHooks.OnUnequip)); }
+            try { h.OnUnequip(player, item, slot); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IItemHooks.OnUnequip), $"{ScriptHookRegistry.DescribePlayer(player)}, {ScriptHookRegistry.DescribeItem(item)}, slot={slot}"); }
         }
     }
 
@@ -517,9 +581,9 @@ public sealed class ItemHookDispatch(ScriptHookRegistry owner)
             {
                 if (h.OnUse(player, item, targets)) return true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                owner.Failed(ex, h, nameof(IItemHooks.OnUse));
+                owner.Failed(ex, h, nameof(IItemHooks.OnUse), $"{ScriptHookRegistry.DescribePlayer(player)}, {ScriptHookRegistry.DescribeItem(item)}");
             }
         }
 
@@ -541,7 +605,7 @@ public sealed class SpellHookDispatch(ScriptHookRegistry owner)
     {
         foreach (ISpellHooks h in _finished)
         {
-            try { h.OnCastFinished(cast, completed); } catch (Exception ex) { owner.Failed(ex, h, nameof(ISpellHooks.OnCastFinished)); }
+            try { h.OnCastFinished(cast, completed); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(ISpellHooks.OnCastFinished), ScriptHookRegistry.DescribeCast(cast, completed)); }
         }
     }
 }
@@ -562,7 +626,7 @@ public sealed class GroupHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IGroupHooks h in _added)
         {
-            try { h.OnMemberAdded(group, member); } catch (Exception ex) { owner.Failed(ex, h, nameof(IGroupHooks.OnMemberAdded)); }
+            try { h.OnMemberAdded(group, member); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IGroupHooks.OnMemberAdded), ScriptHookRegistry.DescribeGroup(group, member)); }
         }
     }
 
@@ -570,7 +634,7 @@ public sealed class GroupHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IGroupHooks h in _removed)
         {
-            try { h.OnMemberRemoved(group, member); } catch (Exception ex) { owner.Failed(ex, h, nameof(IGroupHooks.OnMemberRemoved)); }
+            try { h.OnMemberRemoved(group, member); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IGroupHooks.OnMemberRemoved), ScriptHookRegistry.DescribeGroup(group, member)); }
         }
     }
 
@@ -578,7 +642,7 @@ public sealed class GroupHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IGroupHooks h in _disband)
         {
-            try { h.OnDisband(group); } catch (Exception ex) { owner.Failed(ex, h, nameof(IGroupHooks.OnDisband)); }
+            try { h.OnDisband(group); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IGroupHooks.OnDisband), ScriptHookRegistry.DescribeGroup(group)); }
         }
     }
 }
@@ -598,7 +662,7 @@ public sealed class GuildHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IGuildHooks h in _added)
         {
-            try { h.OnMemberAdded(guild, characterId); } catch (Exception ex) { owner.Failed(ex, h, nameof(IGuildHooks.OnMemberAdded)); }
+            try { h.OnMemberAdded(guild, characterId); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IGuildHooks.OnMemberAdded), ScriptHookRegistry.DescribeGuild(guild, characterId)); }
         }
     }
 
@@ -606,7 +670,7 @@ public sealed class GuildHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IGuildHooks h in _removed)
         {
-            try { h.OnMemberRemoved(guild, characterId); } catch (Exception ex) { owner.Failed(ex, h, nameof(IGuildHooks.OnMemberRemoved)); }
+            try { h.OnMemberRemoved(guild, characterId); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IGuildHooks.OnMemberRemoved), ScriptHookRegistry.DescribeGuild(guild, characterId)); }
         }
     }
 }
@@ -636,7 +700,7 @@ public sealed class BattlegroundHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IBattlegroundHooks h in _start)
         {
-            try { h.OnStart(battleground); } catch (Exception ex) { owner.Failed(ex, h, nameof(IBattlegroundHooks.OnStart)); }
+            try { h.OnStart(battleground); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IBattlegroundHooks.OnStart), ScriptHookRegistry.DescribeBattleground(battleground)); }
         }
     }
 
@@ -644,7 +708,7 @@ public sealed class BattlegroundHookDispatch(ScriptHookRegistry owner)
     {
         foreach (IBattlegroundHooks h in _end)
         {
-            try { h.OnEnd(battleground, winner); } catch (Exception ex) { owner.Failed(ex, h, nameof(IBattlegroundHooks.OnEnd)); }
+            try { h.OnEnd(battleground, winner); } catch (Exception ex) when (ex is not OutOfMemoryException) { owner.Failed(ex, h, nameof(IBattlegroundHooks.OnEnd), ScriptHookRegistry.DescribeBattleground(battleground, winner)); }
         }
     }
 }

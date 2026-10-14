@@ -75,7 +75,10 @@ public sealed class DatabaseCircuits
         }
     }
 
-    /// <summary>The cause as one line: type and message, with the innermost message when it adds something. Provider messages carry no credentials.</summary>
+    /// <summary>
+    /// The cause as one line: type, provider error code (<c>SqliteErrorCode</c> / <c>SqlState</c> / <c>ErrorCode</c>) when present,
+    /// and message, with the innermost exception when it adds something. Provider messages carry no credentials.
+    /// </summary>
     internal static string Reason(Exception? cause)
     {
         if (cause is null)
@@ -89,7 +92,14 @@ public sealed class DatabaseCircuits
             innermost = innermost.InnerException;
         }
 
-        string text = $"{cause.GetType().Name}: {cause.Message.ReplaceLineEndings(" ")}";
-        return ReferenceEquals(innermost, cause) ? text : $"{text} <- {innermost.GetType().Name}: {innermost.Message.ReplaceLineEndings(" ")}";
+        string text = DescribeSingle(cause);
+        return ReferenceEquals(innermost, cause) ? text : $"{text} <- {DescribeSingle(innermost)}";
+    }
+
+    private static string DescribeSingle(Exception exception)
+    {
+        string? code = DatabaseTransience.FormatProviderCode(exception);
+        string header = code is null ? exception.GetType().Name : $"{exception.GetType().Name} [{code}]";
+        return $"{header}: {exception.Message.ReplaceLineEndings(" ")}";
     }
 }

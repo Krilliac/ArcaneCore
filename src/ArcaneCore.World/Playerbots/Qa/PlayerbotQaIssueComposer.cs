@@ -76,6 +76,10 @@ internal static class PlayerbotQaIssueComposer
                 }
             }
             if (f.Kind != QaSignalKind.ServerFault) sb.Append("  `").Append(Code(redactor.Redact(s.Message))).Append("`\n"); // a server fault never publishes its message: it may name a player
+            if (s.Diag is { Length: > 0 } diag)
+            {
+                sb.Append("  - Diagnostic: `").Append(Code(redactor.Redact(diag))).Append("`\n");
+            }
         }
 
         sb.Append("\n## Reproduction\n\n");

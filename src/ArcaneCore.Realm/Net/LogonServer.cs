@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Realms;
 using Microsoft.Extensions.DependencyInjection;
@@ -62,9 +63,23 @@ public sealed class LogonServer(
                 logger,
                 stoppingToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // shutting down
+        }
+        catch (Exception ex)
+        {
+            FaultRecording recording = FaultLedger.Shared.Record("logon/listener", ex);
+            string stack = LogonSession.CondensedStack("logon/listener", ex);
+            logger.LogError(
+                ex,
+                "Logon listener fault on {Address}:{Port} (category={Category}, faultId={FaultId}, stack={Stack})",
+                config.BindAddress,
+                config.Port,
+                LogonSession.ClassifyFaultCategory(ex),
+                recording.Id,
+                stack);
+            throw;
         }
         finally
         {
@@ -89,9 +104,22 @@ public sealed class LogonServer(
                 }
             }
         }
-        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        catch (Exception ex) when (LogonSession.IsExpectedDisconnect(ex))
         {
             client.Dispose(); // the peer already went away
+            return;
+        }
+        catch (Exception ex)
+        {
+            FaultRecording recording = FaultLedger.Shared.Record("logon/admit", ex);
+            string stack = LogonSession.CondensedStack("logon/admit", ex);
+            logger.LogError(
+                ex,
+                "Logon admission fault (category={Category}, faultId={FaultId}, stack={Stack})",
+                LogonSession.ClassifyFaultCategory(ex),
+                recording.Id,
+                stack);
+            client.Dispose();
             return;
         }
 
@@ -100,7 +128,16 @@ public sealed class LogonServer(
 
     private async Task HandleClientAsync(TcpClient client, AuthOptions config, NetGuard guard, IDisposable? lease, CancellationToken stoppingToken)
     {
-        string endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+        string endpoint;
+        try
+        {
+            endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+        }
+        catch (Exception ex) when (LogonSession.IsExpectedDisconnect(ex))
+        {
+            endpoint = "unknown";
+        }
+
         Interlocked.Increment(ref _activeSessions);
         logger.LogInformation("[{Endpoint}] connected", endpoint);
 
@@ -121,21 +158,29 @@ public sealed class LogonServer(
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (LogonSession.IsExpectedDisconnect(ex))
         {
-            // server stopping
-        }
-        catch (EndOfStreamException)
-        {
-            // client disconnected mid-packet
-        }
-        catch (IOException)
-        {
-            // connection reset
+            // Expected client disconnect (SocketException, IOException, EndOfStreamException) or cancellation.
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "[{Endpoint}] session error", endpoint);
+            string stage = ex.Data["arcanecore.logon.stage"] as string ?? "session-scope";
+            string opcode = ex.Data["arcanecore.logon.opcode"] as string ?? "none";
+            string category = LogonSession.ClassifyFaultCategory(ex);
+            string site = $"logon/{stage}/{category}";
+            string faultId = ex.Data["arcanecore.logon.recorded"] as string
+                ?? FaultLedger.Shared.Record(site, ex).Id;
+            string stack = ex.Data["arcanecore.logon.stack"] as string
+                ?? LogonSession.CondensedStack(site, ex);
+            logger.LogError(
+                ex,
+                "[{Endpoint}] session error (category={Category}, stage={Stage}, opcode={Opcode}, faultId={FaultId}, stack={Stack})",
+                endpoint,
+                category,
+                stage,
+                opcode,
+                faultId,
+                stack);
         }
         finally
         {

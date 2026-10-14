@@ -229,7 +229,7 @@ public sealed class Map
     public IReadOnlyList<IMapUpdater> IsolatedUpdaters
         => [.. _updaters.Where(u => _updaterFaults.TryGetValue(u, out int faults) && faults < 0)];
 
-    private void CountUpdaterFault(IMapUpdater updater)
+    private void CountUpdaterFault(IMapUpdater updater, Exception? lastException = null)
     {
         int limit = _world.Options.MaxConsecutiveUpdaterFaults;
         if (limit <= 0)
@@ -246,8 +246,9 @@ public sealed class Map
 
         _updaterFaults[updater] = -1;
         _logger.LogError(
-            "map {MapId} updater {Updater} failed {Limit} ticks in a row and is skipped until the next code edit is applied or the server restarts",
-            MapId, updater.GetType().Name, limit);
+            lastException,
+            "map {MapId} instance {InstanceId} updater {Updater} failed {Limit} ticks in a row (last {ExceptionType}: {Message}) and is skipped until the next code edit is applied or the server restarts",
+            MapId, InstanceId, updater.GetType().Name, limit, lastException?.GetType().Name ?? "unknown", lastException?.Message ?? string.Empty);
     }
 
     /// <summary>
@@ -763,10 +764,12 @@ public sealed class Map
                     _updaterFaults.Remove(updater); // only consecutive failures count
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _logger.LogFault("map-updater", ex, "map {MapId} updater {Updater} failed", MapId, updater.GetType().Name);
-                CountUpdaterFault(updater);
+                _logger.LogFault("map-updater", ex,
+                    "map {MapId} instance {InstanceId} updater {Updater} failed (diff={DiffMs} ms, players={Players}, objects={Objects})",
+                    MapId, InstanceId, updater.GetType().Name, diffMs, _players.Count, _objects.Count);
+                CountUpdaterFault(updater, ex);
             }
 
             diagnostics?.EndUpdater(updater);
@@ -787,7 +790,16 @@ public sealed class Map
             // distance queries below must cover it.
             foreach (WorldObject obj in _valuesQueue)
             {
-                _grid.TrackRadius(obj);
+                try
+                {
+                    _grid.TrackRadius(obj);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("map-visibility", ex,
+                        "tracking bounding radius failed for {Guid} (type {Type}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1})",
+                        obj.Guid, obj.GetType().Name, MapId, InstanceId, obj.X, obj.Y, obj.Z);
+                }
             }
 
             // (2) visibility: players that moved, then other objects that moved or appeared
@@ -796,8 +808,20 @@ public sealed class Map
             {
                 if (player.NeedsVisibilityUpdate)
                 {
-                    UpdateVisibility(player);
-                    player.NeedsVisibilityUpdate = false;
+                    try
+                    {
+                        UpdateVisibility(player);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        _logger.LogFault("map-visibility", ex,
+                            "visibility update failed for player {Player} ({Guid}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1})",
+                            player.Name, player.Guid, MapId, InstanceId, player.X, player.Y, player.Z);
+                    }
+                    finally
+                    {
+                        player.NeedsVisibilityUpdate = false;
+                    }
                 }
             }
 
@@ -812,7 +836,16 @@ public sealed class Map
                     {
                         if (ReferenceEquals(obj.Map, this))
                         {
-                            UpdateObjectVisibility(obj);
+                            try
+                            {
+                                UpdateObjectVisibility(obj);
+                            }
+                            catch (Exception ex) when (ex is not OutOfMemoryException)
+                            {
+                                _logger.LogFault("map-visibility", ex,
+                                    "object visibility update failed for {Guid} (entry {Entry}, type {Type}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1})",
+                                    obj.Guid, obj.Guid.Entry, obj.GetType().Name, MapId, InstanceId, obj.X, obj.Y, obj.Z);
+                            }
                         }
                     }
                 }
@@ -839,9 +872,21 @@ public sealed class Map
             }
             foreach (WorldObject obj in _valuesQueue)
             {
-                SendValuesUpdate(obj);
-                obj.ClearChangedFields();
-                obj.IsQueuedForUpdate = false;
+                try
+                {
+                    SendValuesUpdate(obj);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("map-values", ex,
+                        "values update failed for {Guid} (type {Type}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1})",
+                        obj.Guid, obj.GetType().Name, MapId, InstanceId, obj.X, obj.Y, obj.Z);
+                }
+                finally
+                {
+                    obj.ClearChangedFields();
+                    obj.IsQueuedForUpdate = false;
+                }
             }
 
             _valuesQueue.Clear();
@@ -850,7 +895,16 @@ public sealed class Map
             // (4) flush
             foreach (Player player in _players.Values)
             {
-                FlushPlayer(player);
+                try
+                {
+                    FlushPlayer(player);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("map-flush", ex,
+                        "flushing pending updates failed for player {Player} ({Guid}) on map {MapId} instance {InstanceId}",
+                        player.Name, player.Guid, MapId, InstanceId);
+                }
             }
             diagnostics?.EndFlush();
         }
@@ -860,9 +914,27 @@ public sealed class Map
         }
 
         // (5) grid and terrain lifecycles (vmangos Map::Update → grid states; TerrainInfo::CleanUpGrids)
-        _grid.Update(diffMs);
+        try
+        {
+            _grid.Update(diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("map-grid", ex,
+                "grid lifecycle update failed on map {MapId} instance {InstanceId} (diff={DiffMs} ms)",
+                MapId, InstanceId, diffMs);
+        }
         diagnostics?.EndGrid();
-        _terrain.CleanUp(diffMs);
+        try
+        {
+            _terrain.CleanUp(diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("map-terrain", ex,
+                "terrain cleanup failed on map {MapId} instance {InstanceId} (diff={DiffMs} ms)",
+                MapId, InstanceId, diffMs);
+        }
         diagnostics?.EndTerrain();
 
         // (6) work scheduled for after the update (vmangos MapManager::ScheduleFarTeleport)
@@ -1018,9 +1090,11 @@ public sealed class Map
         {
             player.Session.ProcessWorldPackets(player);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _logger.LogFault("packet-handling", ex, "packet handling failed for {Player}; disconnecting", player.Name);
+            _logger.LogFault("packet-handling", ex,
+                "packet handling failed for {Player} ({Guid}) on map {MapId} instance {InstanceId} at ({X:F1},{Y:F1},{Z:F1}); disconnecting",
+                player.Name, player.Guid, MapId, InstanceId, player.X, player.Y, player.Z);
             player.Session.Kick();
         }
     }

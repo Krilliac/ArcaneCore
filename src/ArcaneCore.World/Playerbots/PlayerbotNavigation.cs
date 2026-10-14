@@ -322,6 +322,19 @@ internal static class PlayerbotNavigation
     internal const float PartialProgressYards = 2f;
 
     /// <summary>
+    /// Flat travel threshold (yards) above which an incomplete partial route must make at least
+    /// <see cref="PartialWallSlideProgressRatio"/> of its flat travel in progress toward the goal (<see cref="PartialClosesOnGoal"/>).
+    /// </summary>
+    internal const float PartialWallSlideTravelYards = 12f;
+
+    /// <summary>
+    /// Minimum ratio of goalward progress to flat travel required for an incomplete partial route longer than
+    /// <see cref="PartialWallSlideTravelYards"/> (<see cref="PartialClosesOnGoal"/>), rejecting wall-sliding routes that run sideways
+    /// along a ridge or cliff while closing on the goal by only a few yards.
+    /// </summary>
+    internal const float PartialWallSlideProgressRatio = 0.25f;
+
+    /// <summary>
     /// A route towards <paramref name="goal"/>, which may lie beyond one route. Beyond <see cref="PlayerbotOptions.MaxPathPoints"/> yards
     /// the map's region graph leads (<see cref="RegionLeg"/>); without it, the goal itself when it is within one route's
     /// reach (<see cref="PlayerbotOptions.MaxRouteYards"/>, and <see cref="PlayerbotOptions.MaxPathPoints"/> yards for the terrain
@@ -817,13 +830,21 @@ internal static class PlayerbotNavigation
         // A partial answer (the corridor did not reach the destination) must at least close on the goal, and must not end at a
         // place given up after a loop or remembered as a dead-end pin. An end projected from above or below the destination stays at its spot and is exact.
         if (partial && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination)
-            && (Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(from), Flat(goal)) - PartialProgressYards
+            && (!PartialClosesOnGoal(from, path.End, goal)
                 || PlayerbotMotion.IsBlacklisted(player, path.End)
                 || IsDeadEndPin(player, path.End)))
             return false;
 
         route = Bounded(path.Points, options, complete: Reaches(path) || EndsAt(path, destination));
         return route is not null;
+    }
+
+    private static bool PartialClosesOnGoal(Vector3 from, Vector3 end, Vector3 goal)
+    {
+        float progress = Vector2.Distance(Flat(from), Flat(goal)) - Vector2.Distance(Flat(end), Flat(goal));
+        if (progress < PartialProgressYards) return false;
+        float travel = Vector2.Distance(Flat(from), Flat(end));
+        return !(travel > PartialWallSlideTravelYards && progress < travel * PartialWallSlideProgressRatio);
     }
 
     /// <summary>
@@ -986,7 +1007,7 @@ internal static class PlayerbotNavigation
                 bool reaches = Reaches(path) || EndsAt(path, destination);
                 if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0
                     || (!reaches && (Vector3.Distance(path.End, beside) <= SteepPatchYards
-                        || Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(start), Flat(goal)) - PartialProgressYards)))
+                        || !PartialClosesOnGoal(start, path.End, goal))))
                 {
                     // Refused after running out of nodes short of the destination: the other starts lie a few yards away and search the
                     // same ground, so they end the same way (each up to 32 768 nodes). A search that reached it despite the cap is no such

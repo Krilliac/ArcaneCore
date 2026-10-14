@@ -155,12 +155,20 @@ internal sealed class PlayerbotHomeArea
     internal bool InZone(float x, float y, float z)
         => !ZoneClipped || ZoneId is not 0 and var zone && _zones!.ZoneAt(x, y, z) == zone;
 
+    internal static bool IsNullIsland(uint mapId, float x, float y)
+        => mapId is 0 or 1 && MathF.Abs(x) < 1f && MathF.Abs(y) < 1f;
+
     /// <summary>
     /// Whether a point on <paramref name="map"/> lies inside the area: inside the circle and, for a clipped home, in its zone
     /// (another map: never). The circle is tested first, so the zone is looked up only for points near the home.
     /// </summary>
     internal bool Contains(uint map, float x, float y, float z = 0f)
-        => map == MapId && float.IsFinite(x) && float.IsFinite(y) && DistanceTo(x, y) <= Radius && InZone(x, y, z);
+        => map == MapId
+           && float.IsFinite(x)
+           && float.IsFinite(y)
+           && (!IsNullIsland(map, x, y) || IsNullIsland(MapId, Centre.X, Centre.Y))
+           && DistanceTo(x, y) <= Radius
+           && InZone(x, y, z);
 
     internal bool Contains(Unit unit) => Contains(unit.MapId, unit.X, unit.Y, unit.Z);
 
@@ -407,6 +415,13 @@ internal sealed class PlayerbotHomeReturn
     internal const int MaxFailures = 3;
 
     /// <summary>
+    /// Minimum two-dimensional progress (yards) toward the home's centre required to clear <see cref="_failures"/> or count a completed
+    /// route as progress; a partial route that moves sideways along a wall or ridge without closing on the home by at least this much
+    /// counts as a failure instead of resetting <see cref="_failures"/> on every step.
+    /// </summary>
+    internal const float ProgressYards = 4f;
+
+    /// <summary>
     /// The shortest time between two return teleports of one bot (5 minutes, an ArcaneCore choice: no reference server has a home).
     /// A bot sent home that is out again within it is not teleported again: its return is set aside (blocked, tried again every
     /// <see cref="BlockedMs"/>) until the time has passed. A home the bot cannot stay in (an area it keeps leaving, a fight that drags
@@ -420,6 +435,8 @@ internal sealed class PlayerbotHomeReturn
     private Vector3 _lastPosition;
     private uint _stuckMs;
     private int _failures;
+    private float _bestDistance = float.MaxValue;
+    private float _routeStartDistance = float.MaxValue;
     private uint _blockedUntil;
     private bool _walkBlocked;
     private int? _highestAreaLevel;
@@ -455,6 +472,8 @@ internal sealed class PlayerbotHomeReturn
         _route = null;
         _stuckMs = 0;
         _failures = 0;
+        _bestDistance = float.MaxValue;
+        _routeStartDistance = float.MaxValue;
         _blockedUntil = 0;
         _walkBlocked = false;
         _highestAreaLevel = null;
@@ -469,21 +488,27 @@ internal sealed class PlayerbotHomeReturn
         {
             _route = null;
             _highestAreaLevel = null;
+            _bestDistance = float.MaxValue;
+            _routeStartDistance = float.MaxValue;
             Distance = float.NaN;
             return State = PlayerbotHomeState.OffMap;
         }
 
         Distance = area.DistanceTo(player.X, player.Y);
+        bool onNullIsland = PlayerbotHomeArea.IsNullIsland(player.Map?.MapId ?? player.MapId, player.X, player.Y)
+            && !PlayerbotHomeArea.IsNullIsland(area.MapId, area.Centre.X, area.Centre.Y);
         // A clipped home counts the bot outside while it stands in another zone, even inside the circle (Raven Hill from Sentinel
         // Hill), so it walks back to the centre, which is in the zone. A home whose own zone is not known cannot be walked into:
         // the walk uses the circle alone (the filters still reject everything, PlayerbotHomeArea.ZoneUnknown).
-        bool zoneOk = area.ZoneUnknown || area.InZone(player.X, player.Y, player.Z);
+        bool zoneOk = !onNullIsland && (area.ZoneUnknown || area.InZone(player.X, player.Y, player.Z));
         if (State == PlayerbotHomeState.Blocked)
         {
             if (Distance <= area.Radius && zoneOk) return Arrived();
             if (unchecked((int)(nowMs - _blockedUntil)) < 0) return State;
             _failures = 0;
             _walkBlocked = false;
+            _bestDistance = float.MaxValue;
+            _routeStartDistance = float.MaxValue;
             State = PlayerbotHomeState.Returning;
         }
 
@@ -497,6 +522,8 @@ internal sealed class PlayerbotHomeReturn
         _route = null;
         _failures = 0;
         _walkBlocked = false;
+        _bestDistance = float.MaxValue;
+        _routeStartDistance = float.MaxValue;
         _highestAreaLevel = null;
         return State = PlayerbotHomeState.Inside;
     }
@@ -509,6 +536,14 @@ internal sealed class PlayerbotHomeReturn
     {
         ArgumentNullException.ThrowIfNull(options);
         bool onMap = State != PlayerbotHomeState.OffMap;
+        uint mapId = player.Map?.MapId ?? player.MapId;
+        if (onMap
+            && options.ReturnMode != PlayerbotHomeReturnMode.Walk
+            && PlayerbotHomeArea.IsNullIsland(mapId, player.X, player.Y)
+            && !PlayerbotHomeArea.IsNullIsland(area.MapId, area.Centre.X, area.Centre.Y))
+        {
+            return LastJudgement = PlayerbotHomeTeleportReason.Island;
+        }
         int highest = 0;
         if (onMap && options.ReturnMode == PlayerbotHomeReturnMode.Auto && !WalkBlocked && Distance <= options.TeleportDistanceYards
             && area.AreaLevels is { } levels)
@@ -585,6 +620,8 @@ internal sealed class PlayerbotHomeReturn
         _stuckMs = 0;
         _failures = 0;
         _walkBlocked = false;
+        _bestDistance = float.MaxValue;
+        _routeStartDistance = float.MaxValue;
         _highestAreaLevel = null;
         if (State == PlayerbotHomeState.Blocked) State = PlayerbotHomeState.Returning;
         LoggerOf(session).LogInformation(
@@ -652,11 +689,20 @@ internal sealed class PlayerbotHomeReturn
     internal bool Update(WorldSession session, Player player, PlayerbotHomeArea area, PlayerbotOptions options, uint elapsedMs, uint nowMs)
     {
         if (State != PlayerbotHomeState.Returning || elapsedMs == 0) return false;
+        float distance = area.DistanceTo(player.X, player.Y);
+        Distance = distance;
+        if (_bestDistance == float.MaxValue) _bestDistance = distance;
+        else if (distance <= _bestDistance - ProgressYards)
+        {
+            _bestDistance = distance;
+            _failures = 0;
+        }
+
         Vector3 position = new(player.X, player.Y, player.Z);
         if (_route is { Complete: false })
         {
             if (Vector3.DistanceSquared(position, _lastPosition) < 0.0025f) _stuckMs += elapsedMs;
-            else { _stuckMs = 0; _failures = 0; }
+            else _stuckMs = 0;
             if (_stuckMs >= StuckMs)
             {
                 _route = null;
@@ -664,9 +710,23 @@ internal sealed class PlayerbotHomeReturn
                 if (Fail(nowMs)) return false;
             }
         }
+        else if (_route is { Complete: true })
+        {
+            _route = null;
+            bool arrived = distance <= area.ReturnRadius && (area.ZoneUnknown || area.InZone(player.X, player.Y, player.Z));
+            if (!arrived && (distance > _routeStartDistance - ProgressYards || distance > _bestDistance + 2f))
+            {
+                if (Fail(nowMs)) return false;
+            }
+            else
+            {
+                _bestDistance = MathF.Min(_bestDistance, distance);
+                _failures = 0;
+            }
+        }
 
         _lastPosition = position;
-        if (_route is null or { Complete: true })
+        if (_route is null)
         {
             PlanOutcome planned = PlayerbotNavigation.PlanToward(player, area.Centre, options, ref _tileWait, nowMs, out _route);
             if (planned != PlanOutcome.Route)
@@ -678,10 +738,30 @@ internal sealed class PlayerbotHomeReturn
                 return false;
             }
 
+            _routeStartDistance = MathF.Min(distance, _bestDistance);
             _stuckMs = 0;
         }
 
-        if (!PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, nowMs)) _route = null;
+        if (!PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, nowMs))
+        {
+            float afterDistance = area.DistanceTo(player.X, player.Y);
+            Distance = afterDistance;
+            if (afterDistance <= _bestDistance - ProgressYards)
+            {
+                _bestDistance = afterDistance;
+                _failures = 0;
+            }
+
+            _route = null;
+            bool arrived = afterDistance <= area.ReturnRadius && (area.ZoneUnknown || area.InZone(player.X, player.Y, player.Z));
+            if (!arrived && session.ManagedBudget is not { Remaining: <= 0 }
+                && (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) == 0
+                && (afterDistance > _routeStartDistance - ProgressYards || afterDistance > _bestDistance + 2f))
+            {
+                if (Fail(nowMs)) return false;
+            }
+        }
+
         return true;
     }
 

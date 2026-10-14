@@ -27,7 +27,7 @@ namespace ArcaneCore.Kernel.Diagnostics;
 /// </para>
 /// <para>
 /// Threads and ownership: <see cref="Shared"/> is the process-wide instance (the DI container registers the same object, the way
-/// <see cref="Invariant"/> is static) and <see cref="Record(string, Exception)"/> is callable from any thread: lookups are
+/// <see cref="Invariant"/> is static) and <see cref="Record(string, Exception, bool)"/> is callable from any thread: lookups are
 /// lock-free, a new signature takes one gate, a counter update takes the entry's own lock for a few assignments.
 /// Recording walks the exception's stack once (tens of microseconds); it runs on the failure path only.
 /// </para>
@@ -74,7 +74,7 @@ public sealed class FaultLedger
         _time = time;
         _maxSignatures = Math.Max(1, limits.MaxSignatures);
         _logLimit = Math.Max(0, limits.LogLimit);
-        _overflow = new FaultEntry(OverflowId, "(overflow)", "(various)", [], time.GetUtcNow(), string.Empty);
+        _overflow = new FaultEntry(OverflowId, "(overflow)", "(various)", [], time.GetUtcNow(), string.Empty, string.Empty, string.Empty);
     }
 
     /// <summary>The process-wide ledger.</summary>
@@ -140,9 +140,12 @@ public sealed class FaultLedger
             return;
         }
 
+        string condensed = FormatCondensedStack(exception);
         string text = recording.Suppressed > 0
             ? message + " (" + recording.Suppressed.ToString(CultureInfo.InvariantCulture) + " more since)"
             : message;
+        text = string.Create(CultureInfo.InvariantCulture,
+            $"{text} [fault={recording.Id} count={recording.Count} stack={condensed}]");
         logger.Log(level, exception, text, args);
     }
 
@@ -210,6 +213,122 @@ public sealed class FaultLedger
         return text.ToString();
     }
 
+    /// <summary>
+    /// Formats up to <paramref name="maxFrames"/> <c>ArcaneCore.*</c> frames from the unwrapped exception with file name and line
+    /// number when available (<c>Type.Method(File.cs:123) &lt;- Caller.Method(File.cs:45)</c>), falling back to <c>Type.Method</c>
+    /// when <see cref="StackFrame.GetFileLineNumber"/> is 0.
+    /// </summary>
+    public static string FormatCondensedStack(Exception exception, int maxFrames = 6)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        if (maxFrames <= 0)
+        {
+            return string.Empty;
+        }
+
+        Exception? current = Unwrap(exception);
+        var formatted = new List<string>(Math.Min(maxFrames, 8));
+        var visited = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+        string? lastNormalised = null;
+        bool lastHadLine = false;
+
+        while (current is not null && formatted.Count < maxFrames && visited.Add(current))
+        {
+            StackFrame[]? all = new StackTrace(current, fNeedFileInfo: true).GetFrames();
+            if (all is not null)
+            {
+                foreach (StackFrame frame in all)
+                {
+                    MethodBase? method = frame.GetMethod();
+                    Type? declaring = method?.DeclaringType;
+                    string? ns = declaring?.Namespace;
+                    if (method is null || declaring is null || ns is null
+                        || !ns.StartsWith(AppAssemblyPrefix, StringComparison.Ordinal) && !string.Equals(ns, "ArcaneCore", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    string name = NormalisedName(declaring, method);
+                    if (name.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    int line = frame.GetFileLineNumber();
+                    string? file = frame.GetFileName();
+                    bool hasLine = line > 0 && !string.IsNullOrEmpty(file);
+                    string entry = hasLine
+                        ? string.Create(CultureInfo.InvariantCulture, $"{name}({Path.GetFileName(file!)}:{line})")
+                        : name;
+
+                    if (string.Equals(lastNormalised, name, StringComparison.Ordinal))
+                    {
+                        if (!lastHadLine && hasLine && formatted.Count > 0)
+                        {
+                            formatted[^1] = entry;
+                            lastHadLine = true;
+                        }
+
+                        continue;
+                    }
+
+                    formatted.Add(entry);
+                    lastNormalised = name;
+                    lastHadLine = hasLine;
+                    if (formatted.Count == maxFrames)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            current = current.InnerException is { } next ? Unwrap(next) : null;
+        }
+
+        return string.Join(" <- ", formatted);
+    }
+
+    /// <summary>
+    /// Formats outer-to-inner exception types and messages (<c>OuterType: msg &lt;- InnerType: innerMsg</c>),
+    /// handling <see cref="AggregateException.InnerExceptions"/> as well.
+    /// </summary>
+    public static string FormatExceptionChain(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var parts = new List<string>(4);
+        var visited = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+        AppendExceptionChain(exception, parts, visited, maxNodes: 12);
+        return string.Join(" <- ", parts);
+    }
+
+    private static void AppendExceptionChain(Exception current, List<string> parts, HashSet<Exception> visited, int maxNodes)
+    {
+        if (parts.Count >= maxNodes || !visited.Add(current))
+        {
+            return;
+        }
+
+        string message = Truncate(current.Message).ReplaceLineEndings(" ");
+        parts.Add(message.Length == 0 ? current.GetType().Name : $"{current.GetType().Name}: {message}");
+
+        if (current is AggregateException aggregate && aggregate.InnerExceptions.Count > 0)
+        {
+            foreach (Exception inner in aggregate.InnerExceptions)
+            {
+                if (parts.Count >= maxNodes)
+                {
+                    break;
+                }
+
+                AppendExceptionChain(inner, parts, visited, maxNodes);
+            }
+        }
+        else if (current.InnerException is { } inner)
+        {
+            AppendExceptionChain(inner, parts, visited, maxNodes);
+        }
+    }
+
     private FaultRecording RecordCore(string site, Exception exception, bool terminating)
     {
         string signature = SignatureOf(site, exception, out string type, out IReadOnlyList<string> frames);
@@ -229,7 +348,15 @@ public sealed class FaultLedger
                     }
                     else
                     {
-                        entry = new FaultEntry(id, site, type, frames, now, Truncate(exception.Message));
+                        entry = new FaultEntry(
+                            id,
+                            site,
+                            type,
+                            frames,
+                            now,
+                            Truncate(exception.Message),
+                            FormatCondensedStack(exception),
+                            FormatExceptionChain(exception));
                         _entries[id] = entry;
                     }
                 }
@@ -241,7 +368,8 @@ public sealed class FaultLedger
         FaultRecording recording = entry.Note(now, _logLimit, exception, ReferenceEquals(entry, _overflow) ? id : null);
         if (recording.ShouldLog && FaultNoticed is { } noticed)
         {
-            var notice = new FaultNotice(recording.Id, site, type, Truncate(exception.Message), recording.Count, recording.Suppressed, terminating);
+            string condensed = FormatCondensedStack(exception);
+            var notice = new FaultNotice(recording.Id, site, type, Truncate(exception.Message), recording.Count, recording.Suppressed, terminating, condensed);
             foreach (Action<FaultNotice> handler in noticed.GetInvocationList())
             {
                 try
@@ -442,12 +570,22 @@ public sealed class FaultLedger
     }
 
     /// <summary>Mutable per-signature state; every field is guarded by <c>this</c>.</summary>
-    private sealed class FaultEntry(string id, string site, string type, IReadOnlyList<string> frames, DateTimeOffset now, string message)
+    private sealed class FaultEntry(
+        string id,
+        string site,
+        string type,
+        IReadOnlyList<string> frames,
+        DateTimeOffset now,
+        string message,
+        string stack,
+        string chain)
     {
         private DateTimeOffset _first = now;
         private DateTimeOffset _last = now;
         private DateTimeOffset _lastLog = DateTimeOffset.MinValue;
         private string _message = message;
+        private string _stack = stack;
+        private string _chain = chain;
         private long _count;
         private long _sinceLog;
         private HashSet<string>? _overflowSeen;
@@ -462,6 +600,11 @@ public sealed class FaultLedger
                 {
                     _first = now;
                     _message = Truncate(exception.Message);
+                    if (overflowId is null)
+                    {
+                        _stack = FormatCondensedStack(exception);
+                        _chain = FormatExceptionChain(exception);
+                    }
                 }
 
                 // A brand-new signature that lands in the overflow bucket still logs its first occurrence (with the exception): the bucket keeps no frames.
@@ -499,6 +642,8 @@ public sealed class FaultLedger
                 _lastLog = DateTimeOffset.MinValue;
                 _overflowSeen?.Clear();
                 _message = string.Empty;
+                _stack = string.Empty;
+                _chain = string.Empty;
             }
         }
 
@@ -506,7 +651,7 @@ public sealed class FaultLedger
         {
             lock (this)
             {
-                return new FaultSnapshot(id, site, type, frames, _count, _first, _last, _message);
+                return new FaultSnapshot(id, site, type, frames, _count, _first, _last, _message, _stack, _chain);
             }
         }
     }
@@ -516,14 +661,23 @@ public sealed class FaultLedger
 public sealed record FaultLedgerLimits(int MaxSignatures = 512, int LogLimit = 10);
 
 /// <summary>
-/// What <see cref="FaultLedger.Record(string, Exception)"/> decided: the signature id, how often it has now occurred,
+/// What <see cref="FaultLedger.Record(string, Exception, bool)"/> decided: the signature id, how often it has now occurred,
 /// whether the caller should write its log line, and how many occurrences since the previous line were held back.
 /// </summary>
 public readonly record struct FaultRecording(string Id, long Count, bool ShouldLog, long Suppressed);
 
 /// <summary>A fault the ledger wants logged now (<see cref="FaultLedger.FaultNoticed"/>): its signature id, where and what, how often so far and how many repeats were held back since the previous notice.</summary>
 /// <param name="Terminating">The process ends because of this fault (an unhandled exception, or an unobserved task exception under a policy other than Log).</param>
-public sealed record FaultNotice(string Id, string Site, string ExceptionType, string Message, long Count, long Suppressed, bool Terminating = false);
+/// <param name="CondensedStack">The condensed <c>ArcaneCore.*</c> call chain with file and line numbers when available.</param>
+public sealed record FaultNotice(
+    string Id,
+    string Site,
+    string ExceptionType,
+    string Message,
+    long Count,
+    long Suppressed,
+    bool Terminating = false,
+    string CondensedStack = "");
 
 /// <summary>A point-in-time copy of one ledger entry (safe to hold and read from any thread).</summary>
 public sealed record FaultSnapshot(
@@ -534,7 +688,9 @@ public sealed record FaultSnapshot(
     long Count,
     DateTimeOffset FirstSeen,
     DateTimeOffset LastSeen,
-    string SampleMessage);
+    string SampleMessage,
+    string SampleStack = "",
+    string SampleChain = "");
 
 /// <summary>
 /// Logs a caught exception through the ledger: the catch sites keep their message template and recovery, and gain a count,

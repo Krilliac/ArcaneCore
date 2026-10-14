@@ -1,7 +1,10 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures.Scripts;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -14,6 +17,15 @@ public sealed partial class CreatureMapSystem
     /// <summary>cmangos CONTACT_DISTANCE (ObjectDefines.h): the gap a summon without coordinates keeps to its summoner.</summary>
     public const float ContactDistance = 0.5f;
 
+    /// <summary>Radius (yards) within which stripped creature flags are restored when a scripted movement step fails or is skipped.</summary>
+    public const float MissingPathRestoreRadius = 30f;
+
+    /// <summary>Map-time safeguard window (ms) after which stripped template flags self-heal when out of combat and not on a scripted waypoint path.</summary>
+    public const uint StrippedFlagSafeguardMs = 60_000;
+
+    private readonly Dictionary<Creature, uint> _strippedFlagElapsedMs = [];
+    private readonly Dictionary<Creature, WaypointMovementGenerator> _scriptedWaypointGenerators = [];
+
     /// <summary>
     /// SCRIPT_COMMAND_TEMP_SPAWN_CREATURE: creature <c>datalong</c> at (x, y, z, o), from any source object. Without coordinates it stands
     /// in front of the source at contact distance (CreatureCreatePos(spawner, spawner orientation, CONTACT_DISTANCE) then GetClosePoint,
@@ -24,60 +36,110 @@ public sealed partial class CreatureMapSystem
     /// <c>creature_movement_template</c>. COMMAND_ADDITIONAL (active object) needs no grid state here; a spawn data entry (<c>dataint4</c>,
     /// creature_spawn_data_template) is not supported and is reported.
     /// </summary>
+    private bool ExecuteRelayStepSafely(RelayScriptPendingStep pending)
+    {
+        try
+        {
+            return ExecuteRelayStep(pending);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogRelayStepFault("CreatureMapSystem.ExecuteRelayStep", ex, pending.Step, Map.FindObject(pending.Source), Map.FindObject(pending.Target));
+            return false;
+        }
+    }
+
+    private void LogRelayStepFault(string site, Exception ex, RelayScriptStep step, WorldObject? source, WorldObject? target)
+    {
+        _logger.LogFault(
+            site,
+            ex,
+            "Relay script step fault (scriptId={ScriptId}, command={Command}, dataLong={DataLong}, dataLong2={DataLong2}, map={MapId}, source={Source}, target={Target})",
+            step.Id,
+            step.Command,
+            step.DataLong,
+            step.DataLong2,
+            Map.MapId,
+            DescribeObjectForFault(source),
+            DescribeObjectForFault(target));
+    }
+
+    internal static string DescribeObjectForFault(WorldObject? obj)
+        => obj switch
+        {
+            null => "null",
+            Creature c => $"{c.Guid} (entry={c.Entry}, name={c.Template.Name}, map={c.MapId}, pos=({c.X:F2},{c.Y:F2},{c.Z:F2}))",
+            Player p => $"{p.Guid} (player={p.Name}, level={p.Level}, map={p.MapId}, pos=({p.X:F2},{p.Y:F2},{p.Z:F2}))",
+            _ => $"{obj.Guid} (entry={obj.Guid.Entry}, map={obj.MapId}, pos=({obj.X:F2},{obj.Y:F2},{obj.Z:F2}))",
+        };
+
     private void RelayTempSpawn(RelayScriptStep step, WorldObject? source)
     {
-        if (source is null)
+        try
         {
-            return; // "found no worldobject as source, skipping"
-        }
-
-        if (_content.FindTemplate(step.DataLong) is not { } template)
-        {
-            ReportRelay(step, $"TEMP_SPAWN_CREATURE of missing creature_template {step.DataLong}");
-            return;
-        }
-
-        if (step.DataInt4 != 0)
-        {
-            ReportRelay(step, "TEMP_SPAWN_CREATURE with a creature_spawn_data_template entry (dataint4)");
-        }
-
-        bool atSource = step.X == 0f && step.Y == 0f && step.Z == 0f;
-        // cmangos WorldObject::SummonCreature with the source as the spawner (Entities/Object.cpp:2026-2166): a creature source is the summon's
-        // spawner from its construction, and its AI hears JustSummoned once the summon is placed and summoned (:2155-2158).
-        Creature? spawner = source as Creature;
-        Creature summoned = SpawnTemporary(template, atSource ? source.X : step.X, atSource ? source.Y : step.Y, atSource ? source.Z : step.Z, step.Orientation,
-            spawner, notifySummoner: false);
-        if (atSource)
-        {
-            float distance = ContactDistance + source.BoundingRadius + summoned.BoundingRadius;
-            float angle = source.Orientation + source.Orientation;
-            PlaceTemporary(summoned, source.X + (distance * MathF.Cos(angle)), source.Y + (distance * MathF.Sin(angle)), source.Z, step.Orientation);
-        }
-
-        summoned.ScriptRun = step.DataInt == 1;
-        SyncWalkMode(summoned, summoned.ScriptRun);
-        if (step.DataLong3 != 0 && summoned.MovementType == CreatureMovementType.Waypoint)
-        {
-            IReadOnlyList<CreatureWaypoint> path = _content.GetEntryWaypoints(template.Entry, step.DataLong3);
-            if (path.Count > 0)
+            if (source is null)
             {
-                summoned.Motion.Initialize(new WaypointMovementGenerator(path), this, start: true);
+                return; // "found no worldobject as source, skipping"
             }
-            else
+
+            if (_content.FindTemplate(step.DataLong) is not { } template)
             {
-                ReportRelay(step, $"TEMP_SPAWN_CREATURE path {step.DataLong3} missing for entry {template.Entry}");
+                ReportRelay(step, $"TEMP_SPAWN_CREATURE of missing creature_template {step.DataLong}");
+                return;
+            }
+
+            if (step.DataInt4 != 0)
+            {
+                ReportRelay(step, "TEMP_SPAWN_CREATURE with a creature_spawn_data_template entry (dataint4)");
+            }
+
+            bool atSource = step.X == 0f && step.Y == 0f && step.Z == 0f;
+            // cmangos WorldObject::SummonCreature with the source as the spawner (Entities/Object.cpp:2026-2166): a creature source is the summon's
+            // spawner from its construction, and its AI hears JustSummoned once the summon is placed and summoned (:2155-2158).
+            Creature? spawner = source as Creature;
+            Creature summoned = SpawnTemporary(template, atSource ? source.X : step.X, atSource ? source.Y : step.Y, atSource ? source.Z : step.Z, step.Orientation,
+                spawner, notifySummoner: false);
+            if (atSource)
+            {
+                float distance = ContactDistance + source.BoundingRadius + summoned.BoundingRadius;
+                float angle = source.Orientation + source.Orientation;
+                PlaceTemporary(summoned, source.X + (distance * MathF.Cos(angle)), source.Y + (distance * MathF.Sin(angle)), source.Z, step.Orientation);
+            }
+
+            summoned.ScriptRun = step.DataInt == 1;
+            SyncWalkMode(summoned, summoned.ScriptRun);
+            if (step.DataLong3 != 0 && summoned.MovementType == CreatureMovementType.Waypoint)
+            {
+                IReadOnlyList<CreatureWaypoint> path = _content.GetEntryWaypoints(template.Entry, step.DataLong3);
+                if (path.Count > 0)
+                {
+                    var wpGen = new WaypointMovementGenerator(path);
+                    if (HasWaypointScripts(path))
+                    {
+                        _scriptedWaypointGenerators[summoned] = wpGen;
+                    }
+
+                    summoned.Motion.Initialize(wpGen, this, start: true);
+                }
+                else
+                {
+                    ReportRelay(step, $"TEMP_SPAWN_CREATURE path {step.DataLong3} missing for entry {template.Entry}");
+                }
+            }
+
+            if (step.DataLong2 > 0)
+            {
+                AddTimedSummon(summoned, step.DataLong2, SummonTimer.OutOfCombatUncharmed);
+            }
+
+            if (spawner is not null)
+            {
+                NotifyJustSummoned(summoned);
             }
         }
-
-        if (step.DataLong2 > 0)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            AddTimedSummon(summoned, step.DataLong2, SummonTimer.OutOfCombatUncharmed);
-        }
-
-        if (spawner is not null)
-        {
-            NotifyJustSummoned(summoned);
+            LogRelayStepFault("CreatureMapSystem.RelayTempSpawn", ex, step, source, null);
         }
     }
 
@@ -95,129 +157,288 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     private void RelayActivateObject(RelayScriptStep step, WorldObject? source, WorldObject? target)
     {
-        if (source is not Unit user)
+        try
         {
-            ReportRelay(step, "ACTIVATE_OBJECT by a non-unit");
-            return;
-        }
+            if (source is not Unit user)
+            {
+                ReportRelay(step, "ACTIVATE_OBJECT by a non-unit");
+                return;
+            }
 
-        if (target is not GameObject go || Map.FindUpdater<GameObjectMapSystem>() is not { } objects)
-        {
-            ReportRelay(step, "ACTIVATE_OBJECT without a game object target");
-            return;
-        }
+            if (target is not GameObject go || Map.FindUpdater<GameObjectMapSystem>() is not { } objects)
+            {
+                ReportRelay(step, "ACTIVATE_OBJECT without a game object target");
+                return;
+            }
 
-        if ((step.DataFlags & FlagCommandAdditional) != 0)
-        {
-            objects.SendCustomAnim(go, step.DataLong);
-            return;
-        }
+            if ((step.DataFlags & FlagCommandAdditional) != 0)
+            {
+                objects.SendCustomAnim(go, step.DataLong);
+                return;
+            }
 
-        if (objects.UseByUnit(user, go) == GameObjectUseResult.Unsupported)
+            if (objects.UseByUnit(user, go) == GameObjectUseResult.Unsupported)
+            {
+                ReportRelay(step, $"ACTIVATE_OBJECT of a game object of type {go.Type}");
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            ReportRelay(step, $"ACTIVATE_OBJECT of a game object of type {go.Type}");
+            LogRelayStepFault("CreatureMapSystem.RelayActivateObject", ex, step, source, target);
         }
     }
 
     /// <summary>
     /// SCRIPT_COMMAND_MOVEMENT for a creature source out of combat (in combat the step is skipped): <c>datalong</c> 0 idles; 1 wanders within
     /// <c>datalong2</c> yards (the spawn's own wander when 0) around the spawn point, or around where it stands with COMMAND_ADDITIONAL, walking
-    /// unless <c>dataint</c> is non-zero (MoveRandomAroundPoint's walk argument is textId[0] == 0); 2 walks waypoint path <c>datalong2</c> (0: the
+    /// unless <c>dataint</c> is non-zero (MoveRandomAroundPoint's walk argument is textId[0] == 0); 2 (WAYPOINT_MOTION_TYPE) and 3
+    /// (LINEAR_WP_MOTION_TYPE) walk waypoint path <c>datalong2</c> (0: the
     /// creature's default path, its spawn's <c>creature_movement</c> else the entry's path 0; otherwise path <c>datalong2</c> of the entry's
     /// <c>creature_movement_template</c>). Idle and waypoint replace the creature's default movement (Clear(false, true) then the new one); random
     /// does so only with <c>dataint2</c> bit 0x1 ("make it main movegen"), otherwise it is pushed over the default, which resumes when the stack
     /// is cleared (cmangos ScriptMgr.cpp:2334-2350, MoveRandomAroundPoint mutates). A non-zero <c>datalong3</c> is the wander's expiry in ms: the
     /// wander then ends by itself and the movement beneath resumes (the default, or idle for the main-movegen form). A waypoint with <c>datalong3</c> bit 0x1 (pass the target) is
-    /// skipped only when there is no target (ScriptMgr.cpp:2318-2330); the target itself is not handed to the path (no waypoint scripts here).
-    /// Paths from <c>waypoint_path</c> (<c>datalong3</c> bit 0x2), forced movement, the formation update and the path,
-    /// linear and fall movement types are not supported and are reported.
+    /// skipped only when there is no target (ScriptMgr.cpp:2318-2330).
+    /// When a scripted waypoint path has no points in content or movement is skipped/blocked, template <see cref="Creature.NpcFlags"/> and
+    /// <see cref="Unit.UnitFlags"/> stripped earlier in the script are restored on the mover and living creatures within 30 yards.
     /// </summary>
     private void RelayMovement(RelayScriptStep step, WorldObject? source, WorldObject? target)
     {
-        if (source is not Creature mover)
+        try
         {
-            ReportRelay(step, "MOVEMENT by a non-creature");
+            if (source is not Creature mover)
+            {
+                ReportRelay(step, "MOVEMENT by a non-creature");
+                return;
+            }
+
+            if (mover.Combat.IsInCombat)
+            {
+                RestoreMissingPathNpcFlags(mover);
+                return; // "source is in combat and may lead to wrong behaviour: skipping"
+            }
+
+            if (FormationOfMember(mover) is { } formation && formation.SlotOf(mover) is { } slot)
+            {
+                if (slot.SlotId != 0)
+                {
+                    RestoreMissingPathNpcFlags(mover);
+                    return; // "call for creature in formation, skipping": a follower's movement is the formation's
+                }
+
+                // FormationData::SetMovementInfo: a new leader later resumes this movement, not the formation's old one.
+                formation.MovementType = (byte)Math.Min(step.DataLong, byte.MaxValue);
+                formation.PathId = step.DataLong2;
+                formation.LastWaypointIndex = -1;
+            }
+
+            switch (step.DataLong)
+            {
+                case 0:
+                    _scriptedWaypointGenerators.Remove(mover);
+                    StopMoving(mover);
+                    mover.Motion.Initialize(IdleMovementGenerator.Instance, this, start: true);
+                    break;
+                case 1:
+                {
+                    bool around = (step.DataFlags & FlagCommandAdditional) != 0;
+                    float? wander = step.DataLong2 != 0 ? step.DataLong2 : around ? 0f : null;
+                    CreatureHome? center = around ? new CreatureHome(mover.X, mover.Y, mover.Z, mover.Orientation) : null;
+                    var random = new RandomMovementGenerator(wander, center, run: step.DataInt != 0, expiryMs: step.DataLong3);
+                    if ((step.DataInt2 & 0x1) != 0 && step.DataLong3 != 0)
+                    {
+                        // Main movegen with an expiry: cmangos Clear(false, true) leaves only the idle generator at the bottom, so the
+                        // timed wander goes over idle and the creature stands when it expires.
+                        _scriptedWaypointGenerators.Remove(mover);
+                        StopMoving(mover);
+                        mover.Motion.Initialize(IdleMovementGenerator.Instance, this, start: true);
+                        mover.Motion.MoveRandom(random);
+                    }
+                    else if ((step.DataInt2 & 0x1) != 0)
+                    {
+                        // "make it main movegen": StopMoving, Clear(false, true), then the wander is the only generator.
+                        _scriptedWaypointGenerators.Remove(mover);
+                        StopMoving(mover);
+                        mover.Motion.Initialize(random, this, start: true);
+                    }
+                    else
+                    {
+                        mover.Motion.MoveRandom(random);
+                    }
+
+                    break;
+                }
+
+                case 2:
+                case 3:
+                {
+                    if ((step.DataLong3 & 0x1) != 0 && target is null)
+                    {
+                        RestoreMissingPathNpcFlags(mover);
+                        return; // "pass target true and target nullptr: skipping"
+                    }
+
+                    IReadOnlyList<CreatureWaypoint> path = (step.DataLong3 & 0x2) != 0
+                        ? _content.GetWaypointPath(step.DataLong2)
+                        : step.DataLong2 == 0
+                            ? _content.ResolveWaypointPath(mover.Spawn?.Guid ?? 0, mover.Template.Entry).Points
+                            : _content.GetEntryWaypoints(mover.Template.Entry, step.DataLong2);
+                    if (path.Count == 0)
+                    {
+                        RestoreMissingPathNpcFlags(mover);
+                        ReportRelay(step, $"MOVEMENT waypoint path {step.DataLong2} missing for entry {mover.Template.Entry}");
+                        return;
+                    }
+
+                    StopMoving(mover);
+                    var wpGen = new WaypointMovementGenerator(path, (step.DataLong3 & 0x1) != 0 ? target!.Guid : default, linear: step.DataLong == 3);
+                    if (HasWaypointScripts(path))
+                    {
+                        _scriptedWaypointGenerators[mover] = wpGen;
+                    }
+                    else
+                    {
+                        _scriptedWaypointGenerators.Remove(mover);
+                    }
+
+                    mover.Motion.Initialize(wpGen, this, start: true);
+                    break;
+                }
+
+                default:
+                    RestoreMissingPathNpcFlags(mover);
+                    ReportRelay(step, $"MOVEMENT type {step.DataLong}");
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (source is Creature faultMover)
+            {
+                RestoreMissingPathNpcFlags(faultMover);
+            }
+
+            LogRelayStepFault("CreatureMapSystem.RelayMovement", ex, step, source, target);
+        }
+    }
+
+    private static bool HasWaypointScripts(IReadOnlyList<CreatureWaypoint> path)
+    {
+        for (int i = 0; i < path.Count; i++)
+        {
+            if (path[i].ScriptId != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasStrippedTemplateFlags(Creature creature)
+    {
+        UnitFlags templateUnitFlags = (UnitFlags)creature.Template.UnitFlags;
+        return (creature.NpcFlags & creature.Template.NpcFlags) != creature.Template.NpcFlags
+            || (creature.UnitFlags & templateUnitFlags) != templateUnitFlags;
+    }
+
+    private void RestoreTemplateFlags(Creature creature)
+    {
+        creature.NpcFlags |= creature.Template.NpcFlags;
+        creature.UnitFlags |= (UnitFlags)creature.Template.UnitFlags;
+        _strippedFlagElapsedMs.Remove(creature);
+    }
+
+    /// <summary>
+    /// When a scripted waypoint path is absent from content (or a MOVEMENT step is blocked by combat, skipped, or unsupported), any
+    /// <c>dbscripts_on_creature_movement</c> step that would restore template <see cref="Creature.NpcFlags"/> or <see cref="Unit.UnitFlags"/>
+    /// on arrival can never run (e.g. <c>dbscripts_on_quest_end</c> 412 stripping <c>NPC_FLAG_QUESTGIVER</c> from Razzle 1269 and Ozzie 1268
+    /// before starting missing path 1). Restore template flags on the mover and living creatures within 30 yd.
+    /// </summary>
+    private void RestoreMissingPathNpcFlags(Creature mover)
+    {
+        RestoreTemplateFlags(mover);
+        const float RestoreRadiusSq = MissingPathRestoreRadius * MissingPathRestoreRadius;
+        foreach (Creature nearby in _creatures.Values)
+        {
+            if (nearby.IsAlive && HasStrippedTemplateFlags(nearby)
+                && DistanceSquared(nearby, mover) <= RestoreRadiusSq)
+            {
+                RestoreTemplateFlags(nearby);
+            }
+        }
+    }
+
+    private bool IsActivelyMovingOnScriptedWaypointPath(Creature creature)
+    {
+        if (!_scriptedWaypointGenerators.TryGetValue(creature, out WaypointMovementGenerator? scriptedGen))
+        {
+            return false;
+        }
+
+        if (!ReferenceEquals(creature.Motion.Top, scriptedGen))
+        {
+            if (!ReferenceEquals(creature.Motion.Default, scriptedGen))
+            {
+                _scriptedWaypointGenerators.Remove(creature);
+            }
+
+            return false;
+        }
+
+        return !creature.WaypointsPaused && (creature.IsMoving || scriptedGen.WaitMs > 0);
+    }
+
+    /// <summary>
+    /// Self-diagnose and restore stripped template <see cref="Creature.NpcFlags"/> and <see cref="Unit.UnitFlags"/> when a creature has
+    /// remained alive, out of combat, and not actively moving on a scripted waypoint path for <see cref="StrippedFlagSafeguardMs"/> (60s).
+    /// </summary>
+    private void UpdateStrippedFlagSafeguard(uint diffMs)
+    {
+        if (_creatures.Count == 0)
+        {
             return;
         }
 
-        if (mover.Combat.IsInCombat)
+        foreach (Creature creature in _creatures.Values)
         {
-            return; // "source is in combat and may lead to wrong behaviour: skipping"
-        }
-
-        if (FormationOfMember(mover) is { } formation && formation.SlotOf(mover) is { } slot)
-        {
-            if (slot.SlotId != 0)
+            if (!creature.IsAlive || !HasStrippedTemplateFlags(creature))
             {
-                return; // "call for creature in formation, skipping": a follower's movement is the formation's
+                _strippedFlagElapsedMs.Remove(creature);
+                continue;
             }
 
-            // FormationData::SetMovementInfo: a new leader later resumes this movement, not the formation's old one.
-            formation.MovementType = (byte)Math.Min(step.DataLong, byte.MaxValue);
-            formation.PathId = step.DataLong2;
-            formation.LastWaypointIndex = -1;
-        }
-
-        switch (step.DataLong)
-        {
-            case 0:
-                StopMoving(mover);
-                mover.Motion.Initialize(IdleMovementGenerator.Instance, this, start: true);
-                break;
-            case 1:
+            if (creature.Combat.IsInCombat || IsActivelyMovingOnScriptedWaypointPath(creature))
             {
-                bool around = (step.DataFlags & FlagCommandAdditional) != 0;
-                float? wander = step.DataLong2 != 0 ? step.DataLong2 : around ? 0f : null;
-                CreatureHome? center = around ? new CreatureHome(mover.X, mover.Y, mover.Z, mover.Orientation) : null;
-                var random = new RandomMovementGenerator(wander, center, run: step.DataInt != 0, expiryMs: step.DataLong3);
-                if ((step.DataInt2 & 0x1) != 0 && step.DataLong3 != 0)
-                {
-                    // Main movegen with an expiry: cmangos Clear(false, true) leaves only the idle generator at the bottom, so the
-                    // timed wander goes over idle and the creature stands when it expires.
-                    StopMoving(mover);
-                    mover.Motion.Initialize(IdleMovementGenerator.Instance, this, start: true);
-                    mover.Motion.MoveRandom(random);
-                }
-                else if ((step.DataInt2 & 0x1) != 0)
-                {
-                    // "make it main movegen": StopMoving, Clear(false, true), then the wander is the only generator.
-                    StopMoving(mover);
-                    mover.Motion.Initialize(random, this, start: true);
-                }
-                else
-                {
-                    mover.Motion.MoveRandom(random);
-                }
-
-                break;
+                _strippedFlagElapsedMs[creature] = 0;
+                continue;
             }
 
-            case 2:
+            uint elapsed = _strippedFlagElapsedMs.GetValueOrDefault(creature) + diffMs;
+            if (elapsed >= StrippedFlagSafeguardMs)
             {
-                if ((step.DataLong3 & 0x1) != 0 && target is null)
-                {
-                    return; // "pass target true and target nullptr: skipping"
-                }
-
-                IReadOnlyList<CreatureWaypoint> path = (step.DataLong3 & 0x2) != 0
-                    ? _content.GetWaypointPath(step.DataLong2)
-                    : step.DataLong2 == 0
-                        ? _content.ResolveWaypointPath(mover.Spawn?.Guid ?? 0, mover.Template.Entry).Points
-                        : _content.GetEntryWaypoints(mover.Template.Entry, step.DataLong2);
-                if (path.Count == 0)
-                {
-                    ReportRelay(step, $"MOVEMENT waypoint path {step.DataLong2} missing for entry {mover.Template.Entry}");
-                    return;
-                }
-
-                StopMoving(mover);
-                mover.Motion.Initialize(new WaypointMovementGenerator(path, (step.DataLong3 & 0x1) != 0 ? target!.Guid : default), this, start: true);
-                break;
+                uint prevNpcFlags = creature.NpcFlags;
+                UnitFlags prevUnitFlags = creature.UnitFlags;
+                RestoreTemplateFlags(creature);
+                _logger.LogWarning(
+                    "Self-diagnosed and restored stripped template flags on creature {Guid} (entry={Entry}, name={Name}, map={MapId}, pos=({X:F2},{Y:F2},{Z:F2}), npcFlags={PrevNpcFlags}->{NewNpcFlags}, unitFlags={PrevUnitFlags}->{NewUnitFlags}) after {ElapsedMs} ms without scripted waypoint restore.",
+                    creature.Guid,
+                    creature.Entry,
+                    creature.Template.Name,
+                    Map.MapId,
+                    creature.X,
+                    creature.Y,
+                    creature.Z,
+                    prevNpcFlags,
+                    creature.NpcFlags,
+                    prevUnitFlags,
+                    creature.UnitFlags,
+                    elapsed);
             }
-
-            default:
-                ReportRelay(step, $"MOVEMENT type {step.DataLong}");
-                break;
+            else
+            {
+                _strippedFlagElapsedMs[creature] = elapsed;
+            }
         }
     }
 
@@ -228,22 +449,29 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     private void RelaySendAiEvent(RelayScriptStep step, WorldObject? source, WorldObject? target)
     {
-        if (source is not Creature sender || target is not Unit unit)
+        try
         {
-            return; // LogIfNotCreature(pSource) / LogIfNotUnit(pTarget)
-        }
+            if (source is not Creature sender || target is not Unit unit)
+            {
+                return; // LogIfNotCreature(pSource) / LogIfNotUnit(pTarget)
+            }
 
-        if (step.DataLong2 != 0)
-        {
-            SendAiEventAround(sender, step.DataLong, unit, step.DataLong2);
+            if (step.DataLong2 != 0)
+            {
+                SendAiEventAround(sender, step.DataLong, unit, step.DataLong2);
+            }
+            else if (unit is Creature receiver)
+            {
+                receiver.ReceiveAiEvent(step.DataLong, sender, invoker: null);
+            }
+            else if (unit is Player player)
+            {
+                sender.ReceiveAiEvent(step.DataLong, player, player);
+            }
         }
-        else if (unit is Creature receiver)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            receiver.ReceiveAiEvent(step.DataLong, sender, invoker: null);
-        }
-        else if (unit is Player player)
-        {
-            sender.ReceiveAiEvent(step.DataLong, player, player);
+            LogRelayStepFault("CreatureMapSystem.RelaySendAiEvent", ex, step, source, target);
         }
     }
 
