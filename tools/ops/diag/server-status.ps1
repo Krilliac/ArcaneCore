@@ -143,9 +143,14 @@ $servicesList = @(
     @{ N = 'supervisor';       P = 19087;      Role = 'diagnostics & fence' }
 )
 
+$logicalCores = [Math]::Max(1, [Environment]::ProcessorCount)
+$prevCpu = @{}
+$prevCpuAt = $null
 $prev = $null
 while ($true) {
     $now = Get-Date
+    $cpuWindowSec = if ($null -ne $prevCpuAt) { ($now - $prevCpuAt).TotalSeconds } else { 0.0 }
+    $nextCpu = @{}
     $out = [System.Collections.Generic.List[string]]::new()
     $out.Add("ArcaneCore status   $($now.ToString('yyyy-MM-dd HH:mm:ss'))   profile: $Profile")
     $out.Add('')
@@ -168,12 +173,23 @@ while ($true) {
         $p = ListenerProc $svc.P
         if ($p) {
             $up = (New-TimeSpan -Start $p.StartTime -End $now)
-            $cpuSec = if ($null -ne $p.CPU) { $p.CPU } else { 0.0 }
-            $out.Add(('  {0,-16} pid {1,-7} port {2,-5} up {3:d\.hh\:mm\:ss}   mem {4,7:N0} MB   cpu {5,8:N0}s   [{6}]' -f $svc.N, $p.Id, $svc.P, $up, ($p.WorkingSet64 / 1MB), $cpuSec, $svc.Role))
+            $cpuSec = if ($null -ne $p.CPU) { [double]$p.CPU } else { 0.0 }
+            $nextCpu[$p.Id] = $cpuSec
+            if ($cpuWindowSec -gt 0.1 -and $prevCpu.ContainsKey($p.Id)) {
+                $deltaCpu = [Math]::Max(0.0, $cpuSec - $prevCpu[$p.Id])
+                $cpuPct = ($deltaCpu / ($cpuWindowSec * $logicalCores)) * 100.0
+            } elseif ($up.TotalSeconds -gt 0.1) {
+                $cpuPct = ($cpuSec / ($up.TotalSeconds * $logicalCores)) * 100.0
+            } else {
+                $cpuPct = 0.0
+            }
+            $out.Add(('  {0,-16} pid {1,-7} port {2,-5} up {3:d\.hh\:mm\:ss}   mem {4,7:N0} MB   cpu {5,5:N1}% ({6,5:N0}s)   [{7}]' -f $svc.N, $p.Id, $svc.P, $up, ($p.WorkingSet64 / 1MB), $cpuPct, $cpuSec, $svc.Role))
         } else {
             $out.Add(('  {0,-16} NOT LISTENING on port {1,-5} [{2}]' -f $svc.N, $svc.P, $svc.Role))
         }
     }
+    $prevCpu = $nextCpu
+    $prevCpuAt = $now
     $out.Add('')
 
     $out.Add("WORLD METRICS ($MetricsUrl)")
