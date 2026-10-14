@@ -53,6 +53,15 @@ line and has its own `BOTINSPECT` line.
 Bots also use the faction auction house and the mailbox: they list loot they have no use for, buy one gear upgrade within a budget
 and collect what sold, expired or was won (`World:Playerbots:Economy`, live): `docs/areas/playbots-economy.md`.
 
+In town and out in the world, bots continuously pursue better gear, bags, spells, mounts and trade-skill crafting (`PlayerbotEquipment`,
+`PlayerbotTownGoals`, `PlayerbotCrafting` in `src/ArcaneCore.World/Playerbots/Progression/PlayerbotCrafting.cs`): they equip wearable gear
+upgrades and larger bags from their pack, use learnable recipe, spell and mount items in their bags (`PlayerbotEquipment.TryLearnFromBagItem`),
+buy affordable weapon/armor/bag/recipe upgrades and crafting tools/reagents from vendors (`PlayerbotTownGoals.TryBuyEquipmentUpgrade`,
+`TryBuyCraftingSupplies`), train class and trade-skill spells (`QuestNpcServices.GetTradeSkillTrainerQuote`) and riding mounts whenever no
+quest objective creature is in immediate sight, harvest nearby herb and mining nodes (`TryGatherNode`), skin looted beast and dragonkin corpses
+(`TrySkinCorpse`), craft wearable upgrades, bags, ammo, bandages, potions, food and intermediate reagents (moving to a nearby forge or anvil
+when `RequiresSpellFocus` demands one), and hunt creatures that drop missing crafting materials (`PreferredMaterialDropperEntry`).
+
 Content one bot cannot do (elite, dungeon and raid quests, objectives inside instances, quest targets too strong alone) becomes a
 "needs a group of N" goal: `PlayerbotGroupCoordinator` matches bots by goal, team, level and role, the leader invites the others
 through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,
@@ -827,7 +836,8 @@ where the master goes.
 - **Out of combat** the bot follows at 2-5 yards at a random angle (`PlayerbotNavigation.TryPlan`/`TryAdvance`), eats and drinks
   through `PlayerbotConsumables` while its master is within 30 yards, and catches up with a master it cannot simply walk to as
   [Following and catch-up](#following-and-catch-up) describes: by default it teleports (vmangos `.goname`) to a master more than 100
-  yards away or on another map, and to one it has no reasonable way to, through the teleport service the GM `.goname`/`.namego`
+  yards away or on another map, and to a distant one it has no reasonable way to (short-distance detours up to 45 yards straight / 160 yards
+  along the mesh are walked rather than teleported, and short-distance blocked paths wait a stall window before teleporting), through the teleport service the GM `.goname`/`.namego`
   commands use, so the map resolver's instance rules and the group's instance bind decide where it lands (into the master's
   instance). It lands on the master's spot, not 5 yards above as `.goname` puts a GM: it has no client to fall. A master on a map
   the bot may not be on (outside `AllowedMaps` and no dungeon or raid, `PlayerbotMapPolicy`), on a taxi flight (vmangos idles
@@ -843,7 +853,9 @@ where the master goes.
   It walks up, opens each and releases it untouched (CMSG_LOOT, CMSG_LOOT_RELEASE), and the loot service opens the leftovers to
   the group. A staying bot walks back to its place afterwards. A release the shared action budget held back is tried on the
   next think; a corpse it could not reach or open three times is left.
-- **Loot rolls** are answered at once with `LootRoll` (`Pass` by default, or `Greed`; never need), so a roll never waits out its
+- **Loot rolls** are answered at once with `LootRoll` (`Need` by default, or `Greed` or `Pass`): in `Need` mode (`PlayerbotLootRolls.VoteFor`),
+  the bot rolls `RollVote.Need` on wearable gear upgrades (`PlayerbotEquipment.TryPickSlot`), container bag upgrades (`IsBagUpgrade`), and
+  unlearned spell, recipe or mount items (`CanLearnFromItem`), and `RollVote.Greed` on all other items, so a roll never waits out its
   timer for a bot (mangoszero `LootRollAction`).
 - **Dead:** a group member's resurrection is accepted (CMSG_RESURRECT_RESPONSE; a stranger's declined). With `AutoRevive`
   (default on) the bot revives in place at half health when vmangos `ShouldAutoRevive` allows it (a released ghost; or nobody

@@ -320,7 +320,37 @@ internal sealed class PlayerbotFollower
         PlanOutcome onLeader = beside == PlanOutcome.Route ? beside
             : PlayerbotNavigation.PlanExact(player, leaderAt, _options, ref _tileWait, _session.World.NowMs, out route);
         if (onLeader == PlanOutcome.Pending) return true;
-        if (onLeader == PlanOutcome.Route) _route = route;
+        if (onLeader == PlanOutcome.Route)
+        {
+            _route = route;
+            return false;
+        }
+
+        PlanOutcome towardGoal = PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out route);
+        if (towardGoal == PlanOutcome.Pending) return true;
+        if (towardGoal == PlanOutcome.Route)
+        {
+            _route = route;
+            return false;
+        }
+
+        PlanOutcome towardLeader = PlayerbotNavigation.PlanToward(player, leaderAt, _options, ref _tileWait, _session.World.NowMs, out route);
+        if (towardLeader == PlanOutcome.Pending) return true;
+        if (towardLeader == PlanOutcome.Route)
+        {
+            _route = route;
+            return false;
+        }
+
+        if (player.Map is { } map && Vector3.Distance(Position(player), leaderAt) <= 35f && MathF.Abs(player.Z - leaderAt.Z) < 6f)
+        {
+            if (PlayerbotMoveCheck.TerrainRoute(map, Position(player), goal, _options, out PlayerbotRoute? terrain)
+                || PlayerbotMoveCheck.TerrainRoute(map, Position(player), leaderAt, _options, out terrain))
+            {
+                _route = terrain;
+            }
+        }
+
         return false;
     }
 
@@ -357,6 +387,25 @@ internal sealed class PlayerbotFollower
             else
             {
                 _dropSearchAgainAtMs = Now + DropSearchAgainMs;
+            }
+        }
+
+        // Do not teleport straight to the leader over short distances when a walkable route exists and has not stalled.
+        if (step == PlayerbotFollowStep.Teleport
+            && follow.CatchUpMode != PlayerbotCatchUpMode.Teleport
+            && _progress.Stalls < PlayerbotFollowRules.StallsToTeleport)
+        {
+            if (reason == PlayerbotCatchUpReason.Detour && found && dangers == 0 && routeYards <= 160f)
+            {
+                step = PlayerbotFollowStep.Walk;
+            }
+            else if (reason == PlayerbotCatchUpReason.Danger && found && straight <= 45f && routeYards <= 160f && MathF.Abs(here.Z - leaderAt.Z) < 10f)
+            {
+                step = PlayerbotFollowStep.Walk;
+            }
+            else if (reason == PlayerbotCatchUpReason.NoRoute && straight <= 45f && !PlayerbotFollowRules.IsVertical(across, here.Z - leaderAt.Z) && _progress.Stalls < 1)
+            {
+                step = PlayerbotFollowStep.Wait;
             }
         }
 

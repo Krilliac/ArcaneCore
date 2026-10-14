@@ -76,6 +76,50 @@ public sealed partial class QuestNpcServices
     }
 
     /// <summary>
+    /// Returns the first affordable, currently learnable offer from a trade-skill trainer (<see cref="TrainerType.TradeSkills"/>).
+    /// Advisory only: does not interact with the NPC, teach a spell, or change money.
+    /// </summary>
+    public ClassTrainerQuote? GetTradeSkillTrainerQuote(
+        Player player,
+        NpcInfo npc,
+        uint teachingSpell = 0,
+        uint? maxCost = null,
+        Func<uint, bool>? filterLearnedSpell = null)
+    {
+        if (npc is null || Ready(player) is not { } state || npc.IsGameObject
+            || npc.TrainerType != TrainerType.TradeSkills || !IsTrainerOf(state, npc, false)
+            || Deps.Spells is not { } spells)
+        {
+            return null;
+        }
+
+        float discount = PriceDiscount(player, npc);
+        int examined = 0;
+        foreach (TrainerSpell trainerSpell in Npcs.TrainerSpells(npc.Entry))
+        {
+            if (++examined > 128) break;
+            if ((teachingSpell != 0 && trainerSpell.Spell != teachingSpell)
+                || spells.DescribeTrainerSpell(trainerSpell.Spell) is not { } info
+                || info.LearnedSpell == 0
+                || GetTrainerSpellState(player, trainerSpell, info) != TrainerSpellState.Green
+                || (filterLearnedSpell is not null && !filterLearnedSpell(info.LearnedSpell)))
+            {
+                continue;
+            }
+
+            uint cost = Discounted(trainerSpell.SpellCost, discount);
+            if (player.Money < cost || cost > (maxCost ?? uint.MaxValue))
+            {
+                continue;
+            }
+
+            return new ClassTrainerQuote(trainerSpell.Spell, info.LearnedSpell, cost);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// CMSG_TRAINER_BUY_SPELL (vmangos HandleTrainerBuySpellOpcode): the spell must be on the
     /// trainer's list and GREEN, affordable after the reputation discount, and the teaching cast
     /// must succeed; only then is the money taken.

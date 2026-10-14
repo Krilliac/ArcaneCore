@@ -62,7 +62,7 @@ public sealed class PlayerbotGroupInviteTests
         Assert.Empty(party.Allowlist);
         Assert.True(party.TeleportToLeader);
         Assert.True(party.AutoRevive);
-        Assert.Equal(PlayerbotLootRoll.Pass, party.LootRoll);
+        Assert.Equal(PlayerbotLootRoll.Need, party.LootRoll);
         new PlayerbotOptions().Validate();
     }
 

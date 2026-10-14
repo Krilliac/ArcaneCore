@@ -15119,14 +15119,15 @@
       "elementType": "PlayerbotLootRoll",
       "enumValues": [
         "Pass",
-        "Greed"
+        "Greed",
+        "Need"
       ],
-      "default": "Pass",
+      "default": "Need",
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The vote on every group loot roll (`PlayerbotLootRoll.Pass` by default: the items go to the players). Values: `Pass`, `Greed`.",
-      "allowed": "Pass | Greed",
+      "meaning": "The vote on every group loot roll (`PlayerbotLootRoll.Need` by default: Need on upgrades, Greed otherwise). Values: `Pass`, `Greed`, `Need`.",
+      "allowed": "Pass | Greed | Need",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },

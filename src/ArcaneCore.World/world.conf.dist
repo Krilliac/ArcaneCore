@@ -12229,15 +12229,15 @@ World.Playerbots.Party.InvitePolicy = GuildOrFriends
 
 #
 #    World.Playerbots.Party.LootRoll
-#        Description: The vote on every group loot roll (PlayerbotLootRoll.Pass by default: the
-#                     items go to the players). Values: Pass, Greed.
+#        Description: The vote on every group loot roll (PlayerbotLootRoll.Need by default: Need on
+#                     upgrades, Greed otherwise). Values: Pass, Greed, Need.
 #        Type: PlayerbotLootRoll
-#        Default: Pass
-#        Allowed: Pass | Greed
+#        Default: Need
+#        Allowed: Pass | Greed | Need
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Party.LootRoll = Pass
+World.Playerbots.Party.LootRoll = Need
 
 #
 #    World.Playerbots.Party.MasterTimeoutSeconds

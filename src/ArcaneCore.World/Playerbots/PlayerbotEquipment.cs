@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Crafting;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Crafting;
@@ -12,11 +14,11 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
-/// Out-of-combat upkeep for one managed player, one request per think: bags into empty bag slots, then the best-scoring gear
+/// Out-of-combat upkeep for one managed player, one request per think: bags into empty or smaller bag slots, then the best-scoring gear
 /// upgrade from the bags (armor, weapons, shields, rings, trinkets, cloaks, items with stats or random suffixes; vmangos
-/// CombatBotBaseAI::EquipOrUseNewItem, CombatBotBaseAI.cpp:2958, and mangoszero's EquipAction), then ammunition for a bow, gun
-/// or crossbow (the AddHunterAmmo choice, :2908, made from what the bags hold), then a talent rank
-/// (<see cref="PlayerbotTalents"/>). Every request is the client's own packet through its real handler; legality is the
+/// CombatBotBaseAI::EquipOrUseNewItem, CombatBotBaseAI.cpp:2958, and mangoszero's EquipAction), then learnable spell/recipe/mount
+/// items in the bags, then ammunition for a bow, gun or crossbow (the AddHunterAmmo choice, :2908, made from what the bags hold),
+/// then a talent rank (<see cref="PlayerbotTalents"/>). Every request is the client's own packet through its real handler; legality is the
 /// server's (a refused CMSG_AUTOEQUIP_ITEM is not a fault: the item is left alone for a while).
 /// </summary>
 internal sealed class PlayerbotEquipment(WorldSession session)
@@ -35,12 +37,78 @@ internal sealed class PlayerbotEquipment(WorldSession session)
             return false;
 
         if (session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is
-            { State: ArcaneCore.Game.Spells.SpellCastState.Preparing or ArcaneCore.Game.Spells.SpellCastState.Casting })
+            { State: SpellCastState.Preparing or SpellCastState.Casting })
             return false;
 
         ForgetExpiredRefusals();
-        // Equip first, then talents: a new weapon or piece is worth more than one rank, and both wait for the next think.
-        return TryEquipBag(player) || TryEquipUpgrade(player) || TrySetAmmo(player) || _talents.Update(player);
+        // Equip first, then learnable spell/recipe/mount items, ammo, and talents.
+        return TryEquipBag(player) || TryEquipUpgrade(player) || TryLearnFromBagItem(player) || TrySetAmmo(player) || _talents.Update(player);
+    }
+
+    /// <summary>Whether <paramref name="candidate"/> is a usable general bag that fills an empty bag slot or replaces a smaller worn general bag.</summary>
+    internal static bool IsBagUpgrade(Player player, ItemTemplate candidate)
+    {
+        if (!candidate.IsBag() || !candidate.IsGeneralBag() || candidate.ContainerSlots == 0
+            || player.Inventory.CanUseItem(candidate) != InventoryResult.Ok)
+            return false;
+
+        for (byte slot = InventorySlots.BagStart; slot < InventorySlots.BagEnd; slot++)
+        {
+            Item? worn = player.Inventory.GetItem(InventorySlots.Bag0, slot);
+            if (worn is null)
+                return true;
+            if (worn.Template.IsGeneralBag() && candidate.ContainerSlots > worn.Template.ContainerSlots)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether <paramref name="template"/> is a usable spellbook, recipe, schematic, pattern, plan, formula or mount item that teaches an unknown spell.</summary>
+    internal static bool CanLearnFromItem(Player player, ItemTemplate template, SpellStore? store, SpellbookCache? spellbook)
+    {
+        if (player.Inventory.CanUseItem(template) != InventoryResult.Ok)
+            return false;
+
+        if (template.RequiredSkill != 0 && player.Skills is { } skills
+            && skills.GetValueBase(template.RequiredSkill) < template.RequiredSkillRank)
+            return false;
+
+        bool anyTeachEffect = false;
+        foreach (ItemSpell itemSpell in template.Spells)
+        {
+            if (itemSpell.SpellId == 0 || itemSpell.Trigger != 0)
+                continue;
+
+            if (store?.Get(itemSpell.SpellId) is { } useSpell)
+            {
+                if (PlayerbotMountRules.IsMountSpell(useSpell))
+                {
+                    if (spellbook is null || !spellbook.HasSpell(player, useSpell.Id))
+                        return true;
+                    continue;
+                }
+
+                for (int i = 0; i < useSpell.Effects.Count; i++)
+                {
+                    SpellEffectInfo eff = useSpell.Effects[i];
+                    if (eff.Effect != SpellEffectName.LearnSpell || eff.TriggerSpell == 0)
+                        continue;
+
+                    anyTeachEffect = true;
+                    if (spellbook is not null && spellbook.HasSpell(player, eff.TriggerSpell))
+                        continue;
+
+                    return true;
+                }
+            }
+            else if ((ItemClass)template.Class == ItemClass.Recipe && spellbook is null)
+            {
+                return true;
+            }
+        }
+
+        return !anyTeachEffect && (ItemClass)template.Class == ItemClass.Recipe && store is null;
     }
 
     /// <summary>A general bag from the bags into an empty bag slot (CMSG_AUTOEQUIP_ITEM finds the slot).</summary>
@@ -55,6 +123,31 @@ internal sealed class PlayerbotEquipment(WorldSession session)
             .OrderByDescending(item => item.Template.ContainerSlots).ThenBy(item => item.Guid.Value)
             .FirstOrDefault(item => player.Inventory.CanEquipItem(InventorySlots.NullSlot, out _, item.Template, item, swap: false) == InventoryResult.Ok);
         return bag is not null && Send(player, bag, InventorySlots.NullSlot);
+    }
+
+    /// <summary>Use a carried recipe, grimoire, manual or mount item that teaches the bot a new spell (<c>CMSG_USE_ITEM</c>).</summary>
+    private bool TryLearnFromBagItem(Player player)
+    {
+        SpellFeature? spells = session.Services.GetService<SpellFeature>();
+        SpellStore? store = spells?.System.Store;
+        SpellbookCache? spellbook = spells?.Spellbook;
+        if (store is null || spellbook is null)
+            return false;
+
+        foreach (Item item in Carried(player))
+        {
+            if (!CanLearnFromItem(player, item.Template, store, spellbook))
+                continue;
+
+            int before = spellbook.GetSpells(player).Count;
+            if (!session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(item.BagSlot, item.Slot)))
+                return false;
+            if (spellbook.GetSpells(player).Count <= before && item.Inventory is not null)
+                _refusedUntil[item.Guid.Value] = unchecked(session.World.NowMs + RefusalBackoffMs);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>The carried item that gains most over what it would replace, worn through the ordinary equip handlers.</summary>

@@ -104,6 +104,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
+    private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotHomeReturn _homeReturn = new();
     private PlayerbotHomeArea? _home;
@@ -124,6 +125,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _homeReturn.Reset();
             _quests.Home = value;
             _destinations.Home = value;
+            _crafting.Home = value;
             DropIntent();
         }
     }
@@ -138,6 +140,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         PlayerbotHomeArea? active = _home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId ? home : null;
         _quests.Home = active;
         _destinations.Home = active;
+        _crafting.Home = active;
     }
 
     /// <summary>The home the in-area filters use right now: the home while the bot is on its map, else null (tests).</summary>
@@ -934,11 +937,17 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
             // Under resurrection sickness no new fight: the quest exchanges and town errands above (a repair among them) still run.
             if (StandDownWhileSick(player)) return;
+            PlayerbotThinkProbe.Phase("crafting");
+            _crafting.Suspensions = _suspensions;
+            if (_crafting.Update(player, interval))
+            { RetireIdleCombatRoute(); _goal = _crafting.Goal; TargetEntry = _crafting.TargetEntry; return; }
             PlayerbotThinkProbe.Phase("economy");
             if (_economy.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
+            bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0
+                && FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is not null;
             PlayerbotThinkProbe.Phase("trainers");
-            if (_quests.PreferredCreatureEntry == 0 && _trainers.HasCandidate(player))
+            if (!visibleQuestTarget && _trainers.HasCandidate(player))
             {
                 // An abandoned idle-grind target must not keep reopening combat instead
                 // of travelling to a useful trainer. Stop through the ordinary handler;
@@ -956,7 +965,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 { _goal = PlayerbotGoalKind.Train; TargetEntry = _trainers.TargetEntry; return; }
             }
             PlayerbotThinkProbe.Phase("riding");
-            if (_quests.PreferredCreatureEntry == 0 && _riding.HasCandidate(player))
+            if (!visibleQuestTarget && _riding.HasCandidate(player))
             {
                 // Saved for riding training or a mount and the money is there: the same priority as a class trainer trip.
                 if (_attacking || player.Combat.Victim is not null)
@@ -1007,7 +1016,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             PlayerbotThinkProbe.Phase("choose target");
             Creature? previousTarget = _target;
-            uint preferred = _quests.PreferredItemUseId != 0 ? 0u : _quests.PreferredCreatureEntry;
+            uint materialDropper = _quests.PreferredCreatureEntry == 0 && _quests.PreferredItemUseId == 0
+                ? _crafting.PreferredMaterialDropperEntry(player)
+                : 0u;
+            uint preferred = _quests.PreferredItemUseId != 0
+                ? 0u
+                : (_quests.PreferredCreatureEntry != 0 ? _quests.PreferredCreatureEntry : materialDropper);
             _contention.ReleaseClaim();
             _contention.EndAssist();
             _contention.BlockedSeen = 0;
@@ -1027,10 +1041,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (_target is null)
             {
                 PlayerbotThinkProbe.Phase("grind destinations");
-                PlayerbotGoalKind huntGoal = _quests.PreferredCreatureEntry != 0 && _quests.PreferredItemUseId == 0
+                uint huntEntry = _quests.PreferredCreatureEntry != 0 ? _quests.PreferredCreatureEntry : materialDropper;
+                PlayerbotGoalKind huntGoal = huntEntry != 0 && _quests.PreferredItemUseId == 0
                     ? PlayerbotGoalKind.Grind : PlayerbotGoalKind.Quest;
                 _planningGoal = huntGoal;
-                bool huntPlanned = _destinations.Update(player, _quests.PreferredCreatureEntry, interval, preferredQuestId: _quests.PreferredQuestId);
+                bool huntPlanned = _destinations.Update(player, huntEntry, interval, preferredQuestId: _quests.PreferredQuestId);
                 _planningGoal = null;
                 if (huntPlanned)
                 {

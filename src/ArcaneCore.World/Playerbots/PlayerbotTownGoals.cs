@@ -115,9 +115,12 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 if (!PlayerbotMovementControl.Stop(session, player)) return false;
                 uint? limit = ClassTrainingLimit(player);
                 uint spell = _greenTrainerSpells.OrderBy(id => id)
-                    .FirstOrDefault(id => trainer.TrainerType == TrainerType.Mounts
-                        ? RidingQuote(player, services, trainer, id) is not null
-                        : services.GetClassTrainerQuote(player, trainer, id, limit) is not null);
+                    .FirstOrDefault(id => trainer.TrainerType switch
+                    {
+                        TrainerType.Mounts => RidingQuote(player, services, trainer, id) is not null,
+                        TrainerType.TradeSkills => TradeSkillQuote(player, services, trainer, id) is not null,
+                        _ => services.GetClassTrainerQuote(player, trainer, id, limit) is not null,
+                    });
                 if (spell != 0)
                 {
                     Goal = PlayerbotGoalKind.Train;
@@ -185,6 +188,10 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyAmmo(player, services, npc))
             return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyMount(player, services, npc))
+            return true;
+        if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyEquipmentUpgrade(player, services, npc))
+            return true;
+        if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyCraftingSupplies(player, services, npc))
             return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TrySellGray(player, services, npc))
             return true;
@@ -766,6 +773,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return false;
         if (npc.TrainerType == TrainerType.Mounts && RidingQuote(player, services, npc, 0) is null)
             return false;
+        if (npc.TrainerType == TrainerType.TradeSkills && TradeSkillQuote(player, services, npc, 0) is null)
+            return false;
         _trainerTarget = npc.Guid;
         _trainerListPending = session.TryManagedAction(WorldOpcode.CmsgTrainerList, TrainerListPayload(npc.Guid));
         return _trainerListPending;
@@ -898,6 +907,20 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         return services.GetRidingTrainerQuote(player, npc, spell, free - Math.Min(budget.Riding.MountCost, free));
     }
 
+    private ClassTrainerQuote? TradeSkillQuote(Player player, QuestNpcServices services, NpcInfo npc, uint spell)
+    {
+        SpellFeature? spellFeature = session.Services.GetService<SpellFeature>();
+        SpellStore? store = spellFeature?.System.Store;
+        SpellbookCache? spellbook = spellFeature?.Spellbook;
+        uint? limit = ClassTrainingLimit(player);
+        return services.GetTradeSkillTrainerQuote(
+            player,
+            npc,
+            spell,
+            limit,
+            learned => PlayerbotCrafting.WantsTradeSkillSpell(player, store, spellbook, learned));
+    }
+
     /// <summary>
     /// The cheapest mount this vendor sells that the bot can use (a riding-skill or mounted-aura item its inventory lets it use), when it
     /// can ride, owns no mount and the budget lets it pay: never dearer than the cheapest the budget planned for.
@@ -933,8 +956,115 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         return bought;
     }
 
+    private VendorItem? FindEquipmentUpgradeRow(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        if (player.Money == 0 || FreeBagSlots(player) <= 0)
+            return null;
+
+        IReadOnlyList<VendorItem> items = services.Npcs.VendorItems(npc.Entry);
+        int limit = Math.Min(items.Count, 64);
+        if (limit == 0)
+            return null;
+
+        SpellFeature? spellFeature = session.Services.GetService<SpellFeature>();
+        SpellStore? store = spellFeature?.System.Store;
+        SpellbookCache? spellbook = spellFeature?.Spellbook;
+        PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        VendorItem? best = null;
+        float bestScore = 0f;
+
+        for (int i = 0; i < limit; i++)
+        {
+            VendorItem row = items[i];
+            if (Refused(_refusedPurchases, (npc.Entry, row.Item))
+                || player.Inventory.GetItemCount(row.Item) > 0
+                || player.Inventory.Templates.Find(row.Item) is not { } template
+                || services.GetVendorPurchasePrice(player, npc, row.Item) is not { } price
+                || price == 0 || price > player.Money
+                || (Budget is not null && !Budget.MayAfford(PlayerbotSpendKind.Discretionary, price, player)))
+            {
+                continue;
+            }
+
+            float score = 0f;
+            if (player.Inventory.CanUseItem(template) == ArcaneCore.Game.Items.InventoryResult.Ok
+                && PlayerbotItemScore.UpgradeGain(player, template, weights) is { } gain
+                && gain > PlayerbotItemScore.MinimumGain)
+            {
+                score = 1000f + gain;
+            }
+            else if (PlayerbotEquipment.IsBagUpgrade(player, template))
+            {
+                score = 500f + template.ContainerSlots;
+            }
+            else if (store is not null && spellbook is not null && PlayerbotEquipment.CanLearnFromItem(player, template, store, spellbook))
+            {
+                score = 300f + template.ItemLevel;
+            }
+
+            if (score > bestScore)
+            {
+                best = row;
+                bestScore = score;
+            }
+        }
+
+        return best;
+    }
+
+    private bool TryBuyEquipmentUpgrade(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        if (FindEquipmentUpgradeRow(player, services, npc) is not { } row)
+            return false;
+        Goal = PlayerbotGoalKind.Vendor;
+        bool bought = Buy(player, npc, row.Item);
+        Budget?.Invalidate();
+        return bought;
+    }
+
+    private VendorItem? FindCraftingSupplyRow(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        if (player.Money == 0 || FreeBagSlots(player) <= 0)
+            return null;
+
+        SpellFeature? spellFeature = session.Services.GetService<SpellFeature>();
+        SpellStore? store = spellFeature?.System.Store;
+        SpellbookCache? spellbook = spellFeature?.Spellbook;
+        if (store is null || spellbook is null)
+            return null;
+
+        IReadOnlyList<VendorItem> items = services.Npcs.VendorItems(npc.Entry);
+        int limit = Math.Min(items.Count, 64);
+        for (int i = 0; i < limit; i++)
+        {
+            VendorItem row = items[i];
+            if (Refused(_refusedPurchases, (npc.Entry, row.Item))
+                || !PlayerbotCrafting.NeedsVendorSupply(player, row.Item, store, spellbook)
+                || services.GetVendorPurchasePrice(player, npc, row.Item) is not { } price
+                || price > player.Money
+                || (Budget is not null && !Budget.MayAfford(PlayerbotSpendKind.Discretionary, price, player)))
+            {
+                continue;
+            }
+
+            return row;
+        }
+
+        return null;
+    }
+
+    private bool TryBuyCraftingSupplies(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        if (FindCraftingSupplyRow(player, services, npc) is not { } row)
+            return false;
+        Goal = PlayerbotGoalKind.Vendor;
+        bool bought = Buy(player, npc, row.Item);
+        Budget?.Invalidate();
+        return bought;
+    }
+
     /// <summary>
-    /// Whether the class trainer has a spell the bot can learn and pay for (<see cref="QuestNpcServices.GetClassTrainerQuote"/>: up to 128
+    /// Whether the class or trade-skill trainer has a spell the bot can learn and pay for (<see cref="QuestNpcServices.GetClassTrainerQuote"/>: up to 128
     /// spells described and weighed per trainer). A trainer with nothing is not asked again for <see cref="TrainerQuoteMemoMs"/>, unless the
     /// bot's level changed or it has more money than when it was asked; what else could make a spell learnable (a quest reward, a
     /// skill) is noticed at the next look after that.
@@ -949,7 +1079,10 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             && memo.Level == level && money <= memo.Money && limit <= memo.Limit && unchecked((int)(memo.Until - now)) > 0)
             return false;
         TrainerQuotesAsked++;
-        if (services.GetClassTrainerQuote(player, npc, 0, spendable) is not null)
+        ClassTrainerQuote? quote = npc.TrainerType == TrainerType.TradeSkills
+            ? TradeSkillQuote(player, services, npc, 0)
+            : services.GetClassTrainerQuote(player, npc, 0, spendable);
+        if (quote is not null)
         {
             _noTrainerOffer.Remove(npc.Guid);
             return true;
@@ -970,6 +1103,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 && FindConsumableVendorRow(player, services, npc, spells, food, drink) is not null) return true;
             if (needs.Ammo(player) && FindAmmoRowOf(player, services, npc) is not null) return true;
             if (FindMountRow(player, services, npc) is not null) return true;
+            if (FindEquipmentUpgradeRow(player, services, npc) is not null) return true;
+            if (FindCraftingSupplyRow(player, services, npc) is not null) return true;
             if (needs.Grays(this, player, services)) return true;
             if (needs.Junk(this, player, services)) return true;
         }

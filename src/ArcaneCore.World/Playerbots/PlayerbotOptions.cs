@@ -308,6 +308,7 @@ public enum PlayerbotLootRoll
 {
     Pass,
     Greed,
+    Need,
 }
 
 /// <summary>
@@ -335,8 +336,8 @@ public sealed class PlayerbotPartyOptions
     /// <summary>Revive a dead bot in place when vmangos <c>PartyBotAI::ShouldAutoRevive</c> says so (on by default); otherwise it runs back.</summary>
     public bool AutoRevive { get; set; } = true;
 
-    /// <summary>The vote on every group loot roll (<see cref="PlayerbotLootRoll.Pass"/> by default: the items go to the players).</summary>
-    public PlayerbotLootRoll LootRoll { get; set; } = PlayerbotLootRoll.Pass;
+    /// <summary>The vote on every group loot roll (<see cref="PlayerbotLootRoll.Need"/> by default: Need on upgrades, Greed otherwise).</summary>
+    public PlayerbotLootRoll LootRoll { get; set; } = PlayerbotLootRoll.Need;
 
     /// <summary>Seconds a bot waits for an offline or departed master before it leaves the group and goes back to its own goals (1..3600).</summary>
     public int MasterTimeoutSeconds { get; set; } = 60;
@@ -345,7 +346,7 @@ public sealed class PlayerbotPartyOptions
     {
         const string section = PlayerbotOptions.SectionName + ":Party";
         if (!Enum.IsDefined(InvitePolicy)) throw new InvalidOperationException($"{section}: InvitePolicy must be None, GuildOrFriends or Anyone.");
-        if (!Enum.IsDefined(LootRoll)) throw new InvalidOperationException($"{section}: LootRoll must be Pass or Greed.");
+        if (!Enum.IsDefined(LootRoll)) throw new InvalidOperationException($"{section}: LootRoll must be Pass, Greed or Need.");
         if (MasterTimeoutSeconds is < 1 or > 3600) throw new InvalidOperationException($"{section}: MasterTimeoutSeconds must be 1..3600.");
         if (Allowlist is null || Allowlist.Length > MaxAllowlist
             || Allowlist.Any(name => string.IsNullOrWhiteSpace(name) || name.Length > 12 || !name.All(char.IsLetter))

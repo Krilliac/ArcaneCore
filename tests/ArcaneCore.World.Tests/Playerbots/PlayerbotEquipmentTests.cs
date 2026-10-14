@@ -310,6 +310,74 @@ public sealed class PlayerbotEquipmentTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task NeedLootRollAndBagAndRecipeAndCraftingProgressionWorkTogether()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Template(40, InventoryType.Feet, 10));
+        items.Templates.Templates.Add(Template(2967, InventoryType.Feet, 70, requiredLevel: 5));
+        items.Templates.Templates.Add(Template(2968, InventoryType.Feet, 5, requiredLevel: 1));
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 4496, Name = "Small Brown Pouch", Class = (uint)ItemClass.Container, SubClass = 0,
+            InventoryType = (uint)InventoryType.Bag, ContainerSlots = 6, AllowableClass = uint.MaxValue,
+            AllowableRace = uint.MaxValue, Stackable = 1,
+        });
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 6400, Name = "Plans: Copper Bracers", Class = 9, SubClass = 4,
+            InventoryType = (uint)InventoryType.NonEquip, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue,
+            Stackable = 1, Spells = [new ItemSpell(994010, 0u, -1, 0f, 0, 0, 0)],
+        });
+        using IDisposable scope = items.Use();
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.Level = 5;
+                EquipFromBags(player, 40);
+
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                feature.System.Store = new SpellStore([
+                    new SpellInfo
+                    {
+                        Id = 994010,
+                        Effects = [new SpellEffectInfo { Effect = SpellEffectName.LearnSpell, TriggerSpell = 994011 }, new(), new()],
+                    },
+                    new SpellInfo
+                    {
+                        Id = 994011,
+                        Effects = [new SpellEffectInfo { Effect = SpellEffectName.CreateItem, ItemType = 2967 }, new(), new()],
+                        Reagents = [new SpellReagent(2840, 2)],
+                        Totems = [5956, 0],
+                    },
+                ], [], []);
+
+                // Need on wearable armor upgrade, bag upgrade, and unlearned recipe; Greed on downgrade.
+                Assert.Equal(ArcaneCore.Game.Loot.RollVote.Need,
+                    ArcaneCore.World.Playerbots.Party.PlayerbotLootRolls.VoteFor(player, 2967, PlayerbotLootRoll.Need, feature.System.Store, feature.Spellbook));
+                Assert.Equal(ArcaneCore.Game.Loot.RollVote.Need,
+                    ArcaneCore.World.Playerbots.Party.PlayerbotLootRolls.VoteFor(player, 4496, PlayerbotLootRoll.Need, feature.System.Store, feature.Spellbook));
+                Assert.Equal(ArcaneCore.Game.Loot.RollVote.Need,
+                    ArcaneCore.World.Playerbots.Party.PlayerbotLootRolls.VoteFor(player, 6400, PlayerbotLootRoll.Need, feature.System.Store, feature.Spellbook));
+                Assert.Equal(ArcaneCore.Game.Loot.RollVote.Greed,
+                    ArcaneCore.World.Playerbots.Party.PlayerbotLootRolls.VoteFor(player, 2968, PlayerbotLootRoll.Need, feature.System.Store, feature.Spellbook));
+
+                // Once recipe 994011 is learned, recipe item 6400 is no longer Needed, and crafting supply 5956 / 2840 are recognized.
+                feature.Spellbook.LearnSpell(player, 994011);
+                Assert.Equal(ArcaneCore.Game.Loot.RollVote.Greed,
+                    ArcaneCore.World.Playerbots.Party.PlayerbotLootRolls.VoteFor(player, 6400, PlayerbotLootRoll.Need, feature.System.Store, feature.Spellbook));
+                Assert.True(ArcaneCore.World.Playerbots.Progression.PlayerbotCrafting.NeedsVendorSupply(player, 5956, feature.System.Store, feature.Spellbook));
+                Assert.True(ArcaneCore.World.Playerbots.Progression.PlayerbotCrafting.NeedsVendorSupply(player, 2840, feature.System.Store, feature.Spellbook));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     internal static void EquipFromBags(Player player, uint entry)
     {
         Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(entry, 1, out _));

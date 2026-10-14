@@ -131,6 +131,7 @@ public sealed class PlayerbotChatCommandTests
     [Theory]
     [InlineData(PlayerbotLootRoll.Pass, RollVote.Pass)]
     [InlineData(PlayerbotLootRoll.Greed, RollVote.Greed)]
+    [InlineData(PlayerbotLootRoll.Need, RollVote.Need)]
     public void LootRolls_AreAnsweredWithTheConfiguredVote_InTheServersOwnFormat(PlayerbotLootRoll choice, RollVote expected)
     {
         var corpse = ObjectGuid.WithEntry(HighGuid.Unit, 990001, 990001);

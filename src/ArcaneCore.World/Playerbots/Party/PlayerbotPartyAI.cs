@@ -426,7 +426,8 @@ internal sealed class PlayerbotPartyAI
     private void OnLootRoll(Player player, byte[] payload)
     {
         if (!PlayerbotLootRolls.TryRead(payload, out PlayerbotLootRolls.StartRoll roll)) return;
-        RollVote vote = GroupLootVote?.Invoke(player, roll.ItemId) ?? PlayerbotLootRolls.VoteFor(_options.Party.LootRoll);
+        RollVote vote = GroupLootVote?.Invoke(player, roll.ItemId)
+            ?? PlayerbotLootRolls.VoteFor(player, roll.ItemId, _options.Party.LootRoll, Services.Spells?.System.Store, Services.Spells?.Spellbook);
         Act(WorldOpcode.CmsgLootRoll, PlayerbotLootRolls.Vote(roll, vote), budgeted: false);
     }
 
