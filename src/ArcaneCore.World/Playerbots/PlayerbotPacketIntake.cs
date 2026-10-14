@@ -45,6 +45,8 @@ internal static class PlayerbotPacketIntake
         WorldOpcode.SmsgQuestgiverQuestDetails,
         WorldOpcode.SmsgQuestgiverRequestItems,
         WorldOpcode.SmsgQuestgiverOfferReward,
+        WorldOpcode.SmsgQuestgiverQuestFailed,
+        WorldOpcode.SmsgQuestgiverQuestInvalid,
         // PlayerbotTownGoals: trainer lists.
         WorldOpcode.SmsgTrainerList,
         // PlayerbotTaxi: the reply to a flight activation.
