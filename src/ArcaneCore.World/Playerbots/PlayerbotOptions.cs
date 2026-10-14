@@ -192,6 +192,9 @@ public sealed class PlayerbotOptions
     /// <summary>Adversarial server-breaker chaos bots that fuzz handlers, state machines and invariants (<c>World:Playerbots:Chaos</c>; live; off by default).</summary>
     public Chaos.PlayerbotChaosOptions Chaos { get; set; } = new();
 
+    /// <summary>Zero-allocation batched ONNX / SIMD policy inference engine (<c>World:Playerbots:Inference</c>; off by default).</summary>
+    public AI.Inference.PlayerbotInferenceOptions Inference { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -272,6 +275,8 @@ public sealed class PlayerbotOptions
         Battlegrounds.Validate();
         if (Chaos is null) throw new InvalidOperationException($"{SectionName}:Chaos is missing.");
         Chaos.Validate();
+        if (Inference is null) throw new InvalidOperationException($"{SectionName}:Inference is missing.");
+        Inference.Validate();
     }
 }
 

@@ -1,5 +1,9 @@
+extern alias MelRuntime;
+
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Logging;
+using MelRuntime::Microsoft.Extensions.DependencyInjection;
+using MelRuntime::Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;

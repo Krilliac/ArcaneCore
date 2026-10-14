@@ -68,6 +68,8 @@ banners, as it does the classic-db goobers; never Alterac Valley), fill the queu
 `PlayerbotBattlegroundCoordinator` and `PlayerbotBattlegroundAI` (`World:Playerbots:Battlegrounds`, live; `.playerbot battlegrounds`):
 `docs/areas/playbots-battlegrounds.md`.
 
+Zero-allocation batched policy inference (`World:Playerbots:Inference`, `Enabled` true by default, `ModelPath`, `TensorRtCachePath`, `GpuDeviceId`, `MaxBatchSize` 128) evaluates up to 128 active bots per world tick inside `PlayerbotBatchCoordinator` (`src/ArcaneCore.World/Playerbots/AI/Inference/`) using 64-byte aligned native observation/logit buffers (`NativeMemory.AlignedAlloc`), ONNX Runtime `OrtIoBinding` (falling back to a deterministic `TensorPrimitives` SIMD linear policy when `ModelPath` is unset or absent), and a 24-byte explicit-layout C# 15 `[Union]` value type (`PlayerbotAction`: `IdleAction`, `MoveToAction`, `CastSpellAction`, `PetCommandAction`) with zero managed heap allocations per tick.
+
 ### Autonomous and scripted mode
 
 By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,

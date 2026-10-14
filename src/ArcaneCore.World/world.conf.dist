@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       455 keys
+#   WORLD                       460 keys
 #
 ###############################################################################
 
@@ -11906,6 +11906,65 @@ World.Playerbots.Home.ReturnMode = Auto
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Home.TeleportDistanceYards = 1500
+
+#
+#    World.Playerbots.Inference.EnableTensorRt
+#        Description: Enable the TensorRT execution provider when loading an ONNX model (falls back
+#                     to CPU when unavailable; off by default).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Inference.EnableTensorRt = false
+
+#
+#    World.Playerbots.Inference.Enabled
+#        Description: Run the zero-allocation batched playerbot inference pass each world tick (off
+#                     by default).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Inference.Enabled = false
+
+#
+#    World.Playerbots.Inference.GpuDeviceId
+#        Description: GPU device index for ONNX Runtime TensorRT execution provider (0..15).
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Inference.GpuDeviceId = 0
+
+#
+#    World.Playerbots.Inference.ModelPath
+#        Description: Optional path to an ONNX policy model (obs_input [128,64] -&gt; action_output
+#                     [128,16]); empty uses the built-in SIMD policy kernel.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Inference.ModelPath = ""
+
+#
+#    World.Playerbots.Inference.TensorRtCachePath
+#        Description: Directory where TensorRT engine caches are stored (non-empty, at most 260
+#                     characters).
+#        Type: string
+#        Default: "./cache/trt_11_engines"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Inference.TensorRtCachePath = "./cache/trt_11_engines"
 
 #
 #    World.Playerbots.LocalLlmContextSize
