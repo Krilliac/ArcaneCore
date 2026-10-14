@@ -7,6 +7,7 @@ using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Stealth;
 using ArcaneCore.Kernel.WorldData;
@@ -459,7 +460,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && UnsafeBody is { } judge
             && _corpseRunResumedFor != corpse!.Guid && HealerOutcomeKnown(player, corpse!) && judge(player, corpse!) is { Reason: not PlayerbotUnsafeBody.None } verdict
             && (verdict.Reason == PlayerbotUnsafeBody.Hazard
-                || !KeepBodyOverLanding(player, corpse!) && !KeepBodyOverSickness(player, corpse!, verdict.Reason)))
+                ? !CanReclaimSubmergedFromDryShore(player, corpse!)
+                : !KeepBodyOverLanding(player, corpse!) && !KeepBodyOverSickness(player, corpse!, verdict.Reason)))
         {
             // The body is not worth it (submerged, a repeat death there, a camp too strong, or outside the home with the healer nearer it):
             // take the spirit healer now rather than revive where the bot would die again.
@@ -476,7 +478,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         PlayerbotThinkProbe.Phase("recovery revive spot");
         bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && WithinReclaimDistance(player, corpse!);
         long wait = atCorpse ? player.Map?.Combat.CorpseReclaimWaitSeconds(player) ?? 0 : 0;
-        bool hostile = atCorpse && wait <= 0 && Camped(player, Hazards?.Invoke(player) ?? []);
+        bool submergedAtCorpse = atCorpse && wait <= 0 && player.Map is { } currentMap
+            && PlayerbotWater.Submerged(currentMap, new Vector3(corpse!.X, corpse.Y, corpse.Z), player.Locomotion.CollisionHeight)
+            && !IsDryShore(currentMap, new Vector3(player.X, player.Y, player.Z));
+        bool hostile = atCorpse && wait <= 0 && (Camped(player, Hazards?.Invoke(player) ?? []) || submergedAtCorpse);
         Vector3? spot = hostile && !stalled && !_preferSpiritHealer ? ChooseReviveSpot(player, corpse!) : null;
         PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: _preferSpiritHealer,
             reviveSpotKnown: spot is not null);
@@ -944,6 +949,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         {
             PlayerbotUnsafeBody.DiedHere or PlayerbotUnsafeBody.OutsideHome => true,
             PlayerbotUnsafeBody.TooStrong => ClearSpotNear(player, corpse),
+            PlayerbotUnsafeBody.Hazard => CanReclaimSubmergedFromDryShore(player, corpse),
             _ => false,
         };
         if (keep && BodyKeptOverSickness == PlayerbotUnsafeBody.None)
@@ -955,6 +961,42 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
 
         return keep;
+    }
+
+    /// <summary>Maximum distance from the corpse at which a dry shoreline spot may be used to reclaim a submerged body.</summary>
+    internal const float SafeReviveMaxRadius = ReviveSpotMaxYards - 1f;
+
+    /// <summary>
+    /// Whether <paramref name="at"/> lies on loaded terrain with no liquid (<see cref="LiquidStatus.NoWater"/>: dry ground above the
+    /// water surface, not merely shallow water).
+    /// </summary>
+    internal static bool IsDryShore(Map map, Vector3 at)
+    {
+        TerrainTile tile = map.Terrain.GetTile(at.X, at.Y);
+        if (!tile.HasData) return false;
+        float ground = tile.GetHeight(at.X, at.Y);
+        float z = ground > TerrainTile.InvalidHeight ? ground : at.Z;
+        return map.GetLiquidStatus(at.X, at.Y, z, LiquidTypeFlags.AllLiquids, out _) == LiquidStatus.NoWater;
+    }
+
+    private static Vector3 GroundAt(Map map, Vector3 at)
+    {
+        float ground = map.GetHeight(at.X, at.Y, at.Z);
+        return ground > TerrainTile.InvalidHeight ? new Vector3(at.X, at.Y, ground) : at;
+    }
+
+    /// <summary>
+    /// Whether a submerged body (<see cref="PlayerbotUnsafeBody.Hazard"/>) has a dry shoreline revive spot within
+    /// <see cref="SafeReviveMaxRadius"/> yards that is clear of threats around the body.
+    /// </summary>
+    internal bool CanReclaimSubmergedFromDryShore(Player player, Corpse corpse)
+    {
+        if (player.Map is not { } map) return false;
+        var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
+        List<PlayerbotThreat> hostiles = [.. ThreatsAround(player, body, BodyThreatYards), .. Hazards?.Invoke(player) ?? []];
+        return FindReviveSpot(body, body, hostiles, candidate => GroundAt(map, candidate),
+            candidate => Vector2.Distance(new Vector2(candidate.X, candidate.Y), new Vector2(body.X, body.Y)) <= SafeReviveMaxRadius
+                && IsDryShore(map, candidate)) is not null;
     }
 
     /// <summary>A spot inside the reclaim radius of the body clear of every threat round it (the geometry of <see cref="FindReviveSpot"/>).</summary>
@@ -1221,7 +1263,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         if (player.Map is null) return null;
         var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
         List<PlayerbotThreat> hostiles = [.. Threats(player), .. Hazards?.Invoke(player) ?? []];
-        bool Dry(Vector3 candidate) => !PlayerbotWater.Submerged(player.Map, candidate, player.Locomotion.CollisionHeight);
+        bool bodySubmerged = PlayerbotWater.Submerged(player.Map, body, player.Locomotion.CollisionHeight);
+        bool Dry(Vector3 candidate) => bodySubmerged
+            ? Vector2.Distance(new Vector2(candidate.X, candidate.Y), new Vector2(body.X, body.Y)) <= SafeReviveMaxRadius
+                && IsDryShore(player.Map, candidate)
+            : !PlayerbotWater.Submerged(player.Map, candidate, player.Locomotion.CollisionHeight);
         if (_spot is { } kept && IsReviveSpot(kept, body, hostiles, Dry)) return kept;
 
         Vector3? found = FindReviveSpot(new Vector3(player.X, player.Y, player.Z), body, hostiles, candidate =>
@@ -1230,7 +1276,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             // nearest walkable point (a candidate off the mesh ends short of it, which IsReviveSpot then re-checks). A candidate whose
             // tiles are still being read answers no point, as a refusal does: no spot is known yet (WaitForHostiles, not progress), the
             // search is made again next think, and nothing is set aside here that a tile arriving would not reopen.
-            if (!PlayerbotNavigation.TryPlan(player, candidate, options, out PlayerbotRoute? route) || route is null
+            Vector3 target = bodySubmerged ? GroundAt(player.Map, candidate) : candidate;
+            if (!PlayerbotNavigation.TryPlan(player, target, options, out PlayerbotRoute? route) || route is null
                 || route.Distance > ReviveSpotMaxWalkYards)
                 return null;
             return route.Points[^1];

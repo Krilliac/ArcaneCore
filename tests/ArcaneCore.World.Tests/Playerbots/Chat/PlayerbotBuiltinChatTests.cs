@@ -163,4 +163,40 @@ public sealed class PlayerbotBuiltinChatTests
             }
         }
     }
+
+    [Theory]
+    [InlineData("commands")]
+    [InlineData("what commands do you have?")]
+    [InlineData("how do I control you?")]
+    [InlineData("what can I ask you?")]
+    [InlineData("list commands")]
+    [InlineData("what can you do?")]
+    public void HelpAndCommandQuestions_ReturnCommandListForAnyPlayer_AndGmHelpForGm(string question)
+    {
+        Assert.Equal(BuiltinChatIntent.Help, PlayerbotBuiltinChat.Classify(question, "Chatbot", out _));
+        BuiltinChatAnswer playerAnswer = PlayerbotBuiltinChat.Answer(ChatSamples.Ask(question, fromMaster: false), null, true, new Random(1));
+        Assert.Equal(PlayerbotChatCommands.Help, playerAnswer.Text);
+
+        BotChatAsk gmAsk = ChatSamples.Ask(question, fromMaster: false) with { FromGm = true };
+        BuiltinChatAnswer gmAnswer = PlayerbotBuiltinChat.Answer(gmAsk, null, true, new Random(1));
+        Assert.Equal(PlayerbotChatCommands.GmHelp, gmAnswer.Text);
+    }
+
+    [Theory]
+    [InlineData("debug")]
+    [InlineData("diag")]
+    [InlineData("what is your debug state?")]
+    [InlineData("show brain state")]
+    public void DebugQuestions_ExposeInternalDebugSummaryOnlyToGm(string question)
+    {
+        Assert.Equal(BuiltinChatIntent.Debug, PlayerbotBuiltinChat.Classify(question, "Chatbot", out _));
+        BotChatPersona persona = ChatSamples.Persona() with { DebugSummary = "Debug: driver=autonomous goal=Quest/123 phase=Quest" };
+
+        BuiltinChatAnswer nonGmAnswer = PlayerbotBuiltinChat.Answer(ChatSamples.Ask(question, persona, fromMaster: false), null, true, new Random(1));
+        Assert.DoesNotContain("driver=autonomous", nonGmAnswer.Text);
+
+        BotChatAsk gmAsk = ChatSamples.Ask(question, persona, fromMaster: false) with { FromGm = true };
+        BuiltinChatAnswer gmAnswer = PlayerbotBuiltinChat.Answer(gmAsk, null, true, new Random(1));
+        Assert.Equal("Debug: driver=autonomous goal=Quest/123 phase=Quest", gmAnswer.Text);
+    }
 }

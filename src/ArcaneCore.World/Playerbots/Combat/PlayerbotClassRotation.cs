@@ -114,13 +114,16 @@ internal abstract class PlayerbotClassRotation
     // --- emergencies ------------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// A healing potion below 25% health in a fight; a bandage below 40% when nothing is hitting the bot in melee (a hit
-    /// interrupts the channel) and the "Recently Bandaged" debuff has worn off.
+    /// A healing potion below 25% health in a fight; a mana potion at or below 20% mana; a bandage below 40% when nothing is
+    /// hitting the bot in melee (a hit interrupts the channel) and the "Recently Bandaged" debuff has worn off.
     /// </summary>
     internal static RotationAction? Emergency(RotationState s)
     {
         if (!s.InCombat) return null;
         if (s.Self.HealthPercent < 25f && s.HealingPotion is { } potion) return RotationAction.Use(potion, s.Self);
+        if (s.PowerType == PowerType.Mana && s.MaxPower > 0 && s.PowerPercent <= 20f
+            && PlayerbotCombatView.GetManaPotion(s) is { } manaPotion)
+            return RotationAction.Use(manaPotion, s.Self);
         if (s.Self.HealthPercent < 40f && s.Bandage is { } bandage && !s.Self.HasAura(RecentlyBandaged)
             && !s.Attackers.Any(a => a.IsAlive && a.InMeleeRange))
             return RotationAction.Use(bandage, s.Self);

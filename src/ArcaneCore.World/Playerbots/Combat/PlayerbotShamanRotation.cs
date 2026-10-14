@@ -28,6 +28,10 @@ internal sealed class PlayerbotShamanRotation : PlayerbotClassRotation
     internal const string ManaSpringTotem = "Mana Spring Totem";
     internal const string GraceOfAirTotem = "Grace of Air Totem";
     internal const string WindfuryTotem = "Windfury Totem";
+    internal const string RockbiterWeapon = "Rockbiter Weapon";
+    internal const string FlametongueWeapon = "Flametongue Weapon";
+    internal const string FrostbrandWeapon = "Frostbrand Weapon";
+    internal const string WindfuryWeapon = "Windfury Weapon";
 
     /// <summary>Totem names by element (a new totem of an element replaces the old one).</summary>
     internal static readonly string[] EarthTotems = [StoneskinTotem, StrengthOfEarthTotem, "Earthbind Totem", "Stoneclaw Totem", "Tremor Totem"];
@@ -41,7 +45,7 @@ internal sealed class PlayerbotShamanRotation : PlayerbotClassRotation
     [
         LightningBolt, ChainLightning, EarthShock, FlameShock, FrostShock, Purge, Stormstrike, ElementalMastery, LightningShield,
         ManaTideTotem, CurePoison, CureDisease, SearingTotem, MagmaTotem, StoneskinTotem, StrengthOfEarthTotem, HealingStreamTotem,
-        ManaSpringTotem, GraceOfAirTotem, WindfuryTotem,
+        ManaSpringTotem, GraceOfAirTotem, WindfuryTotem, RockbiterWeapon, FlametongueWeapon, FrostbrandWeapon, WindfuryWeapon,
     ];
 
     protected override IEnumerable<string> Dispels => [CureDisease, CurePoison];
@@ -52,7 +56,16 @@ internal sealed class PlayerbotShamanRotation : PlayerbotClassRotation
 
     protected override RotationAction? Upkeep(RotationState s)
         => Do(s, LightningShield, s.Self)
+            ?? WeaponImbue(s)
             ?? (s.Role == PlayerbotRole.Healer ? HealInjuredAlly(s) : null);
+
+    internal static RotationAction? WeaponImbue(RotationState s)
+        => PlayerbotCombatView.CanImbueMainHand(s)
+            ? Do(s, WindfuryWeapon, s.Self)
+                ?? Do(s, RockbiterWeapon, s.Self)
+                ?? Do(s, FlametongueWeapon, s.Self)
+                ?? Do(s, FrostbrandWeapon, s.Self)
+            : null;
 
     /// <summary>A shaman alone, still classed as a healer because it has no Elemental Mastery or Stormstrike, heals only below this.</summary>
     internal const float SoloEmergencyHealth = 30f;

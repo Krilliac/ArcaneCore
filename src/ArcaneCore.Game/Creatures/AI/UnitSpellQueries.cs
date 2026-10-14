@@ -22,6 +22,9 @@ public interface IUnitSpellQueries
     /// <summary>Sum the creature's level-eligible MOD_DETECT_RANGE auras (vmangos Creature::GetAttackDistance, Creature.cpp:2225-2230).</summary>
     float GetDetectRangeModifier(Creature creature) => 0;
 
+    /// <summary>Sum the target's MOD_DETECTED_RANGE auras (vmangos Creature::GetAttackDistance, Creature.cpp:2232).</summary>
+    float GetDetectedRangeModifier(Unit target) => 0;
+
     /// <summary>cmangos Unit::RemoveAurasDueToSpell (EventAI REMOVEAURASFROMSPELL); false when nothing could be removed.</summary>
     bool RemoveAuras(Unit unit, uint spellId) => false;
 
@@ -61,6 +64,24 @@ public sealed class SpellSystemUnitSpellQueries(Func<SpellSystem> spells) : IUni
             foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is { Type: AuraType.ModDetectRange }) total += aura.Amount;
+            }
+        }
+
+        return total;
+    }
+
+    public float GetDetectedRangeModifier(Unit target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        float total = 0;
+        IReadOnlyList<SpellAuraHolder> holders = spells().GetAuras(target);
+        for (int i = 0; i < holders.Count; i++)
+        {
+            SpellAuraHolder holder = holders[i];
+            if (holder.IsRemoved) continue;
+            foreach (SpellAura? aura in holder.AuraSpan)
+            {
+                if (aura is { Type: AuraType.ModDetectedRange }) total += aura.Amount;
             }
         }
 

@@ -7,6 +7,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Skills;
@@ -58,7 +59,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     /// <summary>
     /// Whether the bot wants to learn <paramref name="learnedSpellId"/> at a <c>TrainerType.TradeSkills</c> trainer:
     /// secondary skills (First Aid, Cooking), class-fitted gathering and crafting professions, or any recipe that crafts
-    /// a wearable upgrade, bag upgrade, ammunition, or reagent.
+    /// a wearable upgrade, bag upgrade, ammunition, reagent, or permanent equipment enchantment.
     /// </summary>
     internal static bool WantsTradeSkillSpell(Player player, SpellStore? store, SpellbookCache? spellbook, uint learnedSpellId)
     {
@@ -82,7 +83,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 }
             }
 
-            if (eff.Effect is SpellEffectName.OpenLock or SpellEffectName.Skinning)
+            if (eff.Effect is SpellEffectName.OpenLock or SpellEffectName.Skinning or SpellEffectName.EnchantItem or SpellEffectName.Disenchant)
                 return true;
 
             if (eff.Effect == SpellEffectName.CreateItem && eff.ItemType != 0)
@@ -148,7 +149,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 return true;
             }
 
-            if (!WantsToCraftSpell(player, spell, weights, store, spellbook))
+            if (!WantsToCraftSpell(player, spell, weights, store, spellbook)
+                && !WantsToEnchantSpell(player, spell))
                 continue;
 
             for (int r = 0; r < spell.Reagents.Count; r++)
@@ -182,6 +184,15 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return true;
 
         if (spellFeature is not null && TryCraft(player, spellFeature.System.Store, spellFeature.Spellbook, elapsedMs, now))
+            return true;
+
+        if (spellFeature is not null && TryEnchantEquipment(player, spellFeature.System.Store, spellFeature.Spellbook, now))
+            return true;
+
+        if (spellFeature is not null && TryDisenchantItem(player, spellFeature.System.Store, spellFeature.Spellbook, now))
+            return true;
+
+        if (spellFeature is not null && TryPickLockItem(player, spellFeature.System.Store, spellFeature.Spellbook, now))
             return true;
 
         if (spellFeature is not null && TryGatherNode(player, spellFeature.System.Store, spellFeature.Spellbook, elapsedMs, now))
@@ -434,6 +445,242 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         }
 
         return anyReagent;
+    }
+
+    private static bool WantsToEnchantSpell(Player player, SpellInfo spell)
+    {
+        uint enchantId = 0;
+        for (int i = 0; i < spell.Effects.Count; i++)
+        {
+            SpellEffectInfo eff = spell.Effects[i];
+            if (eff.Effect == SpellEffectName.EnchantItem && eff.MiscValue > 0)
+            {
+                enchantId = (uint)eff.MiscValue;
+                break;
+            }
+        }
+        if (enchantId == 0)
+            return false;
+
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is { } worn
+                && worn.GetUInt32(UpdateFields.ItemFieldEnchantment) == 0
+                && worn.Template.ItemLevel >= spell.BaseLevel
+                && ArcaneCore.Game.Crafting.Enchanting.ItemTargetRules.IsFit(spell, worn.Template))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryEnchantEquipment(Player player, SpellStore store, SpellbookCache spellbook, uint now)
+    {
+        SpellInfo? bestSpell = null;
+        Item? bestTarget = null;
+        uint bestRank = 0;
+
+        foreach (uint spellId in spellbook.GetSpells(player))
+        {
+            if (_refusedUntil.ContainsKey(SpellKey(spellId))
+                || store.Get(spellId) is not { } spell
+                || !HasReagentsAndTools(player, spell))
+                continue;
+
+            uint enchantId = 0;
+            for (int i = 0; i < spell.Effects.Count; i++)
+            {
+                SpellEffectInfo eff = spell.Effects[i];
+                if (eff.Effect == SpellEffectName.EnchantItem && eff.MiscValue > 0)
+                {
+                    enchantId = (uint)eff.MiscValue;
+                    break;
+                }
+            }
+            if (enchantId == 0)
+                continue;
+
+            for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+            {
+                if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is not { } worn)
+                    continue;
+                if (_refusedUntil.ContainsKey(worn.Guid.Value)
+                    || worn.GetUInt32(UpdateFields.ItemFieldEnchantment) != 0
+                    || worn.Template.ItemLevel < spell.BaseLevel
+                    || !ArcaneCore.Game.Crafting.Enchanting.ItemTargetRules.IsFit(spell, worn.Template))
+                    continue;
+
+                uint rank = Math.Max(spell.SpellLevel, spell.BaseLevel) * 100_000u + spell.Id;
+                if (bestSpell is null || rank > bestRank)
+                {
+                    bestSpell = spell;
+                    bestTarget = worn;
+                    bestRank = rank;
+                }
+            }
+        }
+
+        if (bestSpell is null || bestTarget is null)
+            return false;
+
+        _route = null;
+        _routeTarget = default;
+        if (!PlayerbotMovementControl.Stop(_session, player))
+            return true;
+
+        Goal = PlayerbotGoalKind.Vendor;
+        TargetEntry = 0;
+        var writer = new PacketWriter(16);
+        writer.WriteUInt32(bestSpell.Id);
+        new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = bestTarget.Guid }.Write(writer);
+        if (!_session.TryManagedAction(WorldOpcode.CmsgCastSpell, writer.ToArray()))
+            return false;
+
+        if (_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is null
+            && bestTarget.GetUInt32(UpdateFields.ItemFieldEnchantment) == 0)
+        {
+            _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + RefusalBackoffMs);
+            _refusedUntil[bestTarget.Guid.Value] = unchecked(now + RefusalBackoffMs);
+        }
+        return true;
+    }
+
+    private bool TryDisenchantItem(Player player, SpellStore store, SpellbookCache spellbook, uint now)
+    {
+        if (PlayerbotTownGoals.FreeBagSlots(player) <= 0)
+            return false;
+
+        const uint DisenchantSpellId = 13262;
+        SpellInfo? disenchantSpell = null;
+        if (spellbook.HasSpell(player, DisenchantSpellId))
+        {
+            disenchantSpell = store.Get(DisenchantSpellId);
+        }
+        else
+        {
+            foreach (uint spellId in spellbook.GetSpells(player))
+            {
+                if (store.Get(spellId) is { } s && s.Effects.Any(e => e.Effect == SpellEffectName.Disenchant))
+                {
+                    disenchantSpell = s;
+                    break;
+                }
+            }
+        }
+
+        if (disenchantSpell is null || _refusedUntil.ContainsKey(SpellKey(disenchantSpell.Id)))
+            return false;
+
+        PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        Item? candidate = null;
+        foreach (Item item in player.Inventory.AllItems.Take(128))
+        {
+            if (!InventorySlots.IsInventoryPos(item.BagSlot, item.Slot)
+                || InventorySlots.IsEquipmentPos(item.BagSlot, item.Slot)
+                || item.Count == 0
+                || _refusedUntil.ContainsKey(item.Guid.Value))
+                continue;
+
+            ItemTemplate template = item.Template;
+            if (!DisenchantLoot.HasDisenchantLoot(template))
+                continue;
+
+            // Never disenchant an item that is an upgrade for this bot.
+            if (PlayerbotItemScore.BestUpgradeSlot(player, template, out _, out _, weights, spells: store))
+                continue;
+
+            candidate = item;
+            break;
+        }
+
+        if (candidate is null)
+            return false;
+
+        _route = null;
+        _routeTarget = default;
+        if (!PlayerbotMovementControl.Stop(_session, player))
+            return true;
+
+        Goal = PlayerbotGoalKind.Vendor;
+        TargetEntry = 0;
+        var writer = new PacketWriter(16);
+        writer.WriteUInt32(disenchantSpell.Id);
+        new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = candidate.Guid }.Write(writer);
+        if (!_session.TryManagedAction(WorldOpcode.CmsgCastSpell, writer.ToArray()))
+            return false;
+
+        _gatheringTarget = candidate.Guid;
+        _waitingForGatherLoot = true;
+        _gatherWaitUntilMs = unchecked(now + 6_000);
+        _refusedUntil[candidate.Guid.Value] = unchecked(now + RefusalBackoffMs);
+        return true;
+    }
+
+    private bool TryPickLockItem(Player player, SpellStore store, SpellbookCache spellbook, uint now)
+    {
+        SpellInfo? pickLockSpell = null;
+        foreach (uint spellId in spellbook.GetSpells(player))
+        {
+            if (store.Get(spellId) is not { } s)
+                continue;
+            if (s.Id == 1804 || s.Effects.Any(e => e.Effect == SpellEffectName.OpenLock && e.MiscValue == (int)LockType.PickLock))
+            {
+                pickLockSpell = s;
+                break;
+            }
+        }
+
+        if (pickLockSpell is null || _refusedUntil.ContainsKey(SpellKey(pickLockSpell.Id)))
+            return false;
+
+        GameObjectLootFeature? objects = _session.Services.GetService<GameObjectLootFeature>();
+        Item? lockedItem = null;
+        foreach (Item item in player.Inventory.AllItems.Take(128))
+        {
+            if (!InventorySlots.IsInventoryPos(item.BagSlot, item.Slot)
+                || InventorySlots.IsEquipmentPos(item.BagSlot, item.Slot)
+                || item.Count == 0
+                || _refusedUntil.ContainsKey(item.Guid.Value))
+                continue;
+
+            uint lockId = item.Template.LockId;
+            if (lockId == 0 || (item.GetUInt32(UpdateFields.ItemFieldFlags) & 4u) != 0)
+                continue;
+
+            if (objects?.Content.FindLock(lockId) is { } lockEntry)
+            {
+                SpellEffectInfo eff = pickLockSpell.Effects[0];
+                OpenLockCheck check = GatheringRules.CanOpenLock(
+                    lockId, lockEntry, (uint)LockType.PickLock, 0, false, eff.BasePoints + eff.BaseDice, true,
+                    id => player.Skills?.GetValue(id) ?? 0);
+                if (check.Result != SpellCastResult.CastOk)
+                    continue;
+            }
+
+            lockedItem = item;
+            break;
+        }
+
+        if (lockedItem is null)
+            return false;
+
+        _route = null;
+        _routeTarget = default;
+        if (!PlayerbotMovementControl.Stop(_session, player))
+            return true;
+
+        Goal = PlayerbotGoalKind.Vendor;
+        TargetEntry = 0;
+        var writer = new PacketWriter(16);
+        writer.WriteUInt32(pickLockSpell.Id);
+        new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = lockedItem.Guid }.Write(writer);
+        if (!_session.TryManagedAction(WorldOpcode.CmsgCastSpell, writer.ToArray()))
+            return false;
+
+        _refusedUntil[lockedItem.Guid.Value] = unchecked(now + RefusalBackoffMs);
+        return true;
     }
 
     private static bool HasNearbySpellFocus(Player player, uint spellFocusType, out GameObject? nearestOutOfRange)

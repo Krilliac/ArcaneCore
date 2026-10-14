@@ -20,7 +20,8 @@ internal sealed record BotChatPersona(
     string? QuestTitle,
     string? MasterName,
     bool InGroup,
-    IReadOnlyList<string> RecentEvents);
+    IReadOnlyList<string> RecentEvents,
+    string? DebugSummary = null);
 
 /// <summary>
 /// What a bot is asked to say on its own, with nobody having spoken to it (a guild announcement,
@@ -46,7 +47,8 @@ internal sealed record BotChatAsk(
     bool FromMaster,
     bool InviteAllowed,
     int SenderAccountId = 0,
-    BotChatTopic? Topic = null);
+    BotChatTopic? Topic = null,
+    bool FromGm = false);
 
 /// <summary>
 /// A reply on its way back to the world thread: said by the bot on <see cref="Channel"/>, and the master's order, if any.

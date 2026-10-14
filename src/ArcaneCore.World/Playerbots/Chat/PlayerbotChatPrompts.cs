@@ -52,6 +52,8 @@ internal static class PlayerbotChatPrompts
         if (p.RecentEvents.Count > 0) text.Append(" Recently: ").Append(string.Join("; ", p.RecentEvents)).Append('.');
         text.Append(c, $" You are speaking with {ask.SenderName} {ChannelWords(ask.Channel)}");
         text.Append(ask.FromMaster ? ", your party leader." : ".");
+        if (ask.FromGm && !string.IsNullOrWhiteSpace(p.DebugSummary))
+            text.Append(c, $" The speaker is a Game Master; if they ask for debug or diagnostic state, share your exact debug state: {p.DebugSummary}");
         return text.ToString();
     }
 

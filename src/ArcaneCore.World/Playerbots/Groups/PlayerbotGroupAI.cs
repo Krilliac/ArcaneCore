@@ -63,6 +63,7 @@ internal sealed class PlayerbotGroupAI
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotCombatSpells _spells;
+    private readonly PlayerbotEquipment _equipment;
     private readonly PlayerbotRecovery _recovery;
     private readonly PlayerbotRisk _risk;
     private readonly Random _random;
@@ -88,11 +89,12 @@ internal sealed class PlayerbotGroupAI
     private long _stuckSinceMs, _stuckLastMs;
     private uint _rangedIdleMs;
 
-    internal PlayerbotGroupAI(WorldSession session, PlayerbotOptions options)
+    internal PlayerbotGroupAI(WorldSession session, PlayerbotOptions options, PlayerbotEquipment? equipment = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _spells = new PlayerbotCombatSpells(session);
+        _equipment = equipment ?? new PlayerbotEquipment(session);
         _recovery = new PlayerbotRecovery(session, options);
         _risk = new PlayerbotRisk(session, options, _spells) { AvoidsStrongCreatures = false };
         _recovery.Hazards = _risk.HazardThreats;
@@ -283,6 +285,7 @@ internal sealed class PlayerbotGroupAI
             if (LootHeld(player, interval)) { Step = "loot"; return; }
             if (_spells.UpdateOutOfCombat(player, interval)) { Step = "buff"; Goal = PlayerbotGoalKind.Group; return; }
             if (Rest(player)) { Step = "rest"; return; }
+            UpdateEquipment(player);
         }
 
         if (isLeader) Lead(player, group, interval);
@@ -956,6 +959,20 @@ internal sealed class PlayerbotGroupAI
         catch (InvalidOperationException)
         {
             return null;
+        }
+    }
+
+    private void UpdateEquipment(Player player)
+    {
+        ManagedActionBudget? previous = _session.ManagedBudget;
+        if (previous is null) _session.ManagedBudget = new ManagedActionBudget(1);
+        try
+        {
+            _equipment.Update(player);
+        }
+        finally
+        {
+            if (previous is null) _session.ManagedBudget = null;
         }
     }
 

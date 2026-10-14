@@ -93,7 +93,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_GUILD_QUERY` | `0x0054` | handled | — | — |
 | `SMSG_GUILD_QUERY_RESPONSE` | `0x0055` | — | 1 | decoded |
 | `CMSG_ITEM_QUERY_SINGLE` | `0x0056` | handled | — | — |
-| `CMSG_ITEM_QUERY_MULTIPLE` | `0x0057` | unhandled | — | — |
+| `CMSG_ITEM_QUERY_MULTIPLE` | `0x0057` | handled | — | — |
 | `SMSG_ITEM_QUERY_SINGLE_RESPONSE` | `0x0058` | — | 2 | decoded |
 | `SMSG_ITEM_QUERY_MULTIPLE_RESPONSE` | `0x0059` | — | 0 | — |
 | `CMSG_PAGE_TEXT_QUERY` | `0x005A` | handled | — | — |
@@ -118,7 +118,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_DEL_IGNORE` | `0x006D` | handled | — | — |
 | `CMSG_GROUP_INVITE` | `0x006E` | handled | — | — |
 | `SMSG_GROUP_INVITE` | `0x006F` | — | 49 | decoded |
-| `CMSG_GROUP_CANCEL` | `0x0070` | unhandled | — | — |
+| `CMSG_GROUP_CANCEL` | `0x0070` | handled | — | — |
 | `SMSG_GROUP_CANCEL` | `0x0071` | — | 0 | — |
 | `CMSG_GROUP_ACCEPT` | `0x0072` | handled | — | — |
 | `CMSG_GROUP_DECLINE` | `0x0073` | handled | — | — |
@@ -346,7 +346,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_SAVE_PLAYER` | `0x0153` | unhandled | — | — |
 | `CMSG_SETDEATHBINDPOINT` | `0x0154` | unhandled | — | — |
 | `SMSG_BINDPOINTUPDATE` | `0x0155` | — | 1962 | decoded |
-| `CMSG_GETDEATHBINDZONE` | `0x0156` | unhandled | — | — |
+| `CMSG_GETDEATHBINDZONE` | `0x0156` | handled | — | — |
 | `SMSG_BINDZONEREPLY` | `0x0157` | — | 0 | — |
 | `SMSG_PLAYERBOUND` | `0x0158` | — | 1 | decoded |
 | `SMSG_CLIENT_CONTROL_UPDATE` | `0x0159` | — | 13 | decoded |

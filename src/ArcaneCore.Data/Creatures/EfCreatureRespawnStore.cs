@@ -84,18 +84,18 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
             list.Add(record);
         }
 
-        // One transaction for the whole batch, as the interface promises (the queue retains and retries a failed write whole). It is kept
-        // short by round trips: a few set-based statements per instance and chunk instead of one per key.
-        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        // Commit per chunk so SQLite/PostgreSQL write locks and EF change-tracker state stay bounded per chunk.
         try
         {
             foreach ((int instance, List<uint> guids) in deleteGuids)
             {
                 foreach (uint[] part in guids.Distinct().Chunk(ChunkSize))
                 {
+                    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
                     List<uint> chunk = [.. part]; // a List: C# 14 would bind an array's Contains to the span overload, which EF Core 9 cannot translate (EF 10 can)
                     await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == instance && chunk.Contains(r.SpawnGuid))
                         .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
 
@@ -103,27 +103,35 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
             {
                 foreach (CreatureRespawnRecord[] chunk in records.Chunk(ChunkSize))
                 {
-                    List<uint> guids = [.. chunk.Select(c => c.SpawnGuid)];
-                    Dictionary<uint, CreatureRespawnRow> existing = (await db.Set<CreatureRespawnRow>()
-                        .Where(r => r.InstanceId == instance && guids.Contains(r.SpawnGuid))
-                        .ToListAsync(cancellationToken).ConfigureAwait(false)).ToDictionary(r => r.SpawnGuid);
-                    foreach (CreatureRespawnRecord record in chunk)
+                    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+                    try
                     {
-                        if (existing.TryGetValue(record.SpawnGuid, out CreatureRespawnRow? row))
+                        List<uint> guids = [.. chunk.Select(c => c.SpawnGuid)];
+                        Dictionary<uint, CreatureRespawnRow> existing = (await db.Set<CreatureRespawnRow>()
+                            .Where(r => r.InstanceId == instance && guids.Contains(r.SpawnGuid))
+                            .ToListAsync(cancellationToken).ConfigureAwait(false)).ToDictionary(r => r.SpawnGuid);
+                        foreach (CreatureRespawnRecord record in chunk)
                         {
-                            row.MapId = record.MapId;
-                            row.RespawnTime = record.RespawnTime;
+                            if (existing.TryGetValue(record.SpawnGuid, out CreatureRespawnRow? row))
+                            {
+                                row.MapId = record.MapId;
+                                row.RespawnTime = record.RespawnTime;
+                            }
+                            else
+                            {
+                                db.Set<CreatureRespawnRow>().Add(new CreatureRespawnRow { InstanceId = instance, SpawnGuid = record.SpawnGuid, MapId = record.MapId, RespawnTime = record.RespawnTime });
+                            }
                         }
-                        else
-                        {
-                            db.Set<CreatureRespawnRow>().Add(new CreatureRespawnRow { InstanceId = instance, SpawnGuid = record.SpawnGuid, MapId = record.MapId, RespawnTime = record.RespawnTime });
-                        }
+
+                        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        db.ChangeTracker.Clear();
                     }
                 }
             }
-
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {

@@ -27,6 +27,7 @@ internal static class PlayerbotPacketIntake
         WorldOpcode.SmsgAuctionOwnerListResult,
         WorldOpcode.SmsgAuctionListResult,
         WorldOpcode.SmsgAuctionCommandResult,
+        WorldOpcode.SmsgTradeStatus,
         // PlayerbotBrain.LootManagedPackets, PlayerbotGroupAI.
         WorldOpcode.SmsgLootResponse,
         // PlayerbotGroupCoordinator.Runs: dungeon reset replies.

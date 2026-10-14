@@ -27,14 +27,78 @@ public sealed class AttackSpeedAuras : ISpellHandlerModule
 {
     /// <summary>The percent each applied aura contributed (after the haste spell modifier); presence means "applied".</summary>
     private static readonly ConditionalWeakTable<SpellAura, StrongBox<float>> s_applied = new();
+    private static readonly ConditionalWeakTable<Unit, List<SpellAura>> s_castSpeedAuras = new();
 
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
         system.RegisterAura(AuraType.ModAttackspeed, new AuraHandler((s, h, a, apply) => Apply(s, h, a, apply, WeaponAttackType.BaseAttack, WeaponAttackType.OffAttack, WeaponAttackType.RangedAttack), null));
+        system.RegisterAura(AuraType.ModCastingSpeedNotStack, new AuraHandler(ApplyCastingSpeed, null));
         system.RegisterAura(AuraType.ModMeleeHaste, new AuraHandler((s, h, a, apply) => Apply(s, h, a, apply, WeaponAttackType.BaseAttack, WeaponAttackType.OffAttack), null));
         system.RegisterAura(AuraType.ModRangedHaste, new AuraHandler((s, h, a, apply) => Apply(s, h, a, apply, WeaponAttackType.RangedAttack), null));
         system.RegisterAura(AuraType.ModRangedAmmoHaste, new AuraHandler(ApplyAmmoHaste, null));
+    }
+
+    /// <summary>
+    /// vmangos <c>Aura::HandleModCastingSpeed</c> (SpellAuras.cpp:5080-5091) and <c>Unit::UpdateCastSpeed</c> (Unit.cpp:9702-9733):
+    /// applies <see cref="SpellModOp.Haste"/> on apply, then recomputes <see cref="UpdateFields.UnitModCastSpeed"/> across all active
+    /// <see cref="AuraType.ModCastingSpeedNotStack"/> auras on the target.
+    /// </summary>
+    private static void ApplyCastingSpeed(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply)
+    {
+        Unit target = holder.Target;
+        List<SpellAura> active = s_castSpeedAuras.GetOrCreateValue(target);
+        if (apply)
+        {
+            float percent = aura.Amount;
+            if (holder.CasterOwner.Caster is Player modOwner)
+            {
+                percent = system.SpellModifiers.Apply(modOwner, holder.Spell, SpellModOp.Haste, percent);
+                aura.Amount = (int)percent;
+            }
+
+            s_applied.AddOrUpdate(aura, new StrongBox<float>(percent));
+            if (!active.Contains(aura))
+            {
+                active.Add(aura);
+            }
+        }
+        else
+        {
+            if (!s_applied.TryGetValue(aura, out _))
+            {
+                return;
+            }
+
+            s_applied.Remove(aura);
+            active.Remove(aura);
+        }
+
+        float total = 1.0f;
+        for (int i = 0; i < active.Count; i++)
+        {
+            if (!s_applied.TryGetValue(active[i], out StrongBox<float>? box))
+            {
+                continue;
+            }
+
+            float val = box.Value;
+            if (val == -100.0f)
+            {
+                val = -99.99f;
+            }
+
+            if (val > 0.0f)
+            {
+                total *= 100.0f / (100.0f + val);
+            }
+            else
+            {
+                total *= (100.0f - val) / 100.0f;
+            }
+        }
+
+        target.SetFloat(UpdateFields.UnitModCastSpeed, total);
     }
 
     private static void ApplyAmmoHaste(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply)

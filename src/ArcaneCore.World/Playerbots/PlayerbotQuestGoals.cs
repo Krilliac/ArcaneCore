@@ -71,6 +71,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// <summary>The last turn-in refusal recorded for a completed quest at its ender (quest, ender entry, human reason, compact QA code).</summary>
     internal (uint QuestId, uint EnderEntry, string Reason, string Code)? LastTurnInRefusal { get; private set; }
 
+    /// <summary>Whether a quest turn-in was refused because the bot's inventory had no room for the reward.</summary>
+    public bool NeedsBagSpaceForTurnIn { get; private set; }
+
     private uint _approachFailQuest;
     private uint _approachFailEntry;
     private System.Numerics.Vector3 _approachFailSpot;
@@ -217,6 +220,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (services?.StateOf(player) is not { Loaded: true } state)
             return false;
         RefreshObjectiveEntry(player, services, state);
+        if (NeedsBagSpaceForTurnIn && PlayerbotTownGoals.FreeBagSlots(player) > 0)
+            NeedsBagSpaceForTurnIn = false;
         if (_stage == Stage.AcceptConfirmation)
         {
             if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
@@ -229,6 +234,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (state.Quests.Get(_stageQuest)?.Rewarded == true)
             {
+                NeedsBagSpaceForTurnIn = false;
                 ClearStage();
                 return false;
             }
@@ -430,6 +436,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, reason, TurnInRefusalCode(reason, "RewardRefused"), now);
                         return false;
                     }
+                    NeedsBagSpaceForTurnIn = false;
                     _stage = Stage.RewardConfirmation;
                     ArmStage(target);
                 }
@@ -1002,6 +1009,22 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private void RefuseTurnIn(Player player, uint questId, uint enderEntry, string reason, string code, uint now, bool suspendEntry = false)
     {
         LastTurnInRefusal = (questId, enderEntry, reason, code);
+        bool inventoryFull = code == "InventoryFull"
+            || reason.Contains("inventory full", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("InventoryFull", StringComparison.OrdinalIgnoreCase);
+        if (inventoryFull)
+            NeedsBagSpaceForTurnIn = true;
+
+        bool missingUnlistedReq = (code is "DontHaveReq" or "IncompleteAtEnder" or "MissingDeliveryItem"
+                || reason.Contains("DontHaveReq", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("requirements not met", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("missing required delivery item", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("autocomplete requirement", StringComparison.OrdinalIgnoreCase))
+            && _session.Services.GetService<QuestNpcFeature>()?.Services.Quests.Get(questId) is { } quest
+            && (quest.IsAutoComplete || (quest.ReqItemCount.All(c => c == 0) && quest.ReqCreatureOrGOCount.All(c => c == 0)));
+        if (missingUnlistedReq)
+            Suspensions?.MarkUnreachableQuest(questId);
+
         Refuse(questId, now);
         Suspensions?.SuspendQuest(questId, now);
         if (suspendEntry && enderEntry != 0) Suspensions?.SuspendEntry(enderEntry, now);
@@ -1011,16 +1034,27 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         Backoff(now);
         if (_session.Services.GetService<Microsoft.Extensions.Logging.ILogger<PlayerbotQuestGoals>>() is { } log)
         {
-            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(log,
-                "Playerbot {Bot} sets aside completed quest {Quest} at ender {Entry} ({X:F1},{Y:F1},{Z:F1} map {Map}): turn-in refused ({Reason})",
-                player.Name, questId, enderEntry, player.X, player.Y, player.Z, player.MapId, reason);
+            if (inventoryFull || missingUnlistedReq)
+            {
+                Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(log,
+                    "Playerbot {Bot} sets aside completed quest {Quest} at ender {Entry} ({X:F1},{Y:F1},{Z:F1} map {Map}): turn-in refused ({Reason})",
+                    player.Name, questId, enderEntry, player.X, player.Y, player.Z, player.MapId, reason);
+            }
+            else
+            {
+                Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(log,
+                    "Playerbot {Bot} sets aside completed quest {Quest} at ender {Entry} ({X:F1},{Y:F1},{Z:F1} map {Map}): turn-in refused ({Reason})",
+                    player.Name, questId, enderEntry, player.X, player.Y, player.Z, player.MapId, reason);
+            }
         }
     }
 
     internal static string TurnInRefusalCode(string? reason, string fallback)
     {
         if (string.IsNullOrEmpty(reason)) return fallback;
-        if (reason.Contains("inventory full", StringComparison.OrdinalIgnoreCase)) return "InventoryFull";
+        if (reason.Contains("inventory full", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("InventoryFull", StringComparison.OrdinalIgnoreCase)) return "InventoryFull";
+        if (reason.Contains("DontHaveReq", StringComparison.OrdinalIgnoreCase)) return "DontHaveReq";
         if (reason.Contains("missing required delivery item", StringComparison.OrdinalIgnoreCase)) return "MissingDeliveryItem";
         if (reason.Contains("not enough money", StringComparison.OrdinalIgnoreCase)) return "NotEnoughMoney";
         if (reason.Contains("duplicate unique", StringComparison.OrdinalIgnoreCase)) return "DuplicateUniqueItem";

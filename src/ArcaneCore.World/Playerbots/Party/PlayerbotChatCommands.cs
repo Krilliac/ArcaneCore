@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ArcaneCore.Game;
 using ArcaneCore.Protocol;
 
@@ -27,6 +28,36 @@ public enum PlayerbotPartyCommand
     /// <summary>Whisper back level, health %, mana % and the current activity.</summary>
     Status,
 
+    /// <summary>Whisper back equipped items across slots 0..18.</summary>
+    Gear,
+
+    /// <summary>Whisper back free and total bag slots across backpack and equipped containers.</summary>
+    Bags,
+
+    /// <summary>Whisper back current money formatted in gold/silver/copper.</summary>
+    Gold,
+
+    /// <summary>Whisper back active quests and their completion state.</summary>
+    Quests,
+
+    /// <summary>Whisper back known professions or weapon/class skills with current/max values.</summary>
+    Skills,
+
+    /// <summary>Whisper back active talent build name, spent points, and free talent points.</summary>
+    Talents,
+
+    /// <summary>Run out-of-combat buffing and equipment upkeep immediately.</summary>
+    Upkeep,
+
+    /// <summary>Share active quests in the bot's quest log with the party.</summary>
+    ShareQuests,
+
+    /// <summary>Whisper back the list of available party commands.</summary>
+    Help,
+
+    /// <summary>Whisper back internal bot brain/motion/route/stall/trace diagnostic state (GM or master).</summary>
+    Debug,
+
     /// <summary>Leave the group and go back to the bot's own goals.</summary>
     Leave,
 }
@@ -48,13 +79,19 @@ internal enum PlayerbotChatSource
 internal readonly record struct PlayerbotChatLine(ChatType Type, Language Language, ObjectGuid Sender, string Text);
 
 /// <summary>The party bot's chat: decoding what it hears, parsing commands, and the whispers it sends back (CMSG_MESSAGECHAT).</summary>
-internal static class PlayerbotChatCommands
+internal static partial class PlayerbotChatCommands
 {
     /// <summary>The answer to a whisper from somebody who is not the bot's master.</summary>
     internal const string PoliteReply = "Sorry, I am a server bot. I only take orders from the player I am grouped with.";
 
-    /// <summary>The answer to a whispered word the master sent that is no command.</summary>
-    internal const string Help = "Commands: follow, stay, attack, stop, come, status, leave.";
+    /// <summary>The answer to a whispered word the master sent that is no command, or to the 'help' / 'commands' order.</summary>
+    internal const string Help = "Commands: follow, stay, come, attack, stop, status, gear, bags, gold, quests, skills, talents, buff, share, leave.";
+
+    /// <summary>The command list shown to GameMasters (includes debug/diagnostic inspection commands).</summary>
+    internal const string GmHelp = "Commands: follow, stay, come, attack, stop, status, gear, bags, gold, quests, skills, talents, buff, share, leave | GM: debug, diag, state, trace, brain, motion (.bot info/inspect).";
+
+    /// <summary>Returns <see cref="GmHelp"/> when the caller is a GM, otherwise <see cref="Help"/>.</summary>
+    internal static string HelpFor(bool isGm) => isGm ? GmHelp : Help;
 
     /// <summary>The longest line a bot reads as a command (anything longer is talk, not an order).</summary>
     internal const int MaxCommandLength = 16;
@@ -78,10 +115,91 @@ internal static class PlayerbotChatCommands
             case "passive": command = PlayerbotPartyCommand.Stop; return true;
             case "come": command = PlayerbotPartyCommand.Come; return true;
             case "status": command = PlayerbotPartyCommand.Status; return true;
+            case "gear":
+            case "equip":
+            case "equipment": command = PlayerbotPartyCommand.Gear; return true;
+            case "bags":
+            case "bag":
+            case "inv":
+            case "inventory": command = PlayerbotPartyCommand.Bags; return true;
+            case "gold":
+            case "money":
+            case "cash": command = PlayerbotPartyCommand.Gold; return true;
+            case "quests":
+            case "quest": command = PlayerbotPartyCommand.Quests; return true;
+            case "skills":
+            case "professions":
+            case "prof": command = PlayerbotPartyCommand.Skills; return true;
+            case "talents":
+            case "spec":
+            case "talent": command = PlayerbotPartyCommand.Talents; return true;
+            case "buff":
+            case "buffs":
+            case "upkeep": command = PlayerbotPartyCommand.Upkeep; return true;
+            case "share":
+            case "sharequests": command = PlayerbotPartyCommand.ShareQuests; return true;
+            case "help":
+            case "commands":
+            case "command":
+            case "cmd":
+            case "cmds":
+            case "?": command = PlayerbotPartyCommand.Help; return true;
+            case "debug":
+            case "diag":
+            case "diagnostics":
+            case "state":
+            case "brain":
+            case "trace":
+            case "motion":
+            case "route":
+            case "stall":
+            case "stalls": command = PlayerbotPartyCommand.Debug; return true;
             case "leave": command = PlayerbotPartyCommand.Leave; return true;
             default: return false;
         }
     }
+
+    /// <summary>True when <paramref name="command"/> is a read-only inspection/help/debug query that a GM may run without owning the bot.</summary>
+    internal static bool IsGmInspectCommand(PlayerbotPartyCommand command) => command is
+        PlayerbotPartyCommand.Status or
+        PlayerbotPartyCommand.Gear or
+        PlayerbotPartyCommand.Bags or
+        PlayerbotPartyCommand.Gold or
+        PlayerbotPartyCommand.Quests or
+        PlayerbotPartyCommand.Skills or
+        PlayerbotPartyCommand.Talents or
+        PlayerbotPartyCommand.Help or
+        PlayerbotPartyCommand.Debug;
+
+    /// <summary>True when <paramref name="text"/> is a help/commands keyword or a natural-language question revolving around commands/controls.</summary>
+    internal static bool IsHelpQuestion(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (TryParse(text, out PlayerbotPartyCommand cmd) && cmd == PlayerbotPartyCommand.Help) return true;
+        if (AttackHelpClause().IsMatch(text)) return false;
+        return HelpQuestionRegex().IsMatch(text);
+    }
+
+    /// <summary>True when <paramref name="text"/> is a debug/diagnostic keyword or a question asking for internal bot debug state.</summary>
+    internal static bool IsDebugQuestion(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (TryParse(text, out PlayerbotPartyCommand cmd) && cmd == PlayerbotPartyCommand.Debug) return true;
+        return DebugQuestionRegex().IsMatch(text);
+    }
+
+    [GeneratedRegex(@"\bhelp me (kill|fight|attack)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex AttackHelpClause();
+
+    [GeneratedRegex(
+        @"^\s*(help|commands?|cmds?|\?)\s*[?!.]*\s*$|\b(what|which|list|show|tell me)\b.*\b(commands?|orders?|controls?|options)\b|\bhow (do|can) i (control|command|use|order|direct) (you|u|bots?)\b|\bwhat can (i|we) (say|tell|ask|whisper|order|command)\b|\bwhat (do|can) (you|u) (do|respond to|understand|accept)\b|\bcommand list\b|\bhelp with commands\b|\bneed help\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex HelpQuestionRegex();
+
+    [GeneratedRegex(
+        @"\b(debug|diagnostics?|diag|stack ?trace|internal state|brain state|motion state|route state|stall state|home state|telemetry)\b|\b(what is|what's|show|dump|print|inspect)\b.*\b(debug|diag|diagnostics?|state|brain|trace|motion|route|stall)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex DebugQuestionRegex();
 
     /// <summary>
     /// Whose line it is: the master's whisper or party (raid) line is a command; another player's whisper gets the polite answer;

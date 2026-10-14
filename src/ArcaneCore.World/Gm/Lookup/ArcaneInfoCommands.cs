@@ -41,7 +41,12 @@ public sealed class ArcaneInfoCommands : ICommandExtension
         CultureInfo c = CultureInfo.InvariantCulture;
         WorldMaps maps = WorldMaps.Of(context.World);
         context.Reply(Line("maps", string.Create(c, $"{maps.Registry.Count} maps, {maps.Areas.Count} areas, {maps.GameTeles.Count} tele locations, {maps.AreaTriggers.Count} area triggers")));
-        context.Reply(Line("items", string.Create(c, $"{context.Player.Inventory.Templates.Count} templates")));
+        int itemCount = context.IsConsole
+            ? (services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items
+                ? (items.Templates.Count > 0 ? items.Templates : items.EnsureLoadedAsync().GetAwaiter().GetResult()).Count
+                : 0)
+            : context.Player.Inventory.Templates.Count;
+        context.Reply(Line("items", string.Create(c, $"{itemCount} templates")));
         if (services.GetService<CreatureWorldFeature>() is { } creatures)
         {
             context.Reply(Line("creatures", string.Create(c, $"{creatures.Content.TemplateCount} templates, {creatures.Content.SpawnCount} spawns, definitions generation {creatures.Content.DefinitionsVersion}")));

@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Economy;
@@ -58,8 +59,54 @@ public sealed partial class EconomyFeature
         long now = Now;
         Dictionary<uint, AuctionView> byId = HouseAuctions(house.Id, now).ToDictionary(v => v.Auction.Id);
         (IReadOnlyList<AuctionRecord> page, int total) = AuctionSearch.Run(byId.Values.Select(v => v.Auction), query, Templates.Find,
-            t => t.RequiredLevel <= player.Level);
+            t => IsUsableForAuctionSearch(player, t));
         session.Send(WorldOpcode.SmsgAuctionListResult, EconomyPackets.AuctionList([.. page.Select(a => byId[a.Id])], total, now));
+    }
+
+    private bool IsUsableForAuctionSearch(Player player, ItemTemplate template)
+    {
+        if (player.Inventory.CanUseItem(template) != InventoryResult.Ok)
+        {
+            return false;
+        }
+
+        if ((ItemClass)template.Class == ItemClass.Recipe)
+        {
+            Spells.SpellFeature? spells = _services.GetService<Spells.SpellFeature>();
+            bool KnowsSpell(uint spellId) => spellId != 0 && (
+                (spells?.Spellbook.HasSpell(player, spellId) ?? false)
+                || (player.Skills?.HasSpell(spellId) ?? false)
+                || (player.Inventory.Requirements is not DefaultItemRequirements
+                    && player.Inventory.Requirements.HasSpell(player.Inventory, spellId)));
+
+            uint useSpellId = template.Spells.Count > 0 ? template.Spells[0].SpellId : 0;
+            if (useSpellId != 0)
+            {
+                if (KnowsSpell(useSpellId))
+                {
+                    return false;
+                }
+
+                if (spells?.System.Store.Get(useSpellId) is { } useSpell)
+                {
+                    foreach (var effect in useSpell.Effects)
+                    {
+                        if (effect.Effect == ArcaneCore.Game.Spells.SpellEffectName.LearnSpell && KnowsSpell(effect.TriggerSpell))
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            uint taughtSpellId = template.Spells.Count > 1 ? template.Spells[1].SpellId : 0;
+            if (KnowsSpell(taughtSpellId))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>CMSG_AUCTION_LIST_OWNER_ITEMS: the player's own listings in this house.</summary>

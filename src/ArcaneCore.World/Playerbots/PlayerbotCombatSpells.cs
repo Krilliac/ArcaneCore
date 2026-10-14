@@ -2,9 +2,12 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Updates;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
@@ -155,8 +158,8 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
     /// <summary>
     /// Upkeep between fights (vmangos UpdateOutOfCombatAI_&lt;Class&gt;): forms, auras and buffs on the bot and its group, the
-    /// pet summoned, revived and called back, heals for the bot and its group, and stealth before a pull. True: an action was
-    /// accepted or a cast is in progress (the caller keeps still).
+    /// pet summoned, revived and called back, heals for the bot and its group, stealth before a pull, plus out-of-combat
+    /// bandaging, temporary weapon enhancements, and buff consumables. True: an action was accepted or a cast is in progress.
     /// </summary>
     internal bool UpdateOutOfCombat(Player player, uint elapsedMs)
     {
@@ -171,14 +174,120 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             return true;
         }
 
-        if (Rotation(player, feature) is not { } rotation) return false;
-        Unit? pull = PullTarget is { IsInWorld: true, IsAlive: true } target && ReferenceEquals(target.Map, player.Map)
-            && player.Map.Combat.Hooks.CanAttack(player, target) ? target : null;
-        RotationState view = View(player, feature, pull);
-        RotationAction? action = rotation.OutOfCombat(view);
-        bool acted = action is { } taken && Execute(player, feature, taken);
-        CommandCompanionPet(player, feature, rotation, view, action);
-        return acted;
+        if (Rotation(player, feature) is { } rotation)
+        {
+            Unit? pull = PullTarget is { IsInWorld: true, IsAlive: true } target && ReferenceEquals(target.Map, player.Map)
+                && player.Map.Combat.Hooks.CanAttack(player, target) ? target : null;
+            RotationState view = View(player, feature, pull);
+            RotationAction? action = rotation.OutOfCombat(view);
+            bool acted = action is { } taken && Execute(player, feature, taken);
+            CommandCompanionPet(player, feature, rotation, view, action);
+            if (acted)
+                return true;
+        }
+
+        return TryOutOfCombatConsumables(player, feature);
+    }
+
+    private bool TryOutOfCombatConsumables(Player player, SpellFeature feature)
+    {
+        if (unchecked((int)(_itemBlockedUntil - session.World.NowMs)) > 0)
+            return false;
+
+        SpellSystem system = feature.System;
+        var cooldownSpells = new HashSet<uint>();
+        var cooldownCategories = new HashSet<uint>();
+        foreach (InitialSpellCooldown cooldown in system.GetActiveCooldowns(player))
+        {
+            cooldownSpells.Add(cooldown.SpellId);
+            if (cooldown.Category != 0) cooldownCategories.Add(cooldown.Category);
+        }
+
+        IReadOnlyList<SpellAuraHolder> ownAuras = system.GetAuras(player);
+
+        // 1. Out-of-combat bandaging when below 65% HP, no food is available or active, and Recently Bandaged is not present.
+        if (player.Health * 100UL < player.MaxHealth * 65UL
+            && !PlayerbotConsumables.HasActiveFoodDrink(player, system)
+            && PlayerbotConsumables.FindBestFood(player, system.Store) is null
+            && !ownAuras.Any(h => !h.IsRemoved && (h.Spell.Id == 11196
+                || string.Equals(h.Spell.Name, PlayerbotClassRotation.RecentlyBandaged, StringComparison.OrdinalIgnoreCase)))
+            && PlayerbotConsumables.FindBestBandage(player, system.Store, cooldownSpells, cooldownCategories) is { } bandage)
+        {
+            if (player.Movement.HasFlag(MovementFlags.MaskMoving)
+                && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
+                return true;
+
+            _itemBlockedUntil = unchecked(session.World.NowMs + 2000);
+            SpellInfo? bandageSpell = system.Store.Get(bandage.Template.Spells[0].SpellId);
+            SpellCastTargets targets = bandageSpell is not null && IsExplicitUnit(bandageSpell)
+                ? SpellCastTargets.ForUnit(player.Guid)
+                : SpellCastTargets.ForSelf();
+            return session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(bandage.BagSlot, bandage.Slot, targets));
+        }
+
+        // 2. Temporary weapon enhancement items (sharpening stones, weightstones, wizard/mana oils) on main-hand weapon.
+        if (player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand) is { } mainHand
+            && (ItemClass)mainHand.Template.Class == ItemClass.Weapon
+            && mainHand.GetUInt32(UpdateFields.ItemFieldEnchantment + 3) == 0
+            && FindBestTempWeaponEnhancement(player, mainHand, system.Store, cooldownSpells, cooldownCategories) is { } enhItem)
+        {
+            SpellInfo? enhSpell = system.Store.Get(enhItem.Template.Spells[0].SpellId);
+            if (enhSpell is not null && enhSpell.GetCastTime(player.Level) > 0 && player.Movement.HasFlag(MovementFlags.MaskMoving)
+                && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
+                return true;
+
+            _itemBlockedUntil = unchecked(session.World.NowMs + 2000);
+            var itemTarget = new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = mainHand.Guid };
+            return session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(enhItem.BagSlot, enhItem.Slot, itemTarget));
+        }
+
+        // 3. Buff scrolls and elixirs out of combat when the aura is not already present.
+        if (PlayerbotConsumables.FindBestBuffConsumable(player, system.Store, ownAuras, cooldownSpells, cooldownCategories) is { } buffItem)
+        {
+            _itemBlockedUntil = unchecked(session.World.NowMs + 2000);
+            SpellInfo? buffSpell = system.Store.Get(buffItem.Template.Spells[0].SpellId);
+            SpellCastTargets targets = buffSpell is not null && IsExplicitUnit(buffSpell)
+                ? SpellCastTargets.ForUnit(player.Guid)
+                : SpellCastTargets.ForSelf();
+            return session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(buffItem.BagSlot, buffItem.Slot, targets));
+        }
+
+        return false;
+    }
+
+    private static Item? FindBestTempWeaponEnhancement(Player player, Item mainHand, SpellStore store,
+        IReadOnlySet<uint> cooldownSpells, IReadOnlySet<uint> cooldownCategories)
+    {
+        Item? best = null;
+        uint bestLevel = 0;
+        foreach (Item item in player.Inventory.AllItems.Take(128))
+        {
+            if (!InventorySlots.IsInventoryPos(item.BagSlot, item.Slot)
+                || InventorySlots.IsEquipmentPos(item.BagSlot, item.Slot)
+                || item.Count == 0
+                || player.Inventory.CanUseItem(item) != InventoryResult.Ok)
+                continue;
+
+            ItemSpell use = item.Template.Spells[0];
+            if (use.SpellId == 0 || use.Trigger != 0
+                || cooldownSpells.Contains(use.SpellId)
+                || (use.Category != 0 && cooldownCategories.Contains(use.Category))
+                || store.Get(use.SpellId) is not { } spell)
+                continue;
+
+            if (!spell.Effects.Any(e => e.Effect == SpellEffectName.EnchantItemTemporary && e.MiscValue != 0))
+                continue;
+
+            if (!ArcaneCore.Game.Crafting.Enchanting.ItemTargetRules.IsFit(spell, mainHand.Template) || mainHand.Template.ItemLevel < spell.BaseLevel)
+                continue;
+
+            if (best is null || item.Template.ItemLevel >= bestLevel)
+            {
+                best = item;
+                bestLevel = item.Template.ItemLevel;
+            }
+        }
+        return best;
     }
 
     /// <summary>The pet command a class sends beside its chosen action (<see cref="PlayerbotClassRotation.PetCompanion"/>).</summary>

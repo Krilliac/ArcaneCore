@@ -17,19 +17,37 @@ public sealed class GhostAuras : ISpellHandlerModule
     /// <summary>UNIT_VIS_FLAGS_GHOST.</summary>
     public const byte VisFlagGhost = 0x01;
 
+    /// <summary>Night Elf Wisp Spirit ghost spell ID.</summary>
+    public const uint WispSpiritSpellId = 20584;
+
+    /// <summary>Classic Night Elf Wisp display model ID.</summary>
+    public const uint WispDisplayId = 10045;
+
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
-        system.RegisterAura(AuraType.Ghost, new AuraHandler((s, holder, aura, apply) => Apply(holder.Target, apply), null));
+        system.RegisterAura(AuraType.Ghost, new AuraHandler((_, holder, _, apply) => ApplyGhost(holder, apply), null));
     }
 
-    private static void Apply(Unit target, bool apply)
+    private static void ApplyGhost(SpellAuraHolder holder, bool apply)
     {
+        Unit target = holder.Target;
         byte vis = target.GetByte(UpdateFields.UnitFieldBytes1, VisFlagByte);
         target.SetByte(UpdateFields.UnitFieldBytes1, VisFlagByte, apply ? (byte)(vis | VisFlagGhost) : (byte)(vis & ~VisFlagGhost));
         if (target is Player player)
         {
             player.Flags = apply ? player.Flags | PlayerFlags.Ghost : player.Flags & ~PlayerFlags.Ghost;
+            if (holder.Spell.Id == WispSpiritSpellId || player.Race == Race.NightElf)
+            {
+                if (apply)
+                {
+                    player.DisplayId = WispDisplayId;
+                }
+                else if (player.DisplayId == WispDisplayId)
+                {
+                    player.DisplayId = player.NativeDisplayId;
+                }
+            }
         }
     }
 }

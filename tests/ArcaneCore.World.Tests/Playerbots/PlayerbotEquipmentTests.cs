@@ -378,6 +378,137 @@ public sealed class PlayerbotEquipmentTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task UniqueRingDoesNotEquipDuplicateAndSpellTrinketsAreScored()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Ring(3101, strength: 6) with { Flags = 0x00080000u }); // Unique-Equipped
+        items.Templates.Templates.Add(Template(3201, InventoryType.Trinket, 0) with
+        {
+            ItemLevel = 25,
+            Spells = [new ItemSpell(994020, 1u, 0, 0f, 0, 0, 0)],
+        });
+        using IDisposable scope = items.Use();
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.Level = 25;
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3101, 1, out _));
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3101, 1, out _));
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3201, 1, out _));
+
+                var helper = new PlayerbotEquipment(session);
+                // First think equips one of the two items (trinket or unique ring).
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(helper.Update(player));
+                // Second think equips the other item.
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(helper.Update(player));
+
+                Assert.Equal(3101u, player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Finger1)!.Entry);
+                Assert.Null(player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Finger2));
+                Assert.Equal(3201u, player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Trinket1)!.Entry);
+
+                // Third think must NOT attempt to equip the duplicate Unique ring 3101 into Finger2.
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.False(helper.Update(player));
+                Assert.Null(player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Finger2));
+                Assert.False(ArcaneCore.World.Playerbots.Progression.PlayerbotItemScore.BestUpgradeSlot(
+                    player, player.Inventory.Templates.Find(3101)!, out _, out _));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task WellFedCookedFoodManaPotionAndBuffConsumablesAreClassifiedAndSelected()
+    {
+        var items = new ItemTestContent();
+        // Cooked food ("Well Fed"): Effect 0 = ModRegen, Effect 1 = TriggerSpell
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 3301, Name = "Herb Baked Egg", Class = (uint)ItemClass.Consumable, SubClass = 5,
+            InventoryType = (uint)InventoryType.NonEquip, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue,
+            Stackable = 20, Spells = [new ItemSpell(994030, 0u, -1, 0f, 11, 1000, 0)],
+        });
+        // Mana potion: Effect 0 = Energize (Mana)
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 3302, Name = "Minor Mana Potion", Class = (uint)ItemClass.Consumable, SubClass = 1,
+            InventoryType = (uint)InventoryType.NonEquip, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue,
+            Stackable = 5, Spells = [new ItemSpell(994031, 0u, -1, 0f, 4, 120000, 0)],
+        });
+        // Scroll of Strength: Effect 0 = ApplyAura (ModStat Strength)
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 3303, Name = "Scroll of Strength", Class = (uint)ItemClass.Consumable, SubClass = 4,
+            InventoryType = (uint)InventoryType.NonEquip, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue,
+            Stackable = 5, Spells = [new ItemSpell(994032, 0u, -1, 0f, 0, 0, 0)],
+        });
+        using IDisposable scope = items.Use();
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                feature.System.Store = new SpellStore([
+                    new SpellInfo
+                    {
+                        Id = 994030, Name = "Well Fed Food",
+                        AuraInterruptFlags = SpellAuraInterruptFlags.StandingCancels,
+                        Effects =
+                        [
+                            new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModRegen, BasePoints = 60 },
+                            new SpellEffectInfo { Effect = SpellEffectName.TriggerSpell, TriggerSpell = 994039 },
+                            new(),
+                        ],
+                    },
+                    new SpellInfo
+                    {
+                        Id = 994031, Name = "Restore Mana",
+                        Effects =
+                        [
+                            new SpellEffectInfo { Effect = SpellEffectName.Energize, MiscValue = (int)PowerType.Mana, BasePoints = 140 },
+                            new(),
+                            new(),
+                        ],
+                    },
+                    new SpellInfo
+                    {
+                        Id = 994032, Name = "Strength",
+                        PreventionType = 1,
+                        Effects =
+                        [
+                            new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModStat, MiscValue = 0, BasePoints = 4, TargetA = SpellImplicitTarget.UnitFriend },
+                            new(),
+                            new(),
+                        ],
+                    },
+                ], [], []);
+
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3301, 2, out _));
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3302, 2, out _));
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3303, 1, out _));
+
+                Assert.True(PlayerbotConsumables.TryClassify(player.Inventory.Templates.Find(3301)!, feature.System.Store, out PlayerbotConsumableKind kind));
+                Assert.Equal(PlayerbotConsumableKind.Food, kind);
+                Assert.NotNull(PlayerbotConsumables.FindBestFood(player, feature.System.Store));
+                Assert.Equal(3302u, PlayerbotConsumables.FindBestManaPotion(player, feature.System.Store)?.Entry);
+                Assert.Equal(3303u, PlayerbotConsumables.FindBestBuffConsumable(player, feature.System.Store)?.Entry);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     internal static void EquipFromBags(Player player, uint entry)
     {
         Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(entry, 1, out _));

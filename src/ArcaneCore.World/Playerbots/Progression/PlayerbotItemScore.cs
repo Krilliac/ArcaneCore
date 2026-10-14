@@ -1,6 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Crafting;
 using ArcaneCore.Kernel.Items;
 
@@ -94,6 +95,7 @@ internal static class PlayerbotItemScore
     public const float MinimumGain = 0.05f;
 
     private const float ItemLevelWeight = 0.01f;
+    private const uint ItemFlagUniqueEquippable = 0x00080000u;
     private const uint WeaponBow = 2;
     private const uint WeaponGun = 3;
     private const uint WeaponThrown = 16;
@@ -102,6 +104,10 @@ internal static class PlayerbotItemScore
 
     /// <summary>The score of an item instance: its template plus the stats of its enchantment slots (null catalog: template only).</summary>
     public static float Score(Item item, PlayerbotStatWeights weights, Func<uint, SpellItemEnchantment?>? enchantments)
+        => Score(item, weights, enchantments, spells: null);
+
+    /// <summary>The score of an item instance: its template (including spell effects when <paramref name="spells"/> is provided) plus enchantment slots.</summary>
+    public static float Score(Item item, PlayerbotStatWeights weights, Func<uint, SpellItemEnchantment?>? enchantments, SpellStore? spells)
     {
         ArgumentNullException.ThrowIfNull(item);
         if (item.MaxDurability > 0 && item.Durability == 0)
@@ -109,7 +115,7 @@ internal static class PlayerbotItemScore
             return 0f; // a broken item gives nothing (vmangos _ApplyItemMods skips it)
         }
 
-        float score = Score(item.Template, weights);
+        float score = Score(item.Template, weights, spells);
         if (enchantments is null)
         {
             return score;
@@ -135,8 +141,12 @@ internal static class PlayerbotItemScore
         return score;
     }
 
-    /// <summary>The score of a template: stats, armor, block value, weapon damage per second by kind, item level.</summary>
+    /// <summary>The score of a template: stats, armor, block value, weapon damage per second by kind, item spells, and item level.</summary>
     public static float Score(ItemTemplate template, PlayerbotStatWeights weights)
+        => Score(template, weights, spells: null);
+
+    /// <summary>The score of a template: stats, armor, block value, weapon damage per second by kind, item spells, and item level.</summary>
+    public static float Score(ItemTemplate template, PlayerbotStatWeights weights, SpellStore? spells)
     {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(weights);
@@ -159,7 +169,65 @@ internal static class PlayerbotItemScore
             };
         }
 
+        score += ScoreSpells(template, weights, spells);
         return score;
+    }
+
+    private static float ScoreSpells(ItemTemplate template, PlayerbotStatWeights weights, SpellStore? spells)
+    {
+        if (template.Spells.Count == 0)
+            return 0f;
+
+        uint effectiveLevel = Math.Max(template.ItemLevel, template.RequiredLevel);
+        if (effectiveLevel == 0)
+            effectiveLevel = 10;
+
+        bool isTrinketOrRelic = template.GetInventoryType() is InventoryType.Trinket or InventoryType.Relic;
+        float fallbackPerSpell = isTrinketOrRelic ? effectiveLevel * 0.8f : effectiveLevel * 0.1f;
+
+        float total = 0f;
+        foreach (ItemSpell itemSpell in template.Spells)
+        {
+            // Trigger 0 = OnUse, 1 = OnEquip, 2 = ChanceOnHit
+            if (itemSpell.SpellId == 0 || itemSpell.Trigger is not (0u or 1u or 2u))
+                continue;
+
+            float spellScore = 0f;
+            if (spells?.Get(itemSpell.SpellId) is { } spell)
+            {
+                foreach (SpellEffectInfo eff in spell.Effects)
+                {
+                    if (eff.Effect != SpellEffectName.ApplyAura)
+                        continue;
+
+                    int points = Math.Max(1, eff.BasePoints + 1);
+                    spellScore += eff.AuraType switch
+                    {
+                        AuraType.ModStat when eff.MiscValue < 0 =>
+                            (weights.Strength + weights.Agility + weights.Stamina + weights.Intellect + weights.Spirit) * points,
+                        AuraType.ModStat when eff.MiscValue is >= 0 and <= 4 =>
+                            weights.Stat((uint)eff.MiscValue) * points,
+                        AuraType.ModAttackPower or AuraType.ModRangedAttackPower =>
+                            Math.Max(weights.Strength, weights.Agility) * 0.5f * points,
+                        AuraType.ModDamageDone or AuraType.ModHealingDone =>
+                            weights.Intellect * 0.6f * points,
+                        AuraType.ModCritPercent or AuraType.ModHitChance or AuraType.ModSpellCritChance or AuraType.ModSpellHitChance =>
+                            Math.Max(weights.Strength, Math.Max(weights.Agility, weights.Intellect)) * 8f * points,
+                        AuraType.ModPowerRegen =>
+                            (weights.Spirit > 0f ? weights.Spirit : weights.Intellect * 0.4f) * 2f * points,
+                        AuraType.ModResistance =>
+                            weights.Armor * 2f * points,
+                        AuraType.DamageShield =>
+                            weights.Stamina * 0.5f * points,
+                        _ => 0f,
+                    };
+                }
+            }
+
+            total += spellScore > 0f ? spellScore : fallbackPerSpell;
+        }
+
+        return total;
     }
 
     /// <summary>Average damage per second over every damage entry (vmangos ItemPrototype damage ranges and Delay).</summary>
@@ -234,12 +302,64 @@ internal static class PlayerbotItemScore
         return (uint)(best >= 0 ? best : richest);
     }
 
+    /// <summary>Whether <paramref name="template"/> is Unique or Unique-Equipped (MaxCount == 1 or ITEM_FLAG_UNIQUE_EQUIPPABLE).</summary>
+    public static bool IsUnique(ItemTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        return (template.MaxCount > 0 && template.MaxCount <= 1) || (template.Flags & ItemFlagUniqueEquippable) != 0;
+    }
+
+    /// <summary>Whether <paramref name="player"/> already wears an item with template entry <paramref name="entry"/> in any equipment slot (0..18).</summary>
+    public static bool HasEquippedEntry(Player player, uint entry)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (entry == 0)
+            return false;
+
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is { } worn && worn.Entry == entry)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Finds the best equipment slot and positive upgrade gain for <paramref name="candidate"/> on <paramref name="player"/>.
+    /// </summary>
+    public static bool BestUpgradeSlot(Player player, ItemTemplate candidate, out byte targetSlot, out float scoreGain,
+        PlayerbotStatWeights? weights = null, Func<uint, SpellItemEnchantment?>? enchantments = null, SpellStore? spells = null)
+    {
+        PlayerbotStatWeights effectiveWeights = weights ?? PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        float candidateScore = Score(candidate, effectiveWeights, spells);
+        if (UpgradeGain(player, candidate, candidateScore, effectiveWeights, enchantments, spells, out targetSlot) is { } gain
+            && gain > MinimumGain)
+        {
+            scoreGain = gain;
+            return true;
+        }
+
+        targetSlot = InventorySlots.NullSlot;
+        scoreGain = 0f;
+        return false;
+    }
+
     /// <summary>
     /// What equipping a new item of <paramref name="template"/> would gain (null when the character cannot use or wear it).
     /// </summary>
     public static float? UpgradeGain(Player player, ItemTemplate template, PlayerbotStatWeights weights,
-        Func<uint, SpellItemEnchantment?>? enchantments = null)
-        => UpgradeGain(player, template, Score(template, weights), weights, enchantments, out _);
+        Func<uint, SpellItemEnchantment?>? enchantments = null, SpellStore? spells = null)
+        => UpgradeGain(player, template, Score(template, weights, spells), weights, enchantments, spells, out _);
+
+    /// <summary>
+    /// What wearing an item of <paramref name="template"/> scoring <paramref name="candidateScore"/> would gain over the worse
+    /// of the slots it may fill, and that slot (<see cref="InventorySlots.NullSlot"/> and null when the character cannot use or
+    /// wear it).
+    /// </summary>
+    public static float? UpgradeGain(Player player, ItemTemplate template, float candidateScore, PlayerbotStatWeights weights,
+        Func<uint, SpellItemEnchantment?>? enchantments, out byte slot)
+        => UpgradeGain(player, template, candidateScore, weights, enchantments, spells: null, out slot);
 
     /// <summary>
     /// What wearing an item of <paramref name="template"/> scoring <paramref name="candidateScore"/> would gain over the worse
@@ -249,11 +369,16 @@ internal static class PlayerbotItemScore
     /// rules (ItemPrototype::GetAllowedEquipSlots with the character's dual-wield ability).
     /// </summary>
     public static float? UpgradeGain(Player player, ItemTemplate template, float candidateScore, PlayerbotStatWeights weights,
-        Func<uint, SpellItemEnchantment?>? enchantments, out byte slot)
+        Func<uint, SpellItemEnchantment?>? enchantments, SpellStore? spells, out byte slot)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(template);
         slot = InventorySlots.NullSlot;
+        if (IsUnique(template) && HasEquippedEntry(player, template.Entry))
+        {
+            return null;
+        }
+
         byte[] slots = [.. template.AllowedEquipSlots(player.Class, player.Inventory.Requirements.CanDualWield(player.Inventory))
             .Where(candidate => candidate < InventorySlots.EquipmentEnd)];
         if (slots.Length == 0 || player.Inventory.CanUseItem(template) != InventoryResult.Ok)
@@ -271,8 +396,8 @@ internal static class PlayerbotItemScore
                 continue;
             }
 
-            float worn = WornScore(player, candidate, weights, enchantments)
-                + (twoHand && candidate == InventorySlots.MainHand ? WornScore(player, InventorySlots.OffHand, weights, enchantments) : 0f);
+            float worn = WornScore(player, candidate, weights, enchantments, spells)
+                + (twoHand && candidate == InventorySlots.MainHand ? WornScore(player, InventorySlots.OffHand, weights, enchantments, spells) : 0f);
             if (worn < worst)
             {
                 worst = worn;
@@ -284,11 +409,11 @@ internal static class PlayerbotItemScore
     }
 
     /// <summary>The score of what is worn in <paramref name="slot"/> (0 when empty), style-weighted like a candidate.</summary>
-    public static float WornScore(Player player, byte slot, PlayerbotStatWeights weights, Func<uint, SpellItemEnchantment?>? enchantments)
+    public static float WornScore(Player player, byte slot, PlayerbotStatWeights weights, Func<uint, SpellItemEnchantment?>? enchantments, SpellStore? spells = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         return player.Inventory.GetItem(InventorySlots.Bag0, slot) is { } worn
-            ? Score(worn, weights, enchantments) * StyleFactor(worn.Template, weights)
+            ? Score(worn, weights, enchantments, spells) * StyleFactor(worn.Template, weights)
             : 0f;
     }
 }

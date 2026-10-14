@@ -15,6 +15,7 @@ internal static class BuiltInProcHandlers
 {
     private const uint FamilyWarlock = 5;
     private const uint FamilyPriest = 6;
+    private const uint FamilyHunter = 9;
     private const uint FamilyPaladin = 10;
     private const uint FamilyShaman = 11;
 
@@ -116,6 +117,21 @@ internal static class BuiltInProcHandlers
         int? basePoints0 = null;
         switch (aura.Id)
         {
+            case 5118:  // Aspect of the Cheetah (UnitAuraProcHandler.cpp:1338-1346)
+            case 13159: // Aspect of the Pack
+                // "dont trigger from non damaging spells, amount is 1 for non damaging spells if they hit"
+                if (c.Amount <= 1)
+                {
+                    return AuraProcResult.Failed;
+                }
+
+                if (triggerSpellId == 0)
+                {
+                    triggerSpellId = 15571;
+                }
+
+                target = c.Target ?? c.Owner;
+                break;
             case 23780: // Aegis of Preservation
                 triggerSpellId = 23781;
                 break;
@@ -145,7 +161,7 @@ internal static class BuiltInProcHandlers
                 break;
         }
 
-        // The talent cases of the family switch (UnitAuraProcHandler.cpp:1226-1330, 1468-1500).
+        // The talent cases of the family switch (UnitAuraProcHandler.cpp:1226-1330, 1334-1349, 1468-1500).
         switch (aura.SpellFamilyName)
         {
             case FamilyWarlock when aura.SpellIconId == PyroclasmIcon:
@@ -178,6 +194,19 @@ internal static class BuiltInProcHandlers
 
                 basePoints0 = NonZero(Dither(c.Amount * (float)c.Aura.Amount / 100f / 3f, system.Random));
                 target = c.Owner;
+                break;
+            case FamilyHunter when aura.Id is 5118 or 13159:
+                if (c.Amount <= 1)
+                {
+                    return AuraProcResult.Failed;
+                }
+
+                if (triggerSpellId == 0)
+                {
+                    triggerSpellId = 15571;
+                }
+
+                target ??= c.Target ?? c.Owner;
                 break;
             case FamilyPaladin when aura.SpellIconId == IlluminationIcon:
                 if (c.ProcSpell is not { } healed || c.Owner is not Player)

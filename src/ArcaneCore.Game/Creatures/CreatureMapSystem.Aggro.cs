@@ -19,8 +19,9 @@ public sealed partial class CreatureMapSystem
     {
         ArgumentNullException.ThrowIfNull(creature);
         ArgumentNullException.ThrowIfNull(target);
-        return CreatureAggro.GetAttackDistance(creature.Template.Detection, creature.Level, target.Level, _options.AggroRate,
-            _ai.UnitSpells?.GetDetectRangeModifier(creature) ?? 0);
+        float detectMod = (_ai.UnitSpells?.GetDetectRangeModifier(creature) ?? 0f)
+            + (_ai.UnitSpells?.GetDetectedRangeModifier(target) ?? 0f);
+        return CreatureAggro.GetAttackDistance(creature.Template.Detection, creature.Level, target.Level, _options.AggroRate, detectMod);
     }
 
     /// <summary>

@@ -4,6 +4,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Progression;
+using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Reputation;
@@ -27,7 +28,7 @@ namespace ArcaneCore.World.Reputation;
 /// reach <see cref="Reputation"/> with <c>GetService&lt;ReputationFeature&gt;()</c>.
 /// </summary>
 public sealed partial class ReputationFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
-    : IWorldFeature, ICharacterHooks, IAsyncDisposable
+    : IWorldFeature, ICharacterHooks, IReputationChangeSource, IAsyncDisposable
 {
     private readonly ILogger _logger = loggers.CreateLogger<ReputationFeature>();
     private readonly HashSet<MapCombat> _combat = [];
@@ -47,6 +48,13 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
 
     /// <summary>The cross-feature reputation seam.</summary>
     public IReputationService Reputation => Service;
+
+    /// <inheritdoc />
+    public event Action<Player, uint>? ReputationChanged
+    {
+        add => Service.ReputationChanged += value;
+        remove => Service.ReputationChanged -= value;
+    }
 
     /// <summary>Writes queued or in progress.</summary>
     public int PendingWrites => _writes?.Pending ?? 0;
@@ -74,7 +82,10 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
         }
 
         world.PlayerLoggingOut += OnPlayerLoggingOut;
-        service.ReputationChanged += OnReputationChanged;
+        if (services.GetService<IReputationChangeSource>() is null)
+        {
+            service.ReputationChanged += OnReputationChanged;
+        }
         _logger.LogInformation("Loaded {Factions} factions, {OnKill} kill reputation entries, {Spillovers} spillover templates and {Rates} reward rates",
             service.Factions.Count, service.OnKillCount, service.Content.SpilloverCount, service.Content.RateCount);
         ReportStatus(service);

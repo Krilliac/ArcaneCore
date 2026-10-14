@@ -21,6 +21,8 @@ public sealed class LiveItemTemplateStore : IItemTemplateStore
 
     public IReadOnlyList<Kernel.Items.StartingItem> StartingItems(byte race, byte cls) => _current.StartingItems(race, cls);
 
+    public uint QuestStartingItem(uint questId) => _current.QuestStartingItem(questId);
+
     /// <summary>
     /// The enumerable <see cref="ItemTemplateStore"/> behind <paramref name="templates"/> (unwrapping this live store), or
     /// null when the store cannot list its templates. GM lookups and name searches use it.

@@ -20,8 +20,11 @@ internal enum BuiltinChatIntent
     /// <summary>An order (follow me, wait here, attack my target, stop, come here).</summary>
     Command,
 
-    /// <summary>"help", "commands".</summary>
+    /// <summary>"help", "commands", or a question revolving around commands/controls.</summary>
     Help,
+
+    /// <summary>GM debug / diagnostic state query ("debug", "diag", "what is your debug state?").</summary>
+    Debug,
 
     /// <summary>"want to group?", "inv?".</summary>
     Group,
@@ -60,6 +63,8 @@ internal static partial class PlayerbotBuiltinChat
         if (Severe().IsMatch(line)) return BuiltinChatIntent.Ignore;
         if (Insult().IsMatch(line)) return BuiltinChatIntent.Abuse;
         if (AskBot().IsMatch(line)) return BuiltinChatIntent.BotQuestion;
+        if (AskDebug().IsMatch(line)) return BuiltinChatIntent.Debug;
+        if (AskCommandQuestion().IsMatch(line)) return BuiltinChatIntent.Help;
         if (Order(line) is { } order) { command = order; return BuiltinChatIntent.Command; }
         if (AskHelp().IsMatch(line)) return BuiltinChatIntent.Help;
         if (AskGroup().IsMatch(line)) return BuiltinChatIntent.Group;
@@ -87,12 +92,13 @@ internal static partial class PlayerbotBuiltinChat
             case BuiltinChatIntent.Command when ask.FromMaster && naturalLanguageCommands:
                 return new(null, command); // the party command answers ("Following.", "Staying here.")
             case BuiltinChatIntent.Command when ask.FromMaster:
-            case BuiltinChatIntent.Help when ask.FromMaster:
-                return new(PlayerbotChatCommands.Help, null);
+            case BuiltinChatIntent.Help:
+                return new(PlayerbotChatCommands.HelpFor(ask.FromGm), null);
+            case BuiltinChatIntent.Debug when ask.FromGm:
+                return new(PlayerbotChatPrompts.Sanitize(p.DebugSummary ?? "Debug: no state available.") ?? "Debug: no state available.", null);
+            case BuiltinChatIntent.Debug:
             case BuiltinChatIntent.Command:
                 return new(Pick(p.MasterName is null ? "command.nogroup" : "command.notmaster", ask, lastLine, random), null);
-            case BuiltinChatIntent.Help:
-                return new(Pick("help.other", ask, lastLine, random), null);
             case BuiltinChatIntent.Group:
                 string key = ask.FromMaster ? "group.together" : p.InGroup ? "group.already" : ask.InviteAllowed ? "group.yes" : "group.no";
                 return new(Pick(key, ask, lastLine, random), null);
@@ -211,12 +217,14 @@ internal static partial class PlayerbotBuiltinChat
     [GeneratedRegex(@"\b(kys|kill (yo)?urself|kill yourself|go die)\b")] private static partial Regex Severe();
     [GeneratedRegex(@"\b(idiot|stupid|moron|dumb|noob|n00b|loser|retard\w*|trash|garbage|ugly|fuck\w*|shit\w*|bitch\w*|stfu|shut up|you suck|u suck)\b")] private static partial Regex Insult();
     [GeneratedRegex(@"\b(are|r)( you| u)( a| an)? (bot|ai|robot|real person|real player|human|npc)\b|\byou a bot\b|\bu a bot\b|\bis this a bot\b")] private static partial Regex AskBot();
+    [GeneratedRegex(@"^(debug|diag|diagnostics|state|brain|trace|motion|route|stall|stalls)\b|\b(debug|diagnostics?|diag|stack ?trace|internal state|brain state|motion state|route state|stall state|home state|telemetry)\b|\b(what is|what's|show|dump|print|inspect) (your )?(debug|diag|diagnostics?|state|brain|trace|motion|route|stall)\b")] private static partial Regex AskDebug();
+    [GeneratedRegex(@"\b(what|which|list|show|tell me)\b.*\b(commands?|orders?|controls?|options)\b|\bhow (do|can) i (control|command|use|order|direct) (you|u|bots?)\b|\bwhat can (i|we) (say|tell|ask|whisper|order|command)\b|\bcommand list\b|\bhelp with commands\b")] private static partial Regex AskCommandQuestion();
     [GeneratedRegex(@"\bstop (attacking|fighting)\b|^stop\b|\bstand down\b|\bback off\b|\bpassive\b|\bdon'?t attack\b")] private static partial Regex OrderStop();
     [GeneratedRegex(@"^(please )?(stay|wait|hold)\b|\b(stay|wait) (here|there)\b|\bhold (position|here)\b|\bdon'?t move\b")] private static partial Regex OrderStay();
     [GeneratedRegex(@"\battack\b|\bassist me\b|\bkill (it|that|this|my target)\b|\bhelp me (kill|fight)\b")] private static partial Regex OrderAttack();
     [GeneratedRegex(@"\bfollow me\b|^(please )?follow\b|\bcome with me\b|\bstick with me\b")] private static partial Regex OrderFollow();
     [GeneratedRegex(@"\bcome (here|to me|back|over)\b|\bover here\b|^(please )?come\b")] private static partial Regex OrderCome();
-    [GeneratedRegex(@"^help\b|\bcommands\b|\bwhat can you do\b|\bhelp me\b")] private static partial Regex AskHelp();
+    [GeneratedRegex(@"^help\b|\bcommands?\b|\bcmds?\b|\bwhat (can|do) (you|u) (do|respond to|understand|accept)\b|\bhelp me\b|\bneed help\b")] private static partial Regex AskHelp();
     [GeneratedRegex(@"\b(want to|wanna|can you|can i|could you|let'?s|like to) (group|join|party)\b|\binvite\b|\binv\b|\bgroup up\b|\bjoin (me|us|my group|our group|my party)\b|\blfg\b|\blooking for (a )?group\b|\bparty up\b")] private static partial Regex AskGroup();
     [GeneratedRegex(@"\bwhat (are|r) (you|u) (doing|up to|working on)\b|\bwhere (are|r) (you|u) (going|headed|heading|off to)\b|\bwhat quest\b|\bwhat'?s up\b|\bwhatcha\b|\bwyd\b|\bwhat you doing\b")] private static partial Regex AskDoing();
     [GeneratedRegex(@"\bwhere (are|r) (you|u)\b|\bwhere (you|u) at\b|\bwhat zone\b|\bwhere is this\b")] private static partial Regex AskWhere();

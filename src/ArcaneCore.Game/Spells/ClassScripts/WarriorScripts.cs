@@ -192,8 +192,71 @@ public sealed class ShieldSlamDamage : ISpellValueModifier
 }
 
 /// <summary>
+/// Orc racial Blood Fury (20572; buff 23234, debuff 23230; vmangos SpellEffects.cpp / SpellAuras.cpp):
+/// casting 20572 triggers the attack power buff 23234 on the caster, and when the buff fades or is removed,
+/// triggers the healing reduction debuff 23230 on the target.
+/// </summary>
+[SpellScript(BloodFury)]
+public sealed class BloodFuryScript : ISpellScript
+{
+    public const uint BloodFury = 20572;
+    public const uint BloodFuryBuff = 23234;
+    public const uint BloodFuryDebuff = 23230;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        if (context.EffectIndex == 0 && context.Effect.Effect == SpellEffectName.Dummy)
+        {
+            TriggerBuff(context.System, context.Caster);
+        }
+    }
+
+    internal static void TriggerBuff(SpellSystem system, Unit caster)
+    {
+        if (system.Store.Get(BloodFuryBuff) is not null && !system.HasAura(caster, BloodFuryBuff))
+        {
+            system.CastSpell(caster, BloodFuryBuff, SpellCastTargets.ForUnit(caster.Guid), triggered: true);
+        }
+    }
+
+    internal static void OnHolderRemoved(SpellSystem system, SpellAuraHolder holder)
+    {
+        if (holder.RemoveMode == AuraRemoveMode.Stack || !holder.Target.IsAlive || system.Store.Get(BloodFuryDebuff) is null)
+        {
+            return;
+        }
+
+        if (holder.Spell.Id == BloodFuryBuff
+            || (holder.Spell.Id == BloodFury && system.Store.Get(BloodFuryBuff) is null))
+        {
+            system.CastSpell(holder.Target, BloodFuryDebuff, SpellCastTargets.ForUnit(holder.Target.Guid), triggered: true);
+        }
+    }
+}
+
+/// <summary>
+/// Undead racial Cannibalize (20577; periodic heal 20578; vmangos SpellEffects.cpp:1429-1434):
+/// the dummy effect triggers 20578 on the caster.
+/// </summary>
+[SpellScript(Cannibalize)]
+public sealed class CannibalizeScript : ISpellScript
+{
+    public const uint Cannibalize = 20577;
+    public const uint CannibalizeHeal = 20578;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        if (context.EffectIndex == 0 && context.Effect.Effect == SpellEffectName.Dummy)
+        {
+            context.System.CastSpell(context.Caster, CannibalizeHeal, SpellCastTargets.ForUnit(context.Caster.Guid), triggered: true);
+        }
+    }
+}
+
+/// <summary>
 /// Registers the warrior value modifiers and target filters (discovered <see cref="ISpellHandlerModule"/>):
-/// Bloodthirst's attack power damage, Shield Slam's block value damage, and Intimidating Shout's main-target exclusion on effects 1 and 2.
+/// Bloodthirst's attack power damage, Shield Slam's block value damage, Intimidating Shout's main-target exclusion on effects 1 and 2,
+/// and the Orc Blood Fury / Undead Cannibalize racial hooks.
 /// </summary>
 public sealed class WarriorScriptsModule : ISpellHandlerModule
 {
@@ -205,6 +268,8 @@ public sealed class WarriorScriptsModule : ISpellHandlerModule
         system.RegisterValueModifier(new BloodthirstDamage());
         system.RegisterValueModifier(new ShieldSlamDamage());
         system.RegisterSpellTargetFilter(IntimidatingShout, FilterIntimidatingShout);
+        system.HolderRemoved += holder => BloodFuryScript.OnHolderRemoved(system, holder);
+        system.RegisterObserver(new RacialCastObserver(system));
     }
 
     /// <summary>
@@ -213,5 +278,22 @@ public sealed class WarriorScriptsModule : ISpellHandlerModule
     /// </summary>
     public static bool FilterIntimidatingShout(SpellCast cast, SpellEffectInfo effect, Unit target)
         => ReferenceEquals(effect, cast.Spell.Effects[0]) || cast.Targets.Unit.IsEmpty || target.Guid != cast.Targets.Unit;
+
+    private sealed class RacialCastObserver(SpellSystem system) : ISpellCastObserver
+    {
+        public void OnCast(SpellCast cast)
+        {
+            if (cast.Spell.Id == BloodFuryScript.BloodFury)
+            {
+                BloodFuryScript.TriggerBuff(system, cast.Caster);
+            }
+            else if (cast.Spell.Id == CannibalizeScript.Cannibalize
+                && cast.Spell.HasEffect(SpellEffectName.Dummy)
+                && !system.HasAura(cast.Caster, CannibalizeScript.CannibalizeHeal))
+            {
+                system.CastSpell(cast.Caster, CannibalizeScript.CannibalizeHeal, SpellCastTargets.ForUnit(cast.Caster.Guid), triggered: true);
+            }
+        }
+    }
 }
 

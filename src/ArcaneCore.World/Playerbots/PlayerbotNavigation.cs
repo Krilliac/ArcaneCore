@@ -1367,12 +1367,15 @@ internal static class PlayerbotNavigation
     }
 
     internal static byte[] UseItemPayload(byte bag, byte slot)
+        => UseItemPayload(bag, slot, ArcaneCore.Game.Spells.SpellCastTargets.ForSelf());
+
+    internal static byte[] UseItemPayload(byte bag, byte slot, ArcaneCore.Game.Spells.SpellCastTargets targets)
     {
         var writer = new PacketWriter(16);
         writer.WriteByte(bag);
         writer.WriteByte(slot);
         writer.WriteByte(0);
-        ArcaneCore.Game.Spells.SpellCastTargets.ForSelf().Write(writer);
+        targets.Write(writer);
         return writer.ToArray();
     }
 

@@ -4,8 +4,10 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -294,6 +296,138 @@ public sealed class PlayerbotRecoveryTests
             Assert.Equal(PlayerbotRecovery.SpiritHealerFailed, fault!.Message);
         }
         finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task SubmergedCorpseNearDryShoreline_ReclaimsOnDryShoreWithoutSpiritHealer()
+    {
+        string dataDir = Path.Combine(Path.GetTempPath(), "arcanecore-shoreline-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dataDir, "maps"));
+        try
+        {
+            // Tile (32, 32) covers x in (-533.33, 0], y in (-533.33, 0]: water at level 88 over ground at 83.0 (submerged).
+            // Tile (31, 32) covers x in (0, +533.33], y in (-533.33, 0]: dry shoreline at height 83.53 with LiquidStatus.NoWater.
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 32, 32)), BuildMapTileBytes(groundHeight: 83.0f, liquidLevel: 88f));
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 31, 32)), BuildMapTileBytes(groundHeight: 83.53f, liquidLevel: null));
+
+            await using WorldTestHost host = WorldTestHost.Start(configure: options => options.Maps.DataDirectory = dataDir);
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                var clock = new TestDeathClock(1_000);
+                await host.OnWorldAsync(() =>
+                {
+                    DeathHooks.Register(host.World, new DeathHooks(new DeathOptions(), clock));
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor());
+                    Player player = session.Player!;
+                    player.Level = 14;
+                    player.Relocate(-10f, -30f, 83.0f, 0f, host.World.NowMs);
+                    player.Health = 0;
+                    player.Map!.Combat.KillPlayer(player);
+                    Assert.True(player.Map!.Combat.RepopPlayer(player));
+
+                    Corpse corpse = player.Combat.Corpse!;
+                    Assert.True(PlayerbotWater.Submerged(player.Map!, new Vector3(corpse.X, corpse.Y, corpse.Z), player.Locomotion.CollisionHeight));
+
+                    var healer = new Creature(
+                        999_801,
+                        new ArcaneCore.Kernel.WorldData.Creatures.CreatureTemplate
+                        {
+                            Entry = 6491,
+                            Name = "Spirit Healer",
+                            MinLevel = 60,
+                            MaxLevel = 60,
+                            MinLevelHealth = 1000,
+                            MaxLevelHealth = 1000,
+                            Faction = 35,
+                            NpcFlags = (uint)NpcFlags.SpiritHealer,
+                        },
+                        null,
+                        ArcaneCore.Kernel.WorldData.Creatures.CreatureContent.Empty,
+                        new Random(1));
+                    healer.Relocate(-50f, -30f, 83.53f, 0f, host.World.NowMs);
+                    player.Map!.AddObject(healer);
+                    player.VisibleObjects.Add(healer.Guid);
+
+                    clock.Seconds += 31;
+                    var recovery = new PlayerbotRecovery(session, new PlayerbotOptions { Enabled = true, MaxRouteYards = 100, AllowedMaps = [0, 1] })
+                    {
+                        UnsafeBody = (p, c) => (
+                            PlayerbotRecovery.JudgeBody(
+                                false,
+                                false,
+                                false,
+                                false,
+                                bodySubmerged: PlayerbotWater.Submerged(p.Map!, new Vector3(c.X, c.Y, c.Z), p.Locomotion.CollisionHeight)),
+                            "submerged"),
+                    };
+
+                    Assert.True(recovery.CanReclaimSubmergedFromDryShore(player, corpse));
+
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    Assert.True(recovery.Update(player, 500));
+                    Assert.False(recovery.UsingSpiritHealer);
+                    Assert.False(recovery.SpiritHealerChosen);
+                    Assert.Equal(PlayerbotRecoveryStep.WalkToReviveSpot, recovery.LastStep);
+                    Assert.NotNull(recovery.ReviveSpot);
+                    Assert.True(PlayerbotRecovery.IsDryShore(player.Map, recovery.ReviveSpot!.Value));
+
+                    for (int step = 0; step < 30 && !player.IsAlive; step++)
+                    {
+                        PlayerbotMotion.ElapseForTests(player, 500);
+                        session.ManagedBudget = new ManagedActionBudget(4);
+                        recovery.Update(player, 500);
+                    }
+
+                    Assert.True(player.IsAlive);
+                    Assert.Null(player.Combat.Corpse);
+                    Assert.False(recovery.UsingSpiritHealer);
+                    Assert.True(PlayerbotRecovery.IsDryShore(player.Map, new Vector3(player.X, player.Y, player.Z)));
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally
+        {
+            if (Directory.Exists(dataDir)) Directory.Delete(dataDir, recursive: true);
+        }
+    }
+
+    private static byte[] BuildMapTileBytes(float groundHeight, float? liquidLevel)
+    {
+        bool hasLiquid = liquidLevel.HasValue;
+        byte[] bytes = new byte[hasLiquid ? 73 : 56];
+        Span<byte> span = bytes;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[0..], TerrainTile.MapMagic);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[4..], TerrainTile.MapVersionMagic);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[16..], 40u);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[20..], 16u);
+        if (hasLiquid)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[24..], 56u);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[28..], 17u);
+        }
+
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[40..], 0x5447484Du); // "MHGT"
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[44..], 1u); // MapHeightNoHeight
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[48..], groundHeight);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[52..], groundHeight);
+
+        if (hasLiquid)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[56..], 0x51494C4Du); // "MLIQ"
+            span[60] = 0x03; // MapLiquidNoType | MapLiquidNoHeight
+            span[61] = (byte)LiquidTypeFlags.Water;
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(span[62..], 1);
+            span[64] = 0;
+            span[65] = 0;
+            span[66] = 128;
+            span[67] = 128;
+            System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[68..], liquidLevel!.Value);
+        }
+
+        return bytes;
     }
 
     private sealed class TestDeathClock(long seconds) : DeathClock

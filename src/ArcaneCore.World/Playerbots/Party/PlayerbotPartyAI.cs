@@ -3,22 +3,30 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Talents;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Talents;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -52,6 +60,7 @@ internal sealed class PlayerbotPartyAI
     internal static readonly WorldOpcode[] IntakeOpcodes =
     [
         WorldOpcode.SmsgGroupInvite, WorldOpcode.SmsgMessagechat, WorldOpcode.SmsgLootStartRoll, WorldOpcode.SmsgResurrectRequest,
+        WorldOpcode.SmsgTradeStatus,
     ];
 
     /// <summary>The brain's melee approach distance (PlayerbotBrain: chase until within 4 yards, then swing).</summary>
@@ -75,6 +84,7 @@ internal sealed class PlayerbotPartyAI
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotCombatSpells _combatSpells;
+    private readonly PlayerbotEquipment _equipment;
     private readonly PlayerbotRecovery _recovery;
     private readonly PlayerbotRisk _risk;
     private string? _wipe;
@@ -103,6 +113,8 @@ internal sealed class PlayerbotPartyAI
     private long _deadSinceMs = -1;
     private bool _deathRetired;
     private bool _corpseRun;
+    private long _resurrectAtMs;
+    private uint _rangedIdleMs;
     private readonly Dictionary<ObjectGuid, int> _releaseTries = [];
     private Vector3? _stayPoint;
     private readonly PlayerbotFollower _follower;
@@ -112,11 +124,13 @@ internal sealed class PlayerbotPartyAI
     private readonly Guid _botId;
     private readonly Chat.PlayerbotChatEvents _chatEvents = new();
 
-    internal PlayerbotPartyAI(WorldSession session, PlayerbotOptions options, Chat.PlayerbotChat? chat = null, Guid botId = default)
+    internal PlayerbotPartyAI(WorldSession session, PlayerbotOptions options, Chat.PlayerbotChat? chat = null, Guid botId = default,
+        PlayerbotEquipment? equipment = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _combatSpells = new PlayerbotCombatSpells(session);
+        _equipment = equipment ?? new PlayerbotEquipment(session);
         _recovery = new PlayerbotRecovery(session, options);
         _risk = new PlayerbotRisk(session, options, _combatSpells) { AvoidsStrongCreatures = false };
         _follower = new PlayerbotFollower(session, options);
@@ -125,11 +139,29 @@ internal sealed class PlayerbotPartyAI
         _botId = botId;
     }
 
+    /// <summary>The last resurrection cast (inspection and tests: the dead member's name).</summary>
+    internal string? LastResurrection { get; private set; }
+
+    /// <summary>Whether that cast was aimed at the member's corpse (it had released) rather than at its unreleased body.</summary>
+    internal bool LastResurrectionAtCorpse { get; private set; }
+
+    /// <summary>The bot's combat spells (inspection and tests).</summary>
+    internal PlayerbotCombatSpells CombatSpells => _combatSpells;
+
     /// <summary>
     /// What the bot does when it is not party-driven (the brain's goal and quest; set by <see cref="ManagedPlayerbotFeature"/>), for
     /// the chat persona. Null: the party AI's own goal only.
     /// </summary>
     internal Func<(PlayerbotGoalKind Goal, uint QuestId)>? BrainGoal { get; set; }
+
+    /// <summary>
+    /// Live internal diagnostic snapshot callback supplied by <see cref="ManagedPlayerbotFeature"/> (botId, driver, goal, stall, home,
+    /// risk, motion/route, and brain trace ring buffer) for GM debug inspection.
+    /// </summary>
+    internal Func<Player, string>? BrainDiagnostics { get; set; }
+
+    private static bool IsGm(Player sender)
+        => sender.IsGameMaster || sender.Session.Security >= ArcaneCore.Kernel.Accounts.AccountSecurity.GameMaster;
 
     /// <summary>
     /// An invitation the bot accepts whatever <see cref="PlayerbotPartyOptions.InvitePolicy"/> says (bot, inviter): another bot's
@@ -234,6 +266,7 @@ internal sealed class PlayerbotPartyAI
                 case WorldOpcode.SmsgMessagechat: OnChat(player, packet.Payload); break;
                 case WorldOpcode.SmsgLootStartRoll: OnLootRoll(player, packet.Payload); break;
                 case WorldOpcode.SmsgResurrectRequest: OnResurrectRequest(player, packet.Payload); break;
+                case WorldOpcode.SmsgTradeStatus: OnTradeStatus(player, packet.Payload); break;
             }
         }
 
@@ -284,6 +317,7 @@ internal sealed class PlayerbotPartyAI
         if (!PlayerbotChatCommands.TryRead(payload, out PlayerbotChatLine line)) return;
         Player? sender = _session.World.FindOnlinePlayer(line.Sender);
         bool senderIsBot = sender?.Session is WorldSession { IsManaged: true };
+        bool isGm = sender is not null && IsGm(sender);
         ObjectGuid master = ResolveMaster(player);
         switch (PlayerbotChatCommands.Classify(line, player.Guid, master, senderIsBot))
         {
@@ -293,15 +327,34 @@ internal sealed class PlayerbotPartyAI
                 if (!_engaged || master != _master) Engage(player, master);
                 _masterLostMs = -1;
                 if (PlayerbotChatCommands.TryParse(line.Text, out PlayerbotPartyCommand command)) Execute(player, sender, command);
+                else if (isGm && PlayerbotChatCommands.IsDebugQuestion(line.Text)) Tell(player, sender.Name, DebugLine(player));
+                else if (PlayerbotChatCommands.IsHelpQuestion(line.Text)) Tell(player, sender.Name, PlayerbotChatCommands.HelpFor(isGm));
                 else if (Converse(player, line, sender, master)) { }
-                else if (line.Type == ChatType.Whisper && _replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.Help);
+                else if (line.Type == ChatType.Whisper && _replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.HelpFor(isGm));
                 break;
             case PlayerbotChatSource.Stranger when sender is not null:
-                if (Converse(player, line, sender, master)) { }
+                if (isGm && PlayerbotChatCommands.TryParse(line.Text, out PlayerbotPartyCommand gmCmd) && PlayerbotChatCommands.IsGmInspectCommand(gmCmd))
+                    Execute(player, sender, gmCmd);
+                else if (isGm && PlayerbotChatCommands.IsDebugQuestion(line.Text))
+                    Tell(player, sender.Name, DebugLine(player));
+                else if (PlayerbotChatCommands.IsHelpQuestion(line.Text))
+                {
+                    if (isGm || _replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.HelpFor(isGm));
+                }
+                else if (Converse(player, line, sender, master)) { }
                 else if (_replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.PoliteReply);
                 break;
             case PlayerbotChatSource.Ignore when sender is not null && !senderIsBot && sender.Guid != player.Guid:
-                // A party or say line from a real player: answered only when it names the bot (and chat is on).
+                // A party or say line from a real player: answered when it names the bot.
+                if (Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name))
+                {
+                    if (isGm && PlayerbotChatCommands.IsDebugQuestion(line.Text)) { Tell(player, sender.Name, DebugLine(player)); break; }
+                    if (PlayerbotChatCommands.IsHelpQuestion(line.Text) && (_chat is not { IsActive: true } || !_chat.Answers(line.Type)))
+                    {
+                        if (isGm || _replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.HelpFor(isGm));
+                        break;
+                    }
+                }
                 Converse(player, line, sender, master);
                 break;
         }
@@ -326,9 +379,10 @@ internal sealed class PlayerbotPartyAI
 
         _chatEvents.Observe(player, Now);
         bool fromMaster = !master.IsEmpty && sender.Guid == master;
-        var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master), sender.Guid, sender.Name,
+        bool isGm = IsGm(sender);
+        var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master, isGm), sender.Guid, sender.Name,
             line.Type is ChatType.Raid or ChatType.RaidLeader ? ChatType.Party : line.Type, line.Text, fromMaster, InviteAllowed(player, sender),
-            sender.AccountId);
+            sender.AccountId, FromGm: isGm);
         // The AI disclosure comes first, once per login of the speaker (a new Player is made at every login).
         if (chat.TryAsk(ask) == Chat.BotChatAdmission.Queued && chat.TakeDisclosure(ask, Chat.PlayerbotChatSafety.LoginOf(sender)) is { } notice)
             Gm.Core.GmReplies.SendSystemMessage(sender, notice);
@@ -339,7 +393,7 @@ internal sealed class PlayerbotPartyAI
     internal Chat.BotChatPersona PersonaFor(Player p) => Persona(p, ResolveMaster(p));
 
     /// <summary>The bot's facts for the chat (world thread): who and where it is, what it does, its group and recent events.</summary>
-    private Chat.BotChatPersona Persona(Player player, ObjectGuid master)
+    private Chat.BotChatPersona Persona(Player player, ObjectGuid master, bool includeDebug = false)
     {
         (string? zone, string? subzone) = ZoneNames(player);
         PlayerbotGoalKind? goal = null;
@@ -350,8 +404,9 @@ internal sealed class PlayerbotPartyAI
             : _session.Services.GetService<QuestNpcFeature>()?.Services.Quests.Get(questId)?.Title is { Length: > 0 } title ? title : null;
         string? masterName = master.IsEmpty ? null : _session.World.FindOnlinePlayer(master)?.Name;
         bool inGroup = Services.Social?.Groups.GetGroup(player.Guid) is not null;
+        string? debugSummary = includeDebug ? DebugLine(player) : null;
         return new Chat.BotChatPersona(player.Name, player.Race, player.Class, player.Gender, player.Level, zone, subzone, goal, quest,
-            masterName, inGroup, _chatEvents.Recent(Now));
+            masterName, inGroup, _chatEvents.Recent(Now), DebugSummary: debugSummary);
     }
 
     private (string? Zone, string? Subzone) ZoneNames(Player player)
@@ -443,6 +498,36 @@ internal sealed class PlayerbotPartyAI
         Act(WorldOpcode.CmsgResurrectResponse, response.ToArray(), budgeted: false);
     }
 
+    /// <summary>
+    /// Answer a party member's or master's trade (SMSG_TRADE_STATUS): open the trade window on BeginTrade (1), accept when the
+    /// partner accepts on TradeAccept (4), and run equipment evaluation when the trade completes so any traded upgrade is worn.
+    /// </summary>
+    private void OnTradeStatus(Player player, byte[] payload)
+    {
+        if (payload.Length < 4) return;
+        uint status = BitConverter.ToUInt32(payload, 0);
+        switch (status)
+        {
+            case 1 when payload.Length >= 12:
+            {
+                var trader = new ObjectGuid(BitConverter.ToUInt64(payload, 4));
+                if (trader.IsEmpty || trader == player.Guid) return;
+                ObjectGuid master = ResolveMaster(player);
+                bool trusted = trader == _master || trader == master
+                    || Services.Social?.Groups.AreInSameGroup(player.Guid, trader) == true;
+                if (trusted) Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false);
+                break;
+            }
+            case 4:
+                Act(WorldOpcode.CmsgAcceptTrade, BitConverter.GetBytes(1u), budgeted: false);
+                UpdateEquipment(player);
+                break;
+            case 8:
+                UpdateEquipment(player);
+                break;
+        }
+    }
+
     private void Execute(Player player, Player master, PlayerbotPartyCommand command, bool acknowledge = true)
     {
         switch (command)
@@ -491,6 +576,36 @@ internal sealed class PlayerbotPartyAI
                 break;
             case PlayerbotPartyCommand.Status:
                 Tell(player, master.Name, StatusLine(player));
+                break;
+            case PlayerbotPartyCommand.Gear:
+                Tell(player, master.Name, GearLine(player));
+                break;
+            case PlayerbotPartyCommand.Bags:
+                Tell(player, master.Name, BagsLine(player));
+                break;
+            case PlayerbotPartyCommand.Gold:
+                Tell(player, master.Name, GoldLine(player));
+                break;
+            case PlayerbotPartyCommand.Quests:
+                Tell(player, master.Name, QuestsLine(player));
+                break;
+            case PlayerbotPartyCommand.Skills:
+                Tell(player, master.Name, SkillsLine(player));
+                break;
+            case PlayerbotPartyCommand.Talents:
+                Tell(player, master.Name, TalentsLine(player));
+                break;
+            case PlayerbotPartyCommand.Upkeep:
+                Tell(player, master.Name, RunUpkeep(player));
+                break;
+            case PlayerbotPartyCommand.ShareQuests:
+                Tell(player, master.Name, ShareQuestsWithParty(player));
+                break;
+            case PlayerbotPartyCommand.Help:
+                Tell(player, master.Name, PlayerbotChatCommands.HelpFor(IsGm(master)));
+                break;
+            case PlayerbotPartyCommand.Debug:
+                Tell(player, master.Name, IsGm(master) ? DebugLine(player) : StatusLine(player));
                 break;
             case PlayerbotPartyCommand.Leave:
                 if (!_leash.IsEmpty)
@@ -551,6 +666,312 @@ internal sealed class PlayerbotPartyAI
             ? (SpellSystem.GetPower(player, PowerType.Mana) * 100UL / maxMana).ToString(CultureInfo.InvariantCulture) + "%"
             : "none";
         return string.Create(CultureInfo.InvariantCulture, $"Level {player.Level}, health {health}%, mana {mana}, {Activity(player)}.");
+    }
+
+    /// <summary>The GM 'debug' / 'diag' answer: internal brain/party driver, goal, motion, position, risk, and trace state.</summary>
+    internal string DebugLine(Player player)
+    {
+        string partyState = _engaged
+            ? string.Create(CultureInfo.InvariantCulture, $"party(mode={_mode},master={(_masterName.Length > 0 ? _masterName : "none")},leash={!_leash.IsEmpty},goal={Goal}/{TargetEntry})")
+            : "autonomous";
+        if (BrainDiagnostics?.Invoke(player) is { Length: > 0 } brainDiag)
+        {
+            string combined = $"Debug: driver={partyState} {brainDiag}";
+            return Chat.PlayerbotChatPrompts.Sanitize(combined) ?? combined[..Math.Min(combined.Length, Chat.PlayerbotChatPrompts.MaxReplyLength)];
+        }
+
+        (PlayerbotGoalKind? brainGoal, uint questId) = BrainGoal is { } bg ? bg() : (_engaged ? (PlayerbotGoalKind?)Goal : null, 0u);
+        uint mapId = player.Map?.MapId ?? player.MapId;
+        bool moving = (player.Movement.Flags & MovementFlags.MaskMoving) != 0 || PlayerbotMotion.IsActive(player);
+        string fallback = string.Create(CultureInfo.InvariantCulture,
+            $"Debug: bot={(_botId == Guid.Empty ? player.Guid.Low.ToString(CultureInfo.InvariantCulture) : _botId.ToString("N")[..8])} driver={partyState} goal={brainGoal?.ToString() ?? "None"} target={TargetEntry} quest={questId} pos=({player.X:F1},{player.Y:F1},{player.Z:F1}) map={mapId} zone={player.ZoneId} hp={player.Health}/{player.MaxHealth} moving={moving} risk={RiskReport}");
+        return Chat.PlayerbotChatPrompts.Sanitize(fallback) ?? fallback[..Math.Min(fallback.Length, Chat.PlayerbotChatPrompts.MaxReplyLength)];
+    }
+
+    /// <summary>The 'gear' answer: equipped items across slots 0..18, or "Gear: none." when unequipped.</summary>
+    internal static string GearLine(Player player)
+    {
+        var items = new List<string>();
+        foreach ((byte slot, Item item) in player.Inventory.Equipped)
+        {
+            string name = !string.IsNullOrWhiteSpace(item.Template.Name)
+                ? item.Template.Name
+                : "#" + item.Entry.ToString(CultureInfo.InvariantCulture);
+            items.Add($"{EquipmentSlotName(slot)}: {name}");
+        }
+
+        return items.Count == 0 ? "Gear: none." : $"Gear: {string.Join(", ", items)}.";
+    }
+
+    private static string EquipmentSlotName(byte slot) => slot switch
+    {
+        InventorySlots.Head => "Head",
+        InventorySlots.Neck => "Neck",
+        InventorySlots.Shoulders => "Shoulders",
+        InventorySlots.Body => "Shirt",
+        InventorySlots.Chest => "Chest",
+        InventorySlots.Waist => "Waist",
+        InventorySlots.Legs => "Legs",
+        InventorySlots.Feet => "Feet",
+        InventorySlots.Wrists => "Wrists",
+        InventorySlots.Hands => "Hands",
+        InventorySlots.Finger1 => "Finger1",
+        InventorySlots.Finger2 => "Finger2",
+        InventorySlots.Trinket1 => "Trinket1",
+        InventorySlots.Trinket2 => "Trinket2",
+        InventorySlots.Back => "Back",
+        InventorySlots.MainHand => "MainHand",
+        InventorySlots.OffHand => "OffHand",
+        InventorySlots.Ranged => "Ranged",
+        InventorySlots.Tabard => "Tabard",
+        _ => slot.ToString(CultureInfo.InvariantCulture),
+    };
+
+    /// <summary>The 'bags' answer: free and total slots across the 16-slot backpack and equipped containers.</summary>
+    internal static string BagsLine(Player player)
+    {
+        int free = 0, total = 0;
+        for (byte slot = InventorySlots.ItemStart; slot < InventorySlots.ItemEnd; slot++)
+        {
+            total++;
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is null) free++;
+        }
+
+        for (byte bagSlot = InventorySlots.BagStart; bagSlot < InventorySlots.BagEnd; bagSlot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, bagSlot) is Container container)
+            {
+                total += container.Size;
+                for (byte s = 0; s < container.Size; s++)
+                    if (container[s] is null) free++;
+            }
+        }
+
+        return string.Create(CultureInfo.InvariantCulture, $"Bags: {free}/{total} free.");
+    }
+
+    /// <summary>The 'gold' answer: current money formatted in gold, silver and copper.</summary>
+    internal static string GoldLine(Player player)
+    {
+        uint money = player.Money;
+        uint g = money / 10_000;
+        uint s = (money / 100) % 100;
+        uint c = money % 100;
+        return string.Create(CultureInfo.InvariantCulture, $"Gold: {g}g {s}s {c}c.");
+    }
+
+    /// <summary>The 'quests' answer: active quests in the bot's log with title (or quest ID) and completion state.</summary>
+    internal string QuestsLine(Player player)
+    {
+        QuestNpcServices? quests = Services.Quests;
+        PlayerNpcState? state = quests?.StateOf(player);
+        QuestStore? store = quests?.Quests ?? _session.Services.GetService<QuestStore>();
+        var entries = new List<string>();
+        var seen = new HashSet<uint>();
+
+        for (int slot = 0; slot < QuestConstants.MaxQuestLogSize; slot++)
+        {
+            uint questId = player.GetUInt32(UpdateFields.PlayerQuestLog11 + (slot * QuestConstants.FieldsPerSlot));
+            if (questId == 0 || !seen.Add(questId)) continue;
+            byte slotFlags = player.GetByte(UpdateFields.PlayerQuestLog11 + (slot * QuestConstants.FieldsPerSlot) + 1, 3);
+            QuestStatus status = state?.Quests.GetStatus(questId) ?? QuestStatus.None;
+            bool complete = status == QuestStatus.Complete || (slotFlags & QuestConstants.SlotStateComplete) != 0;
+            bool failed = status == QuestStatus.Failed || (slotFlags & QuestConstants.SlotStateFail) != 0;
+            string statusWord = complete ? "complete" : failed ? "failed" : "incomplete";
+            string title = store?.Get(questId)?.Title is { Length: > 0 } t
+                ? t
+                : "#" + questId.ToString(CultureInfo.InvariantCulture);
+            entries.Add($"{title} ({statusWord})");
+        }
+
+        if (state is not null)
+        {
+            foreach ((uint questId, QuestStatusData data) in state.Quests.Statuses.OrderBy(r => r.Key))
+            {
+                if (data.Rewarded || data.Status is not (QuestStatus.Incomplete or QuestStatus.Complete or QuestStatus.Failed))
+                    continue;
+                if (!seen.Add(questId)) continue;
+                string statusWord = data.Status == QuestStatus.Complete ? "complete"
+                    : data.Status == QuestStatus.Failed ? "failed" : "incomplete";
+                string title = store?.Get(questId)?.Title is { Length: > 0 } t
+                    ? t
+                    : "#" + questId.ToString(CultureInfo.InvariantCulture);
+                entries.Add($"{title} ({statusWord})");
+            }
+        }
+
+        return entries.Count == 0 ? "Quests: none." : $"Quests: {string.Join(", ", entries)}.";
+    }
+
+    /// <summary>The 'skills' answer: known primary/secondary professions (or weapon/class skills when no professions are learned).</summary>
+    internal static string SkillsLine(Player player)
+    {
+        var professions = new List<string>();
+        var fallback = new List<string>();
+        var seen = new HashSet<uint>();
+        if (player.Skills is { } skills)
+        {
+            foreach ((uint skillId, _) in skills.Known())
+            {
+                if (!seen.Add(skillId)) continue;
+                ushort cur = skills.GetValueBase(skillId);
+                ushort max = skills.GetMax(skillId);
+                if (cur == 0 && max == 0) continue;
+                SkillLineRecord? line = skills.Catalog.Line(skillId);
+                string name = line?.Name is { Length: > 0 } n ? n : SkillDisplayName(skillId);
+                string formatted = string.Create(CultureInfo.InvariantCulture, $"{name} {cur}/{max}");
+                int category = line?.Category ?? InferSkillCategory(skillId);
+                if (category is SkillCategories.Profession or SkillCategories.Secondary)
+                    professions.Add(formatted);
+                else if (category is SkillCategories.Weapon or SkillCategories.Class)
+                    fallback.Add(formatted);
+            }
+        }
+
+        for (int i = 0; i < PlayerSkills.MaxSkills; i++)
+        {
+            uint word0 = player.GetUInt32(UpdateFields.PlayerSkillInfo11 + (i * 3));
+            uint skillId = word0 & 0xFFFFu;
+            if (skillId == 0 || !seen.Add(skillId)) continue;
+            uint word1 = player.GetUInt32(UpdateFields.PlayerSkillInfo11 + (i * 3) + 1);
+            ushort cur = (ushort)(word1 & 0xFFFFu);
+            ushort max = (ushort)(word1 >> 16);
+            if (cur == 0 && max == 0) continue;
+            SkillLineRecord? line = player.Skills?.Catalog.Line(skillId);
+            string name = line?.Name is { Length: > 0 } n ? n : SkillDisplayName(skillId);
+            string formatted = string.Create(CultureInfo.InvariantCulture, $"{name} {cur}/{max}");
+            int category = line?.Category ?? InferSkillCategory(skillId);
+            if (category is SkillCategories.Profession or SkillCategories.Secondary)
+                professions.Add(formatted);
+            else if (category is SkillCategories.Weapon or SkillCategories.Class)
+                fallback.Add(formatted);
+        }
+
+        List<string> chosen = professions.Count > 0 ? professions : fallback;
+        return chosen.Count == 0 ? "Skills: none." : $"Skills: {string.Join(", ", chosen)}.";
+    }
+
+    private static int InferSkillCategory(uint skillId) => skillId switch
+    {
+        SkillIds.Blacksmithing or SkillIds.Leatherworking or SkillIds.Alchemy or SkillIds.Herbalism
+            or SkillIds.Mining or SkillIds.Tailoring or SkillIds.Engineering or SkillIds.Enchanting
+            or SkillIds.Skinning => SkillCategories.Profession,
+        SkillIds.FirstAid or SkillIds.Cooking or SkillIds.Fishing or SkillIds.Poisons
+            or SkillIds.Lockpicking or SkillIds.Riding => SkillCategories.Secondary,
+        SkillIds.Swords or SkillIds.Axes or SkillIds.Bows or SkillIds.Guns or SkillIds.Maces
+            or SkillIds.TwoHandedSwords or SkillIds.Defense or SkillIds.DualWield or SkillIds.Staves
+            or SkillIds.TwoHandedMaces or SkillIds.Unarmed or SkillIds.TwoHandedAxes or SkillIds.Daggers
+            or SkillIds.Thrown or SkillIds.Crossbows or SkillIds.Wands or SkillIds.Polearms
+            or SkillIds.FistWeapons => SkillCategories.Weapon,
+        _ => SkillCategories.Generic,
+    };
+
+    private static string SkillDisplayName(uint skillId) => skillId switch
+    {
+        SkillIds.Blacksmithing => "Blacksmithing",
+        SkillIds.Leatherworking => "Leatherworking",
+        SkillIds.Alchemy => "Alchemy",
+        SkillIds.Herbalism => "Herbalism",
+        SkillIds.Mining => "Mining",
+        SkillIds.Tailoring => "Tailoring",
+        SkillIds.Engineering => "Engineering",
+        SkillIds.Enchanting => "Enchanting",
+        SkillIds.Skinning => "Skinning",
+        SkillIds.FirstAid => "First Aid",
+        SkillIds.Cooking => "Cooking",
+        SkillIds.Fishing => "Fishing",
+        SkillIds.Poisons => "Poisons",
+        SkillIds.Lockpicking => "Lockpicking",
+        SkillIds.Riding => "Riding",
+        SkillIds.Swords => "Swords",
+        SkillIds.Axes => "Axes",
+        SkillIds.Bows => "Bows",
+        SkillIds.Guns => "Guns",
+        SkillIds.Maces => "Maces",
+        SkillIds.TwoHandedSwords => "Two-Handed Swords",
+        SkillIds.Defense => "Defense",
+        SkillIds.DualWield => "Dual Wield",
+        SkillIds.Staves => "Staves",
+        SkillIds.TwoHandedMaces => "Two-Handed Maces",
+        SkillIds.Unarmed => "Unarmed",
+        SkillIds.TwoHandedAxes => "Two-Handed Axes",
+        SkillIds.Daggers => "Daggers",
+        SkillIds.Thrown => "Thrown",
+        SkillIds.Crossbows => "Crossbows",
+        SkillIds.Wands => "Wands",
+        SkillIds.Polearms => "Polearms",
+        SkillIds.FistWeapons => "Fist Weapons",
+        _ => "#" + skillId.ToString(CultureInfo.InvariantCulture),
+    };
+
+    /// <summary>The 'talents' answer: active talent build name, spent points and free talent points.</summary>
+    internal string TalentsLine(Player player)
+    {
+        string buildName = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Name;
+        TalentService? talents = _session.Services.GetService<TalentFeature>()?.Service;
+        uint free = talents?.FreePoints(player) ?? player.GetUInt32(UpdateFields.PlayerCharacterPoints1);
+        uint spent = talents?.UsedPoints(player) ?? 0;
+        return string.Create(CultureInfo.InvariantCulture, $"Talents: {buildName} ({spent} spent, {free} free).");
+    }
+
+    /// <summary>Run out-of-combat buffing and equipment/talent upkeep at once ('buff' / 'upkeep').</summary>
+    internal string RunUpkeep(Player player)
+    {
+        ManagedActionBudget? previous = _session.ManagedBudget;
+        if (previous is null || previous.Remaining < 2) _session.ManagedBudget = new ManagedActionBudget(2);
+        try
+        {
+            bool cast = _combatSpells.UpdateOutOfCombat(player, 1000);
+            _equipment.Update(player);
+            return cast ? "Buffing." : "Upkeep done.";
+        }
+        finally
+        {
+            if (previous is null || previous.Remaining < 2) _session.ManagedBudget = previous;
+        }
+    }
+
+    /// <summary>Share all active quests in the bot's quest log with the party ('share' / 'sharequests').</summary>
+    internal string ShareQuestsWithParty(Player player)
+    {
+        QuestNpcServices? quests = Services.Quests;
+        PlayerNpcState? state = quests?.StateOf(player);
+        var activeIds = new List<uint>();
+        var seen = new HashSet<uint>();
+
+        for (int slot = 0; slot < QuestConstants.MaxQuestLogSize; slot++)
+        {
+            uint questId = player.GetUInt32(UpdateFields.PlayerQuestLog11 + (slot * QuestConstants.FieldsPerSlot));
+            if (questId != 0 && seen.Add(questId)) activeIds.Add(questId);
+        }
+
+        if (state is not null)
+        {
+            foreach ((uint questId, QuestStatusData data) in state.Quests.Statuses.OrderBy(r => r.Key))
+            {
+                if (!data.Rewarded && data.Status is QuestStatus.Incomplete or QuestStatus.Complete && seen.Add(questId))
+                    activeIds.Add(questId);
+            }
+        }
+
+        if (activeIds.Count == 0) return "No quests to share.";
+        foreach (uint questId in activeIds)
+            Act(WorldOpcode.CmsgPushquesttoparty, BitConverter.GetBytes(questId), budgeted: false);
+        return string.Create(CultureInfo.InvariantCulture, $"Shared {activeIds.Count} quest(s).");
+    }
+
+    private void UpdateEquipment(Player player)
+    {
+        ManagedActionBudget? previous = _session.ManagedBudget;
+        if (previous is null) _session.ManagedBudget = new ManagedActionBudget(1);
+        try
+        {
+            _equipment.Update(player);
+        }
+        finally
+        {
+            if (previous is null) _session.ManagedBudget = null;
+        }
     }
 
     /// <summary>What the bot is doing, in the words of its status answer.</summary>
@@ -664,6 +1085,7 @@ internal sealed class PlayerbotPartyAI
         _target = null;
         _attacking = false;
         _restUntilMs = 0;
+        _rangedIdleMs = 0;
         _releaseTries.Clear();
         _deadSinceMs = -1;
         _corpseRun = false;
@@ -770,6 +1192,7 @@ internal sealed class PlayerbotPartyAI
             _target = null;
             _attacking = false;
             _route = null;
+            _rangedIdleMs = 0;
         }
 
         TargetEntry = 0;
@@ -786,10 +1209,82 @@ internal sealed class PlayerbotPartyAI
         if (!player.Combat.IsInCombat)
         {
             if (ReleaseRoundRobinLoot(player, interval)) return;
+            if (Resurrect(player, interval)) return;
+            bool settled = _mode == PlayerbotPartyMode.Stay
+                ? (_stayPoint is not { } sp || Vector3.Distance(new Vector3(player.X, player.Y, player.Z), sp) <= 1.5f)
+                : (ReferenceEquals(player.Map, master.Map) && Distance(player, master) <= _followDistance + 4f);
+            if (settled && _combatSpells.UpdateOutOfCombat(player, interval)) return;
             if (Rest(player, master)) return;
+            if (settled) UpdateEquipment(player);
         }
 
         Follow(player, master, interval);
+    }
+
+    /// <summary>
+    /// Cast a resurrection spell on a dead party member (or its corpse when it has released) on the same map within 40 yards,
+    /// walking into the 28-yard cast range first when needed (vmangos PartyBotAI::UpdateOutOfCombatAI, PlayerbotGroupAI.Resurrect).
+    /// </summary>
+    private bool Resurrect(Player player, uint interval)
+    {
+        if (Services.Social?.Groups.GetGroup(player.Guid) is not { } group) return false;
+        if (Services.Spells?.System.GetState(player.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting })
+            return true;
+        if (Now < _resurrectAtMs) return false;
+        if (ResurrectionSpell(player) is not { } spell) return false;
+
+        Player? dead = null;
+        Corpse? corpse = null;
+        WorldObject? body = null;
+        float best = float.MaxValue;
+        foreach (GroupMemberSlot slot in group.Members)
+        {
+            if (slot.Guid == player.Guid || _session.World.FindOnlinePlayer(slot.Guid) is not { } member) continue;
+            if (member.IsAlive || !ReferenceEquals(member.Map, player.Map)) continue;
+            if (ArcaneCore.Game.Death.Resurrection.ResurrectionRequests.IsRequested(member)) continue;
+            Corpse? c = (member.Flags & PlayerFlags.Ghost) != 0 ? member.Combat.Corpse : null;
+            if ((member.Flags & PlayerFlags.Ghost) != 0 && (c is null || !c.IsInWorld || !ReferenceEquals(c.Map, player.Map))) continue;
+            WorldObject candidate = (WorldObject?)c ?? member;
+            float d = Distance(player, candidate);
+            if (d <= 40f && d < best)
+            {
+                best = d;
+                dead = member;
+                corpse = c;
+                body = candidate;
+            }
+        }
+
+        if (dead is null || body is null) return false;
+        if (best > 28f)
+        {
+            if (_mode == PlayerbotPartyMode.Stay) return false;
+            MoveTo(player, new Vector3(body.X, body.Y, body.Z), interval);
+            return true;
+        }
+
+        if (!PlayerbotMovementControl.Stop(_session, player)) return true;
+        _route = null;
+        bool cast = corpse is not null
+            ? _combatSpells.CastAtCorpse(player, spell, corpse)
+            : _combatSpells.CastAt(player, spell, dead);
+        if (!cast) return false;
+        LastResurrection = dead.Name;
+        LastResurrectionAtCorpse = corpse is not null;
+        _resurrectAtMs = Now + 3_000;
+        return true;
+    }
+
+    internal SpellInfo? ResurrectionSpell(Player player)
+    {
+        if (!PlayerbotParty.IsHealerClass(player.Class) || Services.Spells is not { } feature) return null;
+        SpellInfo? best = null;
+        foreach (uint id in feature.Spellbook.GetSpells(player))
+            if (feature.System.Store.Get(id) is { } spell && Groups.PlayerbotGroupAI.ResurrectionSpells.Contains(spell.Name, StringComparer.Ordinal)
+                && spell.Reagents.All(r => r.Item <= 0 || r.Count == 0 || player.Inventory.GetItemCount((uint)r.Item) >= r.Count)
+                && (best is null || spell.Id > best.Id))
+                best = spell;
+        return best;
     }
 
     private Creature? SelectTarget(Player player, Player? master)
@@ -832,24 +1327,51 @@ internal sealed class PlayerbotPartyAI
             _target = target;
             _attacking = false;
             _route = null;
+            _rangedIdleMs = 0;
             _follower.Suspend(player); // the fight takes the bot off its follow route (a fall under way lands first)
         }
 
         Goal = PlayerbotGoalKind.Assist;
         TargetEntry = target.Entry;
-        if (_combatSpells.Update(player, target, interval)) return;
-        if (Distance(player, target) > MeleeReach)
+        if (_combatSpells.Update(player, target, interval))
         {
-            if (_mode == PlayerbotPartyMode.Stay)
-            {
-                PlayerbotMovementControl.Stop(_session, player);
-                return;
-            }
-
-            if (!MoveTo(player, new Vector3(target.X, target.Y, target.Z), interval)) _follower.NoteUnreachable(target);
+            if ((player.Movement.Flags & MovementFlags.MaskMoving) == 0)
+                FaceTargetIfNeeded(player, target);
+            _rangedIdleMs = 0;
             return;
         }
 
+        float distance = Distance(player, target);
+        float preferredRange = _combatSpells.PreferredRange(player);
+        bool engaged = player.Combat.ThreatenedBy.Contains(target) || target.Combat.Victim is not null;
+        PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(preferredRange, distance,
+            player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
+            idleTooLong: _rangedIdleMs >= PlayerbotBrain.RangedIdleLimitMs && !engaged,
+            inMeleeReach: MapCombat.CanReachWithMeleeAutoAttack(player, target));
+
+        switch (position)
+        {
+            case PlayerbotFightPosition.Hold:
+                _rangedIdleMs = engaged ? 0 : _rangedIdleMs + interval;
+                _route = null;
+                if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0)
+                    PlayerbotMovementControl.Stop(_session, player);
+                FaceTargetIfNeeded(player, target);
+                return;
+            case PlayerbotFightPosition.ChaseToRange:
+            case PlayerbotFightPosition.ChaseToMelee:
+                if (_mode == PlayerbotPartyMode.Stay)
+                {
+                    PlayerbotMovementControl.Stop(_session, player);
+                    FaceTargetIfNeeded(player, target);
+                    return;
+                }
+
+                if (!MoveTo(player, new Vector3(target.X, target.Y, target.Z), interval)) _follower.NoteUnreachable(target);
+                return;
+        }
+
+        _rangedIdleMs = 0;
         if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0)
         {
             PlayerbotMovementControl.Stop(_session, player);
@@ -857,8 +1379,18 @@ internal sealed class PlayerbotPartyAI
             return;
         }
 
+        FaceTargetIfNeeded(player, target);
         if (!_attacking || !ReferenceEquals(player.Combat.Victim, target))
             _attacking = Act(WorldOpcode.CmsgAttackswing, PlayerbotNavigation.GuidPayload(target.Guid.Value));
+    }
+
+    private void FaceTargetIfNeeded(Player player, Creature target)
+    {
+        float flatDist = MathF.Sqrt(MathF.Pow(target.X - player.X, 2) + MathF.Pow(target.Y - player.Y, 2));
+        if (flatDist > CombatConstants.NoFacingChecksDistance && !MapCombat.HasInArc(player, target, CombatConstants.AutoAttackArc))
+        {
+            PlayerbotMotion.Face(_session, player, MathF.Atan2(target.Y - player.Y, target.X - player.X));
+        }
     }
 
     private void StopAttacking(Player player)
@@ -867,6 +1399,7 @@ internal sealed class PlayerbotPartyAI
         _attacking = false;
         _target = null;
         _route = null;
+        _rangedIdleMs = 0;
         TargetEntry = 0;
     }
 

@@ -52,9 +52,16 @@ public sealed class PercentStatAuras : ISpellHandlerModule
     private const uint DireBearFormPassive = 9635;
 
     private static readonly ConditionalWeakTable<SpellAura, Applied> s_applied = new();
+    private static readonly ConditionalWeakTable<Unit, IntellectArmorState> s_intellectArmor = new();
 
     /// <summary>What an aura contributed on apply: its amount and, for the pool auras, the group it went to (a druid's power type can change later).</summary>
     private sealed record Applied(int Amount, UnitMods Group);
+
+    private sealed class IntellectArmorState
+    {
+        public readonly List<(SpellAura Aura, int Amount)> Auras = [];
+        public int Applied;
+    }
 
     public void Register(SpellSystem system)
     {
@@ -68,6 +75,7 @@ public sealed class PercentStatAuras : ISpellHandlerModule
         system.RegisterAura(AuraType.ModBaseResistance, new AuraHandler((_, h, a, apply) => ApplyBaseResistance(h, a, apply), null));
         system.RegisterAura(AuraType.ModBaseResistancePct, new AuraHandler((_, h, a, apply) => ApplyResistancePercent(h, a, apply, UnitModifierType.BasePct), null));
         system.RegisterAura(AuraType.ModResistancePct, new AuraHandler((_, h, a, apply) => ApplyResistancePercent(h, a, apply, UnitModifierType.TotalPct), null));
+        system.RegisterAura(AuraType.ModResistanceOfStatPercent, new AuraHandler((_, h, a, apply) => ApplyResistanceOfStatPercent(h, a, apply), null));
         system.RegisterAura(AuraType.ModAttackPowerPct, new AuraHandler((_, h, a, apply) => ApplyAttackPowerPercent(h, a, apply, ranged: false), null));
         system.RegisterAura(AuraType.ModRangedAttackPowerPct, new AuraHandler((_, h, a, apply) => ApplyAttackPowerPercent(h, a, apply, ranged: true), null));
         system.RegisterAura(AuraType.ModDodgePercent, new AuraHandler((_, h, a, apply) => ApplyDefense(h, a, apply, static (s, d) => s.AddDodgeBonus(d)), null));
@@ -119,27 +127,30 @@ public sealed class PercentStatAuras : ISpellHandlerModule
     internal static void RefreshStat(Unit unit, int stat)
     {
         var group = (UnitMods)((int)UnitMods.StatStrength + stat);
-        if (UnitModLedger.Find(unit) is not { } ledger || ledger.IsNeutral(group))
+        if (UnitModLedger.Find(unit) is { } ledger && !ledger.IsNeutral(group))
         {
-            return;
+            int field = UpdateFields.UnitFieldStat0 + stat;
+            int current = unit.GetInt32(field);
+            int pre = current - ledger.Applied(group);
+
+            // BASE_PCT scales the level base only: the buff counters hold what items and flat auras added (BASE_PCT is a player-only aura).
+            int baseValue = 0;
+            if (unit is Player player && ledger.BasePct(group) != 1.0f)
+            {
+                baseValue = Math.Max(0, pre - player.GetInt32(UpdateFields.PlayerFieldPosstat0 + stat) - player.GetInt32(UpdateFields.PlayerFieldNegstat0 + stat));
+            }
+
+            int value = Math.Max(0, Modified(ledger, group, pre, baseValue));
+            ledger.SetApplied(group, value - pre);
+            if (value != current)
+            {
+                unit.SetInt32(field, value);
+            }
         }
 
-        int field = UpdateFields.UnitFieldStat0 + stat;
-        int current = unit.GetInt32(field);
-        int pre = current - ledger.Applied(group);
-
-        // BASE_PCT scales the level base only: the buff counters hold what items and flat auras added (BASE_PCT is a player-only aura).
-        int baseValue = 0;
-        if (unit is Player player && ledger.BasePct(group) != 1.0f)
+        if (stat == 3)
         {
-            baseValue = Math.Max(0, pre - player.GetInt32(UpdateFields.PlayerFieldPosstat0 + stat) - player.GetInt32(UpdateFields.PlayerFieldNegstat0 + stat));
-        }
-
-        int value = Math.Max(0, Modified(ledger, group, pre, baseValue));
-        ledger.SetApplied(group, value - pre);
-        if (value != current)
-        {
-            unit.SetInt32(field, value);
+            RefreshIntellectArmor(unit);
         }
     }
 
@@ -216,6 +227,16 @@ public sealed class PercentStatAuras : ISpellHandlerModule
     /// <summary>Recompute the field of one school (0 = armor) from the flat sum, the worn items' base and the percentages; holy has no field in 1.12.</summary>
     internal static void RefreshResistance(Unit unit, int school)
     {
+        if (school == 0)
+        {
+            RefreshIntellectArmor(unit);
+        }
+
+        RefreshResistanceCore(unit, school);
+    }
+
+    private static void RefreshResistanceCore(Unit unit, int school)
+    {
         var group = (UnitMods)((int)UnitMods.Armor + school);
         if (school == (int)SpellSchool.Holy || UnitModLedger.Find(unit) is not { } ledger || ledger.IsNeutral(group))
         {
@@ -232,6 +253,40 @@ public sealed class PercentStatAuras : ISpellHandlerModule
         {
             unit.SetInt32(field, value);
         }
+    }
+
+    /// <summary>
+    /// vmangos <c>Player::UpdateArmor</c> (StatSystem.cpp:133-140) and <c>Aura::HandleAuraModResistenceOfStatPercent</c> (SpellAuras.cpp:4782-4791):
+    /// each active <see cref="AuraType.ModResistanceOfStatPercent"/> aura with <c>SPELL_SCHOOL_MASK_NORMAL</c> adds
+    /// <see cref="StatFormulas.ArmorFromIntellectPercent"/> to the dynamic armor before percent armor modifiers run.
+    /// </summary>
+    internal static void RefreshIntellectArmor(Unit unit)
+    {
+        if (!s_intellectArmor.TryGetValue(unit, out IntellectArmorState? state) || (state.Auras.Count == 0 && state.Applied == 0))
+        {
+            return;
+        }
+
+        float intellect = Math.Max(0, unit.GetInt32(UpdateFields.UnitFieldStat0 + 3));
+        float bonus = 0f;
+        foreach ((_, int amount) in state.Auras)
+        {
+            bonus += StatFormulas.ArmorFromIntellectPercent(intellect, amount);
+        }
+
+        int desired = (int)bonus;
+        int delta = desired - state.Applied;
+        if (delta == 0)
+        {
+            return;
+        }
+
+        state.Applied = desired;
+        int field = UpdateFields.UnitFieldResistances;
+        int pre = unit.GetInt32(field) - (UnitModLedger.Find(unit)?.Applied(UnitMods.Armor) ?? 0);
+        int nextPre = Math.Max(0, pre + delta);
+        unit.SetInt32(field, nextPre + (UnitModLedger.Find(unit)?.Applied(UnitMods.Armor) ?? 0));
+        RefreshResistanceCore(unit, 0);
     }
 
     /// <summary>The derived combat values of a player attached to a stat system, after a stat group changed (no-op for any other unit).</summary>
@@ -472,6 +527,43 @@ public sealed class PercentStatAuras : ISpellHandlerModule
             ledger.Apply((UnitMods)((int)UnitMods.Armor + school), slot, applied.Amount, apply);
             RefreshResistance(target, school);
         }
+    }
+
+    /// <summary>
+    /// vmangos <c>Aura::HandleAuraModResistenceOfStatPercent</c> (SpellAuras.cpp:4782-4791): adds <c>aura.Amount</c>% of Intellect to Armor
+    /// when <c>MiscValue</c> covers <c>SPELL_SCHOOL_MASK_NORMAL</c> (1, or 0 in synthetic test spells), and recomputes whenever Intellect or Armor refreshes.
+    /// </summary>
+    private static void ApplyResistanceOfStatPercent(SpellAuraHolder holder, SpellAura aura, bool apply)
+    {
+        if (aura.MiscValue != 0 && ((uint)aura.MiscValue & 1u) == 0)
+        {
+            return;
+        }
+
+        Unit target = holder.Target;
+        if (Take(aura, apply) is not { } applied)
+        {
+            return;
+        }
+
+        IntellectArmorState state = s_intellectArmor.GetOrCreateValue(target);
+        if (apply)
+        {
+            state.Auras.Add((aura, applied.Amount));
+        }
+        else
+        {
+            for (int i = state.Auras.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(state.Auras[i].Aura, aura))
+                {
+                    state.Auras.RemoveAt(i);
+                    break;
+                }
+            }
+        }
+
+        RefreshIntellectArmor(target);
     }
 
     // --- attack power ----------------------------------------------------------------------------

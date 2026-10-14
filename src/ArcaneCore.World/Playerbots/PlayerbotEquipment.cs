@@ -155,6 +155,7 @@ internal sealed class PlayerbotEquipment(WorldSession session)
     {
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
         Func<uint, SpellItemEnchantment?>? enchantments = Enchantments();
+        SpellStore? spells = session.Services.GetService<SpellFeature>()?.System.Store;
         Item? best = null;
         byte bestSlot = InventorySlots.NullSlot;
         float bestGain = PlayerbotItemScore.MinimumGain;
@@ -164,11 +165,12 @@ internal sealed class PlayerbotEquipment(WorldSession session)
             if (template.IsBag() || template.GetInventoryType() is InventoryType.NonEquip or InventoryType.Ammo or InventoryType.Body
                     or InventoryType.Tabard or InventoryType.Quiver
                 || (item.MaxDurability > 0 && item.Durability == 0)
+                || (PlayerbotItemScore.IsUnique(template) && PlayerbotItemScore.HasEquippedEntry(player, template.Entry))
                 || player.Inventory.CanUseItem(item) != InventoryResult.Ok)
                 continue;
 
-            float score = PlayerbotItemScore.Score(item, weights, enchantments);
-            if (PlayerbotItemScore.UpgradeGain(player, template, score, weights, enchantments, out byte slot) is not { } gain
+            float score = PlayerbotItemScore.Score(item, weights, enchantments, spells);
+            if (PlayerbotItemScore.UpgradeGain(player, template, score, weights, enchantments, spells, out byte slot) is not { } gain
                 || gain <= bestGain
                 || player.Inventory.CanEquipItem(slot, out _, template, item, swap: true) != InventoryResult.Ok)
                 continue;

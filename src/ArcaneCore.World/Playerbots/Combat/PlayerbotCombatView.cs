@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
@@ -8,6 +9,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Totems;
+using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Combat;
@@ -38,6 +40,32 @@ internal static class PlayerbotCombatView
     private const uint SubClassBandage = 7;
     private const uint SubClassShield = 6;
     private const uint SubClassWand = 19;
+
+    private sealed record ExtraViewState(RotationItem? ManaPotion, bool MainHandHasWeapon, bool MainHandHasTempEnchant);
+
+    private static readonly ConditionalWeakTable<RotationState, ExtraViewState> Extras = new();
+
+    internal static void AttachExtra(RotationState state, RotationItem? manaPotion, bool mainHandHasWeapon = false, bool mainHandHasTempEnchant = false)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        Extras.AddOrUpdate(state, new ExtraViewState(manaPotion, mainHandHasWeapon, mainHandHasTempEnchant));
+    }
+
+    internal static RotationItem? GetManaPotion(RotationState state)
+        => state is not null && Extras.TryGetValue(state, out ExtraViewState? extra) ? extra.ManaPotion : null;
+
+    internal static bool CanImbueMainHand(RotationState state)
+    {
+        if (state is null)
+            return false;
+        if (Extras.TryGetValue(state, out ExtraViewState? extra))
+            return extra.MainHandHasWeapon && !extra.MainHandHasTempEnchant;
+
+        return !state.Self.HasAura(PlayerbotShamanRotation.WindfuryWeapon)
+            && !state.Self.HasAura(PlayerbotShamanRotation.RockbiterWeapon)
+            && !state.Self.HasAura(PlayerbotShamanRotation.FlametongueWeapon)
+            && !state.Self.HasAura(PlayerbotShamanRotation.FrostbrandWeapon);
+    }
 
     internal static RotationState Build(WorldSession session, SpellFeature feature, Player player, Unit? victim,
         PlayerbotAbilities spells, PlayerbotRole role, Func<SpellInfo, bool> blocked)
@@ -96,6 +124,7 @@ internal static class PlayerbotCombatView
         bool canCallPet = player.Class == Class.Hunter && player.PetGuid.IsEmpty
             && session.Services.GetService<PetsFeature>()?.Service.TryGetCachedCurrentPet(player, out _) == true;
 
+        Item? mainHand = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand);
         Item? ranged = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged);
         Item? offHand = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.OffHand);
         Form form = ShapeshiftService.GetForm(player);
@@ -134,7 +163,7 @@ internal static class PlayerbotCombatView
             return InRange(player, unit, spell);
         }
 
-        return new RotationState
+        var state = new RotationState
         {
             Spells = spells,
             Self = self,
@@ -167,6 +196,15 @@ internal static class PlayerbotCombatView
             InGroup = grouped,
             CanCast = CanCast,
         };
+
+        RotationItem? manaPotion = player.PowerType == PowerType.Mana
+            && PlayerbotConsumables.FindBestManaPotion(player, system.Store, cooldownSpells, cooldownCategories) is { } mp
+                ? new RotationItem(mp.Guid, mp.BagSlot, mp.Slot, mp.Template.Entry)
+                : null;
+        bool mainHandHasWeapon = mainHand?.Template is { Class: ItemClassWeapon };
+        bool mainHandHasTempEnchant = mainHand is not null && mainHand.GetUInt32(UpdateFields.ItemFieldEnchantment + 3) != 0;
+        AttachExtra(state, manaPotion, mainHandHasWeapon, mainHandHasTempEnchant);
+        return state;
     }
 
     /// <summary>A snapshot of <paramref name="unit"/> as <paramref name="bot"/> sees it.</summary>

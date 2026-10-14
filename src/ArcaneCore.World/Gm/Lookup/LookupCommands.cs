@@ -82,8 +82,12 @@ public sealed class LookupCommands : ICommandGroup
         }
 
         string needle = args.ToLowerInvariant();
-        Player caller = context.Player;
-        if (LiveItemTemplateStore.Unwrap(caller.Inventory.Templates) is not { } store)
+        Player? caller = context.IsConsole ? null : context.Player;
+        IItemTemplateStore? templates = caller?.Inventory.Templates
+            ?? (context.Session.Services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items
+                ? (items.Templates.Count > 0 ? items.Templates : items.EnsureLoadedAsync().GetAwaiter().GetResult())
+                : null);
+        if (templates is null || LiveItemTemplateStore.Unwrap(templates) is not { } store)
         {
             context.Reply(GmStrings.NoItemsFound);
             return true;
@@ -95,7 +99,7 @@ public sealed class LookupCommands : ICommandGroup
             .Select(t =>
             {
                 // vmangos ShowItemListHelper: "%d - %s %s" with the link and the [usable] marker.
-                string usable = caller.Inventory.CanUseItem(t) == InventoryResult.Ok ? GmStrings.Usable : string.Empty;
+                string usable = caller is not null && caller.Inventory.CanUseItem(t) == InventoryResult.Ok ? GmStrings.Usable : string.Empty;
                 string link = $"|c{LookupText.QualityColor(t.Quality)}|Hitem:{t.Entry}:0:0:0:0:0:0:0|h[{t.Name}]|h|r";
                 return $"{t.Entry} - {link} {usable}";
             });

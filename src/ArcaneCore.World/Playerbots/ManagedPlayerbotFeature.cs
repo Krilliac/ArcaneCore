@@ -908,6 +908,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             { Controller = controller };
             // The chat persona's goal: the bot-led group's while the coordinator drives the bot, otherwise the brain's (GoalOf).
             active.Party.BrainGoal = () => { var goal = GoalOf(active); return (goal.Goal, goal.QuestId); };
+            active.Party.BrainDiagnostics = p => FormatBotDiagnostics(active, p);
             if (!_active.TryAdd(bot.BotId, active)) throw new InvalidOperationException("duplicate-bot");
             _loadedSetAsides.TryRemove(bot.BotId, out _);
             Interlocked.Increment(ref _activeVersion);
@@ -1860,6 +1861,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>A running bot's current stall (<see cref="PlayerbotStallWatch"/>), shown where a fault would be.</summary>
     private static string? StallOf(ActiveBot active) => active.PartyDriven || active.GroupDriven || active.BattlegroundDriven || active.Controller is not null ? null
         : active.Brain.StallReport is { } stall ? active.StallCode(stall) : null;
+
+    private string FormatBotDiagnostics(ActiveBot active, Player player)
+    {
+        (PlayerbotGoalKind goal, uint target, uint quest) = GoalOf(active);
+        string driver = active.Controller is not null ? "controller"
+            : active.PartyDriven ? "party"
+            : active.GroupDriven ? "group"
+            : active.BattlegroundDriven ? "bg"
+            : "brain";
+        string stall = StallOf(active) ?? "none";
+        string home = HomeLineOf(active) ?? "none";
+        string risk = RiskOf(active) ?? "none";
+        string snap = active.Brain.FormatDiagnosticSnapshot(player);
+        return $"bot={active.Record.BotId.ToString("N")[..8]} drv={driver} goal={goal}/{target}/q{quest} stall={stall} home={home} risk={risk} {snap}";
+    }
 
     private void ReplaceBrain(ActiveBot active)
     {
