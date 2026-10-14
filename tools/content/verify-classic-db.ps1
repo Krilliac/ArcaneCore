@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $Importer) {
     $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $Importer = Join-Path $repo 'tools\ArcaneCore.ContentImporter\bin\Release\net10.0\arcane-content-importer.exe'
+    $Importer = Join-Path $repo 'tools\ArcaneCore.ContentImporter\bin\Release\net11.0\arcane-content-importer.exe'
 }
 if (-not (Test-Path -LiteralPath $Importer)) { throw "importer not found: $Importer (build the solution in Release first)" }
 if (-not (Test-Path -LiteralPath $Dump)) { throw "dump not found: $Dump" }

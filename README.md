@@ -1,7 +1,7 @@
 # ArcaneCore
 
 A from-scratch World of Warcraft **1.12.1 (build 5875)** server emulator in **C# /
-.NET 10**. See [`ARCANECORE_CHARTER.md`](ARCANECORE_CHARTER.md) for the binding design
+.NET 11**. See [`ARCANECORE_CHARTER.md`](ARCANECORE_CHARTER.md) for the binding design
 charter and prime directives.
 
 > Status: **M1–M6** implemented and automatically verified (M5: world-thread runtime,
@@ -98,7 +98,7 @@ The data-layer tests run against MariaDB and PostgreSQL when
 
 ## Build & test
 
-Requires the .NET 10 SDK.
+Requires the .NET 11 SDK.
 
 ```bash
 dotnet build ArcaneCore.slnx -c Release

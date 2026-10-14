@@ -1,5 +1,9 @@
+extern alias LoggingPkg;
+
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Logging;
+using LoggingPkg::Microsoft.Extensions.DependencyInjection;
+using LoggingPkg::Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;

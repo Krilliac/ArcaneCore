@@ -179,7 +179,7 @@ if (-not $NoBuild) {
     }
 }
 
-$accountDll = Join-Path $repo 'tools\ArcaneCore.AccountTool\bin\Debug\net10.0\arcane-account.dll'
+$accountDll = Join-Path $repo 'tools\ArcaneCore.AccountTool\bin\Debug\net11.0\arcane-account.dll'
 if (-not (Test-Path -LiteralPath $accountDll)) { Fail "the account tool is not built: $accountDll (run without -NoBuild)." 7 }
 
 New-Item -ItemType Directory -Force -Path $run, (Join-Path $run 'logs'), (Join-Path $run 'modules') | Out-Null

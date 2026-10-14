@@ -136,7 +136,7 @@ if (-not (Test-Path -LiteralPath $Dump -PathType Leaf)) { throw "dump not found:
 
 if (-not $Importer) {
     $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $Importer = Join-Path $repo 'tools\ArcaneCore.ContentImporter\bin\Release\net10.0\arcane-content-importer.dll'
+    $Importer = Join-Path $repo 'tools\ArcaneCore.ContentImporter\bin\Release\net11.0\arcane-content-importer.dll'
 }
 if (-not (Test-Path -LiteralPath $Importer -PathType Leaf)) { throw "importer not found: $Importer (build the solution in Release first)" }
 $optionalData = Join-Path $PSScriptRoot 'set-optional-data.ps1'

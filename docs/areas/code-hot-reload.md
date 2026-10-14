@@ -10,7 +10,7 @@ Goal: a server running on your PC that a real WoW 1.12.1 client can connect to, 
 shows up in the running server a few seconds after you save it, without restarting it or dropping the client.
 Local test machine only: Debug build, Development environment, loopback addresses, a disposable database.
 
-1. **Check the tools.** `dotnet --list-sdks` must list a 10.x SDK (this was measured with 10.0.401). The client's
+1. **Check the tools.** `dotnet --list-sdks` must list an 11.x SDK (this was measured with 10.0.401). The client's
    `realmlist.wtf` must say `set realmlist 127.0.0.1` (it already does at `D:\World of Warcraft Classic 1.12.1`).
 2. **Start everything with one command**, from the repo root (never needs `-ExecutionPolicy Bypass`):
 
@@ -26,7 +26,7 @@ Local test machine only: Debug build, Development environment, loopback addresse
 3. **Log in with the real client.** Account `DEVGM`, the password from `dev-account.txt` (12 characters), realm
    "ArcaneCore Dev". Create a character and enter the world. (No client at hand? Build the mock client **before**
    you start the runner, see Troubleshooting, then run
-   `dotnet tools\ArcaneCore.MockClient\bin\Debug\net10.0\arcane-mock.dll live --credentials-file %TEMP%\ArcaneCore-dev-dev\dev-account.txt --say ".server info"`.)
+   `dotnet tools\ArcaneCore.MockClient\bin\Debug\net11.0\arcane-mock.dll live --credentials-file %TEMP%\ArcaneCore-dev-dev\dev-account.txt --say ".server info"`.)
 4. **Check that hot reload is on.** In game type `.hotcode status` (Administrator only). It reports the generation and
    `Process diverged from build: no`. Or run `powershell -File scripts\dev-runner.ps1 -Status`.
 5. **Change code while connected.** Edit a `.cs` file under `src\`, for example the text of a reply in

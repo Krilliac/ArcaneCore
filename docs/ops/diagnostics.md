@@ -71,7 +71,7 @@ the sample is bounded in time for that reason, and the first use on the live box
 
 Writes a dump of the server's own process with `Microsoft.Diagnostics.NETCore.Client` 0.2.750501
 (`new DiagnosticsClient(Environment.ProcessId).WriteDump(type, path, logDumpGeneration: false)`; a Microsoft package, owner `dotnetframework`
-on nuget.org, MIT, a `net8.0` asset that runs on net10.0). `full` (default) is `DumpType.Full`, `heap` is `WithHeap`, `mini` is `Normal`.
+on nuget.org, MIT, a `net8.0` asset that runs on net11.0). `full` (default) is `DumpType.Full`, `heap` is `WithHeap`, `mini` is `Normal`.
 **Default is full because heap-type dumps fail on the production box with `E_INVALIDARG`**; the failure is reported, with a hint to use `full`.
 
 A dump contains everything in memory: session keys, password material in flight, character data. It is therefore **off by default** and refused unless

@@ -62,9 +62,9 @@ acceptance** (Charter §1.3 / §8: M1 is "done" only when an actual 1.12.1 clien
    M1 it is two small tables that must work identically on all three engines, where
    three migration sets would be premature. Revisit when the schema grows.
 
-6. **Toolchain.** Targets **.NET 10 / C# 14** (latest), but the EF Core + Extensions
+6. **Toolchain.** Targets **.NET 11 / C# 15** (preview), but the EF Core + Extensions
    packages are pinned to **9.0.0** because the Pomelo MySQL/MariaDB provider (the
-   primary engine) has no .NET 10 release yet; EF 9 is runtime-compatible with net10.0.
+   primary engine) has no .NET 11 release yet; EF 9 is runtime-compatible with net11.0.
 
 ## Client build verified against
 

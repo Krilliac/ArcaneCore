@@ -7,7 +7,7 @@
 ## §0 — What this project IS and IS NOT
 
 ArcaneCore is a **net-new, from-scratch** WoW **1.12.1 (client build 5875)**
-server emulator in **C# / .NET 10**.
+server emulator in **C# / .NET 11**.
 
 **There is no prior canonical codebase.** Any "ArcaneCore" zips, source dumps, or
 reconstructions that predate this charter are **void**. Do **not** import, read,
@@ -51,7 +51,7 @@ is not copied in — it informs design, it is not a source.
 
 ## §2 — Tech baseline
 
-- **Language/runtime:** C# 14 / .NET 10. `async`/`await`, `Span<T>`/`Memory<T>`
+- **Language/runtime:** C# 15 / .NET 11. `async`/`await`, `Span<T>`/`Memory<T>`
   for packet buffers, source generators where they earn their keep.
 - **Target protocol:** WoW **1.12.1**, client build **5875**. Nothing newer.
   Opcodes, UpdateFields, and packet shapes are build-specific — values from
@@ -188,7 +188,7 @@ defined against the real client**, approved before any code is written.
 
 ### 2026-10-03 — Recorded runtime baseline
 
-The implementation and CI already target .NET 10 / C# 14 (`global.json` and
+The implementation and CI already target .NET 11 / C# 15 (`global.json` and
 `Directory.Build.props`); the language/runtime statements above now match them.
 EF Core and Extensions remain at version 9 for the existing Pomelo provider.
 

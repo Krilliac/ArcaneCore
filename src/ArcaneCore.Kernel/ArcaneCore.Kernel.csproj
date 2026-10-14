@@ -5,12 +5,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
+    <!-- Microsoft.Extensions.{Hosting.Abstractions,Logging.Abstractions,Options} are part of Microsoft.NETCore.App in .NET 11 (NU1510). -->
     <!-- Logging provider (Logging/): ILoggingBuilder, ProviderAlias and options binding. Both are already in the daemons'
-         graph through Microsoft.Extensions.Hosting; no third-party logging package is used. -->
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" />
+         graph through Microsoft.Extensions.Hosting; no third-party logging package is used. Aliased so Microsoft.Extensions.Logging 9.0.0
+         does not collide (CS0433) with ProviderAliasAttribute in .NET 11's built-in Microsoft.Extensions.Logging.Abstractions. -->
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" Aliases="LoggingPkg" />
     <!-- Binds the Diagnostics section in UseArcaneDiagnostics; already in both daemons' graphs through Microsoft.Extensions.Hosting. -->
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.0" />
     <!-- The .conf provider (Configuration/Conf): ConfigurationProvider and the file watcher. Both are already in the daemons' graph through Microsoft.Extensions.Hosting. -->
