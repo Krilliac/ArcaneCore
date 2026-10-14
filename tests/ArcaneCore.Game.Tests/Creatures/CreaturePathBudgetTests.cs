@@ -183,4 +183,120 @@ public sealed class CreaturePathBudgetTests
         c.System.FindPath(wolf, new Vector3(7, 8, 9));
         Assert.Equal(2, c.Paths.Calls);
     }
+
+    private sealed class CountingSamplerPathfinder : IPathfinder, IMeshPointQuery
+    {
+        public int PathCalls { get; private set; }
+        public int SampleCalls { get; private set; }
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            PathCalls++;
+            PathSearchCounters.RecordSearch(0, 0, capped: false);
+            return new PathResult(PathType.Normal, [start, end]);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+        {
+            SampleCalls++;
+            point = center + new Vector3(3f, 0f, 0f);
+            return true;
+        }
+
+        public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(true, false, 1f, end);
+    }
+
+    [Fact]
+    public void ARandomWanderer_DoesNotSampleMeshPoint_WhenPathBudgetIsExhausted_AndBacksOffBeforeRetrying()
+    {
+        var content = new CreatureContent(
+            [Template()],
+            [Spawn(1, WolfEntry, 10f, 10f, movementType: 1, wander: 5f)],
+            [], [], [], CreatureAiContent.Empty);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);
+        using (runtime)
+        {
+            system.PathBudget = new CreaturePathBudget(MaxSearches: 0, MaxNodes: long.MaxValue);
+            var nav = new CountingSamplerPathfinder();
+            WorldCollision.Of(runtime).Install(pathfinder: nav);
+            AddPlayer(runtime, 1, 0, 0);
+
+            // Advance until the initial random wander timer expires and tries to move:
+            int ticks = 0;
+            while (system.DeferredPathSearches == 0 && ticks < 200)
+            {
+                runtime.RunTick(100);
+                ticks++;
+            }
+
+            Assert.Equal(1, system.DeferredPathSearches);
+            Assert.Equal(0, nav.SampleCalls);
+            Assert.Equal(0, nav.PathCalls);
+
+            // During the next 900 ms (9 x 100 ms ticks), the 1000-1500 ms backoff prevents re-hammering every tick:
+            for (int i = 0; i < 9; i++)
+            {
+                runtime.RunTick(100);
+            }
+
+            Assert.Equal(1, system.DeferredPathSearches);
+            Assert.Equal(0, nav.SampleCalls);
+        }
+    }
+
+    [Fact]
+    public void CombatAndHomeMovement_ClaimPathBudgetAheadOfRandomWander_InTheSameTick()
+    {
+        var spawns = new List<CreatureSpawn>();
+        // Spawn 10 random wanderers first in creature iteration order:
+        for (uint i = 1; i <= 10; i++)
+        {
+            spawns.Add(Spawn(i, WolfEntry, 50f + i * 5f, 50f, movementType: 1, wander: 6f));
+        }
+        // Spawn 2 combat/home wolves after the wanderers:
+        spawns.Add(Spawn(11, WolfEntry, 15f, 0f, movementType: 0));
+        spawns.Add(Spawn(12, WolfEntry, 15f, 2f, movementType: 0));
+
+        var content = new CreatureContent([Template(configure: t => t.AIName = RecorderName)], spawns, [], [], [], CreatureAiContent.Empty);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(
+            content,
+            new CreatureAiServices { Factory = RecorderFactory() });
+        using (runtime)
+        {
+            var nav = new CountingSamplerPathfinder();
+            WorldCollision.Of(runtime).Install(pathfinder: nav);
+            (Player player, _) = AddPlayer(runtime, 1, 0, 0);
+
+            List<Creature> all = system.Creatures.ToList();
+            Creature chaser = all.Single(c => c.Spawn?.Guid == 11);
+            Creature homer = all.Single(c => c.Spawn?.Guid == 12);
+
+            // Put chaser into Chase and homer into Home while budget is 0 so both need a path on the next tick,
+            // and let the 10 wanderers' initial timers and backoff expire so all 10 want to wander on the next tick too:
+            system.PathBudget = new CreaturePathBudget(MaxSearches: 0, MaxNodes: long.MaxValue);
+            for (int i = 0; i < 140; i++)
+            {
+                runtime.RunTick(100);
+            }
+
+            runtime.GetMap(0, 0).Combat.DealDamage(player, chaser, 1, direct: false);
+            homer.Motion.MoveTargetedHome(new CreatureHome(30f, 2f, 0f, 0f));
+            Assert.False(chaser.IsMoving);
+            Assert.False(homer.IsMoving);
+
+            // Now grant a budget of exactly 2 searches for the next 100 ms tick:
+            system.PathBudget = new CreaturePathBudget(MaxSearches: 2, MaxNodes: long.MaxValue);
+            int pathCallsBefore = nav.PathCalls;
+            runtime.RunTick(100);
+
+            // Pass 1 serves Chase and Home first; Pass 2 defers the Random wanderers without sampling the navmesh:
+            Assert.Equal(2, nav.PathCalls - pathCallsBefore);
+            Assert.True(chaser.IsMoving, "Chase movement should claim budget in pass 1 ahead of Random wander");
+            Assert.True(homer.IsMoving, "Home movement should claim budget in pass 1 ahead of Random wander");
+            Assert.Equal(0, nav.SampleCalls);
+        }
+    }
 }
+

@@ -113,6 +113,13 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             return true;
         }
 
+        if (mover is ICreaturePathQuery { HasPathBudget: false } budgeted)
+        {
+            budgeted.NoteDeferred(creature);
+            _nextMoveMs = mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
+            return true;
+        }
+
         float wander = WanderOf(creature);
         CreatureHome home = _center ?? creature.Home;
         float destX = home.X;
@@ -155,7 +162,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
         if (plan.Outcome == PathOutcome.Deferred)
         {
-            _nextMoveMs = 0; // the search budget is spent: pick again on the next update
+            _nextMoveMs = mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
             return true;
         }
 

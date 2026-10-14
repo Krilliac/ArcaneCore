@@ -368,10 +368,57 @@ public sealed class GhostVisibilityTests
         rig.Tick();
         Assert.Equal(PlayerFlags.None, player.Flags & PlayerFlags.Ghost);
 
-        // Zero health while Dead (ghost):
+        // Stale release timer byte and DeathTimer while Alive:
+        player.SetByte(UpdateFields.PlayerFieldBytes, 0,
+            (byte)(player.GetByte(UpdateFields.PlayerFieldBytes, 0) | MapCombat.FieldByteReleaseTimer));
+        player.Combat.DeathTimer = 60_000;
+        rig.Tick();
+        Assert.Equal(0, player.GetByte(UpdateFields.PlayerFieldBytes, 0) & MapCombat.FieldByteReleaseTimer);
+        Assert.Equal(0u, player.Combat.DeathTimer);
+
+        // Non-finite coordinates healed on tick and sanitized in CreateSnapshot:
+        player.Relocate(float.NaN, float.PositiveInfinity, float.NegativeInfinity, float.NaN, 0);
+        var snap = player.CreateSnapshot(0);
+        Assert.True(float.IsFinite(snap.X) && float.IsFinite(snap.Y) && float.IsFinite(snap.Z) && float.IsFinite(snap.Orientation));
+        rig.Tick();
+        Assert.True(float.IsFinite(player.X) && float.IsFinite(player.Y) && float.IsFinite(player.Z) && float.IsFinite(player.Orientation));
+
+        // Zero health and missing Ghost flag while Dead (ghost):
         rig.Release(player);
         player.Health = 0;
+        player.Flags &= ~PlayerFlags.Ghost;
         rig.Tick();
         Assert.Equal(1u, player.Health);
+        Assert.NotEqual(PlayerFlags.None, player.Flags & PlayerFlags.Ghost);
+    }
+
+    [Fact]
+    public void CombatAndVisibilityInvariants_PruneStaleAttackersThreatHoldersAndOrphanVisibleGuids()
+    {
+        using var rig = new Rig();
+        Player player = rig.Add(1, 0, 0);
+        CombatTestUnit creature = rig.AddCreature(5, 0);
+        rig.Tick();
+
+        // Inject an orphan GUID into VisibleObjects that does not exist on the map:
+        var orphanGuid = ObjectGuid.WithEntry(HighGuid.Unit, 9999, 999999);
+        player.VisibleObjects.Add(orphanGuid);
+        player.NeedsVisibilityUpdate = true;
+
+        // Inject a dead creature into AttackersInternal and ThreatenedByInternal without ThreatList entry:
+        creature.Health = 0;
+        creature.Combat.DeathState = DeathState.Dead;
+        player.Combat.AttackersInternal.Add(creature);
+        player.Combat.ThreatenedByInternal.Add(creature);
+        player.Combat.CombatTimer = 0;
+        player.UnitFlags |= UnitFlags.InCombat;
+
+        rig.Tick();
+
+        Assert.DoesNotContain(orphanGuid, player.VisibleObjects);
+        Assert.Empty(player.Combat.Attackers);
+        Assert.Empty(player.Combat.ThreatenedByInternal);
+        Assert.False(player.Combat.IsInCombat);
     }
 }
+

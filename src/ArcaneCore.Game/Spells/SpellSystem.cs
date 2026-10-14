@@ -287,12 +287,34 @@ public sealed partial class SpellSystem
             UpdateCast(cast, diffMs);
         }
 
+        VerifySpellStateInvariants(state);
         UpdateAuras(state, diffMs);
         UpdateAreaAuras(state);
         ExpireCooldowns(state, now);
         if (state.IsIdle)
         {
             _states.Remove(state.Unit.Guid);
+        }
+    }
+
+    private void VerifySpellStateInvariants(UnitSpellState state)
+    {
+        if (state.CurrentCast is { State: SpellCastState.Finished } terminal)
+        {
+            _logger.LogWarning(
+                "spell-state invariant healed for unit {Guid}: CurrentCast (spell={SpellId}) was left in terminal state {State}; clearing",
+                state.Unit.Guid, terminal.Spell.Id, terminal.State);
+            state.CurrentCast = null;
+        }
+
+        if (state.PendingChannelResetMs == 0
+            && state.CurrentCast is not { State: SpellCastState.Casting, Spell.IsChanneled: true }
+            && state.Unit.GetUInt32(UpdateFields.UnitChannelSpell) is var channelSpell && channelSpell != 0)
+        {
+            _logger.LogWarning(
+                "spell-state invariant healed for unit {Guid}: UnitChannelSpell={SpellId} was set without an active channel or pending reset; clearing",
+                state.Unit.Guid, channelSpell);
+            CancelChannelingAnimation(state.Unit);
         }
     }
 

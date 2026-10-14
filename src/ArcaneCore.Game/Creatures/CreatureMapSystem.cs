@@ -63,6 +63,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     private readonly List<(Player Viewer, Creature Creature, uint SplineId)> _catchUp = [];
     private readonly HashSet<uint> _warnedMissingTemplates = [];
     private readonly List<Creature> _scratchCreatures = [];
+    private readonly List<Creature> _randomMotionScratch = [];
 
     private long _clockMs;
     private uint _splineCounter;
@@ -650,6 +651,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
         // Fair deferral: the walk starts at the creature whose path search was deferred first last update, so deferred chasers are
         // served before the ones that were served (a fixed order starves the late creatures while demand stays above the budget).
+        // Non-Random movement (chase, home, flee, confused, waypoint, point, follow, formation) runs in pass 1 so idle Random wanderers
+        // never starve combat or evade path searches; Random movement runs in pass 2 with the remaining budget.
+        _randomMotionScratch.Clear();
         int count = _scratchCreatures.Count;
         int start = _pathFirstDeferred is { } resume ? Math.Max(0, _scratchCreatures.IndexOf(resume)) : 0;
         _pathFirstDeferred = null; // deferrals from here on (this walk, or a pull before the next update) choose the next start
@@ -716,9 +720,16 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                     // chase, flee, home and point generators on top of it always do.
                     if (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default))
                     {
-                        long motionStart = Stopwatch.GetTimestamp();
-                        creature.Motion.Update(diffMs);
-                        _timing.Motion += Stopwatch.GetTimestamp() - motionStart;
+                        if (creature.Motion.CurrentType == MovementGeneratorType.Random)
+                        {
+                            _randomMotionScratch.Add(creature);
+                        }
+                        else
+                        {
+                            long motionStart = Stopwatch.GetTimestamp();
+                            creature.Motion.Update(diffMs);
+                            _timing.Motion += Stopwatch.GetTimestamp() - motionStart;
+                        }
                     }
 
                     CheckNoMeleePanicEnded(creature);
@@ -758,6 +769,27 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                 _timing.SlowestGenerator = creature.Motion.Top?.GetType();
             }
         }
+
+        foreach (Creature creature in _randomMotionScratch)
+        {
+            if (creature.DeathState == CreatureDeathState.Alive
+                && _creatures.ContainsKey(creature.Guid)
+                && (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default)))
+            {
+                long motionStart = Stopwatch.GetTimestamp();
+                creature.Motion.Update(diffMs);
+                long motionTicks = Stopwatch.GetTimestamp() - motionStart;
+                _timing.Motion += motionTicks;
+                if (motionTicks > _timing.SlowestCreatureTicks)
+                {
+                    _timing.SlowestCreatureTicks = motionTicks;
+                    _timing.SlowestEntry = creature.Entry;
+                    _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+                }
+            }
+        }
+
+        _randomMotionScratch.Clear();
     }
 
     /// <summary><see cref="UpdateAi"/>, its time added to the update's AI stage.</summary>

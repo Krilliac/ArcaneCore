@@ -209,34 +209,26 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (_backoffUntil != 0)
             _backoffUntil = 0;
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
-        if (_stage != Stage.None && _stageDeadline != 0 && unchecked(now - _stageDeadline) <= int.MaxValue)
-        {
-            if (_stage is Stage.CompleteResponse or Stage.RewardRequest or Stage.RewardOffer or Stage.RewardChoice or Stage.RewardConfirmation)
-            {
-                string reason = services?.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? $"turn-in timed out in stage {_stage}";
-                RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
-                return false;
-            }
-            Refuse(_stageQuest, now);
-            ClearStage();
-            _backoffUntil = unchecked(now + 2_000);
-            return false;
-        }
-
         if (services?.StateOf(player) is not { Loaded: true } state)
             return false;
         RefreshObjectiveEntry(player, services, state);
         if (_stage == Stage.AcceptConfirmation)
         {
-            if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete }) ClearStage();
-            return _stage != Stage.None;
+            if (state.Quests.Get(_stageQuest) is { Status: QuestStatus.Incomplete or QuestStatus.Complete })
+            {
+                ClearStage();
+                return false;
+            }
         }
-        if (_stage == Stage.RewardConfirmation)
+        else if (_stage == Stage.RewardConfirmation)
         {
-            if (state.Quests.Get(_stageQuest)?.Rewarded == true) ClearStage();
-            return _stage != Stage.None;
+            if (state.Quests.Get(_stageQuest)?.Rewarded == true)
+            {
+                ClearStage();
+                return false;
+            }
         }
-        if (_stage is Stage.AcceptDetails or Stage.CompleteResponse or Stage.RewardOffer)
+        else if (_stage is Stage.AcceptDetails or Stage.CompleteResponse or Stage.RewardOffer)
         {
             bool confirmed = false;
             foreach (ManagedSessionPacket packet in _session.DrainManagedPackets(WorldOpcode.SmsgQuestgiverQuestDetails,
@@ -246,7 +238,11 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 var response = new PacketReader(packet.Payload);
                 if (response.ReadUInt64() != _stageNpc.Value || response.ReadUInt32() != _stageQuest) continue;
                 if (_stage == Stage.AcceptDetails && packet.Opcode == WorldOpcode.SmsgQuestgiverQuestDetails)
-                { _stage = Stage.Accept; confirmed = true; }
+                {
+                    _stage = Stage.Accept;
+                    _stageDeadline = unchecked(now + 15_000);
+                    confirmed = true;
+                }
                 else if (_stage == Stage.CompleteResponse && packet.Opcode == WorldOpcode.SmsgQuestgiverRequestItems)
                 {
                     if (!QuestPackets.IsRequestItemsCompletable(packet.Payload))
@@ -256,13 +252,51 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         return false;
                     }
                     _stage = Stage.RewardRequest;
+                    _stageDeadline = unchecked(now + 15_000);
                     confirmed = true;
                 }
                 else if ((_stage is Stage.CompleteResponse or Stage.RewardOffer) && packet.Opcode == WorldOpcode.SmsgQuestgiverOfferReward)
-                { _stage = Stage.RewardChoice; confirmed = true; }
+                {
+                    _stage = Stage.RewardChoice;
+                    _stageDeadline = unchecked(now + 15_000);
+                    confirmed = true;
+                }
             }
-            if (!confirmed) return true;
+            if (!confirmed)
+            {
+                if (_stageDeadline != 0 && unchecked(now - _stageDeadline) <= int.MaxValue)
+                {
+                    if (_stage is Stage.CompleteResponse or Stage.RewardOffer)
+                    {
+                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? $"turn-in timed out in stage {_stage}";
+                        RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
+                        return false;
+                    }
+                    Refuse(_stageQuest, now);
+                    ClearStage();
+                    _backoffUntil = unchecked(now + 2_000);
+                    return false;
+                }
+                return true;
+            }
         }
+
+        if (_stage != Stage.None && _stageDeadline != 0 && unchecked(now - _stageDeadline) <= int.MaxValue)
+        {
+            if (_stage is Stage.CompleteResponse or Stage.RewardRequest or Stage.RewardOffer or Stage.RewardChoice or Stage.RewardConfirmation)
+            {
+                string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? $"turn-in timed out in stage {_stage}";
+                RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
+                return false;
+            }
+            Refuse(_stageQuest, now);
+            ClearStage();
+            _backoffUntil = unchecked(now + 2_000);
+            return false;
+        }
+
+        if (_stage is Stage.AcceptConfirmation or Stage.RewardConfirmation)
+            return true;
 
         QuestTarget? target = FindCandidate(player, services, state);
         if (target is null)

@@ -96,6 +96,13 @@ internal sealed class ConfusedMovementGenerator : ICreatureMovementGenerator
             return true;
         }
 
+        if (mover is ICreaturePathQuery { HasPathBudget: false } budgeted)
+        {
+            budgeted.NoteDeferred(creature);
+            _staggerMs = 0;
+            return true;
+        }
+
         double angle = mover.NextDouble() * 2 * Math.PI;
         double distance = StaggerRadius * Math.Sqrt(mover.NextDouble());
         float x = _anchorX + (float)(distance * Math.Cos(angle));

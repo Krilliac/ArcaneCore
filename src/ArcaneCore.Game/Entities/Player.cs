@@ -5,6 +5,7 @@ using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Entities;
 
@@ -513,11 +514,31 @@ public sealed partial class Player : Unit
 
     private CharacterState CreateSnapshot(uint nowMs, uint mapId, float x, float y, float z, float orientation,
         IReadOnlyList<ActionButton>? buttons, Kernel.Items.InventorySnapshot? inventory)
-        => new(
+    {
+        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z) || !float.IsFinite(orientation))
+        {
+            bool useHome = float.IsFinite(Home.X) && float.IsFinite(Home.Y) && float.IsFinite(Home.Z);
+            float safeX = float.IsFinite(x) ? x : (useHome ? Home.X : 0f);
+            float safeY = float.IsFinite(y) ? y : (useHome ? Home.Y : 0f);
+            float safeZ = float.IsFinite(z) ? z : (useHome ? Home.Z : 0f);
+            float safeO = float.IsFinite(orientation) ? orientation : 0f;
+            uint safeMap = (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z)) && useHome ? Home.MapId : mapId;
+            Map?.Logger.LogWarning(
+                "persistence snapshot invariant healed for player {Player} (guid={Guid}): non-finite save coordinates ({X},{Y},{Z},o={O}) on map {MapId}; substituting ({SafeX},{SafeY},{SafeZ},o={SafeO}) on map {SafeMapId}",
+                Name, Guid.Low, x, y, z, orientation, mapId, safeX, safeY, safeZ, safeO, safeMap);
+            mapId = safeMap;
+            x = safeX;
+            y = safeY;
+            z = safeZ;
+            orientation = safeO;
+        }
+
+        return new(
             (int)Guid.Low, mapId, ZoneId, x, y, z, orientation, Level,
             Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
             inventory, Death.PlayerLife.Capture(this), Inventory.BankBagSlotCount,
             Drunk: ArcaneCore.Game.Spells.SpellSystem.GetDrunkValue(this), Ownership: CharacterOwnership);
+    }
 
     private static uint Pack(uint action, byte type) => (action & 0x00FFFFFF) | ((uint)type << 24);
 

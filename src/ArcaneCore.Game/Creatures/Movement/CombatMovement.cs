@@ -436,6 +436,13 @@ internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : 
 
     private void MoveAway(Creature creature, ICreatureMover mover)
     {
+        if (mover is ICreaturePathQuery { HasPathBudget: false } budgeted)
+        {
+            budgeted.NoteDeferred(creature);
+            _pauseMs = 0;
+            return;
+        }
+
         float distance;
         float angle;
         float fromSource = source is null ? float.MaxValue : MathF.Sqrt(Sq(creature.X - source.X) + Sq(creature.Y - source.Y));

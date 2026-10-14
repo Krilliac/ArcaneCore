@@ -263,6 +263,7 @@ public sealed partial class MapCombat : IMapUpdater
             }
         }
 
+        VerifyUnitCombatInvariants(unit);
         UpdateCombatTimer(unit, diff);
         c.TickAttackTimers(diff);
 
@@ -323,12 +324,105 @@ public sealed partial class MapCombat : IMapUpdater
             player.Flags &= ~PlayerFlags.Ghost;
             player.NeedsVisibilityUpdate = true;
         }
-        else if (c.DeathState == DeathState.Dead && player.Health == 0)
+        else if (c.DeathState == DeathState.Dead && (player.Flags & PlayerFlags.Ghost) == 0)
+        {
+            _map.Logger.LogWarning(
+                "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: DeathState.Dead was missing PLAYER_FLAGS_GHOST; restoring ghost flag",
+                player.Name, player.Guid.Low, _map.MapId);
+            player.Flags |= PlayerFlags.Ghost;
+            player.NeedsVisibilityUpdate = true;
+        }
+
+        if (c.DeathState == DeathState.Dead && player.Health == 0)
         {
             _map.Logger.LogWarning(
                 "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: DeathState.Dead had Health=0; restoring ghost Health=1",
                 player.Name, player.Guid.Low, _map.MapId);
             player.Health = 1;
+        }
+
+        if (c.DeathState == DeathState.Alive && player.Health > 0)
+        {
+            byte fieldBytes0 = player.GetByte(UpdateFields.PlayerFieldBytes, 0);
+            if ((fieldBytes0 & FieldByteReleaseTimer) != 0)
+            {
+                _map.Logger.LogWarning(
+                    "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: PLAYER_FIELD_BYTE_RELEASE_TIMER was set while Alive; clearing flag",
+                    player.Name, player.Guid.Low, _map.MapId);
+                player.SetByte(UpdateFields.PlayerFieldBytes, 0, (byte)(fieldBytes0 & ~FieldByteReleaseTimer));
+            }
+
+            if (c.DeathTimer != 0)
+            {
+                _map.Logger.LogWarning(
+                    "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: DeathTimer={DeathTimer} was non-zero while Alive; clearing timer",
+                    player.Name, player.Guid.Low, _map.MapId, c.DeathTimer);
+                c.DeathTimer = 0;
+            }
+        }
+
+        if (!float.IsFinite(player.X) || !float.IsFinite(player.Y) || !float.IsFinite(player.Z) || !float.IsFinite(player.Orientation))
+        {
+            float safeX = float.IsFinite(player.X) ? player.X : (player.Home.MapId == _map.MapId && float.IsFinite(player.Home.X) ? player.Home.X : 0f);
+            float safeY = float.IsFinite(player.Y) ? player.Y : (player.Home.MapId == _map.MapId && float.IsFinite(player.Home.Y) ? player.Home.Y : 0f);
+            float safeZ = float.IsFinite(player.Z) ? player.Z : (player.Home.MapId == _map.MapId && float.IsFinite(player.Home.Z) ? player.Home.Z : 0f);
+            float safeO = float.IsFinite(player.Orientation) ? player.Orientation : 0f;
+            _map.Logger.LogWarning(
+                "coordinate invariant healed for player {Player} (guid={Guid}) on map {MapId}: non-finite position ({X},{Y},{Z},o={O}); relocating to ({SafeX},{SafeY},{SafeZ},o={SafeO})",
+                player.Name, player.Guid.Low, _map.MapId, player.X, player.Y, player.Z, player.Orientation, safeX, safeY, safeZ, safeO);
+            player.Relocate(safeX, safeY, safeZ, safeO, _world.NowMs);
+        }
+    }
+
+    private void VerifyUnitCombatInvariants(Unit unit)
+    {
+        UnitCombat c = unit.Combat;
+        if (c.Victim is { } victim)
+        {
+            if ((victim.Map is not null && !ReferenceEquals(victim.Map, _map)) || (victim is Player vp && !vp.IsInWorld))
+            {
+                _map.Logger.LogWarning(
+                    "combat invariant healed for unit {Guid} on map {MapId}: Victim {VictimGuid} left this map (victimMap={VictimMapId}, inWorld={InWorld}); stopping attack",
+                    unit.Guid, _map.MapId, victim.Guid, victim.Map?.MapId, victim.IsInWorld);
+                AttackStop(unit);
+            }
+        }
+
+        if (c.AttackersInternal.Count > 0)
+        {
+            foreach (Unit attacker in c.AttackersInternal.ToArray())
+            {
+                if (!ReferenceEquals(attacker.Combat.Victim, unit) || !IsAliveState(attacker)
+                    || (attacker.Map is not null && !ReferenceEquals(attacker.Map, _map)))
+                {
+                    _map.Logger.LogWarning(
+                        "combat invariant healed for unit {Guid} on map {MapId}: pruning stale attacker {AttackerGuid} (alive={Alive}, matchesVictim={MatchesVictim}, attackerMap={AttackerMapId})",
+                        unit.Guid, _map.MapId, attacker.Guid, IsAliveState(attacker), ReferenceEquals(attacker.Combat.Victim, unit), attacker.Map?.MapId);
+                    c.AttackersInternal.Remove(attacker);
+                }
+            }
+        }
+
+        if (c.ThreatenedByInternal.Count > 0)
+        {
+            foreach (Unit holder in c.ThreatenedByInternal.ToArray())
+            {
+                if (!IsAliveState(holder) || !holder.Combat.HasThreatList || !holder.Combat.Threat.Contains(unit)
+                    || (holder.Map is not null && !ReferenceEquals(holder.Map, _map)))
+                {
+                    _map.Logger.LogWarning(
+                        "combat invariant healed for unit {Guid} on map {MapId}: pruning stale ThreatenedBy holder {HolderGuid} (alive={Alive}, hasEntry={HasEntry}, holderMap={HolderMapId})",
+                        unit.Guid, _map.MapId, holder.Guid, IsAliveState(holder), holder.Combat.HasThreatList && holder.Combat.Threat.Contains(unit), holder.Map?.MapId);
+                    if (holder.Combat.HasThreatList && holder.Combat.Threat.Contains(unit))
+                    {
+                        holder.Combat.Threat.Remove(unit);
+                    }
+                    else
+                    {
+                        c.ThreatenedByInternal.Remove(holder);
+                    }
+                }
+            }
         }
     }
 

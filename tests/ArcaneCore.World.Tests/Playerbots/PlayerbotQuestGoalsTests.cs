@@ -687,6 +687,53 @@ public sealed class PlayerbotQuestGoalsTests
         });
     }
 
+    [Fact]
+    public async Task CompletedQuestTurnIn_DrainsQueuedServerResponseBeforeCheckingStageTimeout_AfterLongThinkGap()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var accept = new PacketWriter(12);
+            accept.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            accept.WriteUInt32(QuestInteractionFixture.QuestId);
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, accept.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+
+            // First think sends CmsgQuestgiverCompleteQuest and transitions to CompleteResponse,
+            // while the server immediately queues SmsgQuestgiverRequestItems into the session's managed inbox:
+            session.ManagedBudget = new ManagedActionBudget(1);
+            goals.Update(player, 500);
+            Assert.Equal("CompleteResponse", goals.StageName);
+            return true;
+        });
+
+        // Simulate a 16-second think gap on a loaded server (912 bots):
+        await quest.Host.World.AdvanceClockAsync(16_000);
+
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            // Next thinks must drain the already-queued response packet and finish the turn-in without a false timeout:
+            for (int i = 0; i < 3; i++)
+            {
+                session.ManagedBudget = new ManagedActionBudget(1);
+                goals.Update(player, 500);
+            }
+
+            Assert.Null(goals.LastTurnInRefusal);
+            Assert.False(goals.IsRefused(QuestInteractionFixture.QuestId));
+            return true;
+        });
+        await quest.Feature.WaitForSettlementAsync((int)session.Player!.Guid.Low);
+        await quest.Host.WaitForWorldAsync(
+            () => quest.Feature.Services.StateOf(session.Player!)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded,
+            "turn-in completed after long think gap");
+    }
+
     private sealed class BlockedFloor(float height) : ILineOfSight
     {
         public bool Enabled => true;

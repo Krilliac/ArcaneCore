@@ -1238,6 +1238,8 @@ public sealed class Map
     /// <summary>Re-evaluate visibility between a player and everything near it, in both directions.</summary>
     private void UpdateVisibility(Player player)
     {
+        VerifyVisibleSetInvariants(player);
+
         // vmangos Map::UpdateObjectVisibility / Player::UpdateVisibilityOf: same candidates and join order.
         // A visibility rule may recursively refresh a different player; that call must not reuse our active list.
         bool ownsScratch = !_visibilityScratchInUse;
@@ -1267,6 +1269,40 @@ public sealed class Map
             {
                 candidates.Clear();
                 _visibilityScratchInUse = false;
+            }
+        }
+    }
+
+    private void VerifyVisibleSetInvariants(Player player)
+    {
+        if (player.VisibleObjects.Count == 0)
+        {
+            return;
+        }
+
+        List<ObjectGuid>? orphans = null;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (guid == player.Guid || !_objects.TryGetValue(guid, out WorldObject? seen) || !ReferenceEquals(seen.Map, this))
+            {
+                (orphans ??= []).Add(guid);
+            }
+        }
+
+        if (orphans is null)
+        {
+            return;
+        }
+
+        foreach (ObjectGuid orphan in orphans)
+        {
+            _logger.LogWarning(
+                "visibility invariant healed for player {Player} (guid={Guid}) on map {MapId}: removing orphan visible object {OrphanGuid} not present on this map",
+                player.Name, player.Guid.Low, MapId, orphan);
+            RemoveVisible(player, orphan);
+            if (orphan != player.Guid && player.Session.WantsUpdateObjects)
+            {
+                player.PendingUpdates.AddOutOfRange(orphan);
             }
         }
     }
