@@ -44,6 +44,7 @@ public sealed partial class CreatureMapSystem
                         ? _content.ResolveWaypointPath(creature.Spawn?.Guid ?? 0, creature.Template.Entry).Points
                         : _content.GetEntryWaypoints(creature.Template.Entry, wanderOrPathId);
                 StopMoving(creature);
+                if (path.Count == 0) ReportMissingWaypointPath(creature, wanderOrPathId, "script change-movement");
                 creature.Motion.Initialize(path.Count > 0 ? new WaypointMovementGenerator(path) : IdleMovementGenerator.Instance, this, start: true);
                 return true;
             }
