@@ -139,6 +139,24 @@ public sealed class CrashReportTests
         }
     }
 
+    [Fact]
+    public void ShouldIgnoreFirstChance_FiltersExpectedProbesAndPacketRejections_ButKeepsRealBugs()
+    {
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(null));
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new OperationCanceledException()));
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new ArgumentOutOfRangeException("packet", "Packet for CMSG_CHAR_CREATE requires at least 10 bytes, got 0.")));
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new ArgumentOutOfRangeException("payload", "CMSG_ITEM_TEXT_QUERY requires at least 4 bytes.")));
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new System.Net.Sockets.SocketException()));
+
+        var bindProbe = new NotSupportedException("Cannot bind to the target method because its signature is not compatible with that of the delegate type.");
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(bindProbe));
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new System.Reflection.TargetInvocationException(bindProbe)));
+
+        Assert.False(CrashHandler.ShouldIgnoreFirstChance(new InvalidOperationException("unexpected bug")));
+        Assert.False(CrashHandler.ShouldIgnoreFirstChance(new ArgumentOutOfRangeException("index", "unexpected index")));
+        Assert.False(CrashHandler.ShouldIgnoreFirstChance(new NotSupportedException("application feature not supported")));
+    }
+
     private static void ThrowDeep() => throw new InvalidOperationException("deep failure");
 
     private sealed class FixedProvider : ICrashContextProvider

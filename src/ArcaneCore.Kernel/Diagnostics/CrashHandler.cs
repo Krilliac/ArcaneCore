@@ -195,16 +195,63 @@ public sealed class CrashHandler : IDisposable
     private void OnFirstChance(object? sender, FirstChanceExceptionEventArgs e)
     {
         // Every throw in the process lands here, including throws inside the sink: the thread-static
-        // guard in Report makes a nested one a no-op. Expected cancellation signals and controlled
-        // malformed-packet layout rejections are skipped so FirstChanceExceptions remains signal-rich
-        // and avoids expensive stack-trace rendering on ChaosProbe fuzzing in Debug mode.
-        if (_reporting || e.Exception is OperationCanceledException
-            || e.Exception.GetType().Name == "PacketLayoutException")
+        // guard in Report makes a nested one a no-op. Expected cancellation signals, controlled
+        // malformed-packet layout rejections, and internal BCL expression-interpreter probes are skipped
+        // so FirstChanceExceptions remains signal-rich and avoids expensive stack-trace rendering on the world thread.
+        if (_reporting || ShouldIgnoreFirstChance(e.Exception))
         {
             return;
         }
 
         Report(CrashKind.FirstChance, e.Exception, LogLevel.Debug, terminating: false);
+    }
+
+    /// <summary>
+    /// Whether a first-chance exception should be ignored by <see cref="OnFirstChance"/> so Debug logs stay signal-rich
+    /// and world-thread fuzzing/startup probes do not pay for full stack/process crash-report rendering.
+    /// </summary>
+    public static bool ShouldIgnoreFirstChance(Exception? exception)
+    {
+        if (exception is null or OperationCanceledException or System.Net.Sockets.SocketException)
+        {
+            return true;
+        }
+
+        if (exception is ArgumentOutOfRangeException { ParamName: "packet" or "payload" })
+        {
+            return true;
+        }
+
+        string typeName = exception.GetType().Name;
+        if (typeName is "PacketLayoutException" or "PlayerbotQaPublishException")
+        {
+            return true;
+        }
+
+        if (exception is NotSupportedException notSupported && IsBclDelegateBindProbe(notSupported))
+        {
+            return true;
+        }
+
+        if (exception is System.Reflection.TargetInvocationException { InnerException: NotSupportedException innerNotSupported }
+            && IsBclDelegateBindProbe(innerNotSupported))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsBclDelegateBindProbe(NotSupportedException exception)
+    {
+        string? declaringType = exception.TargetSite?.DeclaringType?.FullName;
+        if (declaringType is "System.Delegate" or "System.MulticastDelegate")
+        {
+            return true;
+        }
+
+        return exception.Message.Contains("BindToMethodInfo", StringComparison.Ordinal)
+            || exception.Message.Contains("Cannot bind to the target method", StringComparison.Ordinal);
     }
 
     private void Report(CrashKind kind, Exception? exception, LogLevel level, bool terminating)

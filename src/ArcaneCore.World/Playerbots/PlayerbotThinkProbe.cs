@@ -86,7 +86,7 @@ internal sealed class PlayerbotThinkProbe
     internal long TotalNodes => PathSearchCounters.NodesCreated - _searchBefore.Nodes;
 
     /// <summary>True when this think has not yet spent a heavy pathfinding budget and may start optional destination/explore plans.</summary>
-    internal bool HasOptionalPlanBudget => Queries < 10 && TotalNodes < 16_384;
+    internal bool HasOptionalPlanBudget => Queries < 6 && TotalNodes < 8_192;
 
     /// <summary>Their time (Stopwatch ticks).</summary>
     internal long QueryTicks { get; private set; }

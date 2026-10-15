@@ -32,6 +32,20 @@ public enum CrashKind
 public static class CrashReport
 {
     private static readonly DateTime StartedUtc = DateTime.UtcNow;
+    private static readonly string CachedProcessName = ReadProcessName();
+
+    private static string ReadProcessName()
+    {
+        try
+        {
+            using Process process = Process.GetCurrentProcess();
+            return process.ProcessName;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return "(unknown)";
+        }
+    }
 
     /// <summary>The configuration this Kernel was compiled with (decides whether Invariant.Assert calls inside it exist).</summary>
     public const string BuildConfiguration =
@@ -103,7 +117,7 @@ public static class CrashReport
     {
         sb.Append("[process]\n");
         Guarded(sb, "pid", static () => Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
-        Guarded(sb, "name", static () => Process.GetCurrentProcess().ProcessName);
+        Guarded(sb, "name", static () => CachedProcessName);
         // Never the command line: it may carry --Database:ConnectionString=... with a password.
         Guarded(sb, "uptime", () => (nowUtc - StartedUtc).ToString("c", CultureInfo.InvariantCulture));
         Guarded(sb, "exit code set", static () => ExitCodes.Current.ToString(CultureInfo.InvariantCulture));
@@ -129,15 +143,28 @@ public static class CrashReport
     private static void AppendMemory(StringBuilder sb)
     {
         sb.Append("[memory]\n");
-        Guarded(sb, "working set", static () => Bytes(Environment.WorkingSet));
-        Guarded(sb, "peak working set", static () => Bytes(Process.GetCurrentProcess().PeakWorkingSet64));
-        Guarded(sb, "private bytes", static () => Bytes(Process.GetCurrentProcess().PrivateMemorySize64));
-        Guarded(sb, "gc heap", static () => Bytes(GC.GetTotalMemory(forceFullCollection: false)));
-        Guarded(sb, "gc committed", static () => Bytes(GC.GetGCMemoryInfo().TotalCommittedBytes));
-        Guarded(sb, "gc collections gen0/gen1/gen2", static () =>
-            GC.CollectionCount(0).ToString(CultureInfo.InvariantCulture) + "/" + GC.CollectionCount(1).ToString(CultureInfo.InvariantCulture) + "/" + GC.CollectionCount(2).ToString(CultureInfo.InvariantCulture));
-        Guarded(sb, "total allocated", static () => Bytes(GC.GetTotalAllocatedBytes(precise: false)));
-        Guarded(sb, "handles", static () => Process.GetCurrentProcess().HandleCount.ToString(CultureInfo.InvariantCulture));
+        Process? current = null;
+        try
+        {
+            current = Process.GetCurrentProcess();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Individual probes below still run inside Guarded.
+        }
+
+        using (current)
+        {
+            Guarded(sb, "working set", static () => Bytes(Environment.WorkingSet));
+            Guarded(sb, "peak working set", () => Bytes((current ?? Process.GetCurrentProcess()).PeakWorkingSet64));
+            Guarded(sb, "private bytes", () => Bytes((current ?? Process.GetCurrentProcess()).PrivateMemorySize64));
+            Guarded(sb, "gc heap", static () => Bytes(GC.GetTotalMemory(forceFullCollection: false)));
+            Guarded(sb, "gc committed", static () => Bytes(GC.GetGCMemoryInfo().TotalCommittedBytes));
+            Guarded(sb, "gc collections gen0/gen1/gen2", static () =>
+                GC.CollectionCount(0).ToString(CultureInfo.InvariantCulture) + "/" + GC.CollectionCount(1).ToString(CultureInfo.InvariantCulture) + "/" + GC.CollectionCount(2).ToString(CultureInfo.InvariantCulture));
+            Guarded(sb, "total allocated", static () => Bytes(GC.GetTotalAllocatedBytes(precise: false)));
+            Guarded(sb, "handles", () => (current ?? Process.GetCurrentProcess()).HandleCount.ToString(CultureInfo.InvariantCulture));
+        }
     }
 
     private static void AppendInvariants(StringBuilder sb)
