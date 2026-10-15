@@ -11,7 +11,7 @@ namespace ArcaneCore.World.Playerbots;
 /// <param name="GapMaxMs">Longest time between two thinks of one bot (exact).</param>
 /// <param name="ThinksPerTick">Thinks per tick, averaged over the ticks.</param>
 /// <param name="TimeLimitedPct">Percent of the ticks that stopped because the think time budget (<see cref="PlayerbotThinkBudget"/>) went by.</param>
-/// <param name="ActionLimitedPct">Percent of the ticks that stopped because the shared action budget (<c>MaxActionsPerTick</c>) was spent.</param>
+/// <param name="ActionLimitedPct">Percent of the ticks that stopped because the main lane's action budget (its reserve of <c>MaxActionsPerTick</c> plus the combat lane's leftover) was spent.</param>
 /// <param name="GapP99Ms">99th percentile of the think gap of all bots.</param>
 /// <param name="CombatThinks">Thinks made in the window by bots that were in combat, dead or ghosts.</param>
 /// <param name="CombatGapP50Ms">Median think gap of those thinks.</param>

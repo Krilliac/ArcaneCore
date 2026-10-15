@@ -278,6 +278,10 @@ public sealed class PlayerbotThinkLanesTests
     [InlineData(64, 0.7, 20, 44)]
     [InlineData(64, 0.9, 7, 57)]
     [InlineData(64, 0.1, 58, 6)]
+    // 1 - 0.7 is 0.30000000000000004 in doubles: a ceil of the reserve gave the combat lane 6 of 10, not the documented floor(7).
+    [InlineData(10, 0.7, 3, 7)]
+    [InlineData(20, 0.7, 6, 14)]
+    [InlineData(60, 0.7, 18, 42)]
     public void TheActionSplit_KeepsAtLeastOneActionForTheMainLane(int maxActions, double share, int reserve, int combat)
     {
         Assert.Equal(reserve, PlayerbotThinkRotation.ActionReserve(maxActions, share));

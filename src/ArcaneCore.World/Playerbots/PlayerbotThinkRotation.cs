@@ -112,11 +112,14 @@ internal sealed class PlayerbotThinkRotation
     internal int LastPriorityVisits { get; private set; }
 
     /// <summary>The actions the main lane keeps of <c>MaxActionsPerTick</c>: at least one, whatever the share.</summary>
-    internal static int ActionReserve(int maxActions, double priorityShare)
-        => Math.Max(1, (int)Math.Ceiling(maxActions * (1 - Math.Clamp(priorityShare, 0, 1))));
+    internal static int ActionReserve(int maxActions, double priorityShare) => maxActions - PriorityActions(maxActions, priorityShare);
 
-    /// <summary>The actions of <c>MaxActionsPerTick</c> that are the first lane's own (zero at 1).</summary>
-    internal static int PriorityActions(int maxActions, double priorityShare) => Math.Max(0, maxActions - ActionReserve(maxActions, priorityShare));
+    /// <summary>
+    /// The actions of <c>MaxActionsPerTick</c> that are the first lane's own: floor(share × max), never all of them (zero at 1). The
+    /// epsilon keeps a product a double puts a hair under a whole number (10 × 0.7) on that number, as the option's text promises.
+    /// </summary>
+    internal static int PriorityActions(int maxActions, double priorityShare)
+        => Math.Clamp((int)Math.Floor(maxActions * Math.Clamp(priorityShare, 0, 1) + 1e-9), 0, Math.Max(0, maxActions - 1));
 
     /// <summary>
     /// <see cref="TickWithin(int, double, Func{int, bool}, Func{double})"/> in two lanes. First the bots <paramref name="classify"/> calls
