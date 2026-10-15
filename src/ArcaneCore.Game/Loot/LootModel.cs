@@ -180,6 +180,9 @@ public sealed class LootBag
 
     public uint Gold { get; internal set; }
 
+    /// <summary>Copper already paid out of this bag by <c>LootService.TakeMoney</c>; money offered again after it is a duplicate.</summary>
+    internal uint GoldPaidOut { get; set; }
+
     public IReadOnlyList<LootItem> Items => _items;
 
     /// <summary>Players allowed to loot (killer and group members in range); empty means anyone.</summary>

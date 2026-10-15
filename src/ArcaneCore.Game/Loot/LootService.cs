@@ -7,6 +7,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Updates;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.WorldData.Loot;
@@ -216,6 +217,11 @@ public sealed partial class LootService : IViewerFieldFilter
             }
 
             bag.Add(item);
+        }
+
+        if (normal.Count == 0 && quest.Count == 0)
+        {
+            CheckGuaranteedDrops(source, table, entry);
         }
 
         return bag;
@@ -1112,6 +1118,11 @@ public sealed partial class LootService : IViewerFieldFilter
         LootItem? item = bag.FindSlot(slot);
         if (item is null || bag.SlotFor(player, item) != LootSlotType.AllowLoot)
         {
+            if (item is { RollActive: true })
+            {
+                Rolls.ReportIfOverdue(bag);
+            }
+
             InventoryResult refused = item is { IsLooted: true } ? InventoryResult.AlreadyLooted : InventoryResult.LootCantLootThatNow;
             player.Inventory.SendEquipError(refused, null, null);
             return refused;
@@ -1139,6 +1150,13 @@ public sealed partial class LootService : IViewerFieldFilter
     /// </summary>
     internal InventoryResult AwardItem(Player recipient, LootBag bag, LootItem item)
     {
+        if (item.IsQuestItem || item.IsPerPlayer ? item.LootedBy.Contains(recipient.Guid) : item.IsLooted)
+        {
+            AnomalyLedger.Shared.Report(AnomalySubsystem, ItemDuplicatedCode, SubjectOf(bag),
+                $"item {item.ItemId} x{item.Count} slot {item.Slot} was already taken; award to {recipient.Name} (guid {recipient.Guid.Low}) refused");
+            return InventoryResult.AlreadyLooted;
+        }
+
         InventoryResult result = recipient.Inventory.AddItem(item.ItemId, item.Count, out _, received: false, created: false, showInChat: true);
         if (result != InventoryResult.Ok)
         {
@@ -1284,6 +1302,13 @@ public sealed partial class LootService : IViewerFieldFilter
             return false;
         }
 
+        if (bag.GoldPaidOut != 0)
+        {
+            AnomalyLedger.Shared.Report(AnomalySubsystem, MoneyTwiceCode, SubjectOf(bag),
+                $"{bag.Gold} copper offered again after {bag.GoldPaidOut} copper was already paid out; payout to {player.Name} (guid {player.Guid.Low}) refused");
+            return false;
+        }
+
         var sharers = new List<Player>();
         if (bag.Kind == LootSourceKind.Creature && bag.ShareMoney && player.Map is { } map && Groups?.GroupOf(player) is { } group)
         {
@@ -1320,6 +1345,7 @@ public sealed partial class LootService : IViewerFieldFilter
             GiveMoney(player, bag.Gold);
         }
 
+        bag.GoldPaidOut += bag.Gold;
         bag.Gold = 0;
         foreach (Player viewer in bag.Viewers)
         {

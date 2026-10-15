@@ -249,6 +249,8 @@ public sealed class Map
             lastException,
             "map {MapId} instance {InstanceId} updater {Updater} failed {Limit} ticks in a row (last {ExceptionType}: {Message}) and is skipped until the next code edit is applied or the server restarts",
             MapId, InstanceId, updater.GetType().Name, limit, lastException?.GetType().Name ?? "unknown", lastException?.Message ?? string.Empty);
+        AnomalyLedger.Shared.Report("map", UpdaterIsolatedCode, $"map {MapId} updater {updater.GetType().Name}",
+            $"updater failed {limit} ticks in a row and is skipped (instance {InstanceId}, last {lastException?.GetType().Name ?? "unknown"}: {lastException?.Message})", AnomalySeverity.Warning);
     }
 
     /// <summary>
@@ -997,9 +999,42 @@ public sealed class Map
     /// </summary>
     internal event Action<WorldObject>? ObjectRelocated;
 
+    /// <summary>Anomaly code: a map updater failed the consecutive-tick limit and is isolated by the fault breaker.</summary>
+    public const string UpdaterIsolatedCode = "updater-isolated";
+
+    /// <summary>Anomaly code: an object on this map has a NaN or infinite coordinate.</summary>
+    public const string NonFinitePositionCode = "non-finite-position";
+
+    private HashSet<ObjectGuid>? _nonFiniteReported;
+
+    /// <summary>
+    /// Report an object that sits at a non-finite position, once per episode (until it is seen finite again). Free when the position is
+    /// finite and nothing was reported: three comparisons.
+    /// </summary>
+    private void CheckFinitePosition(WorldObject obj)
+    {
+        if (float.IsFinite(obj.X) && float.IsFinite(obj.Y) && float.IsFinite(obj.Z))
+        {
+            if (_nonFiniteReported is { Count: > 0 })
+            {
+                _nonFiniteReported.Remove(obj.Guid);
+            }
+
+            return;
+        }
+
+        _nonFiniteReported ??= [];
+        if (_nonFiniteReported.Count < 256 && _nonFiniteReported.Add(obj.Guid))
+        {
+            AnomalyLedger.Shared.Report("map", NonFinitePositionCode, $"{obj.GetType().Name} {obj.Guid.Value:X} entry {obj.Guid.Entry}",
+                $"object is on map {MapId} instance {InstanceId} at a non-finite position ({obj.X},{obj.Y},{obj.Z})", AnomalySeverity.Error);
+        }
+    }
+
     /// <summary>Re-file an object whose X/Y changed; non-player objects get a visibility pass this tick.</summary>
     internal void OnObjectMoved(WorldObject obj)
     {
+        CheckFinitePosition(obj);
         if (!_grid.Relocate(obj) && !_grid.Contains(obj))
         {
             return;

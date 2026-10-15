@@ -339,12 +339,18 @@ public sealed partial class InstanceManager : IMapResolver
         InstanceSave? save = GetBoundSaveForSelfOrGroup(player.Guid, player.MapId);
         bool lastMatches = _lastInstance.TryGetValue(player.Guid, out (uint MapId, uint InstanceId) last)
             && save is not null && last.MapId == player.MapId && last.InstanceId == save.InstanceId;
-        if (save is not null && lastMatches && CheckEntry(player, template, save, sendErrors: false) is null)
+        TransferAbortReason? loginRefusal = save is not null && lastMatches ? CheckEntry(player, template, save, sendErrors: false) : null;
+        if (save is not null && lastMatches && loginRefusal is null)
         {
             Map map = GetOrCreateInstanceMap(save);
             BindPlayerOrGroupOnEnter(player, save, map);
             _enterLimiter.Record(player.AccountId, save.InstanceId, Now);
             return map;
+        }
+
+        if (loginRefusal is { } refused)
+        {
+            ReportEnterRefused(player, player.MapId, refused, sendErrors: false);
         }
 
         RelocateToEntrance(player, template);
@@ -366,7 +372,13 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         InstanceSave? save = GetBoundSaveForSelfOrGroup(player.Guid, mapId);
-        return CheckEntry(player, template, save, sendErrors: true) is null;
+        TransferAbortReason? refusal = CheckEntry(player, template, save, sendErrors: true);
+        if (refusal is { } reason)
+        {
+            ReportEnterRefused(player, mapId, reason, sendErrors: true);
+        }
+
+        return refusal is null;
     }
 
     /// <inheritdoc />
@@ -384,8 +396,9 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         InstanceSave? save = GetBoundSaveForSelfOrGroup(player.Guid, mapId);
-        if (CheckEntry(player, template, save, sendErrors: true) is not null)
+        if (CheckEntry(player, template, save, sendErrors: true) is { } refusal)
         {
+            ReportEnterRefused(player, mapId, refusal, sendErrors: true);
             return null;
         }
 
@@ -778,6 +791,11 @@ public sealed partial class InstanceManager : IMapResolver
                 state.UnloadTimerMs = 0;
                 try
                 {
+                    if (map.PlayerCount > 0)
+                    {
+                        VerifyNobodyInside(state.Save, UnloadWithPlayersInsideCode, "map unloaded");
+                    }
+
                     _world.UnloadMap(map);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -910,6 +928,7 @@ public sealed partial class InstanceManager : IMapResolver
             }
 
             AttachInstanceData(map, save);
+            state.BaselineData = CurrentScriptData(map);
         }
 
         return map;
@@ -939,6 +958,7 @@ public sealed partial class InstanceManager : IMapResolver
         {
             if (save.IsDeleted)
             {
+                ReportSaveDataDropped(save, text);
                 return;
             }
 
@@ -1075,6 +1095,7 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         _persistence.PlayerBound(player.Counter, save.InstanceId, permanent);
+        VerifyBindHasSave(save, "player", player.Value);
     }
 
     private void BindGroup(Group group, InstanceSave save, bool permanent)
@@ -1101,6 +1122,8 @@ public sealed partial class InstanceManager : IMapResolver
         {
             ForgetStoredGroupBind(group.Id, save.InstanceId, persist: true);
         }
+
+        VerifyBindHasSave(save, "group", group.Id);
     }
 
     /// <summary>
@@ -1448,6 +1471,8 @@ public sealed partial class InstanceManager : IMapResolver
             return;
         }
 
+        VerifyNobodyInside(save, ResetWithPlayersInsideCode, "save reset");
+
         foreach (ObjectGuid player in save.Players.ToArray())
         {
             if (_playerBinds.TryGetValue(player, out Dictionary<uint, InstanceBind>? binds)
@@ -1586,6 +1611,7 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         InstanceSave save = state.Save;
+        VerifyScriptStateSaved(map, state);
         if (state.ResetAfterUnload)
         {
             ResetSave(save);
@@ -1856,6 +1882,9 @@ public sealed class InstanceMapState
     internal long? LastRefusedResetNotice { get; set; }
 
     internal Action<Unit?, Unit>? KillHandler { get; set; }
+
+    /// <summary>The instance script's save string right after it was created and loaded (null: no script, or it keeps none); the state a map starts with.</summary>
+    internal string? BaselineData { get; set; }
 }
 
 /// <summary>Drives one instance map's unload timer and its players' homebind timers.</summary>
