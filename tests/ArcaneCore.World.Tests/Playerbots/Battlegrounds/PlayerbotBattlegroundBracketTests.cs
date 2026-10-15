@@ -65,20 +65,27 @@ public sealed class PlayerbotBattlegroundBracketTests
     [Fact]
     public void Av_IsRefusedAsUnsupported_AtEveryLevel_WithATemplateAndContent()
     {
-        // Alterac Valley is out of the bots' scope: refused by name whatever its template, content or battlemaster says (fail closed).
-        for (uint level = 1; level <= 60; level++)
+        for (uint level = 1; level <= 50; level++)
         {
-            Assert.Equal(PlayerbotBattlegroundRefusal.Unsupported, PlayerbotBattlegroundBrackets.Check(BattlegroundType.AlteracValley, level, Av, out int bracket));
+            Assert.Equal(PlayerbotBattlegroundRefusal.LevelOutOfRange, PlayerbotBattlegroundBrackets.Check(BattlegroundType.AlteracValley, level, Av, out int bracket));
             Assert.Equal(-1, bracket);
+        }
+
+        for (uint level = 51; level <= 60; level++)
+        {
+            Assert.Equal(PlayerbotBattlegroundRefusal.None, PlayerbotBattlegroundBrackets.Check(BattlegroundType.AlteracValley, level, Av, out int bracket));
+            Assert.Equal(0, bracket);
         }
 
         var refused = new List<(BattlegroundType, PlayerbotBattlegroundRefusal)>();
         List<PlayerbotBattlegroundChoice> choices = PlayerbotBattlegroundBrackets.Eligible(55, Templates, _ => true, _ => true, (t, why) => refused.Add((t, why)));
-        Assert.DoesNotContain(choices, c => c.Type == BattlegroundType.AlteracValley);
-        Assert.Equal([(BattlegroundType.AlteracValley, PlayerbotBattlegroundRefusal.Unsupported)], refused);
-        Assert.False(PlayerbotBattlegroundBrackets.Supported(BattlegroundType.AlteracValley));
+        Assert.Contains(new PlayerbotBattlegroundChoice(BattlegroundType.AlteracValley, 0), choices);
+        Assert.Empty(refused);
+        Assert.True(PlayerbotBattlegroundBrackets.Supported(BattlegroundType.AlteracValley));
         Assert.True(PlayerbotBattlegroundBrackets.Supported(BattlegroundType.WarsongGulch));
         Assert.True(PlayerbotBattlegroundBrackets.Supported(BattlegroundType.ArathiBasin));
+        Assert.False(PlayerbotBattlegroundBrackets.Supported(BattlegroundType.None));
+        Assert.Equal(PlayerbotBattlegroundRefusal.Unsupported, PlayerbotBattlegroundBrackets.Check(BattlegroundType.None, 60, Av, out _));
     }
 
     [Fact]
@@ -95,7 +102,7 @@ public sealed class PlayerbotBattlegroundBracketTests
             _ => true, _ => true, (t, why) => refused.Add((t, why)));
         Assert.DoesNotContain(choices, c => c.Type == BattlegroundType.WarsongGulch);
         Assert.Contains((BattlegroundType.WarsongGulch, PlayerbotBattlegroundRefusal.NoTemplate), refused);
-        Assert.Equal([new PlayerbotBattlegroundChoice(BattlegroundType.ArathiBasin, 4)], choices);
+        Assert.Equal([new PlayerbotBattlegroundChoice(BattlegroundType.ArathiBasin, 4), new PlayerbotBattlegroundChoice(BattlegroundType.AlteracValley, 0)], choices);
     }
 
     [Fact]
@@ -105,7 +112,7 @@ public sealed class PlayerbotBattlegroundBracketTests
         List<PlayerbotBattlegroundChoice> choices = PlayerbotBattlegroundBrackets.Eligible(60, Templates, t => t != BattlegroundType.ArathiBasin, _ => true,
             (t, why) => refused.Add((t, why)));
         Assert.DoesNotContain(choices, c => c.Type == BattlegroundType.ArathiBasin);
-        Assert.Equal([(BattlegroundType.ArathiBasin, PlayerbotBattlegroundRefusal.MissingContent), (BattlegroundType.AlteracValley, PlayerbotBattlegroundRefusal.Unsupported)], refused);
+        Assert.Equal([(BattlegroundType.ArathiBasin, PlayerbotBattlegroundRefusal.MissingContent)], refused);
     }
 
     [Fact]
@@ -115,7 +122,7 @@ public sealed class PlayerbotBattlegroundBracketTests
         List<PlayerbotBattlegroundChoice> choices = PlayerbotBattlegroundBrackets.Eligible(60, Templates, _ => true, t => t == BattlegroundType.ArathiBasin,
             (t, why) => refused.Add((t, why)));
         Assert.Equal([new PlayerbotBattlegroundChoice(BattlegroundType.ArathiBasin, 4)], choices);
-        Assert.Equal([(BattlegroundType.WarsongGulch, PlayerbotBattlegroundRefusal.NoBattlemaster), (BattlegroundType.AlteracValley, PlayerbotBattlegroundRefusal.Unsupported)], refused);
+        Assert.Equal([(BattlegroundType.WarsongGulch, PlayerbotBattlegroundRefusal.NoBattlemaster), (BattlegroundType.AlteracValley, PlayerbotBattlegroundRefusal.NoBattlemaster)], refused);
 
         Assert.Empty(PlayerbotBattlegroundBrackets.Eligible(60, Templates, _ => true, _ => false));
     }

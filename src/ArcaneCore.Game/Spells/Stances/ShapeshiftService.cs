@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells.Druid;
+using ArcaneCore.Game.Stats;
 using ArcaneCore.Kernel.WorldData;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,8 +23,9 @@ namespace ArcaneCore.Game.Spells;
 /// <remarks>
 /// Deliberate differences, all documented in docs/areas/druid-forms.md: the previous form is removed before the new one is
 /// applied (in vmangos the aura stacking rules remove it when the new spell is added, before the handler runs, so the
-/// display and power switch of the new form are not undone by the old form's removal); the weapon-dependent crit refresh of
-/// HandleShapeshiftBoosts (Elemental Sharpening Stone) is not implemented.
+/// display and power switch of the new form are not undone by the old form's removal). Weapon-dependent crit boosts (such as
+/// Elemental Sharpening Stone, enchant 2506 / spell 22756) are refreshed across attack-speed-overridden feral forms via
+/// <see cref="RefreshShapeshiftWeaponBoosts"/>.
 /// </remarks>
 public sealed class ShapeshiftService
 {
@@ -42,6 +45,13 @@ public sealed class ShapeshiftService
 
     /// <summary>SpellIconID of the Furor talent's dummy aura (SpellAuras.cpp:2520).</summary>
     public const uint FurorIconId = 238;
+
+    /// <summary>Elemental Sharpening Stone enchantment id (SpellItemEnchantment.dbc row 2506) and equip spell id (22756, +2% crit).</summary>
+    public const uint ElementalSharpeningStoneEnchantId = 2506;
+
+    public const uint ElementalSharpeningStoneSpellId = 22756;
+
+    public const float ElementalSharpeningStoneCritBonus = 2.0f;
 
     /// <summary>Tactical Mastery's class-script ids and the rage they keep over a stance change, raw (SpellAuras.cpp:2541-2557).</summary>
     private static readonly (int Script, uint Rage)[] TacticalMastery = [(831, 50), (832, 100), (833, 150), (834, 200), (835, 250)];
@@ -273,6 +283,10 @@ public sealed class ShapeshiftService
         }
 
         InitDataForForm(target, oldForm, (byte)form);
+        if (target is Player applyPlayer)
+        {
+            RefreshShapeshiftWeaponBoosts(applyPlayer, form, apply: true);
+        }
     }
 
     /// <summary>
@@ -355,6 +369,62 @@ public sealed class ShapeshiftService
         }
 
         InitDataForForm(target, oldForm, (byte)ShapeshiftForm.None);
+        if (target is Player removePlayer)
+        {
+            RefreshShapeshiftWeaponBoosts(removePlayer, form, apply: false);
+        }
+    }
+
+    /// <summary>
+    /// Weapon-dependent crit refresh of vmangos <c>Aura::HandleShapeshiftBoosts</c> (SpellAuras.cpp:5584-5596):
+    /// weapon-restricted <c>MOD_CRIT_PERCENT</c> effects and Elemental Sharpening Stone (enchant 2506 / spell 22756, +2% crit)
+    /// are suppressed when entering an attack-speed-overridden feral form (Cat, Bear, Dire Bear) and restored when leaving it.
+    /// When a <see cref="PlayerStatSystem"/> maintainer is attached, <see cref="PlayerStatSystem.UpdateAll"/> recomputes the
+    /// crit percentages from <see cref="PlayerStatAuras"/>; any equipped main-hand or off-hand weapon carrying Elemental
+    /// Sharpening Stone directly in its permanent or temporary enchantment slot without a corresponding <see cref="StatAuraTerm"/>
+    /// also has its +2% crit bonus adjusted across the form transition.
+    /// </summary>
+    public static void RefreshShapeshiftWeaponBoosts(Player player, ShapeshiftForm form, bool apply = true)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (!FormQueries.IsAttackSpeedOverridden((byte)form))
+        {
+            return;
+        }
+
+        player.StatState.Maintainer?.UpdateAll(player);
+
+        float rawStoneDelta = 0.0f;
+        foreach (byte slot in new[] { InventorySlots.MainHand, InventorySlots.OffHand })
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is not { } weapon
+                || (weapon.MaxDurability > 0 && weapon.Durability == 0))
+            {
+                continue;
+            }
+
+            uint permEnchant = weapon.GetUInt32(UpdateFields.ItemFieldEnchantment);
+            uint tempEnchant = weapon.GetUInt32(UpdateFields.ItemFieldEnchantment + 3);
+            bool hasSharpeningStone = permEnchant is ElementalSharpeningStoneEnchantId or ElementalSharpeningStoneSpellId
+                || tempEnchant is ElementalSharpeningStoneEnchantId or ElementalSharpeningStoneSpellId;
+            if (!hasSharpeningStone)
+            {
+                continue;
+            }
+
+            bool trackedInStatAuras = player.StatState.Auras.Terms.Any(
+                t => t.Type == AuraType.ModCritPercent && t.CastItem == weapon.Guid);
+            if (!trackedInStatAuras)
+            {
+                rawStoneDelta += apply ? -ElementalSharpeningStoneCritBonus : ElementalSharpeningStoneCritBonus;
+            }
+        }
+
+        if (rawStoneDelta != 0.0f)
+        {
+            float currentCrit = player.GetFloat(UpdateFields.PlayerCritPercentage);
+            player.SetFloat(UpdateFields.PlayerCritPercentage, Math.Max(0.0f, currentCrit + rawStoneDelta));
+        }
     }
 
     /// <summary>

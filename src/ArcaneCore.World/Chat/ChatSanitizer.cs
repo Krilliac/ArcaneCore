@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace ArcaneCore.World.Chat;
@@ -47,11 +48,19 @@ public static class ChatSanitizer
     /// Every '|' must be followed by one of <c>c H h r |</c>; at severity 2 the commands
     /// <c>c H h h r</c> must additionally occur in that cyclic order (an escaped <c>||</c> is
     /// always fine). A sequence still open at the end of the message is accepted, as in vmangos.
-    /// Severity 3 (catalog checks) is not implemented and is treated as 2.
+    /// Without a catalog delegate, severity 3 falls back to severity 2.
     /// </summary>
     public static bool IsValidChatMessage(string message, int severity)
+        => IsValidChatMessage(message, severity, linkExists: null);
+
+    /// <summary>
+    /// vmangos <c>ChatHandler::isValidChatMessage</c> for severities 1, 2, and 3 (Chat.cpp:2165-2270).
+    /// At severity 3 with <paramref name="linkExists"/> supplied, every <c>|H&lt;type&gt;:&lt;payload&gt;|h</c>
+    /// hyperlink must also carry a positive entry id accepted by <paramref name="linkExists"/>.
+    /// </summary>
+    public static bool IsValidChatMessage(string message, int severity, Func<string, uint, bool>? linkExists)
     {
-        severity = Math.Min(severity, 2);
+        int checkSeverity = linkExists is null ? Math.Min(severity, 2) : Math.Min(severity, 3);
         if (Encoding.UTF8.GetByteCount(message) > MaxCheckedMessageBytes)
         {
             return false;
@@ -75,7 +84,7 @@ public static class ChatSanitizer
             }
 
             at++;
-            if (severity == 2)
+            if (checkSeverity >= 2)
             {
                 if (command == ValidSequence[sequence])
                 {
@@ -86,8 +95,57 @@ public static class ChatSanitizer
                     return false;
                 }
             }
+
+            if (command == 'H' && checkSeverity >= 3)
+            {
+                int nextPipe = message.IndexOf('|', at);
+                if (nextPipe <= at)
+                {
+                    return false;
+                }
+
+                ReadOnlySpan<char> linkSpan = message.AsSpan(at, nextPipe - at);
+                int colon = linkSpan.IndexOf(':');
+                if (colon <= 0 || colon + 1 >= linkSpan.Length)
+                {
+                    return false;
+                }
+
+                string linkType = linkSpan[..colon].ToString();
+                ReadOnlySpan<char> payload = linkSpan[(colon + 1)..];
+                if (!ValidateLinkPayload(linkType, payload, checkSeverity, linkExists))
+                {
+                    return false;
+                }
+            }
         }
 
         return true;
     }
+
+    /// <summary>
+    /// Validates the colon-delimited hyperlink payload following <c>|H&lt;type&gt;:</c> at severity 3.
+    /// </summary>
+    public static bool ValidateLinkPayload(string linkType, ReadOnlySpan<char> payload, int severity, Func<string, uint, bool>? linkExists)
+    {
+        if (severity < 3 || linkExists is null)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrEmpty(linkType) || payload.IsEmpty)
+        {
+            return false;
+        }
+
+        int colon = payload.IndexOf(':');
+        ReadOnlySpan<char> idSpan = colon >= 0 ? payload[..colon] : payload;
+        if (!uint.TryParse(idSpan, NumberStyles.None, CultureInfo.InvariantCulture, out uint id) || id == 0)
+        {
+            return false;
+        }
+
+        return linkExists(linkType, id);
+    }
 }
+

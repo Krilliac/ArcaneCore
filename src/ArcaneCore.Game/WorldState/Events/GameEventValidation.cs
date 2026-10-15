@@ -65,11 +65,12 @@ public static class GameEventValidation
                 break; // loaded from the time row below
             case GameEventScheduleType.LunarNewYear:
             case GameEventScheduleType.Easter:
+            case var dmf when GameEventCalendar.IsDarkmoon(dmf):
                 (DateTimeOffset start, DateTimeOffset end) = GameEventCalendar.Compute(definition, now, zone, yearly);
                 definition = definition with { Start = start, End = end };
                 break;
             default:
-                issues.Add($"game_event {source.Id}: schedule type {(int)source.ScheduleType} is not implemented (the computed Darkmoon Faire schedules); the event is disabled");
+                issues.Add($"game_event {source.Id}: schedule type {(int)source.ScheduleType} is not implemented; the event is disabled");
                 definition = definition with { Start = GameEventCalendar.FarFuture };
                 break;
         }

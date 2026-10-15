@@ -96,5 +96,15 @@ public sealed partial class SpellSystem
                 target.UnitFlags &= ~UnitFlags.NonAttackable2;
             }
         }, null));
+
+        RegisterAura(AuraType.FarSight, new AuraHandler(static (_, holder, _, apply) =>
+        {
+            if (!apply && holder.Target is Player player && player.GetUInt64(UpdateFields.PlayerFarsight) != 0)
+            {
+                CharmService.SetView(player, null);
+            }
+        }, null));
+
+        RegisterAura(AuraType.DetectAmore, new AuraHandler(null, null));
     }
 }

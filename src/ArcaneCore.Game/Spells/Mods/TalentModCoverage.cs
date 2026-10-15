@@ -80,15 +80,16 @@ public static class TalentModCoverage
 {
     /// <summary>
     /// The operations something in the engine reads, with where (docs/areas/spell-mods.md). An operation missing here is reported by
-    /// <see cref="TalentModCoverageReport.UnreadOperations"/>; SPEED and ATTACK_POWER (an aura's own amount, vmangos SpellAuras.cpp:3982, 4016,
-    /// 5086-5219) and CHARGES (at holder creation, :6693) have no reader yet. Wiring one adds it here, in the same change; a test compares
-    /// this list with the reads in the source.
+    /// <see cref="TalentModCoverageReport.UnreadOperations"/>; wiring or removing a reader updates this list in the same change, and a test
+    /// compares this list with the reads in the source.
     /// </summary>
     public static IReadOnlyDictionary<SpellModOp, string> Readers { get; } = new Dictionary<SpellModOp, string>
     {
         [SpellModOp.Damage] = "SpellBonusModule, SpellSystem.Combat",
         [SpellModOp.Duration] = "SpellModValueAdapter",
         [SpellModOp.Threat] = "SpellThreatModifiers",
+        [SpellModOp.AttackPower] = "StatAuras (attack power aura amount)",
+        [SpellModOp.Charges] = "SpellSystem.Auras (holder proc charges)",
         [SpellModOp.Range] = "SpellSystem (range checks)",
         [SpellModOp.Radius] = "SpellSystem.Targeting, SpellSystem.AreaAuras, SpellSystem.PersistentAreaAuras",
         [SpellModOp.CriticalChance] = "SpellCombatRules.CritChance",
@@ -96,6 +97,7 @@ public static class TalentModCoverage
         [SpellModOp.NotLoseCastingTime] = "SpellSystem.Pushback",
         [SpellModOp.CastingTime] = "SpellModValueAdapter",
         [SpellModOp.Cooldown] = "SpellSystem (cooldowns)",
+        [SpellModOp.Speed] = "SpeedAuras (speed aura amount)",
         [SpellModOp.Cost] = "SpellSystem.Seams (power cost)",
         [SpellModOp.CritDamageBonus] = "SpellCombatRules (crit damage)",
         [SpellModOp.ResistMissChance] = "SpellCombatRules (hit chance), SpellSystem.Auras (aura amount)",

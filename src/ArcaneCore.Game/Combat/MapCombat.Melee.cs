@@ -609,10 +609,11 @@ public sealed partial class MapCombat
                 break;
             case MeleeHitOutcome.Crit:
             {
-                // vmangos Unit.cpp:1425-1436: (200 + the attacker's MOD_CRIT_PERCENT_VERSUS for the victim's creature type) percent.
+                // vmangos Unit.cpp:1425-1436: (200 + the attacker's MOD_CRIT_PERCENT_VERSUS for the victim's creature type + physical MOD_CRIT_DAMAGE_BONUS) percent.
                 uint typeMask = victim.CreatureTypeMask();
                 int versus = SpellMitigation?.GetTotalAuraModifier(attacker, AuraType.ModCritPercentVersus, a => ((uint)a.MiscValue & typeMask) != 0) ?? 0;
-                damage = (uint)(damage * ((CombatConstants.CritDamagePercent + versus) / 100.0f));
+                int critBonus = SpellMitigation?.GetTotalAuraModifier(attacker, AuraType.ModCritDamageBonus, static a => (a.MiscValue & 1) != 0) ?? 0;
+                damage = (uint)(damage * (CombatConstants.CritDamagePercent + versus + critBonus) / 100.0f);
                 break;
             }
             case MeleeHitOutcome.Parry:

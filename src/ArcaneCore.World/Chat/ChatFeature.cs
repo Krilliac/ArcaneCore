@@ -3,10 +3,20 @@ using ArcaneCore.Data.Social;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Chat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Talents;
+using ArcaneCore.Kernel.WorldData.Items;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Items;
+using ArcaneCore.World.Npc;
+using ArcaneCore.World.Spells;
+using ArcaneCore.World.Talents;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Chat;
 
@@ -22,27 +32,88 @@ namespace ArcaneCore.World.Chat;
 public sealed class ChatFeature : IWorldFeature
 {
     private readonly IConfiguration? _configuration;
+    private readonly IServiceProvider? _services;
     private readonly IChatMuteSource[] _muteSources;
     private readonly TimeProvider _clock;
     private readonly ConditionalWeakTable<Player, ChatState> _states = [];
     private readonly Dictionary<int, long> _sessionMutes = [];
     private long _lastMuteSweepUnixSeconds = long.MinValue;
 
-    public ChatFeature(IConfiguration? configuration = null, IEnumerable<IChatMuteSource>? muteSources = null, TimeProvider? timeProvider = null)
+    public ChatFeature(
+        IConfiguration? configuration = null,
+        IEnumerable<IChatMuteSource>? muteSources = null,
+        TimeProvider? timeProvider = null,
+        IServiceProvider? services = null)
     {
         _configuration = configuration;
         _muteSources = muteSources is null ? [] : [.. muteSources];
         _clock = timeProvider ?? TimeProvider.System;
+        _services = services;
     }
 
     /// <summary>The chat rules.</summary>
     public ChatOptions Options { get; } = new();
+
+    /// <summary>Optional override for severity-3 hyperlink catalog existence checks.</summary>
+    public Func<string, uint, bool>? LinkExists { get; set; }
 
     /// <summary>The client's text emotes and emotes (<see cref="ChatOptions.EmotesTextDbcPath"/>); null without the files.</summary>
     public EmoteCatalog? Emotes { get; set; }
 
     /// <summary>Whole seconds since the Unix epoch (vmangos time(nullptr)).</summary>
     public long NowUnixSeconds => _clock.GetUtcNow().ToUnixTimeSeconds();
+
+    /// <summary>
+    /// Validates <paramref name="message"/> against <see cref="ChatOptions.StrictLinkSeverity"/>,
+    /// including severity-3 catalog checks when a catalog or <see cref="LinkExists"/> is configured.
+    /// </summary>
+    public bool IsValidChatMessage(string message)
+        => Options.StrictLinkSeverity <= 0
+            || ChatSanitizer.IsValidChatMessage(message, Options.StrictLinkSeverity, LinkExists ?? ValidateCatalogLink);
+
+    /// <summary>
+    /// Checks whether a hyperlink entry exists in the active item, quest, spell, talent, or enchantment catalog.
+    /// When a catalog is not loaded in the current host, falls back to accepting the link type.
+    /// </summary>
+    public bool ValidateCatalogLink(string linkType, uint id)
+    {
+        if (id == 0)
+        {
+            return false;
+        }
+
+        if (LinkExists is not null)
+        {
+            return LinkExists(linkType, id);
+        }
+
+        if (_services is null)
+        {
+            return true;
+        }
+
+        return linkType switch
+        {
+            "item" => _services.GetService<ItemsFeature>()?.Templates is { Count: > 0 } items
+                ? items.Find(id) is not null
+                : _services.GetService<IItemTemplateStore>() is not { Count: > 0 } itemStore || itemStore.Find(id) is not null,
+            "quest" => _services.GetService<QuestNpcFeature>()?.Services.Quests is { Count: > 0 } quests
+                ? quests.Get(id) is not null
+                : _services.GetService<QuestStore>() is not { Count: > 0 } questStore || questStore.Get(id) is not null,
+            "spell" => _services.GetService<SpellFeature>()?.System.Store is { Count: > 0 } spells
+                ? spells.Get(id) is not null
+                : _services.GetService<SpellStore>() is not { Count: > 0 } spellStore || spellStore.Get(id) is not null,
+            "talent" => _services.GetService<TalentFeature>()?.Catalog is { TalentCount: > 0 } talents
+                ? talents.ById(id) is not null
+                : _services.GetService<TalentCatalog>() is not { TalentCount: > 0 } talentCatalog || talentCatalog.ById(id) is not null,
+            "enchant" => _services.GetService<SpellFeature>()?.EnchantmentCatalogProvider?.Current is { } enchants
+                ? enchants.Find(id) is not null
+                : _services.GetService<IItemEnchantmentCatalog>() is { } enchantCatalog
+                    ? enchantCatalog.Find(id) is not null
+                    : _services.GetService<SpellFeature>()?.System.Store is not { Count: > 0 } enchantSpells || enchantSpells.Get(id) is not null,
+            _ => false,
+        };
+    }
 
     public void Attach(WorldRuntime world)
     {

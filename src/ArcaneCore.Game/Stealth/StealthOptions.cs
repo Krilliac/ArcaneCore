@@ -19,6 +19,12 @@ public sealed class StealthOptions
     public float MaxCreatureDetectRange { get; set; } = 30.0f;
 
     /// <summary>
+    /// When true, adds <c>0.3 * Strength</c> of the stealthed target to its stealth skill (mangos-classic ObjectVisibility.cpp:152-178).
+    /// Default false (vmangos 1.12.1 Unit::CanDetectStealthOf).
+    /// </summary>
+    public bool IncludeStrengthContribution { get; set; }
+
+    /// <summary>
     /// Improved Sap rolls twice per cast, as the vmangos code does (once at cast start, once at completion), instead of once. Default false (the
     /// talent text: 30/60/90 percent chance to remain stealthed).
     /// </summary>

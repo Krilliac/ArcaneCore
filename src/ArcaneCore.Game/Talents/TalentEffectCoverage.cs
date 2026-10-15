@@ -126,6 +126,16 @@ public static class TalentEffectCoverage
         new(ExternalReaderKind.DummySpell, 18393, 0, "Spells/Casters/Drain/DrainAuras.cs", @"ImprovedDrainManaRank2 = 18393;"),
         new(ExternalReaderKind.DummySpell, 18393, 0, "Spells/Casters/Drain/DrainAuras.cs", @"HasAura\(caster, ImprovedDrainManaRank2\)"),
 
+        // Improved Healthstone (CreateHealthstoneScript.TalentRank): the rank constants and the read.
+        new(ExternalReaderKind.DummySpell, CreateHealthstoneScript.ImprovedHealthstoneRank1, 0, "Spells/Warlock/CreateHealthstoneScript.cs",
+            @"ImprovedHealthstoneRank1 = 18692;"),
+        new(ExternalReaderKind.DummySpell, CreateHealthstoneScript.ImprovedHealthstoneRank1, 0, "Spells/Warlock/CreateHealthstoneScript.cs",
+            @"holder\.Spell\.Id is not \(ImprovedHealthstoneRank1 or ImprovedHealthstoneRank2\)"),
+        new(ExternalReaderKind.DummySpell, CreateHealthstoneScript.ImprovedHealthstoneRank2, 0, "Spells/Warlock/CreateHealthstoneScript.cs",
+            @"ImprovedHealthstoneRank2 = 18693;"),
+        new(ExternalReaderKind.DummySpell, CreateHealthstoneScript.ImprovedHealthstoneRank2, 0, "Spells/Warlock/CreateHealthstoneScript.cs",
+            @"holder\.Spell\.Id is not \(ImprovedHealthstoneRank1 or ImprovedHealthstoneRank2\)"),
+
         // Tactical Mastery (ShapeshiftService.GetTacticalMasteryRage): the script table and the read on a stance change.
         new(ExternalReaderKind.ClassScript, 831, 0, "Spells/Stances/ShapeshiftService.cs", @"\(831, 50\)"),
         new(ExternalReaderKind.ClassScript, 832, 0, "Spells/Stances/ShapeshiftService.cs", @"\(832, 100\)"),
@@ -238,7 +248,8 @@ public static class TalentEffectCoverage
         }
 
         return effect.AuraType == AuraType.Dummy
-            ? DummySpellReaders.Contains(spell.Id) || DummyIconReaders.Contains(spell.SpellIconId)
+            ? spells.HasDummyAuraHandler(spell.Id) || spells.HasPeriodicDummyAura(spell.Id)
+                || DummySpellReaders.Contains(spell.Id) || DummyIconReaders.Contains(spell.SpellIconId)
                 || DummyFamilyIconReaders.Contains((spell.SpellFamilyName, spell.SpellIconId))
             : ClassScriptReaders.Contains(effect.MiscValue) || SpellCritRules.ShatterBonuses.ContainsKey(effect.MiscValue)
                 || BuiltInProcHandlers.HandledClassScripts.Contains(effect.MiscValue);

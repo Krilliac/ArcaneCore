@@ -45,8 +45,8 @@ public sealed class StatAuras : ISpellHandlerModule
         ArgumentNullException.ThrowIfNull(system);
         system.RegisterAura(AuraType.ModStat, new AuraHandler(ApplyStat, null));
         system.RegisterAura(AuraType.ModResistance, new AuraHandler(ApplyResistance, null));
-        system.RegisterAura(AuraType.ModAttackPower, new AuraHandler((_, h, a, apply) => ApplyAttackPower(h, a, apply, ranged: false), null));
-        system.RegisterAura(AuraType.ModRangedAttackPower, new AuraHandler((_, h, a, apply) => ApplyAttackPower(h, a, apply, ranged: true), null));
+        system.RegisterAura(AuraType.ModAttackPower, new AuraHandler((s, h, a, apply) => ApplyAttackPower(s, h, a, apply, ranged: false), null));
+        system.RegisterAura(AuraType.ModRangedAttackPower, new AuraHandler((s, h, a, apply) => ApplyAttackPower(s, h, a, apply, ranged: true), null));
     }
 
     /// <summary>Record on apply (returns the amount) or take back on removal (returns the negated amount); null when nothing was applied.</summary>
@@ -245,12 +245,17 @@ public sealed class StatAuras : ISpellHandlerModule
     /// Unit::GetTotalAttackPowerValue, Unit.cpp:8037). Which half is the aura's polarity (Aura::IsPositive).
     /// Priests, mages and warlocks ignore ranged attack power (SpellAuras.cpp:5183).
     /// </summary>
-    private static void ApplyAttackPower(SpellAuraHolder holder, SpellAura aura, bool apply, bool ranged)
+    private static void ApplyAttackPower(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply, bool ranged)
     {
         Unit target = holder.Target;
         if (ranged && Array.IndexOf(s_wandUsers, target.Class) >= 0)
         {
             return;
+        }
+
+        if (apply && (holder.CasterOwner.Caster ?? (holder.CasterGuid == target.Guid ? target : null)) is { } caster)
+        {
+            aura.Amount = system.ModInt(caster, holder.Spell, SpellModOp.AttackPower, aura.Amount);
         }
 
         if (Take(aura, apply, holder.IsPositive) is not { } applied)

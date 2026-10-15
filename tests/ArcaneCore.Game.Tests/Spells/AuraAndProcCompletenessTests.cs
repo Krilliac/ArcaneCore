@@ -255,4 +255,154 @@ public sealed class AuraAndProcCompletenessTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, CannibalizeScript.Cannibalize, SpellCastTargets.ForSelf(), triggered: true));
         Assert.True(kit.System.HasAura(player, CannibalizeScript.CannibalizeHeal));
     }
+
+    [Fact]
+    public void ApplyAuraWithAuraTypeNone_IsACleanNoOp()
+    {
+        SpellInfo commandRank1 = SpellTestKit.Spell(
+            21563,
+            SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.None)) with
+        {
+            Duration = new SpellDuration(60_000, 0, 60_000),
+        };
+
+        using var kit = new SpellTestKit(commandRank1);
+        (Player player, _) = kit.AddPlayer(1);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, 21563, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.False(kit.System.HasAura(player, 21563));
+    }
+
+    [Fact]
+    public void AttackSpawnDetectAndTransDoorEffects_AreRegistered_AndAttackStartsMeleeAutoAttack()
+    {
+        SpellInfo attackSpell = SpellTestKit.Spell(
+            8376,
+            SpellTestKit.Effect(SpellEffectName.Attack, 0, SpellImplicitTarget.UnitEnemy)) with
+        {
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+        };
+
+        using var kit = new SpellTestKit(attackSpell);
+        Assert.True(kit.System.HasEffectHandler(SpellEffectName.Attack));
+        Assert.True(kit.System.HasEffectHandler(SpellEffectName.Spawn));
+        Assert.True(kit.System.HasEffectHandler(SpellEffectName.Detect));
+        Assert.True(kit.System.HasEffectHandler(SpellEffectName.TransDoor));
+
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, x: 2);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, 8376, SpellCastTargets.ForUnit(target.Guid), triggered: true));
+        Assert.Same(target, caster.Combat.Victim);
+        Assert.True(caster.Combat.IsMeleeAttacking);
+    }
+
+    [Fact]
+    public void All35PromotedCombatAndSightAuras_HaveRegisteredHandlersAndHandlerSupportLevel()
+    {
+        AuraType[] promoted =
+        [
+            AuraType.ModSpellCritChance,
+            AuraType.SchoolAbsorb,
+            AuraType.ModSpellCritChanceSchool,
+            AuraType.ModLanguage,
+            AuraType.SplitDamagePct,
+            AuraType.ModDetectRange,
+            AuraType.PreventsFleeing,
+            AuraType.InterruptRegen,
+            AuraType.ManaShield,
+            AuraType.ModPowerRegenPercent,
+            AuraType.OverrideClassScripts,
+            AuraType.ModHealing,
+            AuraType.ModMechanicResistance,
+            AuraType.ModHealingPct,
+            AuraType.ModTargetResistance,
+            AuraType.ModHealingDone,
+            AuraType.ModHealingDonePercent,
+            AuraType.RetainComboPoints,
+            AuraType.ResistPushback,
+            AuraType.ModDetectedRange,
+            AuraType.SplitDamageFlat,
+            AuraType.ModAoeAvoidance,
+            AuraType.ModCritPercentVersus,
+            AuraType.ModSpellHealingOfStatPercent,
+            AuraType.ModDebuffResistance,
+            AuraType.ModAttackerSpellCritChance,
+            AuraType.ModCriticalThreat,
+            AuraType.ExtraAttacks,
+            AuraType.FarSight,
+            AuraType.AddCasterHitTrigger,
+            AuraType.PetDamageMulti,
+            AuraType.ModCritDamageBonus,
+            AuraType.DetectAmore,
+            AuraType.ModFlatSpellCritDamageVersus,
+            AuraType.AuraSpell,
+        ];
+
+        using var kit = new SpellTestKit();
+        foreach (AuraType type in promoted)
+        {
+            Assert.True(kit.System.HasAuraHandler(type), $"{type} should have a registered aura handler");
+            Assert.Equal(AuraSupportLevel.Handler, AuraSupport.Get(type).Level);
+        }
+    }
+
+    [Fact]
+    public void ModCritDamageBonus_IncreasesMeleeCriticalStrikeDamage()
+    {
+        SpellInfo physicalCritBonus = SpellTestKit.Spell(
+            30050,
+            SpellTestKit.Effect(SpellEffectName.ApplyAura, 10, aura: AuraType.ModCritDamageBonus, misc: 1)) with
+        {
+            Duration = new SpellDuration(60_000, 0, 60_000),
+        };
+        SpellInfo fireCritBonus = SpellTestKit.Spell(
+            30051,
+            SpellTestKit.Effect(SpellEffectName.ApplyAura, 10, aura: AuraType.ModCritDamageBonus, misc: 4)) with
+        {
+            Duration = new SpellDuration(60_000, 0, 60_000),
+        };
+
+        using var kit = new SpellTestKit(physicalCritBonus, fireCritBonus);
+        (Player attacker, _) = kit.AddPlayer(1);
+        (Player victim, _) = kit.AddPlayer(2, x: 2);
+        attacker.Level = 60;
+        victim.Level = 60;
+        MapCombat combat = attacker.Map!.Combat;
+        combat.SpellMitigation = kit.System;
+        attacker.SetFloat(UpdateFields.UnitFieldMindamage, 100);
+        attacker.SetFloat(UpdateFields.UnitFieldMaxdamage, 100);
+        attacker.SetFloat(UpdateFields.PlayerCritPercentage, 200f);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, 30050, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, 30051, SpellCastTargets.ForSelf(), triggered: true));
+
+        MeleeDamageInfo hit = combat.CalculateMeleeDamage(attacker, victim, WeaponAttackType.BaseAttack);
+        Assert.Equal(MeleeHitOutcome.Crit, hit.Outcome);
+        Assert.Equal(210u, hit.TotalDamage);
+    }
+
+    [Fact]
+    public void ModFlatSpellCritDamageVersus_IncreasesSpellCriticalDamageAgainstMatchingCreatureType()
+    {
+        SpellInfo flatCritVersusHumanoid = SpellTestKit.Spell(
+            30060,
+            SpellTestKit.Effect(SpellEffectName.ApplyAura, 25, aura: AuraType.ModFlatSpellCritDamageVersus, misc: 64)) with
+        {
+            Duration = new SpellDuration(60_000, 0, 60_000),
+        };
+
+        using var kit = new SpellTestKit(flatCritVersusHumanoid);
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, x: 5);
+
+        var rules = new VanillaSpellCombatRules();
+        SpellInfo bolt = kit.Store.Get(SpellTestKit.CastBolt)!;
+
+        Assert.Equal(150u, rules.CriticalDamage(kit.System, caster, target, bolt, 100u));
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, 30060, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.Equal(175u, rules.CriticalDamage(kit.System, caster, target, bolt, 100u));
+    }
 }

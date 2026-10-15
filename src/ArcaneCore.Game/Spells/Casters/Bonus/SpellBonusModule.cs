@@ -199,6 +199,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
                 ? SpellBonusFormulas.MultiplicativePercent(ItemIndependentAmounts(caster, AuraType.ModDamagePercentDone, mask))
                 : 1.0f;
             percent *= SpellBonusFormulas.MultiplicativePercent(Amounts(caster, AuraType.ModDamageDoneVersus, a => ((uint)a.MiscValue & typeMask) != 0));
+            percent *= SpellBonusFormulas.MultiplicativePercent(Amounts(caster, AuraType.PetDamageMulti, null));
             percent *= CreatureSpellDamageRate(caster);
         }
 

@@ -15,7 +15,7 @@ namespace ArcaneCore.Game.Spells;
 /// </list>
 /// Each aura records itself in the unit's <see cref="AuraLedger"/> first, so the formula sees it on apply and no longer on
 /// removal. The speed formula and the handshake are <see cref="UnitSpeed"/>. The talent speed modifier (SPELLMOD_SPEED applied
-/// to a caster's own speed auras, :3981-3987) belongs to the talents lane and is not applied.
+/// to a caster's own speed auras, :3981-3987 and :4016) modifies the aura's amount before it enters the ledger.
 /// </summary>
 public sealed class SpeedAuras : ISpellHandlerModule
 {
@@ -36,6 +36,12 @@ public sealed class SpeedAuras : ISpellHandlerModule
     {
         if (apply)
         {
+            if (aura.Type is AuraType.ModIncreaseSpeed or AuraType.ModSpeedAlways or AuraType.ModSpeedNotStack or AuraType.ModDecreaseSpeed
+                && (holder.CasterOwner.Caster ?? (holder.CasterGuid == holder.Target.Guid ? holder.Target : null)) is { } caster)
+            {
+                aura.Amount = system.ModInt(caster, holder.Spell, SpellModOp.Speed, aura.Amount);
+            }
+
             holder.Target.Locomotion.Auras.Add(aura);
         }
         else

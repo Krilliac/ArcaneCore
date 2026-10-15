@@ -15,6 +15,7 @@ internal static class BuiltInProcHandlers
 {
     private const uint FamilyWarlock = 5;
     private const uint FamilyPriest = 6;
+    private const uint FamilyDruid = 7;
     private const uint FamilyHunter = 9;
     private const uint FamilyPaladin = 10;
     private const uint FamilyShaman = 11;
@@ -28,11 +29,13 @@ internal static class BuiltInProcHandlers
     private const uint RuthlessnessPointSpell = 14157;
     private const uint SealFatePointSpell = 14189;
 
-    /// <summary>CF_PALADIN_HOLY_SHOCK (SpellClassMask.h:296), CF_WARLOCK_RAIN_OF_FIRE and CF_WARLOCK_HELLFIRE (:100-101), CF_SHAMAN_LIGHTNING_SHIELD (:328).</summary>
+    /// <summary>CF_PALADIN_HOLY_SHOCK (SpellClassMask.h:296), CF_WARLOCK_RAIN_OF_FIRE and CF_WARLOCK_HELLFIRE (:100-101), CF_SHAMAN_LIGHTNING_SHIELD (:328), CF_DRUID_REJUVENATION and CF_DRUID_REGROWTH (:199-201).</summary>
     private const ulong PaladinHolyShockFlag = 1UL << 21;
     private const ulong WarlockRainOfFireFlag = 1UL << 5;
     private const ulong WarlockHellfireFlag = 1UL << 6;
     private const ulong ShamanLightningShieldFlag = 1UL << 10;
+    private const ulong DruidRejuvenationFlag = 1UL << 4;
+    private const ulong DruidRegrowthFlag = 1UL << 6;
 
     /// <summary>Lightning Shield rank → its damage spell (UnitAuraProcHandler.cpp:1504-1536).</summary>
     internal static readonly IReadOnlyDictionary<uint, uint> LightningShieldSpells = new Dictionary<uint, uint>
@@ -75,9 +78,10 @@ internal static class BuiltInProcHandlers
 
     /// <summary>
     /// The OVERRIDE_CLASS_SCRIPTS misc values <see cref="OverrideClassScripts"/> acts on (Nightfall, Improved Blizzard, Improved Mend Pet,
-    /// Corrupted Healing). The talent coverage report reads it: an aura 112 talent whose script number nothing reads is not handled.
+    /// Corrupted Healing, and the Dreamwalker Rejuvenation/Regrowth set bonuses). The talent coverage report reads it: an aura 112 talent whose
+    /// script number nothing reads is not handled.
     /// </summary>
-    internal static IReadOnlySet<int> HandledClassScripts { get; } = new HashSet<int> { 4309, 836, 988, 989, 4086, 4087, 3656 };
+    internal static IReadOnlySet<int> HandledClassScripts { get; } = new HashSet<int> { 4309, 836, 988, 989, 4086, 4087, 3656, 4533, 4537 };
 
     public static Dictionary<AuraType, AuraProcHandler> Create() => new()
     {
@@ -563,6 +567,30 @@ internal static class BuiltInProcHandlers
                 if (c.ProcSpell?.HasEffect(SpellEffectName.Heal) == true)
                 {
                     triggerSpellId = 23402;
+                }
+
+                break;
+            case 4533:
+                if (c.ProcSpell is { SpellFamilyName: FamilyDruid } rejuv && (rejuv.SpellFamilyFlags & DruidRejuvenationFlag) != 0)
+                {
+                    triggerSpellId = victim.PowerType switch
+                    {
+                        PowerType.Mana => 28722u,
+                        PowerType.Rage => 28723u,
+                        PowerType.Energy => 28724u,
+                        _ => 0u,
+                    };
+                    if (triggerSpellId == 0)
+                    {
+                        return AuraProcResult.Failed;
+                    }
+                }
+
+                break;
+            case 4537:
+                if (c.ProcSpell is { SpellFamilyName: FamilyDruid } regrowth && (regrowth.SpellFamilyFlags & DruidRegrowthFlag) != 0)
+                {
+                    triggerSpellId = 28750;
                 }
 
                 break;

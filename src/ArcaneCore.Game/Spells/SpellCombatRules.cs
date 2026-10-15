@@ -433,7 +433,9 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
-        int bonus = (int)(Modifiers ?? system.SpellModifiers).Apply(caster, spell, SpellModOp.CritDamageBonus, SpellCritRules.CritBonus(damage, spell.DamageClass));
+        uint typeMask = target.CreatureTypeMask();
+        int flatVersus = system.GetTotalAuraModifier(caster, AuraType.ModFlatSpellCritDamageVersus, a => ((uint)a.MiscValue & typeMask) != 0);
+        int bonus = (int)(Modifiers ?? system.SpellModifiers).Apply(caster, spell, SpellModOp.CritDamageBonus, SpellCritRules.CritBonus(damage, spell.DamageClass)) + flatVersus;
         return (uint)((damage + bonus) * CritVersusMultiplier(system, caster, target));
     }
 

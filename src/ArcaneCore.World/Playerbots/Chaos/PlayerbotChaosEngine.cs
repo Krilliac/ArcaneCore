@@ -285,7 +285,11 @@ public sealed class PlayerbotChaosEngine
         session.IsInChaosProbe = true;
         try
         {
-            if (session.IsManaged)
+            if (IsNonProfessionUnlearnSkillProbe(player, opcode, payload))
+            {
+                // Guard chaos probes from spamming TryUnlearnSkill warnings on non-profession skills (weapon/defense/armor/language lines).
+            }
+            else if (session.IsManaged)
             {
                 session.TryManagedAction(opcode, payload);
             }
@@ -317,6 +321,66 @@ public sealed class PlayerbotChaosEngine
         // Verify post-probe state & self-heal any invariant breach.
         VerifyAndHealAfterProbe(botId, session, player, category, probeName, opcode, payload, prevX, prevY, prevZ, prevO);
     }
+
+    /// <summary>
+    /// True when <paramref name="opcode"/> is <see cref="WorldOpcode.CmsgUnlearnSkill"/> with a complete 4-byte skill id that
+    /// is not an unlearnable primary profession skill on <paramref name="player"/> (prevents live soak warning spam on weapon,
+    /// defense, armor and class skill lines such as 43/44/54/95/136/162/172/415 while still allowing truncated &lt;4-byte frames
+    /// to test <see cref="MalformedPacket"/> guards).
+    /// </summary>
+    public static bool IsNonProfessionUnlearnSkillProbe(Player player, WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (opcode != WorldOpcode.CmsgUnlearnSkill || payload.Length < sizeof(uint))
+        {
+            return false;
+        }
+
+        uint skillId = BinaryPrimitives.ReadUInt32LittleEndian(payload);
+        return !IsUnlearnablePrimaryProfessionSkill(player, skillId);
+    }
+
+    /// <summary>
+    /// True only when <paramref name="skillId"/> is a known primary profession skill (<see cref="SkillCategories.Profession"/>)
+    /// carrying <see cref="SkillRaceClassFlags.Unlearnable"/> for <paramref name="player"/>.
+    /// </summary>
+    public static bool IsUnlearnablePrimaryProfessionSkill(Player player, uint skillId)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (!IsPrimaryProfessionSkillId(skillId))
+        {
+            return false;
+        }
+
+        if (player.Skills is { } skills)
+        {
+            if (!skills.Has(skillId))
+            {
+                return false;
+            }
+
+            if (skills.Catalog.Line(skillId) is not { Category: ArcaneCore.Kernel.Skills.SkillCategories.Profession })
+            {
+                return false;
+            }
+
+            return skills.Catalog.RaceClassInfo(skillId, (byte)player.Race, (byte)player.Class) is { } rc
+                && (rc.Flags & ArcaneCore.Kernel.Skills.SkillRaceClassFlags.Unlearnable) != 0;
+        }
+
+        return false;
+    }
+
+    private static bool IsPrimaryProfessionSkillId(uint skillId)
+        => skillId is ArcaneCore.Kernel.Skills.SkillIds.Blacksmithing
+            or ArcaneCore.Kernel.Skills.SkillIds.Leatherworking
+            or ArcaneCore.Kernel.Skills.SkillIds.Alchemy
+            or ArcaneCore.Kernel.Skills.SkillIds.Herbalism
+            or ArcaneCore.Kernel.Skills.SkillIds.Mining
+            or ArcaneCore.Kernel.Skills.SkillIds.Tailoring
+            or ArcaneCore.Kernel.Skills.SkillIds.Engineering
+            or ArcaneCore.Kernel.Skills.SkillIds.Enchanting
+            or ArcaneCore.Kernel.Skills.SkillIds.Skinning;
 
     private void VerifyAndHealAfterProbe(
         Guid botId,

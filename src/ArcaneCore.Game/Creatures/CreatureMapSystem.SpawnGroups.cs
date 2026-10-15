@@ -30,6 +30,12 @@ public sealed partial class CreatureMapSystem : ISpawnGroupHost
     /// </summary>
     public Func<SpawnGroupDefinition, bool?>? SpawnGroupCondition { get; set; }
 
+    /// <summary>
+    /// Evaluates a world-state expression (<c>spawn_group.Flags</c> / <see cref="SpawnGroupDefinition.WorldStateExpression"/>) by expression id;
+    /// null when unset or undecided (fail closed).
+    /// </summary>
+    public Func<uint, bool?>? WorldStateExpressionEvaluator { get; set; }
+
     /// <summary>The spawn groups of this map.</summary>
     internal IReadOnlyCollection<SpawnGroupState> SpawnGroups => _spawnGroups.Values;
 
@@ -316,7 +322,7 @@ public sealed partial class CreatureMapSystem : ISpawnGroupHost
 
     bool ISpawnGroupHost.HasSpawnEntries(uint spawnGuid) => _options.Respawn.AlternateEntries && _content.GetSpawnEntries(spawnGuid).Count > 0;
 
-    bool ISpawnGroupHost.ConditionHolds(SpawnGroupDefinition group) => SpawnGroupConditionHolds(group, SpawnGroupCondition);
+    bool ISpawnGroupHost.ConditionHolds(SpawnGroupDefinition group) => SpawnGroupConditionHolds(group, SpawnGroupCondition, WorldStateExpressionEvaluator);
 
     void ISpawnGroupHost.DespawnMembers(SpawnGroupState group)
     {
@@ -342,15 +348,25 @@ public sealed partial class CreatureMapSystem : ISpawnGroupHost
 
     /// <summary>
     /// cmangos SpawnGroup::IsWorldstateConditionSatisfied: no condition holds; a <c>conditions</c> entry asks <paramref name="condition"/>
-    /// (unset or undecided: false); a world-state expression is not implemented here and never holds.
+    /// (unset or undecided: false); a world-state expression asks <paramref name="worldStateExpression"/> (or <paramref name="condition"/> when unset; unset or undecided: false).
     /// </summary>
-    internal static bool SpawnGroupConditionHolds(SpawnGroupDefinition group, Func<SpawnGroupDefinition, bool?>? condition)
+    internal static bool SpawnGroupConditionHolds(
+        SpawnGroupDefinition group,
+        Func<SpawnGroupDefinition, bool?>? condition,
+        Func<uint, bool?>? worldStateExpression = null)
     {
-        if (group.WorldStateCondition != 0)
+        if (group.WorldStateCondition != 0 && condition?.Invoke(group) != true)
         {
-            return condition?.Invoke(group) == true;
+            return false;
         }
 
-        return group.WorldStateExpression == 0;
+        if (group.WorldStateExpression != 0)
+        {
+            return worldStateExpression is not null
+                ? worldStateExpression(group.WorldStateExpression) == true
+                : condition?.Invoke(group) == true;
+        }
+
+        return true;
     }
 }

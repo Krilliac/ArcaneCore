@@ -644,20 +644,34 @@ public sealed class PlayerbotBattlegroundWorldTests
     [Fact]
     public async Task Av_IsRefused_NoBotQueues_EvenWithATemplateAndABattlemasterBesideIt()
     {
-        // Only Alterac Valley has battlemasters (its template, map and battlemaster rows are loaded): the bot never queues at all.
         await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(null, BattlegroundType.AlteracValley);
-        await RunAsync(world, "bg-av-refused", async context =>
+        await RunAsync(world, "bg-av-flow", async context =>
         {
             ScenarioBot ally = await AutonomousAsync(context, "Bgavally", race: 1);
+            ScenarioBot horde = await AutonomousAsync(context, "Bgavhorde", race: 2);
             PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
-            await context.StepAsync("for half a minute at a 100% chance nothing queues for Alterac Valley", async () =>
+            BattlegroundFeature feature = context.Services.GetRequiredService<BattlegroundFeature>();
+
+            Battleground match = await context.StepAsync("both bots queue for Alterac Valley and port into the match", async () =>
             {
-                await context.WaitUntilAsync("the refusal is noted", () => coordinator.Refusals.Contains((BattlegroundType.AlteracValley, PlayerbotBattlegroundRefusal.Unsupported)),
-                    TimeSpan.FromSeconds(10));
-                await context.IdleAsync(TimeSpan.FromSeconds(30));
-                ScenarioContext.ExpectEqual((0, 0), await context.ReadAsync(() => Manager(context).QueuedTeamCounts(BattlegroundType.AlteracValley)), "Alterac Valley queue");
-                ScenarioContext.Expect(!await context.ReadAsync(() => Manager(context).RunningBattlegrounds.Any(b => b.Type == BattlegroundType.AlteracValley)), "an Alterac Valley match runs");
-                ScenarioContext.Expect(!coordinator.Holds(ally.BotId) && coordinator.Totals.Queued == 0, "the bot went for a battleground");
+                await WaitExplainedAsync(context, "both bots are in the Alterac Valley match",
+                    () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch
+                        && coordinator.Find(horde.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch,
+                    TimeSpan.FromSeconds(60), ally, horde);
+                ScenarioContext.Expect(!coordinator.Refusals.Any(r => r.Type == BattlegroundType.AlteracValley), "Alterac Valley was refused");
+                Battleground? a = await context.ReadAsync(() => feature.BattlegroundOf(ally.Guid));
+                Battleground? h = await context.ReadAsync(() => feature.BattlegroundOf(horde.Guid));
+                ScenarioContext.Expect(a is AlteracValley && ReferenceEquals(a, h), "the bots are not in one Alterac Valley match");
+                coordinator.Options.QueueChancePerMinute = 0f;
+                return a!;
+            });
+
+            await context.StepAsync("the gates open and the bots advance in Alterac Valley", async () =>
+            {
+                await context.WaitUntilAsync("the match is in progress", () => match.Status == BattlegroundStatus.InProgress, StartWait);
+                await WaitExplainedAsync(context, "the Alliance bot advances or fights in Alterac Valley",
+                    () => coordinator.Find(ally.BotId)?.AI?.Activity is "av-advance" or "av-claim-banner" or "fighting",
+                    TimeSpan.FromSeconds(30), ally, horde);
             });
         });
     }

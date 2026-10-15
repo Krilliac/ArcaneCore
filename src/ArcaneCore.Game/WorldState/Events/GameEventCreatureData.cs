@@ -1,18 +1,15 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.WorldState.Events;
 
 /// <summary>
 /// Game-event creature data (<c>game_event_creature_data</c>, vmangos GameEventMgr.cpp:444-526 and :961-1021): while an event runs, the creatures it
-/// lists take its <c>entry_id</c> (another creature_template) and <c>modelid</c> (a forced model), live ones at once and ones created
-/// later (a grid load, a respawn) as they are created, and return to their own when it stops. A spawn listed under several events takes the
-/// data of the first running one in event order (<c>GetCreatureUpdateDataForActiveEvent</c>); one that is listed but whose event does not run
-/// is untouched.
-/// <para>
-/// Not applied, and counted in <see cref="EquipmentRows"/> / <see cref="SpellRows"/> so the world can say so once: <c>equipment_id</c> (creatures
-/// have no equipment model) and <c>spell_start</c> / <c>spell_end</c> (casting on the creature and keeping the aura across death and respawn
-/// belongs to the aura engine). In classic-db 920 of the 977 rows are spell rows, 748 of them on Love is in the Air.
-/// </para>
+/// lists take its <c>entry_id</c> (another creature_template), <c>modelid</c> (a forced model), <c>equipment_id</c>, and <c>spell_start</c> / <c>spell_end</c>,
+/// live ones at once and ones created later (a grid load, a respawn) as they are created, and return to their own when it stops. A spawn listed under
+/// several events takes the data of the first running one in event order (<c>GetCreatureUpdateDataForActiveEvent</c>); one that is listed but whose
+/// event does not run is untouched.
 /// </summary>
 public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffects
 {
@@ -20,6 +17,10 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
     private readonly Func<IEnumerable<Map>> _maps;
     private readonly Dictionary<ushort, uint[]> _guidsByEvent;
     private readonly Dictionary<uint, (ushort Event, GameEventCreatureOverride Data)[]> _byGuid;
+    private readonly Dictionary<uint, uint> _appliedEquipmentByGuid = [];
+    private readonly Dictionary<uint, uint[]> _savedEquipment = [];
+    private readonly Dictionary<uint, uint> _lastSpellCastByGuid = [];
+    private readonly List<(uint Guid, uint SpellId)> _castSpells = [];
 
     public GameEventCreatureData(IGameEventState state, GameEventRows rows, Func<IEnumerable<Map>> maps)
     {
@@ -36,11 +37,23 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
         SpellRows = rows.CreatureData.Sum(p => p.Value.Count(r => r.SpellStart != 0 || r.SpellEnd != 0));
     }
 
-    /// <summary>Rows that name an equipment id (read, not applied).</summary>
+    /// <summary>Rows that name an equipment id.</summary>
     public int EquipmentRows { get; }
 
-    /// <summary>Rows that name a start or end spell (read, not applied).</summary>
+    /// <summary>Rows that name a start or end spell.</summary>
     public int SpellRows { get; }
+
+    /// <summary>Optional callback invoked when an event starts (<c>spell_start</c>) or ends (<c>spell_end</c>) on a live creature.</summary>
+    public Action<Creature, uint>? OnCastSpell { get; set; }
+
+    /// <summary>Currently applied event equipment id by spawn guid.</summary>
+    public IReadOnlyDictionary<uint, uint> AppliedEquipmentByGuid => _appliedEquipmentByGuid;
+
+    /// <summary>The most recent event spell cast on each spawn guid.</summary>
+    public IReadOnlyDictionary<uint, uint> LastSpellCastByGuid => _lastSpellCastByGuid;
+
+    /// <summary>Ordered log of <c>(SpawnGuid, SpellId)</c> event spell casts.</summary>
+    public IReadOnlyList<(uint Guid, uint SpellId)> CastSpells => _castSpells;
 
     public IEnumerable<uint> Listed => _byGuid.Keys;
 
@@ -55,10 +68,20 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
         {
             if (_state.IsActiveEvent(eventId))
             {
+                if (data.EquipmentId != 0)
+                {
+                    _appliedEquipmentByGuid[spawnGuid] = data.EquipmentId;
+                }
+                else
+                {
+                    _appliedEquipmentByGuid.Remove(spawnGuid);
+                }
+
                 return data;
             }
         }
 
+        _appliedEquipmentByGuid.Remove(spawnGuid);
         return null;
     }
 
@@ -71,7 +94,94 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
 
         foreach (Map map in _maps().ToArray())
         {
-            map.FindUpdater<Creatures.CreatureMapSystem>()?.RefreshEventData(guids);
+            if (map.FindUpdater<CreatureMapSystem>() is { } system)
+            {
+                system.RefreshEventData(guids);
+                ApplyEquipmentAndSpells(system, eventId, guids, activate);
+            }
+        }
+    }
+
+    private void ApplyEquipmentAndSpells(CreatureMapSystem system, ushort eventId, uint[] guids, bool activate)
+    {
+        foreach (uint guid in guids)
+        {
+            GameEventCreatureOverride? active = For(guid);
+            Creature? live = system.Creatures.FirstOrDefault(c => c.Spawn?.Guid == guid);
+            if (live is null)
+            {
+                continue;
+            }
+
+            if (active is { EquipmentId: not 0 })
+            {
+                if (!_savedEquipment.ContainsKey(guid))
+                {
+                    _savedEquipment[guid] = SnapshotEquipment(live);
+                }
+
+                live.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay, active.EquipmentId);
+            }
+            else if (_savedEquipment.Remove(guid, out uint[]? saved))
+            {
+                RestoreEquipment(live, saved);
+            }
+
+            if (live.DeathState != CreatureDeathState.Alive || !_byGuid.TryGetValue(guid, out (ushort Event, GameEventCreatureOverride Data)[]? rows))
+            {
+                continue;
+            }
+
+            GameEventCreatureOverride? eventRow = null;
+            foreach ((ushort ev, GameEventCreatureOverride data) in rows)
+            {
+                if (ev == eventId)
+                {
+                    eventRow = data;
+                    break;
+                }
+            }
+
+            if (eventRow is null)
+            {
+                continue;
+            }
+
+            if (activate && ReferenceEquals(active, eventRow) && eventRow.SpellStart != 0)
+            {
+                _lastSpellCastByGuid[guid] = eventRow.SpellStart;
+                _castSpells.Add((guid, eventRow.SpellStart));
+                OnCastSpell?.Invoke(live, eventRow.SpellStart);
+            }
+            else if (!activate && eventRow.SpellEnd != 0)
+            {
+                _lastSpellCastByGuid[guid] = eventRow.SpellEnd;
+                _castSpells.Add((guid, eventRow.SpellEnd));
+                OnCastSpell?.Invoke(live, eventRow.SpellEnd);
+            }
+        }
+    }
+
+    private static uint[] SnapshotEquipment(Creature creature)
+    {
+        var saved = new uint[9];
+        for (int slot = 0; slot < 3; slot++)
+        {
+            saved[slot * 3] = creature.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot);
+            saved[(slot * 3) + 1] = creature.GetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2));
+            saved[(slot * 3) + 2] = creature.GetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2) + 1);
+        }
+
+        return saved;
+    }
+
+    private static void RestoreEquipment(Creature creature, uint[] saved)
+    {
+        for (int slot = 0; slot < 3; slot++)
+        {
+            creature.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot, saved[slot * 3]);
+            creature.SetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2), saved[(slot * 3) + 1]);
+            creature.SetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2) + 1, saved[(slot * 3) + 2]);
         }
     }
 }

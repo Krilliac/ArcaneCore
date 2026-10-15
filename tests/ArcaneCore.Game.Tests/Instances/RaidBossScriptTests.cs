@@ -4,7 +4,9 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.BlackwingLair;
+using ArcaneCore.Game.Instances.Scripts.Dungeons;
 using ArcaneCore.Game.Instances.Scripts.Naxxramas;
+using ArcaneCore.Game.Instances.Scripts.Raids;
 using ArcaneCore.Game.Instances.Scripts.RuinsOfAhnQiraj;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Instances.Scripts.ZulGurub;
@@ -1089,5 +1091,153 @@ public sealed class RaidBossScriptTests
         naxx.OnAreaTrigger(raid.Tank, NaxxramasInstance.AreaTriggerFaerlinaIntro);
         Assert.Equal(-1, naxx.FaerlinaIntroStep);
     }
+
+    [Fact]
+    public void FiremawAndFlamegor_TrackBwlEncounterState_AndCastShadowFlameWingBuffetAndUniqueBuffets()
+    {
+        using var firemawRaid = new Raid(469, BlackwingLairDrakes.FiremawEntry);
+        Assert.Equal(EncounterState.InProgress, firemawRaid.Data.GetData(3));
+        firemawRaid.Boss.AI!.OnUpdate(5000);
+        Assert.Contains(firemawRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.FlameBuffetSpell);
+        firemawRaid.Boss.AI.OnUpdate(13000);
+        Assert.Contains(firemawRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.ShadowFlameSpell);
+        firemawRaid.Boss.AI.OnUpdate(12000);
+        Assert.Contains(firemawRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.WingBuffetSpell);
+        firemawRaid.Boss.AI.OnDeath(firemawRaid.Tank);
+        Assert.Equal(EncounterState.Done, firemawRaid.Data.GetData(3));
+
+        using var flamegorRaid = new Raid(469, BlackwingLairDrakes.FlamegorEntry);
+        Assert.Equal(EncounterState.InProgress, flamegorRaid.Data.GetData(5));
+        flamegorRaid.Boss.AI!.OnUpdate(10000);
+        Assert.Contains(flamegorRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.FrenzySpell);
+        flamegorRaid.Boss.AI.OnUpdate(8000);
+        Assert.Contains(flamegorRaid.Caster.Casts, c => c.Spell == BlackwingLairDrakes.ShadowFlameSpell);
+        flamegorRaid.Boss.AI.OnEvade();
+        flamegorRaid.Boss.AI.OnReachedHome();
+        Assert.Equal(EncounterState.Fail, flamegorRaid.Data.GetData(5));
+    }
+
+    [Fact]
+    public void RagefireChasmInstance_RegistersBossAis_AndMarksAllFourEncountersDoneOnDeath()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(RagefireChasmInstance.MapId);
+        var instance = new RagefireChasmInstance(map);
+        instance.Initialize();
+        map.AddUpdater(instance);
+
+        var caster = new FakeCaster();
+        var creatures = new CreatureMapSystem(
+            map,
+            Content(
+                [
+                    Template(RagefireChasmInstance.Oggleflint),
+                    Template(RagefireChasmInstance.TaragamanTheHungerer),
+                    Template(RagefireChasmInstance.JergoshTheInvoker),
+                    Template(RagefireChasmInstance.Bazzalan),
+                ],
+                []),
+            aiServices: new CreatureAiServices { Spells = caster });
+
+        Creature oggleflint = creatures.SpawnTemporary(Template(RagefireChasmInstance.Oggleflint), 0, 0, 0, 0);
+        Creature taragaman = creatures.SpawnTemporary(Template(RagefireChasmInstance.TaragamanTheHungerer), 5, 0, 0, 0);
+        Creature jergosh = creatures.SpawnTemporary(Template(RagefireChasmInstance.JergoshTheInvoker), 10, 0, 0, 0);
+        Creature bazzalan = creatures.SpawnTemporary(Template(RagefireChasmInstance.Bazzalan), 15, 0, 0, 0);
+
+        Assert.IsType<OggleflintAI>(oggleflint.AI);
+        Assert.IsType<TaragamanAI>(taragaman.AI);
+        Assert.IsType<JergoshAI>(jergosh.AI);
+        Assert.IsType<BazzalanAI>(bazzalan.AI);
+
+        instance.OnCreatureDeath(oggleflint);
+        instance.OnCreatureDeath(taragaman);
+        instance.OnCreatureDeath(jergosh);
+        instance.OnCreatureDeath(bazzalan);
+
+        Assert.Equal(EncounterState.Done, instance.GetData(RagefireChasmInstance.TypeOggleflint));
+        Assert.Equal(EncounterState.Done, instance.GetData(RagefireChasmInstance.TypeTaragaman));
+        Assert.Equal(EncounterState.Done, instance.GetData(RagefireChasmInstance.TypeJergosh));
+        Assert.Equal(EncounterState.Done, instance.GetData(RagefireChasmInstance.TypeBazzalan));
+        Assert.Equal("3 3 3 3", instance.GetSaveData());
+    }
+
+    [Fact]
+    public void TheStockadeInstance_RegistersBossAis_AndMarksAllSixEncountersDoneOnDeath()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(TheStockadeInstance.MapId);
+        var instance = new TheStockadeInstance(map);
+        instance.Initialize();
+        map.AddUpdater(instance);
+
+        var caster = new FakeCaster();
+        var creatures = new CreatureMapSystem(
+            map,
+            Content(
+                [
+                    Template(TheStockadeInstance.TargorrTheDread),
+                    Template(TheStockadeInstance.KamDeepfury),
+                    Template(TheStockadeInstance.Hamhock),
+                    Template(TheStockadeInstance.BazilThredd),
+                    Template(TheStockadeInstance.DextrenWard),
+                    Template(TheStockadeInstance.BruegalIronknuckle),
+                ],
+                []),
+            aiServices: new CreatureAiServices { Spells = caster });
+
+        Creature targorr = creatures.SpawnTemporary(Template(TheStockadeInstance.TargorrTheDread), 0, 0, 0, 0);
+        Creature kam = creatures.SpawnTemporary(Template(TheStockadeInstance.KamDeepfury), 5, 0, 0, 0);
+        Creature hamhock = creatures.SpawnTemporary(Template(TheStockadeInstance.Hamhock), 10, 0, 0, 0);
+        Creature bazil = creatures.SpawnTemporary(Template(TheStockadeInstance.BazilThredd), 15, 0, 0, 0);
+        Creature dextren = creatures.SpawnTemporary(Template(TheStockadeInstance.DextrenWard), 20, 0, 0, 0);
+        Creature bruegal = creatures.SpawnTemporary(Template(TheStockadeInstance.BruegalIronknuckle), 25, 0, 0, 0);
+
+        Assert.IsType<TargorrTheDreadAI>(targorr.AI);
+        Assert.IsType<KamDeepfuryAI>(kam.AI);
+        Assert.IsType<HamhockAI>(hamhock.AI);
+        Assert.IsType<BazilThreddAI>(bazil.AI);
+        Assert.IsType<DextrenWardAI>(dextren.AI);
+        Assert.IsType<BruegalIronknuckleAI>(bruegal.AI);
+
+        instance.OnCreatureDeath(targorr);
+        instance.OnCreatureDeath(kam);
+        instance.OnCreatureDeath(hamhock);
+        instance.OnCreatureDeath(bazil);
+        instance.OnCreatureDeath(dextren);
+        instance.OnCreatureDeath(bruegal);
+
+        Assert.Equal(EncounterState.Done, instance.GetData(TheStockadeInstance.TypeTargorr));
+        Assert.Equal(EncounterState.Done, instance.GetData(TheStockadeInstance.TypeKamDeepfury));
+        Assert.Equal(EncounterState.Done, instance.GetData(TheStockadeInstance.TypeHamhock));
+        Assert.Equal(EncounterState.Done, instance.GetData(TheStockadeInstance.TypeBazilThredd));
+        Assert.Equal(EncounterState.Done, instance.GetData(TheStockadeInstance.TypeDextrenWard));
+        Assert.Equal(EncounterState.Done, instance.GetData(TheStockadeInstance.TypeBruegalIronknuckle));
+        Assert.Equal("3 3 3 3 3 3", instance.GetSaveData());
+    }
+
+    [Fact]
+    public void SpellSystem_ResolveCorpseTarget_FindsCorpseOnCasterMapWhenCorpseFlagSet()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0);
+        Player caster = TestWorld.CreatePlayer(701, 10, 10, new FakeSession());
+        Player fallen = TestWorld.CreatePlayer(702, 12, 12, new FakeSession());
+        world.AddPlayer(caster);
+        world.AddPlayer(fallen);
+
+        Corpse corpse = Corpse.CreateFor(fallen, pvpDeath: false);
+        map.AddObject(corpse);
+
+        var spells = new SpellSystem(SpellStore.Empty, () => 0);
+        var targets = new SpellCastTargets
+        {
+            Mask = SpellCastTargetFlags.CorpseAlly,
+            Corpse = corpse.Guid,
+        };
+
+        Assert.Same(corpse, spells.ResolveCorpseTarget(caster, targets));
+        Assert.Null(spells.ResolveCorpseTarget(caster, new SpellCastTargets { Mask = SpellCastTargetFlags.Unit, Corpse = corpse.Guid }));
+    }
 }
+
 

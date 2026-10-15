@@ -113,7 +113,13 @@ public sealed class GameEventValidationTests
     [Fact]
     public void DarkmoonSchedule_IsDisabledWithAnIssue_NotStubbed()
     {
-        GameEventDefinition def = CMangos(Source(type: GameEventScheduleType.DarkmoonFaire1, occurence: 86400, length: 10080, start: Utc(2020, 1, 1), end: Utc(2030, 1, 1)), out List<string> issues);
+        GameEventDefinition dmf = CMangos(Source(type: GameEventScheduleType.DarkmoonFaire1, occurence: 86400, length: 10080), out List<string> dmfIssues);
+        Assert.Equal(Utc(2026, 10, 2), dmf.Start);
+        Assert.Equal(Utc(2026, 10, 9), dmf.End);
+        Assert.Empty(dmfIssues);
+        Assert.True(GameEventSchedule.IsActive(dmf, Now));
+
+        GameEventDefinition def = CMangos(Source(type: (GameEventScheduleType)99, occurence: 86400, length: 10080, start: Utc(2020, 1, 1), end: Utc(2030, 1, 1)), out List<string> issues);
         Assert.Equal(GameEventCalendar.FarFuture, def.Start);
         Assert.Contains(issues, i => i.Contains("not implemented", StringComparison.Ordinal));
         Assert.False(GameEventSchedule.IsActive(def, Now));

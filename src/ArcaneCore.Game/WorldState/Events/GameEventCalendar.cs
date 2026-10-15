@@ -21,12 +21,30 @@ public static class GameEventCalendar
     /// <summary>The Easter event is 7 days from its start (GameEventMgr.cpp:1316-1317).</summary>
     public const int EasterDays = 7;
 
-    /// <summary>Whether a schedule type has an implementation here (serverside, date, yearly, lunar new year, Easter).</summary>
+    /// <summary>Whether <paramref name="type"/> is one of the mangos-classic Darkmoon Faire schedule types (2..10).</summary>
+    public static bool IsDarkmoon(GameEventScheduleType type)
+        => (int)type is >= (int)GameEventScheduleType.DarkmoonFaire1 and <= 10;
+
+    /// <summary>Whether a schedule type has an implementation here (serverside, date, Darkmoon Faire 2..10, yearly, lunar new year, Easter).</summary>
     public static bool IsSupported(GameEventScheduleType type) => type is GameEventScheduleType.Serverside or GameEventScheduleType.Date
-        or GameEventScheduleType.Yearly or GameEventScheduleType.LunarNewYear or GameEventScheduleType.Easter;
+        or GameEventScheduleType.Yearly or GameEventScheduleType.LunarNewYear or GameEventScheduleType.Easter || IsDarkmoon(type);
 
     /// <summary>Whether the start and end of this type are recomputed from the current date.</summary>
-    public static bool IsComputed(GameEventScheduleType type) => type is GameEventScheduleType.Yearly or GameEventScheduleType.LunarNewYear or GameEventScheduleType.Easter;
+    public static bool IsComputed(GameEventScheduleType type) => type is GameEventScheduleType.Yearly or GameEventScheduleType.LunarNewYear or GameEventScheduleType.Easter || IsDarkmoon(type);
+
+    /// <summary>The day of the month (1..7) of the first Friday of <paramref name="month"/> in <paramref name="year"/>.</summary>
+    public static int FirstFridayOfMonth(int year, int month)
+    {
+        for (int day = 1; day <= 7; day++)
+        {
+            if (new DateTime(year, month, day).DayOfWeek == DayOfWeek.Friday)
+            {
+                return day;
+            }
+        }
+
+        throw new InvalidOperationException("Unreachable: every 7-day range contains a Friday.");
+    }
 
     /// <summary>
     /// mangos-classic <c>gaussEaster</c>: the month and day of Easter Sunday of <paramref name="year"/> by the Gauss
@@ -96,8 +114,8 @@ public static class GameEventCalendar
 
     /// <summary>
     /// The start and end of <paramref name="definition"/> for <paramref name="now"/>
-    /// (<c>ComputeEventStartAndEndTime</c>). Serverside and date events keep what they have; yearly, lunar new year and
-    /// Easter events are recomputed. Throws <see cref="NotSupportedException"/> for the Darkmoon Faire schedules
+    /// (<c>ComputeEventStartAndEndTime</c>). Serverside and date events keep what they have; Darkmoon Faire, yearly, lunar new year and
+    /// Easter events are recomputed. Throws <see cref="NotSupportedException"/> for unknown schedule types
     /// (see <see cref="IsSupported"/>).
     /// </summary>
     public static (DateTimeOffset Start, DateTimeOffset End) Compute(
@@ -132,9 +150,44 @@ public static class GameEventCalendar
                 return (LocalToInstant(startLocal, zone), LocalToInstant(startLocal.AddDays(EasterDays), zone));
             }
 
+            case var dmf when IsDarkmoon(dmf):
+                return ComputeDarkmoon(definition, now, zone);
+
             default:
                 throw new NotSupportedException($"game event schedule type {(int)definition.ScheduleType} ({definition.ScheduleType}) is not implemented");
         }
+    }
+
+    private static (DateTimeOffset Start, DateTimeOffset End) ComputeDarkmoon(GameEventDefinition definition, DateTimeOffset now, TimeZoneInfo zone)
+    {
+        int targetRemainder = ((int)definition.ScheduleType - (int)GameEventScheduleType.DarkmoonFaire1) % 3;
+        DateTime localNow = ToLocal(now, zone);
+        int year = localNow.Year;
+        int month = localNow.Month;
+
+        for (int i = 0; i < 12; i++)
+        {
+            if ((month - 1) % 3 == targetRemainder)
+            {
+                int firstFridayDay = FirstFridayOfMonth(year, month);
+                DateTime startLocal = new(year, month, firstFridayDay, 0, 0, 0, DateTimeKind.Unspecified);
+                DateTimeOffset start = LocalToInstant(startLocal, zone);
+                DateTimeOffset end = start.AddMinutes(definition.LengthMinutes);
+                if (end > now || (definition.LengthMinutes == 0 && start >= now))
+                {
+                    return (start, end);
+                }
+            }
+
+            month++;
+            if (month > 12)
+            {
+                month = 1;
+                year++;
+            }
+        }
+
+        throw new InvalidOperationException("Unreachable: Darkmoon Faire rotation must match within 12 months.");
     }
 
     private static (DateTimeOffset Start, DateTimeOffset End) ComputeYearly(GameEventDefinition definition, DateTimeOffset now, TimeZoneInfo zone, YearlyRebaseMode mode)

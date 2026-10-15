@@ -34,10 +34,10 @@ internal static class PlayerbotBattlegroundBrackets
     internal static readonly BattlegroundType[] Types = [BattlegroundType.WarsongGulch, BattlegroundType.ArathiBasin, BattlegroundType.AlteracValley];
 
     /// <summary>
-    /// The types bots queue for and play: Warsong Gulch and Arathi Basin. Alterac Valley is out of scope (docs/areas/playbots-battlegrounds.md):
-    /// no bot ever queues for it.
+    /// The types bots queue for and play: Warsong Gulch, Arathi Basin and Alterac Valley.
     /// </summary>
-    internal static bool Supported(BattlegroundType type) => type is BattlegroundType.WarsongGulch or BattlegroundType.ArathiBasin;
+    internal static bool Supported(BattlegroundType type)
+        => type is BattlegroundType.WarsongGulch or BattlegroundType.ArathiBasin or BattlegroundType.AlteracValley;
 
     /// <summary>
     /// The type and bracket of one level, or the refusal. A type that is not <see cref="Supported"/> is

@@ -231,6 +231,9 @@ internal sealed class PlayerbotBattlegroundAI
             case ArathiBasin ab:
                 PlayArathi(player, ab, team, role, interval);
                 break;
+            case AlteracValley av:
+                PlayAlteracValley(player, av, team, role, interval);
+                break;
             default:
                 Activity = "unsupported";
                 Hold(player);
@@ -329,7 +332,7 @@ internal sealed class PlayerbotBattlegroundAI
     private void PlayArathi(Player player, ArathiBasin ab, Team team, PlayerbotBattlegroundRole role, uint interval)
     {
         int teamIndex = BattlegroundConstants.TeamIndex(team);
-        List<(int Node, GameObject Banner)> banners = Banners(player);
+        List<(int Node, GameObject Banner)> banners = Banners(player, ArathiBasin.NodeCount);
         if (banners.Count == 0)
         {
             Activity = "no-banners";
@@ -397,12 +400,56 @@ internal sealed class PlayerbotBattlegroundAI
         if (_spells.CastAtObject(player, spell, target.Banner)) BannerCasts++;
     }
 
+    // --- Alterac Valley --------------------------------------------------------------------------------------------------
+
+    private void PlayAlteracValley(Player player, AlteracValley av, Team team, PlayerbotBattlegroundRole role, uint interval)
+    {
+        int teamIndex = BattlegroundConstants.TeamIndex(team);
+        List<(int Node, GameObject Banner)> banners = Banners(player, AlteracValley.NodeCount);
+
+        // vmangos BattleGroundAV::EventPlayerClickedOnFlag (BattleGroundAV.cpp:1288-1368): a controlled node is assaulted when owned by neutral
+        // or the enemy; an assaulted node is defended back when it was ours (TotalOwner == teamIndex) or neutral (Snowfall).
+        bool Clickable(int node)
+            => av.NodeState(node) == AlteracValley.PointControlled
+                ? av.NodeOwner(node) != teamIndex && av.NodeTotalOwner(node) != teamIndex
+                : av.NodeOwner(node) != teamIndex && (av.NodeTotalOwner(node) == teamIndex || av.NodeTotalOwner(node) == AlteracValley.TeamNeutral);
+
+        (int Node, GameObject Banner)? goal = banners.Where(b => Clickable(b.Node) && !TeammateCasting(player, b.Banner))
+            .OrderBy(b => Distance(player, b.Banner)).Select(b => ((int, GameObject)?)b).FirstOrDefault();
+        if (goal is { } target)
+        {
+            TargetEntry = target.Banner.Entry;
+            if (Distance(player, target.Banner) > InteractYards + 0.5f)
+            {
+                Activity = "av-advance";
+                WalkTo(player, new Vector3(target.Banner.X, target.Banner.Y, target.Banner.Z), interval, toward: true);
+                return;
+            }
+
+            if (!PlayerbotMovementControl.Stop(_session, player)) return;
+            _route = null;
+            Activity = "av-claim-banner";
+            if (_session.Services.GetService<SpellFeature>() is { } feature && feature.System.Store.Get(BannerSpell) is { } spell)
+            {
+                if (_spells.CastAtObject(player, spell, target.Banner)) BannerCasts++;
+                return;
+            }
+
+            Act(WorldOpcode.CmsgGameobjUse, PlayerbotNavigation.GuidPayload(target.Banner.Guid.Value));
+            return;
+        }
+
+        BattlegroundStartLocation enemyKeep = team == Team.Alliance ? av.Template.HordeStart : av.Template.AllianceStart;
+        Activity = "av-advance";
+        Guard(player, new Vector3(enemyKeep.X, enemyKeep.Y, enemyKeep.Z), interval);
+    }
+
     /// <summary>
-    /// The Arathi Basin node banners spawned on the bot's map now, each with its node: the objects whose battleground event (the
+    /// The node banners spawned on the bot's map now, each with its node: the objects whose battleground event (the
     /// <c>gameobject_battleground</c> row, event1 = node) names a node, that the banner spell opens (a lock id) and whose opening the match
     /// turns into the node click (<see cref="MatchRuntime.RoutesBannerUse"/>).
     /// </summary>
-    private List<(int Node, GameObject Banner)> Banners(Player player)
+    private List<(int Node, GameObject Banner)> Banners(Player player, int nodeCount = ArathiBasin.NodeCount)
     {
         var banners = new List<(int, GameObject)>();
         if (player.Map?.FindUpdater<GameObjectMapSystem>() is not { } objects
@@ -412,7 +459,7 @@ internal sealed class PlayerbotBattlegroundAI
             // A banner the match does not route to the node click (a goober whose spell is no banner trigger) is never cast at: the cast would claim nothing.
             if (!go.IsSpawned || go.Spawn is not { } spawn || GameObjectLocks.LockIdOf(go.Template) == 0 || !MatchRuntime.RoutesBannerUse(go.Template)) continue;
             foreach ((byte e1, byte _) in feature.Events.ObjectEvents(spawn.Guid))
-                if (e1 < ArathiBasin.NodeCount) banners.Add((e1, go));
+                if (e1 < nodeCount) banners.Add((e1, go));
         }
 
         return banners;
@@ -436,7 +483,7 @@ internal sealed class PlayerbotBattlegroundAI
     // --- fighting --------------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// The enemy player to fight now: the carrier of the bot's own flag (Warsong Gulch) within <see cref="ChaseCarrierYards"/>, then one
+    /// The enemy player or Alterac Valley NPC to fight now: the carrier of the bot's own flag (Warsong Gulch) within <see cref="ChaseCarrierYards"/>, then one
     /// attacking the bot, then the one it fights already, then the nearest within <see cref="EngageYards"/>. Teammates never: the match's
     /// teams decide, not the faction templates (a player may always attack a player as far as the combat hooks go).
     /// </summary>
@@ -449,19 +496,36 @@ internal sealed class PlayerbotBattlegroundAI
             return thief;
 
         foreach (Unit unit in player.Combat.Attackers)
+        {
             if (unit is Player attacker && IsEnemy(player, attacker, match, enemyTeam)) return attacker;
-        if (_target is Player current && IsEnemy(player, current, match, enemyTeam) && Distance(player, current) <= EngageYards * 1.5f) return current;
+            if (match is AlteracValley && unit is Game.Creatures.Creature npcAttacker && IsEnemyCreature(player, npcAttacker)) return npcAttacker;
+        }
 
-        Player? nearest = null;
+        if (_target is Player current && IsEnemy(player, current, match, enemyTeam) && Distance(player, current) <= EngageYards * 1.5f) return current;
+        if (match is AlteracValley && _target is Game.Creatures.Creature currentNpc && IsEnemyCreature(player, currentNpc) && Distance(player, currentNpc) <= EngageYards * 1.5f) return currentNpc;
+
+        Unit? nearest = null;
         float best = EngageYards;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
-            if (map.FindObject(guid) is not Player other || !IsEnemy(player, other, match, enemyTeam)) continue;
-            float distance = Distance(player, other);
-            if (distance <= best)
+            WorldObject? obj = map.FindObject(guid);
+            if (obj is Player other && IsEnemy(player, other, match, enemyTeam))
             {
-                best = distance;
-                nearest = other;
+                float distance = Distance(player, other);
+                if (distance <= best)
+                {
+                    best = distance;
+                    nearest = other;
+                }
+            }
+            else if (match is AlteracValley && nearest is not Player && obj is Game.Creatures.Creature npc && IsEnemyCreature(player, npc))
+            {
+                float distance = Distance(player, npc);
+                if (distance <= best)
+                {
+                    best = distance;
+                    nearest = npc;
+                }
             }
         }
 
@@ -473,6 +537,12 @@ internal sealed class PlayerbotBattlegroundAI
         => !ReferenceEquals(other, player) && other.IsInWorld && other.IsAlive && (other.Flags & PlayerFlags.Ghost) == 0
             && ReferenceEquals(other.Map, player.Map) && match.PlayerTeam(other.Guid) == enemyTeam && player.Map is { } map
             && map.Combat.Hooks.CanAttack(player, other);
+
+    /// <summary>A living, attackable Alterac Valley NPC guard, commander or general on the bot's map.</summary>
+    private static bool IsEnemyCreature(Player player, Game.Creatures.Creature creature)
+        => creature.IsInWorld && creature.IsAlive && ReferenceEquals(creature.Map, player.Map)
+            && (creature.NpcFlags & (uint)Game.Npc.NpcFlags.SpiritGuide) == 0 && player.Map is { } map
+            && map.Combat.Hooks.CanAttack(player, creature);
 
     /// <summary>A unit attacking the bot that it may hit back (the walk to a battlemaster, a carrier that is blocked).</summary>
     private static Unit? FirstAttacker(Player player)

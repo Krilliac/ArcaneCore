@@ -174,12 +174,32 @@ public sealed class GameEventCalendarTests
     [Fact]
     public void DarkmoonSchedules_AreNotSupported_AndSaySo()
     {
-        var dmf = new GameEventDefinition(21, Utc(2020, 1, 1), Utc(2030, 1, 1), 86400, 10080, 0, "DMF") { ScheduleType = GameEventScheduleType.DarkmoonFaire1 };
-        Assert.False(GameEventCalendar.IsSupported(GameEventScheduleType.DarkmoonFaire1));
-        Assert.Throws<NotSupportedException>(() => GameEventCalendar.Compute(dmf, Utc(2026, 10, 3), TimeZoneInfo.Utc));
+        var dmf1 = new GameEventDefinition(21, Utc(2020, 1, 1), Utc(2030, 1, 1), 86400, 10080, 0, "DMF 1") { ScheduleType = GameEventScheduleType.DarkmoonFaire1 };
+        var dmf2 = dmf1 with { ScheduleType = GameEventScheduleType.DarkmoonFaire2 };
+        var dmf3 = dmf1 with { ScheduleType = (GameEventScheduleType)4 };
         Assert.All(
-            new[] { GameEventScheduleType.Serverside, GameEventScheduleType.Date, GameEventScheduleType.Yearly, GameEventScheduleType.LunarNewYear, GameEventScheduleType.Easter },
+            new[]
+            {
+                GameEventScheduleType.Serverside,
+                GameEventScheduleType.Date,
+                GameEventScheduleType.DarkmoonFaire1,
+                GameEventScheduleType.DarkmoonFaire2,
+                (GameEventScheduleType)4,
+                GameEventScheduleType.DarkmoonBuildingStage11,
+                GameEventScheduleType.DarkmoonBuildingStage12,
+                GameEventScheduleType.DarkmoonBuildingStage21,
+                GameEventScheduleType.DarkmoonBuildingStage22,
+                GameEventScheduleType.Yearly,
+                GameEventScheduleType.LunarNewYear,
+                GameEventScheduleType.Easter,
+            },
             t => Assert.True(GameEventCalendar.IsSupported(t)));
+        Assert.Equal((Utc(2026, 10, 2), Utc(2026, 10, 9)), GameEventCalendar.Compute(dmf1, Utc(2026, 10, 3), TimeZoneInfo.Utc));
+        Assert.Equal((Utc(2026, 11, 6), Utc(2026, 11, 13)), GameEventCalendar.Compute(dmf2, Utc(2026, 10, 3), TimeZoneInfo.Utc));
+        Assert.Equal((Utc(2026, 12, 4), Utc(2026, 12, 11)), GameEventCalendar.Compute(dmf3, Utc(2026, 10, 3), TimeZoneInfo.Utc));
+
+        Assert.False(GameEventCalendar.IsSupported((GameEventScheduleType)99));
+        Assert.Throws<NotSupportedException>(() => GameEventCalendar.Compute(dmf1 with { ScheduleType = (GameEventScheduleType)99 }, Utc(2026, 10, 3), TimeZoneInfo.Utc));
     }
 
     [Fact]

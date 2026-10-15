@@ -1,6 +1,9 @@
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.PetAuras;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Spells.Warlock;
 using ArcaneCore.Game.Talents;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Talents;
@@ -187,6 +190,91 @@ public sealed class TalentEffectCoverageTests
         Assert.DoesNotContain(after.Gaps, g => g.Spell == ScriptConsumer);
     }
 
+    [Fact]
+    public void DummyAuraHandlers_PeriodicDummyAuras_AndImprovedHealthstone_AreConsumers()
+    {
+        const uint customDummy = 6110, customPeriodicDummy = 6111;
+        using SpellTestKit kit = new(
+            DummyTalent(customDummy),
+            DummyTalent(customPeriodicDummy),
+            DummyTalent(PetAuraTable.SpiritBond1),
+            DummyTalent(CreateHealthstoneScript.ImprovedHealthstoneRank1),
+            DummyTalent(CreateHealthstoneScript.ImprovedHealthstoneRank2));
+        var catalog = new TalentCatalog(
+            [new TalentTabRecord(1, 1, 0)],
+            [
+                new TalentRecord(50, 1, 0, 0, [customDummy, customPeriodicDummy, PetAuraTable.SpiritBond1, CreateHealthstoneScript.ImprovedHealthstoneRank1, CreateHealthstoneScript.ImprovedHealthstoneRank2], 0, 0, 0),
+            ]);
+
+        TalentCoverageReport before = TalentEffectCoverage.Build(catalog, kit.System);
+        Assert.Contains(before.Gaps, g => g.Spell == customDummy);
+        Assert.Contains(before.Gaps, g => g.Spell == customPeriodicDummy);
+        Assert.DoesNotContain(before.Gaps, g => g.Spell == PetAuraTable.SpiritBond1);
+        Assert.DoesNotContain(before.Gaps, g => g.Spell == CreateHealthstoneScript.ImprovedHealthstoneRank1);
+        Assert.DoesNotContain(before.Gaps, g => g.Spell == CreateHealthstoneScript.ImprovedHealthstoneRank2);
+
+        kit.System.RegisterDummyAuraHandler(customDummy, static (_, _, _, _) => { });
+        kit.System.RegisterPeriodicDummyAura(customPeriodicDummy, 1000, static (_, _, _) => { });
+
+        TalentCoverageReport after = TalentEffectCoverage.Build(catalog, kit.System);
+        Assert.Empty(after.Gaps);
+    }
+
+    [Fact]
+    public void DreamwalkerClassScripts_AreConsumedAndTriggerPowerAndRegrowthBonuses()
+    {
+        const uint rejuvBonusAura = 28716, regrowthBonusAura = 28744, rejuvSpell = 774, regrowthSpell = 8936;
+        using SpellTestKit kit = new(
+            ClassScriptTalent(rejuvBonusAura, 4533, family: 7) with
+            {
+                Duration = new SpellDuration(-1, 0, -1),
+                ProcFlags = ProcFlags.DealHelpfulSpell,
+                ProcChance = 100,
+            },
+            ClassScriptTalent(regrowthBonusAura, 4537, family: 7) with
+            {
+                Duration = new SpellDuration(-1, 0, -1),
+                ProcFlags = ProcFlags.DealHelpfulSpell,
+                ProcChance = 100,
+            },
+            Spell(rejuvSpell, Effect(SpellEffectName.Heal, 50, SpellImplicitTarget.UnitFriend)) with
+            {
+                RangeIndex = 4,
+                Range = new SpellRange(0, 40),
+                SpellFamilyName = 7,
+                SpellFamilyFlags = 1UL << 4,
+            },
+            Spell(regrowthSpell, Effect(SpellEffectName.Heal, 50, SpellImplicitTarget.UnitFriend)) with
+            {
+                RangeIndex = 4,
+                Range = new SpellRange(0, 40),
+                SpellFamilyName = 7,
+                SpellFamilyFlags = 1UL << 6,
+            },
+            Spell(28722, Effect(SpellEffectName.Energize, 60, SpellImplicitTarget.UnitFriend, misc: (int)PowerType.Mana)) with { RangeIndex = 4, Range = new SpellRange(0, 40) },
+            Spell(28723, Effect(SpellEffectName.Energize, 100, SpellImplicitTarget.UnitFriend, misc: (int)PowerType.Rage)) with { RangeIndex = 4, Range = new SpellRange(0, 40) },
+            Spell(28724, Effect(SpellEffectName.Energize, 20, SpellImplicitTarget.UnitFriend, misc: (int)PowerType.Energy)) with { RangeIndex = 4, Range = new SpellRange(0, 40) },
+            Spell(28750, Effect(SpellEffectName.ApplyAura, 100, SpellImplicitTarget.UnitFriend, aura: AuraType.ModIncreaseHealth)) with { Duration = new SpellDuration(15_000, 0, 15_000), RangeIndex = 4, Range = new SpellRange(0, 40) });
+
+        var catalog = new TalentCatalog(
+            [new TalentTabRecord(1, 1, 0)],
+            [new TalentRecord(51, 1, 0, 0, [rejuvBonusAura, regrowthBonusAura, 0, 0, 0], 0, 0, 0)]);
+        Assert.Empty(TalentEffectCoverage.Build(catalog, kit.System).Gaps);
+
+        (Player druid, _) = kit.AddPlayer(1);
+        (Player ally, _) = kit.AddPlayer(2, x: 2);
+        SpellSystem.SetPower(ally, PowerType.Rage, 100);
+        kit.System.CastSpell(druid, rejuvBonusAura, SpellCastTargets.ForSelf(), triggered: true);
+        kit.System.CastSpell(druid, regrowthBonusAura, SpellCastTargets.ForSelf(), triggered: true);
+
+        kit.System.CastSpell(druid, rejuvSpell, SpellCastTargets.ForUnit(ally.Guid), triggered: false);
+        Assert.Equal(200u, SpellSystem.GetPower(ally, PowerType.Rage));
+
+        kit.Now += 2_000;
+        kit.System.CastSpell(druid, regrowthSpell, SpellCastTargets.ForUnit(ally.Guid), triggered: false);
+        Assert.True(kit.System.HasAura(ally, 28750));
+    }
+
     private sealed class FakeProcScript : IProcScript
     {
     }
@@ -218,7 +306,7 @@ public sealed class TalentEffectCoverageTests
         Assert.False(Reads(readers[0] with { Site = "NoSuchFile.cs" }), "the scan matches a file that does not exist");
         Assert.Empty(readers.Where(reader => !Reads(reader)).Select(reader => $"{reader.Kind} {reader.Key}: {reader.Site} /{reader.Pattern}/"));
         Assert.Equal(
-            [831u, 832u, 833u, 834u, 835u, 2228u, 11094u, 11189u, 13043u, 17864u, 18393u, 28332u],
+            [831u, 832u, 833u, 834u, 835u, 2228u, 11094u, 11189u, 13043u, 17864u, 18393u, 18692u, 18693u, 28332u],
             readers.Where(r => r.Kind is ExternalReaderKind.ClassScript or ExternalReaderKind.DummySpell).Select(r => r.Key).Distinct().Order());
     }
 

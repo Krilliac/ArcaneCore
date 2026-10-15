@@ -1,3 +1,5 @@
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Mods;
 using ArcaneCore.Game.Talents;
@@ -86,13 +88,14 @@ public sealed class TalentModCoverageTests
         Assert.Equal(0, report.CountOf(TalentGapKind.MissingAura, (int)AuraType.AddPctModifier));
     }
 
-    private const uint SpeedMod = 948101, PowerMod = 948102, ChargesMod = 948103, CostMod = 948104;
+    private const uint SpeedMod = 948101, PowerMod = 948102, ChargesMod = 948103, CostMod = 948104, UnreadMod = 948105;
+    private const SpellModOp UnreadOp = (SpellModOp)25;
 
     private static readonly TalentCatalog UnreadCatalog = new(
         [new TalentTabRecord(1, 1, 0)],
         [
             new TalentRecord(1, 1, 0, 0, [SpeedMod, PowerMod, 0, 0, 0], 0, 0, 0),
-            new TalentRecord(2, 1, 0, 1, [ChargesMod, CostMod, 0, 0, 0], 0, 0, 0),
+            new TalentRecord(2, 1, 0, 1, [ChargesMod, CostMod, UnreadMod, 0, 0], 0, 0, 0),
         ]);
 
     [Fact]
@@ -102,15 +105,17 @@ public sealed class TalentModCoverageTests
             Pct(SpeedMod, SpellModOp.Speed, 10),
             Flat(PowerMod, SpellModOp.AttackPower, 5),
             Flat(ChargesMod, SpellModOp.Charges, 1),
-            Flat(CostMod, SpellModOp.Cost, -3));
+            Flat(CostMod, SpellModOp.Cost, -3),
+            Flat(UnreadMod, UnreadOp, 2));
 
         string text = TalentModCoverage.Build(UnreadCatalog, kit.System).Describe();
 
-        // spell-mods.md: SPEED and ATTACK_POWER on an aura's own amount and CHARGES at holder creation are not wired; COST is.
-        Assert.Contains("3 with an operation nothing reads", text, StringComparison.Ordinal);
-        Assert.Contains("op 3 (AttackPower): 1, nothing reads it", text, StringComparison.Ordinal);
-        Assert.Contains("op 4 (Charges): 1, nothing reads it", text, StringComparison.Ordinal);
-        Assert.Contains("op 12 (Speed): 1, nothing reads it", text, StringComparison.Ordinal);
+        // SPEED, ATTACK_POWER, CHARGES and COST are wired; an in-range operation with no reader in Readers is reported as unread.
+        Assert.Contains("1 with an operation nothing reads", text, StringComparison.Ordinal);
+        Assert.Contains("op 25 (25): 1, nothing reads it", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("op 3 (AttackPower): 1, nothing reads it", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("op 4 (Charges): 1, nothing reads it", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("op 12 (Speed): 1, nothing reads it", text, StringComparison.Ordinal);
         Assert.DoesNotContain("op 14 (Cost): 1, nothing reads it", text, StringComparison.Ordinal);
     }
 
@@ -121,14 +126,15 @@ public sealed class TalentModCoverageTests
             Pct(SpeedMod, SpellModOp.Speed, 10),
             Flat(PowerMod, SpellModOp.AttackPower, 5),
             Flat(ChargesMod, SpellModOp.Charges, 1),
-            Flat(CostMod, SpellModOp.Cost, -3));
+            Flat(CostMod, SpellModOp.Cost, -3),
+            Flat(UnreadMod, UnreadOp, 2));
 
         TalentModCoverageReport report = TalentModCoverage.Build(UnreadCatalog, kit.System);
 
         Assert.Equal(
-            new Dictionary<SpellModOp, int> { [SpellModOp.AttackPower] = 1, [SpellModOp.Charges] = 1, [SpellModOp.Speed] = 1 },
+            new Dictionary<SpellModOp, int> { [UnreadOp] = 1 },
             report.UnreadOperations.OrderBy(p => p.Key).ToDictionary());
-        Assert.Equal(3, report.UnreadEffects);
+        Assert.Equal(1, report.UnreadEffects);
         Assert.Empty(report.Gaps); // an unread operation is not a broken effect: the mod is stored and sent, it changes nothing on the server
     }
 
@@ -165,9 +171,86 @@ public sealed class TalentModCoverageTests
 
         Assert.True(read.Count >= 10, $"only {read.Count} operations found under {root}: the scan proved nothing");
         Assert.Equal(read, new SortedSet<SpellModOp>(TalentModCoverage.Readers.Keys));
-        Assert.DoesNotContain(SpellModOp.Speed, read);
-        Assert.DoesNotContain(SpellModOp.AttackPower, read);
-        Assert.DoesNotContain(SpellModOp.Charges, read);
+        Assert.Contains(SpellModOp.Speed, read);
+        Assert.Contains(SpellModOp.AttackPower, read);
+        Assert.Contains(SpellModOp.Charges, read);
+    }
+
+    [Fact]
+    public void AttackPowerMod_ScalesMeleeAndRangedAttackPowerAuras_AndRestoresOnRemoval()
+    {
+        const uint apBuff = 948201, rangedApBuff = 948202;
+        using SpellTestKit kit = new(
+            Pct(PowerMod, SpellModOp.AttackPower, 25),
+            InFamily(Spell(apBuff, Effect(SpellEffectName.ApplyAura, 100, aura: AuraType.ModAttackPower)) with { Duration = new SpellDuration(60_000, 0, 60_000) }),
+            InFamily(Spell(rangedApBuff, Effect(SpellEffectName.ApplyAura, 80, aura: AuraType.ModRangedAttackPower)) with { Duration = new SpellDuration(60_000, 0, 60_000) }));
+        (Player caster, _) = kit.AddPlayer(1);
+        kit.System.CastSpell(caster, PowerMod, SpellCastTargets.ForSelf(), triggered: true);
+
+        kit.System.CastSpell(caster, apBuff, SpellCastTargets.ForSelf(), triggered: true);
+        kit.System.CastSpell(caster, rangedApBuff, SpellCastTargets.ForSelf(), triggered: true);
+
+        Assert.Equal(125, (short)(caster.GetUInt32(UpdateFields.UnitFieldAttackPowerMods) & 0xFFFF));
+        Assert.Equal(100, (short)(caster.GetUInt32(UpdateFields.UnitFieldRangedAttackPowerMods) & 0xFFFF));
+
+        kit.System.RemoveAuras(caster, apBuff);
+        kit.System.RemoveAuras(caster, rangedApBuff);
+
+        Assert.Equal(0u, caster.GetUInt32(UpdateFields.UnitFieldAttackPowerMods));
+        Assert.Equal(0u, caster.GetUInt32(UpdateFields.UnitFieldRangedAttackPowerMods));
+    }
+
+    [Fact]
+    public void ChargesMod_ModifiesHolderProcCharges_WhenSpellHasBaseCharges()
+    {
+        const uint chargedAura = 948211, unchargedAura = 948212;
+        using SpellTestKit kit = new(
+            Flat(ChargesMod, SpellModOp.Charges, 2),
+            InFamily(Spell(chargedAura, Effect(SpellEffectName.ApplyAura, 10, aura: AuraType.ModDamageDone, misc: 1)) with
+            {
+                Duration = new SpellDuration(60_000, 0, 60_000),
+                ProcCharges = 3,
+            }),
+            InFamily(Spell(unchargedAura, Effect(SpellEffectName.ApplyAura, 10, aura: AuraType.ModDamageDone, misc: 1)) with
+            {
+                Duration = new SpellDuration(60_000, 0, 60_000),
+                ProcCharges = 0,
+            }));
+        (Player caster, _) = kit.AddPlayer(1);
+        kit.System.CastSpell(caster, ChargesMod, SpellCastTargets.ForSelf(), triggered: true);
+
+        kit.System.CastSpell(caster, chargedAura, SpellCastTargets.ForSelf(), triggered: true);
+        kit.System.CastSpell(caster, unchargedAura, SpellCastTargets.ForSelf(), triggered: true);
+
+        Assert.Equal(5, kit.System.GetAuras(caster).Single(h => h.Spell.Id == chargedAura).Charges);
+        Assert.Equal(0, kit.System.GetAuras(caster).Single(h => h.Spell.Id == unchargedAura).Charges);
+    }
+
+    [Fact]
+    public void SpeedMod_ScalesIncreaseAndDecreaseSpeedAuras_AndRestoresOnRemoval()
+    {
+        const uint sprintBuff = 948221, snareDebuff = 948222, pctSpeedMod = 948223;
+        using SpellTestKit kit = new(
+            Flat(SpeedMod, SpellModOp.Speed, 20),
+            Pct(pctSpeedMod, SpellModOp.Speed, 50, mask: 2),
+            InFamily(Spell(sprintBuff, Effect(SpellEffectName.ApplyAura, 30, aura: AuraType.ModIncreaseSpeed)) with { Duration = new SpellDuration(60_000, 0, 60_000) }),
+            InFamily(Spell(snareDebuff, Effect(SpellEffectName.ApplyAura, -40, SpellImplicitTarget.UnitEnemy, aura: AuraType.ModDecreaseSpeed)) with { Duration = new SpellDuration(60_000, 0, 60_000) }, flags: 2));
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, x: 5);
+        var options = new LocomotionOptions();
+        kit.System.CastSpell(caster, SpeedMod, SpellCastTargets.ForSelf(), triggered: true);
+        kit.System.CastSpell(caster, pctSpeedMod, SpellCastTargets.ForSelf(), triggered: true);
+
+        kit.System.CastSpell(caster, sprintBuff, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.Equal(50, kit.System.GetAuras(caster).Single(h => h.Spell.Id == sprintBuff).Auras[0]!.Amount);
+        Assert.Equal(1.5f, UnitSpeed.ComputeRate(caster, MoveType.Run, options, inBattleground: false));
+
+        kit.System.RemoveAuras(caster, sprintBuff);
+        Assert.Equal(1.0f, UnitSpeed.ComputeRate(caster, MoveType.Run, options, inBattleground: false));
+
+        kit.System.CastSpell(caster, snareDebuff, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        Assert.Equal(-60, kit.System.GetAuras(target).Single(h => h.Spell.Id == snareDebuff).Auras[0]!.Amount);
+        Assert.Equal(0.4f, UnitSpeed.ComputeRate(target, MoveType.Run, options, inBattleground: false));
     }
 
     private static string RepoRoot()

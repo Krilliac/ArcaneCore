@@ -442,7 +442,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (!roll && !anyRealWaiting && checkedRefusalsThisScan) continue;
             checkedRefusalsThisScan = true;
             List<PlayerbotBattlegroundChoice> eligible = PlayerbotBattlegroundBrackets.Eligible(player.Level, manager.TemplateOf,
-                type => HasObjectiveContent(feature, type) && (type != BattlegroundType.ArathiBasin || KnowsBannerSpell(player)),
+                type => HasObjectiveContent(feature, type) && (type is not (BattlegroundType.ArathiBasin or BattlegroundType.AlteracValley) || KnowsBannerSpell(player)),
                 type => !IsSetAside(bot.BotId, type) && FindMaster(player, type) is not null, Refused);
             if (eligible.Count == 0 || (!roll && !anyRealWaiting)) continue;
             if (_demand.Pick(eligible, player.Team, manager.TemplateOf, options, roll, _random.NextDouble()) is not { } choice
@@ -646,6 +646,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// (<see cref="ArcaneCore.World.Battlegrounds.MatchRuntime.RoutesBannerUse"/>: a banner button, or a goober whose spell is a banner trigger spell), and the
     /// banner spell 21651 itself. Without it bots do not queue (fail closed: <see cref="PlayerbotBattlegroundRefusal.MissingContent"/>).
     /// </summary>
+    internal bool HasObjectives(BattlegroundType type) => Feature() is { } feature && HasObjectiveContent(feature, type);
+
     private bool HasObjectiveContent(BattlegroundFeature feature, BattlegroundType type)
     {
         if (_world is null || services.GetService<GameObjectLootFeature>()?.Content is not { } objects) return false;
@@ -663,6 +665,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         {
             BattlegroundType.WarsongGulch => WarsongContent(objects, maps),
             BattlegroundType.ArathiBasin => ArathiContent(objects, feature),
+            BattlegroundType.AlteracValley => AlteracValleyContent(objects, maps, feature),
             _ => false,
         };
         _content[type] = present;
@@ -700,6 +703,28 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
         // Every node the content has must start from a neutral banner a click on which reaches the match.
         return nodes.Count > 0 && nodes.Values.All(n => n.Neutral > 0 && n.Routed == n.Neutral);
+    }
+
+    private bool AlteracValleyContent(GameObjectContent objects, WorldMaps _, BattlegroundFeature feature)
+    {
+        uint mapId = BattlegroundManager.MapOfType(BattlegroundType.AlteracValley);
+        if (feature.Manager.TemplateOf(BattlegroundType.AlteracValley) is not { } template
+            || template.MapId != mapId
+            || services.GetService<SpellFeature>()?.System.Store.Get(PlayerbotBattlegroundAI.BannerSpell) is null)
+            return false;
+        int banners = 0, routed = 0;
+        foreach (GameObjectSpawn spawn in objects.GetSpawns(mapId))
+        {
+            if (objects.FindTemplate(spawn.Entry) is not { } goTemplate || GameObjectLocks.LockIdOf(goTemplate) == 0) continue;
+            foreach ((byte node, byte _) in feature.Events.ObjectEvents(spawn.Guid))
+            {
+                if (node >= AlteracValley.NodeCount) continue;
+                banners++;
+                if (ArcaneCore.World.Battlegrounds.MatchRuntime.RoutesBannerUse(goTemplate)) routed++;
+            }
+        }
+
+        return banners == 0 || routed > 0;
     }
 
     /// <summary>Whether the bot knows the banner spell 21651 (every new character learns it: <c>playercreateinfo_spell</c>).</summary>

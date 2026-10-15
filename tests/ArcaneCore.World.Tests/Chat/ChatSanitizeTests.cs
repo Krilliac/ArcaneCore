@@ -57,6 +57,50 @@ public sealed class ChatSanitizeTests
         Assert.True(ChatSanitizer.IsValidChatMessage(Item, 3));
     }
 
+    [Theory]
+    [InlineData("|cffa335ee|Hitem:812:0:0:0:0:0:0:0:70|h[Glowing Brightwood Staff]|h|r", true)]
+    [InlineData("|cffa335ee|Hitem:999999:0:0:0:0:0:0:0:70|h[Missing Staff]|h|r", false)]
+    [InlineData("|cffa335ee|Hitem:0:0:0:0:0:0:0:0:70|h[Zero Entry]|h|r", false)]
+    [InlineData("|cffa335ee|Hitem:abc:0|h[Bad Entry]|h|r", false)]
+    [InlineData("|cff808080|Hquest:2278:47|h[The Platinum Discs]|h|r", true)]
+    [InlineData("|cff808080|Hquest:404:47|h[Missing Quest]|h|r", false)]
+    [InlineData("|cff71d5ff|Hspell:21563|h[Command]|h|r", true)]
+    [InlineData("|cff71d5ff|Hspell:99999|h[Missing Spell]|h|r", false)]
+    [InlineData("|cff4e96f7|Htalent:161:1|h[Ice Barrier]|h|r", true)]
+    [InlineData("|cff4e96f7|Htalent:999:1|h[Missing Talent]|h|r", false)]
+    [InlineData("|cffffd000|Henchant:20008|h[Enchant Bracer - Greater Intellect]|h|r", true)]
+    [InlineData("|cffffd000|Henchant:99999|h[Missing Enchant]|h|r", false)]
+    [InlineData("|cffffffff|Hunknown:812|h[Unknown Link Type]|h|r", false)]
+    [InlineData("|cffffffff|Hitem|h[No Colon]|h|r", false)]
+    public void Severity3_WithCatalogValidator_ChecksHyperlinkEntryExistence(string message, bool expected)
+    {
+        static bool CatalogContains(string linkType, uint id) => (linkType, id) switch
+        {
+            ("item", 812) => true,
+            ("quest", 2278) => true,
+            ("spell", 21563) => true,
+            ("talent", 161) => true,
+            ("enchant", 20008) => true,
+            _ => false,
+        };
+
+        Assert.Equal(expected, ChatSanitizer.IsValidChatMessage(message, 3, CatalogContains));
+    }
+
+    [Fact]
+    public void ChatFeature_IsValidChatMessage_UsesSeverity3CatalogDelegate()
+    {
+        var feature = new ChatFeature
+        {
+            LinkExists = (type, id) => type == "item" && id == 812,
+        };
+        feature.Options.StrictLinkSeverity = 3;
+
+        Assert.True(feature.IsValidChatMessage(Item));
+        Assert.False(feature.IsValidChatMessage("|cffa335ee|Hitem:813:0:0:0:0:0:0:0:70|h[Other]|h|r"));
+        Assert.False(feature.ValidateCatalogLink("item", 0));
+    }
+
     private static async Task<(WorldTestHost Host, WorldTestClient Speaker, WorldTestClient Listener)> StartAsync(Action<ChatOptions>? options = null)
     {
         WorldTestHost host = WorldTestHost.Start();

@@ -199,6 +199,11 @@ public sealed partial class SpellSystem
         }
 
         SpellEffectInfo effect = context.Effect;
+        if (effect.AuraType == AuraType.None)
+        {
+            return;
+        }
+
         if (!AuraHandlers.ContainsKey(effect.AuraType))
         {
             ReportUnsupported(context.Cast, context.EffectIndex, "aura", (uint)effect.AuraType);
@@ -210,6 +215,9 @@ public sealed partial class SpellSystem
             context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration)
         {
             IsItemEquipAura = context.Cast.IsItemEquipCast,
+            Charges = context.Spell.ProcCharges > 0
+                ? Math.Max(0, ModInt(context.Caster, context.Spell, SpellModOp.Charges, (int)context.Spell.ProcCharges))
+                : 0,
         };
         if (context.Cast.CastItem is { } castItem && context.PendingHolder.CastItemGuid.IsEmpty)
         {

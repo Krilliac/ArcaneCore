@@ -198,16 +198,30 @@ public sealed class GameEventCreatureDataTests
     public void EquipmentAndSpellRows_AreCounted_NotApplied()
     {
         using var rig = new Rig();
+        var castLog = new List<(uint Guid, uint SpellId)>();
+        rig.Data.OnCastSpell = (creature, spellId) => castLog.Add((creature.Spawn!.Guid, spellId));
         rig.Join();
         rig.Service.Initialize(new HashSet<ushort>());
+
+        Creature casting = rig.Spawned(Casting);
+        Assert.Equal(0u, casting.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay));
 
         rig.At(12, 30);
 
         Assert.Equal(1, rig.Data.EquipmentRows);
         Assert.Equal(1, rig.Data.SpellRows);
-        Creature casting = rig.Spawned(Casting);
-        Assert.Equal(Day, casting.Entry);        // the row changes nothing the engine can apply
+        Assert.Equal(Day, casting.Entry);
         Assert.Equal(903u, casting.DisplayId);
+        Assert.Equal(5u, rig.Data.AppliedEquipmentByGuid[Casting]);
+        Assert.Equal(5u, casting.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay));
+        Assert.Equal(7671u, rig.Data.LastSpellCastByGuid[Casting]);
+        Assert.Equal([(Casting, 7671u)], castLog);
+
+        rig.At(14, 30);
+
+        Assert.False(rig.Data.AppliedEquipmentByGuid.ContainsKey(Casting));
+        Assert.Equal(0u, casting.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay));
+        Assert.Equal([(Casting, 7671u), (Casting, 7671u)], castLog);
     }
 
     [Fact]

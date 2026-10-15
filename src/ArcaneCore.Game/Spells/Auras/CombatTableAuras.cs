@@ -28,29 +28,63 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed class CombatTableAuras : ISpellHandlerModule
 {
+    /// <summary>The types this module answers for with no immediate apply/remove effect, in aura order.</summary>
+    public static IReadOnlyList<AuraType> NoImmediateEffectTypes => Types;
+
     /// <summary>The types this module answers for, in aura order.</summary>
     public static IReadOnlyList<AuraType> Types { get; } =
     [
+        AuraType.ModDamageTaken,
         AuraType.ModHitChance,
         AuraType.ModSpellHitChance,
+        AuraType.ModSpellCritChance,
+        AuraType.ModDamageDoneCreature,
+        AuraType.SchoolAbsorb,
+        AuraType.ModSpellCritChanceSchool,
+        AuraType.ModLanguage,
+        AuraType.SplitDamagePct,
+        AuraType.ModDamagePercentTaken,
+        AuraType.ModDetectRange,
+        AuraType.PreventsFleeing,
+        AuraType.InterruptRegen,
+        AuraType.ManaShield,
+        AuraType.ModMeleeAttackPowerVersus,
+        AuraType.ModPowerRegenPercent,
+        AuraType.AddCasterHitTrigger,
+        AuraType.OverrideClassScripts,
+        AuraType.ModRangedDamageTaken,
+        AuraType.ModRangedDamageTakenPct,
+        AuraType.ModHealing,
+        AuraType.ModMechanicResistance,
+        AuraType.ModHealingPct,
+        AuraType.ModTargetResistance,
+        AuraType.ModMeleeDamageTaken,
+        AuraType.ModMeleeDamageTakenPct,
+        AuraType.RangedAttackPowerAttackerBonus,
+        AuraType.ModRangedAttackPowerVersus,
+        AuraType.ModHealingDone,
+        AuraType.ModHealingDonePercent,
+        AuraType.RetainComboPoints,
+        AuraType.ResistPushback,
+        AuraType.ModDetectedRange,
+        AuraType.SplitDamageFlat,
+        AuraType.PetDamageMulti,
+        AuraType.ModAoeAvoidance,
+        AuraType.ModCritDamageBonus,
+        AuraType.MeleeAttackPowerAttackerBonus,
+        AuraType.ModDamageDoneVersus,
+        AuraType.ModCritPercentVersus,
+        AuraType.ModSpellHealingOfStatPercent,
+        AuraType.ModDebuffResistance,
+        AuraType.ModAttackerSpellCritChance,
+        AuraType.ModFlatSpellDamageVersus,
+        AuraType.ModFlatSpellCritDamageVersus,
+        AuraType.ModCriticalThreat,
         AuraType.ModAttackerMeleeHitChance,
         AuraType.ModAttackerRangedHitChance,
         AuraType.ModAttackerSpellHitChance,
         AuraType.ModAttackerMeleeCritChance,
         AuraType.ModAttackerRangedCritChance,
-        AuraType.ModDamageTaken,
-        AuraType.ModDamageDoneCreature,
-        AuraType.ModDamagePercentTaken,
-        AuraType.ModMeleeAttackPowerVersus,
-        AuraType.ModRangedDamageTaken,
-        AuraType.ModRangedDamageTakenPct,
-        AuraType.ModMeleeDamageTaken,
-        AuraType.ModMeleeDamageTakenPct,
-        AuraType.RangedAttackPowerAttackerBonus,
-        AuraType.ModRangedAttackPowerVersus,
-        AuraType.MeleeAttackPowerAttackerBonus,
-        AuraType.ModDamageDoneVersus,
-        AuraType.ModFlatSpellDamageVersus,
     ];
 
     public void Register(SpellSystem system)
@@ -60,6 +94,40 @@ public sealed class CombatTableAuras : ISpellHandlerModule
         foreach (AuraType type in Types)
         {
             system.RegisterAura(type, noImmediateEffect);
+        }
+
+        system.RegisterAura(AuraType.ExtraAttacks, new AuraHandler(ApplyExtraAttacks, null));
+        system.RegisterAura(AuraType.AuraSpell, new AuraHandler(ApplyAuraSpell, null));
+    }
+
+    private static void ApplyExtraAttacks(SpellSystem _, SpellAuraHolder holder, SpellAura aura, bool apply)
+    {
+        if (apply && aura.Amount > 0)
+        {
+            holder.Target.Combat.QueueExtraAttacks(aura.Amount);
+        }
+    }
+
+    private static void ApplyAuraSpell(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply)
+    {
+        if (holder.Target is not Entities.Player player)
+        {
+            return;
+        }
+
+        uint triggeredSpellId = holder.Spell.Effects[aura.EffectIndex].TriggerSpell;
+        if (triggeredSpellId == 0)
+        {
+            return;
+        }
+
+        if (apply)
+        {
+            system.LearnSpell(player, triggeredSpellId);
+        }
+        else
+        {
+            system.RemoveSpell(player, triggeredSpellId);
         }
     }
 }

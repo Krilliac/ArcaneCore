@@ -15,6 +15,7 @@ namespace ArcaneCore.Game.Stealth;
 /// <param name="TargetStealthLevelMod">Sum of the target's MOD_STEALTH_LEVEL aura amounts.</param>
 /// <param name="DetectorDetectMod">Sum of the detector's MOD_STEALTH_DETECT auras with misc value 0 (Perception: +50).</param>
 /// <param name="TargetInDetectorArc">The target is inside the detector's 180 degree front arc.</param>
+/// <param name="TargetStrength">The target's Strength stat (used when <see cref="StealthOptions.IncludeStrengthContribution"/> is enabled).</param>
 public readonly record struct StealthDetectionInput(
     float Distance,
     bool DetectorStunned,
@@ -25,7 +26,8 @@ public readonly record struct StealthDetectionInput(
     int TargetStealthTotal,
     int TargetStealthLevelMod,
     int DetectorDetectMod,
-    bool TargetInDetectorArc);
+    bool TargetInDetectorArc,
+    float TargetStrength = 0f);
 
 /// <summary>The outcome of a stealth detection roll-free check.</summary>
 /// <param name="Detected">The detector sees the target.</param>
@@ -55,6 +57,9 @@ public static class StealthDetection
     /// <summary>The alert band width beyond the visible distance (Unit.cpp:6612).</summary>
     public const float AlertBand = 5.0f;
 
+    /// <summary>Multiplier for the optional mangos-classic target Strength contribution to stealth skill (ObjectVisibility.cpp:152-178).</summary>
+    public const float StrengthStealthFactor = 0.3f;
+
     /// <summary>Hunter's Mark / far visibility is a separate rule; this is only the stealth distance model.</summary>
     public static StealthDetectionResult Evaluate(in StealthDetectionInput input, StealthOptions? options = null)
     {
@@ -76,9 +81,14 @@ public static class StealthDetection
 
         float visibleDistance = input.DetectorIsPlayer ? (input.TargetIsPlayer ? 9.0f : 21.0f) : (5.0f / 6.0f);
         float yardsPerLevel = input.DetectorIsPlayer ? 1.5f : 5.0f / 6.0f;
-        int stealthSkill = input.TargetIsPlayer ? input.TargetStealthTotal : input.TargetLevel * 5;
+        float stealthSkill = input.TargetIsPlayer ? input.TargetStealthTotal : input.TargetLevel * 5;
         stealthSkill += input.TargetStealthLevelMod;
-        int detectSkill = (input.DetectorLevel * 5) + input.DetectorDetectMod;
+        if (options.IncludeStrengthContribution)
+        {
+            stealthSkill += StrengthStealthFactor * input.TargetStrength;
+        }
+
+        float detectSkill = (input.DetectorLevel * 5) + input.DetectorDetectMod;
         if (input.DetectorLevel - input.TargetLevel > 3)
         {
             yardsPerLevel *= 2;
@@ -130,7 +140,8 @@ public static class StealthDetection
             spells.GetTotalAuraModifier(target, AuraType.ModStealth),
             spells.GetTotalAuraModifier(target, AuraType.ModStealthLevel),
             spells.GetTotalAuraModifier(detector, AuraType.ModStealthDetect, aura => aura.MiscValue == 0),
-            MapCombat.HasInArc(detector, target, CombatConstants.DefaultArc));
+            MapCombat.HasInArc(detector, target, CombatConstants.DefaultArc),
+            target.GetUInt32(UpdateFields.UnitFieldStat0));
         return Evaluate(input, options);
     }
 }

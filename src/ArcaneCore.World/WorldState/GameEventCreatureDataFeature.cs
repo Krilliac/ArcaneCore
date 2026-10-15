@@ -1,7 +1,9 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -10,7 +12,7 @@ namespace ArcaneCore.World.WorldState;
 /// <summary>
 /// Wires game-event creature data into the world (docs/areas/game-events-weather.md): registers <see cref="GameEventCreatureData"/> as the creature-data
 /// effect of every <see cref="GameEventService"/> and installs it as the <see cref="ICreatureEventData"/> of every creature system (from the world tick,
-/// as soon as the system exists). Says once how many rows name equipment or spells, which are not applied.
+/// as soon as the system exists).
 /// </summary>
 public sealed class GameEventCreatureDataFeature(IServiceProvider services, ILogger<GameEventCreatureDataFeature> logger) : IWorldFeature
 {
@@ -34,12 +36,16 @@ public sealed class GameEventCreatureDataFeature(IServiceProvider services, ILog
     private void Wire(GameEventService service)
     {
         WorldRuntime world = _world ?? throw new InvalidOperationException("the game event creature data feature is not attached");
-        _data = new GameEventCreatureData(service, service.Rows, () => world.Maps);
+        _data = new GameEventCreatureData(service, service.Rows, () => world.Maps)
+        {
+            OnCastSpell = (creature, spellId) =>
+                services.GetService<SpellFeature>()?.System.CastSpell(creature, spellId, SpellCastTargets.ForUnit(creature.Guid), triggered: true),
+        };
         service.AddEffects(_data);
         if (_data.EquipmentRows > 0 || _data.SpellRows > 0)
         {
-            logger.LogWarning(
-                "game_event_creature_data: {Equipment} row(s) name an equipment id and {Spells} row(s) a start or end spell; only entry_id and modelid are applied",
+            logger.LogInformation(
+                "game_event_creature_data: {Equipment} row(s) name an equipment id and {Spells} row(s) a start or end spell",
                 _data.EquipmentRows, _data.SpellRows);
         }
 

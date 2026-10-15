@@ -107,7 +107,20 @@ public sealed partial class SpellSystem
         [SpellEffectName.Parry] = static context => (context.Target as Player)?.StatState.SetCanParry(true),
         [SpellEffectName.Block] = static context => (context.Target as Player)?.StatState.SetCanBlock(true),
         [SpellEffectName.DualWield] = static context => (context.Target as Player)?.StatState.SetCanDualWield(true),
+        [SpellEffectName.Spawn] = static context => Rules.CrowdControl.CcState.RefreshStun(context.System, context.Target),
+        [SpellEffectName.Detect] = static _ => { },
+        [SpellEffectName.TransDoor] = static _ => { },
+        [SpellEffectName.Attack] = EffectAttack,
     };
+
+    /// <summary>vmangos Spell::EffectAttack (SpellEffects.cpp:3350-3354): start melee auto-attack against a living target other than the caster.</summary>
+    private static void EffectAttack(SpellEffectContext context)
+    {
+        if (!ReferenceEquals(context.Target, context.Caster) && context.Target.IsAlive)
+        {
+            context.Caster.Map?.FindUpdater<Combat.MapCombat>()?.Attack(context.Caster, context.Target, melee: true);
+        }
+    }
 
     /// <summary>vmangos Spell::DoAllEffectOnTarget → HandleEffects per effect, then the built aura holder is added.</summary>
     private SpellTargetOutcome? ApplyEffects(SpellCast cast, Unit target, int effectMask, float[]? multipliers = null, bool reflected = false)
