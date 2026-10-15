@@ -787,6 +787,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (!_groups.Contains(group)) return;
         if (group.LeaderPlayer(world) is not { } leader)
         {
+            PlayerbotGroupAnomalies.ReportNamed(group.Find(group.LeaderBotId)?.Name ?? "unknown", group.LeaderGuid, PlayerbotGroupAnomalies.LeaderGone,
+                string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader (not online) in state {group.State}; the group ends"),
+                AnomalySeverity.Info);
             Finish(group, success: false, "leader-gone");
             return;
         }
@@ -828,6 +831,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             ShareQuests(group);
         if (WatchStall(group, leader, now)) return;
         uint stepLimit = StepLimitOf(group);
+        ObserveOutcomes(group, leader, now, stepLimit);
 
         switch (group.State)
         {
@@ -927,6 +931,79 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
     }
 
+    /// <summary>
+    /// The outcome checks of <see cref="PlayerbotGroupAnomalies"/>, once per group per tick: the state and run clocks (a few compares) and,
+    /// once a second, the members. Reports only; the group's own bounds and give-ups are untouched.
+    /// </summary>
+    internal void ObserveOutcomes(BotGroup group, Player leader, uint now, uint stepLimit)
+    {
+        uint travelLimit = (uint)Math.Max(1, _options.Groups.DungeonRuns.TravelTimeoutMinutes) * 60_000u;
+        PlayerbotGroupFinding found = group.Watch.Observe(group.State, group.StateEnteredMs, stepLimit, GoalTimeoutOf(group), travelLimit, group.Run, now);
+        if (found != PlayerbotGroupFinding.None) ReportFindings(group, leader, found, now, stepLimit, travelLimit);
+        if (group.Watch.MemberPassDue(now)) WatchMembers(group, leader, now);
+    }
+
+    private void ReportFindings(BotGroup group, Player leader, PlayerbotGroupFinding found, uint now, uint stepLimit, uint travelLimit)
+    {
+        string step = group.Find(group.LeaderBotId)?.AI?.Step ?? "none";
+        if ((found & PlayerbotGroupFinding.StateStuck) != 0)
+        {
+            uint budget = PlayerbotGroupWatch.StateBudgetMs(group.State, stepLimit, GoalTimeoutOf(group));
+            PlayerbotGroupAnomalies.Report(leader, PlayerbotGroupAnomalies.StateStuck, string.Create(CultureInfo.InvariantCulture,
+                $"group {group.Id} ({group.Goal}) has been in state {group.State} for {PlayerbotGroupWatch.Seconds(group.StateEnteredMs, now)}s, past its {budget / 1000}s budget (leader step {step}, {group.Members.Count} members)"));
+        }
+
+        if (group.Run is not { } run) return;
+        if ((found & PlayerbotGroupFinding.RunStepStuck) != 0)
+            PlayerbotGroupAnomalies.Report(leader, PlayerbotGroupAnomalies.RunStepStuck, string.Create(CultureInfo.InvariantCulture,
+                $"run {run.Plan.Label} has been in step {run.Step} for {group.Watch.RunStepSeconds(now)}s, past its {PlayerbotGroupWatch.RunStepBudgetMs(run.Step, travelLimit, StepTimeoutMs) / 1000}s budget (group state {group.State}, leader step {step}, {run.Killed}/{run.BossCount} bosses)"));
+        if ((found & PlayerbotGroupFinding.RouteStepIncomplete) != 0)
+            PlayerbotGroupAnomalies.Report(leader, PlayerbotGroupAnomalies.RouteStepIncomplete, string.Create(CultureInfo.InvariantCulture,
+                $"run {run.Plan.Label} has killed no boss for {group.Watch.RouteSeconds(now)}s on its way to {run.CurrentBoss?.Name ?? "its last boss"} ({run.Killed}/{run.BossCount} bosses, step {run.Step}, group state {group.State}, {run.PullsLeft} packs left, leader step {step})"));
+    }
+
+    /// <summary>Members that stay dead, or stay behind while the group travels or fights (once a second per group).</summary>
+    internal void WatchMembers(BotGroup group, Player leader, uint now)
+    {
+        if (_world is not { } world) return;
+        foreach (Member member in group.Members)
+        {
+            if (member.Real || !member.Joined) continue;
+            if (world.FindOnlinePlayer(member.Guid) is not { } player)
+            {
+                member.Watch.Reset();
+                continue;
+            }
+
+            if (member.Watch.ObserveDead(!player.IsAlive, now, out long deadMs))
+                PlayerbotGroupAnomalies.Report(player, PlayerbotGroupAnomalies.MemberUnrecovered, string.Create(CultureInfo.InvariantCulture,
+                    $"{member.Role.ToString().ToLowerInvariant()} of group {group.Id} has been dead {deadMs / 1000}s while the group is {group.State} (ghost {(player.Flags & PlayerFlags.Ghost) != 0}, step {member.AI?.Step ?? "none"})"));
+            if (member.Guid == leader.Guid) continue;
+            bool mapsKnown = player.Map is not null && leader.Map is not null;
+            bool sameMap = mapsKnown && ReferenceEquals(player.Map, leader.Map);
+            bool behind = PlayerbotMemberWatch.IsLeftBehind(group.State, player.IsAlive, mapsKnown, sameMap, sameMap ? Distance(player, leader) : 0f);
+            if (member.Watch.ObserveBehind(behind, now, out long behindMs))
+                PlayerbotGroupAnomalies.Report(player, PlayerbotGroupAnomalies.MemberLeftBehind, string.Create(CultureInfo.InvariantCulture,
+                    $"{member.Role.ToString().ToLowerInvariant()} of group {group.Id} has been {(sameMap ? $"{Distance(player, leader):F0} yd from" : $"on map {player.MapId} away from")} leader {leader.Name} (map {leader.MapId}) for {behindMs / 1000}s while the group is {group.State} (step {member.AI?.Step ?? "none"})"));
+        }
+    }
+
+    /// <summary>The bots whose invitation went unanswered, one report each (the group is about to be given up).</summary>
+    private void ReportUnansweredInvites(BotGroup group, uint now)
+    {
+        foreach (Member member in group.Members)
+        {
+            if (member.Real || member.Joined || !(member.Refused || member.Invited && unchecked(now - member.InvitedMs) > InviteTimeoutMs)) continue;
+            Player? player = _world?.FindOnlinePlayer(member.Guid);
+            string reason = player is null ? "the bot is not online"
+                : member.Refused ? "no invitation was pending after CMSG_GROUP_INVITE and the bot is not in the leader's group"
+                : string.Create(CultureInfo.InvariantCulture, $"invited {unchecked(now - member.InvitedMs) / 1000}s ago, still no answer");
+            string detail = string.Create(CultureInfo.InvariantCulture, $"{member.Name}'s invitation to group {group.Id} ({group.Goal}) went unanswered: {reason}");
+            if (player is not null) PlayerbotGroupAnomalies.Report(player, PlayerbotGroupAnomalies.InviteUnanswered, detail);
+            else PlayerbotGroupAnomalies.ReportNamed(member.Name, member.Guid, PlayerbotGroupAnomalies.InviteUnanswered, detail);
+        }
+    }
+
     private void AdvanceForming(BotGroup group, Player leader, GroupManager? groupManager)
     {
         if (groupManager is null || _world is not { } world) return;
@@ -972,6 +1049,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
         if (group.Members.Any(m => !m.Joined && (m.Refused || m.Invited && unchecked(now - m.InvitedMs) > InviteTimeoutMs)))
         {
+            ReportUnansweredInvites(group, now);
             Finish(group, success: false, "invites-unanswered", setAside: false);
             return;
         }
@@ -1205,6 +1283,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         group.State = state;
         group.StateSinceMs = Now;
+        group.StateEnteredMs = group.StateSinceMs;
         group.StepBudgetMs = 0;
         if (state is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling) BudgetTravel(group, state);
         if (state == PlayerbotGroupState.Gathering) group.ObjectiveKilled = false;
@@ -1264,8 +1343,14 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         PlayerbotAreaTriggers.AllowTeleports(player, false);
         if (leftAlready is null && GroupManagerOrNull() is { } groupManager && (groupManager.GetGroup(player.Guid) is { } server && server.IsMember(player.Guid)
                 || groupManager.GetInvite(player.Guid) is not null))
-            Act(bot.Session, groupManager.GetInvite(player.Guid) is not null && groupManager.GetGroup(player.Guid) is null
+        {
+            bool ran = Act(bot.Session, groupManager.GetInvite(player.Guid) is not null && groupManager.GetGroup(player.Guid) is null
                 ? WorldOpcode.CmsgGroupDecline : WorldOpcode.CmsgGroupDisband, [], budgeted: false);
+            // Outcome: the bot released from the group is out of the server's group, or no brain and no matching can have it again.
+            if ((ran || player.IsInWorld) && (groupManager.GetGroup(player.Guid) is { } still && still.IsMember(player.Guid) || groupManager.GetInvite(player.Guid) is not null))
+                PlayerbotGroupAnomalies.Report(player, PlayerbotGroupAnomalies.MemberStillGrouped, string.Create(CultureInfo.InvariantCulture,
+                    $"released from group {group.Id} ({group.Reason ?? "no reason"}) but still in the server's group or invited to one (leave dispatched {ran})"));
+        }
         bot.Brain.ResumeAfterGroup();
     }
 
@@ -1276,7 +1361,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         group.Members.Remove(member);
         if (!member.Real) Release(group, member, guid);
         Note($"group {group.Id}: {member.Name} {reason}");
-        if (member.BotId == group.LeaderBotId && !member.Real) Finish(group, success: false, "leader-" + reason);
+        if (member.BotId == group.LeaderBotId && !member.Real)
+        {
+            PlayerbotGroupAnomalies.ReportNamed(member.Name, member.Guid, PlayerbotGroupAnomalies.LeaderGone,
+                string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader ({reason}) in state {group.State}; the group ends"),
+                AnomalySeverity.Info);
+            Finish(group, success: false, "leader-" + reason);
+        }
     }
 
     /// <summary>The longest a repeatedly failed goal is set aside (<see cref="EscalatedSetAsideMs"/>).</summary>
@@ -1445,6 +1536,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public PlayerbotGroupState State { get; set; } = PlayerbotGroupState.Forming;
         public uint StateSinceMs { get; set; } = formedMs;
 
+        /// <summary>When the group entered its state; unlike <see cref="StateSinceMs"/> a step's own retry (<c>BringOut</c>) does not move it.</summary>
+        public uint StateEnteredMs { get; set; } = formedMs;
+
+        /// <summary>The outcome clocks of the group (<see cref="PlayerbotGroupWatch"/>).</summary>
+        public PlayerbotGroupWatch Watch { get; } = new();
+
         /// <summary>The distance-scaled limit of the current gathering or travelling step of an instance group (0: the plain step limit; <see cref="BudgetTravel"/>).</summary>
         public uint StepBudgetMs { get; set; }
 
@@ -1576,5 +1673,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public bool Refused { get; set; }
         public uint InvitedMs { get; set; }
         public PlayerbotGroupAI? AI { get; set; }
+
+        /// <summary>The member's outcome clocks (<see cref="PlayerbotMemberWatch"/>).</summary>
+        public PlayerbotMemberWatch Watch { get; } = new();
     }
 }

@@ -65,6 +65,7 @@ internal sealed class PlayerbotFollower
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotFollowProgress _progress = new();
+    private readonly PlayerbotFollowWatch _watch = new();
     private readonly ILogger _logger;
     private PlayerbotRoute? _route;
     private Vector3 _routeGoal;
@@ -110,7 +111,10 @@ internal sealed class PlayerbotFollower
     /// <summary>Whether the follower walks its route, or to the edge of a drop, now.</summary>
     internal bool Walking => _route is not null || _phase == DropPhase.ToEdge;
 
-    private long Now => (long)_session.World.Uptime.TotalMilliseconds;
+    /// <summary>Test seam (never configuration-bound): milliseconds added to the follower's clock, so a test lets minutes pass between thinks.</summary>
+    internal long ClockOffsetMs { get; set; }
+
+    private long Now => (long)_session.World.Uptime.TotalMilliseconds + ClockOffsetMs;
 
     private TeleportService? TeleportServiceOf => _session.Services.GetService<TeleportFeature>()?.Teleports;
 
@@ -127,6 +131,7 @@ internal sealed class PlayerbotFollower
         _unreachableBlockers.Clear();
         _step = PlayerbotFollowStep.Walk;
         _progress.Reset();
+        _watch.Reset();
         ReleaseTriggers(player);
     }
 
@@ -159,6 +164,7 @@ internal sealed class PlayerbotFollower
 
         PlayerbotFollowFacts facts = Facts(player, leader, mode);
         PlayerbotFollowAction action = PlayerbotParty.DecideFollow(facts);
+        _watch.Observe(player, leader, facts, action, Now); // outcome checks: far behind / on another map for too long
         if (action != PlayerbotFollowAction.WalkToEntrance) ReleaseTriggers(player);
         switch (action)
         {
@@ -585,6 +591,7 @@ internal sealed class PlayerbotFollower
         Teleports++;
         LastCatchUp = reason;
         _progress.Reset();
+        _watch.Reset();
         string detail = judged is { } j && float.IsFinite(j.RouteYards)
             ? string.Create(CultureInfo.InvariantCulture, $"; way {j.RouteYards:F1} yd for {j.Straight:F1} yd straight, {j.Dangers} dangerous hostiles")
             : string.Empty;

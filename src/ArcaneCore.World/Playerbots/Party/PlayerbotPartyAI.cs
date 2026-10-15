@@ -17,6 +17,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Talents;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Protocol;
@@ -123,6 +124,10 @@ internal sealed class PlayerbotPartyAI
     private readonly Chat.PlayerbotChat? _chat;
     private readonly Guid _botId;
     private readonly Chat.PlayerbotChatEvents _chatEvents = new();
+    private readonly PlayerbotFollowDropWatch _followDrop = new();
+    private PlayerbotEpisode _deadEpisode;
+    private PlayerbotEpisode _inviteEpisode;
+    private PlayerbotEpisode _orphanEpisode;
 
     internal PlayerbotPartyAI(WorldSession session, PlayerbotOptions options, Chat.PlayerbotChat? chat = null, Guid botId = default,
         PlayerbotEquipment? equipment = null)
@@ -234,7 +239,20 @@ internal sealed class PlayerbotPartyAI
 
     private PartyServices Services => new(_session);
 
-    private long Now => (long)_session.World.Uptime.TotalMilliseconds;
+    private long _clockOffsetMs;
+
+    /// <summary>Test seam (never configuration-bound): milliseconds added to the AI's clock (and its follower's), so a test lets minutes pass between thinks.</summary>
+    internal long ClockOffsetMs
+    {
+        get => _clockOffsetMs;
+        set
+        {
+            _clockOffsetMs = value;
+            _follower.ClockOffsetMs = value;
+        }
+    }
+
+    private long Now => (long)_session.World.Uptime.TotalMilliseconds + _clockOffsetMs;
 
     // --- intake ----------------------------------------------------------------------------------------------------
 
@@ -303,13 +321,23 @@ internal sealed class PlayerbotPartyAI
 
     private void OnInvite(Player player, byte[] payload)
     {
-        if (Services.Social is not { } social || social.Groups.GetInvite(player.Guid) is not { } group) return; // already answered
+        if (Services.Social is not { } social || social.Groups.GetInvite(player.Guid) is not { } group)
+        {
+            _inviteEpisode.Reset();
+            return; // already answered
+        }
+
         string? name = PlayerbotGroupInvites.ReadInviter(payload);
         Player? inviter = (name is null ? null : _session.World.FindOnlinePlayer(name)) ?? _session.World.FindOnlinePlayer(group.LeaderGuid);
         PlayerbotPartyOptions party = _options.Party;
         bool accept = inviter is not null && (AcceptsBotGroup?.Invoke(player, inviter) == true || PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, inviter.Name,
             PlayerbotGroupInvites.SameGuild(social, player, inviter), PlayerbotGroupInvites.OnBotsFriendList(social, player, inviter)));
-        Act(accept ? WorldOpcode.CmsgGroupAccept : WorldOpcode.CmsgGroupDecline, [], budgeted: false);
+        bool sent = Act(accept ? WorldOpcode.CmsgGroupAccept : WorldOpcode.CmsgGroupDecline, [], budgeted: false);
+        // Outcome: the answer clears the invitation (Accept and Decline both do). One still pending after it, tick after tick, was never answered.
+        if (social.Groups.GetInvite(player.Guid) is null) _inviteEpisode.Reset();
+        else if (_inviteEpisode.Observe(true, Now, PlayerbotPartyAnomalies.InviteAnswerBudgetMs, PlayerbotPartyAnomalies.MaxGapMs))
+            PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.InviteUnanswered, string.Create(CultureInfo.InvariantCulture,
+                $"invitation from {inviter?.Name ?? "an unknown inviter"} still pending {PlayerbotPartyAnomalies.Seconds(_inviteEpisode.ElapsedMs(Now))}s after the bot answered it ({(accept ? "accept" : "decline")}, dispatched {sent})"));
     }
 
     private void OnChat(Player player, byte[] payload)
@@ -345,6 +373,10 @@ internal sealed class PlayerbotPartyAI
                 else if (_replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.PoliteReply);
                 break;
             case PlayerbotChatSource.Ignore when sender is not null && !senderIsBot && sender.Guid != player.Guid:
+                // The master's command word on a channel that is no order (say, yell, guild): dropped, and the master sees nothing.
+                if (!master.IsEmpty && sender.Guid == master && PlayerbotChatCommands.TryParse(line.Text, out PlayerbotPartyCommand unheard))
+                    PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.CommandIgnored,
+                        $"the master's '{unheard}' command came as {line.Type} chat; only whispers and party or raid chat are orders", AnomalySeverity.Info);
                 // A party or say line from a real player: answered when it names the bot.
                 if (Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name))
                 {
@@ -480,10 +512,18 @@ internal sealed class PlayerbotPartyAI
 
     private void OnLootRoll(Player player, byte[] payload)
     {
-        if (!PlayerbotLootRolls.TryRead(payload, out PlayerbotLootRolls.StartRoll roll)) return;
+        if (!PlayerbotLootRolls.TryRead(payload, out PlayerbotLootRolls.StartRoll roll))
+        {
+            PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.LootRollUncast,
+                string.Create(CultureInfo.InvariantCulture, $"SMSG_LOOT_START_ROLL of {payload.Length} bytes could not be read, so no vote was cast"));
+            return;
+        }
+
         RollVote vote = GroupLootVote?.Invoke(player, roll.ItemId)
             ?? PlayerbotLootRolls.VoteFor(player, roll.ItemId, _options.Party.LootRoll, Services.Spells?.System.Store, Services.Spells?.Spellbook);
-        Act(WorldOpcode.CmsgLootRoll, PlayerbotLootRolls.Vote(roll, vote), budgeted: false);
+        if (!Act(WorldOpcode.CmsgLootRoll, PlayerbotLootRolls.Vote(roll, vote), budgeted: false))
+            PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.LootRollUncast,
+                string.Create(CultureInfo.InvariantCulture, $"the {vote} vote on item {roll.ItemId} (slot {roll.Slot}) was not dispatched"));
     }
 
     /// <summary>mangoszero AcceptResurrectAction.h: a resurrection from a member of the bot's group is accepted, any other declined.</summary>
@@ -992,10 +1032,15 @@ internal sealed class PlayerbotPartyAI
     // --- master -----------------------------------------------------------------------------------------------------
 
     /// <summary>The bot's master now (<see cref="PlayerbotParty.ResolveMaster"/>), or empty when it has none.</summary>
-    internal ObjectGuid ResolveMaster(Player player)
+    internal ObjectGuid ResolveMaster(Player player) => ResolveMaster(player, out _);
+
+    /// <summary><see cref="ResolveMaster(Player)"/>, saying whether the bot is in a group (false when leashed: no group was looked up).</summary>
+    private ObjectGuid ResolveMaster(Player player, out bool grouped)
     {
+        grouped = false;
         if (!_leash.IsEmpty) return IsRealPlayerOnline(_leash) ? _leash : ObjectGuid.Empty;
         if (Services.Social?.Groups.GetGroup(player.Guid) is not { } group) return ObjectGuid.Empty;
+        grouped = true;
         ObjectGuid[] members = new ObjectGuid[group.Members.Count];
         for (int i = 0; i < members.Length; i++) members[i] = group.Members[i].Guid;
         return PlayerbotParty.ResolveMaster(group.LeaderGuid, members, player.Guid, IsRealPlayerOnline);
@@ -1011,15 +1056,22 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     internal bool Drives(Player player)
     {
-        ObjectGuid master = ResolveMaster(player);
+        ObjectGuid master = ResolveMaster(player, out bool grouped);
         if (!master.IsEmpty)
         {
             if (!_engaged || master != _master) Engage(player, master);
             _masterLostMs = -1;
+            _orphanEpisode.Reset();
             return true;
         }
 
-        if (!_engaged) return false;
+        if (!_engaged)
+        {
+            ObserveOrphan(player, grouped);
+            return false;
+        }
+
+        _orphanEpisode.Reset();
         if (Services.Social?.Groups.GetGroup(player.Guid) is null)
         {
             Release(player);
@@ -1030,8 +1082,24 @@ internal sealed class PlayerbotPartyAI
         if (_masterLostMs < 0) _masterLostMs = now;
         if (now - _masterLostMs < _options.Party.MasterTimeoutSeconds * 1000L) return true;
         Act(WorldOpcode.CmsgGroupDisband, [], budgeted: false);
+        // Outcome: the bot that waited out its master's absence has left the group, so the brain (and the group matching) can have it again.
+        if (Services.Social?.Groups.GetGroup(player.Guid) is not null)
+            PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.LeaderGoneStillGrouped, string.Create(CultureInfo.InvariantCulture,
+                $"master {_masterName} has been gone {PlayerbotPartyAnomalies.Seconds(now - _masterLostMs)}s and CMSG_GROUP_DISBAND did not take the bot out of its group"));
         Release(player);
         return false;
+    }
+
+    /// <summary>
+    /// A bot in a group whose members are all bots or offline, that no coordinator drives (this is only asked for bots the brain drives), for
+    /// <see cref="PlayerbotPartyAnomalies.OrphanBudgetMs"/>: nothing will ever take it out of the group (<c>party/leader-gone-still-grouped</c>).
+    /// </summary>
+    private void ObserveOrphan(Player player, bool grouped)
+    {
+        if (!_orphanEpisode.Observe(grouped, Now, PlayerbotPartyAnomalies.OrphanBudgetMs, PlayerbotPartyAnomalies.MaxGapMs)) return;
+        Group? group = Services.Social?.Groups.GetGroup(player.Guid);
+        PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.LeaderGoneStillGrouped, string.Create(CultureInfo.InvariantCulture,
+            $"in a group of {group?.MemberCount ?? 0} with no real player online and no coordinator driving the bot for {PlayerbotPartyAnomalies.Seconds(_orphanEpisode.ElapsedMs(Now))}s"));
     }
 
     private void Engage(Player player, ObjectGuid master)
@@ -1054,6 +1122,7 @@ internal sealed class PlayerbotPartyAI
             + ((float)_random.NextDouble() * (PlayerbotParty.MaxFollowDistance - 0.5f - PlayerbotParty.MinFollowDistance));
         Goal = PlayerbotGoalKind.Follow;
         TargetEntry = 0;
+        _followDrop.NoteFollow(Now);
         // Whatever route the brain was on is not the master's.
         PlayerbotMovementControl.Stop(_session, player);
     }
@@ -1089,6 +1158,8 @@ internal sealed class PlayerbotPartyAI
         _releaseTries.Clear();
         _deadSinceMs = -1;
         _corpseRun = false;
+        _deadEpisode.Reset();
+        _followDrop.Reset();
         _recovery.Reset();
         _combatSpells.Reset();
         TargetEntry = 0;
@@ -1137,6 +1208,7 @@ internal sealed class PlayerbotPartyAI
         _deathRetired = false;
         _deadSinceMs = -1;
         _corpseRun = false;
+        _deadEpisode.Reset();
         _recovery.Reset();
 
         // In the air of a drop to the master: nothing else until it lands (a client cannot act mid-fall either).
@@ -1148,6 +1220,10 @@ internal sealed class PlayerbotPartyAI
         }
 
         Player? master = _session.World.FindOnlinePlayer(_master);
+        if (master is not null && _followDrop.Observe(_mode, player.Map is not null && ReferenceEquals(player.Map, master.Map), player.Combat.IsInCombat,
+                new Vector3(player.X, player.Y, player.Z), new Vector3(master.X, master.Y, master.Z), Now, out long droppedMs))
+            PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.FollowDropped, string.Create(CultureInfo.InvariantCulture,
+                $"master {master.Name} is {Distance(player, master):F0} yd away and the bot has not followed for {PlayerbotPartyAnomalies.Seconds(droppedMs + PlayerbotFollowDropWatch.NotFollowedMs)}s (mode {_mode}, doing: {Activity(player)}, goal {Goal})"));
 
         // A party bot follows its master's lead: it never weighs a fight on its own and stays while the group fights. Only a wiping
         // group (World:Playerbots:Risk:PartyRetreatOnWipe) sends it back the way it came, past the creatures' leash.
@@ -1416,6 +1492,7 @@ internal sealed class PlayerbotPartyAI
             return;
         }
 
+        _followDrop.NoteFollow(Now);
         PlayerbotFollowAction action = _follower.Update(player, master, _mode, _followAngle, _followDistance, interval);
         if (action == PlayerbotFollowAction.Hold && _comeRequested && _mode == PlayerbotPartyMode.Follow)
         {
@@ -1593,6 +1670,9 @@ internal sealed class PlayerbotPartyAI
         Goal = PlayerbotGoalKind.Recover;
         long now = Now;
         if (_deadSinceMs < 0) _deadSinceMs = now;
+        if (_deadEpisode.Observe(true, now, DeadWaitMs + PlayerbotPartyAnomalies.DeathRecoveryBudgetMs, PlayerbotPartyAnomalies.MaxGapMs))
+            PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.DeathUnrecovered, string.Create(CultureInfo.InvariantCulture,
+                $"dead {PlayerbotPartyAnomalies.Seconds(now - _deadSinceMs)}s and still not alive (ghost {(player.Flags & PlayerFlags.Ghost) != 0}, corpse run {_corpseRun}, auto-revive {_options.Party.AutoRevive})"));
         if (_options.Party.AutoRevive && !_corpseRun && player.Map is { } map)
         {
             bool ghost = (player.Flags & PlayerFlags.Ghost) != 0;
@@ -1629,7 +1709,8 @@ internal sealed class PlayerbotPartyAI
     {
         if (to.Length == 0) return;
         Language language = player.Team == Team.Horde ? Language.Orcish : Language.Common;
-        Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Whisper(language, to, text), budgeted: false);
+        if (!Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Whisper(language, to, text), budgeted: false))
+            PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.ReplyLost, $"the whisper to {to} could not be sent: {text}", AnomalySeverity.Info);
     }
 
     /// <summary>
