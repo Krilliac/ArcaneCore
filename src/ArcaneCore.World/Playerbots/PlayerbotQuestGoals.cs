@@ -82,7 +82,6 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private const int ApproachConfirmFailures = 3;
     private const float ApproachSpotYards = 3f;
     private (uint QuestId, uint Entry, uint Progress) _lastNoProgressEpisode;
-    private (uint QuestId, ObjectGuid Npc) _lastGiverNotFoundEpisode;
 
     /// <summary>The bot's home area, or null. New quests are taken only inside it; distant completed returns may be abandoned.</summary>
     internal PlayerbotHomeArea? Home { get; set; }
@@ -113,7 +112,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (services?.StateOf(player) is not { Loaded: true } state || content is null) return 0;
         return state.Quests.Statuses.OrderBy(row => row.Key)
             .Where(row => row.Value is { Status: QuestStatus.Complete, Rewarded: false }
-                && services.IsRewardable(row.Key) && !IsRefused(row.Key))
+                && services.IsRewardable(row.Key) && !IsRefused(row.Key) && !IsGiverWait(row.Key))
             .Where(row => services.Quests.CreatureEndersOf(row.Key)
                 .Any(entry => content.GetSpawns(player.MapId, entry).Any(spawn => CanReturnToEnder(player, spawn))))
             .Select(row => row.Key).FirstOrDefault();
@@ -232,12 +231,6 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 ClearStage();
                 return false;
             }
-            if (!player.IsQuestSettlementPending)
-            {
-                (string code, string reason) = DiagnoseAcceptRefusal(player, services, state, _stageNpc, _stageQuest, "AcceptRefused", "quest accept refused");
-                RefuseAccept(player, _stageQuest, _stageNpc, TargetEntry, code, reason, now);
-                return false;
-            }
         }
         else if (_stage == Stage.RewardConfirmation)
         {
@@ -286,10 +279,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             {
                 if (services.Deps.Creatures?.Find(player, _stageNpc) is not { IsAlive: true })
                 {
-                    ReportGiverNotFound(player, _stageQuest, _stageNpc, TargetEntry, "giver-despawned-or-dead");
-                    Refuse(_stageQuest, now);
-                    ClearStage();
-                    _backoffUntil = unchecked(now + 2_000);
+                    GiverGone(player, services, _stageQuest, _stageNpc, TargetEntry, "giver-despawned-or-dead", now);
                     return false;
                 }
                 if (_stageDeadline != 0 && unchecked(now - _stageDeadline) <= int.MaxValue)
@@ -300,8 +290,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
                         return false;
                     }
-                    (string code, string acceptReason) = DiagnoseAcceptRefusal(player, services, state, _stageNpc, _stageQuest, "StageTimeout", $"accept timed out in stage {_stage}");
-                    RefuseAccept(player, _stageQuest, _stageNpc, TargetEntry, code, acceptReason, now);
+                    ReportAcceptRefused(player, services, state, _stageNpc, _stageQuest, TargetEntry, "StageTimeout", $"accept timed out in stage {_stage}");
+                    Refuse(_stageQuest, now);
+                    ClearStage();
+                    _backoffUntil = unchecked(now + 2_000);
                     return false;
                 }
                 return true;
@@ -311,10 +303,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (_stage is Stage.Accept or Stage.RewardRequest or Stage.RewardChoice
             && services.Deps.Creatures?.Find(player, _stageNpc) is not { IsAlive: true })
         {
-            ReportGiverNotFound(player, _stageQuest, _stageNpc, TargetEntry, "giver-despawned-or-dead");
-            Refuse(_stageQuest, now);
-            ClearStage();
-            _backoffUntil = unchecked(now + 2_000);
+            GiverGone(player, services, _stageQuest, _stageNpc, TargetEntry, "giver-despawned-or-dead", now);
             return false;
         }
 
@@ -326,8 +315,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
                 return false;
             }
-            (string code, string acceptReason) = DiagnoseAcceptRefusal(player, services, state, _stageNpc, _stageQuest, "StageTimeout", $"accept timed out in stage {_stage}");
-            RefuseAccept(player, _stageQuest, _stageNpc, TargetEntry, code, acceptReason, now);
+            ReportAcceptRefused(player, services, state, _stageNpc, _stageQuest, TargetEntry, "StageTimeout", $"accept timed out in stage {_stage}");
+            Refuse(_stageQuest, now);
+            ClearStage();
+            _backoffUntil = unchecked(now + 2_000);
             return false;
         }
 
@@ -407,30 +398,23 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
 
-        if (services.InteractableNpc(player, target.Npc.Guid, NpcFlags.QuestGiver, out string? interactRefusal) is null)
+        // A giver that is gone is not asked: the bot changes goal and looks again later (GiverGone). Other refusals are the turn-in's, as before.
+        if (services.Deps.Creatures?.Find(player, target.Npc.Guid) is not { IsAlive: true })
+        {
+            GiverGone(player, services, target.Quest.Id, target.Npc.Guid, target.Npc.Entry, "giver-not-found", now);
+            return false;
+        }
+
+        if (target.Action >= QuestAction.Complete
+            && services.InteractableNpc(player, target.Npc.Guid, NpcFlags.QuestGiver, out string? interactRefusal) is null)
         {
             if (target.Npc.IsInCombat)
             {
                 Backoff(now);
                 return false;
             }
-            if (target.Action >= QuestAction.Complete)
-            {
-                if (services.Deps.Creatures?.Find(player, target.Npc.Guid) is not { IsAlive: true })
-                    ReportGiverNotFound(player, target.Quest.Id, target.Npc.Guid, target.Npc.Entry, interactRefusal ?? "ender-not-found");
-                RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, interactRefusal ?? "ender not interactable",
-                    TurnInRefusalCode(interactRefusal, "EnderNotInteractable"), now, suspendEntry: true);
-                return false;
-            }
-            if (services.Deps.Creatures?.Find(player, target.Npc.Guid) is not { IsAlive: true })
-            {
-                ReportGiverNotFound(player, target.Quest.Id, target.Npc.Guid, target.Npc.Entry, interactRefusal ?? "giver-not-found");
-                Refuse(target.Quest.Id, now);
-                Backoff(now);
-                return false;
-            }
-            RefuseAccept(player, target.Quest.Id, target.Npc.Guid, target.Npc.Entry,
-                TurnInRefusalCode(interactRefusal, "GiverNotInteractable"), interactRefusal ?? "giver not interactable", now, suspendEntry: true);
+            RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, interactRefusal ?? "ender not interactable",
+                TurnInRefusalCode(interactRefusal, "EnderNotInteractable"), now, suspendEntry: true);
             return false;
         }
 
@@ -446,17 +430,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 return true;
             case QuestAction.Accept:
                 if (_session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, questRequest))
-                {
-                    if (!player.IsQuestSettlementPending
-                        && state.Quests.Get(target.Quest.Id) is not { Status: QuestStatus.Incomplete or QuestStatus.Complete })
-                    {
-                        (string code, string reason) = DiagnoseAcceptRefusal(player, services, state, target.Npc.Guid, target.Quest.Id, "AcceptRefused", "quest accept refused");
-                        RefuseAccept(player, target.Quest.Id, target.Npc.Guid, target.Npc.Entry, code, reason, now);
-                        return false;
-                    }
-                    _stage = Stage.AcceptConfirmation;
-                    ArmStage(target);
-                }
+                { _stage = Stage.AcceptConfirmation; ArmStage(target); }
                 return true;
             case QuestAction.Complete:
                 if (_session.TryManagedAction(WorldOpcode.CmsgQuestgiverCompleteQuest, questRequest))
@@ -479,11 +453,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 {
                     if (!player.IsQuestSettlementPending && state.Quests.Get(target.Quest.Id)?.Rewarded != true)
                     {
-                        _ = _session.DrainManagedPackets(WorldOpcode.SmsgQuestgiverOfferReward);
-                        string? packetCode = DrainQuestFailureCode(target.Quest.Id);
-                        string reason = services.DiagnoseTurnInRefusal(player, target.Npc.Guid, target.Quest.Id, choice)
-                            ?? (packetCode is not null ? $"reward choice refused ({packetCode})" : "reward choice refused");
-                        RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, reason, TurnInRefusalCode(reason, packetCode ?? "RewardRefused"), now);
+                        _ = _session.DrainManagedPackets(WorldOpcode.SmsgQuestgiverOfferReward,
+                            WorldOpcode.SmsgQuestgiverQuestFailed, WorldOpcode.SmsgQuestgiverQuestInvalid);
+                        string reason = services.DiagnoseTurnInRefusal(player, target.Npc.Guid, target.Quest.Id, choice) ?? "reward choice refused";
+                        RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, reason, TurnInRefusalCode(reason, "RewardRefused"), now);
                         return false;
                     }
                     NeedsBagSpaceForTurnIn = false;
@@ -519,7 +492,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             foreach (uint id in services.Quests.EndersOf(npc.Entry))
             {
-                if (!services.IsRewardable(id) || IsRefused(id)) continue;
+                if (!services.IsRewardable(id) || IsRefused(id) || IsGiverWait(id)) continue;
+                EndGiverWait(id, npc.Guid);
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
                 if (returning && id != ReturnQuest && !WithinReach(player, npc))
@@ -543,7 +517,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             foreach (uint id in services.Quests.StartersOf(npc.Entry))
             {
-                if (!services.IsRewardable(id) || IsRefused(id)) continue;
+                if (!services.IsRewardable(id) || IsRefused(id) || IsGiverWait(id)) continue;
+                EndGiverWait(id, npc.Guid);
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
                 if (services.Quests.Get(id) is not { } quest)
@@ -1118,18 +1093,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
     }
 
-    private void RefuseAccept(Player player, uint questId, ObjectGuid giverGuid, uint giverEntry, string code, string reason, uint now, bool suspendEntry = false)
+    /// <summary>Report (only) an accept that did not land by its deadline: the bot's reaction to it is unchanged.</summary>
+    private void ReportAcceptRefused(Player player, QuestNpcServices services, PlayerNpcState state, ObjectGuid giverGuid, uint questId,
+        uint giverEntry, string fallbackCode, string fallbackReason)
     {
-        Refuse(questId, now);
-        if (suspendEntry && giverEntry != 0) Suspensions?.SuspendEntry(giverEntry, now);
-        QuestId = 0;
-        TargetEntry = 0;
-        if (!_session.IsInChaosProbe)
-        {
-            PlayerbotAnomalies.Report(player, "quest", "accept-refused",
-                $"quest={questId} giver={giverEntry} guid=0x{giverGuid.Value:X} code={code} reason={reason}");
-        }
-        Backoff(now);
+        if (_session.IsInChaosProbe) return;
+        (string code, string reason) = DiagnoseAcceptRefusal(player, services, state, giverGuid, questId, fallbackCode, fallbackReason);
+        PlayerbotAnomalies.Report(player, "quest", "accept-refused",
+            $"quest={questId} giver={giverEntry} guid=0x{giverGuid.Value:X} code={code} reason={reason}");
     }
 
     private (string Code, string Reason) DiagnoseAcceptRefusal(Player player, QuestNpcServices services, PlayerNpcState state,
@@ -1181,14 +1152,74 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         return code;
     }
 
-    private void ReportGiverNotFound(Player player, uint questId, ObjectGuid npcGuid, uint entry, string reason)
+    /// <summary>One quest whose giver or ender is dead or gone: when the bot looks at it again, and how often it found it still so.</summary>
+    private sealed class GiverWait
     {
-        if (_session.IsInChaosProbe) return;
-        var episode = (questId, npcGuid);
-        if (_lastGiverNotFoundEpisode == episode) return;
-        _lastGiverNotFoundEpisode = episode;
-        PlayerbotAnomalies.Report(player, "quest", "giver-not-found",
-            $"quest={questId} giver={entry} guid=0x{npcGuid.Value:X} reason={reason}");
+        public ObjectGuid Giver;
+        public uint RetryAt;
+        public int Attempts;
+    }
+
+    private readonly Dictionary<uint, GiverWait> _giverWaits = [];
+
+    /// <summary>The first look at a quest whose giver is dead and whose respawn is unknown, and the step by which later looks are spaced.</summary>
+    internal const uint GiverRetryMinMs = 60_000;
+
+    /// <summary>The longest wait between two looks at a giver that stays dead.</summary>
+    internal const uint GiverRetryMaxMs = 300_000;
+
+    /// <summary>Added to a known respawn time before the bot looks again.</summary>
+    internal const uint GiverRespawnMarginMs = 5_000;
+
+    /// <summary>The longest known respawn the bot waits for in one go.</summary>
+    internal const uint GiverRespawnCapMs = 900_000;
+
+    private const int MaxGiverWaits = 64;
+
+    /// <summary>Whether the giver of <paramref name="questId"/> was found dead or gone and it is not yet time to look again. Only this quest's step is skipped.</summary>
+    internal bool IsGiverWait(uint questId)
+        => _giverWaits.TryGetValue(questId, out GiverWait? wait) && unchecked((int)(wait.RetryAt - _session.World.NowMs)) > 0;
+
+    /// <summary>The giver of <paramref name="questId"/> is in sight and alive after its wait: the episode is over.</summary>
+    private void EndGiverWait(uint questId, ObjectGuid giver)
+    {
+        if (_giverWaits.TryGetValue(questId, out GiverWait? wait) && wait.Giver == giver) _giverWaits.Remove(questId);
+    }
+
+    /// <summary>
+    /// The giver (or ender) of the quest step in hand is dead or gone. The bot drops the stage at once and the quest as its goal, and looks again later:
+    /// at the creature's respawn time plus a margin when its spawn row gives one, otherwise after 60 s, doubling to 5 min while it stays dead.
+    /// The quest is neither abandoned nor refused, and the giver is not suspended; only this quest's step waits. Reported once per episode.
+    /// </summary>
+    private void GiverGone(Player player, QuestNpcServices services, uint questId, ObjectGuid giver, uint entry, string reason, uint now)
+    {
+        var content = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
+        var spawn = entry == 0 ? null : content?.GetSpawns(player.MapId, entry).FirstOrDefault(s => s.Guid == giver.Low);
+        uint respawnMs = spawn is { SpawnTimeMaxSeconds: > 0 } && spawn.SpawnTimeMaxSeconds != Game.Creatures.Creature.RespawnNeverSeconds
+            ? (uint)Math.Min((ulong)spawn.SpawnTimeMaxSeconds * 1000UL + GiverRespawnMarginMs, GiverRespawnCapMs)
+            : 0;
+        bool newEpisode = !_giverWaits.TryGetValue(questId, out GiverWait? wait) || wait.Giver != giver;
+        if (newEpisode)
+        {
+            if (_giverWaits.Count >= MaxGiverWaits) _giverWaits.Remove(_giverWaits.OrderBy(w => w.Value.RetryAt).First().Key);
+            wait = new GiverWait { Giver = giver };
+            _giverWaits[questId] = wait;
+        }
+
+        uint delay = wait!.Attempts == 0 && respawnMs != 0
+            ? respawnMs
+            : Math.Min(GiverRetryMinMs << Math.Min(wait.Attempts, 3), GiverRetryMaxMs);
+        wait.Attempts++;
+        wait.RetryAt = unchecked(now + delay);
+
+        ClearStage();
+        _route = null;
+        QuestId = 0;
+        TargetEntry = 0;
+        if (ReturnQuest == questId) ReturnQuest = 0;
+        if (newEpisode && !_session.IsInChaosProbe)
+            PlayerbotAnomalies.Report(player, "quest", "giver-not-found",
+                $"quest={questId} giver={entry} guid=0x{giver.Value:X} reason={reason} retryInMs={delay}", AnomalySeverity.Info);
     }
 
     private void ReportObjectiveNoProgress(Player player, uint questId, uint entry, uint progress, string reason)
