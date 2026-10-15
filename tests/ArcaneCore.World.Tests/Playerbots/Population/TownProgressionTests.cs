@@ -5,6 +5,7 @@ using ArcaneCore.Data.Stores;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
@@ -56,12 +57,16 @@ public sealed class TownProgressionTests
         // Every level from the release level to 60 has a level-band town for each faction on each continent a race can start on.
         foreach (Team team in new[] { Team.Alliance, Team.Horde })
             foreach (uint continent in new[] { 0u, 1u })
-                for (int level = 5; level <= 60; level++)
+                for (int level = new PlayerbotPopulationOptions().FreshReleaseLevel; level <= 60; level++)
                 {
                     TownRow? row = PopulationTownProgression.PickSecondary(team, continent, level, new Dictionary<string, int>(), _ => 0, _ => true);
                     Assert.True(row is not null, $"no town serves a level {level} {team} bot");
                     if (level <= 45) Assert.True(row!.MapId == continent, $"level {level} {team} on map {continent} got {row.Key} on map {row.MapId}");
                 }
+
+        // Every row can be picked: a band that ends at or before the release level (the town stage begins there) could never serve a bot.
+        Assert.All(PopulationTownProgression.Rows.Where(r => !r.Capital), r => Assert.True(r.MaxLevel > new PlayerbotPopulationOptions().FreshReleaseLevel, r.Key));
+        Assert.Equal(46, PopulationTownProgression.Rows.Count);
 
         // The longest place text fits the 64 characters of a stored home.
         string longest = PopulationTownProgression.PlaceOf("cenarion-hold", "thunder-bluff", "cenarion-hold");
@@ -69,14 +74,14 @@ public sealed class TownProgressionTests
     }
 
     [Theory]
-    [InlineData(Team.Alliance, 0u, 5, "goldshire,kharanos")]
+    [InlineData(Team.Alliance, 0u, 10, "kharanos,sentinel-hill,thelsamar")]
     [InlineData(Team.Alliance, 0u, 12, "sentinel-hill,thelsamar")]
     [InlineData(Team.Alliance, 0u, 27, "southshore,darkshire,menethil")]
-    [InlineData(Team.Alliance, 1u, 7, "dolanaar")]
+    [InlineData(Team.Alliance, 1u, 10, "auberdine")]
     [InlineData(Team.Alliance, 1u, 14, "auberdine")]
-    [InlineData(Team.Horde, 1u, 7, "razor-hill,bloodhoof")]
+    [InlineData(Team.Horde, 1u, 10, "crossroads")]
     [InlineData(Team.Horde, 1u, 12, "crossroads")]
-    [InlineData(Team.Horde, 0u, 7, "brill")]
+    [InlineData(Team.Horde, 0u, 10, "brill,sepulcher")]
     [InlineData(Team.Horde, 0u, 24, "tarren-mill")]
     [InlineData(Team.Horde, 0u, 33, "hammerfall,grom-gol")]
     [InlineData(Team.Alliance, 0u, 58, "chillwind,lights-hope")]
@@ -268,7 +273,7 @@ public sealed class TownProgressionTests
     {
         var auto = new PlayerbotHomeOptions();
         float walk = PlayerbotHomeRules.TeleportDistanceFor(auto, Defaults.TownWalkYards);
-        Assert.Equal(4500f, walk);
+        Assert.True(walk > auto.TeleportDistanceYards, "a town home walks farther than the Home option alone");
         // Westfall to Stormwind (about 1850 yards) and the Crossroads to Orgrimmar (about 2800) walk; the Home option alone would teleport them.
         foreach (float yards in new[] { 1850f, 2800f })
         {
@@ -281,9 +286,6 @@ public sealed class TownProgressionTests
         Assert.Equal(PlayerbotHomeTeleportReason.Distance, DefaultHomeTravel.Instance.Decide(new(true, 6000f, 0, 20, false), auto, walk));
         Assert.Equal(PlayerbotHomeTeleportReason.Distance, DefaultHomeTravel.Instance.Decide(new(true, float.PositiveInfinity, 0, 20, false), auto, walk));
         Assert.Equal(PlayerbotHomeTeleportReason.OtherMap, DefaultHomeTravel.Instance.Decide(new(false, float.NaN, 0, 20, false), auto, walk));
-        // Never twice in a row: the Home teleport cooldown.
-        Assert.True(new PlayerbotHomeReturn().CanTeleportNow(0));
-        Assert.Equal(300_000u, PlayerbotHomeReturn.TeleportCooldownMs);
     }
 
     [Fact]
@@ -383,7 +385,9 @@ public sealed class TownProgressionTests
         {
             index++;
             if (except.Contains(row.Key)) continue;
-            spawns.Add(new CreatureSpawn { Guid = guid++, Entry = row.AnchorEntry, MapId = row.MapId, X = -9000f, Y = 20000f * index, Z = 50f });
+            // Darnassus is on the island of Teldrassil (x above 8000, y above -200 on map 1), as in the world; every other town is 20000 yards from the next.
+            (float x, float y) = row.Key == "darnassus" ? (9800f, 983f) : (-9000f, 20000f * index);
+            spawns.Add(new CreatureSpawn { Guid = guid++, Entry = row.AnchorEntry, MapId = row.MapId, X = x, Y = y, Z = 50f });
         }
 
         // An auction house, a trainer and a banker 300 yards from the centre of Stormwind and of Orgrimmar.
@@ -490,7 +494,7 @@ public sealed class TownProgressionTests
             // The brain's home is the stored, active one (the pull back goes there and nowhere else).
             Assert.Equal(home.Place, world.Bots.FindBrain(id)!.Home!.Place);
             Assert.Equal(TownStay.Capital, world.Bots.FindBrain(id)!.Home!.Stay);
-            Assert.True(world.Bots.FindBrain(id)!.Home!.AllowsLeaveQuests);
+            Assert.False(world.Bots.FindBrain(id)!.Home!.AllowsLeaveQuests); // a capital sends nobody off on a quest
             Assert.Equal((float)world.Population.TownWalkYards, world.Bots.FindBrain(id)!.Home!.WalkRangeYards);
         }
     }
@@ -512,10 +516,12 @@ public sealed class TownProgressionTests
         Assert.Equal(first.Master, second.Master);
         Assert.Equal((float)world.Population.TownHomeRadius, world.Bots.HomeOf(bot)!.Radius);
         Assert.Equal(TownStay.Secondary, world.Bots.FindBrain(bot)!.Home!.Stay);
+        Assert.True(world.Bots.FindBrain(bot)!.Home!.AllowsLeaveQuests);            // the band town may send the bot on to the next one
         await NextPassAsync(world);                                    // the five-minute town stay is over -> the capital
         Assert.True(PlaceOf(world, bot).AtCapital);
         Assert.Equal((float)world.Population.CapitalHomeRadius, world.Bots.HomeOf(bot)!.Radius);
         Assert.Equal(TownStay.Capital, world.Bots.FindBrain(bot)!.Home!.Stay);
+        Assert.False(world.Bots.FindBrain(bot)!.Home!.AllowsLeaveQuests);           // a capital sends nobody off on a quest
         await NextPassAsync(world);
         Assert.Equal(first.Secondary, PlaceOf(world, bot).Active);
     }
@@ -575,6 +581,8 @@ public sealed class TownProgressionTests
         // The explore atlas has no creature of the bot's level round that town (an over-levelled zone): it takes another town of the band.
         Vector3 centre = TownCentre(before);
         world.Feature.TownFits = (_, _, at) => at != centre;
+        await NextPassAsync(world);
+        Assert.Equal(before, PlaceOf(world, bot).Secondary);          // one sweep without a fit is not enough (the hysteresis)
         await NextPassAsync(world);
         string after = PlaceOf(world, bot).Secondary!;
         Assert.NotEqual(before, after);
@@ -745,6 +753,10 @@ public sealed class TownProgressionTests
             Assert.NotEqual("thelsamar", place.Secondary);
             Assert.NotEqual("sentinel-hill", place.Secondary);
         }
+
+        // One report for the town, however many sweeps met it (the round robin meets different towns each time).
+        Assert.Equal(1, capture.Count(PlayerbotAnomalies.Key("population", "town-unresolved")));
+        Assert.All(capture.Notices, n => Assert.Contains("thelsamar", n.Detail, StringComparison.Ordinal));
     }
 
     /// <summary>A travel layer that reaches nothing without a teleport (what the default says of a town across the water).</summary>
@@ -790,7 +802,7 @@ public sealed class TownProgressionTests
         {
             TownPlace place = PlaceOf(walking, id);
             Assert.Equal(0u, PopulationTownProgression.Find(place.Master)!.MapId);
-            Assert.Equal(0u, PopulationTownProgression.Find(place.Secondary)!.MapId); // a night elf takes a kingdoms town: no boat needed
+            Assert.Equal(0u, PopulationTownProgression.Find(place.Secondary)!.MapId); // the test world's bots all stand on map 0 (the race starts are there): the towns they can walk to are on map 0
             Assert.False(walking.Bots.FindBrain(id)!.Home!.TownTeleports);
         }
     }
@@ -808,10 +820,186 @@ public sealed class TownProgressionTests
         {
             PlayerbotHome home = world.Bots.HomeOf(id)!;
             Assert.Equal(1u, home.MapId);                                     // Orgrimmar, map 1
-            // The bots of the test world stand on map 0: the home is on another map, which the return rules answer with the one teleport.
-            Assert.Equal(PlayerbotHomeTeleportReason.OtherMap,
-                DefaultHomeTravel.Instance.Decide(new PlayerbotHomeFacts(false, float.NaN, 0, 25, false), new PlayerbotHomeOptions(), 4500f));
+            PlayerbotHomeArea area = world.Bots.FindBrain(id)!.Home!;
+            // The bots of the test world stand on map 0: the real return rules, run on the real player and area, answer with the one teleport.
+            PlayerbotHomeTeleportReason reason = await world.Host.World.InvokeAsync(() =>
+            {
+                Player player = world.Bots.FindSession(id)!.Player!;
+                Assert.Equal(0u, player.MapId);
+                var home = new PlayerbotHomeReturn();
+                home.Evaluate(player, area, 1000);
+                return home.Judge(player, area, new PlayerbotHomeOptions());
+            });
+            Assert.Equal(PlayerbotHomeTeleportReason.OtherMap, reason);
         }
+    }
+
+    // ---- bots that cannot leave Teldrassil, the water, the sweep order ----
+
+    private static Task PlaceOnTeldrassilAsync(PopulationTestHost world, Guid botId)
+        => world.Host.World.InvokeAsync(() =>
+        {
+            Player player = world.Bots.FindSession(botId)!.Player!;
+            player.MapId = 1; // inside the island (x above 8000, y above -200 on map 1): the way off is a boat
+            player.X = 9802f;
+            player.Y = 983f;
+            return true;
+        });
+
+    [Fact]
+    public async Task WithTheTeleportOff_ABotOnTeldrassil_IsNeverParkedAtADarnassusCapitalHome()
+    {
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == PlayerbotAnomalies.Key("population", "town-unreachable"));
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 3, o => o.Population.TownProgressionTeleport = false);
+        world.Population.FreshStartHome = true;
+        Guid[] bots = Bots(world);
+        foreach (Guid id in bots)
+        {
+            await PlaceOnTeldrassilAsync(world, id);
+            await SetLevelAsync(world, id, 25);
+        }
+
+        // The state the unfixed sweep left: a capital-only home at Darnassus (every town of the level is across the water or on the kingdoms).
+        Vector3 darnassus = TownCentre("darnassus");
+        await world.Bots.SetHomesAsync([new ManagedPlayerbotFeature.HomeTarget(bots[0], 1, darnassus)], world.Population.CapitalHomeRadius, "town:darnassus;m=darnassus");
+        for (int i = 0; i < 3; i++) await NextPassAsync(world);
+
+        foreach (Guid id in bots)
+        {
+            // No town home at all: not a Darnassus one (the capital idle rule would hold the bot at the inn for good), the bot explores.
+            Assert.Null(world.Bots.HomeOf(id));
+            Assert.Null(world.Bots.FindBrain(id)!.Home);
+            Assert.Equal(TownStay.None, PopulationTownProgression.StayOf(PopulationTownProgression.PlaceOf("darnassus", "darnassus", null)));
+        }
+
+        Assert.Equal(1, capture.Count(PlayerbotAnomalies.Key("population", "town-unreachable")));
+        Assert.Contains("boat", capture.Notices.Single().Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WithTheTeleportOn_ABotOnTeldrassil_GetsTheTownsOfItsBand()
+    {
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 2);
+        world.Population.FreshStartHome = true;
+        Guid[] bots = Bots(world);
+        foreach (Guid id in bots)
+        {
+            await PlaceOnTeldrassilAsync(world, id);
+            await SetLevelAsync(world, id, 25);
+        }
+
+        await NextPassAsync(world);
+        foreach (Guid id in bots) Assert.NotNull(PlaceOf(world, id).Secondary); // the one teleport takes it there
+    }
+
+    [Fact]
+    public void ACapitalOnlyPlace_HasNoStay_SoTheBotExploresInsteadOfLingering()
+    {
+        Assert.Equal(TownStay.None, PopulationTownProgression.StayOf("town:darnassus;m=darnassus"));
+        Assert.Equal(TownStay.Capital, PopulationTownProgression.StayOf("town:darnassus;m=darnassus;s=auberdine"));
+        Assert.Equal(TownStay.Secondary, PopulationTownProgression.StayOf("town:auberdine;m=darnassus;s=auberdine"));
+    }
+
+    [Fact]
+    public async Task WaterBetweenTheBotAndATownHome_MakesTheReturnATeleport_OnlyWhenTheProgressionMayTeleport()
+    {
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 1);
+        Guid bot = Bots(world).Single();
+        await PlaceOnTeldrassilAsync(world, bot);
+        var auberdine = new Vector3(6407f, 515f, 9f); // on the mainland, 3,400 yards away: well inside the town walk range
+        (PlayerbotHomeTeleportReason On, PlayerbotHomeTeleportReason Off) reasons = await world.Host.World.InvokeAsync(() =>
+        {
+            Player player = world.Bots.FindSession(bot)!.Player!;
+            // The test world has no map 1: the rules read the player's MapId when it is in no map object.
+            Map? map = player.Map;
+            player.Map = null;
+            PlayerbotHomeTeleportReason Judge(bool teleports)
+            {
+                var area = new PlayerbotHomeArea(1, auberdine, 4500f, "town:auberdine;m=darnassus;s=auberdine")
+                {
+                    Stay = TownStay.Secondary, WalkRangeYards = teleports ? 4500f : 20000f, TownTeleports = teleports,
+                };
+                var returning = new PlayerbotHomeReturn();
+                returning.Evaluate(player, area, 1000);
+                return returning.Judge(player, area, new PlayerbotHomeOptions());
+            }
+
+            try { return (Judge(true), Judge(false)); }
+            finally { player.Map = map; }
+        });
+
+        Assert.Equal(PlayerbotHomeTeleportReason.Distance, reasons.On);   // infinite distance: the water
+        Assert.Equal(PlayerbotHomeTeleportReason.None, reasons.Off);      // the progression may not teleport: it walks (the sweep assigns no such town)
+    }
+
+    [Fact]
+    public async Task ASweepThatSpendsItsAttempts_ContinuesWhereItStopped_SoNoBotStaysHomeless()
+    {
+        const int fleet = 30; // more than the 25 attempts of a sweep; the stays of one minute re-home every homed bot at every sweep
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), fleet);
+        world.Population.FreshStartHome = true;
+        Guid[] bots = Bots(world);
+        foreach (Guid id in bots) await SetLevelAsync(world, id, 15);
+
+        await NextPassAsync(world);
+        Assert.Equal(25, bots.Count(id => world.Bots.HomeOf(id) is not null)); // MaxHomeChangesPerSweep
+        await NextPassAsync(world);
+        await NextPassAsync(world);
+        Assert.All(bots, id => Assert.NotNull(world.Bots.HomeOf(id)));
+    }
+
+    [Fact]
+    public async Task AnAdoptRequest_ArrivingBeforeTheTownsAreKnown_StaysPending()
+    {
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 1);
+        world.Population.FreshStartHome = true;
+        Guid bot = Bots(world).Single();
+        await SetLevelAsync(world, bot, 15);
+        var sentinel = new Vector3(-10653f, 1166f, 35f);
+        await world.Bots.SetHomesAsync([new ManagedPlayerbotFeature.HomeTarget(bot, 0, sentinel)], 750f, "Sentinel Hill");
+        world.Feature.TownContentSource = () => null; // the creature content is not installed yet
+        world.Feature.RequestAdopt();
+        await NextPassAsync(world);
+        Assert.Equal("Sentinel Hill", world.Bots.HomeOf(bot)!.Place);
+        Assert.True(world.Feature.AdoptPending, "nothing was taken over: the request must survive the sweep");
+
+        CreatureContent content = TownContent();
+        world.Feature.TownContentSource = () => content;
+        await NextPassAsync(world);
+        Assert.StartsWith("town:", world.Bots.HomeOf(bot)!.Place);
+        Assert.False(world.Feature.AdoptPending);
+    }
+
+    [Fact]
+    public void AWalkToAnInnSpotNoRouteReaches_IsGivenUp_ThenTriedAgainLater_NeverReplannedEveryThink()
+    {
+        var idle = new PlayerbotTownIdle();
+        // Making progress: it keeps walking.
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 90f, 0));
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 60f, 10_000));
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 30f, 25_000));
+        // Stuck 6 yards from the spot (a counter, an upper floor): not a yard closer in WalkStallMs, the walk is given up and the bot stands.
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, 30_000));
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, 30_000 + PlayerbotTownIdle.WalkStallMs - 1));
+        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 6f, 30_000 + PlayerbotTownIdle.WalkStallMs));
+        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 6f, 30_000 + PlayerbotTownIdle.WalkStallMs + 60_000));
+        // After the deferral it tries once more, and gives up again after another stall window.
+        uint retry = 30_000 + PlayerbotTownIdle.WalkStallMs + PlayerbotTownIdle.StallDeferMs;
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, retry));
+        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 6f, retry + PlayerbotTownIdle.WalkStallMs));
+    }
+
+    [Fact]
+    public async Task TheTownStateOfADeletedBot_IsForgotten()
+    {
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 2);
+        world.Population.FreshStartHome = true;
+        Guid[] bots = Bots(world);
+        foreach (Guid id in bots) await SetLevelAsync(world, id, 15);
+        await NextPassAsync(world);
+        Assert.Equal(2, world.Feature.TownStateCount);
+        world.Feature.ForgetDeletedBots(new HashSet<Guid> { bots[1] }); // what every sweep does with the population's bots
+        Assert.Equal(1, world.Feature.TownStateCount);
     }
 
     // ---- the real world data ----

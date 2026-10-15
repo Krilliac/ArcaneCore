@@ -2662,6 +2662,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private readonly PlayerbotTownIdle _townIdle = new();
     private uint _bindCheckAt;
+    private bool _bindChecked;
 
     /// <summary>
     /// At the inn of the town it stays in, binds its home to that town through the server's own path (CMSG_BINDER_ACTIVATE to the
@@ -2671,8 +2672,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private bool TryBindAtInn(Player player, PlayerbotHomeArea town)
     {
         uint now = _session.World.NowMs;
-        if (unchecked((int)(now - _bindCheckAt)) < 0 || !player.IsAlive || player.Combat.IsInCombat) return false;
-        _bindCheckAt = unchecked(now + 30_000);
+        // _bindChecked: the first check runs at once (a zero start would read as a future time on a world up for over 2^31 ms).
+        if ((_bindChecked && unchecked((int)(now - _bindCheckAt)) < 0) || !player.IsAlive || player.Combat.IsInCombat) return false;
+        (_bindChecked, _bindCheckAt) = (true, unchecked(now + 30_000));
         HomeBind bind = player.Home;
         if (!PlayerbotTownIdle.NeedsBind(bind.MapId, bind.X, bind.Y, town.MapId, town.Centre.X, town.Centre.Y)) return false;
         if (_session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services is not { } services) return false;

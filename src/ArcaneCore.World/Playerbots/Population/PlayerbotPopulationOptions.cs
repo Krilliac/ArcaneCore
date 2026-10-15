@@ -204,7 +204,8 @@ public sealed class PlayerbotPopulationOptions
     /// FreshStartHomeRadius yards round the race's start position, clipped to the start zone, so a level 1 bot works the quests and
     /// creatures of its own valley and does not wander into the next zone's mobs or onto the Deeprun Tram. It graduates with the
     /// level: from FreshGraduateLevel the circle widens to FreshZoneHomeRadius (still clipped to the start zone), from
-    /// FreshReleaseLevel the home is removed and the bot travels on by its own goals. Off: new bots get no home and no
+    /// FreshReleaseLevel the home becomes the town homes of TownProgression (with it off, the home is removed and the bot travels on
+    /// by its own goals). Off: new bots get no home and no
     /// start-zone cap applies. The population's sweep also gives a running fresh-launch bot that has no home one for its level.
     /// </summary>
     public bool FreshStartHome { get; set; } = true;
@@ -250,7 +251,8 @@ public sealed class PlayerbotPopulationOptions
     /// capital (the master) and the town of its level band (the secondary, <see cref="PopulationTownProgression"/>), and lives at one
     /// of them at a time: SecondaryStayMin/MaxMinutes at the secondary, CapitalStayMin/MaxMinutes at the capital, and again. The secondary follows
     /// the level (the next town once the level reaches the cap of the band); a town whose centre cannot be found in the world data is
-    /// reported once and the bot falls back to its capital alone (or, with none, no home). Off: a bot past FreshReleaseLevel has no home.
+    /// reported once and the bot falls back to the towns that did resolve (or, with none, no home); a bot with no secondary that fits keeps
+    /// no town home at all, so it explores instead of waiting at a capital. Off: a bot past FreshReleaseLevel has no home.
     /// </summary>
     public bool TownProgression { get; set; } = true;
 
@@ -294,7 +296,11 @@ public sealed class PlayerbotPopulationOptions
     /// The teleport of a town home (on by default): a bot whose new town lies on another continent, across the water of Teldrassil or
     /// farther than TownWalkYards takes the one return teleport (the Home teleport rules and cooldown) when it is homed there. Off:
     /// bots reach a town on foot or by taxi only; a town that would need a boat, a zeppelin or a teleport is not assigned to that bot
-    /// (it keeps its old home, or takes a town it can walk to) and one Info anomaly says so. Bots never strand either way.
+    /// (it takes a town it can walk to; with none it keeps a home that is not a town home, or has none, and explores) and one Info
+    /// anomaly per reason says so. The progression's own moves (the town cycle, a new band town, the Danger rule on the way to a town)
+    /// then never teleport. The Home options' returns of a displaced bot still do, as for any home: from another map (OtherMap), a
+    /// walk set aside as blocked (WalkBlocked), the Teleport return mode, an unsafe spirit-healer landing, and stalled ground.
+    /// A bot on Teldrassil, whose only way off is a boat, therefore has no town secondary until a boat (or this option) exists.
     /// </summary>
     public bool TownProgressionTeleport { get; set; } = true;
 

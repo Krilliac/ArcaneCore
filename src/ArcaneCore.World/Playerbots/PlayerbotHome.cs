@@ -233,6 +233,9 @@ internal sealed class PlayerbotHomeArea
         return _quests[quest.Id] = inside;
     }
 
+    /// <summary>The farthest a leave-home quest's turn-in may be from the home centre (yards): the same zone or the next band's town, not across the continent.</summary>
+    internal float LeaveTurnInYards { get; init; } = 3000f;
+
     /// <summary>
     /// Whether <paramref name="quest"/> is a leave-home quest: it has creature enders and none of them has a spawn inside, any spawned
     /// creature starter on the home map has a spawn inside, and every creature it asks the bot to kill does (so only the turn-in lies
@@ -248,12 +251,24 @@ internal sealed class PlayerbotHomeArea
         if (enders.Count > 0)
         {
             leaves = true;
+            bool near = false;
             foreach (uint ender in enders)
             {
-                if (!HasSpawnInside(content, ender)) continue;
-                leaves = false;
-                break;
+                if (HasSpawnInside(content, ender))
+                {
+                    leaves = false;
+                    break;
+                }
+
+                // Only a turn-in within LeaveTurnInYards of the centre (the same zone, or the next band's town) is a leave-home quest.
+                foreach (CreatureSpawn spawn in content.GetSpawns(MapId, ender))
+                {
+                    float dx = spawn.X - Centre.X, dy = spawn.Y - Centre.Y;
+                    if ((dx * dx) + (dy * dy) <= LeaveTurnInYards * LeaveTurnInYards) { near = true; break; }
+                }
             }
+
+            if (!near) leaves = false;
         }
 
         if (leaves)
@@ -598,6 +613,8 @@ internal sealed class PlayerbotHomeReturn
         return State = PlayerbotHomeState.Inside;
     }
 
+    private IPlayerbotHomeTravel? _travel;
+
     /// <summary>
     /// Whether this return is a teleport, and why (<see cref="PlayerbotHomeRules.Decide"/>), after <see cref="Evaluate"/>. The area
     /// levels on the straight line home (Auto, within <see cref="PlayerbotHomeOptions.TeleportDistanceYards"/>) are read once per return.
@@ -621,12 +638,16 @@ internal sealed class PlayerbotHomeReturn
             && Population.PopulationTownProgression.SeparatedByWater(mapId, player.X, player.Y, area.MapId, area.Centre.X, area.Centre.Y)
             ? float.PositiveInfinity : Distance;
         int highest = 0;
-        if (onMap && options.ReturnMode == PlayerbotHomeReturnMode.Auto && !WalkBlocked && distance <= teleportAt
+        // TownProgressionTeleport off: the way to a town home is never judged dangerous (a progression move does not teleport); the other
+        // reasons (another map, a blocked walk, the return mode) are the Home options' own returns of a displaced bot and still apply.
+        bool noTownTeleport = area.WalkRangeYards > 0f && !area.TownTeleports;
+        if (onMap && options.ReturnMode == PlayerbotHomeReturnMode.Auto && !WalkBlocked && distance <= teleportAt && !noTownTeleport
             && area.AreaLevels is { } levels)
             highest = _highestAreaLevel ??= DangerLevelOnLine(new Vector3(player.X, player.Y, player.Z), area, levels);
         var facts = new PlayerbotHomeFacts(onMap, distance, highest, (int)player.Level, WalkBlocked);
-        IPlayerbotHomeTravel travel = (player.Session as WorldSession)?.Services.GetService<IPlayerbotHomeTravel>() ?? DefaultHomeTravel.Instance;
-        return LastJudgement = travel.Decide(facts, options, teleportAt);
+        // Resolved once per brain: the lookup would otherwise run on every think of a returning bot.
+        _travel ??= (player.Session as WorldSession)?.Services.GetService<IPlayerbotHomeTravel>() ?? DefaultHomeTravel.Instance;
+        return LastJudgement = _travel.Decide(facts, options, teleportAt);
     }
 
     /// <summary>

@@ -46,9 +46,19 @@ internal sealed class PlayerbotTownIdle
 
     internal const uint ExploreMs = 240_000;
 
+    /// <summary>A walk to the inn that brings the bot no closer than a yard in this long (ms) is stalled: the spot is unreachable (a counter, an upper floor, a wall).</summary>
+    internal const uint WalkStallMs = 20_000;
+
+    /// <summary>A stalled walk is not tried again for this long (ms): the bot stays where it stands, as at the inn, so it never re-plans every think.</summary>
+    internal const uint StallDeferMs = 180_000;
+
     private bool _exploring;
     private uint _until;
     private bool _started;
+    private float _bestDistance = float.MaxValue;
+    private uint _bestAt;
+    private bool _deferred;
+    private uint _deferUntil;
 
     /// <summary>The action for the bot's idle think, <paramref name="distance"/> yards from the town centre.</summary>
     internal TownIdleAction Decide(TownStay stay, float distance, uint nowMs)
@@ -57,7 +67,37 @@ internal sealed class PlayerbotTownIdle
         if (stay == TownStay.Secondary) Advance(nowMs);
         else _started = false; // the capital: always town; the secondary's window starts afresh on return
         if (stay == TownStay.Secondary && _exploring) return TownIdleAction.Explore;
-        return distance > LingerYards ? TownIdleAction.WalkToTown : TownIdleAction.Linger;
+        if (distance <= LingerYards)
+        {
+            _bestDistance = float.MaxValue;
+            return TownIdleAction.Linger;
+        }
+
+        return WalkStalled(distance, nowMs) ? TownIdleAction.Linger : TownIdleAction.WalkToTown;
+    }
+
+    /// <summary>
+    /// Whether the walk to the inn is given up for now: it has not got a yard closer in <see cref="WalkStallMs"/>. The give-up lasts
+    /// <see cref="StallDeferMs"/>, then the walk is tried afresh. Retries are bounded by those two clocks, not by the think rate.
+    /// </summary>
+    private bool WalkStalled(float distance, uint nowMs)
+    {
+        if (_deferred)
+        {
+            if (unchecked((int)(nowMs - _deferUntil)) < 0) return true;
+            _deferred = false;
+            _bestDistance = float.MaxValue;
+        }
+
+        if (distance < _bestDistance - 1f)
+        {
+            (_bestDistance, _bestAt) = (distance, nowMs);
+            return false;
+        }
+
+        if (unchecked(nowMs - _bestAt) < WalkStallMs) return false;
+        (_deferred, _deferUntil) = (true, unchecked(nowMs + StallDeferMs));
+        return true;
     }
 
     private void Advance(uint nowMs)

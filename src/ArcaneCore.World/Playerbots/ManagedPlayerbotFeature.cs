@@ -1117,7 +1117,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     botId, area.MapId, area.Centre.X, area.Centre.Y))
             {
                 AreaLevels = AreaLevelLookupOf(home.MapId),
-                AllowsLeaveQuests = Population.PopulationStartAreas.StageOfPlace(home.Place) is Population.StartHomeStage.Zone or Population.StartHomeStage.Town,
+                // Leave-home quests (the next band's town) only from a zone home and the band town, never from a capital.
+                AllowsLeaveQuests = Population.PopulationStartAreas.StageOfPlace(home.Place) == Population.StartHomeStage.Zone
+                    || Population.PopulationTownProgression.StayOf(home.Place) == Population.TownStay.Secondary,
                 Stay = Population.PopulationTownProgression.StayOf(home.Place),
                 WalkRangeYards = Population.PopulationTownProgression.StayOf(home.Place) == Population.TownStay.None ? 0f
                     : _options.Population.TownProgressionTeleport ? _options.Population.TownWalkYards : 20000f,

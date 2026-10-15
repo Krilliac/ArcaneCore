@@ -462,7 +462,7 @@ and swapped as one value on reload.
 | `ExcludedZones` | `[]` | Zone ids bots are never placed in (at most 256). |
 | `FreshLaunch` | `false` | New population bots are level 1 at their race's native start, with the default kit, no boost and no teleport (see "Fresh launch"). |
 | `TownProgression` | `true` | From `FreshReleaseLevel` a bot has town homes (see "Town progression"). Off: no home past the release level. |
-| `TownProgressionTeleport` | `true` | A town on another continent, across the water of Teldrassil or farther than `TownWalkYards` is reached by the one return teleport. Off: such a town is not assigned (the bot keeps its home or takes a town it can walk to) and one Info anomaly says so. |
+| `TownProgressionTeleport` | `true` | A town on another continent, across the water of Teldrassil or farther than `TownWalkYards` is reached by the one return teleport. Off: such a town is not assigned (the bot takes a town it can walk to; with none it has no town home) and one Info anomaly per reason says so; the progression never teleports then, only the Home options' returns of a displaced bot do. |
 | `TownHomeRadius` / `CapitalHomeRadius` | `4500` / `500` | Radius of a level-band town home (zone-clipped; covers the zone's quests) and of a capital home (the city). 50..5000. |
 | `TownCap` / `TownCaps` | `60` / empty | Most bots a level-band town holds as its secondary (0 = no cap) and per-town overrides `key=cap,key=cap`. When every town of a band is full the least populated still takes the bot. |
 | `CapitalMajorSharePct` | `65` | Percent of each faction whose master capital is Stormwind or Orgrimmar; the rest go to the other two capitals, the bot's own race's first. |
@@ -482,11 +482,13 @@ the fresh launch has **two homes** and lives at one at a time:
 
 - the **master**, its faction capital: Stormwind or Orgrimmar for `CapitalMajorSharePct` percent (by a stable hash of the bot id), otherwise
   Ironforge/Darnassus or Undercity/Thunder Bluff, the bot's own race's first (race is only the tiebreak inside the minor capitals);
-- the **secondary**, the town of its level band from the table `PopulationTownProgression.Rows` (classic 1.12 zone level ranges; two or more
-  towns per band where they exist: Goldshire/Kharanos, Sentinel Hill/Thelsamar, Lakeshire, Darkshire/Menethil, Southshore, Refuge Pointe,
-  Booty Bay, Aerie Peak, Nethergarde/Thorium Point, Chillwind/Light's Hope; Brill, The Sepulcher, Tarren Mill, Hammerfall/Grom'gol, Stonard/Kargath,
-  Revantusk; Dolanaar, Auberdine, Astranaar, Theramore, Feathermoon; Razor Hill/Bloodhoof, the Crossroads/Camp Taurajo, Splintertree/Sun Rock,
-  Freewind Post, Shadowprey, Brackenwall, Camp Mojache; neutral Ratchet, Gadgetzan, Marshal's Refuge, Everlook, Cenarion Hold).
+- the **secondary**, the town of its level band from the table `PopulationTownProgression.Rows` (46 rows: the six capitals and 40 level-band
+  towns, classic 1.12 zone level ranges from level 10 up; two or more towns per band where they exist: Kharanos, Sentinel Hill/Thelsamar,
+  Lakeshire, Darkshire/Menethil, Southshore, Refuge Pointe, Booty Bay, Aerie Peak, Nethergarde/Thorium Point, Chillwind/Light's Hope; Brill,
+  The Sepulcher, Tarren Mill, Hammerfall/Grom'gol, Stonard/Kargath, Revantusk; Auberdine, Astranaar, Theramore, Feathermoon; the
+  Crossroads/Camp Taurajo, Splintertree/Sun Rock, Freewind Post, Shadowprey, Brackenwall, Camp Mojache; neutral Ratchet, Gadgetzan,
+  Marshal's Refuge, Everlook, Cenarion Hold). There are no rows for the 5-10 start-zone hubs (Goldshire, Dolanaar, Razor Hill, Bloodhoof):
+  the town stage begins at `FreshReleaseLevel` 10, where a band ending at 10 no longer serves, so such a row could never be picked.
 
 The town centres are not coordinates: each row names the innkeeper (or, where the data has none, the flight master) whose first spawn on
 the town's map is the centre, read from the creature content when the sweep first needs it (`Resolve`). A town that does not resolve is
@@ -496,22 +498,39 @@ The stored home (`managed_playerbot_home`, no schema change) is the **active** o
 `town:<active>;m=<master>;s=<secondary>`. The sweep alternates: a stay at the secondary (`SecondaryStayMin/MaxMinutes`), a stay at the capital
 (`CapitalStayMin/MaxMinutes`), and again; a graduate starts at its capital. The stay clock is in memory only: after a restart the stored place
 text says where the bot is and a **fresh stay** starts there, so nothing flaps. The secondary changes only when the bot's level reaches the
-maximum of its town's band (plus `TownBandMargin`), or when the explore atlas has no creature of the bot's level round the town (an
-over-levelled zone); at the capital the new secondary waits for the stay to end, at the secondary the bot goes straight to it. Spread:
+maximum of its town's band (plus `TownBandMargin`), or when the explore atlas has had no creature of the bot's level round the town for two
+sweeps in a row (an over-levelled zone; one sweep is not enough, so a mid-band bot does not hop on a single level); at the capital the new secondary waits for the stay to end, at the secondary the bot goes straight to it. Spread:
 the least populated town of the band under `TownCap`/`TownCaps`. A capital home (radius `CapitalHomeRadius`, zone-clipped to the city)
 contains the trainers, auction house, bank and vendors of the city, which is where the existing town goals (and the economy and trainer
 destinations, which stay inside the active home) do their errands; the level-band town's home (radius `TownHomeRadius`) covers the zone's
-quests, and leave-home quests whose giver is in the zone are allowed (`AllowsLeaveQuests`).
+quests. Leave-home quests (a turn-in outside the home, at most `LeaveTurnInYards` = 3000 yards from its centre: the same zone or the next
+band's town) are allowed only from the level-band town and the start zone, never from a capital (`AllowsLeaveQuests`).
+
+A bot with **no reachable secondary** (with `TownProgressionTeleport` off, a bot on Teldrassil: every town of its level is across the water)
+gets no town home: a capital-only home would hold it at the inn for good. A town home it already had is dropped, a start or operator home
+stays, and the bot explores like an unhomed one. Capital-only place text, whenever one is read, has no stay and so no idle rule.
+
+**Sweep details.** The home sweep resumes where the previous one stopped (round robin), so bots whose homes change on a cycle never starve
+those still waiting for their first. `.playerbot population adopt` is a request generation: a sweep retires only the generation it began with,
+and only when every operator home was taken over (towns not loaded yet, a town the bot cannot reach, or a failure leave it pending). An
+unresolved town and a town on a map `AllowedMaps` refuses are each reported once per process (`town-unresolved`, `town-map-not-allowed`). The
+town state of a bot that is no longer in the population is dropped.
 
 **Idle.** A bot with a town home that has nothing to do goes back to the inn of the town it stays in and waits there
 (`PlayerbotTownIdle`): at the capital always, at the level-band town for two minutes in turn with four minutes of normal exploring. At the
 inn it binds its hearthstone through the server's own path (CMSG_BINDER_ACTIVATE to the innkeeper), so a bind or hearth teleport no longer
-sends a graduate back to its start valley. The pull back to the home goes to the active home only.
+sends a graduate back to its start valley. If the spot beside the innkeeper cannot be reached (a counter, an upper floor, Undercity), the walk
+is given up after `WalkStallMs` (20 s) without getting a yard closer, the bot stands where it is for `StallDeferMs` (3 min), and tries once
+more; it never re-plans on every think. The pull back to the home goes to the active home only.
 
 **Travel.** A trip within `TownWalkYards` on the same side of the water is walked (`PlayerbotHomeArea.WalkRangeYards`); a longer one, one
 across the water of Teldrassil (Darnassus from Darkshore), or one to another continent takes the existing return teleport with its
-5-minute cooldown (`PlayerbotHomeReturn.TryTeleport`); with `TownProgressionTeleport` off such a town is not assigned. Bots never take
-boats, zeppelins or trams themselves. All of it goes through one seam, `IPlayerbotHomeTravel` (`CanReachWithoutTeleport`, `Decide`): the
+5-minute cooldown (`PlayerbotHomeReturn.TryTeleport`). With `TownProgressionTeleport` off such a town is not assigned (one Info
+anomaly per reason, naming the real one: across water, or the bot stands on a dungeon or battleground map), and the progression's own moves
+never teleport (the Danger rule is not applied to the way to a town home). What still teleports are the Home options' returns of a displaced
+bot, as for any home: another map (`OtherMap`), a walk set aside as blocked (`WalkBlocked`), `ReturnMode` Teleport, an unsafe spirit-healer
+landing and stalled ground. Bots never take boats, zeppelins or trams themselves; until a travel layer exists, a Teldrassil bot with the option
+off has no town secondary. All of it goes through one seam, `IPlayerbotHomeTravel` (`CanReachWithoutTeleport`, `Decide`): the
 default is `DefaultHomeTravel`; a travel layer registers its own service of that type.
 
 **Release level.** `FreshReleaseLevel` is now 10 (was 12): the bot is in the town of the next zone as it finishes its start zone. A level

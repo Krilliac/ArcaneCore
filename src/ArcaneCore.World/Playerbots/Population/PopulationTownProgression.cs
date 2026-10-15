@@ -60,6 +60,11 @@ internal static class PopulationTownProgression
     /// <summary>Highest level any row serves (a level-60 bot is served by rows with this maximum).</summary>
     internal const int TopLevel = 61;
 
+    /// <summary>
+    /// The 46 rows: the six capitals and the level-band towns from level 10 up. There are no rows for the 5-10 start-zone hubs
+    /// (Goldshire, Dolanaar, Razor Hill, Bloodhoof): a bot is in the town stage from <c>FreshReleaseLevel</c> (10), at which a band that
+    /// ends at 10 no longer serves it, so such a row could never be picked. Kharanos and Brill (to 12) serve levels 10 and 11.
+    /// </summary>
     internal static readonly IReadOnlyList<TownRow> Rows =
     [
         // ---- the six capitals (master homes). Anchor: the capital's innkeeper. ----
@@ -73,7 +78,6 @@ internal static class PopulationTownProgression
         // ---- Alliance, Eastern Kingdoms (classic 1.12 zone level ranges: Elwynn 1-10, Dun Morogh 1-10, Westfall 10-20, Loch Modan 10-20,
         // Redridge 15-25, Duskwood 18-30, Wetlands 20-30, Hillsbrad 20-30, Arathi 30-40, Stranglethorn 30-45, Hinterlands 40-50,
         // Searing Gorge / Blasted Lands 45-55, Western Plaguelands 51-58, Eastern Plaguelands 53-60) ----
-        new("goldshire", "Goldshire", Team.Alliance, 0, 5, 10, 295),
         new("kharanos", "Kharanos", Team.Alliance, 0, 5, 12, 1247),
         new("sentinel-hill", "Sentinel Hill", Team.Alliance, 0, 10, 20, 8931),
         new("thelsamar", "Thelsamar", Team.Alliance, 0, 10, 20, 6734),
@@ -103,7 +107,6 @@ internal static class PopulationTownProgression
 
         // ---- Alliance, Kalimdor (Teldrassil 1-10, Darkshore 10-20, Ashenvale 18-30, Dustwallow 35-45 (Theramore), Feralas 40-50,
         // Tanaris 40-50, Un'Goro 48-55, Winterspring 50-60, Silithus 55-60) ----
-        new("dolanaar", "Dolanaar", Team.Alliance, 1, 5, 10, 6736),
         new("auberdine", "Auberdine", Team.Alliance, 1, 10, 20, 6737),
         new("astranaar", "Astranaar", Team.Alliance, 1, 18, 30, 6738),
         new("theramore", "Theramore Isle", Team.Alliance, 1, 30, 45, 6272),
@@ -111,8 +114,6 @@ internal static class PopulationTownProgression
 
         // ---- Horde, Kalimdor (Durotar 1-10, Mulgore 1-10, Barrens 10-25, Stonetalon 15-27, Ashenvale 18-30, Thousand Needles 25-35,
         // Desolace 30-40, Dustwallow 35-45, Feralas 40-50) ----
-        new("razor-hill", "Razor Hill", Team.Horde, 1, 5, 10, 6928),
-        new("bloodhoof", "Bloodhoof Village", Team.Horde, 1, 5, 10, 6747),
         new("crossroads", "The Crossroads", Team.Horde, 1, 10, 25, 3934),
         new("camp-taurajo", "Camp Taurajo", Team.Horde, 1, 15, 25, 7714),
         new("splintertree", "Splintertree Post", Team.Horde, 1, 18, 30, 12196),
@@ -168,9 +169,12 @@ internal static class PopulationTownProgression
         return true;
     }
 
-    /// <summary>Where the home with this place text sits in the cycle (None for any other home).</summary>
+    /// <summary>
+    /// Where the home with this place text sits in the cycle (None for any other home, and for a capital-only home: a bot with no secondary
+    /// has no cycle, so its idle bot explores round the capital instead of lingering at the inn for good).
+    /// </summary>
     internal static TownStay StayOf(string? place)
-        => !TryParsePlace(place, out TownPlace parsed) ? TownStay.None : parsed.AtCapital ? TownStay.Capital : TownStay.Secondary;
+        => !TryParsePlace(place, out TownPlace parsed) || parsed.Secondary is null ? TownStay.None : parsed.AtCapital ? TownStay.Capital : TownStay.Secondary;
 
     // ---- resolving the centres ----
 
