@@ -567,7 +567,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     active.Brain.ResumeAfterGroup();
                 }
             }
-            if (controller is not null && active.Session.Player is { } taken) PlayerbotTaxi.Cancel(taken);
+            if (controller is not null && active.Session.Player is { } taken)
+            {
+                PlayerbotTaxi.Cancel(taken);
+                // The journey and its legs end (a ship leg aboard rides on to the next port, PlayerbotShip.Cancel, and the brain steps the
+                // bot off there once the controller detaches; the controller is the administrator's explicit choice meanwhile).
+                PlayerbotTravel.CancelLegs(active.Session, taken);
+            }
             active.Session.ManagedBudget = null;
             if (controller is not null && active.Session.Player is { } player && (active.PartyDriven || active.Party.IsEngaged))
             {
@@ -1449,11 +1455,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
-                        if (!active.BattlegroundDriven) PlayerbotTaxi.Cancel(driven);
+                        if (!active.BattlegroundDriven)
+                        {
+                            PlayerbotTaxi.Cancel(driven);
+                            PlayerbotTravel.CancelLegs(active.Session, driven);
+                        }
+
                         active.BattlegroundDriven = true;
-                        driver = "battleground";
-                        PlayerbotThinkProbe.Phase("battleground");
-                        battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
+                        if (HoldAboard(active, driven, sinceLast))
+                        {
+                            driver = "ship";
+                        }
+                        else
+                        {
+                            driver = "battleground";
+                            PlayerbotThinkProbe.Phase("battleground");
+                            battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
+                        }
                     }
                     // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
                     // quests and memories (its routes and targets belong to another place).
@@ -1465,11 +1483,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
-                        if (!active.GroupDriven) PlayerbotTaxi.Cancel(driven);
+                        if (!active.GroupDriven)
+                        {
+                            PlayerbotTaxi.Cancel(driven);
+                            PlayerbotTravel.CancelLegs(active.Session, driven);
+                        }
+
                         active.GroupDriven = true;
-                        driver = "group";
-                        PlayerbotThinkProbe.Phase("group");
-                        coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
+                        if (HoldAboard(active, driven, sinceLast))
+                        {
+                            driver = "ship";
+                        }
+                        else
+                        {
+                            driver = "group";
+                            PlayerbotThinkProbe.Phase("group");
+                            coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
+                        }
                     }
                     else
                     {
@@ -1526,6 +1556,18 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         PlayerbotMotion.SettleAfterThink(session, player, abandoned || brain.Goal != goalBefore, renewals, sinceLast);
     }
 
+    /// <summary>
+    /// A bot aboard a ship whose leg was cancelled (a party, a battleground or a bot-led group took it over) is never put off at sea: its leg
+    /// rides on to the next port and steps off there (<see cref="PlayerbotShip.Cancel"/>), driven here until it ends (movement orders
+    /// acknowledged first, as the brain does). True while the ship leg still holds the bot; the new driver takes it from the dock.
+    /// </summary>
+    private bool HoldAboard(ActiveBot active, Player driven, uint sinceLast)
+    {
+        if (!PlayerbotShip.IsActive(driven)) return false;
+        if (!PlayerbotMovementControl.Update(active.Session, driven)) PlayerbotShip.Drive(active.Session, driven, _options, sinceLast, out _);
+        return PlayerbotShip.IsActive(driven);
+    }
+
     /// <summary>One tick of an autonomous bot outside a bot-led group: its party AI in a real player's group, its brain otherwise.</summary>
     private string UpdateAutonomous(ActiveBot active, Player driven, uint sinceLast)
     {
@@ -1553,6 +1595,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     PlayerbotElevator.Drive(active.Session, driven, _options, sinceLast, out _);
                 return "elevator";
             }
+
+            // The journey and its legs end the same way; a bot aboard a ship rides on to the next port and steps off there (never at sea),
+            // driven here meanwhile, and the party AI takes it on the dock.
+            PlayerbotTravel.CancelLegs(active.Session, driven);
+            if (HoldAboard(active, driven, sinceLast)) return "ship";
         }
         active.PartyDriven = party;
         if (party)

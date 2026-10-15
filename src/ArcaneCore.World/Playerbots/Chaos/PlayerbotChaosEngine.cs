@@ -209,12 +209,16 @@ public sealed class PlayerbotChaosEngine
         return botOrdinal >= 0 && botOrdinal < cfg.ActiveChaosBots;
     }
 
-    /// <summary>True when <paramref name="player"/> is currently aboard an elevator, tram, transport, or taxi flight.</summary>
+    /// <summary>
+    /// True when <paramref name="player"/> is currently aboard an elevator, tram, transport, or taxi flight, or in the middle of a travel leg
+    /// or journey (a ship leg, the hearthstone, a mage leg or portal service: <see cref="PlayerbotTravel.IsMidLeg"/>).
+    /// </summary>
     public static bool IsTraveling(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
         return PlayerbotElevator.IsTraveling(player)
             || PlayerbotTram.IsTraveling(player)
+            || PlayerbotTravel.IsMidLeg(player)
             || player.Movement.HasFlag(MovementFlags.OnTransport)
             || player.Movement.TransportGuid != 0UL
             || (player.UnitFlags & UnitFlags.TaxiFlight) != 0;

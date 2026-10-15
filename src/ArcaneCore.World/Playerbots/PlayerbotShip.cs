@@ -170,6 +170,14 @@ internal static class PlayerbotShip
     internal static bool IsActive(Player player)
         => Trips.TryGetValue(player, out ShipTrip? trip) && trip.Stage is not (ShipStage.Done or ShipStage.Failed);
 
+    /// <summary>
+    /// Whether the departure dock of <paramref name="entry"/> (port A with <paramref name="fromA"/>) is backed off for the bot at
+    /// <paramref name="nowMs"/>: a leg from it failed lately (<see cref="TryBegin"/> refuses it; the journey planner leaves the route out).
+    /// </summary>
+    internal static bool IsBackedOff(Player player, uint entry, bool fromA, uint nowMs)
+        => Docks.TryGetValue(player, out Dictionary<(uint Entry, bool FromA), DockMemo>? docks) && docks.TryGetValue((entry, fromA), out DockMemo? memo)
+            && memo.Failures > 0 && unchecked((int)(memo.UntilMs - nowMs)) > 0;
+
     /// <summary>Whether the bot rides the ship of its leg now (the server's passenger link).</summary>
     internal static bool IsAboard(Player player)
         => Trips.TryGetValue(player, out ShipTrip? trip) && trip.Stage is not (ShipStage.Done or ShipStage.Failed)

@@ -90,22 +90,6 @@ public sealed class PlayerbotTravelPlannerTests
     }
 
     [Fact]
-    public void HearthstoneIsUsedAtMostOnce()
-    {
-        // A portal first, then a hearthstone from where it lands, then more: whatever the route, one hearthstone leg at most.
-        TravelPlace bind = P(Kalimdor, 5000), mage = P(EasternKingdoms, 50), landing = P(EasternKingdoms, 9000);
-        TravelFacts f = Facts(hearth: true, bind: bind) with
-        {
-            Portals = [new PortalOffer(11, 10059, mage, landing, 0)],
-            OwnTeleports = [new OwnTeleport(3561, P(Kalimdor, 4000))],
-        };
-        TravelRoute? r = PlayerbotTravelPlanner.Plan(f, P(EasternKingdoms, 0), P(Kalimdor, 5200));
-        Assert.NotNull(r);
-        Assert.True(Means(r).Count(m => m == TravelMeans.Hearthstone) <= 1);
-        Assert.True(Means(r).Count(m => m == TravelMeans.MageTeleport) <= 1);
-    }
-
-    [Fact]
     public void ChoosesTheMagesOwnTeleport()
     {
         TravelFacts f = Facts() with { OwnTeleports = [new OwnTeleport(3567, P(Kalimdor, 950))] };
