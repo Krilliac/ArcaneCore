@@ -179,6 +179,26 @@ public static class WorldConfigKeys
             v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
         LivePlayerbots("Risk:PartyRetreatOnWipe", o => o.Risk.PartyRetreatOnWipe, (o, v) => o.Risk.PartyRetreatOnWipe = v),
 
+        // Not vmangos keys: chests, nodes and rares weighed against their guards (docs/areas/playbots-opportunities.md).
+        // PlayerbotOpportunities reads the shared PlayerbotOptions.Opportunities at every scan and decision.
+        LivePlayerbots("Opportunities:Enabled", o => o.Opportunities.Enabled, (o, v) => o.Opportunities.Enabled = v),
+        LivePlayerbotsValue("Opportunities:ScanRadiusYards", o => o.Opportunities.ScanRadiusYards, (o, v) => o.Opportunities.ScanRadiusYards = v,
+            PlayerbotOpportunityOptions.CheckRadius),
+        LivePlayerbotsValue("Opportunities:RiskAppetite", o => o.Opportunities.RiskAppetite, (o, v) => o.Opportunities.RiskAppetite = v,
+            PlayerbotOpportunityOptions.CheckAppetite),
+        LivePlayerbotsValue("Opportunities:MinValue", o => o.Opportunities.MinValue, (o, v) => o.Opportunities.MinValue = v,
+            PlayerbotOpportunityOptions.CheckMinValue),
+        LivePlayerbotsValue("Opportunities:MaxGuards", o => o.Opportunities.MaxGuards, (o, v) => o.Opportunities.MaxGuards = v,
+            PlayerbotOpportunityOptions.CheckGuards),
+        LivePlayerbotsValue("Opportunities:MaxDeathProbability", o => o.Opportunities.MaxDeathProbability, (o, v) => o.Opportunities.MaxDeathProbability = v,
+            PlayerbotOpportunityOptions.CheckDeath),
+        LivePlayerbotsValue("Opportunities:PersonalityVariance", o => o.Opportunities.PersonalityVariance, (o, v) => o.Opportunities.PersonalityVariance = v,
+            PlayerbotOpportunityOptions.CheckVariance),
+        LivePlayerbots("Opportunities:Chests", o => o.Opportunities.Chests, (o, v) => o.Opportunities.Chests = v),
+        LivePlayerbots("Opportunities:LockedChests", o => o.Opportunities.LockedChests, (o, v) => o.Opportunities.LockedChests = v),
+        LivePlayerbots("Opportunities:Nodes", o => o.Opportunities.Nodes, (o, v) => o.Opportunities.Nodes = v),
+        LivePlayerbots("Opportunities:Rares", o => o.Opportunities.Rares, (o, v) => o.Opportunities.Rares = v),
+
         // Not vmangos keys: bot chat (docs/areas/playbots.md, Bot chat). PlayerbotChat reads the shared PlayerbotOptions.Chat at every
         // line and every provider attempt; the provider list is compared and replaced as one value.
         LivePlayerbots("Chat:Enabled", o => o.Chat.Enabled, (o, v) => o.Chat.Enabled = v),

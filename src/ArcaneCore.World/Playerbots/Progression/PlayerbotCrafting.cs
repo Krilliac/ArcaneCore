@@ -57,6 +57,12 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     internal PlayerbotHomeArea? Home { get; set; }
 
     /// <summary>
+    /// The risk side of gathering (<see cref="PlayerbotOpportunities.NodeVeto"/>): asked of each node the bot could gather before it walks
+    /// there; true leaves the node alone (guards the bot would not fight). Null: every reachable node is gathered.
+    /// </summary>
+    internal Func<GameObject, bool>? GatherVeto { get; set; }
+
+    /// <summary>
     /// Whether the bot wants to learn <paramref name="learnedSpellId"/> at a <c>TrainerType.TradeSkills</c> trainer:
     /// secondary skills (First Aid, Cooking), class-fitted gathering and crafting professions, or any recipe that crafts
     /// a wearable upgrade, bag upgrade, ammunition, reagent, or permanent equipment enchantment.
@@ -809,6 +815,10 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                     matchSpell = mineSpell;
             }
             if (matchSpell is null)
+                continue;
+
+            // The guards beside the node are not worth it as the bot is now: leave it (PlayerbotOpportunities).
+            if (GatherVeto?.Invoke(go) == true)
                 continue;
 
             float dx = go.X - player.X, dy = go.Y - player.Y, dz = go.Z - player.Z;

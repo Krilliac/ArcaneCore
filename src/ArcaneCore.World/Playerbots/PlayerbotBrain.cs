@@ -106,6 +106,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
+    private PlayerbotOpportunities? _opportunities;
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotHomeReturn _homeReturn = new();
     private PlayerbotHomeArea? _home;
@@ -1016,11 +1017,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (StandDownWhileSick(player)) return;
             PlayerbotThinkProbe.Phase("crafting");
             _crafting.Suspensions = _suspensions;
+            _crafting.GatherVeto = Opportunities.NodeVeto;
             if (_crafting.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _crafting.Goal; TargetEntry = _crafting.TargetEntry; return; }
             PlayerbotThinkProbe.Phase("economy");
             if (_economy.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
+            PlayerbotThinkProbe.Phase("opportunities");
+            if (TakeOpportunity(player, interval, out bool opportunityPull)) { if (opportunityPull) goto afterGoalLadder; return; }
             bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0
                 && FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is not null;
             PlayerbotThinkProbe.Phase("trainers");
@@ -1086,6 +1090,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (_modelChoice == "explore") { _target = null; PlayerbotThinkProbe.Phase("explore"); Explore(player, interval); return; }
         }
 
+        afterGoalLadder:
         // A mob another player tagged while the bot walked to it is no longer the bot's to take: help its tagger or leave it alone, then
         // choose afresh in this same think (docs/areas/playbots.md, Contention).
         if (_target is { IsAlive: true } held && ReferenceEquals(held.Map, player.Map)) DropIfSomeoneElses(player, held);
@@ -1670,6 +1675,44 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _exploreCandidate = null;
         _exploreHasPosition = false;
         _attacking = false;
+    }
+
+    /// <summary>The chest, rare and node-risk goal (<see cref="PlayerbotOpportunities"/>, docs/areas/playbots-opportunities.md; inspection and tests).</summary>
+    internal PlayerbotOpportunities Opportunities => _opportunities ??= new PlayerbotOpportunities(_session, _options, () => Risk, claims,
+        (opcode, payload) => _lootActions.Enqueue((opcode, payload)));
+
+    /// <summary>
+    /// Offers the opportunity goal to the ladder (after the urgent goals, before the optional travel and grinding): true when it took the
+    /// think. <paramref name="pull"/> says it chose a creature to fight: the target is set and the think goes on to the combat path.
+    /// A quest or grind goal is interrupted only for a find that clears the higher bar of <see cref="PlayerbotOpportunities.Update"/>.
+    /// </summary>
+    private bool TakeOpportunity(Player player, uint interval, out bool pull)
+    {
+        pull = false;
+        Opportunities.Home = _quests.Home;
+        OpportunityStep step = Opportunities.Update(player, interval, interrupting: _goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Grind);
+        if (step.Pull is { } creature)
+        {
+            if (!ReferenceEquals(_target, creature))
+            {
+                _contention.ReleaseClaim();
+                AbandonRoute();
+                _attacking = false;
+                _lootOpened = false;
+            }
+
+            _target = creature;
+            TargetEntry = creature.Entry;
+            _goal = PlayerbotGoalKind.Combat;
+            pull = true;
+            return true;
+        }
+
+        if (!step.Busy) return false;
+        RetireIdleCombatRoute();
+        _goal = step.Goal;
+        TargetEntry = step.TargetEntry;
+        return true;
     }
 
     private void DropIntent()
