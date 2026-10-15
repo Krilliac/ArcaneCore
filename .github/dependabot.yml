@@ -1,0 +1,35 @@
+version: 2
+
+# Weekly version-update PRs, grouped so a week's bumps arrive as one PR per ecosystem. Security updates (enabled in the repository
+# settings) still open at once, one per advisory.
+updates:
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      nuget-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # EF Core and Microsoft.Extensions stay on 9.x until the Pomelo MySQL/MariaDB provider (the primary engine) ships for a newer
+      # major (Directory.Build.props). A major bump of these must be a deliberate change, not a weekly PR.
+      - dependency-name: "Microsoft.EntityFrameworkCore*"
+        update-types: [version-update:semver-major]
+      - dependency-name: "Microsoft.Extensions.*"
+        update-types: [version-update:semver-major]
+      - dependency-name: "Pomelo.EntityFrameworkCore.MySql"
+        update-types: [version-update:semver-major]
+      - dependency-name: "Npgsql.EntityFrameworkCore.PostgreSQL"
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
