@@ -28,17 +28,18 @@ internal readonly record struct PlayerbotPolicyOutcome(int Levels, double LevelP
 internal sealed record PlayerbotPolicyRecord(
     long UnixMs, ulong Bot, uint Map, uint Zone, float[] Features, PlayerbotPolicyGoalMask Open, PlayerbotPolicyGoal? Ladder,
     PlayerbotPolicyGoal? Pick, PlayerbotPolicySource Source, bool Explored, PlayerbotPolicyGoal? Goal, PlayerbotGoalKind Kind,
-    uint WindowMs, PlayerbotPolicyOutcome Outcome)
+    uint WindowMs, PlayerbotPolicyOutcome Outcome) : IPlayerbotTelemetryRecord
 {
     internal const int SchemaVersion = 1;
 
     /// <summary>The record as one JSON line (with its newline).</summary>
-    internal void WriteTo(IBufferWriter<byte> output)
+    public void WriteTo(IBufferWriter<byte> output)
     {
         using (var json = new Utf8JsonWriter(output))
         {
             json.WriteStartObject();
             json.WriteNumber("v", SchemaVersion);
+            json.WriteString("k", "goal");
             json.WriteNumber("t", UnixMs);
             json.WriteString("bot", Bot.ToString("X", CultureInfo.InvariantCulture));
             json.WriteNumber("map", Map);
@@ -99,8 +100,8 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     private readonly PlayerbotPolicyTelemetryOptions _options;
     private readonly ILogger? _logger;
     private readonly TimeProvider _time;
-    private readonly Channel<PlayerbotPolicyRecord> _queue =
-        Channel.CreateBounded<PlayerbotPolicyRecord>(new BoundedChannelOptions(QueueCapacity) { SingleReader = true, FullMode = BoundedChannelFullMode.DropWrite });
+    private readonly Channel<IPlayerbotTelemetryRecord> _queue =
+        Channel.CreateBounded<IPlayerbotTelemetryRecord>(new BoundedChannelOptions(QueueCapacity) { SingleReader = true, FullMode = BoundedChannelFullMode.DropWrite });
     private readonly PlayerbotPolicyTelemetryWriter _writer;
     private readonly Task _writing;
     private readonly Dictionary<ulong, BotState> _bots = []; // world thread
@@ -116,6 +117,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
         _time = time ?? TimeProvider.System;
         _writer = new PlayerbotPolicyTelemetryWriter(directory, options.MaxFileBytes, options.MaxFiles);
         _onAnomaly = OnAnomaly;
+        Combat = new PlayerbotCombatTelemetry(Enqueue, () => _time.GetUtcNow().ToUnixTimeMilliseconds());
         AnomalyLedger.Shared.Reported += _onAnomaly;
         _writing = Task.Run(WriteLoopAsync);
         _logger?.LogInformation("Playerbot goal policy telemetry on: {Directory}, {Files} files of at most {Bytes} bytes, outcome over {Minutes} min",
@@ -124,10 +126,19 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
 
     internal uint WindowMs => (uint)_options.OutcomeMinutes * 60_000u;
 
+    /// <summary>The combat-decision records (fights and turned-down pulls), written with these.</summary>
+    internal PlayerbotCombatTelemetry Combat { get; }
+
     internal PlayerbotPolicyTelemetryWriter Writer => _writer;
 
     internal (long Queued, long Dropped, long Unfinished, long Written) Counts
         => (Interlocked.Read(ref _queued), Interlocked.Read(ref _dropped), Interlocked.Read(ref _unfinished), Interlocked.Read(ref _written));
+
+    /// <summary>Lines the writer refused (an old file held open, a line over the file size, after disposal).</summary>
+    internal long Refused
+    {
+        get { lock (_writer) return _writer.Refused; }
+    }
 
     /// <summary>
     /// After a brain think (world thread): note a death, open a decision when this think made one, and close the decisions whose window
@@ -135,6 +146,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     /// </summary>
     internal void AfterThink(PlayerbotBrain brain, Player player, uint nowMs)
     {
+        Combat.AfterThink(brain, player, nowMs);
         ulong bot = player.Guid.Value;
         if (!_bots.TryGetValue(bot, out BotState? state))
         {
@@ -189,7 +201,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
                 state.Deaths - open.Deaths,
                 AnomaliesOf(state.Subject) - open.Anomalies);
             Enqueue(new PlayerbotPolicyRecord(open.UnixMs, player.Guid.Value, open.Map, open.Zone, open.Window.Features, open.Window.Open,
-                open.Window.LadderPick, open.Verdict.Pick, open.Verdict.Source, open.Verdict.Source == PlayerbotPolicySource.Explored,
+                open.Window.LadderPick, open.Verdict.Pick, open.Verdict.Source, open.Window.Explore is not null,
                 PlayerbotPolicySchema.GoalOf(open.Kind), open.Kind, WindowMs, outcome));
         }
     }
@@ -203,6 +215,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
         if (unchecked((int)(nowMs - _nextSweepMs)) < 0) return;
         _nextSweepMs = unchecked(nowMs + 10_000);
         uint gone = WindowMs + 60_000;
+        Combat.Sweep(nowMs, Math.Max(gone, PlayerbotCombatTelemetry.DowntimeCapMs + 60_000));
         List<ulong>? remove = null;
         foreach ((ulong bot, BotState state) in _bots)
             if (unchecked(nowMs - state.LastSeenMs) > gone) (remove ??= []).Add(bot);
@@ -215,7 +228,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     }
 
     /// <summary>Queue a finished record for the writer (tests call it directly).</summary>
-    internal void Enqueue(PlayerbotPolicyRecord record)
+    internal void Enqueue(IPlayerbotTelemetryRecord record)
     {
         if (_queue.Writer.TryWrite(record)) Interlocked.Increment(ref _queued);
         else Interlocked.Increment(ref _dropped);
@@ -225,7 +238,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     internal async Task FlushAsync()
     {
         long deadline = Environment.TickCount64 + 10_000;
-        while (Interlocked.Read(ref _written) + _writer.Refused < Interlocked.Read(ref _queued) && !_writing.IsCompleted
+        while (Interlocked.Read(ref _written) + Refused < Interlocked.Read(ref _queued) && !_writing.IsCompleted
                && Environment.TickCount64 < deadline)
             await Task.Delay(5).ConfigureAwait(false);
         lock (_writer) _writer.Flush();
@@ -254,16 +267,27 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     private async Task WriteLoopAsync()
     {
         var buffer = new ArrayBufferWriter<byte>(1024);
+        bool refusing = false;
         try
         {
             while (await _queue.Reader.WaitToReadAsync().ConfigureAwait(false))
             {
-                while (_queue.Reader.TryRead(out PlayerbotPolicyRecord? record))
+                while (_queue.Reader.TryRead(out IPlayerbotTelemetryRecord? record))
                 {
                     buffer.ResetWrittenCount();
                     record.WriteTo(buffer);
-                    lock (_writer)
-                        if (_writer.Write(buffer.WrittenSpan)) Interlocked.Increment(ref _written);
+                    bool wrote;
+                    lock (_writer) wrote = _writer.Write(buffer.WrittenSpan);
+                    if (wrote) Interlocked.Increment(ref _written);
+                    // Refusing is silent in the files, so it is said once each way (an old file held open keeps the bound by refusing).
+                    if (wrote == refusing)
+                    {
+                        refusing = !wrote;
+                        if (refusing)
+                            _logger?.LogWarning("Playerbot goal policy telemetry is refusing records: the oldest file in {Directory} cannot be deleted (held open or read-only), or a record is over MaxFileBytes",
+                                _writer.Directory);
+                        else _logger?.LogInformation("Playerbot goal policy telemetry is writing again");
+                    }
                 }
                 lock (_writer) _writer.Flush();
             }

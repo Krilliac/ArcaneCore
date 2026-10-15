@@ -92,6 +92,17 @@ public sealed class PlayerbotPolicyTelemetryTests
     }
 
     [Fact]
+    public void LevelProgress_CountsTheFraction_AcrossALevelUp_AndNoneAtTheCap()
+    {
+        var before = new PlayerbotPolicyProgress(10, 7_500, 10_000, 0, 0, 0); // three quarters of level 10
+        var after = new PlayerbotPolicyProgress(11, 2_750, 11_000, 0, 0, 0); // a quarter of level 11
+        Assert.Equal(10.75, before.Levels, 6);
+        Assert.Equal(0.5, after.Levels - before.Levels, 6); // the rest of 10 and a quarter of 11
+        Assert.Equal(60.0, new PlayerbotPolicyProgress(60, 0, 0, 0, 0, 0).Levels, 6); // capped: no next level, no fraction
+        Assert.Equal(12.0, new PlayerbotPolicyProgress(11, 12_000, 11_000, 0, 0, 0).Levels, 6); // over the next level's: at most a whole one
+    }
+
+    [Fact]
     public async Task ARecord_HasTheDocumentedShape()
     {
         string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
@@ -106,9 +117,10 @@ public sealed class PlayerbotPolicyTelemetryTests
             string line = Assert.Single(Directory.GetFiles(directory).SelectMany(File.ReadAllLines));
             using JsonDocument document = JsonDocument.Parse(line);
             JsonElement root = document.RootElement;
-            Assert.Equal(["v", "t", "bot", "map", "zone", "f", "open", "ladder", "pick", "src", "x", "goal", "kind", "w", "o"],
+            Assert.Equal(["v", "k", "t", "bot", "map", "zone", "f", "open", "ladder", "pick", "src", "x", "goal", "kind", "w", "o"],
                 root.EnumerateObject().Select(p => p.Name));
             Assert.Equal(1, root.GetProperty("v").GetInt32());
+            Assert.Equal("goal", root.GetProperty("k").GetString());
             Assert.Equal(42, root.GetProperty("t").GetInt64());
             Assert.Equal("ABC", root.GetProperty("bot").GetString());
             Assert.Equal(PlayerbotPolicySchema.FeatureCount, root.GetProperty("f").GetArrayLength());

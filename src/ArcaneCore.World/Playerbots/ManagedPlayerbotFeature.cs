@@ -1132,11 +1132,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _policyReportMs = unchecked(world.NowMs + 300_000);
             if (first) return;
             Policy.PlayerbotPolicyStats stats = policy.Stats;
+            (long Queued, long Dropped, long Unfinished, long Written) telemetryCounts = policy.Telemetry?.Counts ?? default;
             logger.LogInformation(
                 "Playerbot goal policy {Policy}: {Submitted} snapshots, {Scored} scored, {Dropped} dropped, {Unscored} unscored over {Overruns} budget overruns, {Errors} errors; "
-                + "thinks {Applied} applied, {Agreed} agreed, {Floor} floor, {Explored} explored, {Missing} missing, {Stale} stale, {NonFinite} non-finite; {Refused} promotions refused",
+                + "thinks {Applied} applied, {Agreed} agreed, {Floor} floor, {Explored} explored, {Missing} missing, {Stale} stale, {NonFinite} non-finite, {Refused} refused; telemetry {Written} written, {TelemetryDropped} dropped, {Unfinished} unfinished, {TelemetryRefused} refused",
                 stats.Policy, stats.Submitted, stats.Scored, stats.Dropped, stats.Unscored, stats.Overruns, stats.Errors,
-                stats.Applied, stats.Agreed, stats.Floor, stats.Explored, stats.Missing, stats.Stale, stats.NonFinite, stats.Refused);
+                stats.Applied, stats.Agreed, stats.Floor, stats.Explored, stats.Missing, stats.Stale, stats.NonFinite, stats.Refused,
+                telemetryCounts.Written, telemetryCounts.Dropped, telemetryCounts.Unfinished, policy.Telemetry?.Refused ?? 0);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -1148,6 +1150,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
     {
         var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy };
+        // The combat telemetry hears the risk model from the brain's first think (its first pull).
+        if (_policy?.Telemetry is { } telemetry) brain.Risk.CombatSink = telemetry.Combat;
         if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
         if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());

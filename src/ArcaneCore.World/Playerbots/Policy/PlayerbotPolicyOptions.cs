@@ -42,7 +42,7 @@ public sealed class PlayerbotPolicyOptions
         if (IntervalMs is < 500 or > 60_000) throw new InvalidOperationException($"{section}: IntervalMs must be 500..60000.");
         if (StaleAfterMs is < 500 or > 120_000) throw new InvalidOperationException($"{section}: StaleAfterMs must be 500..120000.");
         // Shorter, and every snapshot cycle would end in a gap where each think finds its snapshot stale.
-        if (StaleAfterMs < IntervalMs) throw new InvalidOperationException($"{section}: StaleAfterMs must be at least IntervalMs.");
+        if (Enabled && StaleAfterMs < IntervalMs) throw new InvalidOperationException($"{section}: StaleAfterMs must be at least IntervalMs.");
         if (!double.IsFinite(TickBudgetMs) || TickBudgetMs is < 0.1 or > 50)
             throw new InvalidOperationException($"{section}: TickBudgetMs must be 0.1..50.");
         if (!double.IsFinite(ExplorationRate) || ExplorationRate is < 0 or > 0.2)

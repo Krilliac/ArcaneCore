@@ -650,6 +650,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 | Key | Meaning |
 |---|---|
 | `v` | Record version (1). |
+| `k` | `goal` (this table); `fight` and `skip` are the combat records below. |
 | `t` | Unix ms of the decision. |
 | `bot` | The bot's player guid (hex). |
 | `map`, `zone` | Where it decided. |
@@ -665,10 +666,31 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 The world thread only queues finished records (8192 at most; past that a record is dropped and counted); a writer task formats and appends
 them to `Directory` (`telemetry/playerbot-policy`, relative to the profile folder) as `policy-NNNNNNNN.jsonl`, each at most `MaxFileBytes`
 (16 MiB), at most `MaxFiles` (16) of them, the oldest deleted before the next is made (when a reader holds the oldest open, no new file is
-made and lines are refused and counted until it can be deleted). A decision whose bot leaves, or gets a new brain, before its window ends
+made and lines are refused and counted until it can be deleted; one warning when refusing starts, one line when it ends, and the counts in the five-minute line). A decision whose bot leaves, or gets a new brain (noticed at that brain's first policy think), before its window ends
 is dropped, never written with a partial outcome; deaths are seen only on thinks the brain drives (not while a group or battleground
 driver has the bot). A full disk or missing folder stops the telemetry (fault site `playerbot.policy-telemetry-io`), never the
 server.
+
+**Combat decisions** (telemetry only, written with the goal records when telemetry is on; a later phase may score them, gated in
+[docs/design/playerbot-policy-phases.md](../design/playerbot-policy-phases.md)). Nothing here changes a decision: the risk model tells
+`PlayerbotCombatTelemetry` what it assessed (`PlayerbotRisk.CombatSink`, after `Assess` and after `Judge`), and the rest is observed
+after each think. Two kinds of record:
+
+- `fight`, one per fight (from the first think in combat to the first out of it, or the bot's death), written when the bot's next fight
+  starts (so its downtime is known) or after ten minutes without one (`downtime` null). Its keys:
+  - `engage`: the pull that started it, or null with risk scoring off. It holds `f` (`level`, `health`, `mana` (1 without mana),
+    `level_diff`, `elite`, `health_ratio`, `distance`, `risk`, `reward`, `adds`), `decision` (`engage` or `detour`), `reason` and
+    `entry`.
+  - `targets`: each in-fight switch of target, at most four, with `f` (`attackers`, `target_health`, `level_diff`, `distance`,
+    `attacking_bot`).
+  - `retreat`: the retreat decision, null with risk scoring off. It is the verdict that ran (`retreat` 1) or the stay closest to
+    running (`retreat` 0, the least time to die per time to kill). It holds `f` (`health`, `dps_in`, `dps_out`, `enemies`,
+    `time_to_kill`, `time_to_die`, `target_health`) and `reason`.
+  - `rest`: `f` (health and mana at the fight's end) and `rested` (1 when the bot began to rest within 5 s).
+  - `o`: `died`, `killed` (the first target died), `ttk` (seconds to that, or null), `fight` (seconds), `damage` (health lost,
+    summed over thinks), `damage_pct` (of maximum health) and `downtime` (seconds to the next fight).
+- `skip`, a pull candidate the risk model turned down (`decision` `avoid` or `rest`; once a minute per creature, at most eight
+  waiting per bot), with the same `f`, `reason` and `entry`, and `o.wait` (seconds until the bot's next fight, null past ten minutes).
 
 **Training (phase 3, staged separately).** An offline trainer and an A/B report (for `tools/playerbot-policy/`) are staged on their own
 branch, to land once the server has run with telemetry on. They fit
