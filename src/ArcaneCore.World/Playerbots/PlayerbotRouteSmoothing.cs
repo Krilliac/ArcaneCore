@@ -59,6 +59,13 @@ internal static class PlayerbotRouteSmoothing
     /// <summary>Upper bound on output waypoints so a smoothed route remains compact.</summary>
     internal const int MaxSmoothedPoints = 96;
 
+    /// <summary>
+    /// Maximum flat distance (yards) from the start of a route over which subdivision, lateral variation, and corner smoothing
+    /// run per plan. Long multi-hundred-yard routes re-plan as the bot advances, so smoothing only the upcoming horizon avoids
+    /// hundreds of VMap/MMap height and raycast probes on faraway segments.
+    /// </summary>
+    internal const float MaxSmoothHorizonYards = 120f;
+
     private static readonly PathOptions WalkableMeshOptions = new()
     {
         Mover = PathMover.Player,
@@ -139,8 +146,9 @@ internal static class PlayerbotRouteSmoothing
     private static List<Vector3>? TryApplyLateralVariation(ulong botGuid, Map map, IReadOnlyList<Vector3> points, float totalFlat)
     {
         ComputeBotLaneProfile(botGuid, out float laneOffset, out float weaveAmplitude, out float weaveInvWavelength, out float weavePhase);
+        float horizonFlat = MathF.Min(totalFlat, MaxSmoothHorizonYards);
 
-        // Step 1: Build a subdivided spine along segments so long straight roads have interior control points to carry the lane & weave.
+        // Step 1: Build a subdivided spine along segments within the smoothing horizon so long straight roads have interior control points.
         var spine = new List<(Vector3 Point, Vector2 Normal, float AlongFlat)>(Math.Min(MaxSmoothedPoints, points.Count * 3));
         float accumulated = 0f;
 
@@ -173,8 +181,8 @@ internal static class PlayerbotRouteSmoothing
                 spine[^1] = (a, biLen > 1e-3f ? bisector / biLen : normal, accumulated);
             }
 
-            int subdivisions = segLen >= SubdivisionStepYards * 1.45f
-                ? Math.Clamp((int)MathF.Round(segLen / SubdivisionStepYards), 1, 16)
+            int subdivisions = accumulated < MaxSmoothHorizonYards && segLen >= SubdivisionStepYards * 1.45f
+                ? Math.Clamp((int)MathF.Round(MathF.Min(segLen, MaxSmoothHorizonYards - accumulated) / SubdivisionStepYards), 1, 8)
                 : 1;
             if (spine.Count + subdivisions > MaxSmoothedPoints - 8)
                 subdivisions = 1;
@@ -196,17 +204,20 @@ internal static class PlayerbotRouteSmoothing
         int n = spine.Count;
         Span<float> desiredOffsets = n <= 96 ? stackalloc float[n] : new float[n];
         Span<float> safeScales = n <= 96 ? stackalloc float[n] : new float[n];
+        Span<float> probedScales = n <= 96 ? stackalloc float[n] : new float[n];
+        var probedPoints = new Vector3[n];
         desiredOffsets.Clear();
         safeScales.Clear();
+        probedScales.Clear();
 
         for (int i = 1; i < n - 1; i++)
         {
             (Vector3 basePt, Vector2 normal, float s) = spine[i];
-            if (normal.LengthSquared() < 0.5f || !map.Collision.IsOutdoors(basePt.X, basePt.Y, basePt.Z + 1f))
+            if (s > horizonFlat || normal.LengthSquared() < 0.5f || !map.Collision.IsOutdoors(basePt.X, basePt.Y, basePt.Z + 1f))
                 continue;
 
             float startRamp = SmoothRamp(s / EndpointTaperYards);
-            float endRamp = SmoothRamp((totalFlat - s) / EndpointTaperYards);
+            float endRamp = SmoothRamp((horizonFlat - s) / EndpointTaperYards);
             float envelope = startRamp * endRamp;
 
             float spatialArg = (s * weaveInvWavelength) + ((basePt.X + basePt.Y) * 0.04f) + weavePhase;
@@ -215,7 +226,10 @@ internal static class PlayerbotRouteSmoothing
                 continue;
 
             desiredOffsets[i] = desiredOffset;
-            safeScales[i] = ProbeMaxSafePointScale(map, basePt, normal, desiredOffset);
+            float scale = ProbeMaxSafePointScale(map, basePt, normal, desiredOffset, out Vector3 snapped);
+            safeScales[i] = scale;
+            probedScales[i] = scale;
+            probedPoints[i] = snapped;
         }
 
         // Smooth scale transitions across adjacent interior spine points so an obstacle near one point
@@ -230,15 +244,32 @@ internal static class PlayerbotRouteSmoothing
 
         for (int i = 1; i < n - 1; i++)
         {
-            (Vector3 basePt, Vector2 normal, _) = spine[i];
-            float targetOffset = desiredOffsets[i] * safeScales[i];
-            if (MathF.Abs(targetOffset) >= 0.08f
-                && TrySelectSafeOffsetPoint(map, result[^1], basePt, normal, targetOffset, out Vector3 shifted))
+            (Vector3 basePt, Vector2 normal, float s) = spine[i];
+            if (s > horizonFlat)
             {
-                result.Add(shifted);
-                anyOffset = true;
+                result.Add(basePt);
+                continue;
             }
-            else if (IsChordSafe(map, result[^1], basePt))
+
+            float targetOffset = desiredOffsets[i] * safeScales[i];
+            if (MathF.Abs(targetOffset) >= 0.08f)
+            {
+                if (safeScales[i] == probedScales[i] && IsChordSafe(map, result[^1], probedPoints[i]))
+                {
+                    result.Add(probedPoints[i]);
+                    anyOffset = true;
+                    continue;
+                }
+
+                if (TrySelectSafeOffsetPoint(map, result[^1], basePt, normal, targetOffset, out Vector3 shifted))
+                {
+                    result.Add(shifted);
+                    anyOffset = true;
+                    continue;
+                }
+            }
+
+            if (IsChordSafe(map, result[^1], basePt))
             {
                 result.Add(basePt);
             }
@@ -256,7 +287,8 @@ internal static class PlayerbotRouteSmoothing
         Map map,
         Vector3 basePt,
         Vector2 normal,
-        float desiredOffset)
+        float desiredOffset,
+        out Vector3 snapped)
     {
         ReadOnlySpan<float> scales = [1.0f, 0.6f, 0.3f];
         foreach (float scale in scales)
@@ -272,12 +304,13 @@ internal static class PlayerbotRouteSmoothing
 
             if (!map.Collision.IsOutdoors(candidate.X, candidate.Y, candidate.Z + 1f))
                 continue;
-            if (!TrySnapHeight(map, candidate, out _))
+            if (!TrySnapHeight(map, candidate, out snapped))
                 continue;
 
             return scale;
         }
 
+        snapped = basePt;
         return 0f;
     }
 
@@ -321,14 +354,17 @@ internal static class PlayerbotRouteSmoothing
     {
         var output = new List<Vector3>(Math.Min(MaxSmoothedPoints, points.Count + 16)) { points[0] };
         bool anySmoothed = false;
+        float accumulatedFlat = 0f;
 
         for (int i = 1; i < points.Count - 1; i++)
         {
             Vector3 prev = output[^1];
             Vector3 corner = points[i];
             Vector3 next = points[i + 1];
+            accumulatedFlat += Vector2.Distance(Flat(points[i - 1]), Flat(corner));
 
-            if (output.Count + 4 + (points.Count - i) <= MaxSmoothedPoints
+            if (accumulatedFlat <= MaxSmoothHorizonYards
+                && output.Count + 4 + (points.Count - i) <= MaxSmoothedPoints
                 && TryBuildCornerArc(map, prev, corner, next, out Vector3 a, out Vector3 q1, out Vector3 q2, out Vector3 b))
             {
                 output.Add(a);

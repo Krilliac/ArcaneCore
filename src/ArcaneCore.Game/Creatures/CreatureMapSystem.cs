@@ -451,7 +451,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         PathOutcome outcome = (path.Type & PathType.Incomplete) != 0 ? PathOutcome.Partial
             : (path.Type & (PathType.NotUsingPath | PathType.Shortcut)) != 0 ? PathOutcome.Direct
             : PathOutcome.Mesh;
-        if (outcome == PathOutcome.Mesh && corners.Count >= 2 && Map.Collision.MeshPoints is { } mesh)
+        if (outcome == PathOutcome.Mesh && corners.Count >= 2 && Map.Collision.MeshPoints is { } mesh
+            && (toSpawn || creature.Combat.IsInCombat || creature.Motion.CurrentType != MovementGeneratorType.Random))
         {
             corners = CreatureSplineSmoothing.VaryAndSmooth(
                 creature, start, corners, mesh, _height.GetHeight, pathOptions, allowVariation: !toSpawn && !creature.Combat.IsInCombat);

@@ -45,10 +45,25 @@ internal static class PlayerbotAreaTriggers
     {
         internal IReadOnlyCollection<AreaTriggerTemplate>? Source;
         internal readonly Dictionary<uint, PlayerbotTriggerIndex> ByMap = [];
+        internal readonly Dictionary<(uint FromMap, uint TargetMap), AreaTriggerTemplate[]> ByTargetMap = [];
     }
 
     /// <summary>The area triggers on <paramref name="mapId"/>, in id order (cached per map; rebuilt after a reload of the trigger table).</summary>
     internal static IReadOnlyList<AreaTriggerTemplate> OnMap(WorldMaps maps, uint mapId) => Index(maps, mapId).All;
+
+    /// <summary>The area triggers on <paramref name="fromMap"/> whose teleport leads into <paramref name="targetMap"/> (cached per map pair).</summary>
+    internal static IReadOnlyList<AreaTriggerTemplate> EntrancesTo(WorldMaps maps, uint fromMap, uint targetMap)
+    {
+        PlayerbotTriggerIndex index = Index(maps, fromMap);
+        MapCache cache = Caches.GetValue(maps, _ => new MapCache());
+        if (!cache.ByTargetMap.TryGetValue((fromMap, targetMap), out AreaTriggerTemplate[]? list))
+        {
+            list = [.. index.All.Where(t => maps.FindAreaTriggerTeleport(t.Id)?.TargetMap == targetMap)];
+            cache.ByTargetMap[(fromMap, targetMap)] = list;
+        }
+
+        return list;
+    }
 
     /// <summary>The grid of the area triggers on <paramref name="mapId"/> (cached like <see cref="OnMap"/>).</summary>
     internal static PlayerbotTriggerIndex Index(WorldMaps maps, uint mapId)
@@ -58,6 +73,7 @@ internal static class PlayerbotAreaTriggers
         if (!ReferenceEquals(cache.Source, source))
         {
             cache.ByMap.Clear();
+            cache.ByTargetMap.Clear();
             cache.Source = source;
         }
 

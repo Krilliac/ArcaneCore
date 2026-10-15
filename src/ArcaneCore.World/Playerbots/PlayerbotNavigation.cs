@@ -634,7 +634,7 @@ internal static class PlayerbotNavigation
             straightRefused = false;
             return false;
         }
-        if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes) || route is null) return false;
+        if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, noFallbacks: trial || chase) || route is null) return false;
         bool crossBeside = completedQuestReturn && friendlyTownEnder;
         route.CompletedQuestReturn = completedQuestReturn;
         route.CrossBesidePlaceMarks = crossBeside;
@@ -662,6 +662,13 @@ internal static class PlayerbotNavigation
             return true;
         }
 
+        // A trial probe (PlayerbotRisk.Facts / FindDetour) only checks the direct route; it does not run 18 hazard detour searches.
+        if (trial)
+        {
+            route = null;
+            return false;
+        }
+
         // The way passes through a hazard: walk round it (by a corner before it and one past it, on either side), or not at all.
         PlayerbotRoute direct = route;
         route = null;
@@ -681,7 +688,7 @@ internal static class PlayerbotNavigation
                 float off = hazard.Radius + extra;
                 Vector3 before = hazard.At - (along * off) + (side * sign * off);
                 Vector3 past = hazard.At + (along * off) + (side * sign * off);
-                if (!PlanDirect(player, before, before, options, partial: false, out PlayerbotRoute? first, out _) || first is null) continue;
+                if (!PlanDirect(player, before, before, options, partial: false, out PlayerbotRoute? first, out _, noFallbacks: true) || first is null) continue;
                 if (Leg(map, first.Points[^1], past, options) is not { } middle
                     || Leg(map, middle.Points[^1], end, options) is not { } last) continue;
                 List<Vector3> points = [.. first.Points, .. middle.Points.Skip(1), .. last.Points.Skip(1)];
@@ -726,16 +733,16 @@ internal static class PlayerbotNavigation
 
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
     private static bool PlanDirect(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
-        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null)
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null, bool noFallbacks = false)
     {
-        bool ok = PlanDirectCore(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, from);
+        bool ok = PlanDirectCore(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, from, noFallbacks);
         if (ok && route is not null && player.Map is { } map)
             route.Pathfinder = map.Collision.Pathfinder;
         return ok;
     }
 
     private static bool PlanDirectCore(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
-        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null)
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null, bool noFallbacks = false)
     {
         straightRefused = false;
         route = null;
@@ -779,8 +786,8 @@ internal static class PlayerbotNavigation
             return true;
         }
 
-        // A leg planned from the end of a route (TryChain) has no fallbacks: the next think plans it from the bot as ever.
-        if (from is not null) return false;
+        // A leg planned from the end of a route (TryChain) or a trial/chase probe has no fallbacks: the next think plans it from the bot as ever.
+        if (from is not null || noFallbacks) return false;
         // The way up indoors is a fallback too, held to the think's search budget (PlayerbotThinkProbe.Fallback).
         using (PlayerbotThinkProbe.Fallback())
         {

@@ -195,9 +195,11 @@ public sealed class CrashHandler : IDisposable
     private void OnFirstChance(object? sender, FirstChanceExceptionEventArgs e)
     {
         // Every throw in the process lands here, including throws inside the sink: the thread-static
-        // guard in Report makes a nested one a no-op. Expected cancellation signals are skipped so
-        // FirstChanceExceptions remains signal-rich in Debug mode.
-        if (_reporting || e.Exception is OperationCanceledException)
+        // guard in Report makes a nested one a no-op. Expected cancellation signals and controlled
+        // malformed-packet layout rejections are skipped so FirstChanceExceptions remains signal-rich
+        // and avoids expensive stack-trace rendering on ChaosProbe fuzzing in Debug mode.
+        if (_reporting || e.Exception is OperationCanceledException
+            || e.Exception.GetType().Name == "PacketLayoutException")
         {
             return;
         }

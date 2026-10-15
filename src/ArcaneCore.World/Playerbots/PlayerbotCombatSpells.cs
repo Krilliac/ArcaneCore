@@ -193,6 +193,10 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     {
         if (unchecked((int)(_itemBlockedUntil - session.World.NowMs)) > 0)
             return false;
+        if (player.GetByte(UpdateFields.UnitFieldBytes1, 2) != 0
+            || ShapeshiftService.GetForm(player) is ShapeshiftForm.Cat or ShapeshiftForm.Bear or ShapeshiftForm.DireBear
+                or ShapeshiftForm.Travel or ShapeshiftForm.Aqua or ShapeshiftForm.Moonkin or ShapeshiftForm.GhostWolf)
+            return false;
 
         SpellSystem system = feature.System;
         var cooldownSpells = new HashSet<uint>();
@@ -469,9 +473,24 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     }
 
     private bool Cast(Player player, SpellFeature feature, SpellInfo spell, ObjectGuid target)
-        => Cast(player, feature, spell, target == player.Guid
-            ? spell.IsPositive && IsExplicitUnit(spell) ? SpellCastTargets.ForUnit(target) : SpellCastTargets.ForSelf()
-            : SpellCastTargets.ForUnit(target));
+    {
+        SpellCastTargets targets;
+        if (target == player.Guid && spell.HasEffect(SpellEffectName.EnchantItemTemporary)
+            && player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand) is { } mainHand)
+        {
+            targets = new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = mainHand.Guid };
+        }
+        else if (target == player.Guid)
+        {
+            targets = spell.IsPositive && IsExplicitUnit(spell) ? SpellCastTargets.ForUnit(target) : SpellCastTargets.ForSelf();
+        }
+        else
+        {
+            targets = SpellCastTargets.ForUnit(target);
+        }
+
+        return Cast(player, feature, spell, targets);
+    }
 
     private bool Cast(Player player, SpellFeature feature, SpellInfo spell, SpellCastTargets targets)
     {

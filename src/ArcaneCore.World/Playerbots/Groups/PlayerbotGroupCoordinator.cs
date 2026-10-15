@@ -611,9 +611,23 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     /// <summary>The nearest area trigger on <paramref name="fromMap"/> whose teleport leads into <paramref name="instanceMap"/>.</summary>
     internal static AreaTriggerTemplate? EntranceTo(WorldMaps maps, uint fromMap, uint instanceMap, Vector3 near)
-        => PlayerbotAreaTriggers.OnMap(maps, fromMap)
-            .Where(t => maps.FindAreaTriggerTeleport(t.Id)?.TargetMap == instanceMap)
-            .OrderBy(t => Vector3.DistanceSquared(new Vector3(t.X, t.Y, t.Z), near)).FirstOrDefault();
+    {
+        IReadOnlyList<AreaTriggerTemplate> entrances = PlayerbotAreaTriggers.EntrancesTo(maps, fromMap, instanceMap);
+        AreaTriggerTemplate? best = null;
+        float bestDistSq = float.MaxValue;
+        for (int i = 0; i < entrances.Count; i++)
+        {
+            AreaTriggerTemplate t = entrances[i];
+            float d2 = Vector3.DistanceSquared(new Vector3(t.X, t.Y, t.Z), near);
+            if (d2 < bestDistSq)
+            {
+                bestDistSq = d2;
+                best = t;
+            }
+        }
+
+        return best;
+    }
 
     /// <summary>The way out of an instance: a trigger on <paramref name="mapId"/> whose teleport leads off it, or null.</summary>
     internal static AreaTriggerTemplate? ExitOf(WorldRuntime world, uint mapId)

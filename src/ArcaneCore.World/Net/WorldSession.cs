@@ -383,8 +383,16 @@ public sealed partial class WorldSession : IPlayerSession
             // Between SMSG_NEW_WORLD and MSG_MOVE_WORLDPORT_ACK the player is in no map: only
             // the ack is handled, everything else is dropped (vmangos STATUS_TRANSFER /
             // WorldSession::Update skips STATUS_LOGGEDIN packets while !IsInWorld()).
+            // Client loading screens routinely emit CMSG_CANCEL_TRADE on map transitions; handle
+            // it without logging a dropped-packet warning.
             if (player.Map is null && packet.Handler.Opcode != WorldOpcode.MsgMoveWorldportAck)
             {
+                if (packet.Handler.Opcode == WorldOpcode.CmsgCancelTrade)
+                {
+                    packet.Handler.World?.Invoke(this, player, packet.Payload);
+                    continue;
+                }
+
                 if (!IsPlayerbot && _packetGate.TryEnter(out int suppressed))
                 {
                     _logger.LogWarning(

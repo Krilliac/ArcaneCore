@@ -159,10 +159,16 @@ internal static class PlayerbotCombatView
             if (!HasPower(player, spell)) return false;
             if (spell.GetErrorAtShapeshiftedCast((uint)form, formFlags) != SpellCastResult.CastOk) return false;
             if (!HasReagents(player, spell) || !HasEquippedItem(player, spell)) return false;
+            if (spell.HasEffect(SpellEffectName.EnchantItemTemporary)
+                && (mainHand is null || !ArcaneCore.Game.Crafting.Enchanting.ItemTargetRules.IsFit(spell, mainHand.Template)))
+                return false;
             if (spell.HasAttribute(SpellAttributes.UsesRangedSlot) && !HasAmmoFor(player, ranged)) return false;
+            if (FacingCastCheck.IsFromBehindOnly(spell) && !FacingCastCheck.IsBehindTarget(player, unit, strict: true)) return false;
             return InRange(player, unit, spell);
         }
 
+        bool canUseItemsInForm = player.GetByte(UpdateFields.UnitFieldBytes1, 2) == 0
+            && form is not (Form.Cat or Form.Bear or Form.DireBear or Form.Travel or Form.Aqua or Form.Moonkin or Form.GhostWolf);
         var state = new RotationState
         {
             Spells = spells,
@@ -188,20 +194,23 @@ internal static class PlayerbotCombatView
             PetFightingCrowdControlled = petFightingCrowdControlled,
             CanCallPet = canCallPet,
             AutoRepeatActive = system.HasAutoRepeat(player),
-            HasRangedWeapon = ranged?.Template is { Class: ItemClassWeapon } rangedTemplate && rangedTemplate.SubClass != SubClassWand,
-            HasWand = ranged?.Template is { Class: ItemClassWeapon, SubClass: SubClassWand },
-            HealingPotion = FindConsumable(player, system, cooldownSpells, cooldownCategories, bandage: false),
-            Bandage = FindConsumable(player, system, cooldownSpells, cooldownCategories, bandage: true),
+            HasRangedWeapon = ranged?.Template is { Class: ItemClassWeapon } rangedTemplate && rangedTemplate.SubClass != SubClassWand
+                && !(ranged.MaxDurability > 0 && ranged.Durability == 0),
+            HasWand = ranged?.Template is { Class: ItemClassWeapon, SubClass: SubClassWand }
+                && !(ranged.MaxDurability > 0 && ranged.Durability == 0),
+            HealingPotion = canUseItemsInForm ? FindConsumable(player, system, cooldownSpells, cooldownCategories, bandage: false) : null,
+            Bandage = canUseItemsInForm ? FindConsumable(player, system, cooldownSpells, cooldownCategories, bandage: true) : null,
             Totems = totems,
             InGroup = grouped,
             CanCast = CanCast,
         };
 
-        RotationItem? manaPotion = player.PowerType == PowerType.Mana
+        RotationItem? manaPotion = canUseItemsInForm && player.PowerType == PowerType.Mana
             && PlayerbotConsumables.FindBestManaPotion(player, system.Store, cooldownSpells, cooldownCategories) is { } mp
                 ? new RotationItem(mp.Guid, mp.BagSlot, mp.Slot, mp.Template.Entry)
                 : null;
-        bool mainHandHasWeapon = mainHand?.Template is { Class: ItemClassWeapon };
+        bool mainHandHasWeapon = mainHand?.Template is { Class: ItemClassWeapon }
+            && !(mainHand.MaxDurability > 0 && mainHand.Durability == 0);
         bool mainHandHasTempEnchant = mainHand is not null && mainHand.GetUInt32(UpdateFields.ItemFieldEnchantment + 3) != 0;
         AttachExtra(state, manaPotion, mainHandHasWeapon, mainHandHasTempEnchant);
         return state;
@@ -220,8 +229,11 @@ internal static class PlayerbotCombatView
             periodicHeal |= holder.HasAura(AuraType.PeriodicHeal);
             if (holder.Spell.Dispel is > 0 and < 32)
             {
-                if (holder.IsPositive) helpful |= 1u << (int)holder.Spell.Dispel;
-                else harmful |= 1u << (int)holder.Spell.Dispel;
+                if (holder.Spell.Dispel is > 0 and < 32)
+                {
+                    if (holder.IsPositive) helpful |= 1u << (int)holder.Spell.Dispel;
+                    else harmful |= 1u << (int)holder.Spell.Dispel;
+                }
             }
         }
 
@@ -315,16 +327,25 @@ internal static class PlayerbotCombatView
         return true;
     }
 
-    /// <summary>Spell.dbc EquippedItemClass / SubClassMask (vmangos Spell::CheckItems): some equipped item must match.</summary>
+    /// <summary>Spell.dbc EquippedItemClass / SubClassMask / InventoryTypeMask (vmangos Spell::CheckItems): some non-broken equipped item in the required slot must match.</summary>
     private static bool HasEquippedItem(Player player, SpellInfo spell)
     {
         // -1 is "none" in the client data; a zero class with no subclass mask (synthetic rows) asks for nothing either.
-        if (spell.EquippedItemClass < 0 || (spell.EquippedItemClass == 0 && spell.EquippedItemSubClassMask == 0)) return true;
-        foreach ((byte _, Item item) in player.Inventory.Equipped)
+        if (spell.EquippedItemClass < 0 || (spell.EquippedItemClass == 0 && spell.EquippedItemSubClassMask == 0 && spell.EquippedItemInventoryTypeMask == 0))
+            return true;
+        bool usesRanged = spell.HasAttribute(SpellAttributes.UsesRangedSlot);
+        foreach ((byte slot, Item item) in player.Inventory.Equipped)
         {
+            if (item.MaxDurability > 0 && item.Durability == 0) continue;
             ItemTemplate template = item.Template;
             if (template.Class != (uint)spell.EquippedItemClass) continue;
+            if (spell.EquippedItemClass == (int)ItemClassWeapon)
+            {
+                if (usesRanged && slot != InventorySlots.Ranged) continue;
+                if (!usesRanged && slot != InventorySlots.MainHand) continue;
+            }
             if (spell.EquippedItemSubClassMask != 0 && (spell.EquippedItemSubClassMask & (1 << (int)template.SubClass)) == 0) continue;
+            if (spell.EquippedItemInventoryTypeMask != 0 && (spell.EquippedItemInventoryTypeMask & (1 << (int)template.InventoryType)) == 0) continue;
             return true;
         }
         return false;
@@ -333,6 +354,7 @@ internal static class PlayerbotCombatView
     /// <summary>A bow, gun or crossbow shoots only with ammunition in the bags (a wand or thrown weapon needs none).</summary>
     private static bool HasAmmoFor(Player player, Item? ranged)
     {
+        if (ranged is { MaxDurability: > 0, Durability: 0 }) return false;
         if (ranged?.Template is not { Class: ItemClassWeapon } template || template.SubClass is SubClassWand or 16) return true;
         uint ammo = player.Inventory.AmmoId;
         return ammo != 0 && player.Inventory.GetItemCount(ammo) > 0;

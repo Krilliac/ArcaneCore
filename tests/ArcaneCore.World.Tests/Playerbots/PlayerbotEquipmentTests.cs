@@ -509,6 +509,81 @@ public sealed class PlayerbotEquipmentTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task CombatView_EnforcesMainHandSlotBrokenDurabilityAndShapeshiftConsumables()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 3401, Name = "Short Bow", Class = (uint)ItemClass.Weapon, SubClass = 2,
+            InventoryType = (uint)InventoryType.Ranged, Delay = 2000, Damages = [new ItemDamage(5f, 10f, 0)],
+            AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue, Stackable = 1, MaxDurability = 30,
+        });
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 3402, Name = "Minor Healing Potion", Class = (uint)ItemClass.Consumable, SubClass = 1,
+            InventoryType = (uint)InventoryType.NonEquip, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue,
+            Stackable = 5, Spells = [new ItemSpell(994040, 0u, -1, 0f, 4, 1000, 0)],
+        });
+        items.Templates.Templates.Add(Sword(3403, 5f, 10f, 2000) with { MaxDurability = 30 });
+        using IDisposable scope = items.Use();
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                var raptorStrike = new SpellInfo
+                {
+                    Id = 994041, Name = "Raptor Strike", EquippedItemClass = (int)ItemClass.Weapon,
+                    RangeIndex = SpellConstants.RangeIndexSelfOnly, Range = new SpellRange(0, 5),
+                    Effects = [new SpellEffectInfo { Effect = SpellEffectName.WeaponDamage, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+                };
+                var healSpell = new SpellInfo
+                {
+                    Id = 994040, Name = "Healing Potion",
+                    Effects = [new SpellEffectInfo { Effect = SpellEffectName.Heal, BasePoints = 70, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+                };
+                feature.System.Store = new SpellStore([raptorStrike, healSpell], [], []);
+
+                // Equip only a bow in the ranged slot + healing potion in bag.
+                foreach ((byte slot, _) in player.Inventory.Equipped.ToArray())
+                    player.Inventory.DestroyItem(InventorySlots.Bag0, slot);
+                EquipFromBags(player, 3401);
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(3402, 1, out _));
+
+                var abilities = ArcaneCore.World.Playerbots.Combat.PlayerbotAbilities.Resolve([raptorStrike], ["Raptor Strike"], feature.System.Store);
+                var stateWithBowOnly = ArcaneCore.World.Playerbots.Combat.PlayerbotCombatView.Build(
+                    session, feature, player, null, abilities, ArcaneCore.World.Playerbots.Combat.PlayerbotRole.MeleeDps, _ => false);
+                Assert.False(stateWithBowOnly.CanCast(raptorStrike, stateWithBowOnly.Self));
+                Assert.NotNull(stateWithBowOnly.HealingPotion);
+
+                // Equip a main-hand sword: Raptor Strike becomes castable until durability hits 0.
+                EquipFromBags(player, 3403);
+                Item mainHand = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand)!;
+                mainHand.Durability = 30;
+                var stateWithMainHand = ArcaneCore.World.Playerbots.Combat.PlayerbotCombatView.Build(
+                    session, feature, player, null, abilities, ArcaneCore.World.Playerbots.Combat.PlayerbotRole.MeleeDps, _ => false);
+                Assert.True(stateWithMainHand.CanCast(raptorStrike, stateWithMainHand.Self));
+
+                mainHand.Durability = 0;
+                var stateWithBrokenMainHand = ArcaneCore.World.Playerbots.Combat.PlayerbotCombatView.Build(
+                    session, feature, player, null, abilities, ArcaneCore.World.Playerbots.Combat.PlayerbotRole.MeleeDps, _ => false);
+                Assert.False(stateWithBrokenMainHand.CanCast(raptorStrike, stateWithBrokenMainHand.Self));
+
+                // Shapeshifted in Bear Form (UnitFieldBytes1 byte 2 != 0): bag consumables are suppressed.
+                player.SetByte(ArcaneCore.Game.UpdateFields.UnitFieldBytes1, 2, (byte)ShapeshiftForm.Bear);
+                var stateShapeshifted = ArcaneCore.World.Playerbots.Combat.PlayerbotCombatView.Build(
+                    session, feature, player, null, abilities, ArcaneCore.World.Playerbots.Combat.PlayerbotRole.MeleeDps, _ => false);
+                Assert.Null(stateShapeshifted.HealingPotion);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     internal static void EquipFromBags(Player player, uint entry)
     {
         Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(entry, 1, out _));

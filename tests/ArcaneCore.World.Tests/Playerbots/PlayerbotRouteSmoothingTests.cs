@@ -211,6 +211,44 @@ public sealed class PlayerbotRouteSmoothingTests
         Assert.Equal(0.28f, newHeading, 2);
     }
 
+    [Fact]
+    public async Task LongRouteBeyondHorizon_OnlySubdividesWithinSmoothHorizon()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Map map = player.Map!;
+                Vector3 start = new(player.X, player.Y, Floor);
+                Vector3 p1 = start + new Vector3(120f, 0f, 0f);
+                Vector3 p2 = start + new Vector3(360f, 0f, 0f);
+                Vector3 end = start + new Vector3(600f, 0f, 0f);
+
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new OpenOutdoorFloor(Floor),
+                    pathfinder: new StraightCorridorMesh([start, p1, p2, end]));
+
+                IReadOnlyList<Vector3> smoothed = PlayerbotRouteSmoothing.VaryAndSmoothPoints(
+                    player.Guid.Value, map, [start, p1, p2, end], varyLateral: true);
+
+                Assert.Equal(start, smoothed[0]);
+                Assert.Equal(end, smoothed[^1]);
+                // Far segments past MaxSmoothHorizonYards (120 yards) are preserved without subdividing the 480-yard tail.
+                int pointsPastHorizon = smoothed.Count(p => p.X - start.X > PlayerbotRouteSmoothing.MaxSmoothHorizonYards + 1f);
+                Assert.Equal(2, pointsPastHorizon);
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     private static float SampleYAtX(IReadOnlyList<Vector3> points, float x)
     {
         for (int i = 1; i < points.Count; i++)

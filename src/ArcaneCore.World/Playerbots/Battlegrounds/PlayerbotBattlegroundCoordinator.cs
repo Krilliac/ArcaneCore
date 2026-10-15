@@ -431,16 +431,20 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
         PlayerbotBattlegroundOptions options = _options.Battlegrounds;
         float chance = PlayerbotBattlegroundDemand.ChancePerThink(options.QueueChancePerMinute, sinceMs);
+        bool anyRealWaiting = _demand.AnyRealWaiting;
+        bool checkedRefusalsThisScan = false;
         foreach (PlayerbotBattlegroundBot bot in _bots.Values.OrderBy(b => b.BotId))
         {
             if (_tracked.ContainsKey(bot.BotId) || !bot.Free || !bot.Session.IsManaged || bot.Session.Player is not { IsInWorld: true } player) continue;
             if (Adopt(bot, player, feature)) continue;
             if (!options.Enabled || !MayQueue(player, feature)) continue;
+            bool roll = chance > 0f && _random.NextDouble() < chance;
+            if (!roll && !anyRealWaiting && checkedRefusalsThisScan) continue;
+            checkedRefusalsThisScan = true;
             List<PlayerbotBattlegroundChoice> eligible = PlayerbotBattlegroundBrackets.Eligible(player.Level, manager.TemplateOf,
                 type => HasObjectiveContent(feature, type) && (type != BattlegroundType.ArathiBasin || KnowsBannerSpell(player)),
                 type => !IsSetAside(bot.BotId, type) && FindMaster(player, type) is not null, Refused);
-            if (eligible.Count == 0) continue;
-            bool roll = chance > 0f && _random.NextDouble() < chance;
+            if (eligible.Count == 0 || (!roll && !anyRealWaiting)) continue;
             if (_demand.Pick(eligible, player.Team, manager.TemplateOf, options, roll, _random.NextDouble()) is not { } choice
                 || FindMaster(player, choice.Type) is not { } master) continue;
             var tracked = new Tracked(bot.BotId, player.Name)

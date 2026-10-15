@@ -256,6 +256,7 @@ internal sealed class PlayerbotRisk
         {
             for (int index = 0; index < found; index++)
             {
+                if (index > 0 && PlayerbotThinkProbe.Active is { Refused: > 0 }) break;
                 Creature candidate = _candidates[index].Creature!;
                 PlayerbotEngagement verdict = Assess(player, candidate, questObjective && candidate.Entry == preferredEntry, out PlayerbotRoute? detour);
                 first ??= verdict;
@@ -497,9 +498,11 @@ internal sealed class PlayerbotRisk
         if (flat.Length() < 1f) return null;
         Vector3 side = Vector3.Normalize(new Vector3(-flat.Y, flat.X, 0));
         Vector3 middle = (here + spot) / 2f;
+        using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         foreach (float offset in (float[])[15f, 25f, 35f])
             foreach (float sign in (float[])[1f, -1f])
             {
+                if (PlayerbotThinkProbe.Active is { Refused: > 0 }) return null;
                 Vector3 waypoint = middle + (side * offset * sign);
                 if (!PlayerbotNavigation.TryPlan(player, waypoint, _options, out PlayerbotRoute? route, trial: true) || route is null) continue;
                 List<Vector3> points = [.. route.Points, spot];

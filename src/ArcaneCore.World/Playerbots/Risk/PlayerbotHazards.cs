@@ -161,19 +161,67 @@ internal sealed class PlayerbotHazards
             if (hazard.MapId == mapId && hazard.Creature.IsEmpty && (!chase || hazard.Kind == DeathLoopKind)
                 && hazard.Covers(start) && hazard.Covers(points[^1]))
                 return hazard;
+        _gapOther.Clear();
+        foreach (PlayerbotHazard hazard in _hazards)
+            if (hazard.MapId == mapId && !hazard.Covers(start)) _gapOther.Add(hazard);
+        _gapStrong.Clear();
+        if (strong)
+            foreach ((PlayerbotHazard hazard, uint _) in _strong.Values)
+                if (hazard.MapId == mapId && Live(hazard, nowMs) && (!completedReturn || !hazard.ReturnPassable) && !hazard.Covers(start))
+                    _gapStrong.Add(hazard);
+        if (_gapOther.Count == 0 && _gapStrong.Count == 0) return null;
+
+        ReadOnlySpan<PlayerbotHazard> otherSpan = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_gapOther);
+        ReadOnlySpan<PlayerbotHazard> strongSpan = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_gapStrong);
+        Span<int> segOther = stackalloc int[otherSpan.Length];
+        Span<int> segStrong = stackalloc int[strongSpan.Length];
+
         for (int index = 1; index < points.Count; index++)
         {
             Vector3 a = points[index - 1], b = points[index];
+            float minX = MathF.Min(a.X, b.X), maxX = MathF.Max(a.X, b.X);
+            float minY = MathF.Min(a.Y, b.Y), maxY = MathF.Max(a.Y, b.Y);
+            float minZ = MathF.Min(a.Z, b.Z), maxZ = MathF.Max(a.Z, b.Z);
+
+            int segOtherCount = 0;
+            for (int h = 0; h < otherSpan.Length; h++)
+            {
+                ref readonly PlayerbotHazard hazard = ref otherSpan[h];
+                float r = hazard.Radius;
+                if (hazard.At.X + r >= minX && hazard.At.X - r <= maxX
+                    && hazard.At.Y + r >= minY && hazard.At.Y - r <= maxY
+                    && hazard.At.Z + r >= minZ && hazard.At.Z - r <= maxZ)
+                    segOther[segOtherCount++] = h;
+            }
+
+            int segStrongCount = 0;
+            for (int h = 0; h < strongSpan.Length; h++)
+            {
+                ref readonly PlayerbotHazard hazard = ref strongSpan[h];
+                float r = hazard.Radius;
+                if (hazard.At.X + r >= minX && hazard.At.X - r <= maxX
+                    && hazard.At.Y + r >= minY && hazard.At.Y - r <= maxY
+                    && hazard.At.Z + r >= minZ && hazard.At.Z - r <= maxZ)
+                    segStrong[segStrongCount++] = h;
+            }
+
+            if (segOtherCount == 0 && segStrongCount == 0) continue;
+
             int steps = Math.Max(1, (int)MathF.Ceiling(Vector3.Distance(a, b) / 2f));
             for (int step = 1; step <= steps; step++)
             {
                 Vector3 point = Vector3.Lerp(a, b, (float)step / steps);
-                foreach (PlayerbotHazard hazard in _hazards)
-                    if (hazard.MapId == mapId && hazard.Covers(point) && !hazard.Covers(start)) return hazard;
-                if (!strong) continue;
-                foreach ((PlayerbotHazard hazard, uint _) in _strong.Values)
-                    if (hazard.MapId == mapId && Live(hazard, nowMs) && (!completedReturn || !hazard.ReturnPassable)
-                        && hazard.Covers(point) && !hazard.Covers(start)) return hazard;
+                for (int o = 0; o < segOtherCount; o++)
+                {
+                    ref readonly PlayerbotHazard hazard = ref otherSpan[segOther[o]];
+                    if (hazard.Covers(point)) return hazard;
+                }
+
+                for (int s = 0; s < segStrongCount; s++)
+                {
+                    ref readonly PlayerbotHazard hazard = ref strongSpan[segStrong[s]];
+                    if (hazard.Covers(point)) return hazard;
+                }
             }
         }
 
@@ -236,12 +284,39 @@ internal sealed class PlayerbotHazards
             if (hazard.MapId == mapId && !hazard.Covers(from)) _gapOther.Add(hazard);
         if (_gapStrong.Count == 0) return 0;
 
+        ReadOnlySpan<PlayerbotHazard> strongSpan = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_gapStrong);
+        ReadOnlySpan<PlayerbotHazard> otherSpan = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_gapOther);
+        Span<int> rayStrong = stackalloc int[strongSpan.Length];
+        Span<int> rayOther = stackalloc int[otherSpan.Length];
+
         int samples = (int)(GapReachYards / GapStepYards);
         int count = 0;
         for (int k = 0; k < GapDirections; k++)
         {
             float angle = k * MathF.Tau / GapDirections;
             var along = new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f);
+            int rayStrongCount = 0;
+            for (int h = 0; h < strongSpan.Length; h++)
+            {
+                ref readonly PlayerbotHazard hazard = ref strongSpan[h];
+                float hx = hazard.At.X - from.X, hy = hazard.At.Y - from.Y, r = hazard.Radius;
+                float proj = (hx * along.X) + (hy * along.Y);
+                if (proj + r <= -0.01f || proj - r >= GapReachYards + 0.01f) continue;
+                float perpSq = (hx * hx) + (hy * hy) - (proj * proj);
+                if (perpSq < (r * r) + 0.01f) rayStrong[rayStrongCount++] = h;
+            }
+
+            int rayOtherCount = 0;
+            for (int h = 0; h < otherSpan.Length; h++)
+            {
+                ref readonly PlayerbotHazard hazard = ref otherSpan[h];
+                float hx = hazard.At.X - from.X, hy = hazard.At.Y - from.Y, r = hazard.Radius;
+                float proj = (hx * along.X) + (hy * along.Y);
+                if (proj + r <= -0.01f || proj - r >= GapReachYards + 0.01f) continue;
+                float perpSq = (hx * hx) + (hy * hy) - (proj * proj);
+                if (perpSq < (r * r) + 0.01f) rayOther[rayOtherCount++] = h;
+            }
+
             float firstBlocked = -1f, lastStrong = -1f, otherFirst = -1f, exposure = 0f;
             for (int i = 1; i <= samples; i++)
             {
@@ -249,8 +324,9 @@ internal sealed class PlayerbotHazards
                 Vector3 point = from + (along * distance);
                 bool inStrong = false;
                 float depth = 0f;
-                foreach (PlayerbotHazard hazard in _gapStrong)
+                for (int s = 0; s < rayStrongCount; s++)
                 {
+                    ref readonly PlayerbotHazard hazard = ref strongSpan[rayStrong[s]];
                     float dx = hazard.At.X - point.X, dy = hazard.At.Y - point.Y;
                     float r = hazard.Radius;
                     float flatSq = (dx * dx) + (dy * dy);
@@ -261,8 +337,8 @@ internal sealed class PlayerbotHazards
                 }
 
                 bool inOther = false;
-                foreach (PlayerbotHazard hazard in _gapOther)
-                    if (hazard.Covers(point))
+                for (int o = 0; o < rayOtherCount; o++)
+                    if (otherSpan[rayOther[o]].Covers(point))
                     {
                         inOther = true;
                         break;

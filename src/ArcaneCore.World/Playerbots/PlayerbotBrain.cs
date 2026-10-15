@@ -983,6 +983,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
             PlayerbotThinkProbe.Phase("quest destinations");
             if (_quests.PreferredCreatureEntry == 0 && player.Combat.Victim is null
+                && (PlayerbotThinkProbe.Active?.Queries ?? 0) < 12
                 && _destinations.HasQuestCandidate(player))
             {
                 // Available quest travel precedes optional idle grinding. Actual combat,
@@ -1041,24 +1042,27 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _lootOpened = false;
             if (_target is null)
             {
-                PlayerbotThinkProbe.Phase("grind destinations");
-                uint huntEntry = _quests.PreferredCreatureEntry != 0 ? _quests.PreferredCreatureEntry : materialDropper;
-                PlayerbotGoalKind huntGoal = huntEntry != 0 && _quests.PreferredItemUseId == 0
-                    ? PlayerbotGoalKind.Grind : PlayerbotGoalKind.Quest;
-                _planningGoal = huntGoal;
-                bool huntPlanned = _destinations.Update(player, huntEntry, interval, preferredQuestId: _quests.PreferredQuestId);
-                _planningGoal = null;
-                if (huntPlanned)
+                if ((PlayerbotThinkProbe.Active?.Queries ?? 0) < 12)
                 {
-                    AbandonRoute();
-                    _goal = huntGoal;
-                    TargetEntry = _destinations.TargetEntry;
-                    if (_destinations.QuestId != 0) QuestId = _destinations.QuestId;
-                    else if (_quests.PreferredItemUseQuestId != 0) QuestId = _quests.PreferredItemUseQuestId;
-                    else if (_quests.PreferredQuestId != 0) QuestId = _quests.PreferredQuestId;
-                    return;
+                    PlayerbotThinkProbe.Phase("grind destinations");
+                    uint huntEntry = _quests.PreferredCreatureEntry != 0 ? _quests.PreferredCreatureEntry : materialDropper;
+                    PlayerbotGoalKind huntGoal = huntEntry != 0 && _quests.PreferredItemUseId == 0
+                        ? PlayerbotGoalKind.Grind : PlayerbotGoalKind.Quest;
+                    _planningGoal = huntGoal;
+                    bool huntPlanned = _destinations.Update(player, huntEntry, interval, preferredQuestId: _quests.PreferredQuestId);
+                    _planningGoal = null;
+                    if (huntPlanned)
+                    {
+                        AbandonRoute();
+                        _goal = huntGoal;
+                        TargetEntry = _destinations.TargetEntry;
+                        if (_destinations.QuestId != 0) QuestId = _destinations.QuestId;
+                        else if (_quests.PreferredItemUseQuestId != 0) QuestId = _quests.PreferredItemUseQuestId;
+                        else if (_quests.PreferredQuestId != 0) QuestId = _quests.PreferredQuestId;
+                        return;
+                    }
+                    if (_destinations.WaitingForTiles) return; // the route's tiles are being read: keep the goal, plan again next think
                 }
-                if (_destinations.WaitingForTiles) return; // the route's tiles are being read: keep the goal, plan again next think
                 PlayerbotThinkProbe.Phase("explore");
                 Explore(player, interval);
                 return;
