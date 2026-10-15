@@ -1,0 +1,92 @@
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Policy;
+using ArcaneCore.World.Tests.Playerbots.Risk;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.Playerbots.Policy;
+
+/// <summary>The policy hook in a real brain: the rule ladder policy changes nothing, a model's different pick is tried first.</summary>
+public sealed class PlayerbotPolicyBrainTests
+{
+    private const int Thinks = 12;
+
+    [Fact]
+    public async Task WithTheRuleLadderPolicy_TheBrainDoesExactlyWhatTheLadderDoes()
+    {
+        IReadOnlyList<string> ladderOnly = await RunAsync(engine: null);
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true });
+        IReadOnlyList<string> withPolicy = await RunAsync(engine);
+
+        Assert.Equal(ladderOnly, withPolicy);
+        // Not vacuous: the policy really decided on those thinks (and agreed every time) rather than being skipped.
+        PlayerbotPolicyStats stats = engine.Stats;
+        Assert.True(stats.Agreed > 0, $"agreed {stats.Agreed}, missing {stats.Missing}");
+        Assert.Equal(0, stats.Applied);
+        Assert.True(stats.Scored > 0, $"scored {stats.Scored}");
+        // And the ladder did choose the grind target on its own: what the next test's model overrides.
+        Assert.Contains(ladderOnly, line => line.Contains(":Grind/", StringComparison.Ordinal));
+        await engine.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task AModelThatPicksAnotherOpenGoal_IsHonoured()
+    {
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true },
+            policy: new PlayerbotPolicyEngineTests.StubPolicy(PlayerbotPolicyGoal.Explore));
+        await using RiskTestWorld world = await StartAsync();
+        world.Brain.PolicyEngine = engine;
+        Creature mob = await world.OnWorldAsync(() => world.Spawn(Mob(), 50f, 0f));
+        await world.SeeAsync(mob);
+
+        PlayerbotPolicyVerdict? applied = null;
+        for (int i = 0; i < Thinks && applied is null; i++)
+        {
+            await world.ThinkAsync();
+            await world.OnWorldAsync(() => { engine.Dispatch(); return true; });
+            await engine.WhenIdleAsync();
+            applied = await world.OnWorldAsync(() =>
+                world.Brain.PolicyAgent?.LastVerdict is { Source: PlayerbotPolicySource.Applied } verdict ? verdict : (PlayerbotPolicyVerdict?)null);
+        }
+
+        Assert.NotNull(applied);
+        Assert.Equal(PlayerbotPolicyGoal.Explore, applied.Value.Promote);
+        Assert.True(applied.Value.Window!.Open.Contains(PlayerbotPolicyGoal.Grind), "the ladder had a grind target to choose");
+        Assert.Equal(PlayerbotPolicyGoal.Grind, applied.Value.Window.LadderPick);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.Equal(PlayerbotGoalKind.Explore, world.Brain.Goal);
+            Assert.Null(world.Brain.InspectionTarget);
+            return true;
+        });
+        await engine.DisposeAsync();
+    }
+
+    /// <summary>The bot's goal and target after each of <see cref="Thinks"/> thinks next to one grindable mob.</summary>
+    private static async Task<IReadOnlyList<string>> RunAsync(PlayerbotPolicyEngine? engine)
+    {
+        await using RiskTestWorld world = await StartAsync();
+        world.Brain.PolicyEngine = engine;
+        Creature mob = await world.OnWorldAsync(() => world.Spawn(Mob(), 50f, 0f));
+        await world.SeeAsync(mob);
+        var trace = new List<string>();
+        for (int i = 0; i < Thinks; i++)
+        {
+            await world.ThinkAsync();
+            if (engine is not null)
+            {
+                await world.OnWorldAsync(() => { engine.Dispatch(); return true; });
+                await engine.WhenIdleAsync();
+            }
+            trace.Add(await world.OnWorldAsync(() =>
+                $"{world.Brain.LastThinkPhase}:{world.Brain.Goal}/{world.Brain.TargetEntry}/{world.Brain.InspectionTarget?.Entry ?? 0}/{world.Player.X:F1},{world.Player.Y:F1}"));
+        }
+        return trace;
+    }
+
+    private static Task<RiskTestWorld> StartAsync() => RiskTestWorld.StartAsync(options => options.Risk.Enabled = false);
+
+    private static CreatureTemplate Mob() => RiskTestWorld.Template(993_901, level: 1, health: 400);
+}
