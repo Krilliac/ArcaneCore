@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -45,7 +46,7 @@ internal enum TaxiStage : byte { ToMaster, Flying, Done, Failed }
 /// <summary>One bot's taxi trip: where it departs, where it lands, what the flight costs, and the walk to the flight master.</summary>
 internal sealed class TaxiTrip(uint mapId, uint[] nodes, uint fare, uint masterEntry, Vector3 master, Vector3 goal, uint nowMs)
 {
-    public uint MapId { get; } = mapId;
+    public uint MapId { get; internal set; } = mapId;
 
     /// <summary>The route: departure node, any transfer nodes, landing node (two or more).</summary>
     public uint[] Nodes { get; } = nodes;
@@ -71,6 +72,27 @@ internal sealed class TaxiTrip(uint mapId, uint[] nodes, uint fare, uint masterE
     public uint BestMs { get; set; } = nowMs;
     public uint NextPlanMs { get; set; } = nowMs;
     public int Attempts { get; set; }
+
+    /// <summary>When the flight began (world ms), and how long it may take before it is overdue.</summary>
+    public uint FlightStartMs { get; set; }
+
+    public uint FlightBudgetMs { get; set; }
+
+    /// <summary>The next in-flight check, and where the bot was at the last one.</summary>
+    public uint NextWatchMs { get; set; }
+
+    public uint SampleMs { get; set; }
+    public Vector3 SamplePosition { get; set; }
+
+    /// <summary>The bot died (or a chaos probe ran) in flight: where it lands says nothing about the flight.</summary>
+    public bool Interrupted { get; set; }
+
+    /// <summary>Which in-flight anomalies were reported already: one report per trip.</summary>
+    public bool StallReported { get; set; }
+
+    public bool OverdueReported { get; set; }
+    public bool FlagReported { get; set; }
+    public bool NonFiniteReported { get; set; }
 }
 
 /// <summary>
@@ -253,6 +275,30 @@ internal static class PlayerbotTaxi
     /// <summary>The action budget may refuse the flight request this many thinks in a row before the trip is given up.</summary>
     internal const int MaxActivateAttempts = 20;
 
+    /// <summary>The anomaly area of every report in this file (subsystem <c>bot-taxi</c>).</summary>
+    internal const string Area = "taxi";
+
+    /// <summary>In flight the bot is looked at this often (world ms).</summary>
+    internal const uint WatchIntervalMs = 5_000;
+
+    /// <summary>A bot that moved less than this between two in-flight looks did not fly (the flight speed is 32 yards a second).</summary>
+    internal const float StalledYards = 1f;
+
+    /// <summary>The slowest speed a flight is expected to average, in yards per second, over the straight lines between its nodes (the real speed is 32).</summary>
+    internal const float SlowestFlightYardsPerSecond = 8f;
+
+    /// <summary>Time on top of the slowest-speed estimate for a flight to be called overdue (hop changes, a lagging world).</summary>
+    internal const uint FlightGraceMs = 60_000;
+
+    /// <summary>A landing farther than this from the route's last node is off it (a flight ends on its last waypoint, at the node).</summary>
+    internal const float LandingToleranceYards = 50f;
+
+    /// <summary>A landing lower than this below the last node is under the map.</summary>
+    internal const float BelowNodeYards = 100f;
+
+    /// <summary>Failed trips in a row (no landing between) that make a bot's taxi use a repeated failure.</summary>
+    internal const int RepeatedFailures = 3;
+
     private const int MaxAskMemo = 32;
 
     private static readonly ConditionalWeakTable<Player, TaxiTrip> Trips = [];
@@ -264,6 +310,13 @@ internal static class PlayerbotTaxi
         public bool HasBackoff;
         public uint BackoffUntilMs;
         public uint NextScanMs;
+
+        /// <summary>Trips that failed since the last one that landed; the repeated-failure anomaly is reported once at <see cref="RepeatedFailures"/>.</summary>
+        public int Failures;
+
+        /// <summary>The departure node whose flight master spawn could not be found, as last reported (0 = none): one report per node.</summary>
+        public uint MasterMissingNode;
+
         public readonly Dictionary<ulong, uint> AskedUntil = [];
 
         // The last route search, reused while the known nodes, the departure, the destination, the bot's 25-yard cell and its money
@@ -471,7 +524,20 @@ internal static class PlayerbotTaxi
         }
 
         if (!routed) return false;
-        if (FindMasterSpawn(session, player, services, index, mapId, source.Id, here) is not { } found) return false;
+        if (FindMasterSpawn(session, player, services, index, mapId, source.Id, here) is not { } found)
+        {
+            // A known, affordable route whose departure has no flight master the bot may approach: reported once per node, not per plan.
+            if (cache.MasterMissingNode != source.Id)
+            {
+                cache.MasterMissingNode = source.Id;
+                PlayerbotAnomalies.Report(player, Area, "master-not-found",
+                    $"a taxi route {string.Join('>', route)} is known and affordable, but no flight master spawn the bot may approach maps to departure node {source.Id}");
+            }
+
+            return false;
+        }
+
+        cache.MasterMissingNode = 0;
         master = found;
         return true;
     }
@@ -488,6 +554,7 @@ internal static class PlayerbotTaxi
         if (!player.IsInWorld || player.Map is not { } map) return TaxiStep.Traveling;
         if (!player.IsAlive)
         {
+            if (trip.Stage == TaxiStage.Flying) trip.Interrupted = true;
             Cancel(player);
             return TaxiStep.Idle;
         }
@@ -495,8 +562,15 @@ internal static class PlayerbotTaxi
         uint now = session.World.NowMs;
         if (trip.Stage == TaxiStage.Flying)
         {
-            if (IsFlying(player)) return TaxiStep.Traveling;
+            if (IsFlying(player))
+            {
+                if (unchecked((int)(now - trip.NextWatchMs)) >= 0) WatchFlight(session, player, trip, now);
+                return TaxiStep.Traveling;
+            }
+
             trip.Stage = TaxiStage.Done;
+            Memos.GetOrCreateValue(player).Failures = 0;
+            CheckLanding(session, player, trip);
             return TaxiStep.Arrived;
         }
 
@@ -506,30 +580,32 @@ internal static class PlayerbotTaxi
             return TaxiStep.Idle;
         }
 
-        if (map.MapId != trip.MapId) return Fail(session, player, trip, options, now, $"left for map {map.MapId} on the way to the flight master", out failure);
+        if (map.MapId != trip.MapId)
+            return Fail(session, player, trip, options, now, "map-changed", AnomalySeverity.Info, $"left for map {map.MapId} on the way to the flight master", out failure);
         if (session.Services.GetService<QuestNpcFeature>()?.Services is not { } services || services.StateOf(player) is not { } state)
-            return Fail(session, player, trip, options, now, "the NPC services are not available", out failure);
+            return Fail(session, player, trip, options, now, "services-unavailable", AnomalySeverity.Warning, "the NPC services are not available", out failure);
         TaxiIndex index = TaxiIndex.Of(services.Npcs);
         PlayerbotThinkProbe.Phase("taxi");
         if (VisibleMaster(player, services, index, trip.Nodes[0], session.Services.GetService<CreatureWorldFeature>()?.Content) is { } master)
-            return Board(session, player, trip, options, state, master, now, out failure);
+            return Board(session, player, trip, options, state, index, master, now, out failure);
 
         Vector3 here = new(player.X, player.Y, player.Z);
         if (Vector3.Distance(here, trip.Master) <= AtSpawnYards)
-            return Fail(session, player, trip, options, now, "no flight master of the departure node can be talked to where it stands", out failure);
+            return Fail(session, player, trip, options, now, "master-missing", AnomalySeverity.Warning,
+                "no flight master of the departure node can be talked to where it stands", out failure);
         if (!Walk(session, player, trip, options, elapsedMs, now))
-            return Fail(session, player, trip, options, now, "no way to the flight master", out failure);
+            return Fail(session, player, trip, options, now, "master-unreachable", AnomalySeverity.Warning, "no way to the flight master", out failure);
         return TaxiStep.Traveling;
     }
 
-    private static TaxiStep Board(WorldSession session, Player player, TaxiTrip trip, PlayerbotOptions options, PlayerNpcState state, NpcInfo master,
+    private static TaxiStep Board(WorldSession session, Player player, TaxiTrip trip, PlayerbotOptions options, PlayerNpcState state, TaxiIndex index, NpcInfo master,
         uint now, out string? failure)
     {
         failure = null;
         if (!TaxiIndex.IsKnown(state.TaxiMask, trip.Nodes[0]))
-            return Fail(session, player, trip, options, now, "the departure node is no longer known", out failure);
+            return Fail(session, player, trip, options, now, "node-forgotten", AnomalySeverity.Info, "the departure node is no longer known", out failure);
         if (player.Money < trip.Fare)
-            return Fail(session, player, trip, options, now, "the bot can no longer pay the fare", out failure);
+            return Fail(session, player, trip, options, now, "cannot-pay", AnomalySeverity.Info, "the bot can no longer pay the fare", out failure);
         // A client reports itself standing before it asks for a flight (ERR_TAXIPLAYERMOVING / NOTSTANDING).
         if (!PlayerbotMovementControl.Stop(session, player)) return TaxiStep.Traveling;
         WorldOpcode opcode = trip.Nodes.Length == 2 ? WorldOpcode.CmsgActivatetaxi : WorldOpcode.CmsgActivatetaxiexpress;
@@ -541,11 +617,12 @@ internal static class PlayerbotTaxi
             if (session.ManagedBudget is { Remaining: <= 0 })
             {
                 return ++trip.Attempts > MaxActivateAttempts
-                    ? Fail(session, player, trip, options, now, "the action budget never allowed the flight request", out failure)
+                    ? Fail(session, player, trip, options, now, "budget-starved", AnomalySeverity.Warning, "the action budget never allowed the flight request", out failure)
                     : TaxiStep.Traveling;
             }
 
-            return Fail(session, player, trip, options, now, "the session refused the flight request (closed, settling a quest reward, or not in the world)", out failure);
+            return Fail(session, player, trip, options, now, "session-refused", AnomalySeverity.Warning,
+                "the session refused the flight request (closed, settling a quest reward, or not in the world)", out failure);
         }
 
         IReadOnlyList<ManagedSessionPacket> replies = session.DrainManagedPackets(WorldOpcode.SmsgActivatetaxireply);
@@ -556,19 +633,128 @@ internal static class PlayerbotTaxi
                 if (packet.Payload.Length >= 4 && BitConverter.ToUInt32(packet.Payload, 0) != (uint)ActivateTaxiReply.Ok)
                 {
                     var reply = (ActivateTaxiReply)BitConverter.ToUInt32(packet.Payload, 0);
-                    return Fail(session, player, trip, options, now, $"the server refused the flight: {reply}", out failure);
+                    // A bot that is busy (in combat) when it asks is an expected, counted refusal; any other refusal is the server saying no to a request the bot checked.
+                    return Fail(session, player, trip, options, now, "activate-refused",
+                        reply == ActivateTaxiReply.PlayerBusy ? AnomalySeverity.Info : AnomalySeverity.Warning, $"the server refused the flight: {reply}", out failure);
                 }
             }
 
-            return Fail(session, player, trip, options, now, "the server did not start the flight", out failure);
+            return Fail(session, player, trip, options, now, "flight-not-started", AnomalySeverity.Warning, "the server did not start the flight", out failure);
         }
 
         trip.Stage = TaxiStage.Flying;
         trip.Route = null;
+        BeginFlightWatch(player, trip, index, now);
         return TaxiStep.Traveling;
     }
 
-    private static TaxiStep Fail(WorldSession session, Player player, TaxiTrip trip, PlayerbotOptions options, uint now, string why, out string? failure)
+    /// <summary>Record when and where the flight began and how long it may take (the straight lines between the route's nodes at the slowest expected speed, plus a grace).</summary>
+    private static void BeginFlightWatch(Player player, TaxiTrip trip, TaxiIndex index, uint now)
+    {
+        float length = 0f;
+        TaxiNode? previous = null;
+        foreach (uint id in trip.Nodes)
+        {
+            TaxiNode? node = index.Node(id);
+            if (node is not null && previous is not null) length += Vector3.Distance(new Vector3(previous.X, previous.Y, previous.Z), new Vector3(node.X, node.Y, node.Z));
+            previous = node ?? previous;
+        }
+
+        trip.FlightStartMs = now;
+        trip.FlightBudgetMs = FlightGraceMs + (uint)Math.Min(length / SlowestFlightYardsPerSecond * 1000f, 3_600_000f);
+        trip.NextWatchMs = unchecked(now + WatchIntervalMs);
+        trip.SampleMs = now;
+        trip.SamplePosition = new Vector3(player.X, player.Y, player.Z);
+    }
+
+    /// <summary>
+    /// One look at a bot in the air, every <see cref="WatchIntervalMs"/>: a finite position, the flag matched by a flight the server holds,
+    /// the bot moving, and the flight inside its time budget. Each anomaly is reported once per trip. Cost on a bot in the air: one
+    /// comparison per think, and a few float operations every five seconds.
+    /// </summary>
+    private static void WatchFlight(WorldSession session, Player player, TaxiTrip trip, uint now)
+    {
+        trip.NextWatchMs = unchecked(now + WatchIntervalMs);
+        if (session.IsInChaosProbe) trip.Interrupted = true;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        if (!IsFinite(here))
+        {
+            if (!trip.NonFiniteReported)
+            {
+                trip.NonFiniteReported = true;
+                PlayerbotAnomalies.Report(player, Area, "flight-nonfinite-position", $"the bot's position is not finite in flight (route {string.Join('>', trip.Nodes)})", AnomalySeverity.Error);
+            }
+
+            return;
+        }
+
+        uint sinceSample = unchecked(now - trip.SampleMs);
+        if (!trip.StallReported && sinceSample >= WatchIntervalMs && Vector3.Distance(here, trip.SamplePosition) < StalledYards)
+        {
+            trip.StallReported = true;
+            PlayerbotAnomalies.Report(player, Area, "flight-stalled",
+                $"the flight is on but the bot moved {Vector3.Distance(here, trip.SamplePosition):F2} yards in {sinceSample} ms (route {string.Join('>', trip.Nodes)})");
+        }
+
+        trip.SampleMs = now;
+        trip.SamplePosition = here;
+
+        if (!trip.FlagReported && session.Services.GetService<NpcServicesFeature>()?.Flights is { } flights && !flights.IsFlying(player))
+        {
+            trip.FlagReported = true;
+            PlayerbotAnomalies.Report(player, Area, "flag-without-flight",
+                $"the taxi flight flag is set but the flight system holds no flight for the bot: it will never land (route {string.Join('>', trip.Nodes)})", AnomalySeverity.Error);
+        }
+
+        uint inFlightMs = unchecked(now - trip.FlightStartMs);
+        if (!trip.OverdueReported && inFlightMs > trip.FlightBudgetMs)
+        {
+            trip.OverdueReported = true;
+            PlayerbotAnomalies.Report(player, Area, "flight-overdue",
+                $"still in the air {inFlightMs} ms after take-off, budget {trip.FlightBudgetMs} ms (route {string.Join('>', trip.Nodes)})");
+        }
+    }
+
+    /// <summary>
+    /// The bot is out of the air after a flight this trip began: did it land where the route ends, in the world, with the flight state
+    /// cleared? Skipped after a death or a chaos probe in flight (the landing then says nothing about the flight). Once per landing.
+    /// </summary>
+    private static void CheckLanding(WorldSession session, Player player, TaxiTrip trip)
+    {
+        if (session.IsInChaosProbe) trip.Interrupted = true;
+        if ((player.UnitFlags & UnitFlags.RemoveClientControl) != 0
+            || session.Services.GetService<NpcServicesFeature>()?.Flights?.IsFlying(player) == true)
+            PlayerbotAnomalies.Report(player, Area, "flight-state-residue", $"the flight ended but the bot is still without client control or held by the flight system (route {string.Join('>', trip.Nodes)})");
+        if (trip.Interrupted) return;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        if (!IsFinite(here))
+        {
+            PlayerbotAnomalies.Report(player, Area, "landed-nonfinite", $"the bot landed at a non-finite position (route {string.Join('>', trip.Nodes)})", AnomalySeverity.Error);
+            return;
+        }
+
+        if (player.MapId != trip.MapId)
+        {
+            PlayerbotAnomalies.Report(player, Area, "landed-wrong-map", $"the flight began on map {trip.MapId} and the bot landed on map {player.MapId}");
+            return;
+        }
+
+        if (session.Services.GetService<QuestNpcFeature>()?.Services?.Npcs is not { } npcs || TaxiIndex.Of(npcs).Node(trip.Nodes[^1]) is not { } last) return;
+        Vector3 landing = new(last.X, last.Y, last.Z);
+        if (here.Z < landing.Z - BelowNodeYards)
+        {
+            PlayerbotAnomalies.Report(player, Area, "landed-under-map",
+                $"the bot landed {landing.Z - here.Z:F0} yards below landing node {last.Id} (route {string.Join('>', trip.Nodes)})", AnomalySeverity.Error);
+            return;
+        }
+
+        float off = Vector3.Distance(here, landing);
+        if (off > LandingToleranceYards)
+            PlayerbotAnomalies.Report(player, Area, "landed-off-node", $"the bot landed {off:F0} yards from landing node {last.Id} (route {string.Join('>', trip.Nodes)})");
+    }
+
+    private static TaxiStep Fail(WorldSession session, Player player, TaxiTrip trip, PlayerbotOptions options, uint now, string code, AnomalySeverity severity,
+        string why, out string? failure)
     {
         PlayerbotMovementControl.Stop(session, player);
         trip.Failure = "taxi: " + why;
@@ -578,6 +764,9 @@ internal static class PlayerbotTaxi
         memo.HasBackoff = true;
         memo.BackoffUntilMs = unchecked(now + ((uint)Math.Clamp(options.Taxi.BackoffMinutes, 1, 1440) * 60_000u));
         failure = trip.Failure;
+        PlayerbotAnomalies.Report(player, Area, code, $"{why} (route {string.Join('>', trip.Nodes)})", severity);
+        if (++memo.Failures == RepeatedFailures)
+            PlayerbotAnomalies.Report(player, Area, "repeated-failure", $"{RepeatedFailures} taxi trips failed in a row without a landing, last: {why}");
         return TaxiStep.Failed;
     }
 
