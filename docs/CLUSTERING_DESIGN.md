@@ -359,7 +359,7 @@ validates and applies them on its own tick. Common rules (planned):
 |---|---|---|
 | Warden | Runs on the connection owner (the gateway in cluster mode); not a separate process | 1: needed for Warden under M15.1 without shipping session keys |
 | Playerbot chat / LLM | Optional `Remote` service | 2 |
-| Playerbot planning | Optional `Remote` proposal worker; the bots themselves stay on their map worker | 3 |
+| Playerbot planning | No service: the goal policy scores in process with each map's bots (the Ollama planner was removed) | n/a |
 | Auction house bot | Optional `Remote` planner; custody stays with the auction owner | 4 |
 | Metrics exporter | No service: every role exports its own metrics | n/a |
 | Broadcast and server mail | No service: fixed placement on existing roles | n/a |
@@ -449,7 +449,7 @@ validates and applies them on its own tick. Common rules (planned):
    (a reply goes to the worker that owns the bot; a player sender may be on
    another worker or gateway).
 
-### Playerbot planning (optional Remote) and the bot host decision
+### Playerbot planning and the bot host decision
 
 1. **Boundary.** A managed bot is a Player with a socketless
    `ManagedWorldSession` on a map, and every action is a real CMSG through the
@@ -458,27 +458,14 @@ validates and applies them on its own tick. Common rules (planned):
    run on the world tick (`Playerbots/ManagedPlayerbotFeature.cs:544-596`), and
    the brain reads live Map and Player references
    (for example `Playerbots/PlayerbotBrain.cs:302`, `:437`). All of that stays on
-   the map worker that owns the bot. Only the optional local-model planner can
-   move. It already selects one id from at most 16 closed candidates, off the
-   world thread, every 5 s (`PlayerbotBrain.cs:827-848`,
-   `Playerbots/PlayerbotLocalPlanner.cs:3-8`).
-2. **Contract.** `SelectPlan(request_id, realm, worker incarnation, bot_id,
-   map/instance, owner epoch, facts, candidates, deadline)` returns
-   `PlanChoice(request_id, candidate_id | none)`. The facts are today's
-   `PlayerbotPlannerFacts`: level, health, combat, map, spell count and food. They
-   carry no names or chat. The worker discards a choice that is late, has a stale
-   epoch or names an id it did not offer. The world owns every goal and action;
-   the service owns only the model call. The idempotency key is `request_id`.
-   A choice is a read-only proposal, so a retry is safe.
-3. **Failure.** With no answer, the deterministic brain decides, as it does
-   today when no planner is configured (`PlayerbotBrain.cs:829`).
-4. **Value and cost.** The value is small: inference can run on a GPU host
-   instead of the world host. The model runner is the memory cost (one recorded
-   run of the larger MockClient model committed about 11.8 GiB, playbots.md:597-598).
-   The managed default is a 0.6B model (`Playerbots/PlayerbotOptions.cs:85`).
-   Today's endpoint is hard-coded to loopback (`PlayerbotLocalPlanner.cs:9`) as a
-   deliberate local-only rule. A Remote planner is a policy change that needs an
-   explicit approval.
+   the map worker that owns the bot. The local-model (Ollama) planner this
+   section once proposed to move was removed: the goal policy that replaced it
+   scores each map's bots in process, on the CPU, off the world thread
+   (`Playerbots/Policy/PlayerbotPolicyEngine.cs`; playbots.md, Goal policy).
+2. **No Remote planner.** A bot costs at most a few thousand multiply-adds per
+   snapshot, far less than one RPC, so the policy stays with its map and moves
+   with it when maps move. With no scores, or late ones, the rule ladder decides,
+   as it does with the policy off.
    **No separate playerbot host.** A process that runs bots away from their maps
    would need a replica of map state, or an RPC per decision. The subsystem table
    above rejects both. The measured cost does not justify it: think time is

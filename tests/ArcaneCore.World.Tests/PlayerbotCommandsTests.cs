@@ -22,7 +22,7 @@ public sealed class PlayerbotCommandsTests
         Assert.Equal(2000f, options.MaxRouteYards);
         Assert.Equal(7f, options.MoveSpeed);
         Assert.Equal<uint[]>([0, 1], options.AllowedMaps);
-        Assert.False(options.AllowLocalLlm);
+        Assert.False(options.Policy.Enabled);
         options.Validate();
     }
 
