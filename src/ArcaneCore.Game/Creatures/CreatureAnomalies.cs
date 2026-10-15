@@ -30,7 +30,6 @@ public static class CreatureAnomalies
     public const string WaypointPathMissingCode = "waypoint-path-missing";
 
     public const string ScriptActionUnsupportedCode = "script-action-unsupported";
-    public const string ActionFailedCode = "action-failed";
 
     public const string BossStateInconsistentCode = "boss-state-inconsistent";
 
@@ -197,18 +196,6 @@ public static class CreatureAnomalies
             detail);
     }
 
-    public static void ReportActionFailed(Creature creature, string actionKey, string detail)
-    {
-        if (creature.TryReportFailedAction(actionKey))
-        {
-            AnomalyLedger.Shared.Report(
-                CreatureAiSubsystem,
-                ActionFailedCode,
-                Subject(creature),
-                detail);
-        }
-    }
-
     public static void ReportBossStateInconsistent(Creature creature, string stateKey, string detail)
     {
         if (creature.TryReportBossStateInconsistent(stateKey))
@@ -287,7 +274,6 @@ public sealed partial class Creature
 
     private HashSet<uint>? _reportedMissingWaypointPaths;
     private HashSet<string>? _reportedUnsupportedScripts;
-    private HashSet<string>? _reportedFailedActions;
     private HashSet<string>? _reportedInconsistentStates;
 
     internal string GetAnomalySubject()
@@ -547,9 +533,6 @@ public sealed partial class Creature
 
     internal bool TryReportUnsupportedScript(string detail)
         => (_reportedUnsupportedScripts ??= []).Add(detail);
-
-    internal bool TryReportFailedAction(string actionKey)
-        => (_reportedFailedActions ??= []).Add(actionKey);
 
     internal bool TryReportBossStateInconsistent(string stateKey)
         => (_reportedInconsistentStates ??= []).Add(stateKey);
@@ -840,7 +823,9 @@ public sealed partial class CreatureMapSystem
 
     private void CheckScriptedStateConsistency(Creature creature)
     {
-        if (creature.IsEvading && creature.Motion.CurrentType != MovementGeneratorType.Home)
+        // SyncCrowdControl deliberately keeps a fear or confuse generator on top of Home while the creature evades: that stack is consistent.
+        if (creature.IsEvading && creature.Motion.CurrentType != MovementGeneratorType.Home
+            && creature.Motion.ActiveCrowdControl == CrowdControlMovement.None)
         {
             if (!creature.BossStateReported("evading-without-home-generator"))
             {

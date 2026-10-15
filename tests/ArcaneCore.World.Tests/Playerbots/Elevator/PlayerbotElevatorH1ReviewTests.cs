@@ -10,9 +10,20 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots.Elevator;
 
 /// <summary>
+/// Every test world names its bot "Controlone" (guid 1), so the anomaly subject is the same in every elevator test and the process-wide
+/// ledger would mix their reports; this collection runs alone, with no other test class in parallel.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class ElevatorAnomalyLedgerCollection
+{
+    public const string Name = "ElevatorAnomalyLedger";
+}
+
+/// <summary>
 /// Hardening wave H1, review 2. The behaviour changes <see cref="PlayerbotElevator"/> kept (each proved against the base behaviour: it fails
 /// when the change is reverted) and a fires / stays-silent pair for every <c>bot-elevator/*</c> anomaly key.
 /// </summary>
+[Collection(ElevatorAnomalyLedgerCollection.Name)]
 public sealed class PlayerbotElevatorH1ReviewTests
 {
     private static PlayerbotOptions Options() => new() { Enabled = true, ThinkIntervalMs = 100 };

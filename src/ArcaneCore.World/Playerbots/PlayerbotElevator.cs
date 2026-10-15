@@ -1812,9 +1812,9 @@ internal static class PlayerbotElevator
     /// </summary>
     internal static Vector3? LandingBeside(Map map, Vector3 stop, Vector3 toward)
     {
-        if (ElevatorRegions.IsVaultLift(map.MapId, stop))
+        if (ElevatorRegions.IsVaultLift(map.MapId, stop) && FindOnRings(map, stop, toward, VaultLandingRadii) is { } vaultLanding)
         {
-            return FindOnRings(map, stop, toward, VaultLandingRadii);
+            return vaultLanding;
         }
 
         return FindOnRings(map, stop, toward, LandingRadii);
@@ -1822,7 +1822,6 @@ internal static class PlayerbotElevator
         static Vector3? FindOnRings(Map map, Vector3 stop, Vector3 toward, ReadOnlySpan<float> radii)
         {
             bool hasMesh = map.Collision.MeshPoints is not null;
-            Vector3? firstAny = null;
             foreach (float radius in radii)
             {
                 Vector3? bestMesh = null;
@@ -1852,10 +1851,10 @@ internal static class PlayerbotElevator
                 }
 
                 if (bestMesh is not null) return bestMesh;
-                firstAny ??= bestAny; // the nearest ring with a floor: used only when no ring has a walkable-mesh point
+                if (bestAny is not null) return bestAny; // the nearest ring with a floor: the bot steps the least
             }
 
-            return firstAny;
+            return null;
         }
     }
 
