@@ -70,6 +70,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     private readonly Dictionary<Key, Retained> _retained = [];
     private readonly Dictionary<int, HashSet<Key>> _retainedByCharacter = [];
     private readonly Dictionary<int, int> _rowsPerCharacter = [];
+    private readonly HashSet<int> _backlogged = []; // characters whose refusal at the limit was already reported (this episode)
+    private readonly List<string> _droppedWrites = []; // writes refused because the channel was closed, reported once the gate is released
     private int _rowsTotal;
     private long _epoch;
     private Exception? _terminalFailure;
@@ -184,47 +186,68 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     public bool TrySetSocial(int characterId, int otherId, SocialFlags flags)
     {
         var key = new Key(KeyKind.Row, characterId, otherId);
+        bool accepted = true;
+        bool reportStopped = false;
+        bool reportBacklog = false;
+        int rowsTotal = 0;
         lock (_gate)
         {
             if (_stopped)
             {
                 _logger.LogError("social write queue stopped; friend write for character {Character} lost", characterId);
-                AnomalyLedger.Shared.Report(
-                    "persist",
-                    "write-dropped-on-shutdown",
-                    $"character {characterId}",
-                    $"queue=SocialWriteQueue character={characterId} reason=queue-stopped",
-                    AnomalySeverity.Error);
-                return false;
+                reportStopped = true;
+                accepted = false;
             }
-
-            bool tracked = _queued.ContainsKey(key) || _retained.ContainsKey(key);
-            if (!tracked)
+            else
             {
-                if (OverLimit(characterId))
+                bool tracked = _queued.ContainsKey(key) || _retained.ContainsKey(key);
+                if (!tracked && OverLimit(characterId))
                 {
                     _logger.LogWarning("character {Character} has too many social writes waiting ({Rows} in total); refusing", characterId, _rowsTotal);
-                    AnomalyLedger.Shared.Report(
-                        "persist",
-                        "queue-backlog",
-                        "queue SocialWriteQueue",
-                        $"queue=SocialWriteQueue character={characterId} rowsTotal={_rowsTotal}",
-                        AnomalySeverity.Warning);
-                    return false;
+                    reportBacklog = _backlogged.Add(characterId); // one report per character until it is back under the limit
+                    rowsTotal = _rowsTotal;
+                    accepted = false;
                 }
+                else
+                {
+                    if (!tracked)
+                    {
+                        _backlogged.Remove(characterId);
+                        _rowsPerCharacter[characterId] = _rowsPerCharacter.GetValueOrDefault(characterId) + 1;
+                        _rowsTotal++;
+                    }
 
-                _rowsPerCharacter[characterId] = _rowsPerCharacter.GetValueOrDefault(characterId) + 1;
-                _rowsTotal++;
+                    if (!EnqueueWrite(key, new Payload(flags, null)))
+                    {
+                        ReleaseKey(key);
+                        accepted = false;
+                    }
+                }
             }
-
-            if (!EnqueueWrite(key, new Payload(flags, null)))
-            {
-                ReleaseKey(key);
-                return false;
-            }
-
-            return true;
         }
+
+        if (reportStopped)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"character {characterId}",
+                $"queue=SocialWriteQueue character={characterId} reason=queue-stopped",
+                AnomalySeverity.Error);
+        }
+
+        if (reportBacklog)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "queue-backlog",
+                "queue SocialWriteQueue",
+                $"queue=SocialWriteQueue character={characterId} rowsTotal={rowsTotal}",
+                AnomalySeverity.Warning);
+        }
+
+        ReportDroppedWrites();
+        return accepted;
     }
 
     public void SaveGuild(GuildData guild)
@@ -234,6 +257,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             EnqueueGuildWrite(guild.Id, guild, null);
         }
+
+        ReportDroppedWrites();
     }
 
     public void DeleteGuild(int guildId)
@@ -242,6 +267,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             EnqueueGuildWrite(guildId, null, null);
         }
+
+        ReportDroppedWrites();
     }
 
     public void SavePetition(PetitionData petition)
@@ -251,6 +278,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             EnqueueWrite(new Key(KeyKind.Petition, petition.Id, 0), new Payload(SocialFlags.None, null, petition));
         }
+
+        ReportDroppedWrites();
     }
 
     public void DeletePetition(int petitionId)
@@ -259,6 +288,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             EnqueueWrite(new Key(KeyKind.Petition, petitionId, 0), new Payload(SocialFlags.None, null));
         }
+
+        ReportDroppedWrites();
     }
 
     /// <summary>
@@ -275,6 +306,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             EnqueueGuildWrite(guild.Id, guild, petitionId);
         }
+
+        ReportDroppedWrites();
     }
 
     /// <summary>
@@ -303,6 +336,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             EnqueueWrite(new Key(KeyKind.Purge, characterId, 0), default);
             EnqueueWrite(new Key(KeyKind.PetitionPurge, characterId, 0), default); // the character's petition rows, after the social rows
         }
+
+        ReportDroppedWrites();
     }
 
     /// <summary>True while a friend/ignore write of the character failed all attempts and is retained.</summary>
@@ -493,12 +528,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             Interlocked.Decrement(ref _pending);
             _logger.LogError("social write queue closed; write for {Kind} {Id} lost", key.Kind, key.A);
-            AnomalyLedger.Shared.Report(
-                "persist",
-                "write-dropped-on-shutdown",
-                "queue SocialWriteQueue",
-                $"queue=SocialWriteQueue kind={key.Kind} id={key.A} reason=queue-closed",
-                AnomalySeverity.Error);
+            _droppedWrites.Add($"kind={key.Kind} id={key.A} reason=queue-closed");
             return false;
         }
 
@@ -539,6 +569,32 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
     }
 
+    /// <summary>Reports the writes <see cref="EnqueueWrite"/> refused because the channel was closed; called after the gate is released.</summary>
+    private void ReportDroppedWrites()
+    {
+        string[] dropped;
+        lock (_gate)
+        {
+            if (_droppedWrites.Count == 0)
+            {
+                return;
+            }
+
+            dropped = [.. _droppedWrites];
+            _droppedWrites.Clear();
+        }
+
+        foreach (string what in dropped)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue SocialWriteQueue",
+                $"queue=SocialWriteQueue {what}",
+                AnomalySeverity.Error);
+        }
+    }
+
     /// <summary>A row with nothing queued and nothing retained no longer counts against the limits.</summary>
     private void ReleaseKey(Key key)
     {
@@ -558,6 +614,10 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
 
         _rowsTotal--;
+        if (_backlogged.Count > 0 && !OverLimit(key.A))
+        {
+            _backlogged.Remove(key.A); // back under the limit: the next refusal is a new episode
+        }
     }
 
     private Exception? RetainedFailureOf(int characterId)
@@ -709,6 +769,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
 
         Exception? failure = await TryWriteAsync(work.Key, value, MaxAttempts).ConfigureAwait(false);
+        bool newEpisode = false;
         lock (_gate)
         {
             if (_queued.TryGetValue(work.Key, out Work? newest) && ReferenceEquals(newest, work))
@@ -730,6 +791,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                     later.Value = later.Value with { Petitions = [.. (later.Value.Petitions ?? []).Concat(pending).Distinct()] };
                 }
 
+                newEpisode = !_retained.ContainsKey(work.Key); // a retained write failing again is the same episode
                 SetRetained(work.Key, value, failure);
                 _logger.LogFault("writequeue-social", failure, "social write for {Kind} {Id} failed; retained for retry", work.Key.Kind, work.Key.A);
             }
@@ -737,7 +799,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             ReleaseKey(work.Key);
         }
 
-        if (failure is not null)
+        if (failure is not null && newEpisode && failure is not CharacterOwnershipRejectedException)
         {
             AnomalyLedger.Shared.Report(
                 "persist",

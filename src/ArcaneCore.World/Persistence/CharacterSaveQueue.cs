@@ -46,6 +46,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private readonly Lock _gate = new();
     private readonly Lock _reportGate = new();
     private readonly Dictionary<int, FailedSave> _failed = [];
+    private readonly HashSet<int> _exhaustedReported = []; // under _gate: characters whose retry-exhausted episode was already reported; cleared when the snapshot is written or discarded
     private readonly HashSet<int> _held = [];
     private readonly HashSet<int> _quarantined = [];
     private readonly HashSet<int> _quarantineAnnounced = []; // quarantined characters whose first refused snapshot was announced (guarded by _gate)
@@ -280,6 +281,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             {
                 // Authoritative publication/loading supersedes any retained old-session state.
                 _failed.Remove(characterId);
+                _exhaustedReported.Remove(characterId);
             }
         }
     }
@@ -296,6 +298,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             _quarantined.Remove(characterId);
             _quarantineAnnounced.Remove(characterId);
             _failed.Remove(characterId);
+            _exhaustedReported.Remove(characterId);
         }
     }
 
@@ -633,6 +636,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 {
                     previousStreak = _busyStreak;
                     _failed.Remove(state.Id);
+                    _exhaustedReported.Remove(state.Id);
                     _busyStreak = 0;
                     _busyUntil = 0;
                 }
@@ -714,17 +718,23 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                bool newEpisode;
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex);
+                    newEpisode = _exhaustedReported.Add(state.Id); // a retained snapshot failing again is the same episode
                 }
 
-                AnomalyLedger.Shared.Report(
-                    "persist",
-                    "write-retry-exhausted",
-                    $"character {state.Id}",
-                    $"queue=CharacterSaveQueue character={state.Id} attempts={attempt} error={ex.GetType().Name}",
-                    AnomalySeverity.Error);
+                if (newEpisode)
+                {
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "write-retry-exhausted",
+                        $"character {state.Id}",
+                        $"queue=CharacterSaveQueue character={state.Id} attempts={attempt} error={ex.GetType().Name}",
+                        AnomalySeverity.Error);
+                }
+
                 _logger.LogFault("writequeue-character", ex, "saving character {Id} failed; authoritative snapshot retained", state.Id);
                 Announce(AnnounceSeverity.Error, "A character save failed; the snapshot is retained", $"character {state.Id}: {ex.GetType().Name}: {ex.Message}", "save-failed");
                 throw;

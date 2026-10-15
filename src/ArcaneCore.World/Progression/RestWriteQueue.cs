@@ -498,6 +498,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             }
         }
 
+        bool newEpisode;
         lock (_gate)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
@@ -505,6 +506,7 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                 return null;
             }
 
+            newEpisode = failure is not null && unsaved.Failure is null; // a retained write failing again is the same episode
             unsaved.Failure = failure;
             if (failure is null && unsaved.Version == version && !unsaved.Queued)
             {
@@ -514,12 +516,16 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
         if (failure is not null && !sweep)
         {
-            AnomalyLedger.Shared.Report(
-                "persist",
-                "write-retry-exhausted",
-                $"character {characterId}",
-                $"queue=RestWriteQueue character={characterId} attempts={attempts} error={failure.GetType().Name}",
-                AnomalySeverity.Error);
+            if (newEpisode && failure is not CharacterOwnershipRejectedException)
+            {
+                AnomalyLedger.Shared.Report(
+                    "persist",
+                    "write-retry-exhausted",
+                    $"character {characterId}",
+                    $"queue=RestWriteQueue character={characterId} attempts={attempts} error={failure.GetType().Name}",
+                    AnomalySeverity.Error);
+            }
+
             logger.LogFault("writequeue-rest", failure, "rested-state writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }
 

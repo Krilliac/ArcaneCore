@@ -501,6 +501,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             {
                 Operation? replacement = null;
                 Action? abandonAction = operation.Abandon;
+                bool newEpisode = true;
                 lock (_gate)
                 {
                     // Only the request that failed is retained; a newer one replaced it and is queued itself.
@@ -514,6 +515,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                         }
                         else
                         {
+                            newEpisode = unsaved.Failure is null; // a retained write failing again is the same episode
                             unsaved.Failure = ex;
                         }
                     }
@@ -523,12 +525,16 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 {
                     if (!sweep)
                     {
-                        AnomalyLedger.Shared.Report(
-                            "persist",
-                            "write-retry-exhausted",
-                            $"character {characterId}",
-                            $"queue=TaxiFlightWriteQueue character={characterId} action={(operation.Route is null ? "delete" : "save")} attempts={MaxAttempts} error={ex.GetType().Name}",
-                            AnomalySeverity.Error);
+                        if (newEpisode && ex is not CharacterOwnershipRejectedException)
+                        {
+                            AnomalyLedger.Shared.Report(
+                                "persist",
+                                "write-retry-exhausted",
+                                $"character {characterId}",
+                                $"queue=TaxiFlightWriteQueue character={characterId} action={(operation.Route is null ? "delete" : "save")} attempts={MaxAttempts} error={ex.GetType().Name}",
+                                AnomalySeverity.Error);
+                        }
+
                         logger.LogFault("writequeue-taxi", ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
                     }
                     else

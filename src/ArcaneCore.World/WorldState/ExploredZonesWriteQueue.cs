@@ -507,6 +507,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             }
         }
 
+        bool newEpisode;
         lock (_gate)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
@@ -514,6 +515,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
                 return null;
             }
 
+            newEpisode = failure is not null && unsaved.Failure is null; // a retained write failing again is the same episode
             unsaved.Failure = failure;
             if (failure is null && unsaved.Version == version && !unsaved.Queued)
             {
@@ -523,12 +525,16 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
 
         if (failure is not null && !sweep)
         {
-            AnomalyLedger.Shared.Report(
-                "persist",
-                "write-retry-exhausted",
-                $"character {characterId}",
-                $"queue=ExploredZonesWriteQueue character={characterId} attempts={attempts} error={failure.GetType().Name}",
-                AnomalySeverity.Error);
+            if (newEpisode && failure is not CharacterOwnershipRejectedException)
+            {
+                AnomalyLedger.Shared.Report(
+                    "persist",
+                    "write-retry-exhausted",
+                    $"character {characterId}",
+                    $"queue=ExploredZonesWriteQueue character={characterId} attempts={attempts} error={failure.GetType().Name}",
+                    AnomalySeverity.Error);
+            }
+
             logger.LogFault("writequeue-exploredzones", failure, "explored-zones writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }
 
