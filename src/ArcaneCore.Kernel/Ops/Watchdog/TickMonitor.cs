@@ -252,8 +252,9 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     public void StopTicking() => _stopped = true;
 
     /// <summary>
-    /// Tick thread, once per tick at its start, with the watchdog clock. Two to five plain stores and the frame histogram's dozen lock-free atomic operations (about 100 ns);
-    /// no allocation, lock or log.
+    /// Tick thread, once per tick at its start, with the watchdog clock. Two to five plain stores and the frame histogram's dozen lock-free atomic operations (about 100 ns), no log.
+    /// Once per histogram slice (20 s) the recording takes the histogram's short rotation lock, and the first use of a slice allocates its 9 KB bucket array; otherwise no allocation or lock.
+    /// With the simulation's histogram attached (<see cref="AttachLatency"/>) the monitor records no frame itself.
     /// </summary>
     public void OnTick(long nowMicros)
     {

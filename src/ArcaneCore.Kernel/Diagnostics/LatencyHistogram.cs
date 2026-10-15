@@ -77,7 +77,7 @@ public readonly record struct LatencyWindows(LatencySnapshot Last1Min, LatencySn
 /// Thread safety: any number of threads may call <see cref="Record(long)"/> and snapshot concurrently, lock-free on the hot path (about a dozen
 /// interlocked operations, no allocation, no lock; a slice rotation, once per sliceLength, takes one short lock). A snapshot is not atomic: a sample
 /// being recorded during it may be counted in the buckets but not yet in the sum (or the other way round), a difference of at most the samples in
-/// flight. A writer that is stalled for a whole window length while recording can land a sample in a newer slice; that is the only way a sample is misplaced.
+/// flight. A writer that is stalled for a whole ring while recording finds its slice already holding newer samples and then counts only in the totals (the slice is never erased for it).
 /// <see cref="Reset"/> must not run concurrently with recording if exact totals matter.
 /// </para>
 /// </summary>
@@ -489,15 +489,19 @@ public sealed class LatencyHistogram
 
 /// <summary>
 /// The process-wide, name-keyed set of latency histograms the periodic summary prints (<c>db.character_save</c>, <c>nav.path_query</c>, <c>login.to_world</c>,
-/// <c>packet.handler.CMSG_...</c>). Bounded: at most <see cref="MaxNames"/> names; a request beyond that returns the single <see cref="OverflowName"/> histogram, so a
-/// caller that builds names from data can never grow memory without bound. Memory: a name under <see cref="LatencyNames.PacketHandlerPrefix"/> (up to 261 opcodes) and the overflow
-/// histogram use the compact configuration (at most 27 KB each, typically a few KB for an opcode that is rarely handled), every other name the default one (up to 424 KB each;
-/// the server registers fewer than ten). The hard ceiling is about 11 MB, the typical total 1 to 3 MB. Any thread; <see cref="Get"/> is a dictionary lookup on the hot path.
+/// <c>packet.handler.CMSG_...</c>). Bounded: at most <see cref="MaxNames"/> names, of which at most <see cref="MaxDefaultNames"/> use the default layout; a request beyond either
+/// cap returns the single <see cref="OverflowName"/> histogram, so a caller that builds names from data can never grow memory without bound. Memory: a name under
+/// <see cref="LatencyNames.PacketHandlerPrefix"/> (up to 261 opcodes) and the overflow histogram use the compact configuration (at most 27 KB each, typically a few KB for an
+/// opcode that is rarely handled), every other name the default one (up to 424 KB each; the server registers fewer than ten). The hard ceiling is 16 x 424 KB + 368 x 27 KB,
+/// about 17 MB; the typical total is 1 to 3 MB. Any thread; <see cref="Get"/> is a dictionary lookup on the hot path.
 /// </summary>
 public sealed class LatencyRegistry
 {
     /// <summary>The most distinct histograms the registry holds.</summary>
     public const int MaxNames = 384;
+
+    /// <summary>The most histograms with the default (424 KB) layout; further names that are not packet handlers go to the overflow histogram.</summary>
+    public const int MaxDefaultNames = 16;
 
     /// <summary>The name of the histogram that takes everything beyond <see cref="MaxNames"/>.</summary>
     public const string OverflowName = "(overflow)";
@@ -506,6 +510,7 @@ public sealed class LatencyRegistry
     private readonly TimeProvider _time;
     private readonly LatencyHistogram _overflow;
     private readonly object _addGate = new();
+    private int _defaultNames;
 
     /// <summary>The process-wide registry.</summary>
     public static LatencyRegistry Shared { get; } = new();
@@ -544,9 +549,20 @@ public sealed class LatencyRegistry
                 return _overflow;
             }
 
-            var created = name.StartsWith(LatencyNames.PacketHandlerPrefix, StringComparison.Ordinal)
+            bool compact = name.StartsWith(LatencyNames.PacketHandlerPrefix, StringComparison.Ordinal);
+            if (!compact && _defaultNames >= MaxDefaultNames)
+            {
+                return _overflow;
+            }
+
+            LatencyHistogram created = compact
                 ? new LatencyHistogram(_time, LatencyHistogram.CompactSliceLength, LatencyHistogram.CompactSlices, keepTotals: false)
                 : new LatencyHistogram(_time);
+            if (!compact)
+            {
+                _defaultNames++;
+            }
+
             _histograms[name] = created;
             return created;
         }

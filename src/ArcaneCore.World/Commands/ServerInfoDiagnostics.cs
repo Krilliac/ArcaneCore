@@ -73,7 +73,8 @@ internal sealed record ServerInfoDiagnosticsValues(
 
 internal static class ServerInfoDiagnostics
 {
-    internal static ServerInfoDiagnosticsValues Capture(WorldRuntime world, IServiceProvider services)
+    /// <summary>The values for <c>.server info</c>. With <paramref name="includeLatency"/> false (a player asked) the latency values stay empty and the registry is not touched.</summary>
+    internal static ServerInfoDiagnosticsValues Capture(WorldRuntime world, IServiceProvider services, bool includeLatency = true)
     {
         TickStatsSnapshot stats = world.Stats.Snapshot();
         int targetMs = Math.Max(1, world.Options.TickIntervalMs);
@@ -111,17 +112,17 @@ internal static class ServerInfoDiagnostics
             PhaseAllocations = stats.Samples > 0 ? (stats.CommandsMeanBytes, stats.MapsMeanBytes, stats.FeaturesMeanBytes) : null,
             TopAllocatingFeatures = stats.FeatureAllocations.Take(3).ToArray(),
             Gc = GcLine(),
-            TickBodyLatency = stats.BodyLatency,
-            FrameLatency = stats.FrameLatency,
-            PhaseLatency = stats.PhaseLatency,
-            OtherLatencies = OtherLatencies(),
+            TickBodyLatency = includeLatency ? stats.BodyLatency : null,
+            FrameLatency = includeLatency ? stats.FrameLatency : null,
+            PhaseLatency = includeLatency ? stats.PhaseLatency : [],
+            OtherLatencies = includeLatency ? OtherLatencies() : [],
             LeanUpdateBlocksSkipped = ArcaneCore.Game.Updates.BotLeanStats.UpdateBlocks,
             LeanRingPacketsSkipped = ArcaneCore.Game.Updates.BotLeanStats.RingPackets,
             LeanRingBytesSkipped = ArcaneCore.Game.Updates.BotLeanStats.RingBytes,
         };
     }
 
-    /// <summary>The registry's named metrics and the top three packet handlers by p99, 15 minute window (bounded work: the packet ranking reads totals only).</summary>
+    /// <summary>The registry's named metrics and the top three packet handlers by p99, 15 minute window (bounded work: one window merge per packet histogram, 3 shown).</summary>
     private static (string Name, LatencySnapshot Last15Min)[] OtherLatencies()
     {
         TimeSpan window = TimeSpan.FromMinutes(15);

@@ -281,14 +281,30 @@ public sealed class LatencyHistogramTests
     public void Registry_IsBoundedAndSendsTheExcessToOneOverflowHistogram()
     {
         var registry = new LatencyRegistry();
-        for (int i = 0; i < LatencyRegistry.MaxNames + 50; i++) registry.Record("name" + i, 10 + i);
+        for (int i = 0; i < LatencyRegistry.MaxNames + 50; i++) registry.Record(LatencyNames.PacketHandlerPrefix + "name" + i, 10 + i);
 
         IReadOnlyList<KeyValuePair<string, LatencyHistogram>> all = registry.Histograms();
         Assert.Equal(LatencyRegistry.MaxNames + 1, all.Count);
         KeyValuePair<string, LatencyHistogram> overflow = all.Single(p => p.Key == LatencyRegistry.OverflowName);
         Assert.Equal(50, overflow.Value.Count);
-        Assert.Same(registry.Get("name0"), registry.Get("name0"));
+        Assert.Same(registry.Get(LatencyNames.PacketHandlerPrefix + "name0"), registry.Get(LatencyNames.PacketHandlerPrefix + "name0"));
         Assert.Same(registry.Get("brand-new"), registry.Get("another-new"));
+    }
+
+    [Fact]
+    public void TheDefaultLayoutNames_AreCappedSeparately_SoTheWorstCaseMemoryHasARealBound()
+    {
+        var registry = new LatencyRegistry();
+        for (int i = 0; i < 100; i++) registry.Record("metric" + i, 100);
+
+        IReadOnlyList<KeyValuePair<string, LatencyHistogram>> all = registry.Histograms();
+        Assert.Equal(LatencyRegistry.MaxDefaultNames + 1, all.Count); // the 16 default-layout names plus the overflow histogram
+        Assert.Equal(100 - LatencyRegistry.MaxDefaultNames, all.Single(p => p.Key == LatencyRegistry.OverflowName).Value.Count);
+        Assert.Same(registry.Get("metric0"), registry.Get("metric0"));
+        Assert.NotSame(registry.Get("metric0"), registry.Get("metric99"));
+        // Packet handlers still get their own (compact) histograms once the default names are used up.
+        registry.Record(LatencyNames.PacketHandlerPrefix + "CMSG_X", 5);
+        Assert.Contains(registry.Histograms(), p => p.Key == LatencyNames.PacketHandlerPrefix + "CMSG_X");
     }
 
     [Fact]

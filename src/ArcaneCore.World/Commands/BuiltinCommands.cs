@@ -149,7 +149,7 @@ public static class BuiltinCommands
         context.Reply(GmStrings.PlayersOnline(active, 0, Math.Max(stats?.MaxActive ?? 0, active), 0));
         context.Reply(GmStrings.Uptime(GmDuration.SecsToTimeString((long)context.World.Uptime.TotalSeconds)));
         bool gm = context.Security >= AccountSecurity.GameMaster; // the latency lines name opcodes and database files: staff only, like the counts below
-        foreach (string line in ServerInfoDiagnostics.Format(ServerInfoDiagnostics.Capture(context.World, context.Session.Services), includeLatency: gm))
+        foreach (string line in ServerInfoDiagnostics.Format(ServerInfoDiagnostics.Capture(context.World, context.Session.Services, includeLatency: gm), includeLatency: gm))
             context.Reply("Server diagnostics: " + line);
         if (gm)
         {

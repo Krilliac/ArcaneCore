@@ -410,10 +410,7 @@ public sealed partial class WorldSession : IPlayerSession
             try
             {
                 packet.Handler.World!(this, player, packet.Payload);
-                if (!IsPlayerbot) // bots would drown the players' figures; their cost shows in the tick phases
-                {
-                    PacketHandlerLatency.Record(Latency, packet.Handler.Opcode, handlerStart);
-                }
+                RecordHandlerLatency(packet.Handler.Opcode, handlerStart);
 
                 LogIfSlowPacket(packet.Handler.Opcode, handlerStart);
             }
@@ -501,6 +498,15 @@ public sealed partial class WorldSession : IPlayerSession
     }
 
     // --- world-thread state transitions (called by handlers) ------------------------
+
+    /// <summary>Add one in-world handler run to the opcode's latency histogram. Playerbot sessions are left out: they would drown the players' figures (their cost shows in the tick phases).</summary>
+    internal void RecordHandlerLatency(WorldOpcode opcode, long startTimestamp)
+    {
+        if (!IsPlayerbot)
+        {
+            PacketHandlerLatency.Record(Latency, opcode, startTimestamp);
+        }
+    }
 
     private long _loginRequestedTimestamp;
 

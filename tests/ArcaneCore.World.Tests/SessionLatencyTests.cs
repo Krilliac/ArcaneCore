@@ -1,6 +1,8 @@
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Tests.Playerbots.Combat;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -48,5 +50,25 @@ public sealed class SessionLatencyTests
 
         Assert.Equal(before + 1, latency.Get(name).Count);
         Assert.Contains(latency.Histograms(), pair => pair.Key == name);
+    }
+
+    [Fact]
+    public async Task APlayerbotSession_FeedsNeitherTheLoginHistogramNorThePacketHistogram_ButARealPlayerDoes()
+    {
+        var latency = new LatencyRegistry();
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton(latency));
+        string packetName = LatencyNames.PacketHandlerPrefix + WorldOpcodeNames.GetName(WorldOpcode.CmsgMessagechat);
+
+        WorldSession bot = await CombatTestSessions.EnterAsync(host, "BOTACCT", "Botone");
+        Assert.True(bot.IsPlayerbot);
+        Assert.Equal(0, latency.Get(LatencyNames.LoginToWorld).Count); // the bot's login completed and recorded nothing
+        bot.RecordHandlerLatency(WorldOpcode.CmsgMessagechat, System.Diagnostics.Stopwatch.GetTimestamp());
+        Assert.Equal(0, latency.Get(packetName).Count);
+
+        await using WorldTestClient player = await host.EnterWorldAsync("REALPLAYER", "Realone");
+        Assert.Equal(1, latency.Get(LatencyNames.LoginToWorld).Count);
+        WorldSession session = host.Registry.Sessions.Single(s => s.Player?.Name == "Realone");
+        session.RecordHandlerLatency(WorldOpcode.CmsgMessagechat, System.Diagnostics.Stopwatch.GetTimestamp());
+        Assert.Equal(1, latency.Get(packetName).Count);
     }
 }

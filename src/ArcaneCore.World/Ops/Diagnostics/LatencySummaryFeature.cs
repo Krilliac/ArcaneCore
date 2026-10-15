@@ -15,7 +15,7 @@ namespace ArcaneCore.World.Ops.Diagnostics;
 /// idle metric and nothing per event: the instrumented call sites only record into the histograms.
 /// <para>
 /// Thread affinity: a world-tick handler like <see cref="AnomalySummaryFeature"/> (the tick only adds elapsed time; a pass reads the histograms lock-free and costs
-/// well under a millisecond: totals for the opcode ranking, one 15 minute window for each line printed).
+/// well under a millisecond: one 15 minute window merge per histogram ranked or printed).
 /// </para>
 /// </summary>
 public sealed class LatencySummaryFeature : IWorldFeature
@@ -100,6 +100,14 @@ public sealed class LatencySummaryFeature : IWorldFeature
             LatencySnapshot recent = pair.Value.Snapshot(Window);
             if (recent.IsEmpty)
             {
+                continue;
+            }
+
+            if (pair.Key == LatencyRegistry.OverflowName)
+            {
+                // Names beyond the registry caps share this compact histogram, which keeps no since-start data.
+                _logger.LogInformation("Latency {Metric}, last 15 min: {Latency} [names beyond the registry caps share this histogram; no totals kept]", pair.Key, recent.Format());
+                lines++;
                 continue;
             }
 
