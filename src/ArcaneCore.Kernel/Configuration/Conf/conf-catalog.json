@@ -13310,7 +13310,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "How many running autonomous bots are automatically selected as chaos bots when `Enabled` is on (0..64, default 4). Bots explicitly assigned with `.playerbot chaos assign` always run probes while `Enabled` is on, even when this is 0. Live through `.reload config`.",
+      "meaning": "How many running autonomous bots are automatically selected as chaos bots when `Enabled` is on (0..1000, default 4). Bots explicitly assigned with `.playerbot chaos assign` always run probes while `Enabled` is on, even when this is 0. Live through `.reload config`.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -17020,6 +17020,22 @@
       "daemons": "World",
       "reload": "start",
       "meaning": "Improved Sap rolls twice per cast, as the vmangos code does (once at cast start, once at completion), instead of once. Default false (the talent text: 30/60/90 percent chance to remain stealthed).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldstealth",
+      "isCollection": false
+    },
+    {
+      "path": "World:Stealth:IncludeStrengthContribution",
+      "section": "World:Stealth",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "When true, adds `0.3 * Strength` of the stealthed target to its stealth skill (mangos-classic ObjectVisibility.cpp:152-178). Default false (vmangos 1.12.1 Unit::CanDetectStealthOf).",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#worldstealth",
       "isCollection": false

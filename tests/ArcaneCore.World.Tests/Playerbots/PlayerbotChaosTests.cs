@@ -203,8 +203,11 @@ public sealed class PlayerbotChaosTests
         string[] turnedOn = await RunConsoleAsync(host, ".playerbot chaos on 6 3");
         Assert.Contains(turnedOn, l => l.Contains("activeBots=6, probesPerThink=3", StringComparison.Ordinal));
 
+        string[] turnedOnAll = await RunConsoleAsync(host, ".playerbot chaos on all 2");
+        Assert.Contains(turnedOnAll, l => l.Contains($"activeBots={PlayerbotChaosOptions.MaxActiveChaosBots}, probesPerThink=2", StringComparison.Ordinal));
+
         string[] afterOn = await RunConsoleAsync(host, ".playerbot chaos");
-        Assert.Contains(afterOn, l => l.StartsWith("Playerbot chaos: on, activeBots=6", StringComparison.Ordinal));
+        Assert.Contains(afterOn, l => l.StartsWith($"Playerbot chaos: on, activeBots={PlayerbotChaosOptions.MaxActiveChaosBots}", StringComparison.Ordinal));
 
         string[] faults = await RunConsoleAsync(host, ".playerbot chaos faults");
         Assert.Equal(["No chaos faults recorded."], faults);

@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       460 keys
+#   WORLD                       461 keys
 #
 ###############################################################################
 
@@ -10823,7 +10823,7 @@ World.Playerbots.Budget.RefreshSeconds = 30
 #
 #    World.Playerbots.Chaos.ActiveChaosBots
 #        Description: How many running autonomous bots are automatically selected as chaos bots when
-#                     Enabled is on (0..64, default 4). Bots explicitly assigned with .playerbot
+#                     Enabled is on (0..1000, default 4). Bots explicitly assigned with .playerbot
 #                     chaos assign always run probes while Enabled is on, even when this is 0. Live
 #                     through .reload config.
 #        Type: int
@@ -13673,6 +13673,19 @@ World.Stealth.GroupVisibilityMode = SameGroup
 #        Docs: docs/reference/configuration.md#worldstealth
 #
 World.Stealth.ImprovedSapRollPerPhase = false
+
+#
+#    World.Stealth.IncludeStrengthContribution
+#        Description: When true, adds 0.3 * Strength of the stealthed target to its stealth skill
+#                     (mangos-classic ObjectVisibility.cpp:152-178). Default false (vmangos 1.12.1
+#                     Unit::CanDetectStealthOf).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldstealth
+#
+World.Stealth.IncludeStrengthContribution = false
 
 #
 #    World.Stealth.MaxCreatureDetectRange

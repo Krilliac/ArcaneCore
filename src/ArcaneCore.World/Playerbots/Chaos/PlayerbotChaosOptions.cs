@@ -11,7 +11,7 @@ namespace ArcaneCore.World.Playerbots.Chaos;
 public sealed class PlayerbotChaosOptions
 {
     /// <summary>The highest <see cref="ActiveChaosBots"/> accepted.</summary>
-    public const int MaxActiveChaosBots = 64;
+    public const int MaxActiveChaosBots = PlayerbotOptions.MaxBotsCeiling;
 
     /// <summary>The highest <see cref="ProbesPerThink"/> accepted.</summary>
     public const int MaxProbesPerThink = 16;
@@ -23,7 +23,7 @@ public sealed class PlayerbotChaosOptions
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// How many running autonomous bots are automatically selected as chaos bots when <see cref="Enabled"/> is on (0..64, default 4).
+    /// How many running autonomous bots are automatically selected as chaos bots when <see cref="Enabled"/> is on (0..1000, default 4).
     /// Bots explicitly assigned with <c>.playerbot chaos assign</c> always run probes while <see cref="Enabled"/> is on, even when this
     /// is 0. Live through <c>.reload config</c>.
     /// </summary>

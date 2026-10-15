@@ -27,7 +27,7 @@ public sealed class PlayerbotChaosCommands : ICommandExtension
                     "Syntax: .playerbot chaos status\nShow chaos engine state, probe counters by category, invariant repairs, assigned bots and recent faults.",
                     Status),
                 new ChatCommand("on", AccountSecurity.Administrator,
-                    "Syntax: .playerbot chaos on [#activeBots] [#probesPerThink]\nEnable chaos bot probes immediately on the running world (optionally setting ActiveChaosBots and ProbesPerThink).",
+                    "Syntax: .playerbot chaos on [all|#activeBots] [#probesPerThink]\nEnable chaos bot probes immediately on the running world (optionally setting ActiveChaosBots to 'all' or a count, and ProbesPerThink).",
                     On),
                 new ChatCommand("off", AccountSecurity.Administrator,
                     "Syntax: .playerbot chaos off\nDisable chaos bot probes immediately.",
@@ -86,9 +86,15 @@ public sealed class PlayerbotChaosCommands : ICommandExtension
         int probesPerThink = feature.BotOptions.Chaos.ProbesPerThink;
         if (parts.Length >= 1)
         {
-            if (!int.TryParse(parts[0].TrimStart('#'), NumberStyles.None, CultureInfo.InvariantCulture, out activeBots)
+            if (string.Equals(parts[0], "all", StringComparison.OrdinalIgnoreCase))
+            {
+                activeBots = PlayerbotChaosOptions.MaxActiveChaosBots;
+            }
+            else if (!int.TryParse(parts[0].TrimStart('#'), NumberStyles.None, CultureInfo.InvariantCulture, out activeBots)
                 || activeBots is < 0 or > PlayerbotChaosOptions.MaxActiveChaosBots)
+            {
                 return false;
+            }
         }
         if (parts.Length == 2)
         {

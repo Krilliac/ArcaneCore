@@ -1384,7 +1384,7 @@ step: a live run has no socket master to give it.
 ### Chaos bots
 
 `World:Playerbots:Chaos` (every key live through `.reload config` and `.playerbot chaos`) designates a bounded slice of running
-autonomous playerbots (`ActiveChaosBots`, default 4, `0..64`, plus any bot explicitly assigned with `.playerbot chaos assign`) as
+autonomous playerbots (`ActiveChaosBots`, default 4, `0..1000`, plus any bot explicitly assigned with `.playerbot chaos assign`) as
 adversarial server-breakers (`PlayerbotChaosEngine`, `PlayerbotChaosOptions`, `PlayerbotChaosCommands`).
 
 * **Execution.** Each active chaos bot continues its ordinary autonomous gameplay so it visits real world states (combat, quests,
@@ -1413,7 +1413,7 @@ adversarial server-breakers (`PlayerbotChaosEngine`, `PlayerbotChaosOptions`, `P
 * **Post-probe invariant checks.** After every probe, `PlayerbotChaosEngine` verifies finite player coordinates (rolling back and
   recording a fault if any handler ever left `NaN`/`Infinity`), `MapCombat.VerifyPlayerLifeInvariants`,
   `MapCombat.VerifyUnitCombatInvariants`, `Map.VerifyVisibleSetInvariants` and `SpellSystem.VerifySpellStateInvariants`.
-* **GM commands.** `.playerbot chaos [status|on [#activeBots] [#probesPerThink]|off|burst [#probes] [$bot]|assign $bot|unassign $bot|faults|clear [all]]`.
+* **GM commands.** `.playerbot chaos [status|on [all|#activeBots] [#probesPerThink]|off|burst [#probes] [$bot]|assign $bot|unassign $bot|faults|clear [all]]`.
 
 ## MockClient playbot (external protocol client)
 
