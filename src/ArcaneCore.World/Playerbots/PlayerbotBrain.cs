@@ -496,6 +496,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         finally
         {
+            // A think that ran any goal but Explore (a quest, combat, an errand, rest, a retreat...) broke the walk to the inn; the choke
+            // point for all of them. Explore thinks that skip the town idle decision report it in Explore().
+            if (_goal != PlayerbotGoalKind.Explore) _townIdle.Interrupted();
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
             _trace.ObserveState(this, _session.World.NowMs);
             CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
@@ -2625,6 +2628,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (idle == TownIdleAction.Linger) { PlayerbotMovementControl.Stop(_session, player); TryBindAtInn(player, town); return; }
             if (idle == TownIdleAction.WalkToTown) { WalkTowardTown(player, town, elapsedMs); return; }
         }
+        else _townIdle.Interrupted(); // no town idle decision this think (another map, another kind of home)
 
         PlayerbotThinkProbe.Phase("explore candidates");
         if (TryExploreSpawns(player, elapsedMs)) return;
@@ -2648,7 +2652,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 AbandonRoute();
             else
             {
-                _wanderLeg = wanderRoute;
+                MarkLeg(wanderRoute, townWalk: false);
                 ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
             }
         }
@@ -2706,7 +2710,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (_route is { } leg && PlayerbotNavigation.TryAdvance(_session, leg, _options, elapsedMs, _session.World.NowMs))
         {
             _exploreRefusals = 0;
-            _wanderLeg = leg;
+            MarkLeg(leg, townWalk: true);
             return;
         }
 
@@ -2717,6 +2721,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     /// <summary>The wandering leg the bot walks now (<see cref="ChainWanderLeg"/> chains only after such a leg, never after one to a spawn).</summary>
     private PlayerbotRoute? _wanderLeg;
+
+    /// <summary>Records the leg the bot walks: only a real explore leg may be chained onward (a town walk ends at the inn, a chained forward leg would carry the bot past it).</summary>
+    internal void MarkLeg(PlayerbotRoute leg, bool townWalk) => _wanderLeg = townWalk ? null : leg;
+
+    /// <summary>Whether <paramref name="route"/> is the explore leg in hand and so may be chained onward (<see cref="ChainWanderLeg"/>).</summary>
+    internal bool CanChain(PlayerbotRoute? route) => route is not null && ReferenceEquals(route, _wanderLeg);
 
     /// <summary>
     /// The end of the next wandering leg from <paramref name="from"/>, facing <paramref name="orientation"/>: roughly that facing (within
@@ -2791,7 +2801,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// </summary>
     private void ChainWanderLeg(Player player, uint elapsedMs)
     {
-        if (_route is not { Complete: false } route || !ReferenceEquals(route, _wanderLeg) || ExploreMovementPaused(player, elapsedMs)
+        if (_route is not { Complete: false } route || !CanChain(route) || ExploreMovementPaused(player, elapsedMs)
             || route.Points.Count < 2 || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
         if (!PlayerbotMotion.TryTimeToEnd(player, route, out uint remainingMs)) return;
         uint gap = PlayerbotMotion.ThinkGapMs(player);

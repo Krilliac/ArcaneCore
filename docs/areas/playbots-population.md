@@ -528,8 +528,11 @@ inn it binds its hearthstone through the server's own path (CMSG_BINDER_ACTIVATE
 sends a graduate back to its start valley. If the spot beside the innkeeper cannot be reached (a counter, an upper floor, Undercity), the walk
 is given up after `WalkStallMs` (20 s) without getting a yard closer and the bot stands where it is for `StallDeferMs` (3 min); it then tries
 again, so an unreachable spot costs one 20 s attempt every 3 min 20 s, never a re-plan on every think. The progress window restarts
-whenever a walk decision follows any other decision, or a pause of more than `WalkResumeGapMs` (5 s) between two walk decisions (a quest,
-a fight, an errand, the explore window), so an interrupted walk is judged from where it resumes. It binds only when an innkeeper is within
+only on an explicit interruption: the brain calls `PlayerbotTownIdle.Interrupted()` after any think that ran a goal other than Explore (a
+quest, a fight, an errand), or an Explore think that made no town idle decision, and the idle decision itself restarts the window when the
+last decision was not a walk (the explore window). There is no wall-clock gap rule: a think gap of 10 to 16 s on a busy server, or a think
+skipped for want of plan budget, does not reset a walk. A town walk is never chained onto a forward wander leg (it would carry the bot past
+the innkeeper). It binds only when an innkeeper is within
 interaction distance (5 yards plus the bounding radii) of the bot, so a stalled bot far from the inn does not bind. The pull back to the home goes to the active home only.
 
 **Travel.** A trip within `TownWalkYards` on the same side of the water is walked (`PlayerbotHomeArea.WalkRangeYards`); a longer one, one

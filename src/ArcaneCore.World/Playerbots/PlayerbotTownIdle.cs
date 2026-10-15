@@ -52,18 +52,22 @@ internal sealed class PlayerbotTownIdle
     /// <summary>A stalled walk is not tried again for this long (ms): the bot stays where it stands, as at the inn, so it never re-plans every think.</summary>
     internal const uint StallDeferMs = 180_000;
 
-    /// <summary>
-    /// A walk to the inn is one run of consecutive <see cref="TownIdleAction.WalkToTown"/> decisions. After any other decision, or a pause
-    /// between two walk decisions longer than this (ms: ten default think intervals, so a loaded server's think gap of a few seconds does
-    /// not split a walk), the bot was doing something else (a quest, combat, an errand, the explore window, a chained wander leg) and the
-    /// progress window restarts: the walk is judged by the progress it makes from where it resumes.
-    /// </summary>
-    internal const uint WalkResumeGapMs = 5_000;
-
     private bool _exploring;
     private uint _until;
     private TownIdleAction _last = TownIdleAction.Explore;
-    private uint _lastAt;
+
+    /// <summary>
+    /// A walk to the inn is one run of consecutive <see cref="TownIdleAction.WalkToTown"/> decisions, with no wall-clock limit between them
+    /// (a think gap is often 10 to 16 seconds on a busy server, and thinks without plan budget skip the decision). The run ends when the
+    /// brain says it did something else in between (a quest, combat, an errand, a goal change, an explore route: the brain calls this
+    /// from the one place it learns of it, <c>PlayerbotBrain.Update</c> and <c>Explore</c>), or when the last decision was not a walk.
+    /// The progress window then restarts: the walk is judged by the progress it makes from where it resumes.
+    /// </summary>
+    internal void Interrupted()
+    {
+        _last = TownIdleAction.Explore;
+        _bestDistance = float.MaxValue;
+    }
     private bool _started;
     private float _bestDistance = float.MaxValue;
     private uint _bestAt;
@@ -74,7 +78,7 @@ internal sealed class PlayerbotTownIdle
     internal TownIdleAction Decide(TownStay stay, float distance, uint nowMs)
     {
         TownIdleAction action = Choose(stay, distance, nowMs);
-        (_last, _lastAt) = (action, nowMs);
+        _last = action;
         return action;
     }
 
@@ -90,8 +94,8 @@ internal sealed class PlayerbotTownIdle
             return TownIdleAction.Linger;
         }
 
-        // Not a continuation of a walk (another action came in between, or a long pause): the progress window starts afresh here.
-        if (!_deferred && (_last != TownIdleAction.WalkToTown || unchecked(nowMs - _lastAt) > WalkResumeGapMs)) _bestDistance = float.MaxValue;
+        // Not a continuation of a walk (the last decision was another action, or the brain reported an interruption): start afresh here.
+        if (!_deferred && _last != TownIdleAction.WalkToTown) _bestDistance = float.MaxValue;
         return WalkStalled(distance, nowMs) ? TownIdleAction.Linger : TownIdleAction.WalkToTown;
     }
 

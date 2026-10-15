@@ -1088,7 +1088,7 @@ public sealed class TownProgressionTests
         Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 40f, 0));
         // A quest, a fight or the explore window takes the bot away (no walk decision for a minute); it comes back farther from the inn.
         uint back = 60_000;
-        Assert.True(back > PlayerbotTownIdle.WalkStallMs + PlayerbotTownIdle.WalkResumeGapMs);
+        idle.Interrupted();                                         // the brain ran a quest, a fight or an errand in between
         Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 300f, back));
         Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 290f, back + 2_000));
         // The same after another action was decided in between (a secondary's explore window).
@@ -1096,10 +1096,50 @@ public sealed class TownProgressionTests
         Assert.Equal(TownIdleAction.WalkToTown, secondary.Decide(TownStay.Secondary, 40f, 0));
         Assert.Equal(TownIdleAction.Explore, secondary.Decide(TownStay.Secondary, 400f, PlayerbotTownIdle.LingerMs + 1));
         Assert.Equal(TownIdleAction.WalkToTown, secondary.Decide(TownStay.Secondary, 500f, PlayerbotTownIdle.LingerMs + PlayerbotTownIdle.ExploreMs + 2_000));
+        // Without an interruption, however long the pause between two walk decisions, the walk is one run and stalls on time.
+        var slow = new PlayerbotTownIdle();
+        Assert.Equal(TownIdleAction.WalkToTown, slow.Decide(TownStay.Capital, 300f, 0));
+        Assert.Equal(TownIdleAction.Linger, slow.Decide(TownStay.Capital, 300f, 60_000)); // no progress for 60 s: given up, not reset by the pause
         // A resumed walk that really makes no progress is still given up, 20 s after its last progress.
         for (uint step = 3_000; step < 2_000 + PlayerbotTownIdle.WalkStallMs; step += 1_000)
             Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 290f, back + step));
         Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 290f, back + 2_000 + PlayerbotTownIdle.WalkStallMs));
+    }
+
+    [Theory]
+    [InlineData(10_000u)]
+    [InlineData(16_000u)]
+    [InlineData(19_999u)]
+    public void AStalledWalk_ThatThinksEveryTenToSixteenSeconds_IsGivenUpOnceTheStallWindowHasPassed(uint gapMs)
+    {
+        // A busy server's think gap is 10 to 16 s; the stall window (20 s from the last progress) must still fire.
+        var idle = new PlayerbotTownIdle();
+        uint at = 100_000;
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, at));
+        TownIdleAction last = TownIdleAction.WalkToTown;
+        uint now = at;
+        while (now - at < PlayerbotTownIdle.WalkStallMs)
+        {
+            now += gapMs;
+            last = idle.Decide(TownStay.Capital, 6f, now);
+            Assert.Equal(now - at >= PlayerbotTownIdle.WalkStallMs ? TownIdleAction.Linger : TownIdleAction.WalkToTown, last);
+        }
+
+        Assert.Equal(TownIdleAction.Linger, last);
+    }
+
+    [Fact]
+    public async Task ATownWalk_IsNeverChainedOntoAForwardWanderLeg_OnlyAnExploreLegIs()
+    {
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 1);
+        PlayerbotBrain brain = world.Bots.FindBrain(Bots(world).Single())!;
+        var route = new PlayerbotRoute([new Vector3(0, 0, 0), new Vector3(30, 0, 0)], 30f);
+        brain.MarkLeg(route, townWalk: true);
+        Assert.False(brain.CanChain(route), "a leg to the inn ends there: chaining would carry the bot past the innkeeper");
+        brain.MarkLeg(route, townWalk: false);
+        Assert.True(brain.CanChain(route));
+        brain.MarkLeg(route, townWalk: true);
+        Assert.False(brain.CanChain(route));
     }
 
     [Fact]
