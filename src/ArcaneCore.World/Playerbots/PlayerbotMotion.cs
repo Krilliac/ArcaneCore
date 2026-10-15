@@ -74,6 +74,8 @@ internal static class PlayerbotMotion
         internal bool LoopPending;
         internal int LoopCount;
         internal uint Packets;
+        /// <summary>The outcome checks' rate limits and samples (<see cref="PlayerbotMotionAnomalies"/>).</summary>
+        internal readonly PlayerbotMotionAnomalies.MotionWatch Watch = new();
 
         internal bool Active => Route is not null;
 
@@ -220,8 +222,10 @@ internal static class PlayerbotMotion
         // The first stretch must be walkable before anything is announced.
         Vector3 probe = Walk(route, current, route.NextPoint, MathF.Max(0.1f, MathF.Min(speed * 0.5f, 2f)),
             HeadingTo(current, route.Points[route.NextPoint]), out int probed, out _, out _, out _);
-        if (Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f || Validate(map, route, route.NextPoint, probed, current, probe) is null)
+        bool noStretch = Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f;
+        if (noStretch || Validate(map, route, route.NextPoint, probed, current, probe) is null)
         {
+            if (!noStretch) PlayerbotMotionAnomalies.ReportStartBlocked(session, player, route, current, now);
             if (!keepMotion) Stop(session, player);
             return false;
         }
@@ -229,8 +233,12 @@ internal static class PlayerbotMotion
         float heading = HeadingTo(current, route.Points[route.NextPoint]);
         // A deliberate start spends the caller's action budget; a running bot changing its route does not.
         WorldOpcode opcode = moving ? WorldOpcode.MsgMoveHeartbeat : WorldOpcode.MsgMoveStartForward;
+        bool hadBudget = session.ManagedBudget is not { Remaining: <= 0 };
         if (!Send(session, player, opcode, current, heading, walk, moving: true, now, budgeted: !moving))
         {
+            // A start the caller's action budget refused is its own back-off, not the server refusing the move.
+            if (hadBudget || moving)
+                PlayerbotMotionAnomalies.ReportMoveRejected(session, player, opcode.ToString(), current, now);
             if (!moving) state.Clear();
             return false;
         }
@@ -264,6 +272,7 @@ internal static class PlayerbotMotion
     /// </summary>
     internal static void Pump(WorldSession session, Player player, uint now)
     {
+        PlayerbotMotionAnomalies.CheckStoredPosition(session, player, now);
         // Between maps the bot's brain does not run; the client half still ends its loading screen (PlayerbotMovementControl).
         if (PlayerbotMovementControl.AcknowledgeTransfer(session, player)) return;
         PlayerbotElevator.Pump(session, player, now);
@@ -286,18 +295,21 @@ internal static class PlayerbotMotion
             return;
         }
 
+        PlayerbotMotionAnomalies.CheckJump(session, player, state, now);
         uint age = Age(now, state.AnchorMs);
         if (age == 0) return;
         if ((player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) != 0
             || ControlLost(player)
             || player.StandState != StandState.Stand || Age(now, state.RenewedMs) > state.LeaseMs)
         {
+            PlayerbotMotionAnomalies.CheckLeaseExpired(session, player, route, state, now);
             StopMotion(session, player, state, now);
             return;
         }
 
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * age / 1000f, state.Heading,
             out int nextPoint, out float heading, out bool arrived, out bool turned);
+        if (!Finite(position)) PlayerbotMotionAnomalies.ReportNonFinite(session, player, "the position the route walk computed", now);
         // A client checks its area triggers every frame; this checks every world tick. Stepping into a volume is reported at
         // once: a heartbeat where the bot is now, then CMSG_AREATRIGGER (PlayerbotAreaTriggers).
         bool entering = PlayerbotAreaTriggers.WouldEnter(session, player, map, position);
@@ -312,21 +324,26 @@ internal static class PlayerbotMotion
         if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position) is not { } valid)
         {
             // The route is no longer walkable here: stop where the last packet put the bot.
+            PlayerbotMotionAnomalies.ReportRouteBlocked(session, player, route, state.Anchor, now);
             StopAt(session, player, state, state.Anchor, state.Heading, route.NextPoint, now);
             return;
         }
 
         if (!Send(session, player, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false))
         {
+            PlayerbotMotionAnomalies.ReportMoveRejected(session, player, "a heartbeat", valid, now);
             state.Clear();
             return;
         }
 
+        int walkedFrom = route.NextPoint;
         route.NextPoint = nextPoint;
         float travelled = Vector2.Distance(Flat(state.Anchor), Flat(valid));
+        Vector3 walkedFromAt = state.Anchor;
         state.Anchor = valid;
         state.AnchorMs = now;
         state.Heading = heading;
+        PlayerbotMotionAnomalies.AfterHeartbeat(session, player, map, state, route, walkedFromAt, walkedFrom, nextPoint, valid, now);
         if (state.Loops.OnPosition(valid, travelled, now) is { } loop) GiveUp(session, player, state, loop, now);
         // Last: a trigger may teleport the bot (the next pump then finds it between maps and forgets the route).
         PlayerbotAreaTriggers.Update(session, player, map, position);
