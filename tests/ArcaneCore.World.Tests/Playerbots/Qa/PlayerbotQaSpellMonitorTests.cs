@@ -54,7 +54,8 @@ internal sealed class QaSpellKit : IDisposable
         World = new WorldRuntime(new WorldRuntimeOptions { UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0, CommandTimeBudgetMs = 0 }, new NoSaves(),
             NullLogger<WorldRuntime>.Instance);
         UnsupportedAuraType = AuraSupport.Entries.First(e => e.Level == AuraSupportLevel.Unsupported).Type;
-        ReferencedAuraType = AuraSupport.Entries.First(e => e.Level == AuraSupportLevel.Referenced && !new SpellSystem(SpellStore.Empty, () => 0).HasAuraHandler(e.Type)).Type;
+        // AuraSupportBaseline has no Referenced entries since 69f0044b promoted them to Handler; any supported type the bare system has no handler for is the same case.
+        ReferencedAuraType = AuraSupport.Entries.First(e => e.Level != AuraSupportLevel.Unsupported && !new SpellSystem(SpellStore.Empty, () => 0).HasAuraHandler(e.Type)).Type;
         System = new SpellSystem(new SpellStore(
         [
             Spell(UnhandledEffect, Effect(NoHandler, 1)),
