@@ -106,6 +106,56 @@ public sealed class MovementHandlerAnomalyTests
         Assert.False(relaxedCapture.Any(NonFinite), relaxedCapture.Describe());
     }
 
+    // --- move/speed-violation through the handler, with client clocks that have nothing to do with server uptime ---------------
+
+    private static AnomalyCapture SpeedFor(string name)
+        => AnomalyLedger.Shared.Capture(n => n.Key == "move/speed-violation" && n.Subject.StartsWith($"player {name} ", StringComparison.Ordinal));
+
+    private static byte[] Timed(float x, uint clientTime)
+    {
+        MovementInfo block = Block(x);
+        block.Time = clientTime;
+        return Encode(block);
+    }
+
+    [Theory]
+    [InlineData("Spdplayera", "SPDACCOUNTA", 5_000_000u)]  // a client that has been up for ~83 minutes, server up for seconds
+    [InlineData("Spdplayerb", "SPDACCOUNTB", 40u)]         // a client clock behind the server's
+    public async Task ATwoHundredYardHop_IsReportedOnce_WhateverTheClientClockReads(string name, string account, uint clientTime)
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync(account, name);
+        await client.CollectAsync();
+        using AnomalyCapture capture = SpeedFor(name);
+
+        await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Timed(StartX + 1, clientTime));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(name)!.Movement.X == StartX + 1, "the first heartbeat");
+        for (int i = 1; i <= 3; i++) // the cheater keeps teleporting: one episode, one report
+        {
+            await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Timed(StartX + 1 + (200 * i), clientTime + (uint)(1000 * i)));
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(name)!.Movement.X == StartX + 1 + (200 * i), "the hop");
+        }
+
+        Assert.Equal(1, capture.Count("move/speed-violation"));
+    }
+
+    [Fact]
+    public async Task OrdinaryWalking_IsSilent_WhateverTheClientClockReads()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("SPDACCOUNTC", "Spdplayerc");
+        await client.CollectAsync();
+        using AnomalyCapture capture = SpeedFor("Spdplayerc");
+
+        for (int i = 1; i <= 5; i++)
+        {
+            await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Timed(StartX + (3 * i), 5_000_000u + (uint)(500 * i)));
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Spdplayerc")!.Movement.X == StartX + (3 * i), "the step");
+        }
+
+        Assert.False(capture.Any("move/speed-violation"), capture.Describe());
+    }
+
     [Fact]
     public async Task ValidMovement_AndABadPacketWhileAnomaliesAreSuppressed_ReportNothing()
     {

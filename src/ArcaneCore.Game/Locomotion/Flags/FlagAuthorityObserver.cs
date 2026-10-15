@@ -16,7 +16,11 @@ public sealed class FlagAuthorityObserver : IClientMovementObserver
 {
     public const float SpeedToleranceMultiplier = 1.5f;
     public const float SpeedSlackYards = 15.0f;
-    public const uint SpeedViolationCooldownMs = 1000;
+    /// <summary>A speed-violation episode ends after this many consecutive legitimate packets.</summary>
+    public const int EpisodeEndsAfterLegitPackets = 5;
+
+    /// <summary>A speed-violation episode also ends when the last violation is at least this old.</summary>
+    public const uint EpisodeQuietMs = 5000;
 
     public void BeforeApply(MovementObserverContext context, in MovementInfo previous, ref MovementInfo incoming)
     {
@@ -54,12 +58,14 @@ public sealed class FlagAuthorityObserver : IClientMovementObserver
             return;
         }
 
-        if (previous.Time == 0 || incoming.Time <= previous.Time)
+        // Both samples on the server clock: the stored block is stamped with the server time of receipt (Unit.ApplyMovement), and the
+        // incoming block is being received now. incoming.Time is the client's own clock and is never compared with it.
+        if (previous.Time == 0)
         {
             return;
         }
 
-        uint dtMs = incoming.Time - previous.Time;
+        uint dtMs = unchecked(nowMs - previous.Time);
         if (dtMs == 0 || dtMs > 60_000)
         {
             return;
@@ -95,15 +101,27 @@ public sealed class FlagAuthorityObserver : IClientMovementObserver
         float maxAllowedDist = (allowedSpeed * dtSec * SpeedToleranceMultiplier) + SpeedSlackYards;
         if (horizDist <= maxAllowedDist)
         {
+            // A legitimate packet: the episode ends after enough of them in a row, or once the player has been quiet long enough.
+            if (state.SpeedViolationInEpisode
+                && (++state.SpeedLegitStreak >= EpisodeEndsAfterLegitPackets
+                    || (state.LastSpeedViolationReportMs is { } lastViolation && unchecked(nowMs - lastViolation) >= EpisodeQuietMs)))
+            {
+                state.SpeedViolationInEpisode = false;
+                state.SpeedLegitStreak = 0;
+            }
+
             return;
         }
 
-        if (state.LastSpeedViolationReportMs is { } lastReport && unchecked(nowMs - lastReport) < SpeedViolationCooldownMs)
+        state.SpeedLegitStreak = 0;
+        bool quiet = state.LastSpeedViolationReportMs is { } last && unchecked(nowMs - last) >= EpisodeQuietMs;
+        state.LastSpeedViolationReportMs = nowMs;
+        if (state.SpeedViolationInEpisode && !quiet)
         {
             return;
         }
 
-        state.LastSpeedViolationReportMs = nowMs;
+        state.SpeedViolationInEpisode = true;
         AnomalySeverity severity = player.Session.IsPlayerbot ? AnomalySeverity.Info : AnomalySeverity.Warning;
         float observedSpeed = horizDist / dtSec;
         AnomalyLedger.Shared.Report(

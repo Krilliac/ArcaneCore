@@ -131,27 +131,49 @@ public sealed class LocomotionAnomalyTests
     }
 
     [Fact]
-    public void SpeedViolation_ASustainedViolation_IsReportedOncePerSecond_NotOncePerPacket()
+    public void SpeedViolation_ASustainedViolation_IsReportedOncePerEpisode()
     {
-        // The brief asks for one report per episode. This check is rate-limited per second instead (SpeedViolationCooldownMs): a cheater
-        // who keeps teleporting is counted once per second of violation, not once per packet. This test pins that behaviour.
+        // An episode ends after EpisodeEndsAfterLegitPackets legitimate packets in a row, or once EpisodeQuietMs have passed since the last
+        // violation; a cheater who keeps teleporting inside one episode is one report, not one per packet or per second.
         (WorldRuntime world, Player player, _) = Setup(4_101_006);
         using AnomalyCapture capture = CaptureFor(4_101_006);
         Prime(world, player);
 
         float x = 0;
-        for (int i = 0; i < 5; i++) // five violating packets inside 500 ms
+        void Violate(uint dtMs = 100)
         {
             x += 100;
-            Hop(world, player, x, 100);
+            Hop(world, player, x, dtMs);
         }
 
+        void Behave(int packets)
+        {
+            for (int i = 0; i < packets; i++)
+            {
+                world.RunTick(100);
+                Client(world, player, At(world, 100 + x));
+            }
+        }
+
+        for (int i = 0; i < 5; i++)
+        {
+            Violate();
+        }
+
+        world.RunTick(1500); // longer than the old one-second cooldown, still the same episode
+        Violate(100);
         Assert.Equal(1, capture.Count(SpeedKey));
 
-        world.RunTick(FlagAuthorityObserver.SpeedViolationCooldownMs);
-        Client(world, player, At(world, 100 + x + 100));
+        Behave(FlagAuthorityObserver.EpisodeEndsAfterLegitPackets - 1);
+        Violate(); // a violation resets the run of legitimate packets: still the same episode
+        Assert.Equal(1, capture.Count(SpeedKey));
 
-        Assert.Equal(2, capture.Count(SpeedKey));
+        Behave(FlagAuthorityObserver.EpisodeEndsAfterLegitPackets);
+        Violate();
+        Assert.Equal(2, capture.Count(SpeedKey)); // a full run of legitimate packets ended the episode
+
+        Violate(FlagAuthorityObserver.EpisodeQuietMs); // no legitimate packet at all, but the quiet period passed
+        Assert.Equal(3, capture.Count(SpeedKey));
     }
 
     [Fact]

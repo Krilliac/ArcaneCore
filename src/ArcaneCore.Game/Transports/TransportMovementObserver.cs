@@ -187,9 +187,11 @@ internal sealed class TransportMovementObserver : IClientMovementObserver
                     else if (!state.SuppressAnomalies)
                     {
                         ulong rawGuid = player.Movement.TransportGuid;
-                        if (rawGuid == 0 || state.LastUnknownTransportGuid != rawGuid)
+                        // LastUnknownTransportGuid 0 means "no claim in progress", so an empty guid is remembered as MaxValue.
+                        ulong claim = rawGuid == 0 ? ulong.MaxValue : rawGuid;
+                        if (state.LastUnknownTransportGuid != claim)
                         {
-                            state.LastUnknownTransportGuid = rawGuid == 0 ? ulong.MaxValue : rawGuid;
+                            state.LastUnknownTransportGuid = claim;
                             AnomalyLedger.Shared.Report(
                                 "move",
                                 "client-transport-unknown",

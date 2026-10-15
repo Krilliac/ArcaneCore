@@ -219,6 +219,32 @@ public sealed class TransportAnomalyTests
         Assert.Contains("(guid 4203003)", Assert.Single(capture.Notices).Subject);
     }
 
+    [Fact]
+    public void ClientTransportUnknown_AnEmptyGuidRepeated_IsOneReportPerEpisode()
+    {
+        WorldRuntime world = ManualWorld();
+        Install(world, Ferry);
+        Player player = TestWorld.CreatePlayer(4_203_005, 100, 0, new FakeSession(4_203_005));
+        world.AddPlayer(player);
+        using AnomalyCapture capture = CaptureFor(4_203_005);
+
+        for (int i = 0; i < 5; i++)
+        {
+            ClientMoves(world, player, ClaimsTransport(0));
+        }
+
+        Assert.Equal(1, capture.Count(Unknown));
+
+        ClientMoves(world, player, ClaimsTransport(0x1FC0_0000_0000_0000UL | 123_458)); // the guid changed: a new claim
+        Assert.Equal(2, capture.Count(Unknown));
+        ClientMoves(world, player, ClaimsTransport(0));
+        Assert.Equal(3, capture.Count(Unknown));
+
+        ClientMoves(world, player, new MovementInfo { X = 100, Y = 0, Z = 5 }); // off the transport: the episode ends
+        ClientMoves(world, player, ClaimsTransport(0));
+        Assert.Equal(4, capture.Count(Unknown));
+    }
+
     // --- ShipTransport.UpdatePassengerPosition ---------------------------------------------------------------------------------
 
     [Fact]
