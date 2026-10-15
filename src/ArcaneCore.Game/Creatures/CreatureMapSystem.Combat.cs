@@ -293,6 +293,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         float leash = creature.Template.Leash;
         if (leash > 0 && !WithinDistance3d(creature, creature.CombatStart ?? creature.Home, leash))
         {
+            RecordLeashResetAnomaly(creature, "hard leash"); // report-only
             EnterEvadeMode(creature);
             return true;
         }

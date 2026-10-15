@@ -344,6 +344,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         byte spawnState = go.Spawn?.State ?? (byte)GameObjectState.Ready;
         if (go.LootState == GameObjectLootState.Activated
             && go.State == GameObjectState.Ready
+            && (go.Flags & GameObjectFlags.InUse) == 0 // every real activation (use, toggle) sets InUse; a script that opens a door and a later toggle that closes it leave Activated+Ready legitimately
             && spawnState == (byte)GameObjectState.Ready)
         {
             desyncDetail = $"Door has LootState=Activated from Ready spawn state but visual/collision State is still Ready.";
