@@ -44,13 +44,40 @@ public sealed class LogonServer(
     /// <summary>The listener's IP-ban list (<see cref="AuthOptions.IpBanCacheSeconds"/>); null before it starts.</summary>
     public RealmIpBanCache? IpBans { get; private set; }
 
+    private TcpListener? _listener;
+
+    /// <summary>
+    /// Bind before returning: BackgroundService runs <see cref="ExecuteAsync"/> on the thread pool, so a listener bound there could be
+    /// unbound when StartAsync returns, and a client connecting at once is refused (at once on Linux). A bind failure surfaces here too.
+    /// </summary>
+    public override Task StartAsync(CancellationToken cancellationToken)
+    {
+        AuthOptions config = options.Value;
+        var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
+        listener.Start();
+        _listener = listener;
+        logger.LogInformation("Logon daemon listening on {Address}:{Port}", config.BindAddress, config.Port);
+        return base.StartAsync(cancellationToken);
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await base.StopAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // ExecuteAsync stops it; this covers a stop that came before ExecuteAsync ever ran. Stop is idempotent.
+            _listener?.Stop();
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         AuthOptions config = options.Value;
         IPAddress bind = IPAddress.Parse(config.BindAddress);
-        var listener = new TcpListener(bind, config.Port);
-        listener.Start();
-        logger.LogInformation("Logon daemon listening on {Address}:{Port}", config.BindAddress, config.Port);
+        TcpListener listener = _listener ?? throw new InvalidOperationException("the logon listener was not started (StartAsync binds it)");
 
         try
         {
