@@ -11328,9 +11328,10 @@ World.Playerbots.ClientFidelity = Lean
 #
 #    World.Playerbots.CombatLaneShare
 #        Description: The share (0.1..0.9) of the think time budget and of MaxActionsPerTick the
-#                     combat lane may use; the rest of both is kept for the other bots so they are
-#                     never starved by a crowd of fights (the lane stops when less than the rest of
-#                     the actions is left, and a single think may still overspend it).
+#                     combat lane may use. The lane gets floor(share × MaxActionsPerTick) actions of
+#                     its own (none at MaxActionsPerTick 1); the rest, at least one, is the other
+#                     bots' and no fight's think can touch it, so they are never starved by a crowd
+#                     of fights. What the combat lane leaves goes to the other bots too.
 #        Type: double
 #        Default: 0.7
 #        Allowed: a number, '.' is the decimal point

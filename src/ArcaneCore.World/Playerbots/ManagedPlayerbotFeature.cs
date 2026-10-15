@@ -92,6 +92,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     internal double? ThinkBudgetMs { get; set; }
 
+    /// <summary>The action budgets the last tick gave the combat lane and the main lane (tests).</summary>
+    internal (int Combat, int Main) LastLaneActions { get; private set; }
+
+    /// <summary>The inputs of the last tick's think budget: tick interval, smoothed non-bot tick time and the time the bots already used (tests).</summary>
+    internal (double TickIntervalMs, double NonBotMs, double SpentMs) LastThinkBudgetInputs { get; private set; }
+
     /// <summary>The think budget (ms) the last tick used (<c>.playerbot cadence</c>).</summary>
     internal double LastThinkBudgetMs => _lastBudgetMs;
 
@@ -1358,12 +1364,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
-        var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
+        // Hard per-lane action budgets (PlayerbotThinkRotation.PriorityActions / ActionReserve): the combat lane draws from its own; the main
+        // lane's is the reserve plus what the combat lane left, created at its first visit, so no fight's think can empty it.
+        int reserve = PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        int combatActions = PlayerbotThinkRotation.PriorityActions(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        var combatBudget = new ManagedActionBudget(combatActions);
+        ManagedActionBudget? mainBudget = null;
+        int mainActions = -1;
         // A fair rotation in two lanes (PlayerbotThinkRotation.TickLanes): bots in combat, dead or ghosts that are due are thought for first, then
         // every bot from the main cursor, until the think time budget (PlayerbotThinkBudget; one think itself is bounded by MaxThinkSearchNodes).
         long thinkStarted = Stopwatch.GetTimestamp();
-        double budgetMs = ThinkBudgetMs ?? _thinkBudget.Budget(world.Options.TickIntervalMs,
-            Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds,
+        double spentMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
+        LastThinkBudgetInputs = (world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs);
+        double budgetMs = ThinkBudgetMs ?? PlayerbotThinkBudget.Compute(world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs,
             _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare);
         _lastBudgetMs = budgetMs;
         uint now = world.NowMs;
@@ -1374,15 +1387,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             index => IsCombatLane(bots[index]) && unchecked(now - bots[index].LastUpdateMs) >= combatIntervalMs
                 ? PlayerbotThinkRotation.ThinkLane.Priority
                 : PlayerbotThinkRotation.ThinkLane.Normal,
-            index =>
+            (index, lane) =>
             {
-                if (budget.Remaining <= 0) { actionLimited = true; return false; }
+                ManagedActionBudget budget = lane == PlayerbotThinkRotation.ThinkLane.Priority
+                    ? combatBudget
+                    : mainBudget ??= new ManagedActionBudget(mainActions = reserve + combatBudget.Remaining);
+                if (budget.Remaining <= 0)
+                {
+                    if (lane == PlayerbotThinkRotation.ThinkLane.Normal) actionLimited = true;
+                    return false;
+                }
+
                 Think(bots[index], budget, index);
                 thinks++;
                 return true;
             },
-            () => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds,
-            () => budget.Remaining, PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare));
+            () => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds);
+        LastLaneActions = (combatActions, mainActions >= 0 ? mainActions : reserve + combatBudget.Remaining);
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
         _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited, budgetMs);
         ReportStarvedBots(bots, now);

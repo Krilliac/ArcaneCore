@@ -76,7 +76,7 @@ public sealed class PlayerbotOptions
     /// </summary>
     public int CombatThinkIntervalMs { get; set; } = 300;
 
-    /// <summary>The share (0.1..0.9) of the think time budget and of <see cref="MaxActionsPerTick"/> the combat lane may use; the rest of both is kept for the other bots so they are never starved by a crowd of fights (the lane stops when less than the rest of the actions is left, and a single think may still overspend it).</summary>
+    /// <summary>The share (0.1..0.9) of the think time budget and of <see cref="MaxActionsPerTick"/> the combat lane may use. The lane gets floor(share × <see cref="MaxActionsPerTick"/>) actions of its own (none at <see cref="MaxActionsPerTick"/> 1); the rest, at least one, is the other bots' and no fight's think can touch it, so they are never starved by a crowd of fights. What the combat lane leaves goes to the other bots too.</summary>
     public double CombatLaneShare { get; set; } = 0.7;
 
     /// <summary>
