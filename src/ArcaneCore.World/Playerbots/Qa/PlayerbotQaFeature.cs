@@ -143,7 +143,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         if (services.GetService<MetricsOptions>() is { Enabled: true }) _findingsMeter = PlayerbotQaMeters.RegisterFindings(aggregator.Snapshot, this);
         if (services.GetService<IOpsAnnouncer>() is { } announcer)
         {
-            aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view);
+            aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view, Redactor);
         }
 
         // Only a host that registered the ledger (UseArcaneDiagnostics) feeds server faults; a bare provider has no ledger to read.

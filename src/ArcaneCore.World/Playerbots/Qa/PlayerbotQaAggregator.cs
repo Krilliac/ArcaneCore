@@ -1225,7 +1225,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 + " at " + (s.Stage.Length != 0 ? s.Stage : "unknown stage"),
             QaSignalKind.TickHang => "world tick hung in " + (s.Stage.Length != 0 ? s.Stage : "unknown phase") + ": " + (s.Reason.Length != 0 ? s.Reason : "unknown work"),
             QaSignalKind.Anomaly => (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
-                + (s.Detail.Length != 0 ? ": " + Short(s.Detail) : string.Empty),
+                + (s.Detail.Length != 0 ? ": " + PlayerbotQaFingerprint.Readable(s.Detail, 120) : string.Empty),
             _ => s.Kind.ToString(),
         };
     }
