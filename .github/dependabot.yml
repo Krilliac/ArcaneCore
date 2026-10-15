@@ -9,6 +9,9 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    # A release must be a week old before it is proposed: a compromised or yanked version is usually caught within days.
+    cooldown:
+      default-days: 7
     groups:
       nuget-minor-and-patch:
         update-types: [minor, patch]
@@ -30,6 +33,9 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    # A release must be a week old before it is proposed: a compromised or yanked version is usually caught within days.
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
