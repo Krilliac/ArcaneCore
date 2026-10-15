@@ -428,6 +428,14 @@ public sealed partial class Creature
 
     internal void ClearHomeUnreachableEpisode() => _homeUnreachableReported = false;
 
+    /// <summary>True while the current stuck episode is already reported: callers skip building the detail text.</summary>
+    internal bool StuckEpisodeReported => _stuckReported;
+
+    /// <summary>True while the current stuck-in-combat episode is already reported: callers skip building the detail text.</summary>
+    internal bool StuckInCombatEpisodeReported => _stuckInCombatReported;
+
+    internal bool BossStateReported(string stateKey) => _reportedInconsistentStates?.Contains(stateKey) ?? false;
+
     internal bool TryReportStuck()
     {
         if (_stuckReported)
@@ -634,16 +642,6 @@ public sealed partial class CreatureMapSystem
         }
 
         CreatureAnomalies.ReportNonFinite(creature, detail);
-
-        if (nonFiniteCoords)
-        {
-            float safeX = float.IsFinite(creature.Home.X) ? creature.Home.X : 0f;
-            float safeY = float.IsFinite(creature.Home.Y) ? creature.Home.Y : 0f;
-            float safeZ = float.IsFinite(creature.Home.Z) ? creature.Home.Z : 0f;
-            float safeO = float.IsFinite(creature.Home.Orientation) ? creature.Home.Orientation : 0f;
-            creature.DiscardSpline();
-            creature.Relocate(safeX, safeY, safeZ, safeO, _serverTime());
-        }
     }
 
     private void CheckUnderMap(Creature creature)
@@ -747,7 +745,7 @@ public sealed partial class CreatureMapSystem
         }
 
         uint stuckMs = creature.AdvanceStuckSample(diffMs);
-        if (stuckMs >= CreatureAnomalies.StuckThresholdMs)
+        if (stuckMs >= CreatureAnomalies.StuckThresholdMs && !creature.StuckEpisodeReported)
         {
             string movingContext = movingKind switch
             {
@@ -796,7 +794,7 @@ public sealed partial class CreatureMapSystem
         if (!hasValidVictim && !hasValidThreat && !hasValidAttacker)
         {
             uint elapsed = creature.AdvanceStuckInCombat(diffMs);
-            if (elapsed >= CreatureAnomalies.StuckInCombatEmptyMs)
+            if (elapsed >= CreatureAnomalies.StuckInCombatEmptyMs && !creature.StuckInCombatEpisodeReported)
             {
                 CreatureAnomalies.ReportStuckInCombat(
                     creature,
@@ -810,7 +808,7 @@ public sealed partial class CreatureMapSystem
         if (victim is not null && (!victim.IsAlive || !ReferenceEquals(victim.Map, Map)))
         {
             uint elapsed = creature.AdvanceStuckInCombat(diffMs);
-            if (elapsed >= CreatureAnomalies.StuckInCombatEmptyMs)
+            if (elapsed >= CreatureAnomalies.StuckInCombatEmptyMs && !creature.StuckInCombatEpisodeReported)
             {
                 CreatureAnomalies.ReportStuckInCombat(
                     creature,
@@ -826,10 +824,14 @@ public sealed partial class CreatureMapSystem
             && (creature.Template.Behaviour & CreatureBehaviourFlags.NoUnreachableEvade) == 0
             && !Map.Combat.Hooks.IsInstanceable(Map.MapId))
         {
-            CreatureAnomalies.ReportStuckInCombat(
-                creature,
-                creature.TargetNotReachableMs,
-                $"unreachable target timer ({creature.TargetNotReachableMs} ms) exceeded evade threshold ({_options.UnreachableTargetEvadeMs} ms) without evading");
+            if (!creature.StuckInCombatEpisodeReported)
+            {
+                CreatureAnomalies.ReportStuckInCombat(
+                    creature,
+                    creature.TargetNotReachableMs,
+                    $"unreachable target timer ({creature.TargetNotReachableMs} ms) exceeded evade threshold ({_options.UnreachableTargetEvadeMs} ms) without evading");
+            }
+
             return;
         }
 
@@ -840,10 +842,13 @@ public sealed partial class CreatureMapSystem
     {
         if (creature.IsEvading && creature.Motion.CurrentType != MovementGeneratorType.Home)
         {
-            CreatureAnomalies.ReportBossStateInconsistent(
-                creature,
-                "evading-without-home-generator",
-                $"Creature {creature.Guid} has IsEvading=true while Motion.CurrentType={creature.Motion.CurrentType}");
+            if (!creature.BossStateReported("evading-without-home-generator"))
+            {
+                CreatureAnomalies.ReportBossStateInconsistent(
+                    creature,
+                    "evading-without-home-generator",
+                    $"Creature {creature.Guid} has IsEvading=true while Motion.CurrentType={creature.Motion.CurrentType}");
+            }
         }
         else
         {
@@ -854,10 +859,13 @@ public sealed partial class CreatureMapSystem
         {
             if (creature.AiImmobilizedCombatOnly && creature.AiImmobilized)
             {
-                CreatureAnomalies.ReportBossStateInconsistent(
-                    creature,
-                    "combat-only-root-leaked-ooc",
-                    $"Creature {creature.Guid} kept combat-only AI root out of combat");
+                if (!creature.BossStateReported("combat-only-root-leaked-ooc"))
+                {
+                    CreatureAnomalies.ReportBossStateInconsistent(
+                        creature,
+                        "combat-only-root-leaked-ooc",
+                        $"Creature {creature.Guid} kept combat-only AI root out of combat");
+                }
             }
             else
             {
@@ -900,6 +908,11 @@ public sealed partial class CreatureMapSystem
     {
         if (_respawnAt.Count == 0 || diffMs == 0)
         {
+            if (_respawnAt.Count == 0 && _reportedDormantRespawnStuck.Count > 0)
+            {
+                _reportedDormantRespawnStuck.Clear();
+            }
+
             return;
         }
 
@@ -911,6 +924,12 @@ public sealed partial class CreatureMapSystem
 
         uint sampleMs = _dormantSampleAccumMs;
         _dormantSampleAccumMs = 0;
+
+        if (_reportedDormantRespawnStuck.Count > 0)
+        {
+            // A spawn that left _respawnAt (spawned, or rescheduled to another time) ends its episode: forget it.
+            _reportedDormantRespawnStuck.RemoveWhere(key => !_respawnAt.TryGetValue(key.SpawnGuid, out long at) || at != key.RespawnAtMs);
+        }
 
         foreach ((uint spawnGuid, long respawnAtMs) in _respawnAt)
         {

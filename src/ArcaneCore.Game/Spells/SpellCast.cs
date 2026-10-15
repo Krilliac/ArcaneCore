@@ -274,6 +274,9 @@ public sealed class UnitSpellState
     /// </summary>
     internal uint PendingChannelResetMs { get; set; }
 
+    /// <summary>One <c>channel-object-without-active-cast</c> report per episode; cleared when the channel object is empty again.</summary>
+    internal bool ChannelObjectOrphanReported { get; set; }
+
     internal bool IsIdle => CurrentCast is null && MeleeCast is null && AutoRepeatCast is null && Auras.Count == 0 && SpellCooldowns.Count == 0
         && CategoryCooldowns.Count == 0 && GlobalCooldowns.Count == 0 && SchoolLockouts.Count == 0 && PendingChannelResetMs == 0;
 }

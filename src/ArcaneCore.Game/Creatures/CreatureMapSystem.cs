@@ -427,7 +427,6 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             CreatureAnomalies.ReportNonFinite(
                 creature,
                 $"Creature {creature.Guid} (entry {creature.Entry}) requested path to non-finite destination ({destination.X}, {destination.Y}, {destination.Z}) on map {Map.MapId}");
-            return PlannedPath.Of(PathOutcome.NoPath);
         }
 
         if (!HasPathBudget)
@@ -794,7 +793,6 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                         else
                         {
                             creature.CorpseDecayMs -= sinceLast;
-                            CheckRespawnStuck(creature, diffMs, progressedThisTick: false);
                         }
 
                         break;

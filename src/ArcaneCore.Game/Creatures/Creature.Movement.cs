@@ -62,6 +62,9 @@ public sealed partial class Creature : Unit, ICombatCreature
                 speed = 2.5f;
             }
         }
+        // DECLARED BUG FIX (hardening wave H1): a non-finite path point (a bad navmesh corner or caller) used to be stored
+        // verbatim in the spline, whose points and end are written to SMSG_MONSTER_MOVE for every viewer, so a NaN reached
+        // client packets. The point is replaced by the previous finite one and the event is reported. Tests: CreatureSplineNonFiniteTests.
         var start = new Vector3(X, Y, Z);
         bool hasNonFinite = !float.IsFinite(start.X) || !float.IsFinite(start.Y) || !float.IsFinite(start.Z)
             || (facing.FinalAngle is { } finalAngle && !float.IsFinite(finalAngle));
@@ -166,9 +169,6 @@ public sealed partial class Creature : Unit, ICombatCreature
             Relocate(x, y, z, orientation, serverTimeMs);
         }
     }
-
-    /// <summary>Drop the active spline without relocating (used when the position it interpolates is not finite).</summary>
-    internal void DiscardSpline() => Spline = null;
 
     internal void ResetToHome(uint serverTimeMs)
     {

@@ -31,6 +31,7 @@ public sealed partial class SpellSystem
     private readonly Func<uint> _clock;
     private readonly ILogger _logger;
     private readonly HashSet<(string Kind, uint Value)> _reportedUnsupported = [];
+    private readonly HashSet<(string Kind, uint Value, uint SpellId)> _reportedUnsupportedAnomalies = [];
     private readonly Dictionary<SpellEffectName, SpellEffectHandler> _builtInEffectHandlers;
 
     public SpellSystem(
@@ -420,12 +421,22 @@ public sealed partial class SpellSystem
             }
             else if (!channelObj.IsEmpty)
             {
+                if (state.ChannelObjectOrphanReported)
+                {
+                    return;
+                }
+
+                state.ChannelObjectOrphanReported = true;
                 AnomalyLedger.Shared.Report(
                     "spell",
                     "channel-orphaned",
                     FormatUnitSubject(state.Unit),
                     $"channelObject={channelObj} reason=channel-object-without-active-cast",
                     AnomalySeverity.Warning);
+            }
+            else
+            {
+                state.ChannelObjectOrphanReported = false;
             }
         }
     }
@@ -1760,8 +1771,7 @@ public sealed partial class SpellSystem
             return;
         }
 
-        if (itemCooldownMs is < -1 || itemCategoryCooldownMs is < -1
-            || spell.RecoveryTime > MaxReasonableCooldownMs || spell.CategoryRecoveryTime > MaxReasonableCooldownMs)
+        if (itemCooldownMs is < -1 || itemCategoryCooldownMs is < -1)
         {
             AnomalyLedger.Shared.Report(
                 "spell",
@@ -1795,19 +1805,18 @@ public sealed partial class SpellSystem
                 FormatSpellSubject(spell.Id),
                 $"unit={FormatUnitSubject(state.Unit)} recoveryMs={recovery} categoryRecoveryMs={categoryRecovery}",
                 AnomalySeverity.Warning);
-            recovery = Math.Min(recovery, MaxReasonableCooldownMs);
-            categoryRecovery = Math.Min(categoryRecovery, MaxReasonableCooldownMs);
+            // Report-only: the cooldown is applied unchanged (see the Math.Max clamps below).
         }
 
         // vmangos Player::AddCooldown (Player.cpp:22200-22206): the cooldown spell mod applies to the spell's own time when it
         // has one, otherwise to the category time ("blizzlike code for choosing which is recTime > categoryRecTime").
         if (recovery > 0)
         {
-            recovery = (uint)Math.Clamp(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)recovery), 0, (int)MaxReasonableCooldownMs);
+            recovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)recovery), 0);
         }
         else if (category != 0 && categoryRecovery > 0)
         {
-            categoryRecovery = (uint)Math.Clamp(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)categoryRecovery), 0, (int)MaxReasonableCooldownMs);
+            categoryRecovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)categoryRecovery), 0);
         }
 
         uint now = NowMs;
@@ -2130,12 +2139,16 @@ public sealed partial class SpellSystem
 
     private void ReportUnsupported(string kind, uint value, uint spellId)
     {
-        AnomalyLedger.Shared.Report(
-            "spell",
-            "effect-unhandled",
-            FormatSpellSubject(spellId),
-            $"kind={kind} value={value}",
-            AnomalySeverity.Warning);
+        if (_reportedUnsupportedAnomalies.Add((kind, value, spellId)))
+        {
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "effect-unhandled",
+                FormatSpellSubject(spellId),
+                $"kind={kind} value={value}",
+                AnomalySeverity.Warning);
+        }
+
         if (_reportedUnsupported.Add((kind, value)))
         {
             _logger.LogInformation("Spell {Spell}: {Kind} {Value} is not implemented yet", spellId, kind, value);

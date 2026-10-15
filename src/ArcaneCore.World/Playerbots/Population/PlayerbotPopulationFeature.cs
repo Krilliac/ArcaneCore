@@ -90,6 +90,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private readonly Queue<long> _createTimes = new();
     private readonly Dictionary<Guid, long> _startedAt = [];
     private readonly Dictionary<Guid, long> _parkedAt = [];
+    private readonly HashSet<Guid> _reportedParkedUnexpected = [];
     private readonly PopulationBudgetWindows _windows = new();
     private readonly PopulationActionLog _actionLog = new();
     private WorldRuntime? _world;
@@ -696,17 +697,23 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             // A member that is gone no longer needs its start and park times.
             foreach (Guid gone in _startedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _startedAt.Remove(gone);
             foreach (Guid gone in _parkedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _parkedAt.Remove(gone);
+            _reportedParkedUnexpected.RemoveWhere(id => !members.ContainsKey(id));
 
             if (!_stopping && !input.Managed.ResetInProgress)
             {
                 foreach (PlayerbotPopulationMember member in members.Values)
                 {
-                    if (!_startedAt.ContainsKey(member.BotId) || _parkedAt.ContainsKey(member.BotId)) continue;
                     bool isRunning = input.States.TryGetValue(member.BotId, out ManagedPlayerbotState memberState) && memberState == ManagedPlayerbotState.Running;
-                    if (!isRunning)
+                    if (isRunning)
                     {
-                        _startedAt.Remove(member.BotId);
-                        _parkedAt[member.BotId] = input.ClockMs;
+                        _reportedParkedUnexpected.Remove(member.BotId);
+                        continue;
+                    }
+
+                    // Report-only: _startedAt and _parkedAt (and so PopulationParking.RestartOrder) are left exactly as they are.
+                    if (!_startedAt.ContainsKey(member.BotId) || _parkedAt.ContainsKey(member.BotId)) continue;
+                    if (_reportedParkedUnexpected.Add(member.BotId))
+                    {
                         string botLabel = known.TryGetValue(member.BotId, out ManagedPlayerbot? knownBot)
                             ? $"bot {knownBot.AccountName} (id {member.BotId:D}, char {member.CharacterId})"
                             : $"bot {member.BotId:D} (char {member.CharacterId})";
@@ -1427,7 +1434,6 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             if (!result.Success) { Fail($"park of {bot.BotId} refused: {result.Code}"); continue; }
             parked.Add(pick.Reason);
             ctx.RunningNow.Remove(bot.BotId);
-            _startedAt.Remove(bot.BotId);
             _parkedAt[bot.BotId] = ctx.Input.ClockMs;
             int band = PopulationBandPlanner.BandOf(ctx.Input.Bands, bot.Level);
             if (band >= 0) ctx.Have[band]--;

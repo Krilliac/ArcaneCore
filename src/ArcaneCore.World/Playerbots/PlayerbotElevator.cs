@@ -507,8 +507,12 @@ internal static class PlayerbotElevator
     /// <summary>A bot found within this of a car's height, inside its footprint, stands on it (<see cref="Settle"/>).</summary>
     internal const float OnCarYards = 2.5f;
 
-    /// <summary>Vertical gap between the car and a supposedly-aboard bot beyond which the car has left the bot behind.</summary>
-    internal const float LeftBehindYards = 5f;
+    /// <summary>
+    /// Vertical gap between the car and a supposedly-aboard bot beyond which the car has left the bot behind. The bot's own height is
+    /// only as fresh as its last heartbeat (<see cref="HeartbeatMs"/>, 500 ms) and a car moves up to ~25 yards a second, so a bot that
+    /// rides correctly lags the car by up to ~9 yards (8.1 measured on a clean Great Lift ride); 25 yards is a bot missing a few beats.
+    /// </summary>
+    internal const float LeftBehindYards = 25f;
 
     /// <summary>How long <see cref="Settle"/> waits for a car's object to be in the world (its grid loading) before it rescues the bot.</summary>
     internal const uint SettleWaitMs = 10_000;
@@ -721,7 +725,6 @@ internal static class PlayerbotElevator
                 {
                     if (!PlayerbotMovementControl.Stop(session, player)) return;
                     Enter(trip, ElevatorStage.Waiting, now);
-                    goto case ElevatorStage.Waiting;
                 }
 
                 return;
@@ -803,7 +806,7 @@ internal static class PlayerbotElevator
     /// are told: when a root order is pending (the death root of MapCombat.SetDeathState), the bot's acknowledgement carries this block and
     /// is relayed as MSG_MOVE_ROOT (RootAckHandler); otherwise (a bot already rooted when it died) it is relayed here as MSG_MOVE_HEARTBEAT.
     /// </summary>
-    private static void ClearTransport(WorldSession session, Player player)
+    internal static void ClearTransport(WorldSession session, Player player)
     {
         MovementInfo movement = player.Movement;
         movement.Flags &= ~MovementFlags.OnTransport;
@@ -1102,7 +1105,7 @@ internal static class PlayerbotElevator
         {
             if (!PlayerbotMovementControl.Stop(session, player)) return ElevatorStep.Traveling;
             Enter(trip, ElevatorStage.Waiting, now);
-            return Wait(session, player, map, trip, now);
+            return ElevatorStep.Traveling;
         }
 
         if (!Walk(session, player, trip, trip.Landing, options, elapsedMs, now))
@@ -1407,7 +1410,7 @@ internal static class PlayerbotElevator
     /// landing (<see cref="Rescue"/>), retried while the
     /// teleport is refused, up to <see cref="MaxRescueTries"/> times.
     /// </summary>
-    private static ElevatorStep Drop(WorldSession session, Player player, Map map, ElevatorTrip trip, uint now, string why)
+    internal static ElevatorStep Drop(WorldSession session, Player player, Map map, ElevatorTrip trip, uint now, string why)
     {
         trip.Failure ??= why;
         Vector3 at = new(player.X, player.Y, player.Z);
@@ -1567,7 +1570,7 @@ internal static class PlayerbotElevator
         PlayerbotAnomalies.Report(player, AnomalyArea, code, detail, severity);
     }
 
-    private static void ReportPitFall(WorldSession session, Player player, ElevatorTrip trip, float floorZ)
+    internal static void ReportPitFall(WorldSession session, Player player, ElevatorTrip trip, float floorZ)
     {
         if (trip.PitFallReported) return;
         trip.PitFallReported = true;
@@ -1577,7 +1580,7 @@ internal static class PlayerbotElevator
             AnomalySeverity.Warning);
     }
 
-    private static void CheckWaitingLanding(WorldSession session, Player player, Map map, ElevatorTrip trip, ElevatorCar car)
+    internal static void CheckWaitingLanding(WorldSession session, Player player, Map map, ElevatorTrip trip, ElevatorCar car)
     {
         if (trip.WaitingInsideDoorReported) return;
         Vector3 stop = car.At(trip.From);
@@ -1598,7 +1601,7 @@ internal static class PlayerbotElevator
             AnomalySeverity.Warning);
     }
 
-    private static void FlushStopAtFrom(WorldSession session, Player player, ElevatorTrip trip)
+    internal static void FlushStopAtFrom(WorldSession session, Player player, ElevatorTrip trip)
     {
         if (!trip.StopActiveAtFrom) return;
         uint maxWindow = trip.StopMaxStandsForMs;
@@ -1642,7 +1645,7 @@ internal static class PlayerbotElevator
         return best;
     }
 
-    private static bool CheckAboardState(WorldSession session, Player player, ElevatorTrip trip, GameObject live, Vector3 carAt)
+    internal static bool CheckAboardState(WorldSession session, Player player, ElevatorTrip trip, GameObject live, Vector3 carAt)
     {
         bool hasTransport = (player.Movement.Flags & MovementFlags.OnTransport) != 0;
         bool guidMatches = player.Movement.TransportGuid == live.Guid.Value;
@@ -1655,6 +1658,7 @@ internal static class PlayerbotElevator
                 AnomalySeverity.Warning);
         }
 
+        // Report-only: the base treated the OnTransport flag alone as aboard, so a bot on another transport keeps riding.
         if (hasTransport && guidMatches) return true;
 
         if (!trip.DetachedReported)
@@ -1671,10 +1675,10 @@ internal static class PlayerbotElevator
                 AnomalySeverity.Warning);
         }
 
-        return false;
+        return hasTransport;
     }
 
-    private static void ObserveDestinationWindow(WorldSession session, Player player, GameObjectMapSystem system, GameObject live,
+    internal static void ObserveDestinationWindow(WorldSession session, Player player, GameObjectMapSystem system, GameObject live,
         ElevatorCar car, Vector3 carAt, ElevatorTrip trip, uint now)
     {
         float toZ = car.At(trip.To).Z;
@@ -1712,7 +1716,7 @@ internal static class PlayerbotElevator
             AnomalySeverity.Warning);
     }
 
-    private static void CheckArrivedAnomalies(WorldSession session, Player player, Map map, ElevatorTrip trip, PlayerbotOptions options, uint now)
+    internal static void CheckArrivedAnomalies(WorldSession session, Player player, Map map, ElevatorTrip trip, PlayerbotOptions options, uint now)
     {
         if (trip.Car is { } car)
         {

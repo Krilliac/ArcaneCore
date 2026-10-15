@@ -198,8 +198,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     : active.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase);
                 if (!match) continue;
             }
-            else if (Playerbots.Chaos.PlayerbotChaosEngine.IsTraveling(player)
-                || (!Chaos.IsAssigned(active.Record.BotId) && botCount >= maxBots))
+            else if (!Chaos.IsAssigned(active.Record.BotId) && botCount >= maxBots)
             {
                 continue;
             }
@@ -1264,7 +1263,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         foreach (ActiveBot active in bots)
         {
             if (active.Paused) continue;
-            // A bot between maps has a player that is not in a world; its client half still has to acknowledge the transfer below.
+            // A session that is not in the world, or has no player, is skipped here: no motion pump, no party intake and no
+            // acknowledgement this tick. It is reported once as lifecycle/session-lost (report only; nothing here acts on it).
             if (active.Session.State != SessionState.InWorld || active.Session.Player is not { } mover)
             {
                 ReportSessionLostOnce(active, "tick");

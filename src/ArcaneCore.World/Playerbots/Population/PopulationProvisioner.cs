@@ -73,9 +73,7 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
             CharacterBoost.Run(context, player, (byte)level, environment);
         }
 
-        string? tpRefusal = TeleportTo(player, location);
-        if (tpRefusal is not null) return tpRefusal;
-        return null;
+        return TeleportTo(player, location);
     }
 
     /// <summary>Teleport an idle bot to a graveyard (no boost). Null on success, otherwise the refusal code.</summary>
@@ -94,9 +92,7 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
             return "placement-unsafe";
         }
 
-        string? tpRefusal = TeleportTo(player, location);
-        if (tpRefusal is not null) return tpRefusal;
-        return null;
+        return TeleportTo(player, location);
     }
 
     internal bool TryGetUnsafeSurfaceReason(WorldRuntime world, WorldSafeLoc location, out string? reason)
