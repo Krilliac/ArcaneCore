@@ -28,9 +28,8 @@ namespace ArcaneCore.World.Playerbots;
 /// A deterministic, world-thread autonomous player. The feature/host owns scheduling and
 /// persistence; this controller owns only bounded ordinary gameplay decisions for one session.
 /// </summary>
-internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
-    PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default, PlayerbotSharedSetAsides? shared = null,
-    PlayerbotClaims? claims = null, PlayerbotNavigationExecutor? navigationExecutor = null)
+internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
+    PlayerbotSharedSetAsides? shared = null, PlayerbotClaims? claims = null, PlayerbotNavigationExecutor? navigationExecutor = null)
 {
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -226,10 +225,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private (PlayerbotGoalKind Goal, uint Entry, uint Quest, uint AtMs) _errand;
     // The creatures attacking the bot at its last living update (guid and entry): the risk's danger memory of its killers.
     private readonly List<(ObjectGuid Guid, uint Entry)> _attackers = [];
-    private readonly CancellationTokenSource _planningStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
-    private Task<string?>? _planTask;
-    private string? _modelChoice;
-    private long _nextPlanMs;
     private bool _needsRest;
 
     /// <summary>The bot sat down to wait for health without food (<see cref="PlayerbotRisk.KeepWaiting"/>); it stands up when the wait ends.</summary>
@@ -264,9 +259,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (world.IsWorldThread) _contention.ReleaseClaim();
             else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); return true; });
         }
-        _planningStop.Cancel();
         _destinations.Dispose();
-        _planningStop.Dispose();
     }
 
     internal PlayerbotGoalKind Goal => _goal;
@@ -996,15 +989,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             PlayerbotThinkProbe.Phase("class upkeep");
             _combatSpells.PullTarget = _target is { IsAlive: true } pull && ReferenceEquals(pull.Map, player.Map) ? pull : null;
             if (_combatSpells.UpdateOutOfCombat(player, interval)) return;
-            PlayerbotThinkProbe.Phase("local plan");
-            UpdateLocalPlan(player);
             PlayerbotThinkProbe.Phase("home");
             if (_home is { } home && TryReturnHome(player, home, interval)) return;
             PlayerbotThinkProbe.Phase("town");
             _town.BeginThink();
-            // A returned ID is only a proposal; each controller rechecks the live gameplay rules.
-            if (_modelChoice == "town" && _town.Update(player, interval))
-            { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
+            PlayerbotThinkProbe.Phase("policy");
+            if (TryPolicyGoal(player, interval)) return;
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
@@ -1083,7 +1074,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 }
                 if (_destinations.WaitingForTiles) return; // the route's tiles are being read: keep the goal, plan again next think
             }
-            if (_modelChoice == "explore") { _target = null; PlayerbotThinkProbe.Phase("explore"); Explore(player, interval); return; }
         }
 
         // A mob another player tagged while the bot walked to it is no longer the bot's to take: help its tagger or leave it alone, then
@@ -2081,44 +2071,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .ThenBy(creature => ReferenceEquals(creature, _target) ? 0 : 1)
             .ThenBy(creature => Distance(player, creature))
             .FirstOrDefault();
-    }
-
-    private void UpdateLocalPlan(Player player)
-    {
-        if (planner is null || !_options.AllowLocalLlm || _planningStop.IsCancellationRequested) return;
-        if (_planTask?.IsCompleted == true)
-        {
-            _modelChoice = _planTask.IsCompletedSuccessfully ? _planTask.Result : null;
-            _planTask = null;
-        }
-        long now = (long)_session.World.Uptime.TotalMilliseconds;
-        if (_planTask is not null || now < _nextPlanMs) return;
-        _nextPlanMs = now + 5000;
-        var candidates = new List<PlayerbotPlanCandidate>();
-        if (_quests.HasCandidate(player)) candidates.Add(new("quest", PlayerbotGoalKind.Quest, _quests.TargetEntry, _quests.QuestId));
-        if (_town.HasCandidate(player)) candidates.Add(new("town", PlayerbotGoalKind.Vendor, _town.TargetEntry, 0));
-        if (FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is { } target) candidates.Add(new("grind", PlayerbotGoalKind.Grind, target.Entry, QuestId));
-        candidates.Add(new("explore", PlayerbotGoalKind.Explore, 0, 0));
-        var facts = new PlayerbotPlannerFacts(player.Level, player.Health, player.MaxHealth, player.Combat.IsInCombat,
-            player.MapId, (uint)(_session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0),
-            player.Inventory.GetItemCount(117));
-        CancellationToken token = _planningStop.Token;
-        _planTask = Task.Run(async () =>
-        {
-            try
-            {
-                return await planner.SelectAsync(facts, candidates, token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                return null;
-            }
-            catch (Exception ex)
-            {
-                FaultLedger.Shared.Record("playerbot.local-plan", ex);
-                return null;
-            }
-        }, token);
     }
 
     private void MarkUnreachable(Creature creature)

@@ -223,8 +223,11 @@ public sealed class GmObjectNpcCommandTests
         await using WorldTestHost host = scene.Host;
         await using WorldTestClient gm = await GmAsync(scene, "GOAEXP", "Goaexp");
 
-        await SendAsync(gm, $".gobject add {DoorEntry} 1");
-        Assert.Single(await host.OnWorldAsync(() => ObjectSystem(scene).GameObjects.Where(g => g.Spawn is null).ToArray()));
+        // Placed: the reply and the object's update, both sent as it was placed. Not a world read after the replies were collected: on a
+        // loaded run that collection outlasted the one-second life and the object had already expired (Assert.Single on an empty list).
+        Run added = await SendAsync(gm, $".gobject add {DoorEntry} 1");
+        Assert.StartsWith($"Game object Test Door (entry {DoorEntry}, guid ", added.Single, StringComparison.Ordinal);
+        Assert.Contains(added.Packets, p => p.Opcode is WorldOpcode.SmsgUpdateObject or WorldOpcode.SmsgCompressedUpdateObject);
         await host.WaitForWorldAsync(() => !ObjectSystem(scene).GameObjects.Any(g => g.Spawn is null), "the timed object expires");
     }
 

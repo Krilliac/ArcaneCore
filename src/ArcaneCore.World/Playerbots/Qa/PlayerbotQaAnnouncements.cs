@@ -10,14 +10,14 @@ namespace ArcaneCore.World.Playerbots.Qa;
 /// </summary>
 internal static class PlayerbotQaAnnouncements
 {
-    internal static void Announce(IOpsAnnouncer announcer, QaFindingView view)
+    internal static void Announce(IOpsAnnouncer announcer, QaFindingView view, PlayerbotQaRedactor redactor)
     {
         bool fault = view.Kind is QaSignalKind.ActionFault or QaSignalKind.Quarantine or QaSignalKind.Disabled or QaSignalKind.ServerFault;
         announcer.Announce(
             AnnounceCategory.BotQa,
             fault ? AnnounceSeverity.Warning : AnnounceSeverity.Info,
             $"New bot QA finding: {view.Kind}",
-            view.Subject,
+            redactor.Redact(view.Subject),
             [new AnnounceField("finding", view.Id)],
             gmOnly: true,
             dedupKey: view.Id);
