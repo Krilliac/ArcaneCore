@@ -663,7 +663,8 @@ internal static class PlayerbotMotion
                 if (MathF.Abs(best - candidate.Z) <= 1.25f) break;
             }
 
-            return float.IsNaN(best) ? candidate : candidate with { Z = best + 0.05f };
+            if (float.IsNaN(best)) return candidate;
+            return candidate with { Z = best + 0.05f };
         }
 
         float ground = ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, 0f, maxCeilingZ);

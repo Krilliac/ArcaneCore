@@ -79,7 +79,46 @@ public sealed class DiagnosticsHostingTests : IDisposable
         Assert.Equal(defaults.InvariantLogLimit, options.InvariantLogLimit);
         Assert.Equal(defaults.BreakOnInvariant, options.BreakOnInvariant);
         Assert.Equal(defaults.FirstChanceExceptions, options.FirstChanceExceptions);
+        Assert.Equal(defaults.BeepOnStartup, options.BeepOnStartup);
+        Assert.Equal(defaults.BeepOnException, options.BeepOnException);
         Assert.Equal(InvariantPolicy.Continue, Invariant.Policy);
+    }
+
+    [Fact]
+    public async Task BeepOnStartup_And_BeepOnException_InvokeConsoleBeepWhenConfigured()
+    {
+        int beeps = 0;
+        ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.BeepOverride = () => Interlocked.Increment(ref beeps);
+        try
+        {
+            HostApplicationBuilder builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+            {
+                DisableDefaults = true,
+                Args = ["--Diagnostics:BeepOnStartup=true", "--Diagnostics:BeepOnException=true"],
+            });
+            builder.Logging.ClearProviders();
+            builder.UseArcaneDiagnostics();
+
+            using IHost host = builder.Build();
+            await host.StartAsync();
+            try
+            {
+                Assert.Equal(1, beeps);
+                FaultLedger.Shared.Reset();
+                FaultLedger.Shared.Record("beep-test", new InvalidOperationException("probe"));
+                Assert.True(beeps >= 2);
+            }
+            finally
+            {
+                await host.StopAsync();
+            }
+        }
+        finally
+        {
+            ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.BeepOverride = null;
+            FaultLedger.Shared.Configure(new DiagnosticsOptions());
+            FaultLedger.Shared.Reset();
+        }
     }
 
     private sealed class NamedProvider(string name) : ICrashContextProvider

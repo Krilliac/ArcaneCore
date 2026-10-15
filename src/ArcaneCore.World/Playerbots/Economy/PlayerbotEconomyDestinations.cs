@@ -224,7 +224,16 @@ internal sealed class PlayerbotEconomyWalker(WorldSession session, PlayerbotOpti
         if (!float.IsFinite(target.X) || !float.IsFinite(target.Y) || !float.IsFinite(target.Z)) return false;
         if (_route is null || _route.Complete || Vector3.DistanceSquared(_target, target) > 1f)
         {
-            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, target, options, ref _tileWait, session.World.NowMs, out _route);
+            PlayerbotRoute? walk = null;
+            if (PlayerbotElevator.TryBegin(session, player, target, options, out walk))
+            {
+                Clear();
+                return true;
+            }
+            PlanOutcome planned = walk is not null
+                ? PlanOutcome.Route
+                : PlayerbotNavigation.PlanToward(player, target, options, ref _tileWait, session.World.NowMs, out walk);
+            _route = walk;
             // A tile of the way is still being read: not a verdict on this target. The step holds and plans again next think.
             if (planned == PlanOutcome.Pending) return true;
             if (planned != PlanOutcome.Route || _route is null)

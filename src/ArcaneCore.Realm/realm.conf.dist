@@ -28,7 +28,7 @@
 #
 #   AUTH                        15 keys
 #   DATABASE                    17 keys
-#   DIAGNOSTICS                 8 keys
+#   DIAGNOSTICS                 10 keys
 #   LOGGING                     16 keys
 #   NET                         16 keys
 #   OPS                         43 keys
@@ -527,6 +527,34 @@ Database.Upgrade.ValidateOnly = false
 #----------------------------------------------------------------------------
 # Diagnostics
 #----------------------------------------------------------------------------
+
+#
+#    Diagnostics.BeepOnException
+#        Description: Emit a short console beep when the crash hooks or the fault ledger log an
+#                     exception in an interactive console session (Environment.UserInteractive and
+#                     standard error not redirected), rate-limited to at most one beep per second so
+#                     a fault storm cannot stall or flood the terminal. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.BeepOnException = false
+
+#
+#    Diagnostics.BeepOnStartup
+#        Description: Emit a short console beep when the daemon finishes starting in an interactive
+#                     console session (Environment.UserInteractive and standard output not
+#                     redirected), matching the classic MaNGOS BeepAtStart cue. Never beeps under a
+#                     service, test runner or redirected output. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.BeepOnStartup = false
 
 #
 #    Diagnostics.BreakOnInvariant

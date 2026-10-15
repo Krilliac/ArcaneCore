@@ -239,6 +239,17 @@ public sealed class CrashHandler : IDisposable
             return true;
         }
 
+        if (exception is InvalidOperationException { Message: "managed-revision-conflict" })
+        {
+            return true;
+        }
+
+        if (exception is IOException or UnauthorizedAccessException
+            && Thread.CurrentThread.Name?.StartsWith("ArcaneCore.Log.", StringComparison.Ordinal) == true)
+        {
+            return true;
+        }
+
         return false;
     }
 
@@ -264,6 +275,11 @@ public sealed class CrashHandler : IDisposable
         _reporting = true;
         try
         {
+            if (_options.BeepOnException)
+            {
+                ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TryBeep(checkErrorStream: true);
+            }
+
             string report = CrashReport.Render(kind, exception, _providers, DateTime.UtcNow);
             ICrashSink sink = _sink;
             try

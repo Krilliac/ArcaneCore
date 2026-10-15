@@ -28,6 +28,8 @@ public sealed class DiagnosticsWiringTests
             ("Diagnostics:OnUnobservedTask", "FailFast"),
             ("Diagnostics:BreakOnInvariant", "true"),
             ("Diagnostics:FirstChanceExceptions", "false"),
+            ("Diagnostics:BeepOnStartup", "true"),
+            ("Diagnostics:BeepOnException", "false"),
             ("Diagnostics:InvariantLogLimit", "0"))));
     }
 
@@ -37,6 +39,8 @@ public sealed class DiagnosticsWiringTests
     [InlineData("Diagnostics:OnUnhandled", "7")]
     [InlineData("Diagnostics:OnUnobservedTask", "Crash")]
     [InlineData("Diagnostics:BreakOnInvariant", "yes")]
+    [InlineData("Diagnostics:BeepOnStartup", "1")]
+    [InlineData("Diagnostics:BeepOnException", "maybe")]
     [InlineData("Diagnostics:InvariantLogLimit", "-1")]
     [InlineData("Diagnostics:InvariantLogLimit", "ten")]
     public void DiagnosticsCheck_RejectsAnUnknownValue_NamingTheKey_AndTheDaemonValidationSeesIt(string key, string value)

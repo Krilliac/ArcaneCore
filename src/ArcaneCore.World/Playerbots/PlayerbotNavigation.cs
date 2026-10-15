@@ -269,9 +269,9 @@ internal static class PlayerbotNavigation
     {
         PlanOutcome outcome = PlanToward(player, destination, options, ref wait, now, out route);
         if (outcome == PlanOutcome.Route && route is { Navigated: true, Points.Count: > 0 }
+            && Vector2.Distance(Flat(route.Points[^1]), Flat(destination)) > WanderMaxShortfallYards
             && !IsOnMeshFragment(player)
-            && player.Map is { } map && OnWalkableMesh(map, PlayerbotMotion.CurrentPosition(player))
-            && Vector2.Distance(Flat(route.Points[^1]), Flat(destination)) > WanderMaxShortfallYards)
+            && player.Map is { } map && OnWalkableMesh(map, PlayerbotMotion.CurrentPosition(player)))
         {
             route = null;
             return PlanOutcome.Refused;

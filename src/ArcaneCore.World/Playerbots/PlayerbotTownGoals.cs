@@ -501,8 +501,16 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 if (_repairRoute is null || _repairRoute.Complete || _repairRoute.Points.Count == 0
                     || Vector3.Distance(here, _repairRoute.Points[^1]) < 1f)
                 {
-                    PlanOutcome next = PlayerbotNavigation.PlanToward(player, at, options, ref _tileWait, now, out PlayerbotRoute? leg);
-                    _repairRoute = leg;
+                    PlayerbotRoute? walk = null;
+                    if (PlayerbotElevator.TryBegin(session, player, at, options, out walk))
+                    {
+                        _repairRoute = null;
+                        return true;
+                    }
+                    PlanOutcome next = walk is not null
+                        ? PlanOutcome.Route
+                        : PlayerbotNavigation.PlanToward(player, at, options, ref _tileWait, now, out walk);
+                    _repairRoute = walk;
                     if (next == PlanOutcome.Pending)
                     {
                         // A tile of the next leg is being read: the walk waits, it is not stuck. Give back this think's stuck time.
@@ -529,8 +537,23 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
             if (_repairPlansThisThink >= MaxRepairPlansPerThink || _repairPlansThisThink > 0 && RepairQueryBudgetSpent()) return false;
             _repairPlansThisThink++;
-            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, new Vector3(spawn.X, spawn.Y, spawn.Z), options, ref _tileWait, now,
-                out PlayerbotRoute? route);
+            var target = new Vector3(spawn.X, spawn.Y, spawn.Z);
+            PlayerbotRoute? walk = null;
+            if (PlayerbotElevator.TryBegin(session, player, target, options, out walk))
+            {
+                _repairEmptyRounds = 0;
+                _repairRoute = null;
+                _repairSpawn = spawn.Guid;
+                _repairBest = Vector3.Distance(here, target);
+                _repairStuckMs = 0;
+                Goal = PlayerbotGoalKind.Vendor;
+                TargetEntry = entry;
+                return true;
+            }
+            PlanOutcome planned = walk is not null
+                ? PlanOutcome.Route
+                : PlayerbotNavigation.PlanToward(player, target, options, ref _tileWait, now, out walk);
+            PlayerbotRoute? route = walk;
             if (planned == PlanOutcome.Pending)
             {
                 // Not a verdict on this spawn (a tile of the way is being read): leave it unblocked and plan again next think.
@@ -546,7 +569,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             _repairEmptyRounds = 0;
             _repairRoute = route;
             _repairSpawn = spawn.Guid;
-            _repairBest = Vector3.Distance(here, new Vector3(spawn.X, spawn.Y, spawn.Z));
+            _repairBest = Vector3.Distance(here, target);
             _repairStuckMs = 0;
             Goal = PlayerbotGoalKind.Vendor;
             TargetEntry = entry;

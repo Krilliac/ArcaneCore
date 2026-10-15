@@ -734,7 +734,18 @@ internal sealed class PlayerbotHomeReturn
         _lastPosition = position;
         if (_route is null)
         {
-            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, area.Centre, options, ref _tileWait, nowMs, out _route);
+            PlayerbotRoute? walk = null;
+            if (PlayerbotElevator.TryBegin(session, player, area.Centre, options, out walk))
+            {
+                _routeStartDistance = MathF.Min(distance, _bestDistance);
+                _stuckMs = 0;
+                return true;
+            }
+
+            PlanOutcome planned = walk is not null
+                ? PlanOutcome.Route
+                : PlayerbotNavigation.PlanToward(player, area.Centre, options, ref _tileWait, nowMs, out walk);
+            _route = walk;
             if (planned != PlanOutcome.Route)
             {
                 _route = null;

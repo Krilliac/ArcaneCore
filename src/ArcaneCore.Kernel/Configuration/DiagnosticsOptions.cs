@@ -75,6 +75,20 @@ public sealed class DiagnosticsOptions
     /// signature per request.
     /// </summary>
     public int FaultMaxSignatures { get; set; } = 512;
+
+    /// <summary>
+    /// Emit a short console beep when the daemon finishes starting in an interactive console session
+    /// (<c>Environment.UserInteractive</c> and standard output not redirected), matching the classic MaNGOS
+    /// <c>BeepAtStart</c> cue. Never beeps under a service, test runner or redirected output. Default off.
+    /// </summary>
+    public bool BeepOnStartup { get; set; }
+
+    /// <summary>
+    /// Emit a short console beep when the crash hooks or the fault ledger log an exception in an interactive
+    /// console session (<c>Environment.UserInteractive</c> and standard error not redirected), rate-limited to at
+    /// most one beep per second so a fault storm cannot stall or flood the terminal. Default off.
+    /// </summary>
+    public bool BeepOnException { get; set; }
 }
 
 /// <summary>What a failed release-mode invariant does after it is logged and counted.</summary>

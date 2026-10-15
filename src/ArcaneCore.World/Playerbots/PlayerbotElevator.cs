@@ -81,7 +81,7 @@ internal readonly record struct ElevatorRegion(uint Zone, uint Area = 0)
 /// one is a mesa (<see cref="MesaTop"/>: its region reaches down round the mesa's foot, where only ground at least
 /// <see cref="ElevatorNetwork.MesaYards"/> below the top is the upper level; lower, it is the foot).
 /// </summary>
-internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Low, ElevatorRegion High, bool MesaTop, string Name)
+internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Low, ElevatorRegion High, bool MesaTop, string Name, bool VaultLow = false)
 {
     /// <summary>A lift whose centre lies this close (flat) to a row's is that row's.</summary>
     public const float MatchYards = 30f;
@@ -92,9 +92,10 @@ internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Lo
     /// not: the terrain's area map is flat (one area per 33-yard cell, the same above and below a cliff), and it does not follow the cliffs
     /// (measured on the 5875 terrain and AreaTable.dbc, <c>PlayerbotElevatorRealTerrainTests</c>: Thousand Needles' "The Great Lift" area,
     /// 485, covers the top landing of the Great Lift up to 100 yards into The Barrens; Thunder Bluff's zone, 1638, covers the Mulgore ground
-    /// round the mesa's foot; the Thunder Bluff lifts' lower stop, 68.6, stands on a platform 9 yards above that ground). Zone and area ids
+    /// round the mesa's foot; the Thunder Bluff lifts' lower stop, 68.6, stands on a platform 9 yards above that ground; Undercity's three
+    /// lifts stand under the Ruins of Lordaeron, area 153 in zone 85 Tirisfal Glades). Zone and area ids
     /// are the client's AreaTable.dbc (5875): 17 The Barrens, 400 Thousand Needles, 484 Freewind Post (in 400), 215 Mulgore, 1638 Thunder
-    /// Bluff. A lift without a row joins nothing and no bot is sent to it.
+    /// Bluff, 85 Tirisfal Glades, 1497 Undercity. A lift without a row joins nothing and no bot is sent to it.
     /// </summary>
     public static readonly ElevatorRegions[] Known =
     [
@@ -102,6 +103,9 @@ internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Lo
         new(1, new Vector2(-5391f, -2497f), new ElevatorRegion(400), new ElevatorRegion(400, 484), MesaTop: true, "the Freewind Post lift"),
         new(1, new Vector2(-1297f, 188f), new ElevatorRegion(215), new ElevatorRegion(1638), MesaTop: true, "the Thunder Bluff lift"),
         new(1, new Vector2(-1033f, -39f), new ElevatorRegion(215), new ElevatorRegion(1638), MesaTop: true, "the Thunder Bluff lift"),
+        new(0, new Vector2(1596f, 292f), new ElevatorRegion(1497), new ElevatorRegion(85), MesaTop: false, "the Undercity lift", VaultLow: true),
+        new(0, new Vector2(1544f, 241f), new ElevatorRegion(1497), new ElevatorRegion(85), MesaTop: false, "the Undercity lift", VaultLow: true),
+        new(0, new Vector2(1595f, 189f), new ElevatorRegion(1497), new ElevatorRegion(85), MesaTop: false, "the Undercity lift", VaultLow: true),
     ];
 }
 
@@ -154,6 +158,12 @@ internal sealed class ElevatorNetwork
 
     /// <summary>On a mesa lift, ground of the upper region this far or more below the top is the mesa's foot (<see cref="ElevatorRegions.MesaTop"/>).</summary>
     public const float MesaYards = 30f;
+
+    /// <summary>Within this of a vault lift (flat), ground at or below <see cref="VaultMaxZ"/> lies in the underground vault (<see cref="ElevatorRegions.VaultLow"/>: Undercity).</summary>
+    public const float VaultRadiusYards = 420f;
+
+    /// <summary>On a vault lift, ground at or below this height within <see cref="VaultRadiusYards"/> is the underground level (<see cref="ElevatorRegions.VaultLow"/>).</summary>
+    public const float VaultMaxZ = -5f;
 
     /// <summary>The network built last for a content, with the animations it was built from (a world has one catalog).</summary>
     private static readonly ConditionalWeakTable<GameObjectContent, Tuple<TransportAnimationCatalog, ElevatorNetwork>> Cache = [];
@@ -252,6 +262,22 @@ internal sealed class ElevatorNetwork
         }
 
         (uint Zone, uint Area) region = survey.RegionAt(at);
+        if (regions.VaultLow)
+        {
+            float dist = Vector2.Distance(Flat(at), lift.Centre);
+            if (regions.Low.Contains(region) || (dist <= VaultRadiusYards && at.Z <= VaultMaxZ))
+            {
+                return ElevatorLevel.Low;
+            }
+
+            if (regions.High.Contains(region) || (dist <= VaultRadiusYards && at.Z > VaultMaxZ))
+            {
+                return ElevatorLevel.High;
+            }
+
+            return null;
+        }
+
         if (regions.High.Contains(region)) return !regions.MesaTop || at.Z >= lift.HighZ - MesaYards ? ElevatorLevel.High : ElevatorLevel.Low;
         return regions.Low.Contains(region) ? ElevatorLevel.Low : null;
     }
@@ -261,7 +287,7 @@ internal sealed class ElevatorNetwork
     /// null. A bot on top of a mesa lift (<see cref="ElevatorRegions.MesaTop"/>: Thunder Bluff, Freewind Post) whose goal is not up there
     /// rides it down whatever lies beyond: a mesa is left only by its lifts (quest 5361 is taken on Freewind Post and ends in Desolace,
     /// in neither of the lift's regions). Otherwise a lift whose regions put the bot on one level and the goal on the other
-    /// (<see cref="LevelOf"/>); of several (Thunder Bluff has two), the one the shorter straight-line way passes. The caller first makes
+    /// (<see cref="LevelOf"/>); of several (Thunder Bluff has two, Undercity has three), the one the shorter straight-line way passes. The caller first makes
     /// sure the goal is not walkable without it.
     /// </summary>
     public (ElevatorLift Lift, ElevatorLevel From)? Choose(uint mapId, Vector3 bot, Vector3 goal, ElevatorSurvey survey)
@@ -383,8 +409,8 @@ internal static class PlayerbotElevator
     /// <summary>How far inside the car's sides a passenger stands at least.</summary>
     internal const float InsideMarginYards = 1.5f;
 
-    /// <summary>The distances from a car's centre at which its landing is looked for (the floor beside the car at a level).</summary>
-    internal static readonly float[] LandingRadii = [CarHalfYards + 1f, CarHalfYards + 2.5f, CarHalfYards + 4f];
+    /// <summary>The distances from a car's centre at which its landing is looked for (the floor beside the car at a level, including outside Undercity's 9..11 yd enclosed shaft doors).</summary>
+    internal static readonly float[] LandingRadii = [CarHalfYards + 1f, CarHalfYards + 2.5f, CarHalfYards + 4f, CarHalfYards + 6f, CarHalfYards + 7.5f];
 
     /// <summary>A landing's floor lies within this of the level, vertically.</summary>
     internal const float LandingFloorYards = 2.5f;
@@ -1193,7 +1219,7 @@ internal static class PlayerbotElevator
 
     /// <summary>
     /// The floor beside a car standing at <paramref name="stop"/> (<see cref="LandingRadii"/> from its centre, 16 directions, within
-    /// <see cref="LandingFloorYards"/> of its level), nearest <paramref name="toward"/>; null when there is none.
+    /// <see cref="LandingFloorYards"/> of its level and in line of sight from the shaft), nearest <paramref name="toward"/>; null when there is none.
     /// </summary>
     internal static Vector3? LandingBeside(Map map, Vector3 stop, Vector3 toward)
     {
@@ -1207,11 +1233,13 @@ internal static class PlayerbotElevator
                 float x = stop.X + (radius * MathF.Cos(angle)), y = stop.Y + (radius * MathF.Sin(angle));
                 float floor = map.Collision.GetHeight(x, y, stop.Z + 3f);
                 if (!float.IsFinite(floor) || floor <= TerrainTile.InvalidHeight || MathF.Abs(floor - stop.Z) > LandingFloorYards) continue;
+                var candidate = new Vector3(x, y, floor);
+                if (!PlayerbotMoveCheck.LineClear(map.Collision, stop with { Z = floor }, candidate)) continue;
                 float distance = Vector2.Distance(new Vector2(x, y), ElevatorNetwork.Flat(toward));
                 if (distance < bestDistance)
                 {
                     bestDistance = distance;
-                    best = new Vector3(x, y, floor);
+                    best = candidate;
                 }
             }
 

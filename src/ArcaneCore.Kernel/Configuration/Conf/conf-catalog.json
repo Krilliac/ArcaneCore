@@ -3955,6 +3955,38 @@
       "isCollection": false
     },
     {
+      "path": "Diagnostics:BeepOnException",
+      "section": "Diagnostics",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "Both",
+      "reload": "start",
+      "meaning": "Emit a short console beep when the crash hooks or the fault ledger log an exception in an interactive console session (`Environment.UserInteractive` and standard error not redirected), rate-limited to at most one beep per second so a fault storm cannot stall or flood the terminal. Default off.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#diagnostics",
+      "isCollection": false
+    },
+    {
+      "path": "Diagnostics:BeepOnStartup",
+      "section": "Diagnostics",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "Both",
+      "reload": "start",
+      "meaning": "Emit a short console beep when the daemon finishes starting in an interactive console session (`Environment.UserInteractive` and standard output not redirected), matching the classic MaNGOS `BeepAtStart` cue. Never beeps under a service, test runner or redirected output. Default off.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#diagnostics",
+      "isCollection": false
+    },
+    {
       "path": "Diagnostics:BreakOnInvariant",
       "section": "Diagnostics",
       "type": "bool",

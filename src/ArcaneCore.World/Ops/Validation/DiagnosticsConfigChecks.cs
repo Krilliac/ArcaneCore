@@ -21,6 +21,8 @@ public sealed class DiagnosticsConfigChecks : IConfigCheck
         Enum<UnobservedTaskPolicy>(issues, section, nameof(DiagnosticsOptions.OnUnobservedTask));
         Bool(issues, section, nameof(DiagnosticsOptions.BreakOnInvariant));
         Bool(issues, section, nameof(DiagnosticsOptions.FirstChanceExceptions));
+        Bool(issues, section, nameof(DiagnosticsOptions.BeepOnStartup));
+        Bool(issues, section, nameof(DiagnosticsOptions.BeepOnException));
 
         string key = DiagnosticsOptions.SectionName + ":" + nameof(DiagnosticsOptions.InvariantLogLimit);
         string? limit = section[nameof(DiagnosticsOptions.InvariantLogLimit)];

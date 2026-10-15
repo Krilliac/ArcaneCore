@@ -137,7 +137,17 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
         {
             if (!HasAffordableSpell(player, services, destination)) continue;
             Vector3 target = new(destination.Spawn.X, destination.Spawn.Y, destination.Spawn.Z);
-            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, target, _options, ref _tileWait, now, out PlayerbotRoute? route);
+            PlayerbotRoute? walk = null;
+            if (PlayerbotElevator.TryBegin(_session, player, target, _options, out walk))
+            {
+                ClearRoute();
+                TargetEntry = destination.Entry;
+                return true;
+            }
+            PlanOutcome planned = walk is not null
+                ? PlanOutcome.Route
+                : PlayerbotNavigation.PlanToward(player, target, _options, ref _tileWait, now, out walk);
+            PlayerbotRoute? route = walk;
             if (planned == PlanOutcome.Pending)
             {
                 // A tile of the way is still being read: not a verdict on this trainer. Keep it unblocked, plan again next think.

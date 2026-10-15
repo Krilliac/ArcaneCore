@@ -58,21 +58,35 @@ public static class DiagnosticsHostingExtensions
 internal sealed class DiagnosticsHostedService(
     IOptions<DiagnosticsOptions> options,
     IEnumerable<ICrashContextProvider> providers,
-    ILoggerFactory loggerFactory) : IHostedService
+    ILoggerFactory loggerFactory,
+    IHostApplicationLifetime? lifetime = null) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
         DiagnosticsOptions value = options.Value;
         ILogger crashLogger = loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Crash");
         Invariant.Configure(value, loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Invariant"));
+        FaultLedger.Shared.Configure(value);
         CrashHandler handler = CrashHandler.Install(value, new LoggerCrashSink(crashLogger), [.. providers]);
 
         crashLogger.LogInformation(
-            "Diagnostics: OnInvariant={OnInvariant}, BreakOnInvariant={Break}, InvariantLogLimit={LogLimit}, OnUnhandled={OnUnhandled}, OnUnobservedTask={OnUnobserved}, kernel build {Build}",
-            value.OnInvariant, value.BreakOnInvariant, value.InvariantLogLimit, value.OnUnhandled, value.OnUnobservedTask, CrashReport.BuildConfiguration);
+            "Diagnostics: OnInvariant={OnInvariant}, BreakOnInvariant={Break}, InvariantLogLimit={LogLimit}, OnUnhandled={OnUnhandled}, OnUnobservedTask={OnUnobserved}, BeepOnStartup={BeepOnStartup}, BeepOnException={BeepOnException}, kernel build {Build}",
+            value.OnInvariant, value.BreakOnInvariant, value.InvariantLogLimit, value.OnUnhandled, value.OnUnobservedTask, value.BeepOnStartup, value.BeepOnException, CrashReport.BuildConfiguration);
         if (value.FirstChanceExceptions && !handler.FirstChanceHooked)
         {
             crashLogger.LogWarning("Diagnostics:FirstChanceExceptions is on but this is a Release build of the Kernel; the first-chance hook is compiled out and the key is ignored");
+        }
+
+        if (value.BeepOnStartup)
+        {
+            if (lifetime is { } appLifetime && !appLifetime.ApplicationStarted.IsCancellationRequested)
+            {
+                appLifetime.ApplicationStarted.Register(static () => ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TryBeep(bypassCooldown: true));
+            }
+            else
+            {
+                ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TryBeep(bypassCooldown: true);
+            }
         }
 
         return Task.CompletedTask;

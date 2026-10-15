@@ -63,9 +63,9 @@ public sealed class RollingFileWriter : ILineWriter
         _open = open ?? OpenAppend;
     }
 
-    /// <summary>The production open: append, shared read/write (tail -f and a second daemon on the same file work), 64 KiB buffer.</summary>
+    /// <summary>The production open: append, shared read/write/delete (tail -f and a second daemon on the same file work), 64 KiB buffer.</summary>
     public static FileStream OpenAppend(string path)
-        => new(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
+        => new(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, bufferSize: 64 * 1024);
 
     /// <summary>Bytes in the active file.</summary>
     public long CurrentSize => _size;
@@ -215,9 +215,17 @@ public sealed class RollingFileWriter : ILineWriter
             }
 
             string target = Path.Combine(_directory, prefix + sequence.ToString("000", CultureInfo.InvariantCulture) + _extension);
-            File.Move(_path, target, overwrite: false);
-            Rolls++;
-            Prune();
+            try
+            {
+                File.Move(_path, target, overwrite: false);
+                Rolls++;
+                Prune();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Failures++;
+                _diagnostics.WriteLine($"ArcaneCore logging: cannot roll {_path}: {ex.Message}. Continuing on active file.");
+            }
         }
 
         _size = 0;

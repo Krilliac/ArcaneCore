@@ -2803,7 +2803,19 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         PlayerbotThinkProbe.Phase("explore plan");
         if (ExploreMovementPaused(player, elapsedMs)) return true;
         var destination = new System.Numerics.Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z);
-        PlanOutcome atlasPlan = PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out _route);
+        PlayerbotRoute? walk = null;
+        if (PlayerbotWorldDestinations.TransitAllowed(_home, player.Level, _options.Population)
+            && PlayerbotElevator.TryBegin(_session, player, destination, _options, out walk))
+        {
+            AbandonRoute();
+            _goal = PlayerbotGoalKind.Explore;
+            TargetEntry = chosen.Spawn.Entry;
+            return true;
+        }
+        PlanOutcome atlasPlan = walk is not null
+            ? PlanOutcome.Route
+            : PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out walk);
+        _route = walk;
         if (atlasPlan == PlanOutcome.Pending) return true;
         float flatDistSq = (destination.X - player.X) * (destination.X - player.X) + (destination.Y - player.Y) * (destination.Y - player.Y);
         if (atlasPlan == PlanOutcome.Refused

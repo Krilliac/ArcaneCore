@@ -245,41 +245,34 @@ internal static class PlayerbotRouteSmoothing
         for (int i = 1; i < n - 1; i++)
         {
             (Vector3 basePt, Vector2 normal, float s) = spine[i];
-            if (s > horizonFlat)
+            Vector3 nextBasePt = spine[i + 1].Point;
+            if (s <= horizonFlat)
             {
-                result.Add(basePt);
-                continue;
-            }
-
-            float targetOffset = desiredOffsets[i] * safeScales[i];
-            if (MathF.Abs(targetOffset) >= 0.08f)
-            {
-                if (safeScales[i] == probedScales[i] && IsChordSafe(map, result[^1], probedPoints[i]))
+                float targetOffset = desiredOffsets[i] * safeScales[i];
+                if (MathF.Abs(targetOffset) >= 0.08f)
                 {
-                    result.Add(probedPoints[i]);
-                    anyOffset = true;
-                    continue;
-                }
+                    if (safeScales[i] == probedScales[i]
+                        && IsChordSafe(map, result[^1], probedPoints[i])
+                        && IsChordSafe(map, probedPoints[i], nextBasePt))
+                    {
+                        result.Add(probedPoints[i]);
+                        anyOffset = true;
+                        continue;
+                    }
 
-                if (TrySelectSafeOffsetPoint(map, result[^1], basePt, normal, targetOffset, out Vector3 shifted))
-                {
-                    result.Add(shifted);
-                    anyOffset = true;
-                    continue;
+                    if (TrySelectSafeOffsetPoint(map, result[^1], basePt, nextBasePt, normal, targetOffset, out Vector3 shifted))
+                    {
+                        result.Add(shifted);
+                        anyOffset = true;
+                        continue;
+                    }
                 }
             }
 
-            if (IsChordSafe(map, result[^1], basePt))
-            {
-                result.Add(basePt);
-            }
+            result.Add(basePt);
         }
 
-        Vector3 finalPt = spine[^1].Point;
-        while (result.Count > 1 && !IsChordSafe(map, result[^1], finalPt))
-            result.RemoveAt(result.Count - 1);
-
-        result.Add(finalPt);
+        result.Add(spine[^1].Point);
         return anyOffset && result.Count >= 3 ? result : null;
     }
 
@@ -318,6 +311,7 @@ internal static class PlayerbotRouteSmoothing
         Map map,
         Vector3 prevAccepted,
         Vector3 basePt,
+        Vector3 nextBasePt,
         Vector2 normal,
         float desiredOffset,
         out Vector3 chosen)
@@ -339,7 +333,7 @@ internal static class PlayerbotRouteSmoothing
                 continue;
             if (!TrySnapHeight(map, candidate, out Vector3 snapped))
                 continue;
-            if (!IsChordSafe(map, prevAccepted, snapped))
+            if (!IsChordSafe(map, prevAccepted, snapped) || !IsChordSafe(map, snapped, nextBasePt))
                 continue;
 
             chosen = snapped;
@@ -458,13 +452,25 @@ internal static class PlayerbotRouteSmoothing
 
     private static bool IsChordSafe(Map map, Vector3 from, Vector3 to)
     {
+        if (MathF.Abs(to.Z - from.Z) > MaxFloorDeltaYards * 3f)
+            return false;
+
         if (!PlayerbotMoveCheck.LineClear(map.Collision, from, to))
             return false;
 
         if (map.Collision.MeshPoints is { } mesh)
         {
             MeshRaycastResult ray = mesh.Raycast(map.MapId, from, to, WalkableMeshOptions);
-            if (!ray.Available || ray.Hit)
+            if (!ray.Available || ray.Hit || MathF.Abs(ray.Point.Z - to.Z) > MaxFloorDeltaYards * 2f)
+                return false;
+        }
+
+        float flatDist = Vector2.Distance(Flat(from), Flat(to));
+        int samples = (int)MathF.Ceiling(flatDist / 3.0f);
+        for (int s = 1; s < samples; s++)
+        {
+            Vector3 probe = Vector3.Lerp(from, to, s / (float)samples);
+            if (!TrySnapHeight(map, probe, out _))
                 return false;
         }
 

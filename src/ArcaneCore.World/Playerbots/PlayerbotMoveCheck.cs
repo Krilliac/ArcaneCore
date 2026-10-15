@@ -44,7 +44,7 @@ internal static class PlayerbotMoveCheck
     private const float BeyondYards = 1f;
 
     /// <summary>The bot's own mesh filter (steep slopes excluded, as for every bot route). Read-only after construction.</summary>
-    private static readonly PathOptions MeshOptions = new() { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes };
+    internal static readonly PathOptions MeshOptions = new() { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes };
 
     /// <summary>Whether no static model, M2 doodads included, blocks the chest-height segment between two feet positions.</summary>
     internal static bool LineClear(MapCollision collision, Vector3 from, Vector3 to)

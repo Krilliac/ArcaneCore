@@ -57,6 +57,7 @@ public sealed class FaultLedger
     private readonly FaultEntry _overflow;
     private volatile int _maxSignatures;
     private volatile int _logLimit;
+    private volatile bool _beepOnException;
     private long _total;
     private long _lastTicks;
 
@@ -103,12 +104,13 @@ public sealed class FaultLedger
         }
     }
 
-    /// <summary>Apply <c>Diagnostics:FaultMaxSignatures</c> and <c>Diagnostics:FaultLogLimit</c> (safe to call while recording).</summary>
+    /// <summary>Apply <c>Diagnostics:FaultMaxSignatures</c>, <c>Diagnostics:FaultLogLimit</c> and <c>Diagnostics:BeepOnException</c> (safe to call while recording).</summary>
     public void Configure(DiagnosticsOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         _maxSignatures = Math.Max(1, options.FaultMaxSignatures);
         _logLimit = Math.Max(0, options.FaultLogLimit);
+        _beepOnException = options.BeepOnException;
     }
 
     /// <summary>
@@ -430,6 +432,11 @@ public sealed class FaultLedger
         Interlocked.Increment(ref _total);
         Interlocked.Exchange(ref _lastTicks, now.UtcTicks);
         FaultRecording recording = entry.Note(now, _logLimit, exception, ReferenceEquals(entry, _overflow) ? id : null);
+        if (recording.ShouldLog && _beepOnException)
+        {
+            ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TryBeep(checkErrorStream: true);
+        }
+
         if (recording.ShouldLog && FaultNoticed is { } noticed)
         {
             string condensed = FormatCondensedStack(exception);

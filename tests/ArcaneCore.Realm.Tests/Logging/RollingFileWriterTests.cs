@@ -201,6 +201,27 @@ public sealed class RollingFileWriterTests : IDisposable
         Assert.Equal("three\n", ReadShared(LogPath));
     }
 
+    [Fact]
+    public void RollBlockedByExternalReaderWithoutDeleteShare_ContinuesOnActiveFileWithoutDroppingLines()
+    {
+        var diagnostics = new StringWriter();
+        using var writer = Writer(rollSizeBytes: 20, daily: false, retain: 0, diagnostics);
+        writer.Write(Line(1));
+        writer.Write(Line(2));
+        writer.Flush();
+
+        // Hold the active file open without FileShare.Delete so File.Move fails on Windows when the third line triggers a roll.
+        using (var lockStream = new FileStream(LogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            writer.Write(Line(3));
+            writer.Write(Line(4));
+            writer.Flush();
+        }
+
+        Assert.Equal(0, writer.LostLines);
+        Assert.Contains("line 003\nline 004\n", ReadShared(LogPath), StringComparison.Ordinal);
+    }
+
     /// <summary>Opens real files, but while <see cref="Full"/> every flush, including the one <see cref="FileStream.Dispose()"/> performs on a dirty buffer, fails with ENOSPC.</summary>
     private sealed class FailingDisk
     {

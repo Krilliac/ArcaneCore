@@ -29,6 +29,12 @@ public enum ChaosProbeCategory
     LootVendorEconomy,
     SocialTradeMailBg,
     BoundaryMovement,
+    TalentAndSkill,
+    PetAndStable,
+    AuctionMailBank,
+    WorldTransitAndInstance,
+    ChatChannelAndQuery,
+    StateRaceCombo,
 }
 
 /// <summary>One unhandled server exception or invariant breach discovered by a chaos bot probe.</summary>
@@ -222,7 +228,7 @@ public sealed class PlayerbotChaosEngine
         if (session.State != SessionState.InWorld || !player.IsInWorld || player.Map is null) return 0;
 
         PlayerbotChaosOptions cfg = _options.Chaos;
-        Span<ChaosProbeCategory> enabledCategories = stackalloc ChaosProbeCategory[9];
+        Span<ChaosProbeCategory> enabledCategories = stackalloc ChaosProbeCategory[15];
         int catCount = 0;
         if (cfg.MalformedPayloads)
         {
@@ -237,6 +243,12 @@ public sealed class PlayerbotChaosEngine
             enabledCategories[catCount++] = ChaosProbeCategory.QuestAndNpc;
             enabledCategories[catCount++] = ChaosProbeCategory.LootVendorEconomy;
             enabledCategories[catCount++] = ChaosProbeCategory.SocialTradeMailBg;
+            enabledCategories[catCount++] = ChaosProbeCategory.TalentAndSkill;
+            enabledCategories[catCount++] = ChaosProbeCategory.PetAndStable;
+            enabledCategories[catCount++] = ChaosProbeCategory.AuctionMailBank;
+            enabledCategories[catCount++] = ChaosProbeCategory.WorldTransitAndInstance;
+            enabledCategories[catCount++] = ChaosProbeCategory.ChatChannelAndQuery;
+            enabledCategories[catCount++] = ChaosProbeCategory.StateRaceCombo;
         }
         if (cfg.BoundaryMovement)
         {
@@ -248,14 +260,17 @@ public sealed class PlayerbotChaosEngine
         ManagedActionBudget? savedBudget = session.ManagedBudget;
         session.ManagedBudget = null;
         int executed = 0;
+        int startOffset = rng.Next(catCount);
         try
         {
             for (int i = 0; i < count; i++)
             {
                 if (session.State != SessionState.InWorld || !player.IsInWorld || player.Map is null) break;
-                ChaosProbeCategory category = enabledCategories[rng.Next(catCount)];
+                ChaosProbeCategory category = count >= catCount && i < catCount
+                    ? enabledCategories[(startOffset + i) % catCount]
+                    : enabledCategories[rng.Next(catCount)];
                 (WorldOpcode opcode, string probeName, byte[] payload) = BuildProbe(category, rng, player);
-                ExecuteSingleProbe(botId, session, player, category, probeName, opcode, payload);
+                ExecuteSingleProbe(botId, session, player, category, probeName, opcode, payload, rng);
                 executed++;
             }
         }
@@ -274,9 +289,11 @@ public sealed class PlayerbotChaosEngine
         ChaosProbeCategory category,
         string probeName,
         WorldOpcode opcode,
-        byte[] payload)
+        byte[] payload,
+        Random rng)
     {
         float prevX = player.X, prevY = player.Y, prevZ = player.Z, prevO = player.Orientation;
+        StandState prevStandState = player.StandState;
         _ = player.ConsumeRejectedNonFiniteRelocation();
         Interlocked.Increment(ref _probesExecuted);
         Interlocked.Increment(ref _categoryCounts[(int)category]);
@@ -285,24 +302,10 @@ public sealed class PlayerbotChaosEngine
         session.IsInChaosProbe = true;
         try
         {
-            if (IsNonProfessionUnlearnSkillProbe(player, opcode, payload))
+            DispatchProbePacket(session, player, opcode, payload);
+            if (category == ChaosProbeCategory.StateRaceCombo)
             {
-                // Guard chaos probes from spamming TryUnlearnSkill warnings on non-profession skills (weapon/defense/armor/language lines).
-            }
-            else if (session.IsManaged)
-            {
-                session.TryManagedAction(opcode, payload);
-            }
-            else if (session.World.IsWorldThread
-                && session.State == SessionState.InWorld
-                && !player.IsQuestSettlementPending
-                && payload.Length <= WorldSession.MaxClientPacketSize - 4
-                && _opcodes.TryGet(opcode, out OpcodeHandler? handler)
-                && handler.World is not null
-                && handler.AllowsState(session.State)
-                && (player.Map is not null || opcode == WorldOpcode.MsgMoveWorldportAck))
-            {
-                handler.World(session, player, payload);
+                ExecuteStateRaceComboFollowUps(session, player, probeName, rng);
             }
         }
         catch (Exception ex) when (MalformedPacket.Is(ex))
@@ -319,7 +322,32 @@ public sealed class PlayerbotChaosEngine
         }
 
         // Verify post-probe state & self-heal any invariant breach.
-        VerifyAndHealAfterProbe(botId, session, player, category, probeName, opcode, payload, prevX, prevY, prevZ, prevO);
+        VerifyAndHealAfterProbe(botId, session, player, category, probeName, opcode, payload, prevX, prevY, prevZ, prevO, prevStandState);
+    }
+
+    private void DispatchProbePacket(WorldSession session, Player player, WorldOpcode opcode, byte[] payload)
+    {
+        if (IsNonProfessionUnlearnSkillProbe(player, opcode, payload))
+        {
+            // Guard chaos probes from spamming TryUnlearnSkill warnings on non-profession skills (weapon/defense/armor/language lines).
+            return;
+        }
+
+        if (session.IsManaged)
+        {
+            session.TryManagedAction(opcode, payload);
+        }
+        else if (session.World.IsWorldThread
+            && session.State == SessionState.InWorld
+            && !player.IsQuestSettlementPending
+            && payload.Length <= WorldSession.MaxClientPacketSize - 4
+            && _opcodes.TryGet(opcode, out OpcodeHandler? handler)
+            && handler.World is not null
+            && handler.AllowsState(session.State)
+            && (player.Map is not null || opcode == WorldOpcode.MsgMoveWorldportAck))
+        {
+            handler.World(session, player, payload);
+        }
     }
 
     /// <summary>
@@ -393,8 +421,23 @@ public sealed class PlayerbotChaosEngine
         float prevX,
         float prevY,
         float prevZ,
-        float prevO)
+        float prevO,
+        StandState prevStandState)
     {
+        // Rescue bots previously persisted near (0, 0, 0) on continents 0/1 by earlier movement fuzzing.
+        if (player.MapId is 0 or 1
+            && MathF.Abs(prevX) < 100f
+            && MathF.Abs(prevY) < 100f
+            && player.Home is { } home
+            && home.MapId == player.MapId
+            && float.IsFinite(home.X) && float.IsFinite(home.Y) && float.IsFinite(home.Z)
+            && (MathF.Abs(home.X) > 100f || MathF.Abs(home.Y) > 100f))
+        {
+            prevX = home.X;
+            prevY = home.Y;
+            prevZ = home.Z;
+        }
+
         // 1. Coordinate finiteness invariant: a movement or teleport handler must never leave NaN/Infinity on a player
         // or attempt a non-finite relocation that WorldObject/Unit had to reject at the entity boundary.
         bool rejectedNonFinite = player.ConsumeRejectedNonFiniteRelocation();
@@ -411,6 +454,30 @@ public sealed class PlayerbotChaosEngine
                 opcode,
                 payload,
                 new InvalidOperationException($"Non-finite player position after {opcode} ({probeName}); restored to ({prevX:F1},{prevY:F1},{prevZ:F1})."));
+        }
+        else if (player.X != prevX || player.Y != prevY || player.Z != prevZ || player.Orientation != prevO)
+        {
+            // Prevent fuzzed movement packets (e.g., all-zero or random-float MSG_MOVE_* frames) from relocating bots
+            // to Null Island (0, 0, 0) or through walls/air during chaos probes.
+            player.Relocate(prevX, prevY, prevZ, prevO, session.World.NowMs);
+        }
+
+        // Cancel any logout timer started by a fuzzed CMSG_LOGOUT_REQUEST so the chaos bot remains in the world.
+        if (player.IsLoggingOut)
+        {
+            player.CancelLogout();
+        }
+
+        // Restore StandState if a fuzzed packet put a living bot into Dead/Sit/Sleep/Submerged.
+        if (player.IsAlive && player.StandState != prevStandState && player.StandState != StandState.Stand)
+        {
+            player.StandState = StandState.Stand;
+        }
+
+        // Clear orphaned OnTransport flag if no transport is attached.
+        if (player.Movement.TransportGuid == 0UL && player.Movement.HasFlag(MovementFlags.OnTransport))
+        {
+            player.RemoveMovementFlags(MovementFlags.OnTransport);
         }
 
         // 2. Life, combat and visibility invariants.
@@ -493,6 +560,8 @@ public sealed class PlayerbotChaosEngine
         var list = new List<WorldOpcode>(192);
         foreach (WorldOpcode op in _opcodes.Opcodes)
         {
+            if (op is WorldOpcode.CmsgGmticketCreate or WorldOpcode.CmsgGuildCreate or WorldOpcode.CmsgCharDelete or WorldOpcode.CmsgLogoutRequest)
+                continue;
             if (_opcodes.TryGet(op, out OpcodeHandler? handler) && handler.World is not null)
                 list.Add(op);
         }
@@ -513,6 +582,12 @@ public sealed class PlayerbotChaosEngine
             ChaosProbeCategory.LootVendorEconomy => BuildLootVendorEconomyProbe(rng, player),
             ChaosProbeCategory.SocialTradeMailBg => BuildSocialTradeMailBgProbe(rng, player),
             ChaosProbeCategory.BoundaryMovement => BuildBoundaryMovementProbe(rng, player),
+            ChaosProbeCategory.TalentAndSkill => BuildTalentAndSkillProbe(rng, player),
+            ChaosProbeCategory.PetAndStable => BuildPetAndStableProbe(rng, player),
+            ChaosProbeCategory.AuctionMailBank => BuildAuctionMailBankProbe(rng, player),
+            ChaosProbeCategory.WorldTransitAndInstance => BuildWorldTransitAndInstanceProbe(rng, player),
+            ChaosProbeCategory.ChatChannelAndQuery => BuildChatChannelAndQueryProbe(rng, player),
+            ChaosProbeCategory.StateRaceCombo => BuildStateRaceComboProbe(rng, player),
             _ => BuildTruncatedWireProbe(rng),
         };
 
@@ -752,6 +827,436 @@ public sealed class PlayerbotChaosEngine
                 byte[] payload = BuildMovementPayload((uint)MovementFlags.FallingFar, (uint)Environment.TickCount, player.X, player.Y, player.Z, player.Orientation, uint.MaxValue);
                 return (WorldOpcode.CmsgMoveFallReset, "move-fall-reset-max-falltime", payload);
             }
+        }
+    }
+
+    private static (WorldOpcode Opcode, string ProbeName, byte[] Payload) BuildTalentAndSkillProbe(Random rng, Player player)
+    {
+        int sub = rng.Next(7);
+        switch (sub)
+        {
+            case 0:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                w.WriteUInt32((uint)rng.Next(0, 10));
+                return (WorldOpcode.CmsgLearnTalent, "talent-learn-boundary-id", w.ToArray());
+            }
+            case 1:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt32((uint)rng.Next(1, 2000));
+                w.WriteUInt32(uint.MaxValue);
+                return (WorldOpcode.CmsgLearnTalent, "talent-learn-max-rank", w.ToArray());
+            }
+            case 2:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                return (WorldOpcode.MsgTalentWipeConfirm, "talent-wipe-confirm-boundary", w.ToArray());
+            }
+            case 3:
+            {
+                var w = new PacketWriter();
+                uint[] primaryProfessions = [164u, 165u, 171u, 182u, 186u, 197u, 202u, 333u, 393u, 0u, uint.MaxValue];
+                w.WriteUInt32(primaryProfessions[rng.Next(primaryProfessions.Length)]);
+                return (WorldOpcode.CmsgUnlearnSkill, "skill-unlearn-boundary", w.ToArray());
+            }
+            case 4:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgTrainerList, "trainer-list-candidate", w.ToArray());
+            }
+            case 5:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                return (WorldOpcode.CmsgTrainerBuySpell, "trainer-buy-boundary-spell", w.ToArray());
+            }
+            default:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt32((uint)rng.Next(0, 512));
+                w.WriteByte((byte)rng.Next(0, 3));
+                w.WriteUInt16((ushort)rng.Next(0, 65535));
+                return (WorldOpcode.CmsgSetActionButton, "action-button-fuzz", w.ToArray());
+            }
+        }
+    }
+
+    private static (WorldOpcode Opcode, string ProbeName, byte[] Payload) BuildPetAndStableProbe(Random rng, Player player)
+    {
+        int sub = rng.Next(7);
+        switch (sub)
+        {
+            case 0:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(unchecked((uint)rng.Next()));
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgPetAction, "pet-action-fuzz", w.ToArray());
+            }
+            case 1:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteCString(rng.Next(2) == 0 ? "" : "ChaosPet\u0001\u007F");
+                return (WorldOpcode.CmsgPetRename, "pet-rename-control-chars", w.ToArray());
+            }
+            case 2:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgPetAbandon, "pet-abandon-candidate", w.ToArray());
+            }
+            case 3:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                w.WriteUInt16((ushort)rng.Next(0, 65535));
+                return (WorldOpcode.CmsgPetSetAction, "pet-set-action-boundary", w.ToArray());
+            }
+            case 4:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.MsgListStabledPets, "stable-list-candidate", w.ToArray());
+            }
+            case 5:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteByte((byte)rng.Next(0, 255));
+                return (WorldOpcode.CmsgStablePet, "stable-pet-boundary-slot", w.ToArray());
+            }
+            default:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(unchecked((uint)rng.Next()));
+                w.WriteByte((byte)rng.Next(0, 255));
+                return (WorldOpcode.CmsgUnstablePet, "unstable-pet-boundary-slot", w.ToArray());
+            }
+        }
+    }
+
+    private static (WorldOpcode Opcode, string ProbeName, byte[] Payload) BuildAuctionMailBankProbe(Random rng, Player player)
+    {
+        int sub = rng.Next(8);
+        switch (sub)
+        {
+            case 0:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                return (WorldOpcode.CmsgAuctionSellItem, "auction-sell-extreme-prices", w.ToArray());
+            }
+            case 1:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(unchecked((uint)rng.Next()));
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                return (WorldOpcode.CmsgAuctionPlaceBid, "auction-bid-boundary-amount", w.ToArray());
+            }
+            case 2:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteCString("%_%'");
+                w.WriteByte(255);
+                w.WriteByte(255);
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteByte(1);
+                return (WorldOpcode.CmsgAuctionListItems, "auction-list-max-offset", w.ToArray());
+            }
+            case 3:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteCString(rng.Next(2) == 0 ? player.Name : "NonExistentRecipient_Chaos");
+                w.WriteCString("ChaosSubject");
+                w.WriteCString("ChaosBody");
+                w.WriteUInt32(0u);
+                w.WriteUInt32(0u);
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteUInt32(uint.MaxValue);
+                return (WorldOpcode.CmsgSendMail, "mail-send-max-money-cod", w.ToArray());
+            }
+            case 4:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                return (WorldOpcode.CmsgMailTakeMoney, "mail-take-money-boundary-id", w.ToArray());
+            }
+            case 5:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                return (WorldOpcode.CmsgMailTakeItem, "mail-take-item-boundary-id", w.ToArray());
+            }
+            case 6:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgBuyBankSlot, "bank-buy-slot-candidate", w.ToArray());
+            }
+            default:
+            {
+                var w = new PacketWriter();
+                w.WriteByte(PickBoundarySlot(rng));
+                w.WriteByte(PickBoundarySlot(rng));
+                return (WorldOpcode.CmsgAutobankItem, "bank-autobank-boundary-slot", w.ToArray());
+            }
+        }
+    }
+
+    private static (WorldOpcode Opcode, string ProbeName, byte[] Payload) BuildWorldTransitAndInstanceProbe(Random rng, Player player)
+    {
+        int sub = rng.Next(7);
+        switch (sub)
+        {
+            case 0:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                return (WorldOpcode.CmsgAreatrigger, "areatrigger-boundary-id", w.ToArray());
+            }
+            case 1:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                return (WorldOpcode.CmsgActivatetaxi, "taxi-activate-boundary-nodes", w.ToArray());
+            }
+            case 2:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteUInt32((uint)rng.Next(0, 500));
+                for (int i = 0; i < 64; i++)
+                {
+                    w.WriteUInt32((uint)rng.Next(0, 1000));
+                }
+                return (WorldOpcode.CmsgActivatetaxiexpress, "taxi-express-oversized-path", w.ToArray());
+            }
+            case 3:
+            {
+                return (WorldOpcode.CmsgResetInstances, "instance-reset-spam", []);
+            }
+            case 4:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteByte((byte)rng.Next(0, 255));
+                return (WorldOpcode.CmsgBattlefieldPort, "battlefield-port-invalid-slot", w.ToArray());
+            }
+            case 5:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgBinderActivate, "binder-activate-candidate", w.ToArray());
+            }
+            default:
+            {
+                return (WorldOpcode.CmsgRepopRequest, "repop-while-alive-or-ghost", []);
+            }
+        }
+    }
+
+    private static (WorldOpcode Opcode, string ProbeName, byte[] Payload) BuildChatChannelAndQueryProbe(Random rng, Player player)
+    {
+        int sub = rng.Next(7);
+        switch (sub)
+        {
+            case 0:
+            {
+                var w = new PacketWriter();
+                w.WriteCString(rng.Next(2) == 0 ? "" : "ChaosChannel\u0007/\\..");
+                w.WriteCString("pass\u0000word");
+                return (WorldOpcode.CmsgJoinChannel, "channel-join-weird-name", w.ToArray());
+            }
+            case 1:
+            {
+                var w = new PacketWriter();
+                w.WriteCString("ChaosChannel");
+                return (WorldOpcode.CmsgLeaveChannel, "channel-leave-unjoined", w.ToArray());
+            }
+            case 2:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteUInt32(uint.MaxValue);
+                w.WriteUInt32(64u);
+                w.WriteUInt32(64u);
+                for (int i = 0; i < 64; i++)
+                {
+                    w.WriteUInt32((uint)rng.Next());
+                }
+                w.WriteUInt32(10u);
+                for (int i = 0; i < 10; i++)
+                {
+                    w.WriteCString($"ChaosWho_{i}");
+                }
+                return (WorldOpcode.CmsgWho, "who-query-oversized-filters", w.ToArray());
+            }
+            case 3:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgNameQuery, "query-name-candidate-guid", w.ToArray());
+            }
+            case 4:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgCreatureQuery, "query-creature-boundary-entry", w.ToArray());
+            }
+            case 5:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgGameobjectQuery, "query-gobj-boundary-entry", w.ToArray());
+            }
+            default:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt32(rng.Next(2) == 0 ? 0u : uint.MaxValue);
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgItemQuerySingle, "query-item-boundary-entry", w.ToArray());
+            }
+        }
+    }
+
+    private static (WorldOpcode Opcode, string ProbeName, byte[] Payload) BuildStateRaceComboProbe(Random rng, Player player)
+    {
+        int sub = rng.Next(4);
+        switch (sub)
+        {
+            case 0:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(player.Guid.Value);
+                return (WorldOpcode.CmsgInitiateTrade, "combo-trade-swap-cancel", w.ToArray());
+            }
+            case 1:
+            {
+                return (WorldOpcode.CmsgCastSpell, "combo-cast-cancel-standstate", CastSpellPayload(133u, 0x02, player.Guid.Value));
+            }
+            case 2:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgLoot, "combo-loot-take-release", w.ToArray());
+            }
+            default:
+            {
+                var w = new PacketWriter();
+                w.WriteUInt64(PickCandidateGuid(rng, player));
+                return (WorldOpcode.CmsgGossipHello, "combo-npc-gossip-vendor-quest", w.ToArray());
+            }
+        }
+    }
+
+    private void ExecuteStateRaceComboFollowUps(WorldSession session, Player player, string probeName, Random rng)
+    {
+        switch (probeName)
+        {
+            case "combo-trade-swap-cancel":
+            {
+                var setItem = new PacketWriter();
+                setItem.WriteByte(0);
+                setItem.WriteByte(255);
+                setItem.WriteByte(23);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgSetTradeItem, setItem.ToArray());
+
+                var setGold = new PacketWriter();
+                setGold.WriteUInt32(uint.MaxValue);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgSetTradeGold, setGold.ToArray());
+
+                DispatchFollowUp(session, player, WorldOpcode.CmsgAcceptTrade, [1, 0, 0, 0]);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgCancelTrade, []);
+                break;
+            }
+            case "combo-cast-cancel-standstate":
+            {
+                var stand = new PacketWriter();
+                stand.WriteUInt32((uint)StandState.Sit);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgStandstatechange, stand.ToArray());
+
+                var cancel = new PacketWriter();
+                cancel.WriteUInt32(133u);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgCancelCast, cancel.ToArray());
+
+                var standUp = new PacketWriter();
+                standUp.WriteUInt32((uint)StandState.Stand);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgStandstatechange, standUp.ToArray());
+                break;
+            }
+            case "combo-loot-take-release":
+            {
+                ulong targetGuid = PickCandidateGuid(rng, player);
+                var autostore = new PacketWriter();
+                autostore.WriteByte(0);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgAutostoreLootItem, autostore.ToArray());
+
+                DispatchFollowUp(session, player, WorldOpcode.CmsgLootMoney, []);
+
+                var release = new PacketWriter();
+                release.WriteUInt64(targetGuid);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgLootRelease, release.ToArray());
+                break;
+            }
+            case "combo-npc-gossip-vendor-quest":
+            {
+                ulong npcGuid = PickCandidateGuid(rng, player);
+                var gossipSel = new PacketWriter();
+                gossipSel.WriteUInt64(npcGuid);
+                gossipSel.WriteUInt32(uint.MaxValue);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgGossipSelectOption, gossipSel.ToArray());
+
+                var vendor = new PacketWriter();
+                vendor.WriteUInt64(npcGuid);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgListInventory, vendor.ToArray());
+
+                var quest = new PacketWriter();
+                quest.WriteUInt64(npcGuid);
+                DispatchFollowUp(session, player, WorldOpcode.CmsgQuestgiverStatusQuery, quest.ToArray());
+                break;
+            }
+        }
+    }
+
+    private void DispatchFollowUp(WorldSession session, Player player, WorldOpcode opcode, byte[] payload)
+    {
+        try
+        {
+            DispatchProbePacket(session, player, opcode, payload);
+        }
+        catch (Exception ex) when (MalformedPacket.Is(ex))
+        {
+            Interlocked.Increment(ref _malformedRejected);
         }
     }
 
