@@ -299,7 +299,7 @@ public sealed partial class WorldSession : IPlayerSession
         if (_state == SessionState.Connected)
         {
             _logger.LogInformation("[{Endpoint}] no authentication within {Timeout}; closing", RemoteEndpoint, _options.PreAuthTimeout);
-            Kick();
+            Kick("no authentication within the pre-auth timeout");
         }
     }
 
@@ -331,6 +331,7 @@ public sealed partial class WorldSession : IPlayerSession
         {
             if (_state == SessionState.Closed)
             {
+                NoteSendAfterClose(opcode);
                 return;
             }
 
@@ -350,7 +351,7 @@ public sealed partial class WorldSession : IPlayerSession
         if (Interlocked.Add(ref _outboundBytes, frame.Length) > _options.MaxOutboundBytes)
         {
             _logger.LogWarning("[{Endpoint}] outbound queue over {Limit} bytes; disconnecting", RemoteEndpoint, _options.MaxOutboundBytes);
-            Kick();
+            Kick("outbound queue over the byte limit");
         }
     }
 
@@ -361,6 +362,7 @@ public sealed partial class WorldSession : IPlayerSession
     {
         // Player and map state are owned by the world thread; this is the only consumer of _worldQueue.
         Invariant.Assert(World.IsWorldThread, "in-world packets are handled on the world thread");
+        CheckLogoutOverdue(player);
         for (int budget = _options.MaxWorldPacketsPerTick; budget > 0 && _worldQueue.TryDequeue(out QueuedPacket packet); budget--)
         {
             Release(packet);
@@ -418,7 +420,7 @@ public sealed partial class WorldSession : IPlayerSession
                 _logger.LogWarning(
                     "[{Endpoint}] malformed {Opcode} ({PayloadBytes} bytes, {Reason}) for '{Player}' (guid={Guid}, map={MapId}); disconnecting",
                     RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode), packet.Payload.Length, ex.Message, player.Name, player.Guid.Low, player.MapId);
-                Kick();
+                Kick("malformed packet");
                 return;
             }
             catch (Exception ex) when (ex is not (OutOfMemoryException or ArcaneCore.Kernel.Diagnostics.InvariantViolationException))
@@ -452,8 +454,33 @@ public sealed partial class WorldSession : IPlayerSession
         }
     }
 
-    public void Kick()
+    /// <summary>
+    /// Disconnect the session without a recorded reason. A caller that knows why should use <see cref="Kick(string)"/>: an in-session kick
+    /// with no reason is reported as <c>session/kick-no-reason</c> (naming the calling method) so no disconnect stays unexplained.
+    /// </summary>
+    public void Kick() => KickCore(null);
+
+    /// <summary>Disconnect the session and record <paramref name="reason"/> (<see cref="KickReason"/>); the caller logs the details.</summary>
+    public void Kick(string reason)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        KickCore(reason);
+    }
+
+    private void KickCore(string? reason)
+    {
+        if (Interlocked.CompareExchange(ref _kickRecorded, 1, 0) == 0)
+        {
+            if (reason is not null)
+            {
+                Volatile.Write(ref _kickReason, reason);
+            }
+            else
+            {
+                ReportKickWithoutReason();
+            }
+        }
+
         if (_managed)
         {
             CloseManaged();
@@ -652,7 +679,7 @@ public sealed partial class WorldSession : IPlayerSession
 
             if (!IsCurrentSession)
             {
-                Kick();
+                Kick("superseded by a newer session of the account");
                 return false;
             }
 
@@ -1013,6 +1040,7 @@ public sealed partial class WorldSession : IPlayerSession
             }
 
             _state = SessionState.Closed;
+            Volatile.Write(ref _closedAtTick, Environment.TickCount64);
             _packetCapture?.Dispose();
             _packetCapture = null;
             _outbound.Writer.TryComplete();
@@ -1072,7 +1100,7 @@ public sealed partial class WorldSession : IPlayerSession
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
         {
-            Kick(); // the socket is gone; stop reading too
+            Kick("the socket is gone"); // stop reading too
         }
     }
 

@@ -119,3 +119,46 @@ public sealed partial class ClientRejectionLog
     [LoggerMessage(EventId = 4, Level = LogLevel.Debug, Message = "request dropped without a reply: {Reason} (opcode {Opcode}) character {CharacterLow} map {MapId} target {Target:X} entry {Entry} arg {Arg} (suppressed {Suppressed})")]
     private static partial void BotSilentDrop(ILogger logger, string reason, string opcode, uint characterLow, uint mapId, ulong target, uint entry, uint arg, long suppressed);
 }
+
+/// <summary>
+/// Counts the refusals one session is sent in a fixed window and says when they form a storm (<see cref="Threshold"/> within
+/// <see cref="WindowMs"/>). Not thread-safe: the owning session locks it. One <c>true</c> per storm; a window that ends below the threshold
+/// re-arms it.
+/// </summary>
+internal sealed class RejectionStormTracker
+{
+    /// <summary>Length of the counting window.</summary>
+    public const long WindowMs = 10_000;
+
+    /// <summary>Refusals within one window that make a storm.</summary>
+    public const int Threshold = 100;
+
+    private long _windowStart;
+    private int _count;
+    private bool _reported;
+
+    /// <summary>Count one refusal at <paramref name="nowMs"/> (a monotonic millisecond clock); true when this one completes a storm that was not reported yet.</summary>
+    public bool Note(long nowMs, out int count)
+    {
+        if (_windowStart == 0 || nowMs - _windowStart >= WindowMs)
+        {
+            if (_count < Threshold)
+            {
+                _reported = false;
+            }
+
+            _windowStart = nowMs;
+            _count = 0;
+        }
+
+        _count++;
+        count = _count;
+        if (_count >= Threshold && !_reported)
+        {
+            _reported = true;
+            return true;
+        }
+
+        return false;
+    }
+}

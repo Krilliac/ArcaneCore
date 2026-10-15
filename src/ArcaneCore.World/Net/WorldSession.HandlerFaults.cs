@@ -62,7 +62,7 @@ public sealed partial class WorldSession
             _logger.LogError(
                 "[{Endpoint}] {Opcode} handler fault ({ExceptionType}, {Category}) is not containable; disconnecting '{Player}' (guid={Guid}, map={MapId})",
                 RemoteEndpoint, WorldOpcodeNames.GetName(opcode), exception.GetType().Name, category, player.Name, player.Guid.Low, player.MapId);
-            Kick();
+            Kick("handler fault in a state-changing opcode");
             return false;
         }
 
@@ -71,7 +71,7 @@ public sealed partial class WorldSession
             _logger.LogError(
                 "[{Endpoint}] {Count} handler faults within {Seconds} s (last {Opcode}: {ExceptionType}); disconnecting '{Player}' (guid={Guid}, map={MapId})",
                 RemoteEndpoint, HandlerFaultStorm, HandlerFaultStormWindowMs / 1000, WorldOpcodeNames.GetName(opcode), exception.GetType().Name, player.Name, player.Guid.Low, player.MapId);
-            Kick();
+            Kick("handler fault storm");
             return false;
         }
 
@@ -111,7 +111,7 @@ public sealed partial class WorldSession
         {
             _logger.LogError("[{Endpoint}] {Count} handler faults within {Seconds} s; disconnecting account '{Account}'",
                 RemoteEndpoint, HandlerFaultStorm, HandlerFaultStormWindowMs / 1000, AccountName);
-            Kick();
+            Kick("character-screen handler fault storm");
             return false;
         }
 
