@@ -56,9 +56,9 @@ public sealed class PlayerbotTramFarStartTests
         for (int step = 0; step < 900 && stall is null; step++)
             stall = await world.TickAsync(() =>
             {
-                int before = brain.StallCount;
+                int before = brain.TransitFailureCount;
                 brain.Update(100);
-                return brain.StallCount != before ? brain.StallReport : null;
+                return brain.TransitFailureCount != before ? brain.LastTransitFailure : null;
             });
 
         Assert.NotNull(stall);

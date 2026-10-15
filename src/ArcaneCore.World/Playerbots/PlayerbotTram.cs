@@ -240,6 +240,15 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
     public uint LastBeatMs { get; set; }
     public bool LeftPlatform { get; set; }
     public uint NextPlanMs { get; set; }
+
+    /// <summary>Planning calls in a row that the navigation refused (not pending, not a route): <see cref="PlayerbotTram.MaxRefusedPlans"/> fail the walk.</summary>
+    public int RefusedPlans { get; set; }
+
+    /// <summary>The exit trigger's teleport was refused (<see cref="PlayerbotAreaTriggers.TryConsumeTeleportRefusal(Player, out PlayerbotAreaTriggers.TeleportRefusal)"/>): the way out is the server's own teleport of the exit.</summary>
+    public bool ExitRefused { get; set; }
+
+    /// <summary>The entrance was backed off for this trip's failure already (once per trip).</summary>
+    public bool BackoffRecorded { get; set; }
 }
 
 /// <summary>
@@ -293,6 +302,12 @@ internal static class PlayerbotTram
 
     /// <summary>A failed trip is not tried again for this long.</summary>
     internal const uint RetryAfterFailureMs = 600_000;
+
+    /// <summary>
+    /// A walk (to the entrance, to the exit) fails after this many refused plans in a row (pending tile reads do not count; a route resets
+    /// the count) instead of waiting out <see cref="NoProgressMs"/>.
+    /// </summary>
+    internal const int MaxRefusedPlans = PlayerbotTaxi.MaxRefusedPlans;
 
     /// <summary>A car stops at a platform when its position 500 ms later is within this.</summary>
     internal const float StandingYards = 0.05f;
@@ -358,11 +373,29 @@ internal static class PlayerbotTram
         uint now = session.World.NowMs;
         if (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs) return false;
         if (ChooseLeg(session, player, goal, zoneAt, out TramNetwork? network) is not { } leg || network is null) return false;
+        if (PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Tram, leg.From.Entrance.Id, now)) return false;
+        PlayerbotAreaTriggers.ClearTeleportRefusal(player);
         uint? previous = PlayerbotAreaTriggers.TeleportTargetOf(player);
         var trip = new TramTrip(network, leg.From, leg.To, goal, now, previous);
         Trips.AddOrUpdate(player, trip);
         PlayerbotAreaTriggers.AllowTeleportsTo(player, TramNetwork.TramMapId);
         return true;
+    }
+
+    /// <summary>
+    /// Whether the tram is the way to <paramref name="goal"/> but a failed trip keeps <see cref="TryBegin"/> from beginning one now (the
+    /// retry delay after a failure, or the entrance's backoff): the caller defers the goal for a short retry instead of judging the walk
+    /// there refused. World thread, no side effects.
+    /// </summary>
+    internal static bool IsHeldOff(WorldSession session, Player player, Vector3 goal, Func<Vector3, uint>? zoneAt = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.Team != Team.Alliance || IsTraveling(player)) return false;
+        if (ChooseLeg(session, player, goal, zoneAt, out _) is not { } leg) return false;
+        uint now = session.World.NowMs;
+        return (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs)
+            || PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Tram, leg.From.Entrance.Id, now);
     }
 
     /// <summary>
@@ -528,6 +561,18 @@ internal static class PlayerbotTram
         // Every failure carries its reason: a trip that failed on the continent noted it on the trip only, and the log said just "the
         // trip failed" (live-w22-r1).
         TramTrip? trip = TripOf(player);
+        // The entrance the trip began at waits out its own backoff after a failure (the other platform is not affected), and a ride that
+        // arrived clears it.
+        if (trip is not null && step == TramStep.Failed && !trip.BackoffRecorded)
+        {
+            trip.BackoffRecorded = true;
+            PlayerbotTransitBackoff.Fail(player, TransitKind.Tram, trip.From.Entrance.Id, session.World.NowMs, options);
+        }
+        else if (trip is not null && step == TramStep.Arrived)
+        {
+            PlayerbotTransitBackoff.Clear(player, TransitKind.Tram, trip.From.Entrance.Id);
+        }
+
         if (step == TramStep.Failed && failure is null) failure = trip?.Failure;
         if (step == TramStep.Failed && (trip is null || !trip.FailureReported))
         {
@@ -602,6 +647,23 @@ internal static class PlayerbotTram
         }
 
         if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return TramStep.Traveling;
+
+        // The bot walked into the trigger it was heading for and the server did not take it through (policy, level, a refused teleport): the
+        // trip ends at once; waiting inside the volume for the progress bound would only repeat the refusal.
+        if (trip.Stage == TramStage.ToEntrance && map.MapId != TramNetwork.TramMapId
+            && PlayerbotAreaTriggers.TryConsumeTeleportRefusal(player, trip.From.Entrance.Id, trip.StageMs, out string? entranceWhy))
+        {
+            return Fail(session, player, trip, now, $"tram: the {trip.From.Name} entrance did not take the bot ({entranceWhy})", "teleport-refused");
+        }
+
+        if (trip.Stage == TramStage.ToExit && map.MapId == TramNetwork.TramMapId && !trip.ExitRefused
+            && PlayerbotAreaTriggers.TryConsumeTeleportRefusal(player, trip.To.Exit.Id, trip.StageMs, out string? exitWhy))
+        {
+            trip.ExitRefused = true;
+            trip.FailureCategory ??= "teleport-refused";
+            trip.Failure ??= $"tram: the {trip.To.Name} exit did not take the bot ({exitWhy})";
+        }
+
         if (map.MapId == TramNetwork.TramMapId && !trip.SlowReported)
         {
             uint mapStartMs = trip.PlatformSinceMs != 0 ? trip.PlatformSinceMs : trip.StartedMs;
@@ -657,7 +719,8 @@ internal static class PlayerbotTram
         if (!Walk(session, player, trip, trip.From.Approach, options, elapsedMs, now, toward: true))
         {
             return Fail(session, player, trip, now, string.Create(CultureInfo.InvariantCulture,
-                $"tram: no way to the {trip.From.Name} entrance from {player.X:F1},{player.Y:F1},{player.Z:F1}"), "no-way-to-entrance");
+                $"tram: no way to the {trip.From.Name} entrance from {player.X:F1},{player.Y:F1},{player.Z:F1}{(trip.RefusedPlans >= MaxRefusedPlans ? $" (the path was refused {MaxRefusedPlans} times in a row)" : string.Empty)}"),
+                "no-way-to-entrance");
         }
 
         return TramStep.Traveling;
@@ -1010,7 +1073,7 @@ internal static class PlayerbotTram
         TramPlatform exit = trip.To;
         if ((player.Movement.Flags & MovementFlags.OnTransport) != 0)
             PlayerbotMotion.SendStepOff(session, player, new Vector3(player.X, player.Y, player.Z), player.Orientation);
-        if (Walk(session, player, trip, exit.ExitCentre, options, elapsedMs, now, toward: true)) return TramStep.Traveling;
+        if (!trip.ExitRefused && Walk(session, player, trip, exit.ExitCentre, options, elapsedMs, now, toward: true)) return TramStep.Traveling;
 
         // The exit cannot be walked into from here: the server sends the bot where the exit would (the trigger's own teleport).
         PlayerbotMovementControl.Stop(session, player);
@@ -1041,8 +1104,9 @@ internal static class PlayerbotTram
 
     /// <summary>
     /// Follow (planning when needed, one path query per <see cref="PlanRetryMs"/> while none is found) a route to <paramref name="target"/>;
-    /// false when the bot got no <see cref="ProgressYards"/> closer within <see cref="NoProgressMs"/>. <paramref name="toward"/>: a goal that
-    /// may lie beyond one route (<see cref="PlayerbotNavigation.TryPlanToward"/>).
+    /// false when the bot got no <see cref="ProgressYards"/> closer within <see cref="NoProgressMs"/>, or the navigation refused
+    /// <see cref="MaxRefusedPlans"/> plans in a row (<see cref="TramTrip.RefusedPlans"/>; a pending tile read does not count, a route resets
+    /// it). <paramref name="toward"/>: a goal that may lie beyond one route (<see cref="PlayerbotNavigation.PlanToward"/>).
     /// </summary>
     private static bool Walk(WorldSession session, Player player, TramTrip trip, Vector3 target, PlayerbotOptions options, uint elapsedMs, uint now,
         bool toward)
@@ -1065,14 +1129,15 @@ internal static class PlayerbotTram
         // background: a pending plan is retried like a refused one, nothing is set aside); the progress bound above ends it.
         if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
         PlayerbotThinkProbe.Phase("tram plan");
-        bool planned = toward ? PlayerbotNavigation.TryPlanToward(player, target, options, out PlayerbotRoute? next)
-            : PlayerbotNavigation.TryPlan(player, target, options, out next);
-        if (!planned || next is null)
+        PlanOutcome planned = toward ? PlayerbotNavigation.PlanToward(player, target, options, ref trip.Tiles, now, out PlayerbotRoute? next)
+            : PlayerbotNavigation.PlanExact(player, target, options, ref trip.Tiles, now, out next);
+        if (planned != PlanOutcome.Route || next is null)
         {
             trip.NextPlanMs = unchecked(now + PlanRetryMs);
-            return true;
+            return planned != PlanOutcome.Refused || ++trip.RefusedPlans < MaxRefusedPlans;
         }
 
+        trip.RefusedPlans = 0;
         trip.Route = next;
         PlayerbotNavigation.TryAdvance(session, next, options, elapsedMs, now);
         return true;
@@ -1114,6 +1179,7 @@ internal static class PlayerbotTram
             trip.Stage = stage;
             trip.StageMs = now;
             trip.NextPlanMs = now;
+            trip.RefusedPlans = 0;
             trip.Best = float.PositiveInfinity;
             trip.BestMs = now;
             if (stage is TramStage.ToExit or TramStage.ToEntrance) trip.Route = null;

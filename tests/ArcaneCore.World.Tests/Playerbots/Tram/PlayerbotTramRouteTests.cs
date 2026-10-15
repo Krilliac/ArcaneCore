@@ -204,9 +204,9 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         {
             stall = await world.TickAsync(() =>
             {
-                int before = brain.StallCount;
+                int before = brain.TransitFailureCount;
                 brain.Update(100);
-                return brain.StallCount != before ? brain.StallReport : null;
+                return brain.TransitFailureCount != before ? brain.LastTransitFailure : null;
             });
         }
 
@@ -244,9 +244,9 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         {
             string? report = await world.TickAsync(() =>
             {
-                int before = brain.StallCount;
+                int before = brain.TransitFailureCount;
                 brain.Update(100);
-                return brain.StallCount != before ? brain.StallReport : null;
+                return brain.TransitFailureCount != before ? brain.LastTransitFailure : null;
             });
             if (report is not null) reports.Add(report);
         }

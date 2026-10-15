@@ -38,6 +38,30 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private PlayerbotRoute? _route;
     private bool _routeAbandoned;
 
+    /// <summary>The reason of the latest tram trip or lift ride given up (<see cref="GiveUpTransitLeg"/>); null: none yet (inspection, tests).</summary>
+    internal string? LastTransitFailure { get; private set; }
+
+    /// <summary>Tram trips and lift rides given up so far (<see cref="GiveUpTransitLeg"/>).</summary>
+    internal int TransitFailureCount { get; private set; }
+
+    /// <summary>
+    /// A tram trip or lift ride failed (its driver reported the anomaly once and backed the failing point off, <see cref="PlayerbotTransitBackoff"/>):
+    /// only that leg is given up. Logged, the stall watch reset, the route dropped; the quest and its giver stay as they are, and no dead-end
+    /// pin is counted (a failed leg says nothing about the cell the bot stands in). The goal plans again next think and meets the backoff:
+    /// it walks, or waits, instead of re-entering the failed point.
+    /// </summary>
+    private void GiveUpTransitLeg(string why)
+    {
+        LastTransitFailure = why;
+        TransitFailureCount++;
+        _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>()
+            .LogInformation("Playerbot transit leg given up, the goal plans again: {Why}", why);
+        _stall.Reset();
+        _target = null;
+        AbandonRoute();
+        _attacking = false;
+    }
+
     /// <summary>
     /// The brain gives up its route. The motion keeps walking a route for its lease (<see cref="PlayerbotMotion"/>: seconds, as long as
     /// the bot's think gap), so a route given up and not replaced is told to the host (<see cref="TakeRouteAbandoned"/>), which stops
@@ -693,8 +717,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
             if (tram == TramStep.Failed)
             {
-                _stall.ReportExternal(tramFailure ?? "tram: the trip failed (no reason recorded)");
-                GiveUpStalledGoal(player, shareable: false);
+                GiveUpTransitLeg(tramFailure ?? "tram: the trip failed (no reason recorded)");
                 return;
             }
 
@@ -713,8 +736,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
             if (lift == ElevatorStep.Failed)
             {
-                _stall.ReportExternal(liftFailure ?? "elevator: the ride failed (no reason recorded)");
-                GiveUpStalledGoal(player, shareable: false);
+                GiveUpTransitLeg(liftFailure ?? "elevator: the ride failed (no reason recorded)");
                 return;
             }
         }

@@ -163,7 +163,7 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
 
     /// <summary>
     /// The timeout: cars that never stand still at the foot (a path without a stop) are never boarded. The bot waits at the landing for
-    /// two cycles and 30 s (90 s), then the trip fails with its reason, the brain reports it as the bot's own stall, the bot is still on the
+    /// two cycles and 30 s (90 s), then the trip fails with its reason, the brain gives the leg up (LastTransitFailure) without setting the quest aside, the bot is still on the
     /// canyon floor, and no new ride begins for <see cref="PlayerbotElevator.RetryAfterFailureMs"/>.
     /// </summary>
     [Fact]
@@ -189,9 +189,9 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         {
             (string? report, ElevatorStage? stage) = await world.TickAsync(() =>
             {
-                int before = brain.StallCount;
+                int before = brain.TransitFailureCount;
                 brain.Update(100);
-                return (brain.StallCount != before ? brain.StallReport : null, PlayerbotElevator.TripOf(world.Player)?.Stage);
+                return (brain.TransitFailureCount != before ? brain.LastTransitFailure : null, PlayerbotElevator.TripOf(world.Player)?.Stage);
             });
             if (stage == ElevatorStage.Waiting && waitingSince == 0) waitingSince = world.Host.World.NowMs;
             Assert.NotEqual(ElevatorStage.Aboard, stage);
@@ -234,7 +234,7 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         Assert.Equal(ElevatorStep.Failed, step);
         Assert.StartsWith("elevator: no way to", failure);
         Assert.Contains("the Great Lift", failure);
-        Assert.InRange(took, PlayerbotElevator.NoProgressMs, PlayerbotElevator.NoProgressMs + 60_000);
+        Assert.InRange(took, 1u, PlayerbotElevator.NoProgressMs + 60_000); // the refused plans end it before the progress bound
         Assert.True(await world.OnWorldAsync(() => world.Player.X < ElevatorTestWorld.Cliff), "the bot crossed the cliff");
     }
 

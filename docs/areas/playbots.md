@@ -642,8 +642,11 @@ Every request goes through the real handlers (`WorldSession.TryManagedAction`); 
 - **Discovery.** At most every 2 seconds a bot looks at the objects it sees. A living flight master it may talk to (the server's own
   `InteractableNpc` check: range, faction reaction) whose node (the nearest network node with a mount for the bot's team, as the server maps
   it) the bot does not know gets CMSG_TAXIQUERYAVAILABLENODES. The server learns the node (SMSG_NEW_TAXI_PATH). A master that did not teach its
-  node is asked again after a minute. Known nodes are never asked for. Discovery only happens within interaction range; bots do not detour to
-  unknown masters.
+  node is asked again after a minute. Known nodes are never asked for.
+- **Discovery detour.** A bot that is idle for taxi (no trip, no tram or lift ride) and sees an unknown flight master spawn within about 80
+  yards of itself (`DetourYards`) walks to it, learns the node (query and mask check only, never a flight), and the goal plans again. A learn
+  trip that fails ("node-not-learned", no way, refused plans) backs that node off like any other failure. A node that is backed off, taxi
+  off, or a master further away is not walked to.
 - **Planning.** `TryTravelByTaxi(session, player, mapId, destination, options)` is called by `PlayerbotWorldDestinations` for a quest
   destination after the tram and lift checks (a lift's own walk is kept). The estimate of the walk is the straight line (no path query). Taxi
   is used when it is at least `MinRouteYards` (default 600), the bot knows a node within `MaxWalkToMasterYards` (default 300) of itself, a
@@ -654,11 +657,18 @@ Every request goes through the real handlers (`WorldSession.TryManagedAction`); 
 - **The trip.** The brain drives it before anything else (`PlayerbotTaxi.Drive`): walk to the master, stop, send CMSG_ACTIVATETAXI (one hop) or
   CMSG_ACTIVATETAXIEXPRESS (several hops), read SMSG_ACTIVATETAXIREPLY, then wait. In the air (UNIT_FLAG_TAXI_FLIGHT) the bot neither thinks nor
   moves and the stall watch does not judge it. After the landing the goal that asked for the trip plans again from there (usually a short walk).
-- **Failure.** A refusing reply (for example combat or money; a bot already flying gets no reply at all; a mounted bot is dismounted by the managed action before either request), no reply, no way to the master, no master where the node is, or a
-  budget that never accepts the request ends the trip and backs taxi use off for `BackoffMinutes` (default 10); the goal walks meanwhile. A
-  fight on the way to the master cancels the trip without a backoff. Death cancels it.
+- **Failure.** A refusing reply (for example combat or money; a bot already flying gets no reply at all; a mounted bot is dismounted by the managed action before either request), no reply, no way to the master, no master where the node is, a
+  walk whose plans were refused 3 times in a row (`MaxRefusedPlans`; a pending plan does not count, a route resets the count), a stop that
+  never succeeded in 20 attempts (`MaxStopAttempts`, "stop-refused"), or a budget that never accepts the request ends the trip and backs off
+  the departure node (not taxi as a whole): the wait follows `World:Playerbots:Travel` `BackoffMs` (60 s, doubling per failure of that node,
+  to 300 s), capped by `BackoffMinutes`. A landing clears the node's failures. Other known nodes still fly; the goal walks meanwhile. The
+  same refused-plan bound and per-point backoff apply to the tram (per entrance, which is also failed at once when its teleport trigger
+  refuses the bot, `PlayerbotAreaTriggers.TryConsumeTeleportRefusal`) and to lifts. A failed tram or lift leg gives up only that leg: the
+  quest and its giver are not set aside and no dead-end pin is counted; while the point is backed off the destination waits without a
+  set-aside. A completed quest across the tram for a bot below `TramMinLevel` is held (never abandoned or marked unreachable) and taken up
+  again at the level. A fight on the way to the master cancels the trip without a backoff. Death cancels it.
 - **Config** (`World:Playerbots:Taxi`): `Enabled` (true), `MinRouteYards` (600, 100..20000), `MaxWalkToMasterYards` (300, 10..2000),
-  `BackoffMinutes` (10, 1..1440).
+  `BackoffMinutes` (10, 1..1440; the per-node cap of the Travel schedule).
 
 Deviations from retail 1.12 and vmangos: the client picks its own route and fare; the bot computes both from the same node and path data. It
 sends CMSG_ACTIVATETAXI for a single hop and the express opcode for several (which opcode a 1.12.1 client sends for a single hop is
