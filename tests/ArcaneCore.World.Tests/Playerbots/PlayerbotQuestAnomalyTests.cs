@@ -5,6 +5,8 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
@@ -74,8 +76,141 @@ public sealed class PlayerbotQuestAnomalyTests
         Assert.False(capture.Any(GiverNotFound) || capture.Any(NoProgress), capture.Describe());
     }
 
+
+    private static Creature Giver(Player player) => (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+
+    private static void Kill(Player player) => Giver(player).Health = 0;
+
+    private static void Revive(Player player)
+    {
+        Creature giver = Giver(player);
+        giver.Health = giver.MaxHealth;
+        Assert.True(giver.IsAlive);
+    }
+
     [Fact]
-    public async Task AGiverThatIsGoneBeforeItAnswers_FiresGiverNotFound_Once_AndTheStageStillRunsToItsDeadline()
+    public async Task AGiverThatDiesAtAccept_ChangesGoalWithinOneThink_WithoutWaitingOutTheDeadline_AndIsReportedAtInfo()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var sent = new List<WorldOpcode>();
+            session.ManagedDispatchObserver = opcode => sent.Add(opcode);
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            Assert.True(goals.HasCandidate(player));
+            Think(session, goals); // the query goes out
+            Assert.True(goals.Busy);
+            _ = session.DrainManagedPackets(); // its answer is lost
+            Kill(player);
+
+            Think(session, goals); // the very next think, no clock has moved: the 15 s deadline is not reached
+
+            Assert.False(goals.Busy);
+            Assert.True(goals.IsGiverWait(QuestInteractionFixture.QuestId));
+            Assert.False(goals.IsRefused(QuestInteractionFixture.QuestId)); // not refused, not suspended: only waiting
+            Assert.False(capture.Any(AcceptRefused), capture.Describe());
+            Assert.DoesNotContain(WorldOpcode.CmsgQuestlogRemoveQuest, sent);
+            Assert.Equal(1, capture.Count(GiverNotFound));
+            AnomalyNotice notice = capture.Notices.Single(n => n.Key == GiverNotFound);
+            Assert.Equal(AnomalySeverity.Info, notice.Severity);
+            Assert.Contains($"quest={QuestInteractionFixture.QuestId}", notice.Detail, StringComparison.Ordinal);
+            Assert.Null(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AEnderThatDiesAtTurnIn_ChangesGoalAtOnce_AndTheCompletedQuestStaysInTheLogUnabandoned()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var sent = new List<WorldOpcode>();
+            session.ManagedDispatchObserver = opcode => sent.Add(opcode);
+            for (int think = 0; think < 6; think++) Think(session, goals);
+            Assert.NotNull(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            for (int think = 0; think < 3 && !goals.Busy; think++) Think(session, goals); // the turn-in exchange starts
+            Assert.True(goals.Busy);
+            Assert.True(goals.StageName is "CompleteResponse" or "RewardRequest" or "RewardOffer" or "RewardChoice", goals.StageName);
+            _ = session.DrainManagedPackets(); // no answer comes
+            Kill(player);
+
+            Think(session, goals);
+
+            Assert.False(goals.Busy);
+            QuestStatusData status = quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!;
+            Assert.Equal(QuestStatus.Complete, status.Status);
+            Assert.False(status.Rewarded);
+            Assert.DoesNotContain(WorldOpcode.CmsgQuestlogRemoveQuest, sent);
+            Assert.False(goals.IsRefused(QuestInteractionFixture.QuestId));
+            Assert.True(goals.IsGiverWait(QuestInteractionFixture.QuestId));
+            Assert.Equal(0u, goals.CompletedReturnQuest(player)); // the return trip waits too
+            Assert.Equal(1, capture.Count(GiverNotFound));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AfterTheWait_AndOnceTheGiverRespawned_TheBotComesBackAndAccepts_NotBefore_AndOnlyThatQuestWaits()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        int queries = 0;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
+            Think(session, goals);
+            Assert.Equal(1, queries);
+            _ = session.DrainManagedPackets();
+            Kill(player);
+            Think(session, goals);
+            Assert.True(goals.IsGiverWait(QuestInteractionFixture.QuestId));
+            Assert.False(goals.IsGiverWait(QuestInteractionFixture.QuestId + 1)); // another quest's step is not skipped
+            Revive(player); // the giver is back at once, but the bot has not looked again yet
+            return true;
+        });
+
+        // Before the retry time (60 s for a giver whose respawn is unknown) nothing is asked and the controller leaves the bot to other goals.
+        await quest.Host.World.AdvanceClockAsync(30_000);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            Assert.False(goals.HasCandidate(player));
+            for (int think = 0; think < 3; think++)
+            {
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.False(goals.Update(player, 500));
+            }
+
+            Assert.Equal(1, queries);
+            return true;
+        });
+
+        await quest.Host.World.AdvanceClockAsync(40_000);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            Assert.False(goals.IsGiverWait(QuestInteractionFixture.QuestId));
+            Assert.True(goals.HasCandidate(player));
+            for (int think = 0; think < 6; think++) Think(session, goals);
+            Assert.True(queries >= 2, "the bot went back to the giver");
+            Assert.NotNull(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)); // and accepted
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ADeadGiverIsReportedOncePerEpisode_AndANewDeathAfterTheGiverIsBackIsANewEpisode()
     {
         await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
         WorldSession session = quest.Session;
@@ -84,31 +219,52 @@ public sealed class PlayerbotQuestAnomalyTests
         {
             Player player = session.Player!;
             AnomalyCapture c = PlayerbotAnomalies.CaptureFor(player);
-            Assert.True(goals.HasCandidate(player));
-            Think(session, goals); // the query goes out
-            _ = session.DrainManagedPackets(); // its answer is lost
-            ((Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!).Health = 0;
-            for (int think = 0; think < 4; think++) Think(session, goals);
-
+            Think(session, goals);
+            _ = session.DrainManagedPackets();
+            Kill(player);
+            for (int think = 0; think < 5; think++) Think(session, goals); // dead and waiting: more thinks add nothing
             Assert.Equal(1, c.Count(GiverNotFound));
-            Assert.Contains("reason=giver-despawned-or-dead", c.Notices.Single(n => n.Key == GiverNotFound).Detail, StringComparison.Ordinal);
-            // Report only (H1): the exchange is not given up early, it waits for its deadline as it always did.
-            Assert.True(goals.Busy);
-            Assert.False(c.Any(AcceptRefused), c.Describe());
+            Revive(player);
             return c;
         });
 
-        await quest.Host.World.AdvanceClockAsync(16_000);
+        await quest.Host.World.AdvanceClockAsync(70_000);
         await quest.Host.OnWorldAsync(() =>
         {
+            Player player = session.Player!;
+            Assert.True(goals.HasCandidate(player)); // the giver is seen alive after the wait: the episode is over
+            Think(session, goals); // the query goes out again
+            Assert.True(goals.Busy);
+            _ = session.DrainManagedPackets();
+            Kill(player);
             Think(session, goals);
-            Assert.False(goals.Busy);
-            Assert.Equal(1, capture.Count(GiverNotFound)); // still the one episode
-            Assert.Equal(1, capture.Count(AcceptRefused));
+            Assert.Equal(2, capture.Count(GiverNotFound));
+            Assert.All(capture.Notices.Where(n => n.Key == GiverNotFound), n => Assert.Equal(AnomalySeverity.Info, n.Severity));
             return true;
         });
     }
 
+    [Fact]
+    public async Task ALivingGiver_IsAsked_AcceptedAndNeverWaited()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            for (int think = 0; think < 6; think++)
+            {
+                Think(session, goals);
+                Assert.False(goals.IsGiverWait(QuestInteractionFixture.QuestId));
+            }
+
+            Assert.NotNull(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId));
+            Assert.False(AnyQuestAnomaly(capture), capture.Describe());
+            return true;
+        });
+    }
 
     [Fact]
     public async Task AQuestTakenAndHandedInNormally_ReportsNothing()
