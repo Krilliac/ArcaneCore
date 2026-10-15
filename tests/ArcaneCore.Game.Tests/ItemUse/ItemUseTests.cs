@@ -244,6 +244,25 @@ public sealed class ItemUseTests
         Assert.True(worn.IsSoulBound);
     }
 
+    [Theory]
+    [InlineData((byte)ShapeshiftForm.BattleStance)]
+    [InlineData((byte)ShapeshiftForm.DefensiveStance)]
+    [InlineData((byte)ShapeshiftForm.BerserkerStance)]
+    [InlineData((byte)ShapeshiftForm.Stealth)]
+    [InlineData((byte)ShapeshiftForm.Shadow)]
+    public void APlayerInStanceOrStealthOrShadowform_CanUseBagItems(byte stanceForm)
+    {
+        using var rig = new Rig();
+        rig.Player.SetByte(UpdateFields.UnitFieldBytes1, 2, stanceForm);
+        Item potion = rig.Give(Potion, 2);
+        rig.Player.Health = 10;
+
+        rig.Use(potion);
+
+        Assert.Equal(1u, rig.Inventory.GetItemCount(Potion));
+        Assert.True(rig.Player.Health > 10);
+    }
+
     // --- the cast item checks ----------------------------------------------------------------------------------------
 
     [Fact]

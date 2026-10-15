@@ -39,6 +39,9 @@ internal static class PlayerbotConsumables
     internal static bool TryFindRecovery(Player player, SpellSystem spells, uint healthBelowPct, uint manaBelowPct, out PlayerbotConsumable consumable)
     {
         consumable = default;
+        if (ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player))
+            return false;
+
         bool healthLow = player.Health * 100UL < player.MaxHealth * (ulong)healthBelowPct;
         bool manaLow = player.PowerType == PowerType.Mana
             && player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana) > 0
@@ -86,6 +89,9 @@ internal static class PlayerbotConsumables
 
     internal static bool HasUsable(Player player, SpellSystem spells, PlayerbotConsumableKind wanted)
     {
+        if (ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player))
+            return false;
+
         foreach (Item item in player.Inventory.AllItems.Take(MaxItemsScanned))
         {
             if (!InventorySlots.IsInventoryPos(item.BagSlot, item.Slot)
@@ -323,7 +329,7 @@ internal static class PlayerbotConsumables
             {
                 if (eff.Effect == SpellEffectName.None)
                     continue;
-                if (eff.BasePoints < 0)
+                if (eff.BasePoints < 0 || eff.TargetA == SpellImplicitTarget.UnitCasterPet)
                 {
                     hasNegative = true;
                     break;
@@ -350,6 +356,9 @@ internal static class PlayerbotConsumables
 
     private static IEnumerable<Item> CarriedUsable(Player player)
     {
+        if (ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player))
+            yield break;
+
         foreach (Item item in player.Inventory.AllItems.Take(MaxItemsScanned))
         {
             if (InventorySlots.IsInventoryPos(item.BagSlot, item.Slot)

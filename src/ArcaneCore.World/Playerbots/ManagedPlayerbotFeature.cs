@@ -64,6 +64,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private int _snapshotEpoch;
     private int _builtEpoch = -1;
     private int _builtCount = -1;
+    private int _builtActiveVersion = -1;
+    private uint _snapshotElapsedMs;
+    private readonly List<PlayerbotGroupCoordinator.PlayerbotGroupBot> _groupBotsScratch = [];
+    private readonly List<PlayerbotBattlegroundCoordinator.PlayerbotBattlegroundBot> _bgBotsScratch = [];
     private WorldRuntime? _world;
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
@@ -1271,12 +1275,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // Bot-led groups (PlayerbotGroupCoordinator): their states, the needs and the matching, once per tick before any think.
         if (coordinator is { } groups)
         {
-            var running = new List<PlayerbotGroupCoordinator.PlayerbotGroupBot>(bots.Length);
+            _groupBotsScratch.Clear();
+            if (_groupBotsScratch.Capacity < bots.Length) _groupBotsScratch.Capacity = bots.Length;
             foreach (ActiveBot active in bots)
                 if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
-                    running.Add(new(active.Record.BotId, active.Session, active.Brain,
+                    _groupBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
                         active.Controller is null && !active.PartyDriven && battlegrounds?.Holds(active.Record.BotId) != true));
-            try { groups.Update(running, elapsedMs); }
+            try { groups.Update(_groupBotsScratch, elapsedMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("playerbot.feature", ex);
@@ -1296,12 +1301,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // so a bot a group took this tick is not free here.
         if (battlegrounds is { } fields)
         {
-            var running = new List<PlayerbotBattlegroundCoordinator.PlayerbotBattlegroundBot>(bots.Length);
+            _bgBotsScratch.Clear();
+            if (_bgBotsScratch.Capacity < bots.Length) _bgBotsScratch.Capacity = bots.Length;
             foreach (ActiveBot active in bots)
                 if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
-                    running.Add(new(active.Record.BotId, active.Session, active.Brain,
+                    _bgBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
                         active.Controller is null && !active.PartyDriven && coordinator?.Involves(active.Record.BotId) != true));
-            try { fields.Update(running, elapsedMs); }
+            try { fields.Update(_bgBotsScratch, elapsedMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("playerbot.feature", ex);
@@ -1351,7 +1357,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
                 cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapMaxMs, cadence.ThinksPerTick, cadence.Ticks,
                 cadence.TimeLimitedPct, cadence.ActionLimitedPct);
-        PublishSnapshot(bots);
+        PublishSnapshot(bots, elapsedMs);
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
         {
@@ -1631,13 +1637,26 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// in <paramref name="bots"/>, omits it from <see cref="Snapshot"/> until the next tick. The wait posted as soon as start
     /// returns runs at the beginning of that next tick and then finds no row.
     /// </summary>
-    private void PublishSnapshot(ActiveBot[] bots)
+    private void PublishSnapshot(ActiveBot[] bots, uint elapsedMs)
     {
+        _snapshotElapsedMs = unchecked(_snapshotElapsedMs + elapsedMs);
+        int currentVersion = Volatile.Read(ref _activeVersion);
+        bool sameActiveSet = currentVersion == _orderedVersion;
+        if (bots.Length > 64
+            && sameActiveSet
+            && currentVersion == _builtActiveVersion
+            && Volatile.Read(ref _snapshotEpoch) == _builtEpoch
+            && _snapshotElapsedMs < 250)
+        {
+            return;
+        }
+        _snapshotElapsedMs = 0;
+
         bool changed = false;
         int running = 0;
         foreach (ActiveBot b in bots)
         {
-            if (!_active.ContainsKey(b.Record.BotId)) continue;
+            if (!sameActiveSet && !_active.ContainsKey(b.Record.BotId)) continue;
             running++;
             PlayerbotStatus status = StatusOf(b);
             if (!ReferenceEquals(status, b.Status)) { b.Status = status; changed = true; }
@@ -1645,23 +1664,43 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         lock (_snapshotGate)
         {
-            if (changed || running != _builtCount || _snapshotEpoch != _builtEpoch)
+            if (changed || running != _builtCount || _snapshotEpoch != _builtEpoch || currentVersion != _builtActiveVersion)
             {
                 PlayerbotStatus[] current = Volatile.Read(ref _snapshot);
-                // Rows this tick republishes are replaced. Every other row stays, including a bot that became active after
-                // `bots` was captured: its previous (stopped) row remains until the next tick publishes the running one.
-                var republished = new HashSet<Guid>(running);
-                var fresh = new List<PlayerbotStatus>(running);
-                foreach (ActiveBot b in bots)
+                if (sameActiveSet
+                    && currentVersion == _builtActiveVersion
+                    && _snapshotEpoch == _builtEpoch
+                    && running == _builtCount
+                    && running == bots.Length
+                    && current.Length >= running)
                 {
-                    if (!_active.ContainsKey(b.Record.BotId) || b.Status is null) continue;
-                    republished.Add(b.Record.BotId);
-                    fresh.Add(b.Status);
+                    int stoppedCount = current.Length - running;
+                    var next = new PlayerbotStatus[current.Length];
+                    if (stoppedCount > 0)
+                        Array.Copy(current, 0, next, 0, stoppedCount);
+                    for (int i = 0; i < bots.Length; i++)
+                        next[stoppedCount + i] = bots[i].Status ?? StatusOf(bots[i]);
+                    Volatile.Write(ref _snapshot, next);
+                }
+                else
+                {
+                    // Rows this tick republishes are replaced. Every other row stays, including a bot that became active after
+                    // `bots` was captured: its previous (stopped) row remains until the next tick publishes the running one.
+                    var republished = new HashSet<Guid>(running);
+                    var fresh = new List<PlayerbotStatus>(running);
+                    foreach (ActiveBot b in bots)
+                    {
+                        if ((!sameActiveSet && !_active.ContainsKey(b.Record.BotId)) || b.Status is null) continue;
+                        republished.Add(b.Record.BotId);
+                        fresh.Add(b.Status);
+                    }
+
+                    Volatile.Write(ref _snapshot, current.Where(s => !republished.Contains(s.BotId)).Concat(fresh).ToArray());
                 }
 
-                Volatile.Write(ref _snapshot, current.Where(s => !republished.Contains(s.BotId)).Concat(fresh).ToArray());
                 _builtCount = running;
                 _builtEpoch = _snapshotEpoch;
+                _builtActiveVersion = currentVersion;
             }
         }
     }

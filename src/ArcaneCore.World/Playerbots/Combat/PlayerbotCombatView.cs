@@ -156,6 +156,8 @@ internal static class PlayerbotCombatView
             if (spell.StartRecoveryTime > 0 && !system.IsGlobalCooldownReady(player, spell.StartRecoveryCategory)) return false;
             if (spell.CasterAuraState != AuraState.None && !HasAuraState(player, spell.CasterAuraState)) return false;
             if (spell.TargetAuraState != AuraState.None && !HasAuraState(unit, spell.TargetAuraState)) return false;
+            if (spell.IsPositive && ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpell(system, unit, spell, ReferenceEquals(unit, player))) return false;
+            if (spell.Effects.Any(e => !e.IsEmpty && e.TargetA == SpellImplicitTarget.UnitCasterPet) && petStatus != RotationPetStatus.Alive) return false;
             if (!HasPower(player, spell)) return false;
             if (spell.GetErrorAtShapeshiftedCast((uint)form, formFlags) != SpellCastResult.CastOk) return false;
             if (!HasReagents(player, spell) || !HasEquippedItem(player, spell)) return false;
@@ -167,8 +169,7 @@ internal static class PlayerbotCombatView
             return InRange(player, unit, spell);
         }
 
-        bool canUseItemsInForm = player.GetByte(UpdateFields.UnitFieldBytes1, 2) == 0
-            && form is not (Form.Cat or Form.Bear or Form.DireBear or Form.Travel or Form.Aqua or Form.Moonkin or Form.GhostWolf);
+        bool canUseItemsInForm = !ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player);
         var state = new RotationState
         {
             Spells = spells,

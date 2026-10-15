@@ -554,7 +554,7 @@ public sealed class PlayerbotChaosEngine
             4 => (WorldOpcode.CmsgSetSelection, "set-selection-bogus", GuidPayload(targetGuid)),
             5 => (WorldOpcode.CmsgCastSpell, "cast-spell-zero", CastSpellPayload(0u, 0x00, 0UL)),
             6 => (WorldOpcode.CmsgCastSpell, "cast-spell-max-uint", CastSpellPayload(uint.MaxValue, 0x02, targetGuid)),
-            7 => (WorldOpcode.CmsgCastSpell, "cast-spell-self-attack", CastSpellPayload(133u, 0x02, player.Guid.Value)),
+            7 => (WorldOpcode.CmsgCastSpell, "cast-spell-self-attack", CastSpellPayload(player.Class == Class.Mage ? 133u : 6603u, 0x02, player.Guid.Value)),
             8 => (WorldOpcode.CmsgCastSpell, "cast-spell-unknown-target-mask", CastSpellPayload(6603u, 0xFFFF, targetGuid)),
             9 => (WorldOpcode.CmsgCancelCast, "cancel-cast-bogus-id", UInt32Payload((uint)rng.Next(0, 30000))),
             10 => (WorldOpcode.CmsgCancelAura, "cancel-aura-bogus-id", UInt32Payload((uint)rng.Next(0, 30000))),

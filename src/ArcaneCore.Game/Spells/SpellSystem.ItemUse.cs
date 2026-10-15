@@ -138,7 +138,7 @@ public sealed partial class SpellSystem
         }
 
         bool equipped = item.Container is null && item.Slot < InventorySlots.EquipmentEnd;
-        if (player.GetByte(UpdateFields.UnitFieldBytes1, 2) != 0 && !equipped)
+        if (Items.ItemUse.ItemUseService.IsShapeShifted(player) && !equipped)
         {
             result = SpellCastResult.NoItemsWhileShapeshifted;
             shapeshiftSpell = Store.Get(selected.SpellId);

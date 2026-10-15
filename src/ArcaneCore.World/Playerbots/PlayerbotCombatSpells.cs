@@ -120,6 +120,13 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             return false;
         }
 
+        if (player.StandState != StandState.Stand && !spell.HasAttribute(SpellAttributes.AllowWhileSitting))
+        {
+            session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand));
+            if (player.StandState != StandState.Stand)
+                return true;
+        }
+
         // The bot stops (an unbudgeted report, as a client's own) and casts in this same think: a stop that waited for the next think
         // cost a gap of seconds with a thousand bots. Only a stop the server did not take leaves the cast to the next think.
         if (player.Movement.HasFlag(MovementFlags.MaskMoving)
@@ -193,9 +200,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     {
         if (unchecked((int)(_itemBlockedUntil - session.World.NowMs)) > 0)
             return false;
-        if (player.GetByte(UpdateFields.UnitFieldBytes1, 2) != 0
-            || ShapeshiftService.GetForm(player) is ShapeshiftForm.Cat or ShapeshiftForm.Bear or ShapeshiftForm.DireBear
-                or ShapeshiftForm.Travel or ShapeshiftForm.Aqua or ShapeshiftForm.Moonkin or ShapeshiftForm.GhostWolf)
+        if (ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player))
             return false;
 
         SpellSystem system = feature.System;
@@ -494,6 +499,13 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
     private bool Cast(Player player, SpellFeature feature, SpellInfo spell, SpellCastTargets targets)
     {
+        if (player.StandState != StandState.Stand && !spell.HasAttribute(SpellAttributes.AllowWhileSitting))
+        {
+            session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand));
+            if (player.StandState != StandState.Stand)
+                return true;
+        }
+
         // A spell with a cast time needs the bot standing (vmangos DoCastSpell stops the mover); instants go while moving.
         if (spell.GetCastTime(player.Level) > 0 && player.Movement.HasFlag(MovementFlags.MaskMoving)
             && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))

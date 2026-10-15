@@ -948,7 +948,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0
                 && FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is not null;
             PlayerbotThinkProbe.Phase("trainers");
-            if (!visibleQuestTarget && _trainers.HasCandidate(player))
+            if (!visibleQuestTarget && (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true) && _trainers.HasCandidate(player))
             {
                 // An abandoned idle-grind target must not keep reopening combat instead
                 // of travelling to a useful trainer. Stop through the ordinary handler;
@@ -966,7 +966,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 { _goal = PlayerbotGoalKind.Train; TargetEntry = _trainers.TargetEntry; return; }
             }
             PlayerbotThinkProbe.Phase("riding");
-            if (!visibleQuestTarget && _riding.HasCandidate(player))
+            if (!visibleQuestTarget && (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true) && _riding.HasCandidate(player))
             {
                 // Saved for riding training or a mount and the money is there: the same priority as a class trainer trip.
                 if (_attacking || player.Combat.Victim is not null)

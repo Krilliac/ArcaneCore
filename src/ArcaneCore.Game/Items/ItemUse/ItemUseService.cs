@@ -58,8 +58,15 @@ public sealed class ItemUseService(SpellSystem spells, Func<Player, Item, bool>?
     /// <summary>Whether <paramref name="item"/> sits in an equipment slot (vmangos Item::IsEquipped: a direct slot below the bags).</summary>
     public static bool IsEquipped(Item item) => item.Container is null && item.Slot < InventorySlots.EquipmentEnd;
 
-    /// <summary>vmangos IsShapeShifted for the use rule: a non-zero form byte (UNIT_FIELD_BYTES_1 byte 2); the form-flag nuance of the druid lane is not read.</summary>
-    internal static bool IsShapeShifted(Player player) => player.GetByte(UpdateFields.UnitFieldBytes1, 2) != 0;
+    /// <summary>vmangos Unit::IsShapeShifted (Unit.h:1581): a non-zero form byte whose form is not a stance (Battle/Defensive/Berserker Stance, Stealth, Shadowform have SHAPESHIFT_FLAG_STANCE).</summary>
+    public static bool IsShapeShifted(Player player)
+        => (ShapeshiftForm)player.GetByte(UpdateFields.UnitFieldBytes1, 2) is not (
+            ShapeshiftForm.None
+            or ShapeshiftForm.BattleStance
+            or ShapeshiftForm.DefensiveStance
+            or ShapeshiftForm.BerserkerStance
+            or ShapeshiftForm.Shadow
+            or ShapeshiftForm.Stealth);
 
     /// <summary>One CMSG_USE_ITEM.</summary>
     /// <param name="player">The using player.</param>
