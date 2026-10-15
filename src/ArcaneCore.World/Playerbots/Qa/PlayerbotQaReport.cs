@@ -9,11 +9,13 @@ namespace ArcaneCore.World.Playerbots.Qa;
 /// One finding as the JSON export shows it (no bot hashes, redacted text). The build fields tell "a fix landed and the problem stopped" from "nothing ran there":
 /// <see cref="SeenOnCurrentBuild"/> is whether the running build (the file's <c>Build</c>) met the finding, <see cref="OccurrencesOnCurrentBuild"/> how often, and the file's
 /// <c>BuildSinceUtc</c> is how long it has been running (the server's start); <see cref="Builds"/> holds the counts of the current and the previous build only.
+/// <see cref="RatePerHour"/> is <see cref="Count"/> divided by <see cref="ObservedHours"/>, the time from <see cref="FirstSeenUtc"/> to the report (at least one minute, so a first sighting is not an absurd rate);
+/// <see cref="DistinctBots"/> is the number of bots affected.
 /// </summary>
 internal sealed record QaReportEntry(int Rank, string Id, string ShortId, string Kind, string Cause, string CauseDetail, double Severity, long Count,
     int DistinctBots, DateTime FirstSeenUtc, DateTime LastSeenUtc, string Subject, string? QuestTitle, string Publication, IReadOnlyList<QaReportSample> Samples,
     string Goal = "", bool QuestIsGoal = true, bool Stale = false, string? FirstBuild = null, string? LastBuild = null, IReadOnlyList<QaBuildCount>? Builds = null,
-    bool SeenOnCurrentBuild = false, long OccurrencesOnCurrentBuild = 0, string? ClosedBuild = null, string? ReportedBuild = null);
+    bool SeenOnCurrentBuild = false, long OccurrencesOnCurrentBuild = 0, string? ClosedBuild = null, string? ReportedBuild = null, double RatePerHour = 0, double ObservedHours = 0);
 
 /// <summary>One evidence sample of the JSON export.</summary>
 internal sealed record QaReportSample(DateTime AtUtc, uint Map, float? X, float? Y, float? Z, IReadOnlyList<uint> Attackers, string Message);
@@ -55,6 +57,22 @@ internal static class PlayerbotQaReport
     /// <summary>Stale and not worth the default list: a stale finding whose issue is open (Published) is still shown.</summary>
     internal static bool IsHidden(QaFindingView f, DateTime? since) => IsStale(f, since) && f.Publication.State != QaPublicationState.Published;
 
+    /// <summary>The shortest span a rate is computed over: a finding seen once a second ago is 60 per hour, not 3.6 million.</summary>
+    private static readonly TimeSpan MinRateSpan = TimeSpan.FromMinutes(1);
+
+    /// <summary>The hours <see cref="RatePerHour"/> divides by: first seen to <paramref name="nowUtc"/>, at least a minute.</summary>
+    internal static double ObservedHours(QaFindingView f, DateTime nowUtc) => Math.Max((nowUtc - f.FirstSeenUtc).TotalHours, MinRateSpan.TotalHours);
+
+    /// <summary>Occurrences per hour since the finding was first seen (<see cref="QaFindingView.Count"/> over <see cref="ObservedHours"/>).</summary>
+    internal static double RatePerHour(QaFindingView f, DateTime nowUtc) => f.Count / ObservedHours(f, nowUtc);
+
+    /// <summary><c>4.5/h</c>, or <c>&lt;0.1/h</c> for a slower finding (never a misleading 0.0).</summary>
+    internal static string RateText(double perHour)
+        => perHour > 0 && perHour < 0.1 ? "<0.1/h" : string.Create(CultureInfo.InvariantCulture, $"{perHour:F1}/h");
+
+    /// <summary><c>2h</c> for the age of a first sighting (the same words as <see cref="Age"/> without "ago").</summary>
+    private static string Since(DateTime firstSeenUtc, DateTime nowUtc) => Age(firstSeenUtc, nowUtc)[..^4];
+
     /// <summary>How long ago, as a short word: <c>&lt;1m ago</c>, <c>5m ago</c>, <c>2h ago</c>, <c>1d ago</c>.</summary>
     internal static string Age(DateTime lastSeenUtc, DateTime nowUtc)
     {
@@ -88,9 +106,10 @@ internal static class PlayerbotQaReport
         for (int i = 0; i < Math.Min(n, shown.Length); i++)
         {
             QaFindingView f = shown[i];
-            string seen = now is { } at ? " " + Age(f.LastSeenUtc, at) + (IsStale(f, since) ? " (stale)" : string.Empty) : string.Empty;
+            string seen = now is { } at ? " " + Age(f.LastSeenUtc, at) + (IsStale(f, since) ? " (stale)" : string.Empty) + ", first " + Since(f.FirstSeenUtc, at) : string.Empty;
+            string rate = " " + RateText(RatePerHour(f, now ?? f.LastSeenUtc));
             lines.Add(Cut(string.Create(CultureInfo.InvariantCulture,
-                $"#{i + 1} {f.ShortId} sev {f.Severity:F0} x{f.Count} bots {f.DistinctBots}{seen} {f.Cause} {f.KindLabel}: {redactor.Redact(f.Subject)}")));
+                $"#{i + 1} {f.ShortId} sev {f.Severity:F0} x{f.Count}{rate} bots {f.DistinctBots}{seen} {f.Cause} {f.KindLabel}: {redactor.Redact(f.Subject)}")));
         }
 
         if (hint.Length != 0) lines.Add(Cut(hint));
@@ -170,7 +189,7 @@ internal static class PlayerbotQaReport
         {
             Cut(string.Create(CultureInfo.InvariantCulture, $"{f.Id} {f.KindLabel}: {redactor.Redact(f.Subject)}")),
             Cut(string.Create(CultureInfo.InvariantCulture, $"cause {f.Cause}: {redactor.Redact(f.CauseDetail)}")),
-            string.Create(CultureInfo.InvariantCulture, $"seen {f.Count} times by {f.DistinctBots} bots, sev {f.Severity:F1}, first {f.FirstSeenUtc:u}, last {f.LastSeenUtc:u}, github {f.Publication}"),
+            string.Create(CultureInfo.InvariantCulture, $"seen {f.Count} times by {f.DistinctBots} bots, {RateText(RatePerHour(f, f.LastSeenUtc))}, sev {f.Severity:F1}, first {f.FirstSeenUtc:u}, last {f.LastSeenUtc:u}, github {f.Publication}"),
         };
         lines.Add(Cut(BuildLine(f, build, redactor)));
         if (f.QuestTitle is not null) lines.Add(Cut($"{QuestLabel(f, "quest")}: {redactor.Redact(f.QuestTitle)}"));
@@ -231,11 +250,11 @@ internal static class PlayerbotQaReport
         }
         else
         {
-            sb.Append("| # | Id | Severity | Seen | Last seen | Bots | Cause | Kind | Subject | GitHub |\n|---|---|---|---|---|---|---|---|---|---|\n");
+            sb.Append("| # | Id | Severity | Seen | Rate/h | First seen | Last seen | Bots | Cause | Kind | Subject | GitHub |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n");
             for (int i = 0; i < ranked.Length; i++)
             {
                 QaFindingView f = ranked[i];
-                sb.Append(CultureInfo.InvariantCulture, $"| {i + 1} | `{f.ShortId}` | {f.Severity:F1} | {f.Count} | {Age(f.LastSeenUtc, generatedUtc)} | {f.DistinctBots} | {f.Cause} | {f.KindLabel} | {Escape(redactor.Redact(f.Subject))} | {f.Publication} |\n");
+                sb.Append(CultureInfo.InvariantCulture, $"| {i + 1} | `{f.ShortId}` | {f.Severity:F1} | {f.Count} | {RatePerHour(f, generatedUtc):F1} | {f.FirstSeenUtc:u} | {Age(f.LastSeenUtc, generatedUtc)} | {f.DistinctBots} | {f.Cause} | {f.KindLabel} | {Escape(redactor.Redact(f.Subject))} | {f.Publication} |\n");
             }
 
             sb.Append('\n');
@@ -245,7 +264,7 @@ internal static class PlayerbotQaReport
         {
             QaFindingView f = ranked[i];
             sb.Append(CultureInfo.InvariantCulture, $"## {i + 1}. {f.KindLabel}: {Escape(redactor.Redact(f.Subject))}\n\n");
-            sb.Append(CultureInfo.InvariantCulture, $"- Id `{f.Id}`, severity {f.Severity:F1}, seen {f.Count} times by {f.DistinctBots} bots, first {f.FirstSeenUtc:u}, last {f.LastSeenUtc:u}\n");
+            sb.Append(CultureInfo.InvariantCulture, $"- Id `{f.Id}`, severity {f.Severity:F1}, seen {f.Count} times by {f.DistinctBots} bots affected ({RateText(RatePerHour(f, generatedUtc))} over {ObservedHours(f, generatedUtc):F1} h), first {f.FirstSeenUtc:u}, last {f.LastSeenUtc:u}\n");
             sb.Append(CultureInfo.InvariantCulture, $"- Likely cause: {f.Cause}. {Escape(redactor.Redact(f.CauseDetail))}\n");
             if (f.QuestTitle is not null) sb.Append(CultureInfo.InvariantCulture, $"- {QuestLabel(f, "Quest")}: {Escape(redactor.Redact(f.QuestTitle))}\n");
             if (GoHint(f) is { } go) sb.Append(CultureInfo.InvariantCulture, $"- Go there: `{go}`\n");
@@ -263,10 +282,10 @@ internal static class PlayerbotQaReport
         {
             sb.Append(CultureInfo.InvariantCulture, $"## Stale (not seen since {since:u})\n\n");
             sb.Append("Last seen before this server started: possibly fixed by the running build. `.playerbot qa prune` forgets them (the evidence stays in report.json until then).\n\n");
-            sb.Append("| Id | Severity | Seen | Last seen | Kind | Subject | GitHub |\n|---|---|---|---|---|---|---|\n");
+            sb.Append("| Id | Severity | Seen | Rate/h | First seen | Last seen | Bots | Kind | Subject | GitHub |\n|---|---|---|---|---|---|---|---|---|---|\n");
             foreach (QaFindingView f in stale.Take(MaxStaleRows))
             {
-                sb.Append(CultureInfo.InvariantCulture, $"| `{f.ShortId}` | {f.Severity:F1} | {f.Count} | {Age(f.LastSeenUtc, generatedUtc)} | {f.KindLabel} | {Escape(redactor.Redact(f.Subject))} | {f.Publication} |\n");
+                sb.Append(CultureInfo.InvariantCulture, $"| `{f.ShortId}` | {f.Severity:F1} | {f.Count} | {RatePerHour(f, generatedUtc):F1} | {f.FirstSeenUtc:u} | {Age(f.LastSeenUtc, generatedUtc)} | {f.DistinctBots} | {f.KindLabel} | {Escape(redactor.Redact(f.Subject))} | {f.Publication} |\n");
             }
 
             if (stale.Length > MaxStaleRows) sb.Append(CultureInfo.InvariantCulture, $"\n{stale.Length - MaxStaleRows} more stale findings are not listed.\n");
@@ -289,7 +308,7 @@ internal static class PlayerbotQaReport
                 f.FirstSeenUtc, f.LastSeenUtc, redactor.Redact(f.Subject), f.QuestTitle is null ? null : redactor.Redact(f.QuestTitle), f.Publication.ToString(),
                 [.. f.Samples.Select(s => new QaReportSample(s.AtUtc, s.Map, s.HasPosition ? s.X : null, s.HasPosition ? s.Y : null, s.HasPosition ? s.Z : null,
                     s.Attackers, redactor.Redact(s.Message)))], f.Goal, f.QuestIsGoal, IsStale(f, since), f.FirstBuild, f.LastBuild, [.. f.BuildCounts],
-                f.CountOnBuild(build) > 0, f.CountOnBuild(build), f.ClosedBuild, f.ReportedBuild));
+                f.CountOnBuild(build) > 0, f.CountOnBuild(build), f.ClosedBuild, f.ReportedBuild, RatePerHour(f, generatedUtc), ObservedHours(f, generatedUtc)));
         }
 
         // The build has been running since this server started (a lower bound: an earlier run of the same build is not tracked). Null when the caller gave no start.

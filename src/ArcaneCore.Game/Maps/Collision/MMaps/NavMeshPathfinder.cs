@@ -405,7 +405,21 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
             ? graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly) : -1;
     }
 
+    private static readonly ArcaneCore.Kernel.Diagnostics.LatencyHistogram QueryLatency = ArcaneCore.Kernel.Diagnostics.LatencyRegistry.Shared.Get(ArcaneCore.Kernel.Diagnostics.LatencyNames.PathQuery);
+
+    /// <summary>
+    /// The path from <paramref name="start"/> to <paramref name="end"/>. Every completed query (not one that throws, e.g. on cancellation) adds its wall time, tile reads included, to the
+    /// <c>nav.path_query</c> latency histogram (one clock read and a dozen atomic operations).
+    /// </summary>
     public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+    {
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        PathResult result = FindPathUntimed(mapId, start, end, options);
+        QueryLatency.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).Ticks / (TimeSpan.TicksPerMillisecond / 1000));
+        return result;
+    }
+
+    private PathResult FindPathUntimed(uint mapId, Vector3 start, Vector3 end, PathOptions? options)
     {
         options ??= PathOptions.Default;
         options.CancellationToken.ThrowIfCancellationRequested();

@@ -410,6 +410,7 @@ public sealed partial class WorldSession : IPlayerSession
             try
             {
                 packet.Handler.World!(this, player, packet.Payload);
+                PacketHandlerLatency.Record(packet.Handler.Opcode, handlerStart);
                 LogIfSlowPacket(packet.Handler.Opcode, handlerStart);
             }
             catch (Exception ex) when (IsMalformed(ex))
@@ -497,6 +498,11 @@ public sealed partial class WorldSession : IPlayerSession
 
     // --- world-thread state transitions (called by handlers) ------------------------
 
+    private long _loginRequestedTimestamp;
+
+    /// <summary>The client asked to log in a character (CMSG_PLAYER_LOGIN reached its handler): the clock for the <c>login.to_world</c> latency, stopped by <see cref="TryEnterWorld"/>.</summary>
+    internal void MarkLoginRequested() => Interlocked.Exchange(ref _loginRequestedTimestamp, Stopwatch.GetTimestamp());
+
     /// <summary>Character screen → loading. Fails if the session is no longer at the character screen or has been superseded.</summary>
     public bool TryBeginLogin()
     {
@@ -552,6 +558,12 @@ public sealed partial class WorldSession : IPlayerSession
             Invariant.Assert(Player is null, $"session {RemoteEndpoint} enters the world while still holding player {Player?.Guid}");
             Player = player;
             _state = SessionState.InWorld;
+            long requested = Interlocked.Exchange(ref _loginRequestedTimestamp, 0);
+            if (requested != 0)
+            {
+                ArcaneCore.Kernel.Diagnostics.LatencyRegistry.Shared.RecordSince(ArcaneCore.Kernel.Diagnostics.LatencyNames.LoginToWorld, requested);
+            }
+
             return true;
         }
     }

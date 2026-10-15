@@ -34,6 +34,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private const int RetainedEvery = 16;
 
     /// <summary>Pause before the next write after consecutive "database is locked" failures: 1 s, 2 s, then 5 s.</summary>
+    /// <summary>The latency histogram of one successful character write (store call), microseconds.</summary>
+    internal const string SaveLatencyName = LatencyNames.CharacterSave;
+
     private static readonly long[] BusyBackoffTicks = [Stopwatch.Frequency, 2 * Stopwatch.Frequency, 5 * Stopwatch.Frequency];
 
     private static readonly long ReportGateTicks = Stopwatch.Frequency;
@@ -652,6 +655,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 }
 
                 TimeSpan writeElapsed = Stopwatch.GetElapsedTime(writeStart);
+                LatencyRegistry.Shared.Record(SaveLatencyName, writeElapsed.Ticks / (TimeSpan.TicksPerMillisecond / 1000));
                 if (SlowSaveThreshold > TimeSpan.Zero && writeElapsed >= SlowSaveThreshold)
                 {
                     AnomalyLedger.Shared.Report(

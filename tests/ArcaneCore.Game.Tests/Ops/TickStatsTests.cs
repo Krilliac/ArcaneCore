@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Ops;
@@ -231,6 +232,51 @@ public sealed class TickStatsTests
         Assert.Equal(1001, s.Maps.MeanMicros, 6);
         Assert.Equal(2000, s.Maps.MaxMicros);
         Assert.Equal(new TickPhaseSummary(5, 5), s.Features);
+    }
+
+    [Fact]
+    public void Record_FeedsTheBodyFrameAndPhaseLatencyHistograms()
+    {
+        var stats = new TickStats(64);
+        for (int i = 1; i <= 200; i++)
+        {
+            var phases = new TickPhases(CommandsMicros: 100, MapsMicros: i * 10, FeaturesMicros: 700)
+            {
+                WorldTickMicros = 200,
+                AutosaveMicros = i % 50 == 0 ? 9_000 : 0,
+                AutosaveSnapshots = i % 50 == 0 ? 3 : 0,
+            };
+            stats.Record(durationMicros: i * 100, allocatedBytes: 0, intervalMicros: 50_000, frameIntervalMicros: 50_000, phases);
+        }
+
+        TickStatsSnapshot s = stats.Snapshot();
+        Assert.Equal(200, s.BodyLatency.Total.Count);
+        Assert.Equal(200, s.BodyLatency.Last15Min.Count);
+        Assert.Equal(200, s.BodyLatency.Last1Min.Count);
+        Assert.Equal(20_000, s.BodyLatency.Total.Max);
+        Assert.Equal(100, s.BodyLatency.Total.Min);
+        Assert.InRange(s.BodyLatency.Total.P99, 19_800, 19_800 * (1 + LatencyHistogram.RelativeError));
+        Assert.Equal(200, s.FrameLatency.Total.Count);
+        Assert.Equal(50_000, s.FrameLatency.Total.P50);
+        Assert.Equal(0, s.FrameLatency.Total.StdDev, 1e-6);
+
+        Assert.Equal(["commands", "world_tick", "features", "maps", "autosave"], s.PhaseLatency.Select(p => p.Name));
+        Assert.All(s.PhaseLatency.Take(4), p => Assert.Equal(200, p.Last1Min.Count));
+        Assert.Equal(100, s.PhaseLatency[0].Last1Min.P50);
+        Assert.Equal(500, s.PhaseLatency[2].Last1Min.P50); // features = 700 minus the 200 spent in the world-tick handlers
+        Assert.Equal(2_000, s.PhaseLatency[3].Last1Min.Max);
+        Assert.Equal(4, s.PhaseLatency[4].Last1Min.Count); // only the ticks that autosaved
+        Assert.Equal(9_000, s.PhaseLatency[4].Last1Min.Max);
+        Assert.Equal(5, stats.PhaseLatencies.Count);
+    }
+
+    [Fact]
+    public void Snapshot_WithoutSamples_HasEmptyLatencyWindows()
+    {
+        TickStatsSnapshot s = new TickStats(8).Snapshot();
+        Assert.True(s.BodyLatency.Total.IsEmpty);
+        Assert.True(s.FrameLatency.Last1Min.IsEmpty);
+        Assert.All(s.PhaseLatency, p => Assert.True(p.Last1Min.IsEmpty));
     }
 
     [Fact]

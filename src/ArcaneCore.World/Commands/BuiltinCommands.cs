@@ -151,7 +151,11 @@ public static class BuiltinCommands
         foreach (string line in ServerInfoDiagnostics.Format(ServerInfoDiagnostics.Capture(context.World, context.Session.Services)))
             context.Reply("Server diagnostics: " + line);
         if (context.Security >= AccountSecurity.GameMaster) // counts only, but players see no server internals
+        {
             context.Reply("Server diagnostics: " + ServerFaultCommands.InfoLine(FaultLedger.Shared, AnomalyLedger.Shared, DateTimeOffset.UtcNow));
+            context.Reply("Server diagnostics: " + ServerFaultCommands.RatesLine(FaultLedger.Shared, AnomalyLedger.Shared));
+        }
+
         return true;
     }
 

@@ -175,16 +175,18 @@ public sealed class AnomalySummaryFeature : IWorldFeature
             .Take(take)
             .Select(d => string.Create(
                 CultureInfo.InvariantCulture,
-                $"{d.Snapshot.Key}=+{d.Delta} (total={d.Snapshot.Count}, subjects={d.Snapshot.DistinctSubjects}, severity={d.Snapshot.Severity})"))
+                $"{d.Snapshot.Key}=+{d.Delta} (total={d.Snapshot.Count}, subjects={d.Snapshot.DistinctSubjects}, severity={d.Snapshot.Severity}, rate={d.Snapshot.Timing.RatePerHour15Min:F1}/h 15 min {d.Snapshot.Timing.RatePerHour1Hour:F1}/h 1 h)"))
             .ToArray();
 
         _logger.LogInformation(
-            "Anomaly summary (+{TotalDelta} new across {ActiveKeys} keys; ledger total={LedgerTotal}, distinct={LedgerDistinct}): {TopKeys}",
+            "Anomaly summary (+{TotalDelta} new across {ActiveKeys} keys; ledger total={LedgerTotal}, distinct={LedgerDistinct}): {TopKeys}; ledger rate {LedgerRate15m:F1}/h last 15 min, {LedgerRate1h:F1}/h last 1 h",
             totalDelta,
             deltas.Count,
             Ledger.Total,
             Ledger.Distinct,
-            string.Join(", ", topItems));
+            string.Join(", ", topItems),
+            Ledger.Timing().RatePerHour15Min,
+            Ledger.Timing().RatePerHour1Hour);
 
         return totalDelta;
     }

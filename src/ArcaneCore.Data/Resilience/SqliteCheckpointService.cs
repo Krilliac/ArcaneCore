@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Globalization;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -99,6 +101,7 @@ internal sealed class SqliteWalCheckpointer
     private readonly SqliteCheckpointOptions _options;
     private readonly ILogger _logger;
     private readonly TimeProvider _clock;
+    private readonly string _latencyName;
 
     private long? _stalledSince;
     private long? _lastLogFrames;
@@ -114,6 +117,7 @@ internal sealed class SqliteWalCheckpointer
         _logger = logger;
         _clock = clock;
         _walPath = target.DatabasePath + "-wal";
+        _latencyName = LatencyNames.CheckpointPrefix + Path.GetFileNameWithoutExtension(target.DatabasePath);
         _connectionString = new SqliteConnectionStringBuilder(target.ConnectionString)
         {
             Mode = SqliteOpenMode.ReadWrite,
@@ -152,7 +156,9 @@ internal sealed class SqliteWalCheckpointer
                 $"PRAGMA busy_timeout = {(final ? FinalBusyTimeoutMs : 0)}; PRAGMA wal_autocheckpoint = 0; PRAGMA journal_size_limit = {_options.JournalSizeLimitBytes};");
             setup.ExecuteNonQuery();
 
+            long started = Stopwatch.GetTimestamp();
             (long busy, long log, long checkpointed) = Checkpoint(connection, mode);
+            LatencyRegistry.Shared.RecordSince(_latencyName, started);
 
             long after = WalBytes();
             bool complete = busy == 0 && (log < 0 || checkpointed >= log);
