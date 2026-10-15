@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
@@ -23,6 +24,14 @@ namespace ArcaneCore.World.Spells;
 public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
 {
     private readonly Dictionary<int, HashSet<uint>> _spells = [];
+
+    /// <summary>
+    /// The ascending snapshot <see cref="GetSpells"/> hands out per character, built on the first read after the book changed: a playerbot
+    /// think reads the book about twenty times (the sort and the copy were per read). Under <see cref="_lock"/>; every change of a book
+    /// (load, learn, adopt, forget, defaults, delete) drops its entry. A snapshot is read-only and never written after it is published, so a
+    /// caller may keep or iterate one while the book changes, as with the fresh copy each read used to return. At most one per cached book.
+    /// </summary>
+    private readonly Dictionary<int, ReadOnlyCollection<uint>> _sorted = [];
     private readonly HashSet<int> _failedCharacters = [];
     private readonly Lock _lock = new();
     private readonly IServiceScopeFactory? _scopes;
@@ -99,6 +108,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         lock (_lock)
         {
             _spells.Clear();
+            _sorted.Clear();
             foreach (CharacterSpellRow row in rows)
             {
                 Book(row.CharacterId).Add(row.Spell);
@@ -113,6 +123,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         lock (_lock)
         {
             _spells[characterId] = [.. spells];
+            _sorted.Remove(characterId);
         }
     }
 
@@ -152,6 +163,8 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             {
                 return false;
             }
+
+            _sorted.Remove(id);
         }
 
         EnqueueAdd(id, [spellId]);
@@ -175,6 +188,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             }
 
             book.UnionWith(spells);
+            _sorted.Remove(characterId);
             return true;
         }
     }
@@ -197,6 +211,8 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             {
                 return false;
             }
+
+            _sorted.Remove(id);
         }
 
         Enqueue(id, store => store.RemoveAsync(id, spellId));
@@ -204,12 +220,29 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         return true;
     }
 
-    /// <summary>A player's known spells, ascending.</summary>
+    /// <summary>
+    /// A player's known spells, ascending: a read-only snapshot that later changes of the book do not alter (the same instance until the
+    /// book changes).
+    /// </summary>
     public IReadOnlyList<uint> GetSpells(Player player)
     {
+        int id = CharacterId(player);
         lock (_lock)
         {
-            return _spells.TryGetValue(CharacterId(player), out HashSet<uint>? book) ? [.. book.Order()] : [];
+            if (!_spells.TryGetValue(id, out HashSet<uint>? book))
+            {
+                return [];
+            }
+
+            if (!_sorted.TryGetValue(id, out ReadOnlyCollection<uint>? sorted))
+            {
+                uint[] spells = [.. book];
+                Array.Sort(spells);
+                sorted = Array.AsReadOnly(spells);
+                _sorted[id] = sorted;
+            }
+
+            return sorted;
         }
     }
 
@@ -230,6 +263,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             }
 
             Book(id).UnionWith(defaults);
+            _sorted.Remove(id);
         }
 
         if (defaults.Count > 0)
@@ -246,6 +280,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         lock (_lock)
         {
             _spells.Remove(characterId);
+            _sorted.Remove(characterId);
         }
 
         Enqueue(characterId, store => DeleteCharacterAsync(store, characterId));
