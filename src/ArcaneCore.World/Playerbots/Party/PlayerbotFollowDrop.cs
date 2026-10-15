@@ -16,7 +16,7 @@ internal sealed record PlayerbotDropPlan(PlayerbotRoute? ToEdge, Vector3 Edge, V
     /// How long the fall takes, as a client reports it in MSG_MOVE_FALL_LAND: a free fall of <see cref="Height"/> yards at vmangos'
     /// gravity (<c>Movement::gravity</c>, src/game/Movement/spline/util.cpp:24, 19.29110527 yards/s²).
     /// </summary>
-    internal uint FallTimeMs => (uint)MathF.Ceiling(MathF.Sqrt(2f * Height / PlayerbotFollowDrop.Gravity) * 1000f);
+    internal uint FallTimeMs => (uint)MathF.Ceiling(MathF.Sqrt(2f * MathF.Max(0f, Height) / PlayerbotFollowDrop.Gravity) * 1000f);
 }
 
 /// <summary>

@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -175,7 +176,14 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
 
         foreach (Flight flight in _flights.Values.Where(f => ReferenceEquals(f.Map, map)).ToList())
         {
-            Advance(flight, diffMs);
+            try
+            {
+                Advance(flight, diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-taxi", ex);
+            }
         }
     }
 
@@ -243,14 +251,36 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <summary>The waypoints of one hop, or null when the path is unusable from this map.</summary>
     private Waypoint[]? BuildHop(uint pathId, uint from, uint to, uint mapId)
     {
-        if (_npcs.Path(from, to)?.Id != pathId || _npcs.Node(from)?.MapId != mapId || _npcs.Node(to)?.MapId != mapId)
+        if (_npcs.Path(from, to)?.Id != pathId || _npcs.Node(from) is not { } fromNode || fromNode.MapId != mapId
+            || _npcs.Node(to) is not { } toNode || toNode.MapId != mapId)
         {
             return null;
         }
 
+        Invariant.Check(
+            float.IsFinite(fromNode.X) && float.IsFinite(fromNode.Y) && float.IsFinite(fromNode.Z)
+            && float.IsFinite(toNode.X) && float.IsFinite(toNode.Y) && float.IsFinite(toNode.Z),
+            "taxi-node-finite-coords",
+            $"Taxi nodes ({from} -> {to}) on path {pathId} have non-finite coordinates");
+
         IReadOnlyList<TaxiPathNodeRecord> rows = _pathNodes.Nodes(pathId);
-        return rows.Count < 2 || rows.Any(r => r.MapId != mapId)
-            ? null : rows.Select(r => new Waypoint(r.X, r.Y, r.Z)).ToArray();
+        if (rows.Count < 2 || rows.Any(r => r.MapId != mapId))
+        {
+            return null;
+        }
+
+        var hop = new Waypoint[rows.Count];
+        for (int i = 0; i < rows.Count; i++)
+        {
+            TaxiPathNodeRecord r = rows[i];
+            Invariant.Check(
+                float.IsFinite(r.X) && float.IsFinite(r.Y) && float.IsFinite(r.Z),
+                "taxi-waypoint-finite-coords",
+                $"TaxiPathNode on path {pathId} index {i} has non-finite coordinates ({r.X}, {r.Y}, {r.Z})");
+            hop[i] = new Waypoint(r.X, r.Y, r.Z);
+        }
+
+        return hop;
     }
 
     private void LaunchHop(Flight flight)
@@ -421,6 +451,10 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     {
         if (_npcs.Node(nodeId) is { } node && node.MapId == flight.Map.MapId)
         {
+            Invariant.Check(
+                float.IsFinite(node.X) && float.IsFinite(node.Y) && float.IsFinite(node.Z),
+                "taxi-node-finite-coords",
+                $"Taxi node {nodeId} has non-finite coordinates ({node.X}, {node.Y}, {node.Z})");
             flight.Player.Relocate(node.X, node.Y, node.Z, flight.Player.Orientation, _nowMs());
             flight.Player.NeedsVisibilityUpdate = true;
         }
@@ -428,6 +462,10 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
 
     private void Move(Flight flight, Waypoint to, float? tangentOrientation = null)
     {
+        Invariant.Check(
+            float.IsFinite(to.X) && float.IsFinite(to.Y) && float.IsFinite(to.Z),
+            "taxi-waypoint-finite-coords",
+            $"Taxi flight waypoint for player {flight.Player.Guid} has non-finite coordinates ({to.X}, {to.Y}, {to.Z})");
         Player player = flight.Player;
         float orientation;
         if (tangentOrientation is { } tangent && float.IsFinite(tangent))

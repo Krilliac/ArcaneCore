@@ -58,7 +58,7 @@ public abstract class TwinEmperorAI(Creature creature) : RaidBossAI(creature, Te
         // The defenders around the entrance join the initial pull in the reference script.
         if (System is { } system)
             foreach (Creature defender in system.Creatures.Where(c => c.Entry == 15277 && c.IsAlive
-                && (c.X - Me.X) * (c.X - Me.X) + (c.Y - Me.Y) * (c.Y - Me.Y) <= 800f * 800f))
+                && (c.X - Me.X) * (c.X - Me.X) + (c.Y - Me.Y) * (c.Y - Me.Y) <= 800f * 800f).ToArray())
             {
                 system.SetInCombatWithZone(defender);
                 defender.AI?.AttackStart(target);

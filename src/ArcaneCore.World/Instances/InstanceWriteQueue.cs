@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Instances;
 
 /// <summary>
@@ -521,8 +522,13 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         {
             scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException)
         {
+            /* expected on shutdown */
+        }
+        catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-instance-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -596,9 +602,13 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                         break;
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
             {
-                logger.LogError(ex, "instance write queue item {Kind} failed unexpectedly", work.Kind);
+                /* expected on shutdown */
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("writequeue-instance-consume", ex, "instance write queue item {Kind} failed unexpectedly", work.Kind);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -642,7 +652,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 SetRetained(work.Key, work.Value, failure);
                 if (failure is not CharacterOwnershipRejectedException)
                 {
-                    logger.LogError(failure, "instance write for {Target} failed; retained for retry", DescribeKey(work.Key));
+                    logger.LogFault("writequeue-instance", failure, "instance write for {Target} failed; retained for retry", DescribeKey(work.Key));
                 }
             }
         }
@@ -739,14 +749,15 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             }
         }
 
-        if (failed > 0 && first is not CharacterOwnershipRejectedException)
+        if (failed > 0 && Invariant.Check(first is not null, "instance retry recorded failures without a first exception")
+            && first is { } firstFailure && firstFailure is not CharacterOwnershipRejectedException)
         {
             logger.LogWarning(
                 "instance retry: {Failed} of {Total} retained writes still failing{Locked}; first: {Reason}",
                 failed,
                 rows.Length,
                 locked ? " (the database is locked; the rest wait for the next sweep)" : "",
-                first!.Message);
+                firstFailure.Message);
         }
     }
 
@@ -842,11 +853,13 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             }
             catch (CharacterOwnershipRejectedException ex)
             {
+                FaultLedger.Shared.Record("writequeue-instance-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 return ex;
             }
-            catch (Exception ex) when (attempt < attempts)
+            catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("writequeue-instance-attempt", ex);
                 logger.LogWarning(ex, "instance write for {Target} failed (attempt {Attempt}); retrying", DescribeKey(key), attempt);
                 int delayMs = Math.Max(0, (int)RetryDelay.TotalMilliseconds) * attempt;
                 if (delayMs > 0)
@@ -854,8 +867,9 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                     await Task.Delay(delayMs).ConfigureAwait(false);
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("writequeue-instance-failure", ex);
                 return ex;
             }
         }

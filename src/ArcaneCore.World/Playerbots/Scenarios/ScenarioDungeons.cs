@@ -45,7 +45,7 @@ public static class ScenarioDungeons
             await context.PlaceAsync(bot, trigger.MapId, trigger.X, trigger.Y, trigger.Z).ConfigureAwait(false);
             ScenarioContext.Expect(await bot.AreaTriggerAsync(triggerId).ConfigureAwait(false), "area trigger refused");
             TeleportService teleports = context.Services.GetRequiredService<TeleportFeature>().Teleports;
-            await context.WaitUntilAsync($"{bot.Name} is on map {targetMap}", () => bot.Session!.Player is { IsInWorld: true, Map: { } map } player
+            await context.WaitUntilAsync($"{bot.Name} is on map {targetMap}", () => bot.Session?.Player is { IsInWorld: true, Map: { } map } player
                 && map.MapId == targetMap && teleports.StageOf(player) is null).ConfigureAwait(false);
         });
 }
@@ -82,7 +82,9 @@ public sealed class DungeonEntryScenario : IPlayerbotScenario
                 ScenarioContext.Expect(maps.FindAreaTriggerTeleport(trigger) is not null, $"no areatrigger_teleport {trigger}");
             }
 
-            ScenarioContext.ExpectEqual(Deadmines, maps.FindAreaTriggerTeleport(EntranceTrigger)!.TargetMap, "entrance target map");
+            AreaTriggerTeleport entrance = maps.FindAreaTriggerTeleport(EntranceTrigger)
+                ?? throw new ScenarioAssertionException($"no areatrigger_teleport {EntranceTrigger}");
+            ScenarioContext.ExpectEqual(Deadmines, entrance.TargetMap, "entrance target map");
             return true;
         })).ConfigureAwait(false);
 
@@ -99,7 +101,8 @@ public sealed class DungeonEntryScenario : IPlayerbotScenario
             Group group = await context.ReadAsync(() =>
                 context.Services.GetRequiredService<Social.SocialFeature>().Context.Groups.GetGroup(leader.Guid)
                 ?? throw new ScenarioAssertionException("the leader has no group")).ConfigureAwait(false);
-            byte level = await context.ReadAsync(() => WorldMaps.Of(context.World).FindAreaTriggerTeleport(EntranceTrigger)!.RequiredLevel).ConfigureAwait(false);
+            byte level = await context.ReadAsync(() => (WorldMaps.Of(context.World).FindAreaTriggerTeleport(EntranceTrigger)
+                ?? throw new ScenarioAssertionException($"no areatrigger_teleport {EntranceTrigger}")).RequiredLevel).ConfigureAwait(false);
             await context.StepAsync($"both bots reach level {level}", async () =>
             {
                 ScenarioContext.Expect(await context.RaiseLevelAsync(leader, level).ConfigureAwait(false) >= level, $"{leader.Name} is below {level}");
@@ -110,7 +113,7 @@ public sealed class DungeonEntryScenario : IPlayerbotScenario
             await context.TakeAreaTriggerAsync(leader, EntranceTrigger, Deadmines).ConfigureAwait(false);
             uint instanceId = await context.StepAsync("the leader is in a new instance the group is bound to", async () =>
             {
-                uint id = await leader.ReadAsync(p => p.Map!.InstanceId).ConfigureAwait(false);
+                uint id = await leader.ReadAsync(p => p.Map?.InstanceId ?? 0u).ConfigureAwait(false);
                 ScenarioContext.Expect(id != 0, "the dungeon map is not an instance");
                 ScenarioContext.Expect(await context.ReadAsync(() => instances.GetGroupBind(group, Deadmines) is { Permanent: false } bind
                     && bind.Save.InstanceId == id).ConfigureAwait(false), "the group is not bound to the leader's instance");
@@ -119,7 +122,7 @@ public sealed class DungeonEntryScenario : IPlayerbotScenario
 
             await context.TakeAreaTriggerAsync(member, EntranceTrigger, Deadmines).ConfigureAwait(false);
             await context.StepAsync("the member lands in the leader's instance", async () =>
-                ScenarioContext.ExpectEqual(instanceId, await member.ReadAsync(p => p.Map!.InstanceId).ConfigureAwait(false), "member's instance")).ConfigureAwait(false);
+                ScenarioContext.ExpectEqual(instanceId, await member.ReadAsync(p => p.Map?.InstanceId ?? 0u).ConfigureAwait(false), "member's instance")).ConfigureAwait(false);
 
             await context.StepAsync("party chat reaches the member inside", async () =>
             {
@@ -137,7 +140,7 @@ public sealed class DungeonEntryScenario : IPlayerbotScenario
                 {
                     await context.Services.GetRequiredService<ManagedPlayerbotFeature>().StopAsync(member.BotId.ToString(), context.CancellationToken).ConfigureAwait(false);
                     ScenarioBot again = await context.LoginAsync(member.Name).ConfigureAwait(false);
-                    (uint map, uint instance) = await again.ReadAsync(p => (p.MapId, p.Map!.InstanceId)).ConfigureAwait(false);
+                    (uint map, uint instance) = await again.ReadAsync(p => (p.MapId, p.Map?.InstanceId ?? 0u)).ConfigureAwait(false);
                     ScenarioContext.ExpectEqual(Deadmines, map, "login map");
                     ScenarioContext.ExpectEqual(instanceId, instance, "login instance");
                     return again;

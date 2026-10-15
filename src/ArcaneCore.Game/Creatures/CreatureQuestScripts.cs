@@ -84,7 +84,7 @@ public static class CreatureQuestScripts
 
         void Accepted(Player player, ObjectGuid giver, Quest quest) => OnQuestAccepted(systemOf, factory, log, player, giver, quest);
         void Rewarded(Player player, ObjectGuid giver, Quest quest) => OnQuestRewarded(systemOf, factory, log, player, giver, quest);
-        void Gossip(Player player, ObjectGuid npc, uint scriptId, bool playerIsSource) => OnGossipScript(systemOf, player, npc, scriptId, playerIsSource);
+        void Gossip(Player player, ObjectGuid npc, uint scriptId, bool playerIsSource) => OnGossipScript(systemOf, log, player, npc, scriptId, playerIsSource);
         npcs.QuestAccepted += Accepted;
         npcs.QuestRewarded += Rewarded;
         npcs.GossipScriptStarted += Gossip;
@@ -107,7 +107,15 @@ public static class CreatureQuestScripts
         {
             if (quest.Template.StartScript != 0 && player.Map is { } itemMap && systemOf(itemMap) is { } itemSystem)
             {
-                itemSystem.StartDbScript(DbScriptKind.QuestStart, quest.Template.StartScript, source: null, player);
+                try
+                {
+                    itemSystem.StartDbScript(DbScriptKind.QuestStart, quest.Template.StartScript, source: null, player);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("creature-quest-script", ex);
+                    log.LogError(ex, "quest start script {ScriptId} failed for item quest {QuestId}", quest.Template.StartScript, quest.Id);
+                }
             }
 
             return;
@@ -119,7 +127,7 @@ public static class CreatureQuestScripts
         }
 
         // The quest is already in the log when the hooks run: a script's fault must not skip the DB StartScript, the later subscribers, the
-        // party fan-out, the source spell, nor reach the caller's catch (which kicks the session).
+        // party fan-out, the source spell, nor reach the caller's exception handler (which kicks the session).
         if (giver is Creature { AI: IQuestScriptAI script } aiCreature)
         {
             try
@@ -146,7 +154,15 @@ public static class CreatureQuestScripts
 
         if (quest.Template.StartScript != 0 && player.Map is { } map && systemOf(map) is { } system)
         {
-            system.StartDbScript(DbScriptKind.QuestStart, quest.Template.StartScript, giver, player);
+            try
+            {
+                system.StartDbScript(DbScriptKind.QuestStart, quest.Template.StartScript, giver, player);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("creature-quest-script", ex);
+                log.LogError(ex, "quest start script {ScriptId} failed for quest {QuestId}", quest.Template.StartScript, quest.Id);
+            }
         }
     }
 
@@ -160,7 +176,7 @@ public static class CreatureQuestScripts
         if (giver is Creature creature)
         {
             // The quest is committed when the hooks run: a script's fault must not stop the DB CompleteScript, the other subscribers or the
-            // next-quest offer, nor reach the reward publication's catch (which quarantines the character and kicks the session).
+            // next-quest offer, nor reach the reward publication's exception handler (which quarantines the character and kicks the session).
             if (creature.AI is { } script)
             {
                 try
@@ -189,7 +205,15 @@ public static class CreatureQuestScripts
         // The creature's hook never claims a quest, so the DB script always runs (Player.cpp:12712-12713).
         if (quest.Template.CompleteScript != 0 && giver is not null && player.Map is { } map && systemOf(map) is { } system)
         {
-            system.StartDbScript(DbScriptKind.QuestEnd, quest.Template.CompleteScript, giver, player);
+            try
+            {
+                system.StartDbScript(DbScriptKind.QuestEnd, quest.Template.CompleteScript, giver, player);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("creature-quest-script", ex);
+                log.LogError(ex, "quest complete script {ScriptId} failed for quest {QuestId}", quest.Template.CompleteScript, quest.Id);
+            }
         }
     }
 
@@ -200,20 +224,28 @@ public static class CreatureQuestScripts
         => log.LogFault(site, ex,
             "{Site} hook of script {Script} failed (quest {Quest}, creature entry {Entry}); the quest carries on", site, scriptName, questId, creature.Template.Entry);
 
-    private static void OnGossipScript(Func<Map, CreatureMapSystem?> systemOf, Player player, ObjectGuid npcGuid, uint scriptId, bool playerIsSource)
+    private static void OnGossipScript(Func<Map, CreatureMapSystem?> systemOf, ILogger log, Player player, ObjectGuid npcGuid, uint scriptId, bool playerIsSource)
     {
         if (Giver(player, npcGuid) is not { } npc || player.Map is not { } map || systemOf(map) is not { } system)
         {
             return;
         }
 
-        if (playerIsSource)
+        try
         {
-            system.StartDbScript(DbScriptKind.Gossip, scriptId, player, npc);
+            if (playerIsSource)
+            {
+                system.StartDbScript(DbScriptKind.Gossip, scriptId, player, npc);
+            }
+            else
+            {
+                system.StartDbScript(DbScriptKind.Gossip, scriptId, npc, player);
+            }
         }
-        else
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            system.StartDbScript(DbScriptKind.Gossip, scriptId, npc, player);
+            FaultLedger.Shared.Record("creature-quest-script", ex);
+            log.LogError(ex, "gossip script {ScriptId} failed for npc {NpcGuid}", scriptId, npcGuid);
         }
     }
 

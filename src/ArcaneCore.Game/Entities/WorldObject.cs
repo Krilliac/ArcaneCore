@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Entities;
 
@@ -15,6 +16,20 @@ public abstract class WorldObject
     private readonly uint[] _values;
     private readonly UpdateMask _changed;
     private bool _batchingMove;
+    private bool _rejectedNonFiniteRelocation;
+
+    /// <summary>
+    /// True if a caller attempted to relocate or move this object to a non-finite position
+    /// since the last check, and the invariant guard refused the write. Clears the flag.
+    /// </summary>
+    public bool ConsumeRejectedNonFiniteRelocation()
+    {
+        bool rejected = _rejectedNonFiniteRelocation;
+        _rejectedNonFiniteRelocation = false;
+        return rejected;
+    }
+
+    protected void MarkRejectedNonFiniteRelocation() => _rejectedNonFiniteRelocation = true;
 
     protected WorldObject(ObjectGuid guid, byte typeId, uint typeMask, int valuesCount)
     {
@@ -145,6 +160,25 @@ public abstract class WorldObject
     /// </summary>
     public void SetPosition(float x, float y, float z, float orientation)
     {
+        if (!Invariant.Check(float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z),
+                $"WorldObject {Guid} relocated to non-finite position ({x}, {y}, {z}) on map {MapId}"))
+        {
+            MarkRejectedNonFiniteRelocation();
+            if (float.IsFinite(orientation))
+            {
+                Orientation = orientation;
+            }
+            else if (!float.IsFinite(Orientation))
+            {
+                Orientation = 0f;
+            }
+
+            return;
+        }
+
+        float safeOrientation = float.IsFinite(orientation)
+            ? orientation
+            : (float.IsFinite(Orientation) ? Orientation : 0f);
         bool moved = x != X || y != Y;
         _batchingMove = true;
         try
@@ -158,12 +192,18 @@ public abstract class WorldObject
         }
 
         Z = z;
-        Orientation = orientation;
+        Orientation = safeOrientation;
         if (moved)
         {
             Map?.OnObjectMoved(this);
         }
     }
+
+    /// <summary>Relocate the object to finite world coordinates and orientation.</summary>
+    public void Relocate(float x, float y, float z, float orientation) => SetPosition(x, y, z, orientation);
+
+    /// <summary>Relocate the object to finite world coordinates while preserving its current orientation.</summary>
+    public void Relocate(float x, float y, float z) => SetPosition(x, y, z, Orientation);
 
     /// <summary>Fields changed since the last values flush.</summary>
     internal UpdateMask ChangedFields => _changed;
@@ -198,7 +238,16 @@ public abstract class WorldObject
 
     public void SetInt32(int index, int value) => SetUInt32(index, unchecked((uint)value));
 
-    public void SetFloat(int index, float value) => SetUInt32(index, BitConverter.SingleToUInt32Bits(value));
+    public void SetFloat(int index, float value)
+    {
+        if (!Invariant.Check(float.IsFinite(value),
+                $"WorldObject {Guid} field {index} assigned non-finite float {value}"))
+        {
+            return;
+        }
+
+        SetUInt32(index, BitConverter.SingleToUInt32Bits(value));
+    }
 
     /// <summary>
     /// Set a 64-bit (GUID) field. Both halves are marked changed together: the client ignores

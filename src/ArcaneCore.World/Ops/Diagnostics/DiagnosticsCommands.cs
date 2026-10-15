@@ -13,11 +13,13 @@ namespace ArcaneCore.World.Ops.Diagnostics;
 
 /// <summary>
 /// Memory, GC and runtime self-diagnosis commands for a live server, as sub-commands of the existing <c>.debug</c> root (docs/ops/diagnostics.md):
-/// <c>.debug gc</c> and <c>.debug selfcheck</c> (game master), <c>.debug alloc start|report|stop</c> and <c>.debug dump</c> (administrator).
+/// <c>.debug gc</c>, <c>.debug selfcheck</c> and <c>.debug invariants</c> (game master), <c>.debug alloc start|report|stop</c> and <c>.debug dump</c> (administrator).
 /// They have no vmangos equivalent. All of them work from the server console too (it has Administrator authority); none needs a character.
 /// </summary>
 public sealed class DiagnosticsCommands : ICommandExtension
 {
+    public const int MaxInvariantSites = 20;
+
     public string Path => "debug";
 
     public IReadOnlyList<ChatCommand> Children { get; } =
@@ -28,6 +30,9 @@ public sealed class DiagnosticsCommands : ICommandExtension
         new("selfcheck", AccountSecurity.GameMaster,
             "Syntax: .debug selfcheck\nInspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers.",
             SelfCheck, RetailLevel: 3),
+        new("invariants", AccountSecurity.GameMaster,
+            "Syntax: .debug invariants\nPrint the process-wide invariant failure count, policy, and up to 20 recorded invariant violation sites.",
+            Invariants, RetailLevel: 3),
         new("alloc", AccountSecurity.Administrator,
             "Syntax: .debug alloc $subcommand\nSample what the server allocates, by type, for a while: start, report, stop.",
             Children:
@@ -52,6 +57,45 @@ public sealed class DiagnosticsCommands : ICommandExtension
         foreach (string line in GcReport.Format(GcReport.Capture()))
         {
             context.Reply(line);
+        }
+
+        return true;
+    }
+
+    private static bool Invariants(CommandContext context, string args)
+    {
+        if (args.Trim().Length != 0)
+        {
+            return false;
+        }
+
+        long total = Invariant.FailureCount;
+        var policy = Invariant.Policy;
+        IReadOnlyList<InvariantFailure> failures = Invariant.Failures();
+        if (total == 0 && failures.Count == 0)
+        {
+            context.Reply(string.Create(CultureInfo.InvariantCulture, $"Invariants: 0 failures recorded (policy={policy})."));
+            return true;
+        }
+
+        context.Reply(string.Create(CultureInfo.InvariantCulture,
+            $"Invariants: {total} failure(s) recorded ({failures.Count} site(s), policy={policy}):"));
+        int shown = 0;
+        foreach (InvariantFailure inv in failures)
+        {
+            if (shown++ == MaxInvariantSites)
+            {
+                break;
+            }
+
+            context.Reply(string.Create(CultureInfo.InvariantCulture,
+                $"{inv.Member} ({inv.File}:{inv.Line}) count={inv.Count}: {inv.LastMessage}"));
+        }
+
+        if (failures.Count > MaxInvariantSites)
+        {
+            context.Reply(string.Create(CultureInfo.InvariantCulture,
+                $"... {failures.Count - MaxInvariantSites} more site(s) omitted."));
         }
 
         return true;
@@ -200,15 +244,22 @@ public sealed class DiagnosticsCommands : ICommandExtension
     // The dump runs on the thread pool; the outcome is posted back to the world thread, where a reply is safe (the invoker may have left).
     private static async Task ReplyWhenDoneAsync(CommandContext context, Task<DumpOutcome> completion)
     {
-        DumpOutcome outcome = await completion.ConfigureAwait(false);
-        string text = ProcessDumpService.DescribeOutcome(outcome);
-        context.World.Post(() =>
+        try
         {
-            if (context.CanReplyLater)
+            DumpOutcome outcome = await completion.ConfigureAwait(false);
+            string text = ProcessDumpService.DescribeOutcome(outcome);
+            context.World.Post(() =>
             {
-                context.Reply(text);
-            }
-        });
+                if (context.CanReplyLater)
+                {
+                    context.Reply(text);
+                }
+            });
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("diagnostics-dump-reply", ex);
+        }
     }
 
     private static AllocationProfiler? Profiler(CommandContext context) => context.Session.Services.GetService<AllocationProfiler>();

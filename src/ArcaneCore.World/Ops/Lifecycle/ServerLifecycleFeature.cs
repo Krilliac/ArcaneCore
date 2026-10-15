@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
@@ -42,11 +43,10 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
         await _stopTimer.CancelAsync().ConfigureAwait(false);
         try
         {
-            TimerRun? run = Volatile.Read(ref _run);
-        if (run is not null)
-        {
-            await run.Task.ConfigureAwait(false);
-        }
+            if (Volatile.Read(ref _run) is { } run)
+            {
+                await run.Task.ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -116,13 +116,13 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
 
     private void Publish(ServerMessage? message)
     {
-        if (message is not { } value || _world is null)
+        if (message is not { } value || _world is not { } world)
         {
             return;
         }
 
         // vmangos SendGlobalMessage reaches only sessions in the world (World.cpp:2152-2166).
-        _world.BroadcastToAll(WorldOpcode.SmsgServerMessage, ServerMessagePackets.Build(value));
+        world.BroadcastToAll(WorldOpcode.SmsgServerMessage, ServerMessagePackets.Build(value));
         logger.LogInformation("Server message {Type}: {Text}", value.Type, value.Text);
     }
 
@@ -138,21 +138,37 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
             int code = _countdown.ExitCode;
             ExitCodes.Current = code;
             logger.LogWarning("Server stopping on request (exit code {ExitCode})", code);
-            Announcer()?.Announce(
-                AnnounceCategory.Shutdown,
-                AnnounceSeverity.Warning,
-                _countdown.Mask.HasFlag(ShutdownMask.Restart) ? "The server is restarting now" : "The server is shutting down now",
-                $"exit code {code}",
-                dedupKey: "shutdown-now");
-            StopRequested?.Invoke(code);
+            try
+            {
+                Announcer()?.Announce(
+                    AnnounceCategory.Shutdown,
+                    AnnounceSeverity.Warning,
+                    _countdown.Mask.HasFlag(ShutdownMask.Restart) ? "The server is restarting now" : "The server is shutting down now",
+                    $"exit code {code}",
+                    dedupKey: "shutdown-now");
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("lifecycle-announce", ex);
+            }
+
+            try
+            {
+                StopRequested?.Invoke(code);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("lifecycle-stop-requested", ex);
+            }
+
             services.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
 
         if (_countdown.IsPending)
         {
-            if (_run is null && _world is not null)
+            if (_run is null && _world is { } world)
             {
-                _run = StartTimer(_world, ++_runIds);
+                _run = StartTimer(world, ++_runIds);
             }
         }
         else if (_run is { } run)
@@ -187,18 +203,23 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
             {
                 // Whole elapsed seconds since the last post (a stalled timer thread may owe several).
                 long seconds = (Stopwatch.GetTimestamp() - last) / Stopwatch.Frequency;
-                if (seconds == 0)
+                if (seconds <= 0)
                 {
                     continue;
                 }
 
                 last += seconds * Stopwatch.Frequency;
-                world.Post(() => AdvanceFromTimer(runId, (uint)seconds));
+                uint step = seconds > uint.MaxValue ? uint.MaxValue : (uint)seconds;
+                world.Post(() => AdvanceFromTimer(runId, step));
             }
         }
         catch (OperationCanceledException)
         {
             // cancelled by Stop or a newer timer: the run ends
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("lifecycle-timer", ex);
         }
         finally
         {

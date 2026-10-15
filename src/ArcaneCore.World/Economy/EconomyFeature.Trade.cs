@@ -3,6 +3,7 @@ using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
@@ -288,8 +289,27 @@ public sealed partial class EconomyFeature
             SendBackToTrade(trade);
             return;
         }
-        List<ItemInstanceData> aGives = [.. a.TradedItems.Select(g => a.Player.Inventory.GetItemByGuid(g)!.ToData())];
-        List<ItemInstanceData> bGives = [.. b.TradedItems.Select(g => b.Player.Inventory.GetItemByGuid(g)!.ToData())];
+        List<ItemInstanceData> aGives = [];
+        foreach (ObjectGuid guid in a.TradedItems)
+        {
+            if (a.Player.Inventory.GetItemByGuid(guid) is not { } item)
+            {
+                CancelTrade(a.Player, TradeStatus.TradeCanceled);
+                return;
+            }
+            aGives.Add(item.ToData());
+        }
+
+        List<ItemInstanceData> bGives = [];
+        foreach (ObjectGuid guid in b.TradedItems)
+        {
+            if (b.Player.Inventory.GetItemByGuid(guid) is not { } item)
+            {
+                CancelTrade(b.Player, TradeStatus.TradeCanceled);
+                return;
+            }
+            bGives.Add(item.ToData());
+        }
         InventoryResult aResult = a.Player.Inventory.TryStageEconomyTransfer([.. a.TradedItems], bGives, out EconomyInventoryStage? aStage,
             trade: true, replacements: bEnchant is null ? [] : [bEnchant.UpdatedRecipientItem], consume: aEnchant?.Reagents, itemUse: aEnchant?.ItemCast?.Payment);
         InventoryResult bResult = b.Player.Inventory.TryStageEconomyTransfer([.. b.TradedItems], aGives, out EconomyInventoryStage? bStage,
@@ -321,10 +341,16 @@ public sealed partial class EconomyFeature
             return;
         }
 
+        if (aStage is not { } validAStage || bStage is not { } validBStage)
+        {
+            CancelTrade(a.Player, TradeStatus.TradeCanceled);
+            return;
+        }
+
         WorldSession aSession = (WorldSession)a.Player.Session;
         WorldSession bSession = (WorldSession)b.Player.Session;
-        EconomyActor? aActor = Settlements.CreateActor(aSession, a.Player, aStage!, a.Player.Money - a.Gold + b.Gold, aEnchant?.CasterLifeAfter);
-        EconomyActor? bActor = Settlements.CreateActor(bSession, b.Player, bStage!, b.Player.Money - b.Gold + a.Gold, bEnchant?.CasterLifeAfter);
+        EconomyActor? aActor = Settlements.CreateActor(aSession, a.Player, validAStage, a.Player.Money - a.Gold + b.Gold, aEnchant?.CasterLifeAfter);
+        EconomyActor? bActor = Settlements.CreateActor(bSession, b.Player, validBStage, b.Player.Money - b.Gold + a.Gold, bEnchant?.CasterLifeAfter);
         Guid publicationId = Guid.NewGuid();
         trade.Settling = true;
         if (aActor is null || bActor is null || !Start([aActor, bActor], [], outcome =>
@@ -571,23 +597,37 @@ public sealed partial class EconomyFeature
 
         foreach (TradeSession trade in _trades.Values.Distinct().Where(t => !t.Settling && ReferenceEquals(t.Initiator.Player.Map, map)).ToList())
         {
-            Player a = trade.Initiator.Player;
-            Player b = trade.Target.Player;
-            // Always sample, including a step that stays inside interaction distance, so the next
-            // tick measures from the latest positions rather than from where the trade opened.
-            bool separated = trade.SeparatedByMovement();
-            if (!a.IsAlive || !b.IsAlive || !ReferenceEquals(a.Map, b.Map) || separated || !TradeSession.InRange(a, b))
+            try
             {
-                CancelTrade(a, TradeStatus.TradeCanceled);
+                Player a = trade.Initiator.Player;
+                Player b = trade.Target.Player;
+                // Always sample, including a step that stays inside interaction distance, so the next
+                // tick measures from the latest positions rather than from where the trade opened.
+                bool separated = trade.SeparatedByMovement();
+                if (!a.IsAlive || !b.IsAlive || !ReferenceEquals(a.Map, b.Map) || separated || !TradeSession.InRange(a, b))
+                {
+                    CancelTrade(a, TradeStatus.TradeCanceled);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("economy.trade-update", ex);
             }
         }
     }
 
     internal void OnPlayerLeftMap(Player player)
     {
-        if (_trades.GetValueOrDefault(player) is { Settling: false })
+        try
         {
-            CancelTrade(player, TradeStatus.TradeCanceled);
+            if (_trades.GetValueOrDefault(player) is { Settling: false })
+            {
+                CancelTrade(player, TradeStatus.TradeCanceled);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("economy.trade-player-left-map", ex);
         }
     }
 }

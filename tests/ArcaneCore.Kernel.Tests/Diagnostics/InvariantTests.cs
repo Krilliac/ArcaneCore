@@ -48,6 +48,10 @@ public sealed class InvariantTests : IDisposable
     {
         Invariant.Check(value > 0, "literal message");
         Invariant.Check(value > 0, $"{name} is {value}, probe {probe}");
+        Invariant.CheckNotNull(name, nameof(name));
+        Invariant.CheckFinite(12.5f, "coord");
+        Invariant.CheckFiniteCoordinates(100f, -200f, 50f);
+        Invariant.CheckRange(value, 0, 100, nameof(value));
         Invariant.Assert(value > 0, "literal message");
         Invariant.Assert(value > 0, $"{name} is {value}, probe {probe}");
     }
@@ -245,6 +249,80 @@ public sealed class InvariantTests : IDisposable
         {
             ExitCodes.Current = previous;
         }
+    }
+
+    [Fact]
+    public void CheckNotNull_ReturnsTrueWhenPresent_AndRecordsFailureWhenNull()
+    {
+        using InvariantCapture capture = Invariant.Capture();
+
+        string? present = "ok";
+        Assert.True(Invariant.CheckNotNull(present, nameof(present)));
+        Assert.Empty(capture.Failures);
+
+        string? missing = null;
+        Assert.False(Invariant.CheckNotNull(missing, nameof(missing)));
+        InvariantFailureEvent failure = Assert.Single(capture.Failures);
+        Assert.Equal("Check", failure.Kind);
+        Assert.Equal("Expected 'missing' to be non-null.", failure.Message);
+        Assert.Equal(nameof(CheckNotNull_ReturnsTrueWhenPresent_AndRecordsFailureWhenNull), failure.Member);
+    }
+
+    [Fact]
+    public void CheckFinite_AcceptsFiniteFloats_AndRejectsNaNAndInfinities()
+    {
+        using InvariantCapture capture = Invariant.Capture();
+
+        Assert.True(Invariant.CheckFinite(0f, "zero"));
+        Assert.True(Invariant.CheckFinite(-42.5f, "negative"));
+        Assert.Empty(capture.Failures);
+
+        Assert.False(Invariant.CheckFinite(float.NaN, "nanValue"));
+        Assert.False(Invariant.CheckFinite(float.PositiveInfinity, "posInf"));
+        Assert.False(Invariant.CheckFinite(float.NegativeInfinity, "negInf"));
+
+        Assert.Equal(3, capture.Failures.Count);
+        Assert.Contains("Expected 'nanValue' to be finite", capture.Failures[0].Message, StringComparison.Ordinal);
+        Assert.Contains("Expected 'posInf' to be finite", capture.Failures[1].Message, StringComparison.Ordinal);
+        Assert.Contains("Expected 'negInf' to be finite", capture.Failures[2].Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CheckFiniteCoordinates_AcceptsValidWorldCoordinates_AndRejectsNonFiniteOrOutOfBounds()
+    {
+        using InvariantCapture capture = Invariant.Capture();
+
+        Assert.True(Invariant.CheckFiniteCoordinates(0f, 0f, 0f));
+        Assert.True(Invariant.CheckFiniteCoordinates(-64_000f, 64_000f, 512.25f, "spawn"));
+        Assert.Empty(capture.Failures);
+
+        Assert.False(Invariant.CheckFiniteCoordinates(float.NaN, 1f, 2f, "movement"));
+        Assert.False(Invariant.CheckFiniteCoordinates(1f, float.PositiveInfinity, 2f, "movement"));
+        Assert.False(Invariant.CheckFiniteCoordinates(64_001f, 0f, 0f, "teleport"));
+        Assert.False(Invariant.CheckFiniteCoordinates(0f, 0f, -64_001f));
+
+        Assert.Equal(4, capture.Failures.Count);
+        Assert.Contains("Invalid movement (", capture.Failures[0].Message, StringComparison.Ordinal);
+        Assert.Equal("Invalid teleport (64001, 0, 0).", capture.Failures[2].Message);
+        Assert.Equal("Invalid coordinates (0, 0, -64_001).".Replace("_", ""), capture.Failures[3].Message);
+    }
+
+    [Fact]
+    public void CheckRange_AcceptsInclusiveBounds_AndRejectsOutOfRangeValues()
+    {
+        using InvariantCapture capture = Invariant.Capture();
+
+        Assert.True(Invariant.CheckRange(0, 0, 10, "slot"));
+        Assert.True(Invariant.CheckRange(5, 0, 10, "slot"));
+        Assert.True(Invariant.CheckRange(10, 0, 10, "slot"));
+        Assert.Empty(capture.Failures);
+
+        Assert.False(Invariant.CheckRange(-1, 0, 10, "slot"));
+        Assert.False(Invariant.CheckRange(11, 0, 10, "slot"));
+
+        Assert.Equal(
+            ["Expected 'slot' in [0..10], got -1.", "Expected 'slot' in [0..10], got 11."],
+            capture.Failures.Select(f => f.Message));
     }
 
     private sealed class ToStringProbe

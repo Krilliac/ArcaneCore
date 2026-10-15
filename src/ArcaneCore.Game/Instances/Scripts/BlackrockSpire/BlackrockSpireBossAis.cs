@@ -138,7 +138,7 @@ public sealed class PyroguardEmberseerAI(Creature creature) : ScriptDevBossAI(cr
         {
             if (diffMs >= _encage)
             {
-                foreach (Creature incarcerator in System?.Creatures.Where(c => c.Template.Entry == BlackrockSpireInstance.NpcIncarcerator && c.IsAlive) ?? [])
+                foreach (Creature incarcerator in System?.Creatures.Where(c => c.Template.Entry == BlackrockSpireInstance.NpcIncarcerator && c.IsAlive).ToArray() ?? [])
                 {
                     incarcerator.System?.CastSpell(incarcerator, 15281, Me, triggered: false);
                 }

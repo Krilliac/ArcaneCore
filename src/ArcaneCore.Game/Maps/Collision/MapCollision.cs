@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Kernel.Diagnostics;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
 
 namespace ArcaneCore.Game.Maps.Collision;
@@ -69,7 +70,17 @@ public sealed class MapCollision : IMapUpdater
 
     /// <summary>Whether a static model blocks the segment (no data: always in sight).</summary>
     public bool IsInLineOfSight(float x1, float y1, float z1, float x2, float y2, float z2)
-        => _services.LineOfSight.IsInLineOfSight(Map.MapId, new Vector3(x1, y1, z1), new Vector3(x2, y2, z2));
+    {
+        if (!Invariant.Check(
+                float.IsFinite(x1) && float.IsFinite(y1) && float.IsFinite(z1)
+                && float.IsFinite(x2) && float.IsFinite(y2) && float.IsFinite(z2),
+                $"MapCollision.IsInLineOfSight called with non-finite coordinates ({x1}, {y1}, {z1}) -> ({x2}, {y2}, {z2}) on map {Map.MapId}"))
+        {
+            return false;
+        }
+
+        return _services.LineOfSight.IsInLineOfSight(Map.MapId, new Vector3(x1, y1, z1), new Vector3(x2, y2, z2));
+    }
 
     /// <summary>
     /// vmangos <c>WorldObject::IsWithinLOSInMap</c>: line of sight between two objects of this
@@ -124,6 +135,12 @@ public sealed class MapCollision : IMapUpdater
     /// </summary>
     public float GetHeight(float x, float y, float z, bool useModels = true, float maxSearchDistance = DefaultHeightSearch)
     {
+        if (!Invariant.Check(float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z),
+                $"MapCollision.GetHeight called with non-finite coordinates ({x}, {y}, {z}) on map {Map.MapId}"))
+        {
+            return TerrainTile.InvalidHeightValue;
+        }
+
         float probe = z + FloorProbeOffset;
         float mapHeight = TerrainTile.InvalidHeightValue;
         float terrain = Map.Terrain.GetHeight(x, y, z);
@@ -180,8 +197,20 @@ public sealed class MapCollision : IMapUpdater
 
     private void OnGridCreated(MapGrid grid)
     {
-        (int tx, int ty) = TerrainTile.TileOf(grid.Coord);
-        ForEachLifecycle(l => l.OnTileLoaded(Map.MapId, tx, ty));
+        try
+        {
+            (int tx, int ty) = TerrainTile.TileOf(grid.Coord);
+            ForEachLifecycle(l => l.OnTileLoaded(Map.MapId, tx, ty));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Map.Logger.LogFault(
+                "map-collision",
+                ex,
+                "MapCollision fault loading collision tile for grid {Grid} on map {MapId}",
+                grid.Coord,
+                Map.MapId);
+        }
     }
 
     private void OnGridApproaching(Grid.GridCoord coord)
@@ -189,31 +218,91 @@ public sealed class MapCollision : IMapUpdater
         (int tx, int ty) = TerrainTile.TileOf(coord);
         if (_services.LineOfSight is ICollisionTilePrefetch los)
         {
-            los.Prefetch(Map.MapId, tx, ty);
+            try
+            {
+                los.Prefetch(Map.MapId, tx, ty);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                Map.Logger.LogFault(
+                    "map-collision",
+                    ex,
+                    "MapCollision fault prefetching LOS tile ({TileX}, {TileY}) on map {MapId}",
+                    tx,
+                    ty,
+                    Map.MapId);
+            }
         }
 
         if (_services.Pathfinder is ICollisionTilePrefetch path && !ReferenceEquals(path, _services.LineOfSight))
         {
-            path.Prefetch(Map.MapId, tx, ty);
+            try
+            {
+                path.Prefetch(Map.MapId, tx, ty);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                Map.Logger.LogFault(
+                    "map-collision",
+                    ex,
+                    "MapCollision fault prefetching pathfinder tile ({TileX}, {TileY}) on map {MapId}",
+                    tx,
+                    ty,
+                    Map.MapId);
+            }
         }
     }
 
     private void OnGridUnloaded(Grid.GridCoord coord)
     {
-        (int tx, int ty) = TerrainTile.TileOf(coord);
-        ForEachLifecycle(l => l.OnTileUnloaded(Map.MapId, tx, ty));
+        try
+        {
+            (int tx, int ty) = TerrainTile.TileOf(coord);
+            ForEachLifecycle(l => l.OnTileUnloaded(Map.MapId, tx, ty));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Map.Logger.LogFault(
+                "map-collision",
+                ex,
+                "MapCollision fault unloading collision tile for grid {Grid} on map {MapId}",
+                coord,
+                Map.MapId);
+        }
     }
 
     private void ForEachLifecycle(Action<ICollisionTileLifecycle> action)
     {
         if (_services.LineOfSight is ICollisionTileLifecycle los)
         {
-            action(los);
+            try
+            {
+                action(los);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                Map.Logger.LogFault(
+                    "map-collision",
+                    ex,
+                    "MapCollision fault in LOS tile lifecycle on map {MapId}",
+                    Map.MapId);
+            }
         }
 
         if (_services.Pathfinder is ICollisionTileLifecycle path && !ReferenceEquals(path, _services.LineOfSight))
         {
-            action(path);
+            try
+            {
+                action(path);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                Map.Logger.LogFault(
+                    "map-collision",
+                    ex,
+                    "MapCollision fault in pathfinder tile lifecycle on map {MapId}",
+                    Map.MapId);
+            }
         }
     }
 }

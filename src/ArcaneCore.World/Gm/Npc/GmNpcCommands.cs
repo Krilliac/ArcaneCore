@@ -43,7 +43,9 @@ public sealed class GmNpcCommands : ICommandGroup
 
     /// <summary>The creature system of the invoker's map; null when the invoker is in no map.</summary>
     internal static CreatureMapSystem? SystemOf(CommandContext context)
-        => context.Player.Map is { } map ? context.Session.Services.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(map) : null;
+        => !context.IsConsole && context.Player.Map is { } map && context.Session.Services.GetService<CreatureWorldFeature>() is { } feature
+            ? feature.GetOrCreateSystem(map)
+            : null;
 
     public const string SelectCreature = "Select a creature first.";
 
@@ -142,7 +144,12 @@ public sealed class GmNpcCommands : ICommandGroup
             return true;
         }
 
-        creature.Map!.BroadcastToObservers(creature, WorldOpcode.SmsgEmote, CreatureChatPackets.BuildEmote(emote, creature.Guid));
+        if (creature.Map is not { } map)
+        {
+            return true;
+        }
+
+        map.BroadcastToObservers(creature, WorldOpcode.SmsgEmote, CreatureChatPackets.BuildEmote(emote, creature.Guid));
         context.Reply(Done(string.Create(CultureInfo.InvariantCulture, $"played emote {emote}"), creature.Template.Name, creature.Template.Entry, creature.Guid.Counter));
         return true;
     }
@@ -166,7 +173,7 @@ public sealed class GmNpcCommands : ICommandGroup
     private static bool Near(CommandContext context, string text)
     {
         var args = new CommandArgs(text);
-        if (!args.ExtractOptFloat(out float radius, 10f) || !args.IsEmpty || !(radius > 0f) || radius > GmObjectCommands.MaxNearRadius)
+        if (!args.ExtractOptFloat(out float radius, 10f) || !args.IsEmpty || !float.IsFinite(radius) || !(radius > 0f) || radius > GmObjectCommands.MaxNearRadius)
         {
             return false;
         }
@@ -177,10 +184,15 @@ public sealed class GmNpcCommands : ICommandGroup
         }
 
         Player player = context.Player;
+        if (!float.IsFinite(player.X) || !float.IsFinite(player.Y) || !float.IsFinite(player.Z))
+        {
+            return true;
+        }
+
         List<(Creature Creature, float Distance)> near = [.. system.Creatures
             .Where(c => c is not { IsPet: true })
             .Select(c => (Creature: c, Distance: GmDistance.Between(player, c)))
-            .Where(t => t.Distance <= radius)
+            .Where(t => float.IsFinite(t.Distance) && t.Distance <= radius)
             .OrderBy(t => t.Distance).ThenBy(t => t.Creature.Guid.Counter)];
         context.Reply(string.Create(CultureInfo.InvariantCulture, $"Creatures within {radius:0.##} yards: {near.Count}"));
         foreach ((Creature creature, float distance) in near.Take(MaxNearRows))

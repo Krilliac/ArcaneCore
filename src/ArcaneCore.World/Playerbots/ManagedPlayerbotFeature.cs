@@ -242,14 +242,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
             .LoadAllAsync(cancellationToken).ConfigureAwait(false);
-        if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } setAsides)
+        if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } setAsides && _world is { } world)
         {
             IReadOnlyList<PlayerbotSetAside> rows = await setAsides.LoadAllAsync(cancellationToken).ConfigureAwait(false);
             foreach (IGrouping<Guid, PlayerbotSetAside> group in rows.Where(row => row.BotId != Guid.Empty).GroupBy(row => row.BotId))
                 _loadedSetAsides[group.Key] = [.. group];
-            await _world!.InvokeAsync(() =>
+            await world.InvokeAsync(() =>
             {
-                _sharedSetAsides.Restore(rows.Where(row => row.BotId == Guid.Empty), _world.NowMs,
+                _sharedSetAsides.Restore(rows.Where(row => row.BotId == Guid.Empty), world.NowMs,
                     _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
                 return true;
             }, cancellationToken).ConfigureAwait(false);
@@ -385,6 +385,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            if (ex is not PlayerbotCreateRefusedException and not OperationCanceledException)
+                FaultLedger.Shared.Record("playerbot.feature", ex);
             // A refusal of the character handler names its reason; any other failure names the exception and its message (the reason
             // used to be the exception type alone, so "InvalidOperationException" was all an operator saw of a name with a digit).
             string reason = ex is PlayerbotCreateRefusedException refused ? refused.Reason : $"{ex.GetType().Name}: {ex.Message}";
@@ -396,7 +398,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             await using AsyncServiceScope repair = scopes.CreateAsyncScope();
             try { await ReconcileProvisioningAsync(repair.ServiceProvider, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception failure) when (failure is not OutOfMemoryException)
-            { logger.LogError(failure, "Playerbot provisioning retained for reconciliation ({Type}: {Message})", failure.GetType().Name, failure.Message); }
+            {
+                FaultLedger.Shared.Record("playerbot.feature", failure);
+                logger.LogError(failure, "Playerbot provisioning retained for reconciliation ({Type}: {Message})", failure.GetType().Name, failure.Message);
+            }
             if (ex is OperationCanceledException) throw;
             return new(false, ex is PlayerbotCreateRefusedException ? $"character-create-refused: {reason}" : $"create-failed: {reason}", null, name);
         }
@@ -447,6 +452,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.feature", ex);
             logger.LogError(ex, "Playerbot cleanup of reused account '{Account}' failed; the account is retired ({Type}: {Message})", spare.Username, ex.GetType().Name, ex.Message);
         }
     }
@@ -730,6 +736,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
             {
                 failed++;
+                FaultLedger.Shared.Record("playerbot.feature", ex);
                 if (logFailures) logger.LogWarning(ex, "Playerbot home of {BotId} was not stored ({Type}: {Message})", target.BotId, ex.GetType().Name, ex.Message);
             }
         }
@@ -861,7 +868,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         CancellationToken cancellationToken, StartKind kind, Quarantine? retrying = null)
     {
         bool quarantineRetry = kind != StartKind.Operator;
-        if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
+        if (!_options.Enabled || _stopping || _world is not { } world) return new(false, "playerbots-disabled");
         if (ResetInProgress) return new(false, "fleet-reset-running");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -893,7 +900,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = true, State = ManagedPlayerbotState.Starting, ErrorCode = null }, cancellationToken).ConfigureAwait(false);
             var login = new PacketWriter(); login.WriteUInt64((ulong)(uint)bot.CharacterId);
             await session.DispatchManagedSessionAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray()).ConfigureAwait(false);
-            bool entered = await _world!.InvokeAsync(() => session.State == SessionState.InWorld
+            bool entered = await world.InvokeAsync(() => session.State == SessionState.InWorld
                 && session.Player is { Map: not null } player && PlayerbotMapPolicy.MayStayOnMap(player, _options))
                 .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
             if (!entered) throw new InvalidOperationException("login-refused");
@@ -914,10 +921,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             Interlocked.Increment(ref _activeVersion);
             retained = true;
             logger.LogInformation("Started managed playerbot {BotId}, character {CharacterId}", bot.BotId, bot.CharacterId);
-            return new(true, "started", bot.BotId, session.Player!.Name);
+            return new(true, "started", bot.BotId, session.Player?.Name ?? active.Name);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            if (ex is not OperationCanceledException)
+                FaultLedger.Shared.Record("playerbot.feature", ex);
             logger.LogWarning(ex, "Managed playerbot start failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
             if (bot is not null)
             {
@@ -1057,14 +1066,18 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     foreach (Task stop in stops.Where(stop => stop.IsFaulted))
-                        failures.AddRange(stop.Exception!.InnerExceptions);
+                        if (stop.Exception is { } stopEx)
+                            failures.AddRange(stopEx.InnerExceptions);
                     foreach (Task stop in stops.Where(stop => stop.IsCanceled))
                         failures.Add(new TaskCanceledException(stop));
                 }
             }
             try { await SaveSharedSetAsidesAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
-            { logger.LogWarning(ex, "Managed playerbot shared set-aside shutdown save failed ({Type})", ex.GetType().Name); }
+            {
+                FaultLedger.Shared.Record("playerbot.feature", ex);
+                logger.LogWarning(ex, "Managed playerbot shared set-aside shutdown save failed ({Type})", ex.GetType().Name);
+            }
         }
         finally { _operations.Release(); }
         if (_planner is { } planner) { _planner = null; await planner.DisposeAsync().ConfigureAwait(false); }
@@ -1161,7 +1174,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     }
 
     private Task<WorldSession> NewSessionAsync(Account owner, int? characterId, IServiceProvider services, CancellationToken cancellationToken)
-        => WorldSession.CreateManagedAsync(owner, characterId, services, opcodes, _world!, registry, sessionOptions.Value, logger, cancellationToken);
+    {
+        WorldRuntime world = _world ?? throw new InvalidOperationException("playerbot-world-not-attached");
+        return WorldSession.CreateManagedAsync(owner, characterId, services, opcodes, world, registry, sessionOptions.Value, logger, cancellationToken);
+    }
 
     private async Task StopCoreAsync(ManagedPlayerbot bot, bool preserveDesired, CancellationToken cancellationToken, string? faultCode = null)
     {
@@ -1170,7 +1186,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             active.Paused = true;
             try { await SaveBotSetAsidesAsync(active, force: true).ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
-            { logger.LogWarning(ex, "Managed playerbot {BotId} set-aside stop save failed ({Type})", bot.BotId, ex.GetType().Name); }
+            {
+                FaultLedger.Shared.Record("playerbot.feature", ex);
+                logger.LogWarning(ex, "Managed playerbot {BotId} set-aside stop save failed ({Type})", bot.BotId, ex.GetType().Name);
+            }
             if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
             active.Brain.Stop();
             if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
@@ -1197,6 +1216,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                if (ex is not OperationCanceledException)
+                    FaultLedger.Shared.Record("playerbot.feature", ex);
                 try
                 {
                     active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
@@ -1204,7 +1225,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         ErrorCode = "stop-incomplete" }, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception failure) when (failure is not OutOfMemoryException)
-                { logger.LogError(failure, "Playerbot {BotId} retains an incomplete stop ({Type})", bot.BotId, failure.GetType().Name); }
+                {
+                    FaultLedger.Shared.Record("playerbot.feature", failure);
+                    logger.LogError(failure, "Playerbot {BotId} retains an incomplete stop ({Type})", bot.BotId, failure.GetType().Name);
+                }
                 PublishStopped(active.Record, active.Name, active.MapId);
                 throw;
             }
@@ -1220,7 +1244,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private void Update(uint elapsedMs)
     {
-        if (_stopping || !_options.Enabled) return;
+        if (_stopping || !_options.Enabled || _world is not { } world) return;
         Interlocked.Add(ref _clockMs, elapsedMs);
         int version = Volatile.Read(ref _activeVersion);
         if (version != _orderedVersion)
@@ -1235,7 +1259,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         foreach (ActiveBot active in bots)
         {
             if (active.Paused || active.Session.State != SessionState.InWorld || active.Session.Player is not { } mover) continue;
-            try { PlayerbotMotion.Pump(active.Session, mover, _world!.NowMs); }
+            try { PlayerbotMotion.Pump(active.Session, mover, world.NowMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "movement", ex); continue; }
             // Party intake, every tick for every autonomous bot (a scripted controller drains its own queue): invitations,
             // chat, loot rolls and resurrection offers are answered as they come, not when the bot's turn in the budget comes.
@@ -1254,7 +1278,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         active.Controller is null && !active.PartyDriven && battlegrounds?.Holds(active.Record.BotId) != true));
             try { groups.Update(running, elapsedMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
-            { logger.LogWarning(ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
+            {
+                FaultLedger.Shared.Record("playerbot.feature", ex);
+                logger.LogWarning(ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            }
             // A group that stalled (PlayerbotGroupCoordinator.WatchStall) is reported like a brain's stall, on its leader: the brains do not
             // think while a group drives them, so this is the only stall line such a group gets (bot QA parses it).
             foreach ((Guid botId, string name, string report) in groups.TakeStalls())
@@ -1276,7 +1303,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         active.Controller is null && !active.PartyDriven && coordinator?.Involves(active.Record.BotId) != true));
             try { fields.Update(running, elapsedMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
-            { logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
+            {
+                FaultLedger.Shared.Record("playerbot.feature", ex);
+                logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            }
         }
 
         if (_options.Inference.Enabled && _inferenceEngine is { } inferenceEngine && _batchCoordinator is { } batchCoordinator && bots.Length > 0)
@@ -1294,7 +1324,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 try { _ = batchCoordinator.UpdatePlayerbotsTick(slots[..slotCount], inferenceEngine); }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
-                { logger.LogWarning(ex, "Playerbot batch inference pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message); }
+                {
+                    FaultLedger.Shared.Record("playerbot.feature", ex);
+                    logger.LogWarning(ex, "Playerbot batch inference pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                }
             }
         }
 
@@ -1321,7 +1354,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         PublishSnapshot(bots);
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
-        { _checkpointMs = 0; _checkpoint = Task.Run(CheckpointAsync); }
+        {
+            if (_checkpoint.Exception is { } checkpointEx)
+                FaultLedger.Shared.Record("playerbot.checkpoint", checkpointEx.GetBaseException());
+            _checkpointMs = 0;
+            _checkpoint = Task.Run(CheckpointAsync);
+        }
     }
 
     /// <summary>
@@ -1361,10 +1399,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         string driver = "idle";
         if (active.Paused || active.Session.State != SessionState.InWorld) active.GapPrimed = false;
-        if (!active.Paused && active.Session.State == SessionState.InWorld)
+        if (!active.Paused && active.Session.State == SessionState.InWorld && _world is { } world)
         {
-            uint sinceLast = unchecked(_world!.NowMs - active.LastUpdateMs);
-            active.LastUpdateMs = _world.NowMs;
+            uint sinceLast = unchecked(world.NowMs - active.LastUpdateMs);
+            active.LastUpdateMs = world.NowMs;
             // The first think after login or unpause measures the time since the record was made (or the pause), not a think gap.
             if (active.GapPrimed)
             {
@@ -1521,7 +1559,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             bool willLogStall = report is not null && !awaitRelease && active.Brain.StallCount != active.StallsLogged;
             (active.StallsLogged, bool sharedLogged) = LogStall(logger, active.Record.BotId, active.Name, active.Brain.StallCount,
                 active.StallsLogged, report, active.Brain.StallOutsideHome, active.Brain.SharedSetAside,
-                willLogStall ? active.Brain.QaReportContext(driven, report!) : null,
+                willLogStall && report is not null ? active.Brain.QaReportContext(driven, report) : null,
                 awaitRelease,
                 willLogStall ? active.Brain.FormatDiagnosticSnapshot(driven) : null);
             if (sharedLogged) active.Brain.SharedSetAside = null;
@@ -1643,6 +1681,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             try { active.Party.DeliverChat(speaker, reply); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.feature", ex);
                 // A chat reply is never worth a bot: it is dropped and the bot carries on.
                 logger.LogWarning(ex, "Playerbot {BotId} ({Name}) could not say a chat reply", active.Record.BotId, active.Name);
             }
@@ -1697,7 +1736,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         else await StopCoreAsync(active.Record, false, CancellationToken.None).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
-                    { logger.LogWarning(ex, "Playerbot {BotId} checkpoint stop failed ({Type}: {Message})", active.Record.BotId, ex.GetType().Name, ex.Message); }
+                    {
+                        FaultLedger.Shared.Record("playerbot.checkpoint", ex);
+                        logger.LogWarning(ex, "Playerbot {BotId} checkpoint stop failed ({Type}: {Message})", active.Record.BotId, ex.GetType().Name, ex.Message);
+                    }
                     continue;
                 }
                 live.Add((active, active.Record with { Goal = goals[i].Goal, TargetEntry = goals[i].TargetEntry, QuestId = goals[i].QuestId }));
@@ -1745,6 +1787,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             try { stored = await store.FindAsync(active.Record.BotId, CancellationToken.None).ConfigureAwait(false); }
                             catch (Exception ex) when (ex is not OutOfMemoryException)
                             {
+                                FaultLedger.Shared.Record("playerbot.checkpoint", ex);
                                 logger.LogWarning(ex, "Playerbot {BotId} conflicting row could not be read ({Type})", active.Record.BotId, ex.GetType().Name);
                                 continue; // not faulted: the next checkpoint finds the same conflict and looks again
                             }
@@ -1759,7 +1802,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     }
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
-                { logger.LogWarning(ex, "Managed playerbot checkpoint write failed ({Type})", ex.GetType().Name); }
+                {
+                    FaultLedger.Shared.Record("playerbot.checkpoint", ex);
+                    logger.LogWarning(ex, "Managed playerbot checkpoint write failed ({Type})", ex.GetType().Name);
+                }
             }
 
             foreach ((ActiveBot active, _) in live)
@@ -1767,9 +1813,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             await SaveSharedSetAsidesAsync().ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
-        { logger.LogWarning(ex, "Managed playerbot checkpoint failed ({Type})", ex.GetType().Name); }
+        {
+            FaultLedger.Shared.Record("playerbot.checkpoint", ex);
+            logger.LogWarning(ex, "Managed playerbot checkpoint failed ({Type})", ex.GetType().Name);
+        }
         finally { _operations.Release(); }
-        await RetryQuarantinedAsync().ConfigureAwait(false);
+        try
+        {
+            await RetryQuarantinedAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.checkpoint", ex);
+            logger.LogWarning(ex, "Managed playerbot quarantine retry loop failed ({Type})", ex.GetType().Name);
+        }
     }
 
     /// <summary>
@@ -1788,14 +1845,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             try { await SaveBotSetAsidesAsync(active, force: true).ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
-            { logger.LogWarning(ex, "Playerbot {BotId} set-aside save failed ({Type})", botId, ex.GetType().Name); }
+            {
+                FaultLedger.Shared.Record("playerbot.checkpoint", ex);
+                logger.LogWarning(ex, "Playerbot {BotId} set-aside save failed ({Type})", botId, ex.GetType().Name);
+            }
         }
 
         if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
         try { if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(botId); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
-        { logger.LogWarning(ex, "Playerbot {BotId} controller detach failed ({Type})", botId, ex.GetType().Name); }
+        {
+            FaultLedger.Shared.Record("playerbot.checkpoint", ex);
+            logger.LogWarning(ex, "Playerbot {BotId} controller detach failed ({Type})", botId, ex.GetType().Name);
+        }
         active.Session.Kick();
         if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(botId, active))) Interlocked.Increment(ref _activeVersion);
         if (row is not null) { active.Record = row; PublishStopped(row, active.Name, active.MapId); }
@@ -1813,7 +1876,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         try { await active.Scope.DisposeAsync().ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
-        { logger.LogWarning(ex, "Playerbot {BotId} scope disposal failed ({Type})", botId, ex.GetType().Name); }
+        {
+            FaultLedger.Shared.Record("playerbot.checkpoint", ex);
+            logger.LogWarning(ex, "Playerbot {BotId} scope disposal failed ({Type})", botId, ex.GetType().Name);
+        }
     }
 
     /// <summary>Whether the checkpoint's persisted fields (the goal, its target and its quest) differ between two records.</summary>
@@ -1892,6 +1958,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private async Task SaveBotSetAsidesAsync(ActiveBot active, bool force = false)
     {
+        if (_world is not { } world) return;
         if (!force && Volatile.Read(ref active.SavedSetAsideVersion) == active.Brain.Suspensions.Version) return;
         (PlayerbotSetAside[] rows, int version, PlayerbotBrain brain) Capture()
         {
@@ -1902,8 +1969,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         // WorldTestHost and the production host may stop the world before stopping features. No tick can mutate the brain then.
         (PlayerbotSetAside[] rows, int version, PlayerbotBrain brain) snapshot;
-        try { snapshot = _world!.IsStopped || _world.IsWorldThread ? Capture() : await _world.InvokeAsync(Capture).ConfigureAwait(false); }
-        catch (TaskCanceledException) when (_world!.IsStopped) { snapshot = Capture(); }
+        try { snapshot = world.IsStopped || world.IsWorldThread ? Capture() : await world.InvokeAsync(Capture).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (world.IsStopped) { snapshot = Capture(); }
         (PlayerbotSetAside[] rows, int version, PlayerbotBrain brain) = snapshot;
         await using AsyncServiceScope scope = scopes.CreateAsyncScope();
         if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } store)
@@ -1915,15 +1982,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private async Task SaveSharedSetAsidesAsync()
     {
+        if (_world is not { } world) return;
         if (Volatile.Read(ref _savedSharedSetAsideVersion) == _sharedSetAsides.Version) return;
         (PlayerbotSetAside[] rows, int version) Capture()
         {
-            return (_sharedSetAsides.Export(_world.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()),
+            return (_sharedSetAsides.Export(world.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()),
                 _sharedSetAsides.Version);
         }
         (PlayerbotSetAside[] rows, int version) snapshot;
-        try { snapshot = _world!.IsStopped || _world.IsWorldThread ? Capture() : await _world.InvokeAsync(Capture).ConfigureAwait(false); }
-        catch (TaskCanceledException) when (_world!.IsStopped) { snapshot = Capture(); }
+        try { snapshot = world.IsStopped || world.IsWorldThread ? Capture() : await world.InvokeAsync(Capture).ConfigureAwait(false); }
+        catch (TaskCanceledException) when (world.IsStopped) { snapshot = Capture(); }
         (PlayerbotSetAside[] rows, int version) = snapshot;
         await using AsyncServiceScope scope = scopes.CreateAsyncScope();
         if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } store)
@@ -2053,6 +2121,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             try { result = await StartCoreAsync(botId.ToString(), null, CancellationToken.None, StartKind.QuarantineRetry, quarantine).ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot.feature", ex);
                 logger.LogWarning(ex, "Playerbot {BotId} quarantine retry failed", botId);
                 result = new(false, "start-failed", botId);
             }
@@ -2159,8 +2228,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public bool PartyDriven;
         public bool GroupDriven;
         public bool BattlegroundDriven;
-        public string Name = session.Player!.Name;
-        public uint MapId = session.Player!.Map!.MapId;
+        public string Name = session.Player?.Name ?? string.Empty;
+        public uint MapId = session.Player?.Map?.MapId ?? session.Player?.MapId ?? 0;
         public uint LastUpdateMs = session.World.NowMs;
         /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>
         public bool GapPrimed;
@@ -2175,13 +2244,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         /// <summary>The status code of a stall report (<see cref="Code"/>), computed once per report instead of every tick.</summary>
         public string StallCode(string report)
         {
-            if (!ReferenceEquals(report, _stallSource))
+            if (!ReferenceEquals(report, _stallSource) || _stallCode is null)
             {
                 _stallSource = report;
                 _stallCode = Code(report);
             }
 
-            return _stallCode!;
+            return _stallCode;
         }
         public PlayerbotControllerContext ControllerContext { get; } = new(record.BotId, session);
     }

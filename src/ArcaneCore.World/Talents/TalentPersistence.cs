@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Talents;
 
 /// <summary>
@@ -288,8 +289,13 @@ public sealed class TalentPersistence : IAsyncDisposable
         {
             scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException)
         {
+            /* expected on shutdown */
+        }
+        catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-talent-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -299,47 +305,57 @@ public sealed class TalentPersistence : IAsyncDisposable
     {
         await foreach (PendingWrite pending in _writes.Reader.ReadAllAsync().ConfigureAwait(false))
         {
-            await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
+            if (!Invariant.Check(_scopes is not null, "TalentPersistence write loop requires a scope factory") || _scopes is not { } scopes)
+            {
+                pending.Done?.TrySetResult();
+                continue;
+            }
+
             try
             {
-                lock (_lock)
-                {
-                    if (_terminalFailure is { } terminal && pending.CharacterId is not null)
-                    {
-                        throw new InvalidOperationException($"talent state writes for character {pending.CharacterId.Value} are not durable", terminal);
-                    }
-                }
-
-                ICharacterTalentStore? store = scope.ServiceProvider.GetService<ICharacterTalentStore>();
-                if (store is null)
-                {
-                    if (!_warnedNoStore)
-                    {
-                        _warnedNoStore = true;
-                        _logger.LogWarning("No ICharacterTalentStore is registered; talent state changes are not persisted");
-                    }
-
-                    pending.Done?.TrySetResult();
-                    continue;
-                }
-
-                await pending.Write(store).ConfigureAwait(false);
-                pending.Done?.TrySetResult();
-            }
-            catch (CharacterOwnershipRejectedException ex)
-            {
-                if (pending.CharacterId is { } characterId)
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                try
                 {
                     lock (_lock)
                     {
-                        _failed.Add(characterId);
+                        if (_terminalFailure is { } terminal && pending.CharacterId is not null)
+                        {
+                            throw new InvalidOperationException($"talent state writes for character {pending.CharacterId.Value} are not durable", terminal);
+                        }
                     }
-                }
 
-                FailTerminal(ex, scope.ServiceProvider);
-                pending.Done?.TrySetException(ex);
+                    ICharacterTalentStore? store = scope.ServiceProvider.GetService<ICharacterTalentStore>();
+                    if (store is null)
+                    {
+                        if (!_warnedNoStore)
+                        {
+                            _warnedNoStore = true;
+                            _logger.LogWarning("No ICharacterTalentStore is registered; talent state changes are not persisted");
+                        }
+
+                        pending.Done?.TrySetResult();
+                        continue;
+                    }
+
+                    await pending.Write(store).ConfigureAwait(false);
+                    pending.Done?.TrySetResult();
+                }
+                catch (CharacterOwnershipRejectedException ex)
+                {
+                    FaultLedger.Shared.Record("writequeue-talent-ownership", ex);
+                    if (pending.CharacterId is { } characterId)
+                    {
+                        lock (_lock)
+                        {
+                            _failed.Add(characterId);
+                        }
+                    }
+
+                    FailTerminal(ex, scope.ServiceProvider);
+                    pending.Done?.TrySetException(ex);
+                }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // Fail loudly but keep the queue alive; the desired state stays authoritative until a reconciling flush.
                 if (pending.CharacterId is { } characterId)
@@ -351,7 +367,7 @@ public sealed class TalentPersistence : IAsyncDisposable
                 }
 
                 pending.Done?.TrySetException(ex);
-                _logger.LogError(ex, "Saving talent state failed");
+                _logger.LogFault("writequeue-talent", ex, "Saving talent state failed");
             }
         }
     }

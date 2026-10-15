@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Reputation;
 
 /// <summary>
@@ -365,10 +366,14 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                         break;
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
+            {
+                /* expected on shutdown */
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // ExecuteAsync reports store failures itself; this is a queue bug and must not kill the consumer.
-                logger.LogError(ex, "reputation write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
+                logger.LogFault("writequeue-reputation-consume", ex, "reputation write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -401,9 +406,9 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             }
         }
 
-        if (failed > 0)
+        if (failed > 0 && Invariant.Check(first is not null, "reputation retry recorded failures without a first exception") && first is { } firstFailure)
         {
-            logger.LogWarning("reputation retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
+            logger.LogWarning("reputation retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", firstFailure.Message);
         }
     }
 
@@ -451,32 +456,33 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 }
 
                 long? stepDelete = i == 0 && deleteGen is { } gen && unsaved.DeleteDone < gen ? gen : null;
-                bool useCandidate = candidate is not null
+                Overlay? selectedCandidate = candidate is { Rejected: false, IsEmpty: false } activeCandidate
                     && unsaved.DeleteRequested == deleteRequested
-                    && !candidate.Rejected
-                    && !candidate.IsEmpty
-                    && (!onlyIfFailed || candidate.Failure is not null);
+                    && (!onlyIfFailed || activeCandidate.Failure is not null)
+                    ? activeCandidate
+                    : null;
 
-                if (stepDelete is null && !useCandidate)
+                if (stepDelete is null && selectedCandidate is null)
                 {
                     Release(characterId, unsaved);
                     continue;
                 }
 
+                Invariant.Check(stepDelete is not null || selectedCandidate is not null, "reputation write step must have either a delete generation or a candidate overlay");
                 snapshot = new Snapshot(
                     stepDelete,
-                    useCandidate ? [.. candidate!.Rows.Values] : [],
-                    useCandidate ? candidate!.Watched : null,
+                    selectedCandidate is not null ? [.. selectedCandidate.Rows.Values] : [],
+                    selectedCandidate?.Watched,
                     unsaved.DeleteRequested,
-                    useCandidate ? candidate!.Ownership : null,
-                    useCandidate ? candidate : null);
+                    selectedCandidate?.Ownership,
+                    selectedCandidate);
             }
 
             try
             {
                 await WriteAsync(characterId, snapshot, sweep ? 1 : MaxAttempts).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 bool rejected = IsOwnershipRejection(ex);
                 lock (_gate)
@@ -501,12 +507,16 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 if (rejected)
                 {
-                    logger.LogCritical(ex, "reputation write for character {Character} was rejected by the character ownership fence; stopping application", characterId);
+                    logger.LogFault(LogLevel.Critical, "writequeue-reputation-ownership", ex, "reputation write for character {Character} was rejected by the character ownership fence; stopping application", characterId);
                     StopHost(ex);
                 }
                 else if (!sweep)
                 {
-                    logger.LogError(ex, "reputation write for character {Character} failed; retained for retry", characterId);
+                    logger.LogFault("writequeue-reputation", ex, "reputation write for character {Character} failed; retained for retry", characterId);
+                }
+                else
+                {
+                    FaultLedger.Shared.Record("writequeue-reputation-sweep", ex);
                 }
 
                 return ex;
@@ -593,8 +603,9 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 return;
             }
-            catch (Exception ex) when (attempt < attempts && !IsOwnershipRejection(ex))
+            catch (Exception ex) when (attempt < attempts && !IsOwnershipRejection(ex) && ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("writequeue-reputation-attempt", ex);
                 logger.LogWarning(ex, "reputation write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }
@@ -609,7 +620,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
         catch (Exception callbackError) when (callbackError is not OutOfMemoryException)
         {
-            logger.LogError(callbackError, "reputation write queue fatal-failure callback failed");
+            logger.LogFault("writequeue-reputation-callback", callbackError, "reputation write queue fatal-failure callback failed");
         }
 
         if (lifetime is not null)

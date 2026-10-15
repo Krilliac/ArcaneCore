@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Pets.Control;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
@@ -88,6 +89,11 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        if (unit.Map is null)
+        {
+            return;
+        }
+
         WorldOpcode relay = (movement.Flags & MovementFlags.MaskMoving) != 0 ? WorldOpcode.MsgMoveHeartbeat : WorldOpcode.MsgMoveStop;
         if (unit is Player moved)
         {
@@ -116,6 +122,11 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
 
     private static void HandleMovement(WorldSession session, Player player, WorldOpcode opcode, byte[] payload, bool relay)
     {
+        if (player.Map is null)
+        {
+            return;
+        }
+
         // vmangos HandleMovementOpcodes ignores movement while either teleport semaphore is set.
         if (session.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player))
         {
@@ -142,7 +153,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         // vmangos GetConfirmedMover (MovementHandler.cpp:298-300): a possessed or charmed player moves nothing, a player that possesses
         // another unit moves that unit once its client has switched to it (docs/areas/unit-control.md).
         Unit? mover = player.GetConfirmedMover();
-        if (mover is null)
+        if (mover is null || mover.Map is null)
         {
             return;
         }
@@ -230,7 +241,8 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     internal static bool MoveManagedBot(WorldSession session, Player player, WorldOpcode opcode, MovementInfo movement)
     {
         movement = AsDecoded(movement);
-        if (!MovementOpcodes.IsRelayable(opcode)
+        if (player.Map is null
+            || !MovementOpcodes.IsRelayable(opcode)
             || session.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player)
             || (player.UnitFlags & UnitFlags.TaxiFlight) != 0
             || !IsAcceptable(session, movement)
@@ -268,10 +280,15 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     /// </summary>
     internal static void RelayStoredMovement(Player player, WorldOpcode opcode)
     {
+        if (player.Map is not { } map)
+        {
+            return;
+        }
+
         var packet = new PacketWriter(64);
         packet.WritePackedGuid(player.Guid.Value);
         player.Movement.Write(packet);
-        player.Map?.BroadcastToObservers(player, opcode, packet.AsSpan());
+        map.BroadcastToObservers(player, opcode, packet.AsSpan());
     }
 
     /// <summary>
@@ -282,6 +299,11 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static void MoveControlled(WorldSession session, Player controller, Unit mover, WorldOpcode opcode, MovementInfo movement, bool relay)
     {
+        if (mover.Map is null)
+        {
+            return;
+        }
+
         if (mover is Player moved)
         {
             ApplyObserved(session, moved, opcode, movement);
@@ -334,6 +356,9 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         MovementInfo previous = player.Movement;
         var context = new MovementObserverContext(player, session.World, opcode);
         MovementObservers.Before(context, in previous, ref movement, session.Logger);
+        Invariant.Check(
+            float.IsFinite(movement.X) && float.IsFinite(movement.Y) && float.IsFinite(movement.Z) && float.IsFinite(movement.Orientation),
+            $"MovementHandlers.ApplyObserved non-finite coordinates after observers for player {player.Guid.Low}");
         player.ApplyClientMovement(movement, session.World.NowMs);
         MovementObservers.After(context, in previous, session.Logger);
 
@@ -353,6 +378,31 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     /// A malformed movement block is dropped, not kicked (vmangos VerifyMovementInfo, MovementHandler.cpp:1042-1061);
     /// shared with the movement-change acks.
     /// </summary>
-    internal static bool IsAcceptable(WorldSession session, in MovementInfo movement) =>
-        MovementValidator.IsValid(movement, session.StrictMovementFiniteness);
+    internal static bool IsAcceptable(WorldSession session, in MovementInfo movement)
+    {
+        if (!float.IsFinite(movement.X) || !float.IsFinite(movement.Y) || !float.IsFinite(movement.Z) || !float.IsFinite(movement.Orientation))
+        {
+            session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite world coordinates or orientation", session.RemoteEndpoint);
+            return false;
+        }
+
+        if (movement.HasFlag(MovementFlags.OnTransport)
+            && (!float.IsFinite(movement.TransportX) || !float.IsFinite(movement.TransportY)
+                || !float.IsFinite(movement.TransportZ) || !float.IsFinite(movement.TransportOrientation)))
+        {
+            session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite transport coordinates or orientation", session.RemoteEndpoint);
+            return false;
+        }
+
+        if (session.StrictMovementFiniteness
+            && (!float.IsFinite(movement.Pitch) || !float.IsFinite(movement.JumpZSpeed)
+                || !float.IsFinite(movement.JumpCosAngle) || !float.IsFinite(movement.JumpSinAngle)
+                || !float.IsFinite(movement.JumpXySpeed) || !float.IsFinite(movement.SplineElevation)))
+        {
+            session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite pitch/jump/spline field under strict finiteness", session.RemoteEndpoint);
+            return false;
+        }
+
+        return MovementValidator.IsValid(movement, session.StrictMovementFiniteness);
+    }
 }

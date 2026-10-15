@@ -13,10 +13,10 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 
 | Stored account | Retail level (default map) | Commands reachable |
 |---|---|---|
-| `Player` | 0 | 19 |
-| `Moderator` | 1 | 36 |
-| `GameMaster` | 3 | 231 |
-| `Administrator` | 6 | 341 |
+| `Player` | 0 | 6 |
+| `Moderator` | 1 | 23 |
+| `GameMaster` | 3 | 232 |
+| `Administrator` | 6 | 342 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -57,6 +57,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. |
 | `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
 | `.debug selfcheck` | 3 | GameMaster | declared retail level | Syntax: .debug selfcheck Inspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers. |
+| `.debug invariants` | 3 | GameMaster | declared retail level | Syntax: .debug invariants Print the process-wide invariant failure count, policy, and up to 20 recorded invariant violation sites. |
 | `.debug alloc` ... | 6 | Administrator | declared retail level | Syntax: .debug alloc $subcommand Sample what the server allocates, by type, for a while: start, report, stop. |
 | `.debug alloc start` | 6 | Administrator | declared retail level | Syntax: .debug alloc start [seconds=30] Start sampling allocations (the runtime's GCAllocationTick event, about one per 100 KB) for 1-600 seconds; it stops by itself. One sample at a time. |
 | `.debug alloc report` | 6 | Administrator | declared retail level | Syntax: .debug alloc report [top=15] List the biggest allocating types of the running or last sample, separately for the small, large and pinned object heaps: sampled MiB, MiB per second and share. The numbers are sampled estimates. |
@@ -188,7 +189,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.server idleshutdown cancel` | 6 | Administrator | stored level through the map | Syntax: .server idleshutdown cancel — abort the pending countdown. |
 | `.server idlerestart` ... | 6 | Administrator | stored level through the map | Syntax: .server idlerestart [cancel \| #delay [#exitcode]] — restart when no sessions remain. |
 | `.server idlerestart cancel` | 6 | Administrator | stored level through the map | Syntax: .server idlerestart cancel — abort the pending countdown. |
-| `.server faults` | 3 | GameMaster | stored level through the map | Syntax: .server faults [top #count \| show $id \| reset] List the exceptions the server caught, most frequent first; show one in full; reset (administrator) clears the list. |
+| `.server faults` | 3 | GameMaster | stored level through the map | Syntax: .server faults [top #count \| show $id \| summary \| reset] List the exceptions the server caught, most frequent first; show one in full; summarize by subsystem and invariants; reset (administrator) clears the list. |
 | `.server set` ... | 6 | Administrator | declared retail level | Syntax: .server set $subcommand |
 | `.server set motd` | 6 | Administrator | declared retail level | Syntax: .server set motd $MOTD Set the server message of the day. |
 | `.server wiring` | 6 | Administrator | declared retail level | Syntax: .server wiring List what the running server declares but does not wire: client opcodes that arrived with no handler (counted since start), options that a class asks for but nothing configures, config checks that check-config never runs, handlers registered for server-only opcodes. |
@@ -196,18 +197,18 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.tele add` | 5 | Administrator | declared retail level | Syntax: .tele add $name — save your current location. |
 | `.tele del` | 5 | Administrator | declared retail level | Syntax: .tele del $name — delete an exact named location. |
 | `.tele name` | 2 | GameMaster | declared retail level | Syntax: .tele name [#playername] #location Teleport the named player, or the selected one, to a location from the game_tele table. |
-| `.bot` ... | 0 | Player | stored level through the map | Syntax: .bot &lt;commands\|status\|list\|debug\|gear\|summon\|party&gt; Shorthand for .playerbot commands. |
-| `.bot commands` | 0 | Player | stored level through the map | Syntax: .bot commands List available playerbot chat/whisper commands and .bot subcommands. |
+| `.bot` ... | 3 | GameMaster | stored level through the map | Syntax: .bot &lt;commands\|status\|list\|debug\|gear\|summon\|party&gt; Shorthand for .playerbot commands. |
+| `.bot commands` | 3 | GameMaster | stored level through the map | Syntax: .bot commands List available playerbot chat/whisper commands and .bot subcommands. |
 | `.bot status` | 3 | GameMaster | stored level through the map | Syntax: .bot status [$id\|$name] Show bot lifecycle status. |
 | `.bot list` | 3 | GameMaster | stored level through the map | Syntax: .bot list List managed bots. |
 | `.bot debug` | 3 | GameMaster | stored level through the map | Syntax: .bot debug [$id\|$name] Show internal brain, motion, route, stall, risk and trace diagnostics for a running bot. |
-| `.bot gear` | 0 | Player | stored level through the map | Syntax: .bot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
-| `.bot summon` | 0 | Player | stored level through the map | Syntax: .bot summon $id\|$name Teleport a party bot (or fleet selection for GMs) to you. |
-| `.bot party` ... | 0 | Player | stored level through the map | Syntax: .bot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
-| `.bot party fill` | 0 | Player | stored level through the map | Syntax: .bot party fill Invite up to 4 online autonomous bots near your level into your party and summon them to you. |
-| `.bot party add` | 0 | Player | stored level through the map | Syntax: .bot party add $id\|$name Invite a running bot into your party. |
-| `.bot party remove` | 0 | Player | stored level through the map | Syntax: .bot party remove $name Remove a bot from your party. |
-| `.bot party list` | 0 | Player | stored level through the map | Syntax: .bot party list List the bots currently in your party. |
+| `.bot gear` | 3 | GameMaster | stored level through the map | Syntax: .bot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
+| `.bot summon` | 3 | GameMaster | stored level through the map | Syntax: .bot summon $id\|$name Teleport a party bot (or fleet selection for GMs) to you. |
+| `.bot party` ... | 3 | GameMaster | stored level through the map | Syntax: .bot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
+| `.bot party fill` | 3 | GameMaster | stored level through the map | Syntax: .bot party fill Invite up to 4 online autonomous bots near your level into your party and summon them to you. |
+| `.bot party add` | 3 | GameMaster | stored level through the map | Syntax: .bot party add $id\|$name Invite a running bot into your party. |
+| `.bot party remove` | 3 | GameMaster | stored level through the map | Syntax: .bot party remove $name Remove a bot from your party. |
+| `.bot party list` | 3 | GameMaster | stored level through the map | Syntax: .bot party list List the bots currently in your party. |
 | `.bg` ... | 3 | GameMaster | declared retail level | Syntax: .bg status\|start\|stop |
 | `.bg status` | 3 | GameMaster | declared retail level | Show running battlegrounds and the queued players of each battleground. |
 | `.bg start` | 3 | GameMaster | declared retail level | Start the battleground you are in now. |
@@ -367,14 +368,14 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot chaos unassign` | 6 | Administrator | stored level through the map | Syntax: .playerbot chaos unassign $id\|$name Remove a bot's explicit chaos assignment. |
 | `.playerbot chaos faults` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chaos faults List the most recent unhandled handler faults or invariant violations caught by chaos probes. |
 | `.playerbot chaos clear` | 6 | Administrator | stored level through the map | Syntax: .playerbot chaos clear [all] Reset chaos probe counters and recent fault history ('all' also clears explicit bot assignments). |
-| `.playerbot commands` | 0 | Player | stored level through the map | Syntax: .playerbot commands List available playerbot chat/whisper commands and .bot subcommands. |
+| `.playerbot commands` | 3 | GameMaster | stored level through the map | Syntax: .playerbot commands List available playerbot chat/whisper commands and .bot subcommands. |
 | `.playerbot debug` | 3 | GameMaster | stored level through the map | Syntax: .playerbot debug [$id\|$name] Show internal brain, motion, route, stall, risk and trace diagnostics for a running bot. |
-| `.playerbot gear` | 0 | Player | stored level through the map | Syntax: .playerbot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
-| `.playerbot party` ... | 0 | Player | stored level through the map | Syntax: .playerbot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
-| `.playerbot party fill` | 0 | Player | stored level through the map | Syntax: .playerbot party fill Invite up to 4 online autonomous bots near your level into your party and summon them to you. |
-| `.playerbot party add` | 0 | Player | stored level through the map | Syntax: .playerbot party add $id\|$name Invite a running bot into your party. |
-| `.playerbot party remove` | 0 | Player | stored level through the map | Syntax: .playerbot party remove $name Remove a bot from your party. |
-| `.playerbot party list` | 0 | Player | stored level through the map | Syntax: .playerbot party list List the bots currently in your party. |
+| `.playerbot gear` | 3 | GameMaster | stored level through the map | Syntax: .playerbot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
+| `.playerbot party` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
+| `.playerbot party fill` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party fill Invite up to 4 online autonomous bots near your level into your party and summon them to you. |
+| `.playerbot party add` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party add $id\|$name Invite a running bot into your party. |
+| `.playerbot party remove` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party remove $name Remove a bot from your party. |
+| `.playerbot party list` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party list List the bots currently in your party. |
 | `.playerbot summon` | 6 | Administrator | stored level through the map | Syntax: .playerbot summon $name\|$prefix*\|all [#count] [force] [to $player] Teleport running bots to you (or to the named online player), in rings around the spot. With a count: the nearest bots on that player's map first. 'all' or a count above the cap needs 'force'. |
 | `.playerbot send` | 6 | Administrator | stored level through the map | Syntax: .playerbot send $name\|$prefix*\|all $tele\|here [force] [to $player] Teleport running bots to a game_tele place, or to your position (here, or the named player's), in rings. |
 | `.playerbot follow` | 6 | Administrator | stored level through the map | Syntax: .playerbot follow $name\|$prefix*\|all [to $player] The bots follow you (or the named player) without a party and fight back. .playerbot dismiss, or the master's whisper 'leave', sets them free. |

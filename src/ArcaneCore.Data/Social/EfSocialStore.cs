@@ -65,6 +65,7 @@ public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
     /// <summary>Replace the stored guild with <paramref name="guild"/> in one SaveChanges (one transaction).</summary>
     public async Task SaveGuildAsync(GuildData guild, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(guild);
         await StageGuildAsync(db, guild, cancellationToken).ConfigureAwait(false);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
@@ -76,6 +77,8 @@ public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
     /// </summary>
     internal static async Task StageGuildAsync(CharacterDbContext db, GuildData guild, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(guild);
         GuildRow? row = await db.Set<GuildRow>().FirstOrDefaultAsync(g => g.Id == guild.Id, cancellationToken).ConfigureAwait(false);
         if (row is null)
         {

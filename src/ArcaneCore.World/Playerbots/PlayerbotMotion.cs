@@ -168,7 +168,11 @@ internal static class PlayerbotMotion
         state.World = session.World;
         state.Options = options;
         if (player.Map is not { } map) return false;
-        if (route.Complete || route.Points.Count < 2) return false;
+        if (route.Complete || route.Points.Count < 2 || route.IsStaleFor(map))
+        {
+            if (!keepMotion) Stop(session, player);
+            return false;
+        }
         if (IsBlacklisted(player, route.Points[^1]))
         {
             if (!keepMotion) Stop(session, player);
@@ -271,6 +275,12 @@ internal static class PlayerbotMotion
         {
             // Something else already moved or stopped the bot (death, teleport, charge spline, a root acknowledgement).
             state.Clear();
+            return;
+        }
+
+        if (route.IsStaleFor(map))
+        {
+            StopMotion(session, player, state, now);
             return;
         }
 

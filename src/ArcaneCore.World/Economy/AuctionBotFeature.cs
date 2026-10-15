@@ -3,6 +3,7 @@ using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Economy.AuctionBot;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.Loot;
@@ -140,34 +141,56 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
 
         long now = Now;
-        ReconcilePending(economy);
-        ReviewStandingBids(economy, now);
-        uint[] houseIds = Options.HouseIds();
-        int houses = houseIds.Length;
-        if (houses > 0)
+        try
         {
-            if (++_houseAction >= houses * 2)
+            ReconcilePending(economy);
+            ReviewStandingBids(economy, now);
+            uint[] houseIds = Options.HouseIds();
+            int houses = houseIds.Length;
+            if (houses > 0)
             {
-                _houseAction = 0;
-            }
-
-            uint house = houseIds[_houseAction % houses];
-            if (_houseAction < houses)
-            {
-                if (planner.Roll(Options.SellChance))
+                if (++_houseAction >= houses * 2)
                 {
-                    Sell(economy, planner, house, now);
+                    _houseAction = 0;
+                }
+
+                uint house = houseIds[_houseAction % houses];
+                if (_houseAction < houses)
+                {
+                    if (planner.Roll(Options.SellChance))
+                    {
+                        Sell(economy, planner, house, now);
+                    }
+                }
+                else if (planner.Roll(Options.BuyChance))
+                {
+                    Buy(economy, planner, house, now);
                 }
             }
-            else if (planner.Roll(Options.BuyChance))
-            {
-                Buy(economy, planner, house, now);
-            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("ahbot-tick-action", ex, "AHBot tick action failed");
         }
 
-        Ledger.PruneTerminal(now - TerminalRetentionSeconds);
-        Audit();
-        Flush();
+        try
+        {
+            Ledger.PruneTerminal(now - TerminalRetentionSeconds);
+            Audit();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("ahbot-tick-audit", ex, "AHBot custody audit failed");
+        }
+
+        try
+        {
+            Flush();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("ahbot-tick-flush", ex, "AHBot custody flush failed");
+        }
     }
 
     /// <summary>World thread: one sell pass over a house, ignoring the chance roll (tests and GM tools). Returns the listings reserved.</summary>
@@ -295,7 +318,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                logger.LogError(ex, "AHBot: saving ahbot_items row {Item} failed; the change holds until restart", entry);
+                logger.LogFault("ahbot-save-item", ex, "AHBot: saving ahbot_items row {Item} failed; the change holds until restart", entry);
             }
         });
         return kept;
@@ -378,7 +401,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "AHBot: loading ahbot_items failed; no item overrides");
+            logger.LogFault("ahbot-load-overrides", ex, "AHBot: loading ahbot_items failed; no item overrides");
             _overrides = [];
         }
     }
@@ -396,6 +419,11 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         int started = 0;
         foreach (AuctionBotSellIntent intent in planner.PlanSell(room, _items.Templates.Find, _loot?.Roll()))
         {
+            if (!Invariant.Check(intent.Count > 0, $"AuctionBotFeature.Sell: non-positive item count {intent.Count} for entry {intent.Entry}"))
+            {
+                continue;
+            }
+
             if (_items.Templates.Find(intent.Entry) is not { } template)
             {
                 continue;
@@ -462,7 +490,12 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         int started = 0;
         foreach (AuctionBotBuyIntent intent in planner.PlanBuy(open.Values, _items.Templates.Find))
         {
-            AuctionRecord auction = open[intent.AuctionId];
+            if (!Invariant.Check(open.TryGetValue(intent.AuctionId, out AuctionRecord? auction) && intent.Price > 0,
+                $"AuctionBotFeature.Buy: invalid buy intent for auction {intent.AuctionId} price {intent.Price}") || auction is null)
+            {
+                continue;
+            }
+
             AuctionBotCustodyRow? row = intent.Bid
                 ? Ledger.TryReserveBid(houseId, auction.Id, auction.ItemGuid, auction.ItemEntry, auction.ItemCount, intent.Price, now)
                 : Ledger.TryReserveBuyout(houseId, auction.Id, auction.ItemGuid, auction.ItemEntry, auction.ItemCount, intent.Price, now);
@@ -527,14 +560,23 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
                 _flushing = false;
                 if (failure is null)
                 {
-                    foreach ((_, Action start) in starts)
+                    foreach ((AuctionBotCustodyRow row, Action start) in starts)
                     {
-                        start();
+                        try
+                        {
+                            start();
+                        }
+                        catch (Exception ex) when (ex is not OutOfMemoryException)
+                        {
+                            logger.LogFault("ahbot-movement-start", ex, "AHBot: starting movement {Key} failed", row.IdemKey);
+                            _inFlight.Remove(row.IdemKey);
+                            Ledger.Resolve(row.IdemKey, committed: false, Now);
+                        }
                     }
                 }
                 else
                 {
-                    logger.LogError(failure, "AHBot: writing {Rows} custody rows failed; {Starts} movements are rolled back unstarted", rows.Count, starts.Count);
+                    logger.LogFault("ahbot-custody-flush", failure, "AHBot: writing {Rows} custody rows failed; {Starts} movements are rolled back unstarted", rows.Count, starts.Count);
                     Ledger.Requeue(rows, deleted);
                     foreach ((AuctionBotCustodyRow row, _) in starts)
                     {

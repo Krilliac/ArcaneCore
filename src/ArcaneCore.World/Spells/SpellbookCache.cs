@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Spells;
 
 /// <summary>
@@ -352,8 +353,8 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
                 return;
             }
 
-            var entry = new PendingWrite(characterId, null!) { Spells = [.. spells] };
-            entry.Write = store => store.AddAsync(characterId, entry.Spells!);
+            List<uint> spellList = [.. spells];
+            var entry = new PendingWrite(characterId, store => store.AddAsync(characterId, spellList)) { Spells = spellList };
             _writes.AddLast(entry);
         }
 
@@ -488,8 +489,13 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         {
             scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException)
         {
+            /* expected on shutdown */
+        }
+        catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-spellbook-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -512,48 +518,58 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             }
 
             PendingWrite pending = next;
-            await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
+            if (!Invariant.Check(_scopes is not null, "SpellbookCache write loop requires a scope factory") || _scopes is not { } scopes)
+            {
+                pending.Done?.TrySetResult();
+                continue;
+            }
+
             try
             {
-                lock (_lock)
-                {
-                    if (_terminalFailure is { } terminal && pending.CharacterId is not null)
-                    {
-                        throw new InvalidOperationException($"spellbook writes for character {pending.CharacterId.Value} are not durable", terminal);
-                    }
-                }
-
-                ICharacterSpellStore? store = scope.ServiceProvider.GetService<ICharacterSpellStore>();
-                if (store is null)
-                {
-                    if (!_warnedNoStore)
-                    {
-                        _warnedNoStore = true;
-                        _logger.LogWarning("No ICharacterSpellStore is registered; spellbook changes are not persisted");
-                    }
-
-                    await pending.Write(NullCharacterSpellStore.Instance).ConfigureAwait(false);
-                    pending.Done?.TrySetResult();
-                    continue;
-                }
-
-                await pending.Write(store).ConfigureAwait(false);
-                pending.Done?.TrySetResult();
-            }
-            catch (CharacterOwnershipRejectedException ex)
-            {
-                if (pending.CharacterId is { } characterId)
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                try
                 {
                     lock (_lock)
                     {
-                        _failedCharacters.Add(characterId);
+                        if (_terminalFailure is { } terminal && pending.CharacterId is not null)
+                        {
+                            throw new InvalidOperationException($"spellbook writes for character {pending.CharacterId.Value} are not durable", terminal);
+                        }
                     }
-                }
 
-                FailTerminal(ex, scope.ServiceProvider);
-                pending.Done?.TrySetException(ex);
+                    ICharacterSpellStore? store = scope.ServiceProvider.GetService<ICharacterSpellStore>();
+                    if (store is null)
+                    {
+                        if (!_warnedNoStore)
+                        {
+                            _warnedNoStore = true;
+                            _logger.LogWarning("No ICharacterSpellStore is registered; spellbook changes are not persisted");
+                        }
+
+                        await pending.Write(NullCharacterSpellStore.Instance).ConfigureAwait(false);
+                        pending.Done?.TrySetResult();
+                        continue;
+                    }
+
+                    await pending.Write(store).ConfigureAwait(false);
+                    pending.Done?.TrySetResult();
+                }
+                catch (CharacterOwnershipRejectedException ex)
+                {
+                    FaultLedger.Shared.Record("writequeue-spellbook-ownership", ex);
+                    if (pending.CharacterId is { } characterId)
+                    {
+                        lock (_lock)
+                        {
+                            _failedCharacters.Add(characterId);
+                        }
+                    }
+
+                    FailTerminal(ex, scope.ServiceProvider);
+                    pending.Done?.TrySetException(ex);
+                }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // Fail loudly but keep the queue alive; the cache stays authoritative until restart.
                 if (pending.CharacterId is { } characterId)
@@ -565,7 +581,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
                 }
 
                 pending.Done?.TrySetException(ex);
-                _logger.LogError(ex, "Saving a spellbook change failed");
+                _logger.LogFault("writequeue-spellbook", ex, "Saving a spellbook change failed");
             }
         }
     }

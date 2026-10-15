@@ -141,12 +141,17 @@ public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILog
         {
             while (await timer.WaitForNextTickAsync(_stop.Token).ConfigureAwait(false))
             {
-                byte[] body = OtlpJsonFormatter.Render(store.Collect(), serviceName, options.Realm, store.StartTime, DateTimeOffset.UtcNow);
                 try
                 {
+                    if (_http is not { } http)
+                    {
+                        break;
+                    }
+
+                    byte[] body = OtlpJsonFormatter.Render(store.Collect(), serviceName, options.Realm, store.StartTime, DateTimeOffset.UtcNow);
                     using var content = new ByteArrayContent(body);
                     content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-                    using HttpResponseMessage response = await _http!.PostAsync(new Uri(options.OtlpEndpoint), content, _stop.Token).ConfigureAwait(false);
+                    using HttpResponseMessage response = await http.PostAsync(new Uri(options.OtlpEndpoint), content, _stop.Token).ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode && !failing)
                     {
                         failing = true;
@@ -163,6 +168,15 @@ public sealed class MetricsHost(MetricsOptions options, MetricsStore store, ILog
                     {
                         failing = true;
                         logger.LogWarning(ex, "metrics: OTLP push to {Endpoint} failed: {Message}", options.OtlpEndpoint, ex.Message);
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException && !_stop.IsCancellationRequested)
+                {
+                    Diagnostics.FaultLedger.Shared.Record("metrics-otlp-push", ex);
+                    if (!failing)
+                    {
+                        failing = true;
+                        logger.LogWarning(ex, "metrics: OTLP push to {Endpoint} faulted: {Message}", options.OtlpEndpoint, ex.Message);
                     }
                 }
             }

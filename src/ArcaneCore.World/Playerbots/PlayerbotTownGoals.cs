@@ -981,6 +981,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 || player.Inventory.Templates.Find(row.Item) is not { } template
                 || services.GetVendorPurchasePrice(player, npc, row.Item) is not { } price
                 || price == 0 || price > player.Money
+                || (store is not null && PlayerbotMountRules.IsMountItem(template, store))
                 || (Budget is not null && !Budget.MayAfford(PlayerbotSpendKind.Discretionary, price, player)))
             {
                 continue;

@@ -347,7 +347,21 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         if (input is null) return _pass = Task.CompletedTask;
-        return _pass = Task.Run(() => RunAsync(input));
+        return _pass = Task.Run(async () =>
+        {
+            try
+            {
+                await RunAsync(input).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_stop.IsCancellationRequested || _stopping || _world?.IsStopped == true)
+            {
+                // Shutdown cancellation is expected.
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("playerbot-population", ex, "Playerbot population pass faulted ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            }
+        });
     }
 
     /// <summary>Fresh launch counts the whole population as one pool: one band over every level, so levelling up never opens a gap to refill.</summary>
@@ -376,7 +390,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
     private PassInput? Capture(int rushCount = 0, bool shedOnly = false)
     {
-        WorldRuntime world = _world!;
+        if (_world is not { } world) return null;
         ManagedPlayerbotFeature? managed = Managed;
         if (managed is null)
         {
@@ -551,7 +565,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; } // superseded or stopping: nothing to deliver
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                logger.LogWarning(ex, "Playerbot population: the graveyard terrain lookup or creature survey failed; the atlas keeps every graveyard link until the area table, graveyards, creatures or maps change");
+                logger.LogFault("playerbot-population", ex, "Playerbot population: the graveyard terrain lookup or creature survey failed; the atlas keeps every graveyard link until the area table, graveyards, creatures or maps change");
                 result = null;
             }
 
@@ -757,9 +771,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             if (input.RushCount > 0 && ctx.Note is not null && ctx.Note.StartsWith(PopulationRush.StartZonesFullNote, StringComparison.Ordinal))
                 Volatile.Write(ref _rushDeferredUntilMs, ClockMs + (pop.IntervalSeconds * 1000L));
             // A rush keeps the tick window: its brake reads the load the rush itself causes.
-            if (changed > 0 && input.RushCount == 0)
+            if (changed > 0 && input.RushCount == 0 && _world is { } world)
             {
-                await _world!.InvokeAsync(() => { Source.Reset(); return true; }, ct).ConfigureAwait(false);
+                await world.InvokeAsync(() => { Source.Reset(); return true; }, ct).ConfigureAwait(false);
                 _windows.Reset();
             }
 
@@ -772,7 +786,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogWarning(ex, "Playerbot population pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            logger.LogFault("playerbot-population", ex, "Playerbot population pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
             _lastError = $"{ex.GetType().Name}: {ex.Message}";
             decision = decision with { State = "error", Reason = "the pass failed: " + ex.Message };
             if (input.RushCount > 0) _rush.Report(input.RushCount, 0, null, _lastError, ClockMs);
@@ -914,6 +928,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private async Task<(int Created, string? StoppedBecause, bool Failed)> CreateAsync(PassContext ctx, int[] planned, int count, bool quietWhenNothingFits,
         CancellationToken ct)
     {
+        if (_world is not { } world) return (0, "the population feature is not attached", false);
         ManagedPlayerbotFeature managed = ctx.Input.Managed;
         PlayerbotPopulationOptions pop = ctx.Input.Pop;
         int created = 0;
@@ -939,30 +954,30 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
             PopulationRaceClassCache cache = await PairsFor(ctx.Scoped, pop, ct).ConfigureAwait(false);
             PopulationPlan? plan = null;
-            PopulationFreshPlan? freshPlan = null;
+            Team planTeam;
+            byte planRace, planClass;
+            int planBand;
             if (fresh)
             {
                 bool full = false;
-                freshPlan = startHomes
+                PopulationFreshPlan? freshPlan = startHomes
                     ? PopulationBandPlanner.PlanFresh(pop, ctx.Alliance, ctx.Horde, cache, _random, startCounts, pop.FreshStartZoneCap, out full)
                     : PopulationBandPlanner.PlanFresh(pop, ctx.Alliance, ctx.Horde, cache, _random);
                 if (freshPlan is null && full)
                     return (created, string.Create(CultureInfo.InvariantCulture,
                         $"{PopulationRush.StartZonesFullNote}: every start area a new bot could use holds {pop.FreshStartZoneCap} bots (FreshStartZoneCap); creation resumes as bots graduate at level {pop.FreshGraduateLevel}"), false);
                 if (freshPlan is null) return (created, quietWhenNothingFits ? null : "no valid race and class for the configured factions and classes", false);
+                (planTeam, planRace, planClass, planBand) = (freshPlan.Team, freshPlan.Race, freshPlan.Class, 0);
             }
             else
             {
-                plan = await _world!.InvokeAsync(() => PopulationBandPlanner.PlanSafe(pop, ctx.Desired, planned,
+                plan = await world.InvokeAsync(() => PopulationBandPlanner.PlanSafe(pop, ctx.Desired, planned,
                     ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned, ctx.Input.BoostAvailable, _random,
-                    (location, level, faction) => _provisioner.IsSafe(_world!, location, level, faction)), ct).ConfigureAwait(false);
+                    (location, level, faction) => _provisioner.IsSafe(world, location, level, faction)), ct).ConfigureAwait(false);
                 if (plan is null)
                     return (created, quietWhenNothingFits ? null : "no safe zone, level and race-class placement is available (see the zone counts and boost line)", false);
+                (planTeam, planRace, planClass, planBand) = (plan.Team, plan.Race, plan.Class, plan.Band);
             }
-
-            (Team planTeam, byte planRace, byte planClass, int planBand) = fresh
-                ? (freshPlan!.Team, freshPlan.Race, freshPlan.Class, 0)
-                : (plan!.Team, plan.Race, plan.Class, plan.Band);
 
             PlayerbotOperationResult? made = null;
             for (int attempt = 0; attempt < 5; attempt++)
@@ -1004,8 +1019,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _startedAt[botId] = ctx.Input.ClockMs;
 
             // Fresh launch: no boost and no teleport; the bot stands where CMSG_CHAR_CREATE put it. Its zone is recorded as it is.
-            string? refusal = fresh ? null
-                : await _world!.InvokeAsync(() => _provisioner.Provision(botId, plan!.Level, plan.Placement.Location), ct).ConfigureAwait(false);
+            string? refusal = plan is not { } activePlan ? null
+                : await world.InvokeAsync(() => _provisioner.Provision(botId, activePlan.Level, activePlan.Placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null)
             {
                 // The plan was safe when it was made (a content reload can change that before the teleport). A level-1 bot that
@@ -1031,9 +1046,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
             _placementRefusals = 0;
 
-            uint zone = fresh
-                ? await _world!.InvokeAsync(() => managed.FindSession(botId)?.Player?.ZoneId ?? 0u, ct).ConfigureAwait(false)
-                : plan!.Placement.Zone.ZoneId;
+            uint zone = plan is { } placedPlan
+                ? placedPlan.Placement.Zone.ZoneId
+                : await world.InvokeAsync(() => managed.FindSession(botId)?.Player?.ZoneId ?? 0u, ct).ConfigureAwait(false);
             member = member with { ZoneId = zone, UpdatedUnix = NowUnix() };
             await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
             ctx.Members[botId] = member;
@@ -1138,7 +1153,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         StartHomeStage stage, CancellationToken ct)
     {
         if (!managed.AllowsHomeMap(mapId)) return $"map {mapId} is not an allowed playerbot map";
-        uint zone = await _world!.InvokeAsync(() => managed.ZoneAt(mapId, centre), ct).ConfigureAwait(false);
+        if (_world is not { } world) return "the population feature is not attached";
+        uint zone = await world.InvokeAsync(() => managed.ZoneAt(mapId, centre), ct).ConfigureAwait(false);
         try
         {
             ManagedPlayerbotFeature.HomeOutcome outcome = await managed.SetHomesAsync([new ManagedPlayerbotFeature.HomeTarget(botId, mapId, centre)],
@@ -1199,7 +1215,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             }
 
             string? error;
-            if (!ours)
+            if (!ours || home is not { } existingHome)
             {
                 if (PopulationStartAreas.AreaOf(bot.Race) is not { } botArea) continue;
                 uint continent = PopulationStartAreas.ContinentOf(bot.Race);
@@ -1228,9 +1244,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             }
             else
             {
-                if (have == want && (int)MathF.Round(home!.Radius) == (want == StartHomeStage.Zone ? pop.FreshZoneHomeRadius : pop.FreshStartHomeRadius)) continue;
+                if (have == want && (int)MathF.Round(existingHome.Radius) == (want == StartHomeStage.Zone ? pop.FreshZoneHomeRadius : pop.FreshStartHomeRadius)) continue;
                 attempts++;
-                error = await SetStartHomeAsync(managed, bot.BotId, home!.MapId, new Vector3(home.X, home.Y, home.Z), area, want, ct).ConfigureAwait(false);
+                error = await SetStartHomeAsync(managed, bot.BotId, existingHome.MapId, new Vector3(existingHome.X, existingHome.Y, existingHome.Z), area, want, ct).ConfigureAwait(false);
             }
 
             if (error is null) { changes++; _homeRetrySweep.Remove(bot.BotId); continue; }
@@ -1301,6 +1317,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     /// <summary>Park up to <paramref name="count"/> bots in <see cref="PopulationParking.Order"/>; returns the reason of each bot parked.</summary>
     private async Task<IReadOnlyList<string>> ParkAsync(PassContext ctx, int count, bool keepRecent, CancellationToken ct)
     {
+        if (_world is not { } world) return [];
         ManagedPlayerbotFeature managed = ctx.Input.Managed;
         IReadOnlyList<PopulationParkPick> order = PopulationParking.Order(ctx.Input.Running, ctx.Members.Keys.ToHashSet(), ctx.Input.Bands, ctx.Desired,
             ctx.Have, _startedAt, ctx.Input.ClockMs, ctx.Input.Pop.MinRunSeconds * 1000L, keepRecent);
@@ -1310,7 +1327,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             if (parked.Count == count) break;
             PopulationBotFacts bot = pick.Bot;
             // The facts are seconds old: look again, on the world thread, right before stopping.
-            bool stillParkable = await _world!.InvokeAsync(() => IsParkableNow(managed, bot.BotId), ct).ConfigureAwait(false);
+            bool stillParkable = await world.InvokeAsync(() => IsParkableNow(managed, bot.BotId), ct).ConfigureAwait(false);
             if (!stillParkable) continue;
             PlayerbotOperationResult result = await managed.StopAsync(bot.BotId.ToString(), ct).ConfigureAwait(false);
             if (!result.Success) { Fail($"park of {bot.BotId} refused: {result.Code}"); continue; }
@@ -1334,6 +1351,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
     private async Task<int> RelocateAsync(PassContext ctx, CancellationToken ct)
     {
+        if (_world is not { } world) return 0;
         PlayerbotPopulationOptions pop = ctx.Input.Pop;
         PopulationZoneAtlas atlas = ctx.Input.Atlas;
         PopulationLevelRule rule = PopulationLevelRule.From(pop);
@@ -1343,13 +1361,15 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. A bot below every place
         // of its zone it could have been put (UnderLevelled: a low-level bot placed by an older build in Duskwood at Raven Hill, or one that
         // walked over a border into a harder zone) is moved the same way. The worst misfit first.
-        foreach (PopulationBotFacts bot in ctx.Input.Running.Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Dead && !f.Vetoed
-                && atlas.Find(f.ZoneId) is not null)
-            .OrderByDescending(f => Misfit(atlas.Find(f.ZoneId)!, f, rule)).ThenBy(f => f.BotId))
+        foreach ((PopulationBotFacts bot, PopulationZone current) in ctx.Input.Running
+            .Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Dead && !f.Vetoed)
+            .Select(f => (Bot: f, Zone: atlas.Find(f.ZoneId)))
+            .Where(x => x.Zone is not null)
+            .Select(x => (x.Bot, Zone: x.Zone!))
+            .OrderByDescending(x => Misfit(x.Zone, x.Bot, rule)).ThenBy(x => x.Bot.BotId))
         {
             if (moved >= pop.MaxRelocationsPerInterval) break;
             PlayerbotPopulationMember member = ctx.Members[bot.BotId];
-            PopulationZone current = atlas.Find(bot.ZoneId)!;
             if (bot.Level <= current.MaxLevel + pop.OutlevelMargin && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, rule))
             {
                 // Fine where it stands (it may have travelled on by itself): only record the zone.
@@ -1363,11 +1383,11 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 continue;
             }
 
-            PopulationSafeSelection? selected = await _world!.InvokeAsync(() =>
+            PopulationSafeSelection? selected = await world.InvokeAsync(() =>
             {
                 Player? player = ctx.Input.Managed.FindSession(bot.BotId)?.Player;
                 return player is null ? null : atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random,
-                    (location, level) => _provisioner.IsSafe(_world!, location, checked((byte)level), player.FactionTemplate));
+                    (location, level) => _provisioner.IsSafe(world, location, checked((byte)level), player.FactionTemplate));
             }, ct).ConfigureAwait(false);
             if (selected is null)
             {
@@ -1377,7 +1397,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             }
 
             PopulationPlacement placement = selected.Placement;
-            string? refusal = await _world!.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location), ct).ConfigureAwait(false);
+            string? refusal = await world.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location), ct).ConfigureAwait(false);
             if (refusal is not null) { Fail($"move of {bot.BotId} refused: {refusal}"); continue; }
             moved++;
             member = member with { ZoneId = placement.Zone.ZoneId, UpdatedUnix = NowUnix() };

@@ -10,6 +10,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -1214,10 +1215,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _trace.Record(_session.World.NowMs, "loot-bag-full");
         }
 
-        bool hasGoldOnCorpse = _session.Services.GetService<GameObjects.GameObjectLootFeature>()
-            ?.FindSystem(player.Map!)
-            ?.Loot
-            ?.FindLoot(target.Guid) is { Gold: > 0 };
+        bool hasGoldOnCorpse = player.Map is { } lootMap
+            && _session.Services.GetService<GameObjects.GameObjectLootFeature>()
+                ?.FindSystem(lootMap)
+                ?.Loot
+                ?.FindLoot(target.Guid) is { Gold: > 0 };
 
         if (_lootedCorpses.Contains(target.Guid)
             || Distance(player, target) > 5f
@@ -1285,6 +1287,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             case PlayerbotHomeState.OffMap when homeOptions.ReturnMode == PlayerbotHomeReturnMode.Walk:
             case PlayerbotHomeState.Blocked when !(homeOptions.ReturnMode == PlayerbotHomeReturnMode.Auto && _homeReturn.WalkBlocked):
                 return false;
+            case PlayerbotHomeState.Returning:
+            case PlayerbotHomeState.OffMap:
+            case PlayerbotHomeState.Blocked:
+            default:
+                break;
         }
 
         if (_quests.Busy || _town.HasCandidate(player)
@@ -1373,6 +1380,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (_home is null && IsUnderLevelledForArea(player))
                     TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false);
                 break;
+            case PlayerbotGoalKind.Rest:
+            case PlayerbotGoalKind.Recover:
+            case PlayerbotGoalKind.Follow:
+            case PlayerbotGoalKind.Assist:
+            case PlayerbotGoalKind.Retreat:
+            case PlayerbotGoalKind.Group:
+            case PlayerbotGoalKind.Battleground:
+            case PlayerbotGoalKind.Escape:
             default:
                 _exploreRefusals = 3;
                 break;
@@ -1991,7 +2006,22 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             player.MapId, (uint)(_session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0),
             player.Inventory.GetItemCount(117));
         CancellationToken token = _planningStop.Token;
-        _planTask = Task.Run(() => planner.SelectAsync(facts, candidates, token), token);
+        _planTask = Task.Run(async () =>
+        {
+            try
+            {
+                return await planner.SelectAsync(facts, candidates, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return null;
+            }
+            catch (Exception ex)
+            {
+                FaultLedger.Shared.Record("playerbot.local-plan", ex);
+                return null;
+            }
+        }, token);
     }
 
     private void MarkUnreachable(Creature creature)
@@ -2344,6 +2374,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         PlayerbotUnsafeBody reason = PlayerbotRecovery.JudgeBody(diedHere, strong is not null, outside, nearer, bodySubmerged);
         string? detail = reason switch
         {
+            PlayerbotUnsafeBody.None => null,
             PlayerbotUnsafeBody.DiedHere => string.Create(CultureInfo.InvariantCulture,
                 $"{deaths} deaths within {PlayerbotStallWatch.DeathLoopYards:F0} yd in {PlayerbotStallWatch.DeathLoopWindowMs / 1000}s"),
             PlayerbotUnsafeBody.TooStrong => strong.ToString(),
@@ -2443,7 +2474,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return false;
         }
 
-        if (!teleports!.TeleportToHomebind(player)) return false;
+        if (teleports is null) return false;
+        if (!Invariant.Check(float.IsFinite(bind.X) && float.IsFinite(bind.Y) && float.IsFinite(bind.Z),
+            "PlayerbotBrain.TryTeleportToBindPoint requires finite bind point coordinates."))
+            return false;
+        if (!teleports.TeleportToHomebind(player)) return false;
         _bindTeleported = true;
         _bindTeleportAt = now;
         DropIntent();
@@ -2497,15 +2532,15 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _roamDirection--; // the same leg again once the tile is in
             return;
         }
-        if (_route is not null)
+        if (_route is { } wanderRoute)
         {
             _exploreRefusals = 0;
             PlayerbotThinkProbe.Phase("explore advance");
-            if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, _session.World.NowMs))
+            if (!PlayerbotNavigation.TryAdvance(_session, wanderRoute, _options, elapsedMs, _session.World.NowMs))
                 AbandonRoute();
             else
             {
-                _wanderLeg = _route;
+                _wanderLeg = wanderRoute;
                 ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
             }
         }
@@ -2682,7 +2717,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // Explore is only entered after _destinations.Update had no unvisited/reachable spawn for PreferredCreatureEntry;
         // use the explore atlas to walk toward nearby level-appropriate spawns while the quest camp waits to respawn,
         // instead of falling into blind 48-yard wander rays against surrounding hills/walls.
-        uint mapId = player.Map!.MapId;
+        if (player.Map is not { } map) return false;
+        uint mapId = map.MapId;
         if (!_options.AllowedMaps.Contains(mapId)) return false;
         var creatureFeature = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
         var atlas = creatureFeature?.ExploreAtlas;
@@ -2766,12 +2802,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (atlasPlan == PlanOutcome.Pending) return true;
         float flatDistSq = (destination.X - player.X) * (destination.X - player.X) + (destination.Y - player.Y) * (destination.Y - player.Y);
         if (atlasPlan == PlanOutcome.Refused
-            || _route is not { Points.Count: > 0 }
-            || (System.Numerics.Vector3.DistanceSquared(new(player.X, player.Y, player.Z), _route.Points[^1]) <= 4f * 4f
+            || _route is not { Points.Count: > 0 } plannedRoute
+            || (System.Numerics.Vector3.DistanceSquared(new(player.X, player.Y, player.Z), plannedRoute.Points[^1]) <= 4f * 4f
                 && flatDistSq > 65f * 65f)
-            || (_route.Navigated && flatDistSq <= 175f * 175f
-                && (System.Numerics.Vector2.DistanceSquared(new(destination.X, destination.Y), new(_route.Points[^1].X, _route.Points[^1].Y)) > 15f * 15f
-                    || MathF.Abs(destination.Z - _route.Points[^1].Z) > 8f)))
+            || (plannedRoute.Navigated && flatDistSq <= 175f * 175f
+                && (System.Numerics.Vector2.DistanceSquared(new(destination.X, destination.Y), new(plannedRoute.Points[^1].X, plannedRoute.Points[^1].Y)) > 15f * 15f
+                    || MathF.Abs(destination.Z - plannedRoute.Points[^1].Z) > 8f)))
         {
             BlockExploreCell(chosen);
             AbandonRoute();
@@ -2781,9 +2817,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _goal = PlayerbotGoalKind.Explore;
         TargetEntry = chosen.Spawn.Entry;
         PlayerbotThinkProbe.Phase("explore advance");
-        if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, now))
+        if (!PlayerbotNavigation.TryAdvance(_session, plannedRoute, _options, elapsedMs, now))
         {
-            if (!_route!.Complete) BlockExploreCell(chosen);
+            if (!plannedRoute.Complete) BlockExploreCell(chosen);
             AbandonRoute();
         }
         return true;
@@ -2811,12 +2847,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private bool ExploreEligible(PlayerbotExploreAtlas.Candidate candidate)
     {
+        if (_exploreSearchPlayer is not { } player
+            || _exploreSearchContent is not { } content
+            || _exploreSearchAtlas is not { } atlas
+            || _exploreThreatFilter is not { } threatFilter)
+            return false;
         CreatureSpawn spawn = candidate.Spawn;
-        Player player = _exploreSearchPlayer!;
         uint now = _session.World.NowMs;
         if (_suspensions.IsEntrySuspended(spawn.Entry, now) || _destinations.IsVisited(spawn.Guid, now))
             return false;
-        CreatureTemplate? template = _exploreSearchContent!.FindTemplate(spawn.Entry);
+        CreatureTemplate? template = content.FindTemplate(spawn.Entry);
         if (template is null || !PlayerbotWorldDestinations.IsPresent(player, spawn)
             || _exploreSearchHome is { } home && (!home.Contains(spawn) || home.DistanceTo(spawn.X, spawn.Y) > home.ExploreRadius))
             return false;
@@ -2826,7 +2866,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return false;
         foreach (PlayerbotHazard hazard in _exploreSearchHazards)
             if (hazard.Covers(point)) return false;
-        return !_exploreSearchAtlas!.HasStrongHazard(candidate, player.Level, _exploreThreatFilter!);
+        return !atlas.HasStrongHazard(candidate, player.Level, threatFilter);
     }
 
     /// <summary>

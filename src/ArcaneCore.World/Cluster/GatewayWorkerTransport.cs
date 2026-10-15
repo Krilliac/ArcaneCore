@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading.Channels;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Net;
 
 namespace ArcaneCore.World.Cluster;
@@ -469,9 +470,12 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             {
                 Tcp.Close();
             }
-            catch
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                // Ignore socket close races during shutdown.
+                if (ex is not (ObjectDisposedException or SocketException or IOException))
+                {
+                    FaultLedger.Shared.Record("cluster-transport", ex);
+                }
             }
 
             if (SendTask is not null)
@@ -480,9 +484,12 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                 {
                     await SendTask.ConfigureAwait(false);
                 }
-                catch
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    // Ignore teardown exceptions.
+                    if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
+                    {
+                        FaultLedger.Shared.Record("cluster-transport", ex);
+                    }
                 }
             }
 
@@ -492,9 +499,12 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                 {
                     await ReceiveTask.ConfigureAwait(false);
                 }
-                catch
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    // Ignore teardown exceptions.
+                    if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
+                    {
+                        FaultLedger.Shared.Record("cluster-transport", ex);
+                    }
                 }
             }
 
@@ -547,6 +557,11 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             {
                 break;
             }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("cluster-transport", ex);
+                break;
+            }
 
             client.NoDelay = true;
             int id = Interlocked.Increment(ref _nextConnectionId);
@@ -580,9 +595,12 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                 await WriteFrameAsync(conn.Stream, frame, ct).ConfigureAwait(false);
             }
         }
-        catch
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Connection closed or faulted.
+            if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
+            {
+                FaultLedger.Shared.Record("cluster-transport", ex);
+            }
         }
     }
 
@@ -627,6 +645,11 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                     case GatewayWorkerFrameType.AttachSessionRequest:
                     {
                         ReadOnlySpan<byte> span = body.Span;
+                        if (span.Length < 36)
+                        {
+                            throw new InvalidDataException($"truncated AttachSessionRequest frame ({span.Length} B)");
+                        }
+
                         long reqId = BinaryPrimitives.ReadInt64LittleEndian(span[..8]);
                         int accountId = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(8, 4));
                         ulong characterGuid = BinaryPrimitives.ReadUInt64LittleEndian(span.Slice(12, 8));
@@ -649,6 +672,11 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                     case GatewayWorkerFrameType.DetachSessionRequest:
                     {
                         ReadOnlySpan<byte> span = body.Span;
+                        if (span.Length < 25)
+                        {
+                            throw new InvalidDataException($"truncated DetachSessionRequest frame ({span.Length} B)");
+                        }
+
                         long reqId = BinaryPrimitives.ReadInt64LittleEndian(span[..8]);
                         ulong characterGuid = BinaryPrimitives.ReadUInt64LittleEndian(span.Slice(8, 8));
                         long sessionGeneration = BinaryPrimitives.ReadInt64LittleEndian(span.Slice(16, 8));
@@ -672,6 +700,11 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                     case GatewayWorkerFrameType.ClientSessionPacket:
                     {
                         ReadOnlySpan<byte> span = body.Span;
+                        if (span.Length < 52)
+                        {
+                            throw new InvalidDataException($"truncated ClientSessionPacket frame ({span.Length} B)");
+                        }
+
                         long reqId = BinaryPrimitives.ReadInt64LittleEndian(span[..8]);
                         ClusterSessionPacket packet = DeserializeSessionPacket(body[8..]);
                         bool accepted = await _localTransport.SendToWorkerAsync(packet, ct).ConfigureAwait(false);
@@ -686,9 +719,12 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                 }
             }
         }
-        catch
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Peer closed or aborted connection.
+            if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
+            {
+                FaultLedger.Shared.Record("cluster-transport", ex);
+            }
         }
         finally
         {
@@ -740,9 +776,12 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         {
             _listener.Stop();
         }
-        catch
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Ignore listener stop errors.
+            if (ex is not (ObjectDisposedException or SocketException))
+            {
+                FaultLedger.Shared.Record("cluster-transport", ex);
+            }
         }
 
         if (_acceptTask is not null)
@@ -751,9 +790,12 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             {
                 await _acceptTask.ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                // Ignore accept loop cancellation.
+                if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException))
+                {
+                    FaultLedger.Shared.Record("cluster-transport", ex);
+                }
             }
         }
 
@@ -1136,7 +1178,12 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
 
         try
         {
-            NetworkStream stream = _stream!;
+            if (_stream is not { } stream)
+            {
+                Invariant.Check(false, "LoopbackGatewayWorkerClient.ReceiveLoopAsync started without an active NetworkStream.");
+                return;
+            }
+
             while (!ct.IsCancellationRequested)
             {
                 byte[]? frame = await LoopbackGatewayWorkerHost.ReadFrameAsync(stream, ct).ConfigureAwait(false);
@@ -1153,8 +1200,18 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
                     case GatewayWorkerFrameType.HelloAck:
                     {
                         ReadOnlySpan<byte> span = body.Span;
+                        if (span.Length < 5)
+                        {
+                            throw new InvalidDataException($"truncated HelloAck frame ({span.Length} B)");
+                        }
+
                         bool accepted = span[0] != 0;
                         int len = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(1, 4));
+                        if (len < 0 || span.Length < 5 + len)
+                        {
+                            throw new InvalidDataException($"invalid HelloAck reason length ({len})");
+                        }
+
                         string reason = len > 0 ? Encoding.UTF8.GetString(span.Slice(5, len)) : string.Empty;
                         _helloAckTcs.TrySetResult((accepted, reason));
                         break;
@@ -1163,11 +1220,21 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
                     case GatewayWorkerFrameType.AttachSessionReply:
                     {
                         ReadOnlySpan<byte> span = body.Span;
+                        if (span.Length < 29)
+                        {
+                            throw new InvalidDataException($"truncated AttachSessionReply frame ({span.Length} B)");
+                        }
+
                         long reqId = BinaryPrimitives.ReadInt64LittleEndian(span[..8]);
                         bool accepted = span[8] != 0;
                         long assignedGen = BinaryPrimitives.ReadInt64LittleEndian(span.Slice(9, 8));
                         long workerEpoch = BinaryPrimitives.ReadInt64LittleEndian(span.Slice(17, 8));
                         int reasonLen = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(25, 4));
+                        if (reasonLen < 0 || span.Length < 29 + reasonLen)
+                        {
+                            throw new InvalidDataException($"invalid AttachSessionReply reason length ({reasonLen})");
+                        }
+
                         string? reason = reasonLen > 0 ? Encoding.UTF8.GetString(span.Slice(29, reasonLen)) : null;
 
                         if (_pendingAttaches.TryGetValue(reqId, out TaskCompletionSource<ClusterSessionAttachResult>? tcs))
@@ -1181,6 +1248,11 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
                     case GatewayWorkerFrameType.DetachSessionReply:
                     {
                         ReadOnlySpan<byte> span = body.Span;
+                        if (span.Length < 9)
+                        {
+                            throw new InvalidDataException($"truncated DetachSessionReply frame ({span.Length} B)");
+                        }
+
                         long reqId = BinaryPrimitives.ReadInt64LittleEndian(span[..8]);
                         bool detached = span[8] != 0;
                         if (_pendingDetaches.TryGetValue(reqId, out TaskCompletionSource<bool>? tcs))
@@ -1194,6 +1266,11 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
                     case GatewayWorkerFrameType.ClientSessionPacketAck:
                     {
                         ReadOnlySpan<byte> span = body.Span;
+                        if (span.Length < 9)
+                        {
+                            throw new InvalidDataException($"truncated ClientSessionPacketAck frame ({span.Length} B)");
+                        }
+
                         long reqId = BinaryPrimitives.ReadInt64LittleEndian(span[..8]);
                         bool accepted = span[8] != 0;
                         if (_pendingPacketAcks.TryGetValue(reqId, out TaskCompletionSource<bool>? tcs))
@@ -1214,6 +1291,11 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
                     case GatewayWorkerFrameType.ServerSessionDetached:
                     {
                         ReadOnlySpan<byte> span = body.Span;
+                        if (span.Length < 17)
+                        {
+                            throw new InvalidDataException($"truncated ServerSessionDetached frame ({span.Length} B)");
+                        }
+
                         ulong characterGuid = BinaryPrimitives.ReadUInt64LittleEndian(span[..8]);
                         long sessionGeneration = BinaryPrimitives.ReadInt64LittleEndian(span.Slice(8, 8));
                         var reason = (ClusterSessionDetachReason)span[16];
@@ -1223,8 +1305,13 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
                 }
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
+            {
+                FaultLedger.Shared.Record("cluster-transport", ex);
+            }
+
             _helloAckTcs.TrySetException(ex);
         }
         finally
@@ -1256,9 +1343,12 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
         {
             _tcp.Close();
         }
-        catch
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Ignore close errors.
+            if (ex is not (ObjectDisposedException or SocketException or IOException))
+            {
+                FaultLedger.Shared.Record("cluster-transport", ex);
+            }
         }
 
         if (_receiveTask is not null)
@@ -1267,9 +1357,12 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
             {
                 await _receiveTask.ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                // Ignore receive teardown.
+                if (ex is not (OperationCanceledException or ObjectDisposedException or SocketException or IOException))
+                {
+                    FaultLedger.Shared.Record("cluster-transport", ex);
+                }
             }
         }
 

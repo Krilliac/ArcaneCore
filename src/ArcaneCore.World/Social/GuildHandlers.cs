@@ -12,7 +12,13 @@ public sealed class GuildHandlers : IOpcodeHandlerGroup
 {
     public void Register(OpcodeTable table)
     {
-        table.OnWorld(WorldOpcode.CmsgGuildQuery, (s, p, d) => Guilds(s).Query(p, new PacketReader(d).ReadUInt32()));
+        table.OnWorld(WorldOpcode.CmsgGuildQuery, (s, p, d) =>
+        {
+            if (d.Length >= 4)
+            {
+                Guilds(s).Query(p, new PacketReader(d).ReadUInt32());
+            }
+        });
         table.OnWorld(WorldOpcode.CmsgGuildCreate, HandleCreate);
         table.OnWorld(WorldOpcode.CmsgGuildInvite, (s, p, d) => Guilds(s).Invite(p, Name(d)));
         table.OnWorld(WorldOpcode.CmsgGuildAccept, (s, p, _) => Guilds(s).Accept(p));
@@ -36,9 +42,9 @@ public sealed class GuildHandlers : IOpcodeHandlerGroup
 
     private static GuildManager Guilds(WorldSession session) => SocialHandlers.Social(session).Guilds;
 
-    private static string Name(byte[] payload) => CharacterNames.Normalize(new PacketReader(payload).ReadCString());
+    private static string Name(byte[] payload) => payload.Length == 0 ? string.Empty : CharacterNames.Normalize(new PacketReader(payload).ReadCString());
 
-    private static string Text(byte[] payload) => new PacketReader(payload).ReadCString();
+    private static string Text(byte[] payload) => payload.Length == 0 ? string.Empty : new PacketReader(payload).ReadCString();
 
     /// <summary>
     /// CMSG_GUILD_CREATE: CString name (vmangos HandleGuildCreateOpcode: ignored when already
@@ -47,6 +53,11 @@ public sealed class GuildHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static void HandleCreate(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length == 0)
+        {
+            return;
+        }
+
         GuildManager guilds = Guilds(session);
         if (!guilds.Options.AllowClientGuildCreate || guilds.GetGuildOf(player) is not null)
         {
@@ -65,8 +76,18 @@ public sealed class GuildHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_GUILD_SET_PUBLIC_NOTE / CMSG_GUILD_SET_OFFICER_NOTE: CString name, CString note.</summary>
     private static void SetNote(WorldSession session, Player player, byte[] payload, bool officer)
     {
+        if (payload.Length < 2)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         string name = CharacterNames.Normalize(reader.ReadCString());
+        if (reader.Remaining < 1)
+        {
+            return;
+        }
+
         string note = reader.ReadCString();
         if (officer)
         {
@@ -81,6 +102,11 @@ public sealed class GuildHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_GUILD_RANK: u32 rank id, u32 rights, CString rank name.</summary>
     private static void HandleRank(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 9)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint rankId = reader.ReadUInt32();
         uint rights = reader.ReadUInt32();

@@ -398,4 +398,54 @@ public sealed class FaultLedgerTests
         Assert.Contains("[faults]", crashText, StringComparison.Ordinal);
         Assert.Contains("crash-report-site", crashText, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void RecordIfUnexpected_SkipsExpectedCancellation_AndRecordsUnexpectedExceptions()
+    {
+        var ledger = new FaultLedger();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        FaultRecording cancelled = ledger.RecordIfUnexpected("net-session", new OperationCanceledException(cts.Token), cts.Token);
+        Assert.Equal(FaultLedger.OverflowId, cancelled.Id);
+        Assert.Equal(0, cancelled.Count);
+        Assert.False(cancelled.ShouldLog);
+        Assert.Equal(0, ledger.Total);
+
+        FaultRecording taskCancelled = ledger.RecordIfUnexpected("db:query", new TaskCanceledException("cancelled"), CancellationToken.None);
+        Assert.Equal(FaultLedger.OverflowId, taskCancelled.Id);
+        Assert.Equal(0, taskCancelled.Count);
+        Assert.False(taskCancelled.ShouldLog);
+        Assert.Equal(0, ledger.Total);
+
+        FaultRecording unrequestedOce = ledger.RecordIfUnexpected("world-tick", new OperationCanceledException("unexpected oce"), CancellationToken.None);
+        Assert.Equal(1, unrequestedOce.Count);
+        Assert.True(unrequestedOce.ShouldLog);
+        Assert.Equal(1, ledger.Total);
+
+        FaultRecording boom = ledger.RecordIfUnexpected("map-update", ThrowA("unexpected fault"), cts.Token);
+        Assert.Equal(1, boom.Count);
+        Assert.Equal(2, ledger.Total);
+        Assert.Equal(2, ledger.Distinct);
+    }
+
+    [Fact]
+    public void BySubsystem_GroupsByPrefixBeforeDashOrColon_AndReturnsSortedSummary()
+    {
+        var ledger = new FaultLedger();
+        ledger.Record("map-update", ThrowA("m1"));
+        ledger.Record("map-update", ThrowA("m2"));
+        ledger.Record("map-deferred", ThrowB());
+        ledger.Record("db:save", ThrowA("db1"));
+        ledger.Record("worldtick", ThrowOther());
+
+        IReadOnlyDictionary<string, (int Signatures, long TotalCount)> subsystems = ledger.BySubsystem();
+        Assert.Equal(["db", "map", "worldtick"], subsystems.Keys);
+        Assert.Equal((1, 1L), subsystems["db"]);
+        Assert.Equal((2, 3L), subsystems["map"]);
+        Assert.Equal((1, 1L), subsystems["worldtick"]);
+
+        IReadOnlyList<string> reportLines = SelfDiagnosisReport.Format(ledger);
+        Assert.Contains(reportLines, l => l.Contains("subsystems: db=1 (1 sig), map=3 (2 sig), worldtick=1 (1 sig)", StringComparison.Ordinal));
+    }
 }

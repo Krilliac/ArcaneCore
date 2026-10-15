@@ -83,7 +83,7 @@ public sealed class NaxxramasAuraModule : ISpellHandlerModule
         uint buff = charge == 28059 ? 29659u : 29660u;
         uint pulse = charge == 28059 ? 28062u : 28085u;
         spells.RemoveAuras(source, buff);
-        foreach (Player other in source.Map.Players.Where(p => p != source && p.IsAlive))
+        foreach (Player other in source.Map.Players.Where(p => p != source && p.IsAlive).ToArray())
         {
             float dx = source.X - other.X, dy = source.Y - other.Y;
             if (dx * dx + dy * dy > 169) continue;

@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Pets;
 
@@ -85,18 +86,25 @@ public sealed class PetMapSystem : IMapUpdater
 
         foreach (Creature pet in _summons.ToArray())
         {
-            if (PetAI.Of(pet.AI) is not { } ai || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian })
+            try
             {
-                continue;
-            }
+                if (PetAI.Of(pet.AI) is not { } ai || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian })
+                {
+                    continue;
+                }
 
-            if (pet.OwnerGuid == victim.Guid)
-            {
-                ai.OwnerAttackedBy(attacker);
+                if (pet.OwnerGuid == victim.Guid)
+                {
+                    ai.OwnerAttackedBy(attacker);
+                }
+                else if (pet.OwnerGuid == attacker.Guid)
+                {
+                    ai.OwnerAttacked(victim);
+                }
             }
-            else if (pet.OwnerGuid == attacker.Guid)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                ai.OwnerAttacked(victim);
+                FaultLedger.Shared.Record("map-pet", ex);
             }
         }
     }
@@ -119,29 +127,36 @@ public sealed class PetMapSystem : IMapUpdater
 
         foreach (Creature creature in _summons.ToArray())
         {
-            if (creature.System is not { } system || !ReferenceEquals(system.FindCreature(creature.Guid), creature) || creature.Summon is not { } links)
+            try
             {
-                // Killed and decayed, or its grid unloaded. vmangos Pet::Update unsummons a pet whose
-                // corpse timer ran out (Pet.cpp:679-686): the owner's pet link and action bar go too.
-                if (creature.Summon is { Kind: SummonKind.Pet } && _map.FindObject(creature.OwnerGuid) is Player petOwner)
+                if (creature.System is not { } system || !ReferenceEquals(system.FindCreature(creature.Guid), creature) || creature.Summon is not { } links)
                 {
-                    _service?.QueueCurrentPetSave(petOwner);
-                    SummonService.ReleasePetLink(creature, petOwner);
+                    // Killed and decayed, or its grid unloaded. vmangos Pet::Update unsummons a pet whose
+                    // corpse timer ran out (Pet.cpp:679-686): the owner's pet link and action bar go too.
+                    if (creature.Summon is { Kind: SummonKind.Pet } && _map.FindObject(creature.OwnerGuid) is Player petOwner)
+                    {
+                        _service?.QueueCurrentPetSave(petOwner);
+                        SummonService.ReleasePetLink(creature, petOwner);
+                    }
+
+                    Forget(creature);
+                    continue;
                 }
 
-                Forget(creature);
-                continue;
+                Unit? owner = creature.GetOwner();
+                switch (links.Kind)
+                {
+                    case SummonKind.Wild:
+                        UpdateWild(creature, links, diffMs);
+                        break;
+                    default:
+                        UpdatePet(creature, links, owner, diffMs);
+                        break;
+                }
             }
-
-            Unit? owner = creature.GetOwner();
-            switch (links.Kind)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                case SummonKind.Wild:
-                    UpdateWild(creature, links, diffMs);
-                    break;
-                default:
-                    UpdatePet(creature, links, owner, diffMs);
-                    break;
+                FaultLedger.Shared.Record("map-pet", ex);
             }
         }
     }

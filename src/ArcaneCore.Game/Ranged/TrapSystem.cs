@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Ranged;
@@ -35,7 +36,7 @@ public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
 
     public void Update(Map map, uint diffMs)
     {
-        if (map.FindUpdater<GameObjectMapSystem>() is not { } objects)
+        if (map is null || map.FindUpdater<GameObjectMapSystem>() is not { } objects)
         {
             return;
         }
@@ -43,58 +44,70 @@ public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
         long clock = objects.ClockMs;
         foreach (SpellCreatedObject entry in spells.SpellObjects.All.ToArray())
         {
-            GameObject go = entry.Object;
-            if (go.Type != GameObjectType.Trap || !ReferenceEquals(go.System, objects) || !go.IsSpawned
-                || go.LootState == GameObjectLootState.JustDeactivated)
+            try
             {
-                continue;
-            }
-
-            if (!entry.Armed)
-            {
-                // GO_NOT_READY → GO_READY: the arming time (vmangos applies startDelay to every trap).
-                entry.Armed = true;
-                if (go.Template.GetData(TrapRules.StartDelayData) is var delay and not 0)
+                if (entry?.Object is not { } go)
                 {
-                    go.CooldownUntilMs = clock + (delay * 1000L);
+                    continue;
+                }
+
+                if (go.Type != GameObjectType.Trap || !ReferenceEquals(go.System, objects) || !go.IsSpawned
+                    || go.LootState == GameObjectLootState.JustDeactivated)
+                {
+                    continue;
+                }
+
+                if (!entry.Armed)
+                {
+                    // GO_NOT_READY → GO_READY: the arming time (vmangos applies startDelay to every trap).
+                    entry.Armed = true;
+                    if (go.Template.GetData(TrapRules.StartDelayData) is var delay and not 0)
+                    {
+                        go.CooldownUntilMs = clock + (delay * 1000L);
+                    }
+                }
+
+                if (go.CooldownUntilMs >= clock)
+                {
+                    continue;
+                }
+
+                uint charges = go.Template.GetData(TrapRules.ChargesData);
+                float radius = TrapRules.TriggerRadius(go.Template, spells.RangedOptions.Traps.RadiusSource);
+                if (charges == 0 || radius <= 0 || entry.Owner is null || !entry.Owner.IsInWorld
+                    || entry.Owner.Map is null || !ReferenceEquals(entry.Owner.Map, map))
+                {
+                    continue; // the environmental branch (no owner, or no charges) is not modelled
+                }
+
+                Unit? target = FindTarget(map, go, entry.Owner, radius);
+                if (target is null)
+                {
+                    continue;
+                }
+
+                if (go.Template.GetData(TrapRules.SpellData) is var spellId and not 0)
+                {
+                    spells.CastFromObject(entry.Owner, spellId, target, source: (go.X, go.Y, go.Z));
+                }
+
+                uint cooldown = go.Template.GetData(TrapRules.CooldownData);
+                go.CooldownUntilMs = clock + ((cooldown != 0 ? cooldown : TrapRules.DefaultCooldownSeconds) * 1000L);
+                go.UseCount++;
+                if (TrapRules.CustomAnimDisplays.Contains(go.Template.DisplayId))
+                {
+                    map.BroadcastToObservers(go, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, 0));
+                }
+
+                if (go.UseCount >= charges)
+                {
+                    go.UseCount = 0;
+                    go.LootState = GameObjectLootState.JustDeactivated; // the object system removes it on its next update
                 }
             }
-
-            if (go.CooldownUntilMs >= clock)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                continue;
-            }
-
-            uint charges = go.Template.GetData(TrapRules.ChargesData);
-            float radius = TrapRules.TriggerRadius(go.Template, spells.RangedOptions.Traps.RadiusSource);
-            if (charges == 0 || radius <= 0 || !entry.Owner.IsInWorld || !ReferenceEquals(entry.Owner.Map, map))
-            {
-                continue; // the environmental branch (no owner, or no charges) is not modelled
-            }
-
-            Unit? target = FindTarget(map, go, entry.Owner, radius);
-            if (target is null)
-            {
-                continue;
-            }
-
-            if (go.Template.GetData(TrapRules.SpellData) is var spellId and not 0)
-            {
-                spells.CastFromObject(entry.Owner, spellId, target, source: (go.X, go.Y, go.Z));
-            }
-
-            uint cooldown = go.Template.GetData(TrapRules.CooldownData);
-            go.CooldownUntilMs = clock + ((cooldown != 0 ? cooldown : TrapRules.DefaultCooldownSeconds) * 1000L);
-            go.UseCount++;
-            if (TrapRules.CustomAnimDisplays.Contains(go.Template.DisplayId))
-            {
-                map.BroadcastToObservers(go, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, 0));
-            }
-
-            if (go.UseCount >= charges)
-            {
-                go.UseCount = 0;
-                go.LootState = GameObjectLootState.JustDeactivated; // the object system removes it on its next update
+                FaultLedger.Shared.Record("map-trap", ex);
             }
         }
     }

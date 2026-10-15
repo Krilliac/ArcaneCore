@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Clustering;
 using ArcaneCore.World.Features;
@@ -78,8 +79,14 @@ public sealed class WorldHost(
                     await playerbots.StartupAsync(cancellationToken).ConfigureAwait(false);
             }
         }
-        catch
+        catch (OperationCanceledException)
         {
+            await StopClaimWatchAsync().ConfigureAwait(false);
+            throw;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("world-host.start", ex);
             await StopClaimWatchAsync().ConfigureAwait(false);
             throw;
         }
@@ -166,21 +173,33 @@ public sealed class WorldHost(
             if (scope.ServiceProvider.GetService<Playerbots.ManagedPlayerbotFeature>() is { } playerbots)
                 await playerbots.ShutdownBeforeWorldStopAsync().ConfigureAwait(false);
         }
-        catch (Exception ex) { failures.Add(ex); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("world-host.stop-playerbots", ex);
+            failures.Add(ex);
+        }
         finally { world.Stop(); }
         try
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await scope.ServiceProvider.StopWorldFeaturesAsync().ConfigureAwait(false);
         }
-        catch (Exception ex) { failures.Add(ex); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("world-host.stop-features", ex);
+            failures.Add(ex);
+        }
         bool queueStopped = false;
         try
         {
             await saveQueue.StopAsync().ConfigureAwait(false);
             queueStopped = true;
         }
-        catch (Exception ex) { failures.Add(ex); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("world-host.stop-save-queue", ex);
+            failures.Add(ex);
+        }
 
         if (failures.Count == 0 && queueStopped)
         {
@@ -211,9 +230,9 @@ public sealed class WorldHost(
             return;
         }
 
-        _ownership = _fencing.HasTakeover
-            ? await store.TryTakeoverAsync(new CharacterOwnershipToken("world", _fencing.TakeoverEpoch!.Value,
-                _fencing.TakeoverIncarnation!.Value), _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false)
+        _ownership = _fencing is { HasTakeover: true, TakeoverEpoch: { } takeoverEpoch, TakeoverIncarnation: { } takeoverIncarnation }
+            ? await store.TryTakeoverAsync(new CharacterOwnershipToken("world", takeoverEpoch,
+                takeoverIncarnation), _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false)
             : await store.TryAcquireAsync("world", _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
         if (_ownership is null)
             throw new InvalidOperationException("the characters database is already owned by another world authority");
@@ -235,7 +254,11 @@ public sealed class WorldHost(
             if (ownershipContext is not null)
                 ownershipContext.Current = null;
         }
-        catch (Exception ex) { failures.Add(ex); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("world-host.release-ownership", ex);
+            failures.Add(ex);
+        }
     }
 
     /// <summary>
@@ -260,16 +283,27 @@ public sealed class WorldHost(
                         return;
                     }
                 }
-                catch (Exception ex) when (ex is not OutOfMemoryException && !(ex is OperationCanceledException && stop.IsCancellationRequested))
+                catch (OperationCanceledException) when (stop.IsCancellationRequested)
                 {
-                    logger.LogWarning(ex, "Could not read the characters ownership row; will retry next interval");
+                    return;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    logger.LogFault(LogLevel.Warning, "world-host.claim-watch", ex, "Could not read the characters ownership row; will retry next interval");
                 }
 
                 // Read first, then wait: a failed read also waits a full interval before the retry.
                 await Task.Delay(ClaimWatchInterval ?? TimeSpan.FromSeconds(_fencing.ClaimWatchIntervalSeconds), stop).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("world-host.claim-watch", ex, "Characters ownership claim watch terminated unexpectedly");
+        }
     }
 
     private void OnFatalSaveFailure(Exception error)

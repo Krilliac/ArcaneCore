@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.WorldState.Weather;
@@ -94,19 +95,26 @@ public sealed class MapWeather : IMapUpdater
         WeatherSeason? season = null;
         foreach ((uint zone, ZoneWeather weather) in _zones)
         {
-            weather.Current += diffMs;
-            if (weather.Current < weather.Interval)
+            try
             {
-                continue;
-            }
+                weather.Current += diffMs;
+                if (weather.Current < weather.Interval)
+                {
+                    continue;
+                }
 
-            weather.Current -= weather.Interval; // ShortIntervalTimer::Reset
-            // The table can be replaced while the zone is live (hot reload): always read the current row.
-            weather.State.Chances = hooks.WeatherChances.Get(zone);
-            season ??= WeatherSeasons.Of(hooks.LocalNow());
-            if (weather.State.ReGenerate(season.Value, hooks.WeatherRandom) && !SendToPlayersInZone(zone, weather.State))
+                weather.Current -= weather.Interval; // ShortIntervalTimer::Reset
+                // The table can be replaced while the zone is live (hot reload): always read the current row.
+                weather.State.Chances = hooks.WeatherChances.Get(zone);
+                season ??= WeatherSeasons.Of(hooks.LocalNow());
+                if (weather.State.ReGenerate(season.Value, hooks.WeatherRandom) && !SendToPlayersInZone(zone, weather.State))
+                {
+                    (removed ??= []).Add(zone);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                (removed ??= []).Add(zone);
+                FaultLedger.Shared.Record("weather.zone-update", ex);
             }
         }
 
@@ -132,8 +140,15 @@ public sealed class MapWeather : IMapUpdater
         {
             if (player.ZoneId == zone)
             {
-                player.Session.Send(WorldOpcode.SmsgWeather, packet);
                 found = true;
+                try
+                {
+                    player.Session.Send(WorldOpcode.SmsgWeather, packet);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("weather.player-send", ex);
+                }
             }
         }
 

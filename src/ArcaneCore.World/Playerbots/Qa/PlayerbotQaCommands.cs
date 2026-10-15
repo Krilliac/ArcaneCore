@@ -55,13 +55,13 @@ public sealed class PlayerbotQaCommands : ICommandExtension
     private static bool Root(CommandContext context, string args)
     {
         if (args.Trim().Length != 0) return false;
-        if (FeatureOf(context) is not { } feature) return true;
+        if (FeatureOf(context) is not { Aggregator: { } aggregator } feature) return true;
         feature.Drain(MaxViewDrain);
         QaStatus status = feature.Status();
         context.Reply(string.Create(CultureInfo.InvariantCulture,
             $"Bot QA: {status.Findings} findings, {status.Received} warnings seen, {status.Dropped} dropped. GitHub: {status.GitHubMode}{(status.GitHubMode == "off" || status.TokenVariable.Length == 0 ? string.Empty : $", {status.TokenVariable} {(status.TokenSet ? "set" : "not set")}")}. {PlayerbotRetreatStats.Shared.Describe()}"));
         if (status.PersistenceDisabled is { } reason) context.Reply("Persistence is off: " + reason);
-        foreach (string line in PlayerbotQaReport.ChatTop(feature.Aggregator!.Snapshot(), DefaultTop, feature.Redactor, feature.UtcNow, feature.StartedUtc)) context.Reply(line);
+        foreach (string line in PlayerbotQaReport.ChatTop(aggregator.Snapshot(), DefaultTop, feature.Redactor, feature.UtcNow, feature.StartedUtc)) context.Reply(line);
         return true;
     }
 
@@ -75,9 +75,9 @@ public sealed class PlayerbotQaCommands : ICommandExtension
         if (numbers.Length > 1) return false;
         int n = DefaultTop;
         if (numbers.Length == 1 && !int.TryParse(numbers[0].TrimStart('#'), NumberStyles.None, CultureInfo.InvariantCulture, out n)) return false;
-        if (FeatureOf(context) is not { } feature) return true;
+        if (FeatureOf(context) is not { Aggregator: { } aggregator } feature) return true;
         feature.Drain(MaxViewDrain); // thread-safe; without it a finding the bots just met would still look stale for up to one export interval
-        foreach (string line in PlayerbotQaReport.ChatTop(feature.Aggregator!.Snapshot(), n, feature.Redactor, feature.UtcNow, feature.StartedUtc, all)) context.Reply(line);
+        foreach (string line in PlayerbotQaReport.ChatTop(aggregator.Snapshot(), n, feature.Redactor, feature.UtcNow, feature.StartedUtc, all)) context.Reply(line);
         return true;
     }
 
@@ -85,14 +85,15 @@ public sealed class PlayerbotQaCommands : ICommandExtension
     {
         string id = args.Trim();
         if (id.Length == 0 || id.Contains(' ', StringComparison.Ordinal)) return false;
-        if (FeatureOf(context) is not { } feature) return true;
-        if (!PlayerbotQaReport.TryResolve(feature.Aggregator!.Snapshot(), id, out QaFindingView? finding, out string error))
+        if (FeatureOf(context) is not { Aggregator: { } aggregator } feature) return true;
+        if (!PlayerbotQaReport.TryResolve(aggregator.Snapshot(), id, out QaFindingView? resolved, out string error)
+            || resolved is not { } finding)
         {
             context.Reply(error);
             return true;
         }
 
-        foreach (string line in PlayerbotQaReport.ChatShow(finding!, feature.Redactor, feature.Build)) context.Reply(line);
+        foreach (string line in PlayerbotQaReport.ChatShow(finding, feature.Redactor, feature.Build)) context.Reply(line);
         return true;
     }
 
@@ -101,8 +102,8 @@ public sealed class PlayerbotQaCommands : ICommandExtension
         string text = args.Trim().TrimStart('#');
         int n = DefaultTop;
         if (text.Length != 0 && !int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out n)) return false;
-        if (FeatureOf(context) is not { } feature) return true;
-        foreach (string line in PlayerbotQaReport.ChatSpells(feature.Aggregator!.Snapshot(), feature.SpellCoverage, n, feature.Redactor)) context.Reply(line);
+        if (FeatureOf(context) is not { Aggregator: { } aggregator } feature) return true;
+        foreach (string line in PlayerbotQaReport.ChatSpells(aggregator.Snapshot(), feature.SpellCoverage, n, feature.Redactor)) context.Reply(line);
         return true;
     }
 
@@ -110,20 +111,21 @@ public sealed class PlayerbotQaCommands : ICommandExtension
     {
         string id = args.Trim();
         if (id.Contains(' ', StringComparison.Ordinal)) return false;
-        if (FeatureOf(context) is not { } feature) return true;
+        if (FeatureOf(context) is not { Aggregator: { } aggregator } feature) return true;
         if (id.Length == 0)
         {
             context.Reply(string.Create(CultureInfo.InvariantCulture, $"Bot QA: {feature.Reset(null)} findings forgotten (GitHub is untouched)."));
             return true;
         }
 
-        if (!PlayerbotQaReport.TryResolve(feature.Aggregator!.Snapshot(), id, out QaFindingView? finding, out string error))
+        if (!PlayerbotQaReport.TryResolve(aggregator.Snapshot(), id, out QaFindingView? resolved, out string error)
+            || resolved is not { } finding)
         {
             context.Reply(error);
             return true;
         }
 
-        feature.Reset(finding!.Id);
+        feature.Reset(finding.Id);
         context.Reply($"Bot QA: finding {finding.ShortId} forgotten (GitHub is untouched).");
         return true;
     }

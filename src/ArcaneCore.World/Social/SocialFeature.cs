@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
@@ -135,13 +136,19 @@ public sealed class SocialFeature(
         _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions);
         _writes.FatalFailure += ex =>
         {
+            FaultLedger.Shared.Record("social.writes-fatal", ex);
             _logger.LogCritical(ex, "Stopping application after fatal social write failure");
             try
             {
                 services?.GetService<IHostApplicationLifetime>()?.StopApplication();
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException disposedEx)
             {
+                _logger.LogDebug(disposedEx, "Host application lifetime already disposed during fatal social write failure.");
+            }
+            catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+            {
+                _logger.LogFault("social.stop-application", stopEx, "Failed to request host application stop after fatal social write failure.");
             }
         };
         _context = new SocialContext(world, new CharacterLookup(directory), _writes, Options);
@@ -181,9 +188,18 @@ public sealed class SocialFeature(
     /// <summary>The timer's pass, on the world thread.</summary>
     internal void RunPeriodicStatsPass()
     {
-        if (PeriodicStatsPass)
+        if (!PeriodicStatsPass)
+        {
+            return;
+        }
+
+        try
         {
             Context.Groups.UpdateOutOfRangeStats();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("social.periodic-stats", ex, "Periodic group stats update pass failed.");
         }
     }
 
@@ -328,7 +344,11 @@ public sealed class SocialFeature(
 
     private async Task LoadSocialAsync(Player player)
     {
-        WorldRuntime world = _world!;
+        if (_world is not { } world)
+        {
+            return;
+        }
+
         int characterId = (int)player.Guid.Low;
         IReadOnlyList<SocialEntry> entries = [];
         try
@@ -345,7 +365,7 @@ public sealed class SocialFeature(
                 }
                 catch (InvalidOperationException ex)
                 {
-                    _logger.LogWarning(ex, "social writes of character {Id} are retained; its list is loaded with them applied", characterId);
+                    _logger.LogFault(LogLevel.Warning, "social.flush-retained-writes", ex, "social writes of character {Id} are retained; its list is loaded with them applied", characterId);
                 }
             }
 
@@ -359,11 +379,11 @@ public sealed class SocialFeature(
         {
             return;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // An empty list is not a safe stand-in: ignored players could invite and be heard, and the player's later
             // social writes would start from nothing. The player is never marked ready and is disconnected instead.
-            _logger.LogError(ex, "loading the social list of character {Id} failed; disconnecting", characterId);
+            _logger.LogFault("social.load-character", ex, "loading the social list of character {Id} failed; disconnecting", characterId);
             if (!_stopping)
             {
                 world.Post(() => FailLogin(player));
@@ -390,9 +410,13 @@ public sealed class SocialFeature(
                     ? await store.GetSocialAsync(characterId, _stop.Token).ConfigureAwait(false)
                     : [];
             }
-            catch (Exception ex) when (attempt < SocialReadAttempts && !_stopping)
+            catch (OperationCanceledException) when (_stopping)
             {
-                _logger.LogWarning(ex, "loading the social list of character {Id} failed (attempt {Attempt}); retrying", characterId, attempt);
+                throw;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException && attempt < SocialReadAttempts && !_stopping)
+            {
+                _logger.LogFault(LogLevel.Warning, "social.read-character-retry", ex, "loading the social list of character {Id} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(SocialReadRetryDelayMs * attempt, _stop.Token).ConfigureAwait(false);
             }
         }
@@ -401,7 +425,7 @@ public sealed class SocialFeature(
     /// <summary>World thread: the stored list could not be read. Pending commands are dropped and the session is closed.</summary>
     private void FailLogin(Player player)
     {
-        if (_stopping || !ReferenceEquals(_world!.FindOnlinePlayer(player.Guid), player))
+        if (_stopping || _world is not { } world || !ReferenceEquals(world.FindOnlinePlayer(player.Guid), player))
         {
             return; // logged out meanwhile
         }
@@ -413,8 +437,7 @@ public sealed class SocialFeature(
 
     private void CompleteLogin(Player player, IReadOnlyList<SocialEntry> entries)
     {
-        WorldRuntime world = _world!;
-        if (_stopping || !ReferenceEquals(world.FindOnlinePlayer(player.Guid), player))
+        if (_stopping || _world is not { } world || !ReferenceEquals(world.FindOnlinePlayer(player.Guid), player))
         {
             return; // logged out meanwhile
         }
@@ -451,9 +474,9 @@ public sealed class SocialFeature(
                 {
                     action(context);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    _logger.LogError(ex, "deferred social command failed for {Player}", player.Name);
+                    _logger.LogFault("social.deferred-command", ex, "deferred social command failed for {Player}", player.Name);
                 }
             }
         }
@@ -501,7 +524,11 @@ public sealed class SocialFeature(
 
     private async Task LoadGuildsAsync()
     {
-        WorldRuntime world = _world!;
+        if (_world is not { } world)
+        {
+            return;
+        }
+
         IReadOnlyList<GuildData> guilds = [];
         for (int attempt = 1; ; attempt++)
         {
@@ -519,9 +546,9 @@ public sealed class SocialFeature(
             {
                 return;
             }
-            catch (Exception ex) when (attempt < 3)
+            catch (Exception ex) when (ex is not OutOfMemoryException && attempt < 3)
             {
-                _logger.LogWarning(ex, "loading guilds failed (attempt {Attempt}); retrying", attempt);
+                _logger.LogFault(LogLevel.Warning, "social.load-guilds-retry", ex, "loading guilds failed (attempt {Attempt}); retrying", attempt);
                 try
                 {
                     await Task.Delay(500 * attempt, _stop.Token).ConfigureAwait(false);
@@ -531,10 +558,10 @@ public sealed class SocialFeature(
                     return;
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // Guild creation stays disabled (GuildManager.IsLoaded) so stored ids are never reused.
-                _logger.LogError(ex, "loading guilds failed; guilds are unavailable until restart");
+                _logger.LogFault("social.load-guilds-fatal", ex, "loading guilds failed; guilds are unavailable until restart");
                 return;
             }
         }
@@ -555,6 +582,11 @@ public sealed class SocialFeature(
             // Either this feature is stopping or the world thread is already gone (WorldRuntime.Stop cancels every pending
             // invocation, and it runs before the features stop): the load is moot and must not fault the lifecycle task
             // that StopAsync awaits. Guild creation stays disabled, which only matters for the moments before shutdown.
+            return;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("social.install-guilds", ex, "installing loaded guilds on world thread failed; guilds are unavailable until restart");
         }
     }
 }

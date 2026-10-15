@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Locomotion;
@@ -32,36 +33,49 @@ internal sealed class MapLocomotion : IMapUpdater
         LocomotionEnvironment environment = LocomotionEnvironment.For(_world);
         foreach (Player player in map.Players)
         {
-            if (!LocomotionStates.TryGet(player, out LocomotionState? state))
+            try
             {
-                continue;
-            }
-
-            if (state.ActiveSpline is not null)
-            {
-                state.AdvanceSpline(diffMs);
-            }
-
-            if (!state.Pending.HasPending)
-            {
-                continue;
-            }
-
-            state.Pending.Age(diffMs);
-            bool teleporting = environment.IsBeingTeleported(player);
-            PendingMovementChange? enforce = state.Pending.CheckTimeout(environment.Options.PendingAckResponseTimeMs, teleporting, out _);
-            if (enforce is not null)
-            {
-                // "Enforce the change": the client never acknowledged it (vmangos OnFailedToAckChange, then resolve).
-                state.NoteFailedAck();
-                if (player.Session.WantsUpdateObjects)
+                if (!LocomotionStates.TryGet(player, out LocomotionState? state))
                 {
-                    map.Logger.LogWarning(
-                        "client did not acknowledge movement change {Type} (apply={Apply}, value={Value}, counter={Counter}) for player {Player} (guid={Guid}) on map {MapId} in {DeathState}; enforcing (failedAcks={FailedAcks})",
-                        enforce.Type, enforce.Apply, enforce.NewValue, enforce.Counter, player.Name, player.Guid.Low, map.MapId, player.Combat.DeathState, state.FailedAckCount);
+                    continue;
                 }
 
-                MovementControl.Enforce(player, enforce, sendToClient: true);
+                if (state.ActiveSpline is not null)
+                {
+                    state.AdvanceSpline(diffMs);
+                }
+
+                if (!state.Pending.HasPending)
+                {
+                    continue;
+                }
+
+                state.Pending.Age(diffMs);
+                bool teleporting = environment.IsBeingTeleported(player);
+                PendingMovementChange? enforce = state.Pending.CheckTimeout(environment.Options.PendingAckResponseTimeMs, teleporting, out _);
+                if (enforce is not null)
+                {
+                    // "Enforce the change": the client never acknowledged it (vmangos OnFailedToAckChange, then resolve).
+                    state.NoteFailedAck();
+                    if (player.Session.WantsUpdateObjects)
+                    {
+                        map.Logger.LogWarning(
+                            "client did not acknowledge movement change {Type} (apply={Apply}, value={Value}, counter={Counter}) for player {Player} (guid={Guid}) on map {MapId} in {DeathState}; enforcing (failedAcks={FailedAcks})",
+                            enforce.Type, enforce.Apply, enforce.NewValue, enforce.Counter, player.Name, player.Guid.Low, map.MapId, player.Combat.DeathState, state.FailedAckCount);
+                    }
+
+                    MovementControl.Enforce(player, enforce, sendToClient: true);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                map.Logger.LogFault(
+                    "map-locomotion",
+                    ex,
+                    "MapLocomotion fault updating player {Player} (guid={Guid}) on map {MapId}",
+                    player.Name,
+                    player.Guid.Low,
+                    map.MapId);
             }
         }
     }
@@ -72,16 +86,29 @@ internal sealed class MapLocomotion : IMapUpdater
     /// </summary>
     public void OnPlayerRemoved(Map map, Player player)
     {
-        if (LocomotionStates.TryGet(player, out LocomotionState? state))
+        try
         {
-            state.ClearSpline();
-            if (state.Pending.HasPending)
+            if (LocomotionStates.TryGet(player, out LocomotionState? state))
             {
-                foreach (PendingMovementChange change in state.Pending.ResolveAll())
+                state.ClearSpline();
+                if (state.Pending.HasPending)
                 {
-                    MovementControl.Enforce(player, change, sendToClient: false);
+                    foreach (PendingMovementChange change in state.Pending.ResolveAll())
+                    {
+                        MovementControl.Enforce(player, change, sendToClient: false);
+                    }
                 }
             }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            map.Logger.LogFault(
+                "map-locomotion",
+                ex,
+                "MapLocomotion fault removing player {Player} (guid={Guid}) from map {MapId}",
+                player.Name,
+                player.Guid.Low,
+                map.MapId);
         }
     }
 }

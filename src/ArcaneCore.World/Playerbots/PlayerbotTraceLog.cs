@@ -122,9 +122,9 @@ internal sealed class PlayerbotTraceLog
         PlayerbotRoute? route = motion.Route;
         bool moving = route is { Complete: false } || (moveFlags & MovementFlags.MaskMoving) != 0;
         int wpCount = route?.Points.Count ?? 0;
-        int wpIdx = wpCount > 0 ? Math.Clamp(route!.NextPoint, 0, wpCount) : 0;
-        string dest = wpCount > 0
-            ? FormatPos(route!.Points[^1])
+        int wpIdx = route is { } activeRoute && wpCount > 0 ? Math.Clamp(activeRoute.NextPoint, 0, wpCount) : 0;
+        string dest = route is { Points: { Count: > 0 } points }
+            ? FormatPos(points[^1])
             : "none";
 
         string homeSummary;
@@ -187,14 +187,12 @@ internal sealed class PlayerbotTraceLog
         for (int i = 0; i < frames.Length && added < MaxRenderedStackFrames; i++)
         {
             StackFrame frame = frames[i];
-            var method = frame.GetMethod();
-            Type? declaringType = method?.DeclaringType;
-            string? fullName = declaringType?.FullName;
-            if (fullName is null || !fullName.StartsWith("ArcaneCore", StringComparison.Ordinal))
+            if (frame.GetMethod() is not { DeclaringType: { FullName: { } fullName } declaringType } method
+                || !fullName.StartsWith("ArcaneCore", StringComparison.Ordinal))
                 continue;
 
             if (added > 0) sb.Append(" <- ");
-            AppendFrame(sb, frame, declaringType!.Name, method!.Name);
+            AppendFrame(sb, frame, declaringType.Name, method.Name);
             added++;
         }
 

@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.Configuration;
@@ -141,6 +142,11 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
             }
             catch (ObjectDisposedException)
             {
+                // Already disposed during shutdown race.
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("cluster-bridge", ex);
             }
         }
 
@@ -172,6 +178,11 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         }
         catch (ObjectDisposedException)
         {
+            // Already disposed during shutdown race.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster-bridge", ex);
         }
 
         _cts.Dispose();
@@ -239,87 +250,103 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         long sequence = 0;
         while (!ct.IsCancellationRequested)
         {
-            tick++;
-            int connectedCount = 0;
-            long totalHeartbeats = 0;
-
-            foreach (MonitoredNode node in _nodes)
+            try
             {
-                if (ct.IsCancellationRequested)
-                {
-                    return;
-                }
+                tick++;
+                int connectedCount = 0;
+                long totalHeartbeats = 0;
 
-                if (!node.IsConnected || node.Client is null)
+                foreach (MonitoredNode node in _nodes)
                 {
-                    await TryConnectNodeAsync(worldManifest, node, ct).ConfigureAwait(false);
-                }
-
-                if (node.IsConnected && node.Client is not null)
-                {
-                    long seq = Interlocked.Increment(ref sequence);
-                    var ping = new ClusterSessionPacket(
-                        SessionGeneration: 1,
-                        AccountId: (int)(node.ProbeCharacterGuid - 950_000),
-                        CharacterGuid: node.ProbeCharacterGuid,
-                        OwnerEpoch: 1,
-                        Sequence: seq,
-                        Opcode: 0x1DC,
-                        Payload: new byte[] { 1, 2, 3, 4 });
-
-                    try
+                    if (ct.IsCancellationRequested)
                     {
-                        using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                        sendCts.CancelAfter(TimeSpan.FromMilliseconds(1500));
-                        bool ok = await node.Client.SendToWorkerAsync(ping, sendCts.Token).ConfigureAwait(false);
-                        if (ok)
+                        return;
+                    }
+
+                    if (!node.IsConnected || node.Client is null)
+                    {
+                        await TryConnectNodeAsync(worldManifest, node, ct).ConfigureAwait(false);
+                    }
+
+                    if (node.IsConnected && node.Client is not null)
+                    {
+                        long seq = Interlocked.Increment(ref sequence);
+                        var ping = new ClusterSessionPacket(
+                            SessionGeneration: 1,
+                            AccountId: (int)(node.ProbeCharacterGuid - 950_000),
+                            CharacterGuid: node.ProbeCharacterGuid,
+                            OwnerEpoch: 1,
+                            Sequence: seq,
+                            Opcode: 0x1DC,
+                            Payload: new byte[] { 1, 2, 3, 4 });
+
+                        try
                         {
-                            long hb = Interlocked.Increment(ref node.RpcHeartbeats);
-                            totalHeartbeats += hb;
-                            connectedCount++;
+                            using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                            sendCts.CancelAfter(TimeSpan.FromMilliseconds(1500));
+                            bool ok = await node.Client.SendToWorkerAsync(ping, sendCts.Token).ConfigureAwait(false);
+                            if (ok)
+                            {
+                                long hb = Interlocked.Increment(ref node.RpcHeartbeats);
+                                totalHeartbeats += hb;
+                                connectedCount++;
+                            }
+                            else
+                            {
+                                await HandleDisconnectAsync(node).ConfigureAwait(false);
+                            }
                         }
-                        else
+                        catch (Exception ex) when (!ct.IsCancellationRequested && ex is not OutOfMemoryException)
                         {
+                            if (ex is not (OperationCanceledException or IOException or ObjectDisposedException or System.Net.Sockets.SocketException))
+                            {
+                                FaultLedger.Shared.Record("cluster-bridge", ex);
+                            }
+
                             await HandleDisconnectAsync(node).ConfigureAwait(false);
                         }
                     }
-                    catch (Exception) when (!ct.IsCancellationRequested)
+                }
+
+                UpdateWorldPlacementLoads();
+
+                if (connectedCount == _nodes.Count && _nodes.Count > 0)
+                {
+                    if (!_allConnectedLogged)
                     {
-                        await HandleDisconnectAsync(node).ConfigureAwait(false);
+                        _allConnectedLogged = true;
+                        string summaryList = string.Join(", ", _nodes.Select(n => $"{n.NodeId}@{n.EndPoint.Port}({n.RoleLabel})"));
+                        logger.LogInformation(
+                            "Cluster topology active: all {Connected}/{Total} cluster nodes connected to WorldServer [{Nodes}]",
+                            connectedCount,
+                            _nodes.Count,
+                            summaryList);
+                    }
+                    else if (tick % 6 == 0)
+                    {
+                        (int ek, int kal, int inst) = CountPlayersByPartition();
+                        logger.LogInformation(
+                            "Cluster heartbeat: {Connected}/{Total} nodes connected | worker:EK={Ek} players, worker:Kalimdor={Kal} players, worker:instances={Inst} players | rpcHeartbeats={Heartbeats}",
+                            connectedCount,
+                            _nodes.Count,
+                            ek,
+                            kal,
+                            inst,
+                            totalHeartbeats);
                     }
                 }
-            }
-
-            UpdateWorldPlacementLoads();
-
-            if (connectedCount == _nodes.Count && _nodes.Count > 0)
-            {
-                if (!_allConnectedLogged)
+                else
                 {
-                    _allConnectedLogged = true;
-                    string summaryList = string.Join(", ", _nodes.Select(n => $"{n.NodeId}@{n.EndPoint.Port}({n.RoleLabel})"));
-                    logger.LogInformation(
-                        "Cluster topology active: all {Connected}/{Total} cluster nodes connected to WorldServer [{Nodes}]",
-                        connectedCount,
-                        _nodes.Count,
-                        summaryList);
-                }
-                else if (tick % 6 == 0)
-                {
-                    (int ek, int kal, int inst) = CountPlayersByPartition();
-                    logger.LogInformation(
-                        "Cluster heartbeat: {Connected}/{Total} nodes connected | worker:EK={Ek} players, worker:Kalimdor={Kal} players, worker:instances={Inst} players | rpcHeartbeats={Heartbeats}",
-                        connectedCount,
-                        _nodes.Count,
-                        ek,
-                        kal,
-                        inst,
-                        totalHeartbeats);
+                    _allConnectedLogged = false;
                 }
             }
-            else
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                _allConnectedLogged = false;
+                return;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("cluster-bridge", ex, "ClusterNodeBridgeFeature monitor iteration faulted");
             }
 
             try
@@ -364,8 +391,13 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
                 node.MapsSummary,
                 attach.WorkerOwnerEpoch);
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            if (ex is not (OperationCanceledException or IOException or ObjectDisposedException or System.Net.Sockets.SocketException))
+            {
+                FaultLedger.Shared.Record("cluster-bridge", ex);
+            }
+
             await client.DisposeAsync().ConfigureAwait(false);
         }
     }

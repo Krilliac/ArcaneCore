@@ -108,6 +108,11 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         {
             // stopping
         }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-timer", ex);
+            logger.LogError(ex, "creature respawn retry timer faulted");
+        }
     }
 
     /// <summary>On the consumer: retry every retained write once, in the order <see cref="StopAsync"/> uses. A write superseded meanwhile (its key was rewritten or forgotten) is left alone.</summary>
@@ -311,13 +316,15 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
 
                 return null;
             }
-            catch (Exception ex) when (attempt < MaxAttempts && !DatabaseTransience.IsBusy(ex))
+            catch (Exception ex) when (ex is not OutOfMemoryException && attempt < MaxAttempts && !DatabaseTransience.IsBusy(ex))
             {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-attempt", ex);
                 logger.LogWarning(ex, "creature respawn write failed (attempt {Attempt}); retrying", attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn", ex);
                 logger.LogError(ex, "creature respawn write failed; retained for retry");
                 return ex;
             }
@@ -326,36 +333,44 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
 
     private async Task ConsumeAsync()
     {
-        await foreach (Op op in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
+        try
         {
-            if (ReferenceEquals(op.Write, RetrySweep))
+            await foreach (Op op in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
             {
-                try
+                if (ReferenceEquals(op.Write, RetrySweep))
                 {
-                    await SweepRetainedAsync().ConfigureAwait(false);
-                }
-                finally
-                {
-                    Volatile.Write(ref _sweepQueued, 0); // a write retained during this sweep is caught by the next marker
+                    try
+                    {
+                        await SweepRetainedAsync().ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        Volatile.Write(ref _sweepQueued, 0); // a write retained during this sweep is caught by the next marker
+                    }
+
+                    continue; // not a counted write
                 }
 
-                continue; // not a counted write
+                Exception? failure = await TryWriteAsync(op).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    if (failure is null)
+                    {
+                        _retained.Remove(op.Key); // the consumer is in order: this write is newer than anything retained for its key
+                    }
+                    else if (op.Key.InstanceWide || !_forgottenAt.TryGetValue(op.Key.InstanceId, out long forgotten) || forgotten < op.Sequence)
+                    {
+                        _retained[op.Key] = new Retained(op, failure); // a spawn write older than its instance's delete is moot: that delete removes the row
+                    }
+                }
+
+                Interlocked.Decrement(ref _pending);
             }
-
-            Exception? failure = await TryWriteAsync(op).ConfigureAwait(false);
-            lock (_gate)
-            {
-                if (failure is null)
-                {
-                    _retained.Remove(op.Key); // the consumer is in order: this write is newer than anything retained for its key
-                }
-                else if (op.Key.InstanceWide || !_forgottenAt.TryGetValue(op.Key.InstanceId, out long forgotten) || forgotten < op.Sequence)
-                {
-                    _retained[op.Key] = new Retained(op, failure); // a spawn write older than its instance's delete is moot: that delete removes the row
-                }
-            }
-
-            Interlocked.Decrement(ref _pending);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-respawn-consume", ex);
+            logger.LogError(ex, "creature respawn queue consumer loop faulted");
         }
     }
 }

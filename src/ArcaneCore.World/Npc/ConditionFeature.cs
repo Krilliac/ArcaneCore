@@ -1,12 +1,13 @@
 using ArcaneCore.Game.Conditions;
-using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
-using ArcaneCore.Game.Instances.Scripts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
@@ -47,6 +48,7 @@ public sealed class ConditionOptions
 public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<ConditionFeature> logger)
     : IWorldFeature, IConditionEvaluator, IConditionTableEvaluator
 {
+    private readonly ILogger<ConditionFeature> _logger = logger;
     private ConditionEvaluator _current = new(ConditionTable.Empty, new ConditionContext());
     private WorldRuntime? _world;
     private ConditionTable? _table;
@@ -56,7 +58,19 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
     /// <summary>The evaluator over the loaded table.</summary>
     public ConditionEvaluator Current => Volatile.Read(ref _current);
 
-    public bool IsSatisfied(uint conditionId, Player player, NpcInfo? source) => Current.IsSatisfied(conditionId, player, source);
+    public bool IsSatisfied(uint conditionId, Player player, NpcInfo? source)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        try
+        {
+            return Current.IsSatisfied(conditionId, player, source);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("conditions.evaluate", ex, "Condition {ConditionId} evaluation failed for player {PlayerGuid}", conditionId, player.Guid);
+            return false;
+        }
+    }
 
     public void Attach(WorldRuntime world)
     {
@@ -76,11 +90,21 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         Install(world, table);
         foreach (ConditionRejection rejection in table.Rejected.Take(20))
         {
-            logger.LogWarning("Condition {Entry} (type {Type}) skipped: {Reason}", rejection.Entry, rejection.Type, rejection.Reason);
+            _logger.LogWarning("Condition {Entry} (type {Type}) skipped: {Reason}", rejection.Entry, rejection.Type, rejection.Reason);
         }
 
         LogSummary(table);
-        world.WorldTick += _ => InstallSpawnGroupConditions(world);
+        world.WorldTick += _ =>
+        {
+            try
+            {
+                InstallSpawnGroupConditions(world);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("conditions.world-tick", ex, "Installing spawn-group conditions on world tick failed");
+            }
+        };
     }
 
     /// <summary>
@@ -92,15 +116,35 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
     {
         foreach (Map map in world.Maps)
         {
-            if (map.FindUpdater<Game.Creatures.CreatureMapSystem>() is { SpawnGroupCondition: null } creatures)
+            try
             {
-                creatures.SpawnGroupCondition = group => Current.EvaluateOnMap(group.WorldStateCondition, map);
-            }
+                if (map.FindUpdater<Game.Creatures.CreatureMapSystem>() is { SpawnGroupCondition: null } creatures)
+                {
+                    creatures.SpawnGroupCondition = group => EvaluateSpawnGroupCondition(map, group.WorldStateCondition);
+                }
 
-            if (map.FindUpdater<Game.GameObjects.GameObjectMapSystem>() is { SpawnGroupCondition: null } objects)
-            {
-                objects.SpawnGroupCondition = group => Current.EvaluateOnMap(group.WorldStateCondition, map);
+                if (map.FindUpdater<Game.GameObjects.GameObjectMapSystem>() is { SpawnGroupCondition: null } objects)
+                {
+                    objects.SpawnGroupCondition = group => EvaluateSpawnGroupCondition(map, group.WorldStateCondition);
+                }
             }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("conditions.spawn-group-install", ex, "Failed to install spawn-group condition evaluator on map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
+            }
+        }
+    }
+
+    private bool EvaluateSpawnGroupCondition(Map map, uint conditionId)
+    {
+        try
+        {
+            return Current.EvaluateOnMap(conditionId, map) == true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("conditions.spawn-group-evaluate", ex, "Spawn-group condition {ConditionId} evaluation failed on map {MapId} instance {InstanceId}", conditionId, map.MapId, map.InstanceId);
+            return false;
         }
     }
 
@@ -120,14 +164,21 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
             return;
         }
 
-        Install(_world, _table);
-        LogSummary(_table);
+        try
+        {
+            Install(_world, _table);
+            LogSummary(_table);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("conditions.refresh-collaborators", ex, "Failed to refresh condition evaluator collaborators");
+        }
     }
 
     private void LogSummary(ConditionTable table)
     {
         ConditionSummary summary = Current.Summarize();
-        logger.LogInformation(
+        _logger.LogInformation(
             "Conditions: {Rows} rows loaded, {Rejected} rejected, {Evaluable} decidable; undecidable leaf rows by type (they fail closed): {Unavailable}",
             table.Count, table.Rejected.Count, summary.Evaluable,
             summary.UnavailableByType.Count == 0 ? "none" : string.Join(", ", summary.UnavailableByType.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}x{kv.Value}")));

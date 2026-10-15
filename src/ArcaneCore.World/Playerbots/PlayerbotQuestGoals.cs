@@ -897,7 +897,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (player.Inventory.GetItemCount(item) >= needed || services.Npcs.SellsItem(item)) continue;
             loot ??= session?.Services.GetService<GameObjectLootFeature>()?.LootContent;
             if (loot is not { RowCount: > 0 }) continue;
-            if (PlayerbotDropIndex.DroppersOf(loot, item).Count == 0) return false;
+            if (loot.CreatureInfoCount > 0
+                ? PlayerbotDropIndex.DroppersOf(loot, item).Count == 0
+                : !loot.HasLootItem(item))
+                return false;
         }
 
         return true;

@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
@@ -209,20 +210,27 @@ public sealed class FishingService : IMapUpdater, ILootReleaseHandler
         _clockMs += diffMs;
         foreach (Bobber bobber in _bobbers.Values.ToArray())
         {
-            if (!bobber.Go.IsSpawned)
+            try
             {
-                _bobbers.Remove(bobber.Owner.Guid); // removed by someone else (GM command, grid unload)
-                continue;
-            }
+                if (!bobber.Go.IsSpawned)
+                {
+                    _bobbers.Remove(bobber.Owner.Guid); // removed by someone else (GM command, grid unload)
+                    continue;
+                }
 
-            if (!bobber.Ready && _clockMs >= bobber.ReadyAtMs)
-            {
-                MakeReady(bobber);
-            }
+                if (!bobber.Ready && _clockMs >= bobber.ReadyAtMs)
+                {
+                    MakeReady(bobber);
+                }
 
-            if (bobber.Ready && bobber.Go.LootState == GameObjectLootState.Ready && _clockMs >= bobber.ExpireAtMs)
+                if (bobber.Ready && bobber.Go.LootState == GameObjectLootState.Ready && _clockMs >= bobber.ExpireAtMs)
+                {
+                    Expire(bobber);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                Expire(bobber);
+                FaultLedger.Shared.Record("map-fishing", ex);
             }
         }
     }

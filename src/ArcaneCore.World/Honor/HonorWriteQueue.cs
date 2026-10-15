@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Honor;
 
 /// <summary>
@@ -342,8 +343,13 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         {
             scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException)
         {
+            /* expected on shutdown */
+        }
+        catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-honor-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -415,10 +421,14 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                         break;
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
+            {
+                /* expected on shutdown */
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // ExecuteAsync reports store failures itself; this is a queue bug and must not kill the consumer.
-                logger.LogError(ex, "honor write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
+                logger.LogFault("writequeue-honor-consume", ex, "honor write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -456,9 +466,9 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             }
         }
 
-        if (failed > 0)
+        if (failed > 0 && Invariant.Check(first is not null, "honor retry recorded failures without a first exception") && first is { } firstFailure)
         {
-            logger.LogWarning("honor retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
+            logger.LogWarning("honor retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", firstFailure.Message);
         }
     }
 
@@ -507,7 +517,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         {
             await WriteAsync(characterId, snapshot, sweep ? 1 : MaxAttempts).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             lock (_gate)
             {
@@ -520,7 +530,11 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
             if (!sweep)
             {
-                logger.LogError(ex, "honor write for character {Character} failed; retained for retry", characterId);
+                logger.LogFault("writequeue-honor", ex, "honor write for character {Character} failed; retained for retry", characterId);
+            }
+            else
+            {
+                FaultLedger.Shared.Record("writequeue-honor-sweep", ex);
             }
 
             return ex;
@@ -606,11 +620,13 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             }
             catch (CharacterOwnershipRejectedException ex)
             {
+                FaultLedger.Shared.Record("writequeue-honor-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 throw;
             }
-            catch (Exception ex) when (attempt < attempts)
+            catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("writequeue-honor-attempt", ex);
                 logger.LogWarning(ex, "honor write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }

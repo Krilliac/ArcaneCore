@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Social;
 
 /// <summary>
@@ -574,8 +575,13 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException)
         {
+            /* expected on shutdown */
+        }
+        catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-social-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -650,10 +656,14 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                         break;
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
+            {
+                /* expected on shutdown */
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // Store failures are handled where they happen; this is a queue bug and must not kill the consumer.
-                _logger.LogError(ex, "social write queue item {Kind} failed unexpectedly", work.Kind);
+                _logger.LogFault("writequeue-social-consume", ex, "social write queue item {Kind} failed unexpectedly", work.Kind);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -691,7 +701,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                 }
 
                 SetRetained(work.Key, value, failure);
-                _logger.LogError(failure, "social write for {Kind} {Id} failed; retained for retry", work.Key.Kind, work.Key.A);
+                _logger.LogFault("writequeue-social", failure, "social write for {Kind} {Id} failed; retained for retry", work.Key.Kind, work.Key.A);
             }
 
             ReleaseKey(work.Key);
@@ -781,9 +791,9 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             }
         }
 
-        if (failed > 0)
+        if (failed > 0 && Invariant.Check(first is not null, "social retry recorded failures without a first exception") && first is { } firstFailure)
         {
-            _logger.LogWarning("social retry: {Failed} of {Total} retained writes still failing{Locked}; first: {Reason}", failed, rows.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
+            _logger.LogWarning("social retry: {Failed} of {Total} retained writes still failing{Locked}; first: {Reason}", failed, rows.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", firstFailure.Message);
         }
     }
 
@@ -884,16 +894,19 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             }
             catch (CharacterOwnershipRejectedException ex)
             {
+                FaultLedger.Shared.Record("writequeue-social-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 return ex;
             }
-            catch (Exception ex) when (attempt < attempts)
+            catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("writequeue-social-attempt", ex);
                 _logger.LogWarning(ex, "social write for {Kind} {Id} failed (attempt {Attempt}); retrying", key.Kind, key.A, attempt);
                 await Task.Delay(Math.Max(0, _options.RetryDelayMs) * attempt).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("writequeue-social-failure", ex);
                 return ex;
             }
         }

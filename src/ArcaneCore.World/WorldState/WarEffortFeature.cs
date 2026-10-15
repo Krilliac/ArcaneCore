@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -90,10 +91,44 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         if (events.Service is { } current) Wire(current);
         world.WorldTick += diffMs =>
         {
-            InstallBossAis(world);
-            OnTick(diffMs);
-            ApplyGates();
-            if (_hasStore) RunScenes();
+            try
+            {
+                InstallBossAis(world);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("war-effort.install-boss-ais", ex, "failed to install AQ boss AIs on world tick");
+            }
+
+            try
+            {
+                OnTick(diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("war-effort.on-tick", ex, "failed to tick AQ war effort on world tick");
+            }
+
+            try
+            {
+                ApplyGates();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("war-effort.apply-gates", ex, "failed to apply AQ gate states on world tick");
+            }
+
+            if (_hasStore)
+            {
+                try
+                {
+                    RunScenes();
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    logger.LogFault("war-effort.run-scenes", ex, "failed to run AQ war effort scenes on world tick");
+                }
+            }
         };
         world.MapUnloading += map =>
         {
@@ -150,11 +185,15 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         {
             await _store.InFlight.ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
+        {
+            // Expected cancellation during shutdown.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The job's failure would have been logged by its apply on the world thread, which no longer runs: log it here.
             // The queued work below is still written.
-            logger.LogWarning(ex, "the AQ war-effort store job in flight at shutdown failed");
+            logger.LogFault(LogLevel.Warning, "war-effort.stop-inflight", ex, "the AQ war-effort store job in flight at shutdown failed");
         }
 
         WarEffortPhase? phase = _queuedPhase == _inFlightPhase ? null : _queuedPhase;
@@ -165,13 +204,17 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         {
             await RunStoreAsync(phase, deaths, full: false, UtcNowUnix(), result).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            logger.LogError(ex, "could not write the queued AQ war-effort state at shutdown");
+            // Expected cancellation during shutdown.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("war-effort.stop-flush", ex, "could not write the queued AQ war-effort state at shutdown");
         }
 
         if (result.BossDeathFailure is { } failure)
-            logger.LogError(failure, "could not persist AQ Colossus death at shutdown");
+            logger.LogFault("war-effort.stop-boss-death", failure, "could not persist AQ Colossus death at shutdown");
     }
 
     private WarEffortPhase? _inFlightPhase;
@@ -224,7 +267,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             {
                 if (_queuedPhase == phase) _queuedPhase = null;
                 foreach (int done in result.FlushedBossDeaths) _pendingBossDeaths.Remove(done);
-                logger.LogError(ex, "could not refresh AQ war-effort state");
+                logger.LogFault("war-effort.refresh-store", ex, "could not refresh AQ war-effort state");
             });
     }
 
@@ -241,10 +284,11 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
                 result.FlushedBossDeaths.Add(bossIndex);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // A storage outage must not interrupt CreatureMapSystem.OnCreatureDied before it sets corpse state.
             // Keep the idempotent flag in memory and retry on the next five-second refresh.
+            FaultLedger.Shared.Record("war-effort.mark-boss-killed", ex);
             result.BossDeathFailure = ex;
         }
         WarEffortSnapshot state = await store.LoadAsync().ConfigureAwait(false);
@@ -266,7 +310,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
     {
         foreach (int done in result.FlushedBossDeaths) _pendingBossDeaths.Remove(done);
         if (result.BossDeathFailure is { } failure)
-            logger.LogError(failure, "could not persist AQ Colossus death; {Count} flag(s) pending retry", _pendingBossDeaths.Count);
+            logger.LogFault("war-effort.persist-boss-death", failure, "could not persist AQ Colossus death; {Count} flag(s) pending retry", _pendingBossDeaths.Count);
         if (result.Snapshot is { } current) Volatile.Write(ref _snapshot, current);
         if (_queuedPhase is not null)
         {
@@ -276,21 +320,58 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             TryLaunch();
             return;
         }
-        try
+
+        if (syncEvent)
         {
-            if (syncEvent) SyncPhaseEvent();
-            if (full)
+            try
             {
-                FindGates();
-                AnnounceChampion();
-                SyncPiles();
-                PublishCapitalStates();
+                SyncPhaseEvent();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("war-effort.sync-phase-event", ex, "could not sync AQ war-effort phase event");
             }
         }
-        catch (Exception ex)
+
+        if (full)
         {
-            logger.LogError(ex, "could not refresh AQ war-effort state");
+            try
+            {
+                FindGates();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("war-effort.find-gates", ex, "could not scan AQ war-effort gates");
+            }
+
+            try
+            {
+                AnnounceChampion();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("war-effort.announce-champion", ex, "could not announce AQ war-effort champion");
+            }
+
+            try
+            {
+                SyncPiles();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("war-effort.sync-piles", ex, "could not sync AQ war-effort resource piles");
+            }
+
+            try
+            {
+                PublishCapitalStates();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("war-effort.publish-capital-states", ex, "could not publish AQ war-effort capital world states");
+            }
         }
+
         TryLaunch();
     }
 

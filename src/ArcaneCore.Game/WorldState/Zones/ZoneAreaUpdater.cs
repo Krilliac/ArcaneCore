@@ -1,6 +1,7 @@
 using System.Runtime.ExceptionServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.Game.WorldState.Zones;
@@ -91,36 +92,43 @@ public sealed class ZoneAreaUpdater : IMapUpdater
     {
         foreach (Player player in map.Players)
         {
-            State state = GetState(player);
-            CheckExplore(player, state, diffMs);
-            if (state.Timer == 0)
+            try
             {
-                // vmangos runs the first UpdateZone from SendInitialPacketsAfterAddToMap; a player that
-                // reached the map without it (tests, other entry paths) gets it on its first tick.
-                (uint z, uint a, bool storedZone) = Resolve(player, state);
-                UpdateZone(player, state, z, a, storedZone);
-                continue;
-            }
-
-            if (diffMs < state.Timer)
-            {
-                state.Timer -= diffMs;
-                continue;
-            }
-
-            (uint newZone, uint newArea, bool newStored) = Resolve(player, state);
-            if (state.Zone != newZone)
-            {
-                UpdateZone(player, state, newZone, newArea, newStored);
-            }
-            else
-            {
-                if (state.Area != newArea)
+                State state = GetState(player);
+                CheckExplore(player, state, diffMs);
+                if (state.Timer == 0)
                 {
-                    UpdateArea(player, state, newArea);
+                    // vmangos runs the first UpdateZone from SendInitialPacketsAfterAddToMap; a player that
+                    // reached the map without it (tests, other entry paths) gets it on its first tick.
+                    (uint z, uint a, bool storedZone) = Resolve(player, state);
+                    UpdateZone(player, state, z, a, storedZone);
+                    continue;
                 }
 
-                state.Timer = ZoneUpdateIntervalMs;
+                if (diffMs < state.Timer)
+                {
+                    state.Timer -= diffMs;
+                    continue;
+                }
+
+                (uint newZone, uint newArea, bool newStored) = Resolve(player, state);
+                if (state.Zone != newZone)
+                {
+                    UpdateZone(player, state, newZone, newArea, newStored);
+                }
+                else
+                {
+                    if (state.Area != newArea)
+                    {
+                        UpdateArea(player, state, newArea);
+                    }
+
+                    state.Timer = ZoneUpdateIntervalMs;
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("zone-area.player-update", ex);
             }
         }
     }
@@ -258,8 +266,9 @@ public sealed class ZoneAreaUpdater : IMapUpdater
         {
             call();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("zone-area.location-listener", ex);
             failure ??= ex;
         }
     }

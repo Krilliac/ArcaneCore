@@ -203,9 +203,9 @@ public sealed class PlayerbotCommands : ICommandGroup
             // The terminator: tools that wait for the whole reply (tools/ops/OpsLib.ps1) match it, so a bot that is missing does not hide the end.
             context.Reply(string.Create(CultureInfo.InvariantCulture, $"{StatusTerminator}{all.Count}"));
         }
-        else
+        else if (status is { } found)
         {
-            context.Reply(Format(status!));
+            context.Reply(Format(found));
         }
 
         return true;
@@ -235,6 +235,12 @@ public sealed class PlayerbotCommands : ICommandGroup
         if (!TryRequiredId(text, out string id)) return false;
         ManagedPlayerbotFeature? service = context.Session.Services.GetService<ManagedPlayerbotFeature>();
         if (service is null) { context.Reply("Playerbot service is unavailable."); return true; }
+        if (context.IsConsole || context.Player.Map is null)
+        {
+            context.Reply("Playerbot failed: invoker is not in the world.");
+            return true;
+        }
+
         PlayerbotOperationResult result = service.InviteToGroup(context.Player, id);
         context.Reply($"Playerbot {(result.Success ? "ok" : "failed")}: {result.Code} ({result.Name ?? id}).");
         return true;
@@ -341,7 +347,9 @@ public sealed class PlayerbotCommands : ICommandGroup
         {
             foreach (PlayerbotStatus match in matches)
             {
-                if (service.TryGetPosition(match.BotId, out uint map, out System.Numerics.Vector3 position) && service.AllowsHomeMap(map))
+                if (service.TryGetPosition(match.BotId, out uint map, out System.Numerics.Vector3 position)
+                    && float.IsFinite(position.X) && float.IsFinite(position.Y) && float.IsFinite(position.Z)
+                    && service.AllowsHomeMap(map))
                 {
                     if (ZoneKnown(map, position)) targets.Add(new(match.BotId, map, position));
                 }
@@ -365,6 +373,12 @@ public sealed class PlayerbotCommands : ICommandGroup
             if (tele is null)
             {
                 context.Reply(Gm.Core.GmStrings.TeleNotFound);
+                return true;
+            }
+
+            if (!float.IsFinite(tele.X) || !float.IsFinite(tele.Y) || !float.IsFinite(tele.Z))
+            {
+                context.Reply("Playerbot home: the teleport location has invalid coordinates.");
                 return true;
             }
 
@@ -427,9 +441,19 @@ public sealed class PlayerbotCommands : ICommandGroup
 
     private static async Task InspectAndReplyAsync(CommandContext context, ManagedPlayerbotFeature service, string id)
     {
-        try { await InspectReplyCoreAsync(context, service, id).ConfigureAwait(false); }
+        try
+        {
+            await InspectReplyCoreAsync(context, service, id).ConfigureAwait(false);
+        }
         catch (Exception error) when (error is TimeoutException or OperationCanceledException or InvalidOperationException)
-        { context.Reply("Playerbot inspection is temporarily unavailable."); }
+        {
+            context.Reply("Playerbot inspection is temporarily unavailable.");
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            service.ReportCommandFault("inspect", error);
+            context.Reply("Playerbot inspection is temporarily unavailable.");
+        }
     }
 
     private static async Task InspectReplyCoreAsync(CommandContext context, ManagedPlayerbotFeature service, string id)

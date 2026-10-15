@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Combat;
 
@@ -23,6 +24,11 @@ public sealed class MapDuel : IMapUpdater
     /// <inheritdoc/>
     public void Update(Map map, uint diffMs)
     {
+        if (map is null)
+        {
+            return;
+        }
+
         DuelService? service = DuelService.Find(_world);
         if (service is null)
         {
@@ -32,20 +38,27 @@ public sealed class MapDuel : IMapUpdater
         long now = service.Clock();
         foreach (Player player in map.Players.ToArray())
         {
-            if (player.Duel is null)
+            try
             {
-                continue;
-            }
+                if (player is null || !player.IsInWorld || player.Map is null || !ReferenceEquals(player.Map, map) || player.Duel is null)
+                {
+                    continue;
+                }
 
-            if (player.Duel.Finished)
+                if (player.Duel.Finished)
+                {
+                    // "Delay delete duel" (Player.cpp:1132-1137): the finished object lives until the owner's next update.
+                    player.Duel = null;
+                    continue;
+                }
+
+                service.UpdateDuelFlag(player, now);
+                service.CheckDistance(player, now);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                // "Delay delete duel" (Player.cpp:1132-1137): the finished object lives until the owner's next update.
-                player.Duel = null;
-                continue;
+                FaultLedger.Shared.Record("map-duel", ex);
             }
-
-            service.UpdateDuelFlag(player, now);
-            service.CheckDistance(player, now);
         }
     }
 

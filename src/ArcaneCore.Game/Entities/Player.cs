@@ -4,6 +4,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 
@@ -394,6 +395,12 @@ public sealed partial class Player : Unit
     /// </summary>
     public void ApplyClientMovement(in MovementInfo movement, uint serverTimeMs)
     {
+        if (!Invariant.Check(float.IsFinite(movement.X) && float.IsFinite(movement.Y) && float.IsFinite(movement.Z),
+                $"Player {Guid} client movement had non-finite position ({movement.X}, {movement.Y}, {movement.Z}) on map {MapId}"))
+        {
+            return;
+        }
+
         bool moved = movement.X != X || movement.Y != Y;
         ApplyMovement(movement, serverTimeMs);
         if (moved && Map is null)
@@ -515,7 +522,8 @@ public sealed partial class Player : Unit
     private CharacterState CreateSnapshot(uint nowMs, uint mapId, float x, float y, float z, float orientation,
         IReadOnlyList<ActionButton>? buttons, Kernel.Items.InventorySnapshot? inventory)
     {
-        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z) || !float.IsFinite(orientation))
+        if (!Invariant.Check(float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z) && float.IsFinite(orientation),
+                $"Player {Name} (guid={Guid.Low}) had non-finite save coordinates ({x},{y},{z},o={orientation}) on map {mapId}"))
         {
             bool useHome = float.IsFinite(Home.X) && float.IsFinite(Home.Y) && float.IsFinite(Home.Z);
             float safeX = float.IsFinite(x) ? x : (useHome ? Home.X : 0f);
@@ -630,12 +638,12 @@ public sealed partial class Player : Unit
         _nativeDisplayModelInitialized = true;
         float normalized = 1.0f;
         SetFloat(UpdateFields.UnitFieldBoundingradius,
-            model.BoundingRadius > 0 ? normalized * model.BoundingRadius : DefaultBoundingRadius);
+            float.IsFinite(model.BoundingRadius) && model.BoundingRadius > 0 ? normalized * model.BoundingRadius : DefaultBoundingRadius);
         SetFloat(UpdateFields.UnitFieldCombatreach,
-            model.CombatReach > 0 ? normalized * model.CombatReach : DefaultCombatReach);
+            float.IsFinite(model.CombatReach) && model.CombatReach > 0 ? normalized * model.CombatReach : DefaultCombatReach);
         if (model.HasModelData)
         {
-            float height = normalized * (model.CollisionHeight > 0 && model.ModelScale > 0
+            float height = normalized * (float.IsFinite(model.CollisionHeight) && model.CollisionHeight > 0 && float.IsFinite(model.ModelScale) && model.ModelScale > 0
                 ? model.CollisionHeight / model.ModelScale : 2.0f);
             if (float.IsFinite(height) && height > 0)
             {

@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -192,7 +193,20 @@ public sealed class TransportSystem
         {
             if (ReferenceEquals(ship.CurrentMap, map))
             {
-                ship.Update(now);
+                try
+                {
+                    ship.Update(now);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault(
+                        "map-transport",
+                        ex,
+                        "TransportSystem fault updating transport {Entry} (guid={Guid}) on map {MapId}",
+                        ship.Entry,
+                        ship.Guid,
+                        map.MapId);
+                }
             }
         }
     }
@@ -203,16 +217,29 @@ public sealed class TransportSystem
     /// </summary>
     internal void OnPlayerAdding(Map map, Player player)
     {
-        if (player.LoginTransportSeat is { } seat)
+        try
         {
-            player.LoginTransportSeat = null;
-            RestoreSeat(map, player, seat);
-        }
+            if (player.LoginTransportSeat is { } seat)
+            {
+                player.LoginTransportSeat = null;
+                RestoreSeat(map, player, seat);
+            }
 
-        if (_byMap.TryGetValue(map, out List<ShipTransport>? ships) && ships.Count > 0)
+            if (_byMap.TryGetValue(map, out List<ShipTransport>? ships) && ships.Count > 0)
+            {
+                TransportPackets.Send(player, TransportPackets.BuildCreate(ships.Where(s => !ReferenceEquals(s, player.Transport)), player, _world.NowMs),
+                    CompressionThreshold);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            TransportPackets.Send(player, TransportPackets.BuildCreate(ships.Where(s => !ReferenceEquals(s, player.Transport)), player, _world.NowMs),
-                CompressionThreshold);
+            _logger.LogFault(
+                "map-transport",
+                ex,
+                "TransportSystem fault adding player {Player} (guid={Guid}) to map {MapId}",
+                player.Name,
+                player.Guid.Low,
+                map.MapId);
         }
     }
 
@@ -228,18 +255,44 @@ public sealed class TransportSystem
             return;
         }
 
-        PacketWriter block = selfPacket.BeginBlock();
-        UpdateBlockWriter.WriteCreateBlock(block, ship, player, isNewObject: false, _world.NowMs);
-        selfPacket.EndBlock();
-        selfPacket.HasTransport = true;
+        try
+        {
+            PacketWriter block = selfPacket.BeginBlock();
+            UpdateBlockWriter.WriteCreateBlock(block, ship, player, isNewObject: false, _world.NowMs);
+            selfPacket.EndBlock();
+            selfPacket.HasTransport = true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault(
+                "map-transport",
+                ex,
+                "TransportSystem fault writing self transport block for player {Player} (guid={Guid}) on map {MapId}",
+                player.Name,
+                player.Guid.Low,
+                map.MapId);
+        }
     }
 
     /// <summary>vmangos <c>Map::SendRemoveTransports</c>: every ship of the map but the player's own.</summary>
     internal void OnPlayerRemoved(Map map, Player player)
     {
-        if (_byMap.TryGetValue(map, out List<ShipTransport>? ships) && ships.Count > 0)
+        try
         {
-            TransportPackets.Send(player, TransportPackets.BuildOutOfRange(ships.Where(s => !ReferenceEquals(s, player.Transport))), CompressionThreshold);
+            if (_byMap.TryGetValue(map, out List<ShipTransport>? ships) && ships.Count > 0)
+            {
+                TransportPackets.Send(player, TransportPackets.BuildOutOfRange(ships.Where(s => !ReferenceEquals(s, player.Transport))), CompressionThreshold);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault(
+                "map-transport",
+                ex,
+                "TransportSystem fault removing player {Player} (guid={Guid}) from map {MapId}",
+                player.Name,
+                player.Guid.Low,
+                map.MapId);
         }
     }
 
@@ -285,22 +338,35 @@ public sealed class TransportSystem
 
         foreach (Unit passenger in ship.Passengers.ToArray())
         {
-            float destX = passenger.Movement.TransportX;
-            float destY = passenger.Movement.TransportY;
-            float destZ = passenger.Movement.TransportZ;
-            float destO = passenger.Movement.TransportOrientation;
-            ShipTransport.CalculatePassengerPosition(ref destX, ref destY, ref destZ, ref destO, x, y, z, o);
-            switch (passenger)
+            try
             {
-                case Creature creature:
-                    LeaveCreatureBehind(ship, creature);
-                    break;
-                case Player player:
-                    CarryPlayer(ship, player, newMapId, destX, destY, destZ, destO);
-                    break;
-                default:
-                    ship.RemovePassenger(passenger);
-                    break;
+                float destX = passenger.Movement.TransportX;
+                float destY = passenger.Movement.TransportY;
+                float destZ = passenger.Movement.TransportZ;
+                float destO = passenger.Movement.TransportOrientation;
+                ShipTransport.CalculatePassengerPosition(ref destX, ref destY, ref destZ, ref destO, x, y, z, o);
+                switch (passenger)
+                {
+                    case Creature creature:
+                        LeaveCreatureBehind(ship, creature);
+                        break;
+                    case Player player:
+                        CarryPlayer(ship, player, newMapId, destX, destY, destZ, destO);
+                        break;
+                    default:
+                        ship.RemovePassenger(passenger);
+                        break;
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault(
+                    "map-transport",
+                    ex,
+                    "TransportSystem fault teleporting passenger {PassengerGuid} on transport {Entry} to map {NewMapId}",
+                    passenger.Guid,
+                    ship.Entry,
+                    newMapId);
             }
         }
 
@@ -637,9 +703,9 @@ public sealed class TransportSystem
             {
                 handler(ship, passenger);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _logger.LogError(ex, "transport passenger handler failed");
+                _logger.LogFault("map-transport", ex, "transport passenger handler failed");
             }
         }
     }

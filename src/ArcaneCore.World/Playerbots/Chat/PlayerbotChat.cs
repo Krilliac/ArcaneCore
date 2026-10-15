@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Threading.Channels;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 
@@ -283,13 +284,20 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                     {
                         // Never the key: the request carries it, the exception text does not.
                         Interlocked.Increment(ref _dropped);
+                        FaultLedger.Shared.Record("playerbot-chat", error);
                         _logger.LogWarning("Bot chat: a reply failed ({Error})", error.GetType().Name); // type only, by design: the exception text may carry the request URL or key
                     }
                 }
             }
         }
-        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (_stop.IsCancellationRequested)
         {
+            _logger.LogDebug(ex, "Bot chat worker stopped on cancellation");
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot-chat", ex);
+            _logger.LogWarning("Bot chat worker faulted ({Error})", ex.GetType().Name);
         }
     }
 
@@ -748,8 +756,19 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _stop.Cancel();
         _queue?.Writer.TryComplete();
-        try { await Task.WhenAll(_workers).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
-        catch (Exception error) when (error is TimeoutException or OperationCanceledException) { } // dispose: workers that outlive the 5 s grace period are abandoned by design
+        try
+        {
+            await Task.WhenAll(_workers).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is TimeoutException or OperationCanceledException)
+        {
+            _logger.LogDebug(error, "Bot chat workers did not complete within the dispose timeout");
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot-chat", ex);
+            _logger.LogWarning("Bot chat worker faulted during dispose ({Error})", ex.GetType().Name);
+        }
     }
 
     private sealed class ProviderState

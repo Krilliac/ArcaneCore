@@ -152,7 +152,15 @@ public static class WarEffortPileCatalog
         1998, 2055, 2071, 2103, 2090,
     ];
 
-    public static uint TotalField(int resourceId) => TotalFields[resourceId >= TotalFields.Length ? resourceId - 5 : resourceId];
+    public static uint TotalField(int resourceId)
+    {
+        if (resourceId < 0 || resourceId >= WarEffortCatalog.Resources.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(resourceId), resourceId, $"Expected resourceId in [0..{WarEffortCatalog.Resources.Count - 1}].");
+        }
+
+        return TotalFields[resourceId >= TotalFields.Length ? resourceId - 5 : resourceId];
+    }
 
     /// <summary>The counter world states of a capital zone entry: totals then counts while gathering, days left while transporting.</summary>
     public static IReadOnlyList<(uint Field, uint Value)> CapitalStates(WarEffortSnapshot state, DateTimeOffset now)
@@ -161,9 +169,12 @@ public static class WarEffortPileCatalog
         if (state.Phase == WarEffortPhase.Gathering)
         {
             for (int i = 0; i < TotalFields.Length; i++)
-                states.Add((TotalFields[i], (uint)WarEffortCatalog.Resources[i].Goal));
+                states.Add((TotalFields[i], (uint)Math.Clamp(WarEffortCatalog.Resources[i].Goal, 0L, uint.MaxValue)));
             foreach (WarEffortResource resource in WarEffortCatalog.Resources)
-                states.Add((resource.WorldStateField, (uint)Math.Min(uint.MaxValue, state.Counters[resource.Id])));
+            {
+                long count = (uint)resource.Id < (uint)state.Counters.Count ? state.Counters[resource.Id] : 0L;
+                states.Add((resource.WorldStateField, (uint)Math.Clamp(count, 0L, uint.MaxValue)));
+            }
         }
         else if (state.Phase == WarEffortPhase.Transporting)
         {

@@ -61,6 +61,11 @@ public static class PeriodicTiming
         }
 
         int period = (int)aura.Period;
+        if (!ArcaneCore.Kernel.Diagnostics.Invariant.Check(period > 0, $"Periodic aura ({aura.Type}) has non-positive period {period}."))
+        {
+            return;
+        }
+
         int timer = duration > period ? duration % period : duration;
         aura.PeriodicTimer = timer == 0 ? period : timer;
     }
@@ -78,6 +83,11 @@ public static class PeriodicTiming
         }
 
         int period = (int)aura.Period;
+        if (!ArcaneCore.Kernel.Diagnostics.Invariant.Check(period > 0, $"Periodic aura ({aura.Type}) has non-positive period {period}."))
+        {
+            return 0;
+        }
+
         aura.PeriodicTimer -= (int)(diffMs & 0x7FFFFFFF);
         if (aura.PeriodicTimer > 0)
         {

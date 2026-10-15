@@ -636,7 +636,7 @@ internal static class PlayerbotTaxi
         Vector3 here)
     {
         if (session.Services.GetService<CreatureWorldFeature>()?.Content is not { } content) return null;
-        FactionTemplateCatalog factions = session.Services.GetService<QuestNpcFeature>()!.FactionTemplates;
+        if (session.Services.GetService<QuestNpcFeature>()?.FactionTemplates is not { } factions) return null;
         MasterTable table = MasterTables.TryGetValue(content, out MasterTable? cached) && cached.Version == content.DefinitionsVersion
             ? cached : BuildMasterTable(content);
         bool alliance = player.Team == Team.Alliance;

@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Characters;
@@ -75,7 +76,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        if (_world is not null)
+        if (!Invariant.Check(_world is null, "EconomyFeature.Attach: the economy feature is already attached"))
         {
             throw new InvalidOperationException("the economy feature is already attached");
         }
@@ -141,7 +142,17 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         if (Enabled)
         {
             // vmangos MasterPlayer::Update checks the next mail delivery time every world tick; once a second is as fine as the clock.
-            _deliveryTimer = new Timer(_ => world.Post(NotifyDeliveredMail), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+            _deliveryTimer = new Timer(_ => world.Post(() =>
+            {
+                try
+                {
+                    NotifyDeliveredMail();
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("economy-delivery-timer", ex, "economy mail delivery notification failed");
+                }
+            }), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
         }
     }
 
@@ -300,7 +311,11 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
     private Player? OnlinePlayer(int id) => id > 0 ? _world?.FindOnlinePlayer(ObjectGuid.Player((uint)id)) : null;
 
-    private static int IdOf(Player player) => checked((int)player.Guid.Low);
+    private static int IdOf(Player player)
+    {
+        Invariant.Check(player is not null && !player.Guid.IsEmpty && player.Guid.Low > 0, $"EconomyFeature.IdOf: invalid player GUID {player?.Guid}");
+        return checked((int)player!.Guid.Low);
+    }
 
     private static bool IsAlliance(byte race) => (Race)race is Race.Human or Race.Dwarf or Race.NightElf or Race.Gnome;
 
@@ -328,7 +343,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _logger.LogError(ex, "economy read failed");
+                _logger.LogFault("economy-read", ex, "economy read failed");
                 if (failed is not null)
                 {
                     world.Post(failed);
@@ -429,7 +444,14 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             {
                 if (option == ArcaneCore.Game.Npc.GossipOption.Auctioneer && player.Session is WorldSession session)
                 {
-                    AuctionHello(session, player, npc.Guid);
+                    try
+                    {
+                        AuctionHello(session, player, npc.Guid);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        _logger.LogFault("economy-gossip-auction", ex, "auction hello from gossip failed for player {Player}", player.Guid);
+                    }
                 }
             };
         }
@@ -443,8 +465,31 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             return;
         }
 
-        RecoverAuctions();
-        ExpireAuctions();
-        Read((store, ct) => store.GetExpiredMailsAsync(Now, 50, ct), ExpireMails);
+        try
+        {
+            RecoverAuctions();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("economy-sweep-recover", ex, "auction recovery sweep failed");
+        }
+
+        try
+        {
+            ExpireAuctions();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("economy-sweep-auctions", ex, "auction expiry sweep failed");
+        }
+
+        try
+        {
+            Read((store, ct) => store.GetExpiredMailsAsync(Now, 50, ct), ExpireMails);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("economy-sweep-mails", ex, "mail expiry sweep failed");
+        }
     }
 }

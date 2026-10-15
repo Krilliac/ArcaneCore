@@ -11,6 +11,7 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.GameObjects;
 
 /// <summary>
@@ -247,11 +248,17 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
             budget.CancelAfter(allowed);
             if (operation.Source.Actor is { } actor)
             {
+                if (!Invariant.Check(_saves is not null, $"loot operation {operation.Id} settled without character save queue")
+                    || _saves is not { } saves)
+                {
+                    throw new InvalidOperationException("loot settlement requires an attached character save queue");
+                }
+
                 // The pre-operation snapshot must be durable first: the commit compares the stored
                 // money and inventory against it, so a lost earlier save is a conflict, not a dupe.
-                await _saves!.SaveForSettlementAsync(actor.Before, budget.Token).ConfigureAwait(false);
+                await saves.SaveForSettlementAsync(actor.Before, budget.Token).ConfigureAwait(false);
                 budget.Token.ThrowIfCancellationRequested();
-                _saves.QuarantineCharacter(actor.Before.Id);
+                saves.QuarantineCharacter(actor.Before.Id);
             }
 
             // A queued InstanceSaved must land before the commit looks for the instance row; a
@@ -278,12 +285,13 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
             if (ex is OperationCanceledException && !_stop.IsCancellationRequested)
             {
                 // The caller answers the client with its ordinary failure reply (or the actors are kicked when the outcome is unknown).
+                FaultLedger.Shared.Record("loot-settlement-timeout", ex);
                 logger.LogWarning("loot operation {Operation} ran out of its {Budget}s budget after {Elapsed} ms (transaction started: {Started})",
                     operation.Id, allowed.TotalSeconds, clock.ElapsedMilliseconds, transactionStarted);
             }
             else
             {
-                logger.LogError(ex, "loot operation {Operation} failed", operation.Id);
+                logger.LogFault("loot-settlement", ex, "loot operation {Operation} failed", operation.Id);
             }
             if (transactionStarted && outcome != LootOutcome.After)
             {
@@ -298,7 +306,7 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
                 }
                 catch (Exception reconciliation) when (reconciliation is not OutOfMemoryException)
                 {
-                    logger.LogError(reconciliation, "could not reconcile loot operation {Operation}", operation.Id);
+                    logger.LogFault("loot-settlement-reconcile", reconciliation, "could not reconcile loot operation {Operation}", operation.Id);
                 }
             }
         }
@@ -307,9 +315,9 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
             lock (_gate)
             {
                 operation.Outcome = outcome;
-                if (!_stopping)
+                if (!_stopping && Invariant.Check(_world is not null, $"loot operation {operation.Id} completed without world loop") && _world is { } world)
                 {
-                    _world!.Post(() => Finalize(operation, publishLive: true));
+                    world.Post(() => Finalize(operation, publishLive: true));
                 }
             }
         }
@@ -359,7 +367,7 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "loot operation {Operation} callback failed", operation.Id);
+            logger.LogFault("loot-settlement-callback", ex, "loot operation {Operation} callback failed", operation.Id);
         }
         finally
         {
@@ -390,11 +398,19 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
                     }
 
                     player.EndQuestSettlement(operation.Id);
-                    _saves!.ResumeCharacter(id);
+                    if (Invariant.Check(_saves is not null, $"loot settlement finalize missing save queue for character {id}") && _saves is { } savesAfter)
+                    {
+                        savesAfter.ResumeCharacter(id);
+                    }
+
                     break;
                 case LootOutcome.Before or LootOutcome.NotStarted when current:
                     player.EndQuestSettlement(operation.Id);
-                    _saves!.ResumeCharacter(id);
+                    if (Invariant.Check(_saves is not null, $"loot settlement rollback missing save queue for character {id}") && _saves is { } savesBefore)
+                    {
+                        savesBefore.ResumeCharacter(id);
+                    }
+
                     break;
                 case LootOutcome.Unknown when current:
                     (player.Session as WorldSession)?.Kick();
@@ -404,8 +420,12 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The durable state is authoritative; the live copy is not trustworthy any more.
-            _saves!.QuarantineCharacter(id);
-            logger.LogError(ex, "loot publication failed for character {Character}; fresh login is required", id);
+            if (Invariant.Check(_saves is not null, $"loot settlement failure missing save queue for character {id}") && _saves is { } savesQuarantine)
+            {
+                savesQuarantine.QuarantineCharacter(id);
+            }
+
+            logger.LogFault("loot-settlement-publish", ex, "loot publication failed for character {Character}; fresh login is required", id);
             if (current)
             {
                 (player.Session as WorldSession)?.Kick();

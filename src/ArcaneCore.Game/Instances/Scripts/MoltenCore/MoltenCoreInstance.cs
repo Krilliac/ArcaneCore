@@ -151,7 +151,10 @@ public sealed class MoltenCoreInstance(Map map) : ScriptedInstance(map, 10)
         Creature domo = defeated
             ? system.SpawnTemporary(template, 848.933f, -812.875f, -229.601f, 4.046f)
             : system.SpawnTemporary(template, 758.0892f, -1176.712f, -118.6403f, 3.124139f);
-        if (defeated) ((MajordomoAI)domo.AI!).MakeFriendly();
+        if (defeated)
+        {
+            if (domo.AI is MajordomoAI domoAi) domoAi.MakeFriendly();
+        }
         else
         {
             if (_initialSummon) system.SayText(domo, 7566); // vmangos SAY_RUNES_DESTROYED

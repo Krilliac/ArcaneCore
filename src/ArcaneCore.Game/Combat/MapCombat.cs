@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
@@ -205,9 +206,16 @@ public sealed partial class MapCombat : IMapUpdater
             for (int i = 0; i < playerCount; i++)
             {
                 Player player = players[i];
-                if (ReferenceEquals(player.Map, _map))
+                try
                 {
-                    UpdateUnit(player, diffMs);
+                    if (player is not null && player.IsInWorld && player.Map is not null && ReferenceEquals(player.Map, _map))
+                    {
+                        UpdateUnit(player, diffMs);
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("map-combat", ex);
                 }
             }
         }
@@ -218,19 +226,29 @@ public sealed partial class MapCombat : IMapUpdater
 
         foreach (Unit unit in _units.ToArray())
         {
-            if (!ReferenceEquals(unit.Map, _map))
+            try
             {
-                Forget(unit);
-                continue;
-            }
+                if (unit is null || !unit.IsInWorld || unit.Map is null || !ReferenceEquals(unit.Map, _map))
+                {
+                    if (unit is not null)
+                    {
+                        Forget(unit);
+                    }
 
-            UpdateUnit(unit, diffMs);
-            if (IsIdle(unit))
+                    continue;
+                }
+
+                UpdateUnit(unit, diffMs);
+                if (IsIdle(unit))
+                {
+                    _units.Remove(unit);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _units.Remove(unit);
+                FaultLedger.Shared.Record("map-combat", ex);
             }
         }
-
     }
 
     private void UpdateUnit(Unit unit, uint diff)
@@ -590,12 +608,13 @@ public sealed partial class MapCombat : IMapUpdater
         corpse.InstanceId = _map.InstanceId;
         _map.AddObject(corpse, isNewObject: true);
         _corpses.Add(corpse);
-        Maps.Grid.CellCoord cell = _map.Grids.CellOf(corpse)!.Value;
-        MapGrid grid = _map.Grids.GetGrid(cell.Grid)!;
-        // The body must remain reclaimable after the ghost leaves its grid. Until corpse
-        // persistence exists, hold the grid's existing unload lock while its owner is online.
-        grid.IncrementUnloadActiveLock();
-        _corpseGrids.Add(corpse, grid);
+        if (_map.Grids.CellOf(corpse) is { } cell && _map.Grids.GetGrid(cell.Grid) is { } grid)
+        {
+            // The body must remain reclaimable after the ghost leaves its grid. Until corpse
+            // persistence exists, hold the grid's existing unload lock while its owner is online.
+            grid.IncrementUnloadActiveLock();
+            _corpseGrids.Add(corpse, grid);
+        }
     }
 
     private void RemoveCorpse(Corpse corpse)

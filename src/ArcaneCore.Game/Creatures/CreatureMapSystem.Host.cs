@@ -226,6 +226,7 @@ public sealed partial class CreatureMapSystem
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // A script factory that throws leaves the creature with the AI it has; the other creatures still switch.
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("creature-ai-factory", ex);
                 _logger.LogError(ex, "building the new AI of creature {Entry} failed; it keeps its previous AI", creature.Template.Entry);
             }
         }

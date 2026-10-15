@@ -264,7 +264,19 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         }
 
         string path = Path.Combine(_directory, NavMeshFormat.TileFileName(mapId, tileX, tileY));
-        _prefetch.Request(mapId, tileX, tileY, () => File.Exists(path) ? NavMeshTile.ParseFile(File.ReadAllBytes(path)) : null);
+        ILogger logger = _logger;
+        _prefetch.Request(mapId, tileX, tileY, () =>
+        {
+            try
+            {
+                return File.Exists(path) ? NavMeshTile.ParseFile(File.ReadAllBytes(path)) : null;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("mmaps.prefetch", ex, "MMaps: prefetch of {Path} for map {MapId} tile ({TileX}, {TileY}) failed", path, mapId, tileX, tileY);
+                return null;
+            }
+        });
     }
 
     private readonly Dictionary<(uint Map, NavTerrain Include, NavTerrain Exclude), Task<NavRegionGraph?>> _regionGraphs = [];
@@ -328,9 +340,9 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
                         mapId, graph.TileCount, watch.ElapsedMilliseconds, graph.RegionCount, graph.LinkCount);
                     return graph;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    logger.LogError(ex, "MMaps: map {MapId} region graph could not be built; long routes there plan without it", mapId);
+                    logger.LogFault("mmaps.regiongraph", ex, "MMaps: map {MapId} region graph could not be built; long routes there plan without it", mapId);
                     return null;
                 }
                 finally
@@ -375,7 +387,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     {
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(options);
-        if (!IsFinite(at) || GetNavMesh(graph.MapId) is not { } mesh)
+        if (!Invariant.Check(IsFinite(at), $"NavMeshPathfinder.RegionAt called with non-finite coordinates {at} on map {graph.MapId}")
+            || GetNavMesh(graph.MapId) is not { } mesh)
         {
             return -1;
         }
@@ -396,7 +409,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     {
         options ??= PathOptions.Default;
         options.CancellationToken.ThrowIfCancellationRequested();
-        if (!IsFinite(start) || !IsFinite(end))
+        if (!Invariant.Check(IsFinite(start) && IsFinite(end),
+                $"NavMeshPathfinder.FindPath called with non-finite coordinates start={start}, end={end} on map {mapId}"))
         {
             return PathResult.None(start);
         }
@@ -459,7 +473,11 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
     {
         point = center;
-        if (random is null || !IsFinite(center) || !float.IsFinite(radius) || radius <= 0 || GetNavMesh(mapId) is not { } mesh)
+        if (random is null
+            || !Invariant.Check(IsFinite(center) && float.IsFinite(radius),
+                $"NavMeshPathfinder.TryGetRandomPointAround called with non-finite center={center} or radius={radius} on map {mapId}")
+            || radius <= 0
+            || GetNavMesh(mapId) is not { } mesh)
         {
             return false;
         }
@@ -487,7 +505,9 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     /// </summary>
     public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
     {
-        if (!IsFinite(start) || !IsFinite(end) || GetNavMesh(mapId) is not { } mesh)
+        if (!Invariant.Check(IsFinite(start) && IsFinite(end),
+                $"NavMeshPathfinder.Raycast called with non-finite coordinates start={start}, end={end} on map {mapId}")
+            || GetNavMesh(mapId) is not { } mesh)
         {
             return MeshRaycastResult.Unavailable(end);
         }
@@ -738,17 +758,33 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     private bool DropLeastRecentFinishedRead()
     {
         (uint, int, int)? oldest = null;
+        Task<TileRead>? oldestTask = null;
         long oldestSequence = long.MaxValue;
         foreach (((uint, int, int) key, (Task<TileRead> read, long sequence)) in _async)
         {
             if (read.IsCompleted && sequence < oldestSequence)
             {
                 oldest = key;
+                oldestTask = read;
                 oldestSequence = sequence;
             }
         }
 
-        return oldest is { } drop && _async.Remove(drop);
+        if (oldest is not { } drop || !_async.Remove(drop))
+        {
+            return false;
+        }
+
+        if (oldestTask is { IsCompletedSuccessfully: true, Result.Error: { } droppedError })
+        {
+            FaultLedger.Shared.Record("navtile-read", droppedError);
+        }
+        else if (oldestTask is { IsFaulted: true, Exception: { } taskException })
+        {
+            FaultLedger.Shared.Record("navtile-read", taskException);
+        }
+
+        return true;
     }
 
     /// <summary>Read and parse one tile file on the pool, at most <see cref="MaxConcurrentTileReads"/> at a time. Never faults: a failure is the result.</summary>
@@ -764,7 +800,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
                 byte[]? bytes = reader(path);
                 return new TileRead(bytes is null ? null : NavMeshTile.ParseFile(bytes), null);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 return new TileRead(null, ex);
             }

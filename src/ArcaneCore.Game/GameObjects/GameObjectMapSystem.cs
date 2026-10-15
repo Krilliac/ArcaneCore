@@ -8,6 +8,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.SpawnGroups;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
@@ -86,6 +87,10 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         uint maxGuid = 0;
         foreach (GameObjectSpawn spawn in content.GetSpawns(map.MapId))
         {
+            Invariant.Check(
+                float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z) && float.IsFinite(spawn.Orientation),
+                "gameobject-spawn-finite-coords",
+                $"GameObjectSpawn {spawn.Guid} on map {map.MapId} has non-finite coordinates ({spawn.X}, {spawn.Y}, {spawn.Z}, {spawn.Orientation})");
             GridCoord grid = CreatureMapSystem.ComputeGrid(spawn.X, spawn.Y);
             if (!_spawnsByGrid.TryGetValue(grid, out List<GameObjectSpawn>? list))
             {
@@ -226,9 +231,16 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         UpdateSpawnGroups();
         foreach ((ObjectGuid guid, long at) in _despawnAt.ToArray())
         {
-            if (at <= _clockMs && _objects.TryGetValue(guid, out GameObject? expired))
+            try
             {
-                Remove(expired);
+                if (at <= _clockMs && _objects.TryGetValue(guid, out GameObject? expired))
+                {
+                    Remove(expired);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-gameobject", ex);
             }
         }
 
@@ -244,33 +256,40 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         for (int i = 0; i < snapshot.Count; i++)
         {
             GameObject go = snapshot[i];
-            if (!go.IsSpawned)
+            try
             {
-                if (go.RespawnAtMs > 0 && go.RespawnAtMs <= _clockMs)
+                if (!go.IsSpawned)
                 {
-                    Respawn(go);
+                    if (go.RespawnAtMs > 0 && go.RespawnAtMs <= _clockMs)
+                    {
+                        Respawn(go);
+                    }
+
+                    continue;
                 }
 
-                continue;
-            }
-
-            if (go.LootState == GameObjectLootState.JustDeactivated)
-            {
-                if (!TryStartRestock(go))
+                if (go.LootState == GameObjectLootState.JustDeactivated)
                 {
-                    Despawn(go);
+                    if (!TryStartRestock(go))
+                    {
+                        Despawn(go);
+                    }
+
+                    continue;
                 }
 
-                continue;
-            }
+                if (go.ResetAfterSecond is { } resetAfter && resetAfter < ClockSeconds)
+                {
+                    ActivationExpired(go);
+                }
 
-            if (go.ResetAfterSecond is { } resetAfter && resetAfter < ClockSeconds)
+                UpdateRestock(go);
+                UpdateTypeBehaviour(go);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                ActivationExpired(go);
+                FaultLedger.Shared.Record("map-gameobject", ex);
             }
-
-            UpdateRestock(go);
-            UpdateTypeBehaviour(go);
         }
     }
 
@@ -299,12 +318,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
         GameObjectUseResult result = CheckUsable(player, go);
-        if (result != GameObjectUseResult.Ok)
+        if (result != GameObjectUseResult.Ok || go is null)
         {
             return result;
         }
 
-        if (DirectUseRefused?.Invoke(player, go!) == true)
+        if (DirectUseRefused?.Invoke(player, go) == true)
         {
             return GameObjectUseResult.Locked;
         }
@@ -313,36 +332,36 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // object is spawned, not generic, interactable and in reach. A cast aimed at the object already does this (Spell::prepare); a
         // click did not, so Stealth survived an unlocked chest or a door. CheckUsable is that gate here (it also refuses a dead user,
         // which the opcode does not). A use that Use then refuses (lock, quest, immunity) has already broken the auras.
-        if (go!.Type != GameObjectType.Generic)
+        if (go.Type != GameObjectType.Generic)
         {
             BreakLootingAuras?.Invoke(player);
         }
 
         // GameObject::Use (GameObject.cpp:1405-1407): the object's script may take the use over, before anything else (and then nothing
         // else happens: no use event either).
-        if (AiOf(go!)?.OnUse(this, go!, player) == true)
+        if (AiOf(go)?.OnUse(this, go, player) == true)
         {
             return GameObjectUseResult.Ok;
         }
 
         // GameObject::Use (GameObject.cpp:1409-1416): an immune user is ignored by objects that cannot be used under immunity,
         // and a mounted user is taken off the mount unless the object allows mounted use.
-        if (IsRefusedForImmunity(player, go!))
+        if (IsRefusedForImmunity(player, go))
         {
             return GameObjectUseResult.Immune;
         }
 
-        if (!go!.Template.IsUsableMounted() && MountService.IsMounted(player))
+        if (!go.Template.IsUsableMounted() && MountService.IsMounted(player))
         {
             Dismount?.Invoke(player);
         }
 
         // cmangos GameObject::Use runs the ScriptDev2 GOUse script after the mount check; a locked object reaches it only once its lock
         // is open (the direct-use lock here, the open-lock spell in OpenLock).
-        bool scriptTookUse = CheckDirectLock(player, go!) == GameObjectUseResult.Ok && InstanceScriptTookUse(player, go!);
+        bool scriptTookUse = CheckDirectLock(player, go) == GameObjectUseResult.Ok && InstanceScriptTookUse(player, go);
 
         // An area owns a type (fishing bobbers: ArcaneCore.Game.Fishing) and registers its handler instead of editing this switch.
-        result = _useHandlers.TryGetValue(go!.Type, out Func<Player, GameObject, GameObjectUseResult>? useHandler) ? useHandler(player, go) : go.Type switch
+        result = _useHandlers.TryGetValue(go.Type, out Func<Player, GameObject, GameObjectUseResult>? useHandler) ? useHandler(player, go) : go.Type switch
         {
             GameObjectType.Door or GameObjectType.Button => UseDoorOrButton(player, go),
             GameObjectType.Chest => UseChest(player, go),
@@ -402,18 +421,18 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
         GameObjectUseResult result = CheckUsable(player, go);
-        if (result != GameObjectUseResult.Ok)
+        if (result != GameObjectUseResult.Ok || go is null)
         {
             return result;
         }
 
         // Spell::EffectOpenLock (SpellEffects.cpp:2117-2118) returns before opening (and before any skill-up) for an immune caster.
-        if (IsRefusedForImmunity(player, go!))
+        if (IsRefusedForImmunity(player, go))
         {
             return GameObjectUseResult.Immune;
         }
 
-        uint lockId = GameObjectLocks.LockIdOf(go!.Template);
+        uint lockId = GameObjectLocks.LockIdOf(go.Template);
         LockEntry? entry = _content.FindLock(lockId);
         result = lockId != 0 && entry is null ? GameObjectUseResult.Locked
             : GameObjectLocks.CheckOpenLock(entry, player, lockType, keyItemId, SkillValue, skillBonus);
@@ -996,6 +1015,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// </summary>
     public GameObject? Summon(uint entry, float x, float y, float z, float orientation, uint despawnAfterSeconds = 0)
     {
+        Invariant.Check(
+            float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z) && float.IsFinite(orientation),
+            "gameobject-summon-finite-coords",
+            $"GameObject summon entry {entry} on map {Map.MapId} has non-finite coordinates ({x}, {y}, {z}, {orientation})");
+
         if (_content.FindTemplate(entry) is not { } template)
         {
             return null;
@@ -1237,6 +1261,10 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>Create the object of one database spawn as <paramref name="template"/> (its own entry, or the one chosen for it).</summary>
     private void LoadSpawn(List<GameObject> list, GameObjectSpawn spawn, GameObjectTemplate template)
     {
+        Invariant.Check(
+            float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z) && float.IsFinite(spawn.Orientation),
+            "gameobject-spawn-finite-coords",
+            $"GameObjectSpawn {spawn.Guid} on map {Map.MapId} has non-finite coordinates ({spawn.X}, {spawn.Y}, {spawn.Z}, {spawn.Orientation})");
         _spawnEntries[spawn.Guid] = template.Entry;
         var go = new GameObject(spawn.Guid, template, spawn) { CreatedAtMs = _clockMs };
         go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
@@ -1246,21 +1274,21 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         list.Add(go);
         ConfigureQuestFlags(go);
         NotifyInstanceScript(go);
-        if (DurableKeyOf(go) is { } durableKey)
+        if (DurableKeyOf(go) is { } durableKey && Loot?.Durable is { } durable)
         {
             // The stored chest decides: a consumed one stays despawned until its stored respawn
             // time; contents are rebuilt lazily when it is opened (never while an operation is in flight).
             _unloadedLoot.Remove(spawn.Guid);
             _respawnAt.Remove(spawn.Guid);
-            if (Loot!.Durable!.Find(durableKey) is { Consumed: true } consumed && consumed.RespawnAtUnix > Loot.Durable.UnixNow)
+            if (durable.Find(durableKey) is { Consumed: true } consumed && consumed.RespawnAtUnix > durable.UnixNow)
             {
                 go.LootState = GameObjectLootState.JustDeactivated;
                 go.RespawnAtMs = consumed.RespawnAtUnix == long.MaxValue
-                    ? 0 : _clockMs + Math.Max(1L, consumed.RespawnAtUnix - Loot.Durable.UnixNow) * 1000L;
+                    ? 0 : _clockMs + Math.Max(1L, consumed.RespawnAtUnix - durable.UnixNow) * 1000L;
                 return;
             }
 
-            if (spawn.SpawnTimeSeconds < 0 && Loot.Durable.Find(durableKey) is null)
+            if (spawn.SpawnTimeSeconds < 0 && durable.Find(durableKey) is null)
             {
                 go.LootState = GameObjectLootState.JustDeactivated; // spawned by events/scripts only
                 return;
@@ -1271,10 +1299,10 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return;
         }
 
-        if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining))
+        if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining) && Loot is { } lootService)
         {
             // The leftovers come back with the chest, which is still the partly looted one: its despawn timer starts again.
-            Loot!.RestoreGameObjectLoot(go, remaining);
+            lootService.RestoreGameObjectLoot(go, remaining);
             if (go.Loot is not null)
             {
                 ActivateWithLeftovers(go);
@@ -1453,38 +1481,45 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     {
         foreach (GameObject go in _objects.Values)
         {
-            if (!go.IsSpawned || !ReferenceEquals(go.ViewerFieldFilter, this))
+            try
             {
-                continue;
-            }
-
-            if (!_questFlagsSent.TryGetValue(go.Guid, out Dictionary<Player, uint>? sent))
-            {
-                _questFlagsSent[go.Guid] = sent = new(ReferenceEqualityComparer.Instance);
-            }
-
-            bool changed = false;
-            foreach (Player viewer in Map.ObserversOf(go))
-            {
-                // A Lean bot builds no values block, so nothing it is "sent" can go stale; counting it would force an update to every real viewer.
-                if (!viewer.Session.WantsUpdateObjects)
+                if (!go.IsSpawned || !ReferenceEquals(go.ViewerFieldFilter, this))
                 {
                     continue;
                 }
 
-                // A viewer never sent this field (not built yet) has seen none of it: any quest flag is news to it.
-                uint now = (uint)QuestFlagsFor(go, viewer);
-                if (sent.GetValueOrDefault(viewer) != now)
+                if (!_questFlagsSent.TryGetValue(go.Guid, out Dictionary<Player, uint>? sent))
                 {
-                    changed = true;
+                    _questFlagsSent[go.Guid] = sent = new(ReferenceEqualityComparer.Instance);
                 }
 
-                sent[viewer] = now;
-            }
+                bool changed = false;
+                foreach (Player viewer in Map.ObserversOf(go))
+                {
+                    // A Lean bot builds no values block, so nothing it is "sent" can go stale; counting it would force an update to every real viewer.
+                    if (!viewer.Session.WantsUpdateObjects)
+                    {
+                        continue;
+                    }
 
-            if (changed)
+                    // A viewer never sent this field (not built yet) has seen none of it: any quest flag is news to it.
+                    uint now = (uint)QuestFlagsFor(go, viewer);
+                    if (sent.GetValueOrDefault(viewer) != now)
+                    {
+                        changed = true;
+                    }
+
+                    sent[viewer] = now;
+                }
+
+                if (changed)
+                {
+                    go.ForceFieldUpdate(UpdateFields.GameobjectDynFlags);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                go.ForceFieldUpdate(UpdateFields.GameobjectDynFlags);
+                FaultLedger.Shared.Record("map-gameobject", ex);
             }
         }
     }

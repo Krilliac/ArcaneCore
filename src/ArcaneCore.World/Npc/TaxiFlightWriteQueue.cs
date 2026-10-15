@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Npc;
 
 /// <summary>
@@ -304,8 +305,13 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         {
             scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException)
         {
+            /* expected on shutdown */
+        }
+        catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-taxi-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -377,10 +383,14 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                         break;
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
+            {
+                /* expected on shutdown */
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // ExecuteAsync reports store failures itself; this is a queue bug and must not kill the consumer.
-                logger.LogError(ex, "taxi route write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
+                logger.LogFault("writequeue-taxi-consume", ex, "taxi route write queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -418,9 +428,9 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             }
         }
 
-        if (failed > 0)
+        if (failed > 0 && Invariant.Check(first is not null, "taxi route retry recorded failures without a first exception") && first is { } firstFailure)
         {
-            logger.LogWarning("taxi route retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
+            logger.LogWarning("taxi route retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", firstFailure.Message);
         }
     }
 
@@ -465,15 +475,16 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             {
                 await WriteAsync(characterId, operation, sweep ? 1 : MaxAttempts).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 Operation? replacement = null;
+                Action? abandonAction = operation.Abandon;
                 lock (_gate)
                 {
                     // Only the request that failed is retained; a newer one replaced it and is queued itself.
                     if (_characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.Operation?.Generation == operation.Generation)
                     {
-                        if (!sweep && operation.Abandon is not null && !DatabaseTransience.IsBusy(ex) && ex is not CharacterOwnershipRejectedException)
+                        if (!sweep && abandonAction is not null && !DatabaseTransience.IsBusy(ex) && ex is not CharacterOwnershipRejectedException)
                         {
                             // Give the route up rather than keep it: the owner relocates the character and the row goes. Not when the database is merely locked by
                             // another writer: that says nothing about the route, so it is kept and retried. A retry sweep never abandons: it only leaves the entry retained.
@@ -486,18 +497,22 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     }
                 }
 
-                if (replacement is null)
+                if (replacement is null || !Invariant.Check(abandonAction is not null, "taxi route abandonment selected without an abandon callback") || abandonAction is not { } validAbandon)
                 {
                     if (!sweep)
                     {
-                        logger.LogError(ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
+                        logger.LogFault("writequeue-taxi", ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
+                    }
+                    else
+                    {
+                        FaultLedger.Shared.Record("writequeue-taxi-sweep", ex);
                     }
 
                     return ex;
                 }
 
-                logger.LogError(ex, "taxi route save for character {Character} failed; the route is abandoned and its row deleted", characterId);
-                Abandon(characterId, operation.Abandon!);
+                logger.LogFault("writequeue-taxi", ex, "taxi route save for character {Character} failed; the route is abandoned and its row deleted", characterId);
+                Abandon(characterId, validAbandon);
                 operation = replacement;
                 continue;
             }
@@ -528,9 +543,9 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         {
             abandon();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "taxi route fallback for character {Character} failed; the route row is still deleted", characterId);
+            logger.LogFault("writequeue-taxi-abandon", ex, "taxi route fallback for character {Character} failed; the route row is still deleted", characterId);
         }
     }
 
@@ -569,11 +584,13 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             }
             catch (CharacterOwnershipRejectedException ex)
             {
+                FaultLedger.Shared.Record("writequeue-taxi-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 throw;
             }
-            catch (Exception ex) when (attempt < attempts)
+            catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("writequeue-taxi-attempt", ex);
                 logger.LogWarning(ex, "taxi route write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }

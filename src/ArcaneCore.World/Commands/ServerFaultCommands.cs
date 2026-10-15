@@ -7,11 +7,11 @@ using ArcaneCore.World.Gm.Core;
 namespace ArcaneCore.World.Commands;
 
 /// <summary>
-/// <c>.server faults [top N | show ID | reset]</c>: the server's fault ledger (<see cref="FaultLedger"/>) from the console or in game. Without arguments it
-/// lists the ten most frequent faults; <c>show</c> prints one fault in full (its id may be abbreviated to four or more characters); <c>reset</c> clears
-/// the ledger and needs Administrator authority (the console has it). Viewing needs GameMaster. The ledger is process-wide state read under its own locks,
-/// so the command is safe from the world thread. Output is plain lines (no colour codes) so the console and the chat show it alike.
-/// Also formats the one-line summary <c>.server info</c> adds (<see cref="InfoLine"/>).
+/// <c>.server faults [top N | show ID | summary | reset]</c>: the server's fault ledger (<see cref="FaultLedger"/>) from the console or in game. Without arguments it
+/// lists the ten most frequent faults; <c>show</c> prints one fault in full (its id may be abbreviated to four or more characters); <c>summary</c> (or <c>subsystems</c>)
+/// groups recorded faults by subsystem prefix and lists invariant failures; <c>reset</c> clears the ledger and needs Administrator authority (the console has it).
+/// Viewing needs GameMaster. The ledger is process-wide state read under its own locks, so the command is safe from the world thread. Output is plain lines (no colour
+/// codes) so the console and the chat show it alike. Also formats the one-line summary <c>.server info</c> adds (<see cref="InfoLine"/>).
 /// </summary>
 public sealed class ServerFaultCommands : ICommandExtension
 {
@@ -29,7 +29,7 @@ public sealed class ServerFaultCommands : ICommandExtension
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
         new ChatCommand("faults", AccountSecurity.GameMaster,
-            "Syntax: .server faults [top #count | show $id | reset]\nList the exceptions the server caught, most frequent first; show one in full; reset (administrator) clears the list.",
+            "Syntax: .server faults [top #count | show $id | summary | reset]\nList the exceptions the server caught, most frequent first; show one in full; summarize by subsystem and invariants; reset (administrator) clears the list.",
             Faults),
     ];
 
@@ -63,6 +63,15 @@ public sealed class ServerFaultCommands : ICommandExtension
             case "show":
                 return words.Length == 2 && Show(ledger, words[1], now, reply);
 
+            case "summary" or "subsystems":
+                if (words.Length != 1)
+                {
+                    return false;
+                }
+
+                Summary(ledger, now, reply);
+                return true;
+
             case "reset":
                 if (words.Length != 1)
                 {
@@ -91,6 +100,77 @@ public sealed class ServerFaultCommands : ICommandExtension
     {
         string last = ledger.LastSeen is { } at ? Age(now - at) + " ago" : "never";
         return string.Create(CultureInfo.InvariantCulture, $"faults: {ledger.Total} ({ledger.Distinct} distinct, last {last})");
+    }
+
+    /// <summary>Extracts the subsystem prefix of a fault site (the prefix before the first <c>'-'</c> or <c>':'</c>, or the whole site when neither separator is present).</summary>
+    internal static string SubsystemOf(string site)
+    {
+        if (string.IsNullOrWhiteSpace(site))
+        {
+            return "unknown";
+        }
+
+        int sep = site.IndexOfAny(['-', ':']);
+        return sep > 0 ? site[..sep] : site;
+    }
+
+    private static void Summary(FaultLedger ledger, DateTimeOffset now, Action<string> reply)
+    {
+        reply(InfoLine(ledger, now));
+        IReadOnlyList<FaultSnapshot> all = ledger.Snapshot();
+        if (all.Count == 0)
+        {
+            reply("Fault subsystems: 0 faults recorded.");
+        }
+        else
+        {
+            var groups = all
+                .GroupBy(f => SubsystemOf(f.Site), StringComparer.Ordinal)
+                .Select(g =>
+                {
+                    long total = g.Sum(f => f.Count);
+                    int distinct = g.Count();
+                    FaultSnapshot latest = g.OrderByDescending(f => f.LastSeen).ThenByDescending(f => f.Count).First();
+                    return (Subsystem: g.Key, Total: total, Distinct: distinct, Latest: latest);
+                })
+                .OrderByDescending(g => g.Total)
+                .ThenBy(g => g.Subsystem, StringComparer.Ordinal)
+                .ToList();
+
+            reply(string.Create(CultureInfo.InvariantCulture, $"Fault subsystems ({groups.Count}):"));
+            foreach (var group in groups)
+            {
+                reply(string.Create(CultureInfo.InvariantCulture,
+                    $"  {group.Subsystem}: {group.Total} total ({group.Distinct} distinct), latest {group.Latest.Id} at {group.Latest.Site} ({group.Latest.ExceptionType}, {Age(now - group.Latest.LastSeen)} ago)"));
+            }
+        }
+
+        long invTotal = Invariant.FailureCount;
+        var invPolicy = Invariant.Policy;
+        IReadOnlyList<InvariantFailure> invFailures = Invariant.Failures();
+        if (invTotal == 0 && invFailures.Count == 0)
+        {
+            reply(string.Create(CultureInfo.InvariantCulture, $"Invariants: 0 failures recorded (policy={invPolicy})."));
+        }
+        else
+        {
+            reply(string.Create(CultureInfo.InvariantCulture, $"Invariants: {invTotal} failure(s) recorded ({invFailures.Count} site(s), policy={invPolicy}):"));
+            int shown = 0;
+            foreach (InvariantFailure inv in invFailures)
+            {
+                if (shown++ == DefaultTop)
+                {
+                    break;
+                }
+
+                reply(string.Create(CultureInfo.InvariantCulture, $"  {inv.Member} ({inv.File}:{inv.Line}) count={inv.Count}: {inv.LastMessage}"));
+            }
+
+            if (invFailures.Count > DefaultTop)
+            {
+                reply(string.Create(CultureInfo.InvariantCulture, $"  ... {invFailures.Count - DefaultTop} more site(s); use .debug invariants for more."));
+            }
+        }
     }
 
     private static void List(FaultLedger ledger, int top, DateTimeOffset now, Action<string> reply)

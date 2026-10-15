@@ -95,19 +95,19 @@ internal static class PlayerbotInspector
         Unit[] sameMapAttackers = [.. player.Combat.Attackers
             .Where(attacker => ReferenceEquals(attacker.Map, player.Map))
             .OrderBy(attacker => attacker.Guid.Value)];
-        PlayerbotUnitFacts[] attackers = sameMapAttackers.Take(4).Select(attacker => Unit(attacker))
-            .Where(facts => facts is not null).Select(facts => facts!).ToArray();
+        PlayerbotUnitFacts[] attackers = [.. sameMapAttackers.Take(4).Select(Unit).OfType<PlayerbotUnitFacts>()];
         PlayerbotEquipmentFacts equipment = Equipment(player);
         PlayerbotCorpseFacts? corpse = player.Combat.Corpse is { } body
             ? new(body.Guid.Value, body.MapId, body.X, body.Y, body.Z,
                 CorpseDistance(player, body), CorpseDelayRemaining(session, player, body))
             : null;
-        bool partyDriven = party is { IsEngaged: true };
-        return new(player.Name, partyDriven ? party!.Goal : brain.Goal, partyDriven ? party!.TargetEntry : brain.TargetEntry,
+        PlayerbotPartyAI? engagedParty = party is { IsEngaged: true } ? party : null;
+        return new(player.Name, engagedParty is { } pGoal ? pGoal.Goal : brain.Goal,
+            engagedParty is { } pTarget ? pTarget.TargetEntry : brain.TargetEntry,
             brain.QuestId, player.MapId, player.Level,
             player.Health, player.MaxHealth, player.Money, player.Combat.IsInCombat,
             (player.Flags & PlayerFlags.Ghost) != 0, player.X, player.Y, player.Z, player.Combat.DeathState, corpse,
-            Unit(partyDriven ? party!.InspectionTarget : brain.InspectionTarget), Unit(player.Combat.Victim),
+            Unit(engagedParty is { } pInspect ? pInspect.InspectionTarget : brain.InspectionTarget), Unit(player.Combat.Victim),
             state?.CurrentCast?.Spell.Id ?? 0, state?.MeleeCast?.Spell.Id ?? 0,
             spells?.Spellbook.GetSpells(player).Take(128).ToArray() ?? [], nearby,
             attackers, sameMapAttackers.Length, equipment)
@@ -118,9 +118,9 @@ internal static class PlayerbotInspector
             Following = PlayerbotMotion.IsActive(player),
             LoopsGivenUp = PlayerbotMotion.LoopCount(player),
             Stall = brain.StallReport ?? (brain.LastStall is { } last ? "last " + last : null),
-            Master = partyDriven ? party!.MasterName : null,
-            PartyMode = partyDriven ? party!.Mode : null,
-            Risk = partyDriven ? party!.RiskReport : brain.RiskReport,
+            Master = engagedParty?.MasterName,
+            PartyMode = engagedParty?.Mode,
+            Risk = engagedParty is { } pRisk ? pRisk.RiskReport : brain.RiskReport,
             Home = brain.HomeDescription,
             Budget = brain.BudgetReport(player),
         };

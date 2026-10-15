@@ -176,7 +176,7 @@ public sealed partial class NaxxramasInstance(Map map) : ScriptedInstance(map, 1
         UpdateLivingPoison(diffMs);
         UpdateFaerlinaIntro(diffMs);
         if (GetData(AnubRekhan) != EncounterState.InProgress) return;
-        foreach (Player player in Instance.Players)
+        foreach (Player player in Instance.Players.ToArray())
         {
             if (player.IsAlive) _alivePlayers.Add(player.Guid);
             else if (_alivePlayers.Remove(player.Guid) && Instance.FindUpdater<CreatureMapSystem>() is { } system)

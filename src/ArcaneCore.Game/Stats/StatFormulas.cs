@@ -382,6 +382,11 @@ public static class StatFormulas
     /// </summary>
     public static float CombatSkillGainChance(bool defence, uint playerLevel, uint currentSkillValue, uint mobLevel, float intellect)
     {
+        if (playerLevel == 0)
+        {
+            return 0.0f;
+        }
+
         uint currentSkillMax = 5 * playerLevel;
         if (currentSkillMax <= currentSkillValue)
         {
@@ -411,7 +416,7 @@ public static class StatFormulas
             if (currentSkillMax * 0.9f > currentSkillValue)
             {
                 // 1% - 90% of the maximum: the chance falls from 100% to 50%.
-                chance = Math.Min(100.0f, currentSkillMax * 0.9f * 50 / currentSkillValue);
+                chance = currentSkillValue == 0 ? 100.0f : Math.Min(100.0f, currentSkillMax * 0.9f * 50 / currentSkillValue);
             }
             else
             {

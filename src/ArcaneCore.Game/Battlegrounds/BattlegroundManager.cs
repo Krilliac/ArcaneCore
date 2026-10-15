@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Battlegrounds;
 
@@ -100,7 +101,10 @@ public sealed class BattlegroundPlayerState
         return -1;
     }
 
-    public BattlegroundQueueType QueueTypeInSlot(int slot) => _queue[slot];
+    public BattlegroundQueueType QueueTypeInSlot(int slot)
+        => Invariant.Check((uint)slot < (uint)_queue.Length, $"battleground queue slot {slot} is out of range")
+            ? _queue[slot]
+            : BattlegroundQueueType.None;
 
     public bool InAnyQueue => _queue.Any(q => q != BattlegroundQueueType.None);
 
@@ -287,8 +291,17 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
             throw new ArgumentException($"battleground template {template.Type} is not on its map ({template.MapId})", nameof(template));
         }
 
+        if (!Invariant.Check(IsFinite(template.AllianceStart) && IsFinite(template.HordeStart),
+            $"battleground template {template.Type} has non-finite start coordinates"))
+        {
+            return;
+        }
+
         _templates[template.Type] = template;
     }
+
+    private static bool IsFinite(BattlegroundStartLocation loc)
+        => float.IsFinite(loc.X) && float.IsFinite(loc.Y) && float.IsFinite(loc.Z) && float.IsFinite(loc.Orientation);
 
     public BattlegroundTemplate? TemplateOf(BattlegroundType type) => _templates.GetValueOrDefault(type);
 
@@ -312,7 +325,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
 
     /// <summary>The instance ids the client lists for a type and bracket, in order (vmangos <c>m_clientBattleGroundIds</c>).</summary>
     public IReadOnlyList<uint> ClientInstanceIds(BattlegroundType type, int bracket)
-        => _clientIds.TryGetValue((type, bracket), out SortedSet<uint>? ids) ? [.. ids] : [];
+        => bracket is >= 0 and <= BattlegroundConstants.LastBracket && _clientIds.TryGetValue((type, bracket), out SortedSet<uint>? ids) ? [.. ids] : [];
 
     internal IEnumerable<Battleground> FreeSlotBattlegrounds(BattlegroundType type)
         => _freeSlots.TryGetValue(type, out List<Battleground>? list) ? list.ToArray() : [];
@@ -346,7 +359,8 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     /// <summary>Create a match of a type for a bracket (vmangos <c>CreateNewBattleGround</c>, BattleGroundMgr.cpp:1239-1279); null without a template or a supported type.</summary>
     internal Battleground? CreateNewBattleground(BattlegroundType type, int bracket)
     {
-        if (!_templates.TryGetValue(type, out BattlegroundTemplate? template))
+        if (!Invariant.Check(bracket is >= 0 and <= BattlegroundConstants.LastBracket, $"battleground bracket {bracket} is out of range")
+            || !_templates.TryGetValue(type, out BattlegroundTemplate? template))
         {
             return null;
         }
@@ -393,8 +407,16 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     private void DeleteBattleground(Battleground bg)
     {
         bg.RemoveFromFreeSlotQueue();
-        _running[bg.Type].Remove(bg.InstanceId);
-        _clientIds[(bg.Type, bg.Bracket)].Remove(bg.ClientInstanceId);
+        if (_running.TryGetValue(bg.Type, out SortedDictionary<uint, Battleground>? set))
+        {
+            set.Remove(bg.InstanceId);
+        }
+
+        if (_clientIds.TryGetValue((bg.Type, bg.Bracket), out SortedSet<uint>? ids))
+        {
+            ids.Remove(bg.ClientInstanceId);
+        }
+
         Host.BattlegroundDeleted(bg);
     }
 
@@ -431,7 +453,14 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     /// <summary>Run the queue of a type and bracket at the next <see cref="Update"/> (vmangos <c>ScheduleQueueUpdate</c>, once per key).</summary>
     public void ScheduleQueueUpdate(BattlegroundType type, int bracket)
     {
-        var key = ((BattlegroundQueueType)(byte)type, type, bracket);
+        var queueType = (BattlegroundQueueType)(byte)type;
+        if (!Invariant.Check(bracket is >= 0 and <= BattlegroundConstants.LastBracket && (int)queueType >= 1 && (int)queueType < _queues.Length,
+            $"invalid scheduled queue update ({type}, bracket {bracket})"))
+        {
+            return;
+        }
+
+        var key = (queueType, type, bracket);
         if (!_scheduled.Contains(key))
         {
             _scheduled.Add(key);
@@ -443,6 +472,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     /// <summary>The state of a player (queue slots, bound match); created on first use.</summary>
     public BattlegroundPlayerState StateOf(ObjectGuid player)
     {
+        Invariant.Check(!player.IsEmpty, "battleground player state queried for an empty ObjectGuid");
         if (!_states.TryGetValue(player, out BattlegroundPlayerState? state))
         {
             state = new BattlegroundPlayerState();
@@ -452,7 +482,16 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
         return state;
     }
 
-    internal BattlegroundQueue QueueOf(BattlegroundQueueType type) => _queues[(int)type];
+    internal BattlegroundQueue QueueOf(BattlegroundQueueType type)
+    {
+        int index = (int)type;
+        if (!Invariant.Check(index >= 1 && index < _queues.Length, $"battleground queue index {index} ({type}) is out of range"))
+        {
+            return _queues[1];
+        }
+
+        return _queues[index];
+    }
 
     /// <summary>
     /// The status of the match the player is bound to, or null when it is in none (vmangos <c>Player::GetBattleGround</c>; the death
@@ -464,7 +503,11 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
             : null;
 
     /// <summary>The queued group of a player, or null.</summary>
-    public QueuedGroup? QueuedGroupOf(ObjectGuid player, BattlegroundType type) => _queues[(int)(BattlegroundQueueType)(byte)type]?.GroupOf(player);
+    public QueuedGroup? QueuedGroupOf(ObjectGuid player, BattlegroundType type)
+    {
+        int q = (int)(BattlegroundQueueType)(byte)type;
+        return q >= 1 && q < _queues.Length ? _queues[q]?.GroupOf(player) : null;
+    }
 
     /// <summary>The average wait the queue reports for the player's group.</summary>
     public uint AverageWaitOf(ObjectGuid player, BattlegroundType type, uint level)
@@ -489,6 +532,11 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     public BattlegroundJoinResult JoinQueue(BattlegroundJoinRequest request)
     {
         BattlegroundJoinResult Ignored() => new(BattlegroundJoinOutcome.Ignored, BattlegroundJoinError.Ok, []);
+
+        if (!Invariant.CheckNotNull(request, nameof(request)) || !Invariant.Check(!request.Requester.Guid.IsEmpty, "battleground join request has an empty requester guid"))
+        {
+            return Ignored();
+        }
 
         BattlegroundType type = request.Type;
         if (type == BattlegroundType.None)
@@ -524,7 +572,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
         }
 
         BattlegroundQueueType queueType = template.QueueType;
-        BattlegroundQueue queue = _queues[(int)queueType];
+        BattlegroundQueue queue = QueueOf(queueType);
         BattlegroundStatusSubject subject = requested is not null ? BattlegroundStatusSubject.Of(requested) : BattlegroundStatusSubject.OfTemplate(template);
         uint maxPerTeam = requested?.MaxPlayersPerTeam ?? template.MaxPlayersPerTeam;
         List<ObjectGuid> queued = [];
@@ -548,7 +596,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
             uint avg = queue.AverageQueueWaitTime(group, bracket);
             int slot = selfState.AddSlot(queueType);
             Host.StoreEntryPoint(self.Guid, self.Guid, request.QueuedAtPortal);
-            Host.SendStatus(self.Guid, (uint)slot, subject, BattlegroundStatus.WaitQueue, avg, 0);
+            Host.SendStatus(self.Guid, (uint)Math.Max(slot, 0), subject, BattlegroundStatus.WaitQueue, avg, 0);
             queued.Add(self.Guid);
         }
         else
@@ -588,7 +636,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
                 BattlegroundPlayerState state = StateOf(member.Guid);
                 int slot = state.AddSlot(queueType);
                 Host.StoreEntryPoint(member.Guid, self.Guid, request.QueuedAtPortal);
-                Host.SendStatus(member.Guid, (uint)slot, subject, BattlegroundStatus.WaitQueue, avg, 0);
+                Host.SendStatus(member.Guid, (uint)Math.Max(slot, 0), subject, BattlegroundStatus.WaitQueue, avg, 0);
                 Host.SendGroupJoined(member.Guid, template.MapId);
                 queued.Add(member.Guid);
             }
@@ -610,6 +658,11 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
         int leaderBracket = BattlegroundConstants.BracketOfLevel(leader.Level, template.MinLevel);
         foreach (BattlegroundMember member in group)
         {
+            if (!Invariant.Check(!member.Guid.IsEmpty, "battleground group member has an empty guid"))
+            {
+                return BattlegroundJoinError.OfflineMember;
+            }
+
             // An offline member lets nobody join.
             if (!member.InWorld)
             {
@@ -658,6 +711,11 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     /// <summary>A player was invited to a match: remember it, start the timers and send the invitation (BattleGroundMgr.cpp:428-443).</summary>
     internal void OnInvited(ObjectGuid player, Battleground bg, QueuedGroup group)
     {
+        if (!Invariant.CheckNotNull(bg, nameof(bg)) || !Invariant.CheckNotNull(group, nameof(group)) || !Invariant.Check(!player.IsEmpty, $"battleground invitation for {player} has missing state"))
+        {
+            return;
+        }
+
         BattlegroundPlayerState state = StateOf(player);
         BattlegroundQueueType queueType = bg.Template.QueueType;
         state.SetInvite(queueType, group.InvitedToInstanceId);
@@ -704,7 +762,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
 
         BattlegroundQueueType queueType = bg.Template.QueueType;
         int slot = StateOf(e.Player).SlotOf(queueType);
-        if (slot >= 0 && _queues[(int)queueType].IsPlayerInvited(e.Player, e.InstanceId, e.RemoveTimeMs))
+        if (slot >= 0 && QueueOf(queueType).IsPlayerInvited(e.Player, e.InstanceId, e.RemoveTimeMs))
         {
             Host.SendStatus(e.Player, (uint)slot, BattlegroundStatusSubject.Of(bg), BattlegroundStatus.WaitJoin, BattlegroundConstants.InviteAcceptWaitTimeMs - BattlegroundConstants.InvitationRemindTimeMs, 0);
         }
@@ -724,20 +782,23 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
         BattlegroundQueueType queueType = (BattlegroundQueueType)(byte)e.Type;
         BattlegroundPlayerState state = StateOf(e.Player);
         int slot = state.SlotOf(queueType);
-        if (slot < 0 || !_queues[(int)queueType].IsPlayerInvited(e.Player, e.InstanceId, e.RemoveTimeMs))
+        if (slot < 0 || !QueueOf(queueType).IsPlayerInvited(e.Player, e.InstanceId, e.RemoveTimeMs))
         {
             return;
         }
 
         Battleground? bg = GetBattleground(e.InstanceId, e.Type);
         state.RemoveSlot(queueType);
-        _queues[(int)queueType].RemovePlayer(e.Player, true);
+        QueueOf(queueType).RemovePlayer(e.Player, true);
         if (bg is not null && bg.Status != BattlegroundStatus.WaitLeave)
         {
             ScheduleQueueUpdate(e.Type, bg.Bracket);
         }
 
-        Host.SendStatus(e.Player, (uint)slot, BattlegroundStatusSubject.OfTemplate(_templates[e.Type]), BattlegroundStatus.None, 0, 0);
+        if (_templates.TryGetValue(e.Type, out BattlegroundTemplate? template))
+        {
+            Host.SendStatus(e.Player, (uint)slot, BattlegroundStatusSubject.OfTemplate(template), BattlegroundStatus.None, 0, 0);
+        }
     }
 
     /// <summary>Free a player's queue slot and tell it (vmangos <c>RemoveBattleGroundQueueId</c> + the empty status).</summary>
@@ -752,7 +813,14 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
         }
 
         state.RemoveSlot(queueType);
-        Host.SendStatus(player, (uint)slot, bg is not null ? BattlegroundStatusSubject.Of(bg) : BattlegroundStatusSubject.OfTemplate(_templates[type]), BattlegroundStatus.None, 0, 0);
+        if (bg is not null)
+        {
+            Host.SendStatus(player, (uint)slot, BattlegroundStatusSubject.Of(bg), BattlegroundStatus.None, 0, 0);
+        }
+        else if (_templates.TryGetValue(type, out BattlegroundTemplate? template))
+        {
+            Host.SendStatus(player, (uint)slot, BattlegroundStatusSubject.OfTemplate(template), BattlegroundStatus.None, 0, 0);
+        }
     }
 
     // ------------------------------------------------------------------ the port
@@ -762,6 +830,11 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     /// </summary>
     public BattlegroundPortOutcome HandlePort(BattlegroundPortRequest request)
     {
+        if (!Invariant.CheckNotNull(request, nameof(request)) || !Invariant.Check(!request.Player.IsEmpty, "battleground port request has an empty player guid"))
+        {
+            return BattlegroundPortOutcome.Ignored;
+        }
+
         BattlegroundType type = TypeOfMap(request.MapId);
         if (type == BattlegroundType.None || !_templates.TryGetValue(type, out BattlegroundTemplate? template))
         {
@@ -775,7 +848,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
         }
 
         BattlegroundQueueType queueType = template.QueueType;
-        BattlegroundQueue queue = _queues[(int)queueType];
+        BattlegroundQueue queue = QueueOf(queueType);
         QueuedGroup? group = queue.GroupOf(request.Player);
         if (group is null)
         {
@@ -820,16 +893,21 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
         }
 
         int queueSlot = state.SlotOf(queueType);
+        if (!Invariant.Check(queueSlot >= 0, $"player {request.Player} in group for {queueType} has no queue slot"))
+        {
+            return BattlegroundPortOutcome.Ignored;
+        }
+
         if (action == 1)
         {
-            if (state.InvitedInstance(queueType) == 0)
+            if (bg is null || state.InvitedInstance(queueType) == 0)
             {
                 // Not invited in this queue type: a cheat.
                 return BattlegroundPortOutcome.Ignored;
             }
 
             Host.PrepareToPortIn(request.Player);
-            Host.SendStatus(request.Player, (uint)queueSlot, BattlegroundStatusSubject.Of(bg!), BattlegroundStatus.InProgress, 0, bg!.StartTimeMs);
+            Host.SendStatus(request.Player, (uint)queueSlot, BattlegroundStatusSubject.Of(bg), BattlegroundStatus.InProgress, 0, bg.StartTimeMs);
 
             // Remove the queue status; this also leaves another battleground without the deserter debuff.
             queue.RemovePlayer(request.Player, false);
@@ -870,6 +948,11 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     /// </summary>
     public bool EnterBattleground(ObjectGuid player)
     {
+        if (!Invariant.Check(!player.IsEmpty, "EnterBattleground called for an empty player guid"))
+        {
+            return false;
+        }
+
         BattlegroundPlayerState state = StateOf(player);
         if (!state.InBattleground || state.Team is not { } team || GetBattleground(state.InstanceId, state.Type) is not { } bg)
         {
@@ -885,6 +968,11 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     /// </summary>
     public void ClearBinding(ObjectGuid player)
     {
+        if (!Invariant.Check(!player.IsEmpty, "ClearBinding called for an empty player guid"))
+        {
+            return;
+        }
+
         BattlegroundPlayerState state = StateOf(player);
         if (state.InBattleground)
         {
@@ -901,6 +989,11 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     /// <summary>The player logged out: its queue slots are dropped, its place in the queue stays for a minute (vmangos <c>PlayerLoggedOut</c>, BattleGroundMgr.cpp:1759-1769).</summary>
     public void PlayerLoggedOut(ObjectGuid player)
     {
+        if (!Invariant.Check(!player.IsEmpty, "PlayerLoggedOut called for an empty player guid"))
+        {
+            return;
+        }
+
         BattlegroundPlayerState state = StateOf(player);
         for (int slot = 0; slot < BattlegroundOptions.MaxQueuesPerPlayer; slot++)
         {
@@ -908,7 +1001,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
             if (queueType != BattlegroundQueueType.None)
             {
                 state.RemoveSlot(queueType);
-                _queues[(int)queueType].PlayerLoggedOut(player, NowMs);
+                QueueOf(queueType).PlayerLoggedOut(player, NowMs);
             }
         }
     }
@@ -916,17 +1009,21 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     /// <summary>A player logged in: if it is still in a queue, give it a slot and show the status again (vmangos <c>PlayerLoggedIn</c>, BattleGroundMgr.cpp:1731-1757).</summary>
     public void PlayerLoggedIn(ObjectGuid player, uint level)
     {
+        if (!Invariant.Check(!player.IsEmpty, "PlayerLoggedIn called for an empty player guid"))
+        {
+            return;
+        }
+
         BattlegroundPlayerState state = StateOf(player);
         for (int q = 1; q <= BattlegroundOptions.MaxQueuesPerPlayer; q++)
         {
             var queueType = (BattlegroundQueueType)q;
             BattlegroundQueue queue = _queues[q];
-            if (!queue.PlayerLoggedIn(player))
+            if (!queue.PlayerLoggedIn(player) || queue.GroupOf(player) is not { } group)
             {
                 continue;
             }
 
-            QueuedGroup group = queue.GroupOf(player)!;
             var type = (BattlegroundType)q;
             BattlegroundTemplate? template = TemplateOf(type);
             int bracket = template is null ? -1 : BattlegroundConstants.BracketOfLevel(level, template.MinLevel);
@@ -952,6 +1049,11 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
     public IReadOnlyList<BattlegroundStatusReport> StatusReports(ObjectGuid player, uint level)
     {
         List<BattlegroundStatusReport> reports = [];
+        if (!Invariant.Check(!player.IsEmpty, "StatusReports called for an empty player guid"))
+        {
+            return reports;
+        }
+
         BattlegroundPlayerState state = StateOf(player);
         for (int slot = 0; slot < BattlegroundOptions.MaxQueuesPerPlayer; slot++)
         {
@@ -969,7 +1071,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
                 continue;
             }
 
-            QueuedGroup? group = _queues[(int)queueType].GroupOf(player);
+            QueuedGroup? group = QueueOf(queueType).GroupOf(player);
             if (group is null)
             {
                 continue;
@@ -1026,7 +1128,7 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattleg
         _scheduled.Clear();
         foreach ((BattlegroundQueueType queue, BattlegroundType type, int bracket) in scheduled)
         {
-            _queues[(int)queue].Update(type, bracket);
+            QueueOf(queue).Update(type, bracket);
         }
     }
 }

@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Skills;
 
@@ -23,7 +24,14 @@ internal sealed class SkillPersistenceUpdater(SkillsFeature feature, uint interv
         _elapsedMs = 0;
         foreach (Player player in map.Players)
         {
-            feature.EnqueueSnapshot(player);
+            try
+            {
+                feature.EnqueueSnapshot(player);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("skills.persistence-updater", ex);
+            }
         }
     }
 

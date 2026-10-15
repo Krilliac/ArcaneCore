@@ -6,6 +6,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.Procs;
 
@@ -75,7 +76,19 @@ public sealed partial class SpellSystem
     public void ProcDamageAndSpell(Unit actor, in ProcEvent procEvent)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        if (!actor.IsInWorld || (procEvent.Victim is { } v && !ReferenceEquals(v.Map, actor.Map)) || _procDepth >= MaxProcDepth
+        if (!Invariant.Check(_procDepth >= 0 && _procDepth <= MaxProcDepth, $"SpellSystem._procDepth={_procDepth} out of bounds [0, {MaxProcDepth}]"))
+        {
+            if (_procDepth < 0)
+            {
+                _procDepth = 0;
+            }
+            else
+            {
+                return;
+            }
+        }
+
+        if (!actor.IsInWorld || actor.Map is null || (procEvent.Victim is { } v && !ReferenceEquals(v.Map, actor.Map)) || _procDepth >= MaxProcDepth
             || IsQuestSettlementPending(actor) || IsQuestSettlementPending(procEvent.Victim))
         {
             return;
@@ -83,11 +96,11 @@ public sealed partial class SpellSystem
 
         _procDepth++;
         using ProcEventScope scope = BeginProcEvent(); // a standalone event (a kill outside a cast or swing) is its own event
+        List<TriggeredProc> triggered = _procDepth == 1 ? _triggeredScratch ??= [] : [];
         try
         {
             ulong eventId = CurrentProcEvent;
             // The outermost event reuses one list; a nested event (a proc inside HandleTriggers) gets its own.
-            List<TriggeredProc> triggered = _procDepth == 1 ? _triggeredScratch ??= [] : [];
             triggered.Clear();
             if (procEvent.AttackerFlags != ProcFlags.None)
             {
@@ -100,14 +113,25 @@ public sealed partial class SpellSystem
             }
 
             HandleTriggers(procEvent, triggered);
-            triggered.Clear();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("spell-proc", ex);
         }
         finally
         {
+            triggered.Clear();
             _procDepth--;
         }
 
-        ProcEventProcessed?.Invoke(actor, procEvent);
+        try
+        {
+            ProcEventProcessed?.Invoke(actor, procEvent);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("spell-proc", ex);
+        }
     }
 
     /// <summary>
@@ -169,49 +193,56 @@ public sealed partial class SpellSystem
         {
             for (int n = 0; n < count; n++)
             {
-                SpellAuraHolder holder = snapshot[n];
-
-                // "Can not proc on self", and skip deleted auras.
-                if (holder.IsRemoved || (e.ProcSpell is { } procSpell && procSpell.Id == holder.Spell.Id))
+                try
                 {
-                    continue;
-                }
+                    SpellAuraHolder holder = snapshot[n];
 
-                // "don't reroll chance for each target in this case"
-                if (((uint)holder.Spell.AttributesEx2 & ProcAttributes.Ex2ProcCooldownOnFailure) != 0 && !IsProcSpellReady(owner, holder.Spell))
-                {
-                    continue;
-                }
-
-                // "prevent delayed procs from removing auras applied after the proc happened (Frostbite removed by the Frostbolt that applied it)":
-                // an aura of the event's own actor applied or refreshed at or after the event's time does not proc from it (Unit.cpp:8958 compares
-                // with >=). The engine is synchronous, so that is an aura applied or refreshed inside the current event (a nested triggered cast in
-                // the effect handlers): the holder carries the event's sequence number (BeginProcEvent), never a wrapping clock reading.
-                if (holder.AppliedInProcEvent == eventId && ((isVictim && target is not null && target.Guid == holder.CasterGuid) || (!isVictim && owner.Guid == holder.CasterGuid)))
-                {
-                    continue;
-                }
-
-                // An aura that carries a charged spell modifier spends its charges on the casts that use it, not on procs (Unit.cpp:8956-8974).
-                if (holder.Charges > 0 && holder.Auras.Any(a => a is { Type: AuraType.AddFlatModifier or AuraType.AddPctModifier }))
-                {
-                    continue;
-                }
-
-                ProcTriggerCheck result = IsTriggeredAtSpellProcEvent(owner, target, holder, e.ProcSpell, procFlag, extra, e.AttackType, isVictim,
-                    out SpellProcEventRecord? entry, e.SpellTriggeredByAuraOrItem);
-                if (result != ProcTriggerCheck.Ok)
-                {
-                    if (result == ProcTriggerCheck.RollFailed && ((uint)holder.Spell.AttributesEx2 & ProcAttributes.Ex2ProcCooldownOnFailure) != 0
-                        && entry is { Cooldown: > 0 } failed)
+                    // "Can not proc on self", and skip deleted auras.
+                    if (holder is null || holder.IsRemoved || (e.ProcSpell is { } procSpell && procSpell.Id == holder.Spell.Id))
                     {
-                        AddProcCooldown(owner, holder.Spell, failed.Cooldown);
+                        continue;
                     }
 
-                    continue;
-                }
+                    // "don't reroll chance for each target in this case"
+                    if (((uint)holder.Spell.AttributesEx2 & ProcAttributes.Ex2ProcCooldownOnFailure) != 0 && !IsProcSpellReady(owner, holder.Spell))
+                    {
+                        continue;
+                    }
 
-                triggered.Add(new TriggeredProc(entry, holder, owner, target, procFlag, isVictim, extra));
+                    // "prevent delayed procs from removing auras applied after the proc happened (Frostbite removed by the Frostbolt that applied it)":
+                    // an aura of the event's own actor applied or refreshed at or after the event's time does not proc from it (Unit.cpp:8958 compares
+                    // with >=). The engine is synchronous, so that is an aura applied or refreshed inside the current event (a nested triggered cast in
+                    // the effect handlers): the holder carries the event's sequence number (BeginProcEvent), never a wrapping clock reading.
+                    if (holder.AppliedInProcEvent == eventId && ((isVictim && target is not null && target.Guid == holder.CasterGuid) || (!isVictim && owner.Guid == holder.CasterGuid)))
+                    {
+                        continue;
+                    }
+
+                    // An aura that carries a charged spell modifier spends its charges on the casts that use it, not on procs (Unit.cpp:8956-8974).
+                    if (holder.Charges > 0 && holder.Auras.Any(a => a is { Type: AuraType.AddFlatModifier or AuraType.AddPctModifier }))
+                    {
+                        continue;
+                    }
+
+                    ProcTriggerCheck result = IsTriggeredAtSpellProcEvent(owner, target, holder, e.ProcSpell, procFlag, extra, e.AttackType, isVictim,
+                        out SpellProcEventRecord? entry, e.SpellTriggeredByAuraOrItem);
+                    if (result != ProcTriggerCheck.Ok)
+                    {
+                        if (result == ProcTriggerCheck.RollFailed && ((uint)holder.Spell.AttributesEx2 & ProcAttributes.Ex2ProcCooldownOnFailure) != 0
+                            && entry is { Cooldown: > 0 } failed)
+                        {
+                            AddProcCooldown(owner, holder.Spell, failed.Cooldown);
+                        }
+
+                        continue;
+                    }
+
+                    triggered.Add(new TriggeredProc(entry, holder, owner, target, procFlag, isVictim, extra));
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("spell-proc", ex);
+                }
             }
         }
         finally
@@ -249,10 +280,20 @@ public sealed partial class SpellSystem
             return hardCoded;
         }
 
-        if (FindProcScript(aura) is { } script
-            && script.CheckProc(new ProcCheckContext(this, owner, target, holder, procSpell, procFlag, procExtra, attackType, isVictim)) is { } scripted)
+        if (FindProcScript(aura) is { } script)
         {
-            return scripted;
+            try
+            {
+                if (script.CheckProc(new ProcCheckContext(this, owner, target, holder, procSpell, procFlag, procExtra, attackType, isVictim)) is { } scripted)
+                {
+                    return scripted;
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("spell-proc", ex);
+                return ProcTriggerCheck.Failed;
+            }
         }
 
         entry = ProcEvents.Find(aura.Id);
@@ -495,84 +536,101 @@ public sealed partial class SpellSystem
         List<(Unit Unit, uint SpellId)>? removed = null; // made on the first charge that runs out
         foreach (TriggeredProc proc in triggered)
         {
-            SpellAuraHolder holder = proc.Holder;
-            if (holder.IsRemoved || !proc.Owner.IsInWorld)
+            try
             {
-                continue;
-            }
-
-            SpellProcEventRecord? entry = proc.Entry;
-            bool useCharges = holder.Charges > 0;
-            bool anyAuraProc = false;
-            uint cooldown = entry?.Cooldown ?? 0;
-            for (int i = 0; i < SpellConstants.MaxEffects; i++)
-            {
-                if (holder.IsRemoved)
-                {
-                    break; // an effect's handler (or the damage-proc cancel) removed the holder: its other effects do not proc
-                }
-
-                if (holder.Auras[i] is not { } aura)
+                SpellAuraHolder holder = proc.Holder;
+                if (holder is null || holder.IsRemoved || proc.Owner is null || !proc.Owner.IsInWorld || proc.Owner.Map is null)
                 {
                     continue;
                 }
 
-                if (e.ProcSpell is { } procSpell)
+                SpellProcEventRecord? entry = proc.Entry;
+                bool useCharges = holder.Charges > 0;
+                bool anyAuraProc = false;
+                uint cooldown = entry?.Cooldown ?? 0;
+                for (int i = 0; i < SpellConstants.MaxEffects; i++)
                 {
-                    if (entry is not null)
+                    if (holder.IsRemoved)
                     {
-                        if (entry.FamilyMask(i) != 0)
+                        break; // an effect's handler (or the damage-proc cancel) removed the holder: its other effects do not proc
+                    }
+
+                    if (holder.Auras[i] is not { } aura)
+                    {
+                        continue;
+                    }
+
+                    if (e.ProcSpell is { } procSpell)
+                    {
+                        if (entry is not null)
                         {
-                            if ((procSpell.SpellFamilyFlags & entry.FamilyMask(i)) == 0)
+                            if (entry.FamilyMask(i) != 0)
+                            {
+                                if ((procSpell.SpellFamilyFlags & entry.FamilyMask(i)) == 0)
+                                {
+                                    continue;
+                                }
+                            }
+                            else if (!CanProcFrom(holder, i, procSpell, (ProcFlagsEx)entry.ProcEx, proc.Extra, e.Amount != 0, useClassMask: entry.SchoolMask == 0))
                             {
                                 continue;
                             }
                         }
-                        else if (!CanProcFrom(holder, i, procSpell, (ProcFlagsEx)entry.ProcEx, proc.Extra, e.Amount != 0, useClassMask: entry.SchoolMask == 0))
+                        else if (!CanProcFrom(holder, i, procSpell, ProcFlagsEx.None, proc.Extra, e.Amount != 0, useClassMask: true))
                         {
                             continue;
                         }
                     }
-                    else if (!CanProcFrom(holder, i, procSpell, ProcFlagsEx.None, proc.Extra, e.Amount != 0, useClassMask: true))
+
+                    // Spells that require the target below 20% (Deadly Swiftness).
+                    if (holder.Spell.TargetAuraState == AuraState.Healthless20Percent
+                        && (proc.Target is null || proc.Target.MaxHealth == 0 || proc.Target.Health * 5 > proc.Target.MaxHealth))
                     {
                         continue;
                     }
-                }
 
-                // Spells that require the target below 20% (Deadly Swiftness).
-                if (holder.Spell.TargetAuraState == AuraState.Healthless20Percent
-                    && (proc.Target is null || proc.Target.MaxHealth == 0 || proc.Target.Health * 5 > proc.Target.MaxHealth))
-                {
-                    continue;
-                }
-
-                var context = new AuraProcContext(this, proc.Owner, proc.Target, holder, aura, e.ProcSpell, proc.ProcFlag, proc.Extra, e.Amount,
-                    e.OriginalAmount, cooldown, proc.IsVictim, e.AttackType, e.Reflected);
-                AuraProcResult result = FindProcScript(holder.Spell)?.OnProc(context)
-                    ?? (ProcHandlers.TryGetValue(aura.Type, out AuraProcHandler? handler) ? handler(context) : AuraProcResult.Ok);
-                bool burnsOnFailure = ((uint)holder.Spell.Attributes & ProcAttributes.ProcFailureBurnsCharge) != 0;
-                switch (result)
-                {
-                    case AuraProcResult.CantTrigger:
+                    var context = new AuraProcContext(this, proc.Owner, proc.Target, holder, aura, e.ProcSpell, proc.ProcFlag, proc.Extra, e.Amount,
+                        e.OriginalAmount, cooldown, proc.IsVictim, e.AttackType, e.Reflected);
+                    AuraProcResult result;
+                    try
+                    {
+                        result = FindProcScript(holder.Spell)?.OnProc(context)
+                            ?? (ProcHandlers.TryGetValue(aura.Type, out AuraProcHandler? handler) ? handler(context) : AuraProcResult.Ok);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        FaultLedger.Shared.Record("spell-proc", ex);
                         continue;
-                    case AuraProcResult.Failed:
-                        useCharges &= burnsOnFailure;
-                        break;
-                    case AuraProcResult.Ok:
-                        useCharges &= !burnsOnFailure;
-                        break;
+                    }
+
+                    bool burnsOnFailure = ((uint)holder.Spell.Attributes & ProcAttributes.ProcFailureBurnsCharge) != 0;
+                    switch (result)
+                    {
+                        case AuraProcResult.CantTrigger:
+                            continue;
+                        case AuraProcResult.Failed:
+                            useCharges &= burnsOnFailure;
+                            break;
+                        case AuraProcResult.Ok:
+                            useCharges &= !burnsOnFailure;
+                            break;
+                    }
+
+                    anyAuraProc = true;
+                    if (result == AuraProcResult.Ok)
+                    {
+                        ApplyDamageProcCancel(context); // only a proc that happened ends the aura
+                    }
                 }
 
-                anyAuraProc = true;
-                if (result == AuraProcResult.Ok)
+                if (useCharges && anyAuraProc && !holder.IsRemoved && DropAuraCharge(holder))
                 {
-                    ApplyDamageProcCancel(context); // only a proc that happened ends the aura
+                    (removed ??= []).Add((proc.Owner, holder.Spell.Id));
                 }
             }
-
-            if (useCharges && anyAuraProc && !holder.IsRemoved && DropAuraCharge(holder))
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                (removed ??= []).Add((proc.Owner, holder.Spell.Id));
+                FaultLedger.Shared.Record("spell-proc", ex);
             }
         }
 
@@ -583,7 +641,14 @@ public sealed partial class SpellSystem
 
         foreach ((Unit unit, uint spellId) in removed.Distinct())
         {
-            RemoveAuras(unit, spellId);
+            try
+            {
+                RemoveAuras(unit, spellId);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("spell-proc", ex);
+            }
         }
     }
 

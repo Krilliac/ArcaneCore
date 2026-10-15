@@ -12,6 +12,7 @@ using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Economy;
 
 /// <summary>Where an economy operation ended up durably.</summary>
@@ -124,9 +125,18 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
     private static IReadOnlyList<uint> Ended(EconomyActor actor, IReadOnlyList<EconomyActor> actors)
     {
         IReadOnlyList<uint> consumed = actor.Stage.ConsumedItemGuids;
+        if (!Invariant.Check(
+                actor.Before.Inventory is not null && actor.After.Inventory is not null,
+                $"economy actor {actor.Id} is missing before/after inventory snapshots")
+            || actor.Before.Inventory is not { } beforeInventory
+            || actor.After.Inventory is not { } afterInventory)
+        {
+            return consumed;
+        }
+
         uint[] merged = [.. actors.Where(other => !ReferenceEquals(other, actor)).SelectMany(other => other.Stage.MergedItemGuids)
-            .Where(guid => actor.Before.Inventory!.Items.Any(row => row.Item.Guid == guid)
-                && !actor.After.Inventory!.Items.Any(row => row.Item.Guid == guid))];
+            .Where(guid => beforeInventory.Items.Any(row => row.Item.Guid == guid)
+                && !afterInventory.Items.Any(row => row.Item.Guid == guid))];
         return merged.Length == 0 ? consumed : Array.AsReadOnly(consumed.Union(merged).ToArray());
     }
 
@@ -253,15 +263,21 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
         var clock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
+            if (!Invariant.Check(_saves is not null, $"economy operation {operation.Id} settled without character save queue")
+                || _saves is not { } saves)
+            {
+                throw new InvalidOperationException("economy settlement requires an attached character save queue");
+            }
+
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
             budget.CancelAfter(allowed);
             // The pre-operation snapshot must be durable first: the commit compares the stored
             // money and inventory against it, so a lost earlier save is a conflict, not a dupe.
-            await Task.WhenAll(operation.Actors.Select(a => _saves!.SaveForSettlementAsync(a.Before, budget.Token))).ConfigureAwait(false);
+            await Task.WhenAll(operation.Actors.Select(a => saves.SaveForSettlementAsync(a.Before, budget.Token))).ConfigureAwait(false);
             budget.Token.ThrowIfCancellationRequested();
             foreach (EconomyActor actor in operation.Actors)
             {
-                _saves!.QuarantineCharacter(actor.Id);
+                saves.QuarantineCharacter(actor.Id);
             }
 
             if (BeforeCommit is { } hook)
@@ -286,12 +302,13 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
             if (ex is OperationCanceledException && !_stop.IsCancellationRequested)
             {
                 // The caller answers the client with its ordinary failure reply (or the actors are kicked when the outcome is unknown).
+                FaultLedger.Shared.Record("economy-settlement-timeout", ex);
                 logger.LogWarning("economy operation {Operation} ran out of its {Budget}s budget after {Elapsed} ms (transaction started: {Started})",
                     operation.Id, allowed.TotalSeconds, clock.ElapsedMilliseconds, transactionStarted);
             }
             else
             {
-                logger.LogError(ex, "economy operation {Operation} failed", operation.Id);
+                logger.LogFault("economy-settlement", ex, "economy operation {Operation} failed", operation.Id);
             }
             if (transactionStarted && outcome != EconomyOutcome.After)
             {
@@ -306,7 +323,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
                 }
                 catch (Exception reconciliation) when (reconciliation is not OutOfMemoryException)
                 {
-                    logger.LogError(reconciliation, "could not reconcile economy operation {Operation}", operation.Id);
+                    logger.LogFault("economy-settlement-reconcile", reconciliation, "could not reconcile economy operation {Operation}", operation.Id);
                 }
             }
         }
@@ -315,9 +332,9 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
             lock (_gate)
             {
                 operation.Outcome = outcome;
-                if (!_stopping)
+                if (!_stopping && Invariant.Check(_world is not null, $"economy operation {operation.Id} completed without world loop") && _world is { } world)
                 {
-                    _world!.Post(() => Finalize(operation, publishLive: true));
+                    world.Post(() => Finalize(operation, publishLive: true));
                 }
             }
         }
@@ -346,7 +363,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "economy operation {Operation} callback failed", operation.Id);
+            logger.LogFault("economy-settlement-callback", ex, "economy operation {Operation} callback failed", operation.Id);
         }
         finally
         {
@@ -382,7 +399,11 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
                     }
 
                     player.EndQuestSettlement(operation.Id);
-                    _saves!.ResumeCharacter(actor.Id);
+                    if (Invariant.Check(_saves is not null, $"economy settlement finalize missing save queue for character {actor.Id}") && _saves is { } savesAfter)
+                    {
+                        savesAfter.ResumeCharacter(actor.Id);
+                    }
+
                     if (actor.Before.Money != actor.MoneyAfter)
                     {
                         // Cash objectives use the durable wallet after the live freeze ends.
@@ -392,7 +413,11 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
                     break;
                 case EconomyOutcome.Before or EconomyOutcome.NotStarted when current:
                     player.EndQuestSettlement(operation.Id);
-                    _saves!.ResumeCharacter(actor.Id);
+                    if (Invariant.Check(_saves is not null, $"economy settlement rollback missing save queue for character {actor.Id}") && _saves is { } savesBefore)
+                    {
+                        savesBefore.ResumeCharacter(actor.Id);
+                    }
+
                     break;
                 case EconomyOutcome.Unknown when current:
                     actor.Session.Kick();
@@ -402,8 +427,12 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The durable state is authoritative; the live copy is not trustworthy any more.
-            _saves!.QuarantineCharacter(actor.Id);
-            logger.LogError(ex, "economy publication failed for character {Character}; fresh login is required", actor.Id);
+            if (Invariant.Check(_saves is not null, $"economy settlement failure missing save queue for character {actor.Id}") && _saves is { } savesQuarantine)
+            {
+                savesQuarantine.QuarantineCharacter(actor.Id);
+            }
+
+            logger.LogFault("economy-settlement-publish", ex, "economy publication failed for character {Character}; fresh login is required", actor.Id);
             if (current)
             {
                 actor.Session.Kick();

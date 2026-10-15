@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 
@@ -150,12 +151,16 @@ public static class PlayerDumpTables
         => db.Model.GetEntityTypes().FirstOrDefault(e => e.GetTableName() == table && !e.IsOwned())
            ?? throw new InvalidOperationException($"the characters model has no table {table}");
 
+    internal static PropertyInfo Property(DbContext db, string table, string property)
+        => Entity(db, table).FindProperty(property)?.PropertyInfo
+           ?? throw new InvalidOperationException($"table {table} has no mapped property {property}");
+
     internal static object? Get(DbContext db, string table, object row, string property)
-        => Entity(db, table).FindProperty(property)!.PropertyInfo!.GetValue(row);
+        => Property(db, table, property).GetValue(row);
 
     internal static void Set(DbContext db, string table, object row, string property, object value)
     {
-        PropertyInfo info = Entity(db, table).FindProperty(property)!.PropertyInfo!;
+        PropertyInfo info = Property(db, table, property);
         info.SetValue(row, Convert.ChangeType(value, info.PropertyType, System.Globalization.CultureInfo.InvariantCulture));
     }
 
@@ -163,8 +168,18 @@ public static class PlayerDumpTables
     internal static async Task<List<object>> ReadAsync(DbContext db, string table, (string Column, IReadOnlyCollection<long> Values)? filter, CancellationToken ct)
     {
         IEntityType entity = Entity(db, table);
-        MethodInfo read = typeof(PlayerDumpTables).GetMethod(nameof(ReadTyped), BindingFlags.NonPublic | BindingFlags.Static)!.MakeGenericMethod(entity.ClrType);
-        return await ((Task<List<object>>)read.Invoke(null, [db, filter, ct])!).ConfigureAwait(false);
+        if (typeof(PlayerDumpTables).GetMethod(nameof(ReadTyped), BindingFlags.NonPublic | BindingFlags.Static) is not { } readMethod)
+        {
+            throw new InvalidOperationException($"missing {nameof(ReadTyped)} method on {nameof(PlayerDumpTables)}");
+        }
+
+        MethodInfo read = readMethod.MakeGenericMethod(entity.ClrType);
+        if (read.Invoke(null, [db, filter, ct]) is not Task<List<object>> task)
+        {
+            throw new InvalidOperationException($"unexpected return value from {nameof(ReadTyped)} for {table}");
+        }
+
+        return await task.ConfigureAwait(false);
     }
 
     private static async Task<List<object>> ReadTyped<T>(DbContext db, (string Column, IReadOnlyCollection<long> Values)? filter, CancellationToken ct)
@@ -177,7 +192,11 @@ public static class PlayerDumpTables
         }
 
         // Filtered in memory: the key columns are int or uint by table, and a dump is an admin's rare action.
-        PropertyInfo info = typeof(T).GetProperty(f.Column)!;
+        if (typeof(T).GetProperty(f.Column) is not { } info)
+        {
+            throw new InvalidOperationException($"entity {typeof(T).Name} has no property {f.Column}");
+        }
+
         var wanted = f.Values.ToHashSet();
         return [.. rows.Where(r => wanted.Contains(Convert.ToInt64(info.GetValue(r), System.Globalization.CultureInfo.InvariantCulture)))];
     }
@@ -245,6 +264,8 @@ public sealed class PlayerDumpWriter(CharacterDbContext db)
                         break;
                     case DumpTableType.Item:
                         AddNonZero(texts, PlayerDumpTables.Get(db, table, row, "Text"));
+                        break;
+                    default:
                         break;
                 }
             }
@@ -401,13 +422,24 @@ public sealed class PlayerDumpReader(CharacterDbContext db)
                 case DumpTableType.ItemText:
                     Remap("Id", texts, ids.NextItemTextId, allowZero: false);
                     break;
+                default:
+                    Invariant.Check(false, $"unexpected dump table type {type} after character row in {table}");
+                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                    db.ChangeTracker.Clear();
+                    return new(DumpReturn.FileBroken);
             }
 
             // Store-generated keys (character_honor_cp.Id) are generated again.
             IEntityType entity = PlayerDumpTables.Entity(db, table);
-            foreach (IProperty key in entity.FindPrimaryKey()!.Properties.Where(p => p.ValueGenerated == ValueGenerated.OnAdd && p.PropertyInfo is not null))
+            if (entity.FindPrimaryKey() is { } primaryKey)
             {
-                key.PropertyInfo!.SetValue(row, Activator.CreateInstance(key.ClrType));
+                foreach (IProperty key in primaryKey.Properties)
+                {
+                    if (key.ValueGenerated == ValueGenerated.OnAdd && key.PropertyInfo is { } keyProperty)
+                    {
+                        keyProperty.SetValue(row, Activator.CreateInstance(key.ClrType));
+                    }
+                }
             }
 
             db.Add(row);
@@ -417,9 +449,10 @@ public sealed class PlayerDumpReader(CharacterDbContext db)
         {
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex)
         {
             // Duplicate rows in a hand-edited dump: the whole load goes, as vmangos ROLLBACK(DUMP_FILE_BROKEN).
+            FaultLedger.Shared.Record("data-playerdump.save", ex);
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
             db.ChangeTracker.Clear();
             return new(DumpReturn.FileBroken);
@@ -459,9 +492,10 @@ public sealed class PlayerDumpReader(CharacterDbContext db)
             {
                 row = JsonSerializer.Deserialize(line[(tab + 1)..], PlayerDumpTables.Entity(db, table).ClrType, Json);
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
                 // a row that does not parse makes the dump invalid; the caller returns the failure to the operator
+                FaultLedger.Shared.Record("data-playerdump.parse", ex);
                 return false;
             }
 

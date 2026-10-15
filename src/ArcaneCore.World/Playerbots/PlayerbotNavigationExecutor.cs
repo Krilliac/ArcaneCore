@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -64,7 +65,15 @@ internal sealed class PlayerbotNavigationJob : IDisposable
     internal void Cancel()
     {
         try { _cancel.Cancel(); }
-        catch (ObjectDisposedException) { } // A finished and consumed job already released its linked source.
+        catch (ObjectDisposedException ex)
+        {
+            // A finished and consumed job already released its linked source.
+            _ = ex;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.nav-executor", ex);
+        }
     }
 
     internal void Complete(PlayerbotNavigationResult result)
@@ -270,6 +279,7 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot.nav-executor", error);
             PathSearchTotals search = PathSearchCounters.Current - before;
             job.Complete(new(PlayerbotNavigationResultStatus.Faulted, null, default, false,
                 search.Capped > 0, search, watch.Elapsed, error));

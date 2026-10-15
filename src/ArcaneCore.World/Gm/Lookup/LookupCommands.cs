@@ -17,7 +17,7 @@ public static class LookupText
 {
     /// <summary>vmangos <c>Utf8FitTo</c>: the case-insensitive substring test (both sides lower-cased).</summary>
     public static bool Fits(string name, string lowerNeedle)
-        => name.Length > 0 && name.ToLowerInvariant().Contains(lowerNeedle, StringComparison.Ordinal);
+        => !string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(lowerNeedle) && name.ToLowerInvariant().Contains(lowerNeedle, StringComparison.Ordinal);
 
     /// <summary>
     /// The first <paramref name="max"/> lines (all of them when <paramref name="max"/> is 0, the
@@ -76,7 +76,7 @@ public sealed class LookupCommands : ICommandGroup
 
     private static bool LookupItem(CommandContext context, string args)
     {
-        if (args.Length == 0)
+        if (string.IsNullOrWhiteSpace(args))
         {
             return false;
         }
@@ -108,13 +108,18 @@ public sealed class LookupCommands : ICommandGroup
 
     private static bool LookupCreature(CommandContext context, string args)
     {
-        if (args.Length == 0)
+        if (string.IsNullOrWhiteSpace(args))
         {
             return false;
         }
 
+        if (context.Session.Services.GetService<CreatureWorldFeature>() is not { } feature)
+        {
+            context.Reply(GmStrings.NoCreaturesFound);
+            return true;
+        }
+
         string needle = args.ToLowerInvariant();
-        var feature = context.Session.Services.GetRequiredService<CreatureWorldFeature>();
         IEnumerable<string> lines = feature.Content.Templates
             .Where(t => LookupText.Fits(t.Name, needle))
             .OrderBy(t => t.Entry)
@@ -124,13 +129,18 @@ public sealed class LookupCommands : ICommandGroup
 
     private static bool LookupObject(CommandContext context, string args)
     {
-        if (args.Length == 0)
+        if (string.IsNullOrWhiteSpace(args))
         {
             return false;
         }
 
+        if (context.Session.Services.GetService<GameObjectLootFeature>() is not { } feature)
+        {
+            context.Reply(GmStrings.NoGameObjectsFound);
+            return true;
+        }
+
         string needle = args.ToLowerInvariant();
-        var feature = context.Session.Services.GetRequiredService<GameObjectLootFeature>();
         IEnumerable<string> lines = feature.Content.Templates
             .Where(t => LookupText.Fits(t.Name, needle))
             .OrderBy(t => t.Entry)
@@ -140,13 +150,18 @@ public sealed class LookupCommands : ICommandGroup
 
     private static bool LookupTele(CommandContext context, string args)
     {
-        if (args.Length == 0)
+        if (string.IsNullOrWhiteSpace(args))
         {
             return false;   // vmangos answers LANG_COMMAND_TELE_PARAMETER then the syntax; ours is the syntax text
         }
 
+        if (context.Session.Services.GetService<TeleportFeature>() is not { } feature)
+        {
+            context.Reply(GmStrings.TeleNoLocation);
+            return true;
+        }
+
         string needle = args.ToLowerInvariant();
-        TeleportFeature feature = context.Session.Services.GetRequiredService<TeleportFeature>();
         List<string> lines = [.. feature.Maps.GameTeles
             .Where(t => LookupText.Fits(t.Name, needle))
             .OrderBy(t => t.Id)
@@ -163,7 +178,8 @@ public sealed class LookupCommands : ICommandGroup
 
     private static bool Send(CommandContext context, IEnumerable<string> lines, string none)
     {
-        List<string> shown = LookupText.Limit(lines, context.Commands.Gm.LookupMaxResults, out bool omitted);
+        int maxResults = Math.Max(0, context.Commands.Gm.LookupMaxResults);
+        List<string> shown = LookupText.Limit(lines, maxResults, out bool omitted);
         if (shown.Count == 0)
         {
             context.Reply(none);

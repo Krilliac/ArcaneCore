@@ -103,6 +103,12 @@ public sealed class LogonServer(
                     return;
                 }
             }
+            else
+            {
+                logger.LogWarning("Logon connection had no IPEndPoint ({Endpoint}); closing", client.Client.RemoteEndPoint);
+                client.Dispose();
+                return;
+            }
         }
         catch (Exception ex) when (LogonSession.IsExpectedDisconnect(ex))
         {
@@ -128,21 +134,22 @@ public sealed class LogonServer(
 
     private async Task HandleClientAsync(TcpClient client, AuthOptions config, NetGuard guard, IDisposable? lease, CancellationToken stoppingToken)
     {
-        string endpoint;
-        try
-        {
-            endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
-        }
-        catch (Exception ex) when (LogonSession.IsExpectedDisconnect(ex))
-        {
-            endpoint = "unknown";
-        }
-
+        string endpoint = "unknown";
         Interlocked.Increment(ref _activeSessions);
-        logger.LogInformation("[{Endpoint}] connected", endpoint);
 
         try
         {
+            try
+            {
+                endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+            }
+            catch (Exception ex) when (LogonSession.IsExpectedDisconnect(ex))
+            {
+                endpoint = "unknown";
+            }
+
+            logger.LogInformation("[{Endpoint}] connected", endpoint);
+
             using (client)
             await using (NetworkStream stream = client.GetStream())
             await using (AsyncServiceScope scope = scopeFactory.CreateAsyncScope())

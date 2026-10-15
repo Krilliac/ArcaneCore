@@ -104,8 +104,11 @@ public sealed partial class CreatureMapSystem
         if (_followSlaves.Count == 0) return;
         foreach (Creature slave in _followSlaves)
         {
-            Debug.Assert(slave.Spawn is not null);
-            CreatureSpawn spawn = slave.Spawn!;
+            if (!ArcaneCore.Kernel.Diagnostics.Invariant.Check(slave.Spawn is not null, $"Follow slave creature {slave.Guid} (Entry {slave.Entry}) has null Spawn.")
+                || slave.Spawn is not { } spawn)
+            {
+                continue;
+            }
             // vmangos GetLinkedTriggerInformation (CreatureLinkingMgr.cpp:310-326): the spawn's own link first, then its entry's on this map.
             if ((LinkFlags(slave, out CreatureLink? link, out CreatureTemplateLink? template) & LinkFollow) == 0) continue; // entry rewritten behind RefreshFollowSlave's back
 

@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Crafting.Enchanting;
 
@@ -51,7 +52,14 @@ public sealed class EnchantUpdater : IMapUpdater
         ArgumentNullException.ThrowIfNull(map);
         foreach (Player player in map.Players)
         {
-            player.Enchantments?.Update(diffMs);
+            try
+            {
+                player.Enchantments?.Update(diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-enchant-stats", ex);
+            }
         }
     }
 

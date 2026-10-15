@@ -67,8 +67,8 @@ internal sealed class PlayerbotRoute
     /// </summary>
     internal bool LegsNavigated(int fromPoint, int toPoint)
     {
-        if (_legs is null) return Navigated;
-        int first = Math.Clamp(fromPoint, 1, Points.Count - 1), last = Math.Clamp(toPoint, 1, Points.Count - 1);
+        if (_legs is null || _legs.Count == 0) return Navigated;
+        int first = Math.Clamp(fromPoint, 1, _legs.Count), last = Math.Clamp(toPoint, 1, _legs.Count);
         for (int point = first; point <= last; point++)
             if (!_legs[point - 1]) return false;
         return true;
@@ -77,11 +77,17 @@ internal sealed class PlayerbotRoute
     /// <summary>A route to a moving target (a chase): re-planned as the target moves, so the loop watch does not count its ends.</summary>
     internal bool Chase { get; set; }
 
+    /// <summary>The map pathfinder active when this route was planned, used to detect live pathfinder replacement.</summary>
+    internal IPathfinder? Pathfinder { get; set; }
+
+    internal bool IsStaleFor(Map? map)
+        => Pathfinder is not null && map is not null && !ReferenceEquals(Pathfinder, map.Collision.Pathfinder);
+
     internal int NextPoint { get; set; } = 1;
     internal bool Complete => NextPoint >= Points.Count;
 
     /// <summary>Whether the leg ending at point <paramref name="point"/> (1-based) came from the navigation mesh.</summary>
-    internal bool LegNavigatedAt(int point) => _legs is null ? Navigated : _legs[Math.Clamp(point, 1, Points.Count - 1) - 1];
+    internal bool LegNavigatedAt(int point) => _legs is null || _legs.Count == 0 ? Navigated : _legs[Math.Clamp(point, 1, _legs.Count) - 1];
 
     /// <summary>
     /// This route's unwalked rest, from <paramref name="here"/>, joined to <paramref name="next"/> (a route planned from this one's end):
@@ -107,7 +113,11 @@ internal sealed class PlayerbotRoute
             legs.Add(next.LegNavigatedAt(i));
         }
 
-        return new PlayerbotRoute(points, distance, legs) { CompletedQuestReturn = CompletedQuestReturn };
+        return new PlayerbotRoute(points, distance, legs)
+        {
+            CompletedQuestReturn = CompletedQuestReturn,
+            Pathfinder = Pathfinder ?? next.Pathfinder,
+        };
     }
 }
 
@@ -493,6 +503,7 @@ internal static class PlayerbotNavigation
                 if (TryTerrainRoute(here, target, options, (x, y, z) => map.Collision.GetHeight(x, y, z),
                         (a, b) => PlayerbotMoveCheck.LineClear(map.Collision, a, b), out PlayerbotRoute? hop) && hop is not null)
                 {
+                    hop.Pathfinder = map.Collision.Pathfinder;
                     route = hop;
                     retry.Value = now;
                     return true;
@@ -681,7 +692,10 @@ internal static class PlayerbotNavigation
                 // motion must not skip the floor and line-of-sight checks on that one (PlayerbotMotion.Validate).
                 bool[] legs = [.. Enumerable.Repeat(first.Navigated, first.Points.Count - 1),
                     .. Enumerable.Repeat(middle.Navigated, middle.Points.Count - 1), .. Enumerable.Repeat(last.Navigated, last.Points.Count - 1)];
-                var detour = new PlayerbotRoute(points, length, legs);
+                var detour = new PlayerbotRoute(points, length, legs)
+                {
+                    Pathfinder = map.Collision.Pathfinder,
+                };
                 if (risk.Blocking(player, detour.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not null) continue;
                 detour.CompletedQuestReturn = completedQuestReturn;
                 detour.CrossBesidePlaceMarks = crossBeside;
@@ -712,6 +726,15 @@ internal static class PlayerbotNavigation
 
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
     private static bool PlanDirect(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null)
+    {
+        bool ok = PlanDirectCore(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, from);
+        if (ok && route is not null && player.Map is { } map)
+            route.Pathfinder = map.Collision.Pathfinder;
+        return ok;
+    }
+
+    private static bool PlanDirectCore(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null)
     {
         straightRefused = false;
@@ -1237,7 +1260,7 @@ internal static class PlayerbotNavigation
             return false;
         if (player.Map is not { } map || options.MoveSpeed <= 0 || elapsedMs == 0)
             return false;
-        if (route.Complete)
+        if (route.Complete || route.IsStaleFor(map))
         {
             PlayerbotMovementControl.Stop(session, player);
             return false;

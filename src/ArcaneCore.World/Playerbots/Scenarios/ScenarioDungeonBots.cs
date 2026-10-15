@@ -70,8 +70,9 @@ public static class ScenarioDungeonBots
         => context.StepAsync($"{BotName} dies", () => context.ReadAsync(() =>
         {
             Player player = bot.RequirePlayer();
+            if (player.Map is not { } map) throw new ScenarioAssertionException($"{BotName} is not on a map");
             player.Health = 0;
-            player.Map!.Combat.KillPlayer(player);
+            map.Combat.KillPlayer(player);
             ScenarioContext.Expect(!player.IsAlive, $"{BotName} did not die");
             return true;
         }));
@@ -108,10 +109,10 @@ public static class ScenarioDungeonBots
             {
                 Player player = bot.RequirePlayer();
                 PlayerbotAreaTriggers.AllowTeleports(player, false);
-                if (!player.IsAlive)
+                if (!player.IsAlive && player.Map is { } map)
                 {
-                    player.Map!.Combat.ResurrectPlayer(player, 1f, applySickness: false);
-                    player.Map!.Combat.SpawnCorpseBones(player);
+                    map.Combat.ResurrectPlayer(player, 1f, applySickness: false);
+                    map.Combat.SpawnCorpseBones(player);
                 }
 
                 return true;
@@ -136,7 +137,8 @@ public static class ScenarioDungeonBots
     /// <summary>Walk the bot from <see cref="DungeonBotWalkIntoEntranceScenario.ApproachYards"/> before the entrance trigger to as far behind it.</summary>
     internal static async Task<ScenarioRouteWalker> WalkAcrossEntranceAsync(ScenarioContext context, ScenarioBot bot)
     {
-        AreaTriggerTemplate trigger = await context.ReadAsync(() => WorldMaps.Of(context.World).FindAreaTrigger(DungeonEntryScenario.EntranceTrigger)!).ConfigureAwait(false);
+        AreaTriggerTemplate trigger = await context.ReadAsync(() => WorldMaps.Of(context.World).FindAreaTrigger(DungeonEntryScenario.EntranceTrigger)
+            ?? throw new ScenarioAssertionException($"no areatrigger_template {DungeonEntryScenario.EntranceTrigger}")).ConfigureAwait(false);
         // Across the volume along its own orientation (the box's long side for the entrance), from outside to outside.
         float approach = DungeonBotWalkIntoEntranceScenario.ApproachYards;
         Vector2 across = new(MathF.Cos(trigger.BoxOrientation + (MathF.PI / 2)), MathF.Sin(trigger.BoxOrientation + (MathF.PI / 2)));
@@ -159,7 +161,7 @@ public static class ScenarioDungeonBots
     {
         await context.TakeAreaTriggerAsync(bot, DungeonEntryScenario.EntranceTrigger, DungeonEntryScenario.Deadmines).ConfigureAwait(false);
         await context.StepAsync($"{BotName} is in an instance of The Deadmines", async () =>
-            ScenarioContext.Expect(await bot.ReadAsync(p => p.Map!.InstanceId).ConfigureAwait(false) != 0, "the dungeon map is not an instance"))
+            ScenarioContext.Expect(await bot.ReadAsync(p => p.Map?.InstanceId ?? 0u).ConfigureAwait(false) != 0, "the dungeon map is not an instance"))
             .ConfigureAwait(false);
     }
 
@@ -211,18 +213,20 @@ internal sealed class ScenarioRouteWalker(PlayerbotOptions options, Vector3 dest
             return;
         }
 
-        if (_route is null || _route.Complete)
+        if (_route is not { Complete: false } activeRoute)
         {
-            PlanOutcome planned = PlayerbotNavigation.PlanExact(player, destination, options, ref _tileWait, context.World.NowMs, out _route);
-            if (planned != PlanOutcome.Route)
+            PlanOutcome planned = PlayerbotNavigation.PlanExact(player, destination, options, ref _tileWait, context.World.NowMs, out PlayerbotRoute? plannedRoute);
+            if (planned != PlanOutcome.Route || plannedRoute is null)
             {
                 _route = null;
                 if (planned == PlanOutcome.Refused) PlanFailures++; // a tile still being read is no failure: planned again next tick
                 return;
             }
+
+            _route = activeRoute = plannedRoute;
         }
 
-        if (!PlayerbotNavigation.TryAdvance(context.Session, _route!, options, interval, context.World.NowMs)) _route = null;
+        if (!PlayerbotNavigation.TryAdvance(context.Session, activeRoute, options, interval, context.World.NowMs)) _route = null;
     }
 
     public void Detached(Guid botId)
@@ -296,7 +300,7 @@ public sealed class DungeonBotWalkIntoEntranceScenario : IPlayerbotScenario
             await ScenarioDungeonBots.WalkAcrossEntranceAsync(context, bot).ConfigureAwait(false);
             TeleportService teleports = context.Services.GetRequiredService<TeleportFeature>().Teleports;
             await ScenarioDungeonBots.WaitStepAsync(context, $"{ScenarioDungeonBots.BotName} is teleported into map {DungeonEntryScenario.Deadmines}",
-                () => bot.Session!.Player is { IsInWorld: true, Map.MapId: DungeonEntryScenario.Deadmines } player && teleports.StageOf(player) is null,
+                () => bot.Session?.Player is { IsInWorld: true, Map.MapId: DungeonEntryScenario.Deadmines } player && teleports.StageOf(player) is null,
                 TimeSpan.FromSeconds(20)).ConfigureAwait(false);
             await ScenarioDungeonBots.ExpectNoFaultAsync(context, bot).ConfigureAwait(false);
         }
@@ -375,12 +379,13 @@ public sealed class DungeonBotGhostEntranceScenario : IPlayerbotScenario
             await ScenarioDungeonBots.KillAsync(context, bot).ConfigureAwait(false);
             await ScenarioDungeonBots.DriveAsync(context, bot, null, $"{ScenarioDungeonBots.BotName} goes autonomous").ConfigureAwait(false);
             TeleportService teleports = context.Services.GetRequiredService<TeleportFeature>().Teleports;
-            uint outside = await context.ReadAsync(() => WorldMaps.Of(context.World).FindAreaTrigger(DungeonEntryScenario.EntranceTrigger)!.MapId).ConfigureAwait(false);
+            uint outside = await context.ReadAsync(() => (WorldMaps.Of(context.World).FindAreaTrigger(DungeonEntryScenario.EntranceTrigger)
+                ?? throw new ScenarioAssertionException($"no areatrigger_template {DungeonEntryScenario.EntranceTrigger}")).MapId).ConfigureAwait(false);
             await ScenarioDungeonBots.WaitStepAsync(context, $"{ScenarioDungeonBots.BotName} releases and appears outside as a ghost", () =>
-                bot.Session!.Player is { IsInWorld: true } player && (player.Flags & PlayerFlags.Ghost) != 0
+                bot.Session?.Player is { IsInWorld: true } player && (player.Flags & PlayerFlags.Ghost) != 0
                 && player.MapId == outside && teleports.StageOf(player) is null, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
             await ScenarioDungeonBots.WaitStepAsync(context, $"{ScenarioDungeonBots.BotName} walks in as a ghost and is resurrected at the entrance", () =>
-                bot.Session!.Player is { IsInWorld: true, IsAlive: true, Map.MapId: DungeonEntryScenario.Deadmines } player
+                bot.Session?.Player is { IsInWorld: true, IsAlive: true, Map.MapId: DungeonEntryScenario.Deadmines } player
                 && teleports.StageOf(player) is null, TimeSpan.FromSeconds(90)).ConfigureAwait(false);
             await context.StepAsync($"{ScenarioDungeonBots.BotName} stands at the entrance, its body gone", async () =>
             {
@@ -430,13 +435,13 @@ public sealed class DungeonBotSpiritHealerScenario : IPlayerbotScenario
             await ScenarioDungeonBots.KillAsync(context, bot).ConfigureAwait(false);
             await ScenarioDungeonBots.DriveAsync(context, bot, null, $"{ScenarioDungeonBots.BotName} goes autonomous").ConfigureAwait(false);
             TeleportService teleports = context.Services.GetRequiredService<TeleportFeature>().Teleports;
-            await ScenarioDungeonBots.WaitStepAsync(context, $"{ScenarioDungeonBots.BotName} releases", () => bot.Session!.Player is { IsInWorld: true } player
+            await ScenarioDungeonBots.WaitStepAsync(context, $"{ScenarioDungeonBots.BotName} releases", () => bot.Session?.Player is { IsInWorld: true } player
                 && (player.Flags & PlayerFlags.Ghost) != 0 && player.Combat.Corpse is not null && teleports.StageOf(player) is null,
                 TimeSpan.FromSeconds(30)).ConfigureAwait(false);
             // The ghost sees the spirit healers (the living do not) once its view is updated after the release: note where the one
             // it will use stands.
             await ScenarioDungeonBots.WaitStepAsync(context, "a spirit healer is in sight",
-                () => bot.Session!.Player is { IsInWorld: true } player && NearestHealer(player) is not null, TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+                () => bot.Session?.Player is { IsInWorld: true } player && NearestHealer(player) is not null, TimeSpan.FromSeconds(10)).ConfigureAwait(false);
             Vector3 healer = await context.ReadAsync(() =>
             {
                 Creature spirit = NearestHealer(bot.RequirePlayer()) ?? throw new ScenarioAssertionException("no spirit healer in sight");
@@ -450,7 +455,7 @@ public sealed class DungeonBotSpiritHealerScenario : IPlayerbotScenario
                 return new Vector3(corpse.X, corpse.Y, corpse.Z);
             })).ConfigureAwait(false);
             await ScenarioDungeonBots.WaitStepAsync(context, $"{ScenarioDungeonBots.BotName} is resurrected", () =>
-                bot.Session!.Player is { IsInWorld: true, IsAlive: true } player && teleports.StageOf(player) is null,
+                bot.Session?.Player is { IsInWorld: true, IsAlive: true } player && teleports.StageOf(player) is null,
                 TimeSpan.FromSeconds(120)).ConfigureAwait(false);
             // CMSG_SPIRIT_HEALER_ACTIVATE revives the ghost where it stands, within reach of the healer; a reclaim would have needed the
             // body within about 39 yards, and the body lies 500 yards down.

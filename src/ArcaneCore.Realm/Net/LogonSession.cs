@@ -224,6 +224,12 @@ public sealed class LogonSession(
 
                         break;
 
+                    case AuthCommand.XferAccept or AuthCommand.XferResume or AuthCommand.XferCancel:
+                        logger.LogWarning("[{Endpoint}] out-of-order patch transfer command 0x{Command:X2} without an offered patch; closing",
+                            remoteEndpoint, commandBuffer[0]);
+                        RecordFailure();
+                        return;
+
                     default:
                         logger.LogWarning("[{Endpoint}] unsupported logon command 0x{Command:X2}; closing",
                             remoteEndpoint, commandBuffer[0]);
@@ -256,9 +262,9 @@ public sealed class LogonSession(
     internal static bool IsExpectedDisconnect(Exception exception)
         => exception is OperationCanceledException
             or EndOfStreamException
-            or IOException
             or SocketException
-            or ObjectDisposedException;
+            or ObjectDisposedException
+            or (IOException and not (FileNotFoundException or DirectoryNotFoundException or DriveNotFoundException or PathTooLongException or FileLoadException));
 
     /// <summary>
     /// Classifies an unexpected session fault (<see cref="CryptographicException"/>, <see cref="FormatException"/>,
@@ -346,6 +352,7 @@ public sealed class LogonSession(
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Fault metadata tagging must never mask the original exception.
+            FaultLedger.Shared.Record("logon/tag-fault-context", ex);
         }
     }
 
@@ -385,6 +392,9 @@ public sealed class LogonSession(
                     break;
                 case AuthCommand.ReconnectChallenge:
                     await SendReconnectFailureAsync(AuthResult.FailDbBusy, cancellationToken).ConfigureAwait(false);
+                    break;
+                default:
+                    // Commands without a FailDbBusy wire reply close fail-closed via _closeRequested above.
                     break;
             }
         }
@@ -493,7 +503,7 @@ public sealed class LogonSession(
         // (vmangos AuthSocket.cpp:338-352). A store error propagates and closes the connection (fail closed).
         // ArcaneCore validates the build and name above first, so a wrong-build client sees VersionInvalid.
         string? address = AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint);
-        if (_banStore is not null && address is not null && await IsIpBannedAsync(address, cancellationToken).ConfigureAwait(false))
+        if (_banStore is { } banStore && address is not null && await IsIpBannedAsync(banStore, address, cancellationToken).ConfigureAwait(false))
         {
             logger.LogInformation("[{Endpoint}] banned address tried to log in as '{Account}'",
                 remoteEndpoint, LogSafe.Escape(username));
@@ -528,6 +538,8 @@ public sealed class LogonSession(
         {
             switch (account.Status)
             {
+                case AccountStatus.Active:
+                    break;
                 case AccountStatus.Banned:
                     RecordFailure();
                     await SendChallengeFailureAsync(AuthResult.Banned, cancellationToken).ConfigureAwait(false);
@@ -535,6 +547,11 @@ public sealed class LogonSession(
                 case AccountStatus.Suspended:
                     RecordFailure();
                     await SendChallengeFailureAsync(AuthResult.Suspended, cancellationToken).ConfigureAwait(false);
+                    return;
+                default:
+                    Invariant.Check(false, $"unexpected account status {account.Status} for '{LogSafe.Escape(username)}'");
+                    RecordFailure();
+                    await SendChallengeFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
                     return;
             }
 
@@ -665,7 +682,7 @@ public sealed class LogonSession(
         }
 
         if (promptPin && (account is null || pinSalt is null
-            || !VerifyPin(account, gridSeed, pinSalt, pinData!)))
+            || pinData is not { } validPinData || !VerifyPin(account, gridSeed, pinSalt, validPinData)))
         {
             RecordFailure();
             await SendProofFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
@@ -683,8 +700,7 @@ public sealed class LogonSession(
         // with (account.sessionkey), and an auto-create candidate carries the verifier its challenge was
         // built from. Either missing means the challenge handler and this handler disagree; refuse rather
         // than store a row the world cannot use or an account with no verifier.
-        if (!Invariant.Check(srp.SessionKey.Length == WowSrp6.SessionKeyLength, $"session key of {srp.SessionKey.Length} bytes about to be stored for an account")
-            || !Invariant.Check(!isAutocreate || autocreateVerifier is not null, "auto-create proof without the verifier its challenge was built from"))
+        if (!Invariant.Check(srp.SessionKey.Length == WowSrp6.SessionKeyLength, $"session key of {srp.SessionKey.Length} bytes about to be stored for an account"))
         {
             await SendProofFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
             return;
@@ -692,12 +708,19 @@ public sealed class LogonSession(
 
         if (isAutocreate)
         {
+            if (autocreateVerifier is not { } verifier)
+            {
+                Invariant.Check(false, "auto-create proof without the verifier its challenge was built from");
+                await SendProofFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             await accountStore.CreateAsync(
                 new Account
                 {
                     Username = username,
                     Salt = srp.Salt,
-                    Verifier = autocreateVerifier!,
+                    Verifier = verifier,
                     SessionKey = srp.SessionKey,
                     Status = AccountStatus.Active,
                 },
@@ -766,7 +789,7 @@ public sealed class LogonSession(
         }
 
         string? address = AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint);
-        if (_banStore is not null && address is not null && await IsIpBannedAsync(address, cancellationToken).ConfigureAwait(false))
+        if (_banStore is { } banStore && address is not null && await IsIpBannedAsync(banStore, address, cancellationToken).ConfigureAwait(false))
         {
             RecordFailure();
             await SendReconnectFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
@@ -1012,10 +1035,10 @@ public sealed class LogonSession(
     /// The IP-ban check of a challenge or a reconnect challenge: through the listener's <see cref="RealmIpBanCache"/>
     /// when there is one, otherwise one row read per call (vmangos AuthSocket.cpp:338-352). A store error propagates.
     /// </summary>
-    private async ValueTask<bool> IsIpBannedAsync(string address, CancellationToken cancellationToken)
+    private async ValueTask<bool> IsIpBannedAsync(IBanStore banStore, string address, CancellationToken cancellationToken)
         => _ipBanCache is not null
-            ? await _ipBanCache.IsBannedAsync(address, _banStore!, cancellationToken).ConfigureAwait(false)
-            : await _banStore!.GetActiveIpBanAsync(address, cancellationToken).ConfigureAwait(false) is not null;
+            ? await _ipBanCache.IsBannedAsync(address, banStore, cancellationToken).ConfigureAwait(false)
+            : await banStore.GetActiveIpBanAsync(address, cancellationToken).ConfigureAwait(false) is not null;
 
     private static bool IsPrintableAscii(string value)
     {
@@ -1069,8 +1092,7 @@ public sealed class LogonSession(
         {
             return false;
         }
-
-        if (command == AuthCommand.XferResume)
+        else if (command == AuthCommand.XferResume)
         {
             byte[] start = new byte[8];
             await ReadPacketPartAsync(start, cancellationToken).ConfigureAwait(false);
@@ -1082,6 +1104,11 @@ public sealed class LogonSession(
             }
 
             offset = (long)requested;
+        }
+        else if (command != AuthCommand.XferAccept)
+        {
+            Invariant.Check(false, $"unexpected patch transfer command {command}");
+            return false;
         }
 
         await using FileStream file = new(patch.Path, FileMode.Open, FileAccess.Read, FileShare.Read, XferChunkSize, useAsync: true);
@@ -1175,11 +1202,19 @@ public sealed class LogonSession(
         writer.WriteBytes(WowSrp6.NLittleEndian);        // N (32, LE)
         writer.WriteBytes(srp.Salt);                     // s (32)
         writer.WriteBytes(AuthConstants.VersionChallenge); // crc_salt (16)
-        writer.WriteByte(_promptPin ? (byte)1 : (byte)0);
+        bool includePin = _promptPin && _pinSalt is not null;
+        writer.WriteByte(includePin ? (byte)1 : (byte)0);
         if (_promptPin)
         {
-            writer.WriteUInt32(_gridSeed);
-            writer.WriteBytes(_pinSalt!);
+            if (_pinSalt is { } pinSalt)
+            {
+                writer.WriteUInt32(_gridSeed);
+                writer.WriteBytes(pinSalt);
+            }
+            else
+            {
+                Invariant.Check(false, "PIN prompt enabled on logon challenge without a generated PIN salt");
+            }
         }
         await SendAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }

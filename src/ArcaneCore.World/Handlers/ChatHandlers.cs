@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Chat;
@@ -56,6 +57,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static void HandleMessageChat(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 8)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint rawType = reader.ReadUInt32();
         var language = (Language)reader.ReadUInt32();
@@ -204,21 +210,21 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         switch (type)
         {
             case ChatType.Say:
-                if (player.IsAlive)
+                if (player.IsAlive && player.Map is { } sayMap)
                 {
                     float say = options.ListenRangeSay;
                     float yell = options.ListenRangeYell;
                     float range = say > 0 && yell > 0 ? Math.Min(say, yell) : say; // vmangos Player::Say: min(say, yell range)
-                    player.Map?.BroadcastInRange(player, range, WorldOpcode.SmsgMessagechat,
+                    sayMap.BroadcastInRange(player, range, WorldOpcode.SmsgMessagechat,
                         ChatPackets.BuildMessage(ChatType.Say, language, player.Guid, message, player.ChatTag), includeSelf: true);
                 }
 
                 break;
 
             case ChatType.Yell:
-                if (player.IsAlive)
+                if (player.IsAlive && player.Map is { } yellMap)
                 {
-                    player.Map?.BroadcastInRange(player, options.ListenRangeYell, WorldOpcode.SmsgMessagechat,
+                    yellMap.BroadcastInRange(player, options.ListenRangeYell, WorldOpcode.SmsgMessagechat,
                         ChatPackets.BuildMessage(ChatType.Yell, language, player.Guid, message, player.ChatTag), includeSelf: true);
                 }
 
@@ -227,9 +233,9 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             case ChatType.Emote:
                 // Custom emotes are plain text, so they stay within the faction unless two-side
                 // chat is allowed (vmangos Player::TextEmote, own_team_only).
-                if (player.IsAlive)
+                if (player.IsAlive && player.Map is { } emoteMap)
                 {
-                    player.Map?.BroadcastInRange(player, options.ListenRangeTextEmote, WorldOpcode.SmsgMessagechat,
+                    emoteMap.BroadcastInRange(player, options.ListenRangeTextEmote, WorldOpcode.SmsgMessagechat,
                         ChatPackets.BuildMessage(ChatType.Emote, Language.Universal, player.Guid, message, player.ChatTag),
                         includeSelf: true, onlyTeam: options.AllowTwoSideChat ? null : player.Team);
                 }
@@ -278,6 +284,9 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                 }
 
                 break;
+
+            default:
+                break;
         }
     }
 
@@ -320,7 +329,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // A faulty command must not take the invoker's connection down with it.
-            session.Logger.LogError(ex, "[{Endpoint}] command '{Command}' by {Player} failed", session.RemoteEndpoint, commandText, player.Name);
+            session.Logger.LogFault("chat-command", ex, "[{Endpoint}] command '{Command}' by {Player} failed", session.RemoteEndpoint, commandText, player.Name);
             context.Reply("The command failed; see the server log.");
         }
 
@@ -418,6 +427,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static void HandleTextEmote(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 16)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint textEmote = reader.ReadUInt32();
         uint emoteNumber = reader.ReadUInt32();
@@ -511,6 +525,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static void HandleEmote(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 4)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint emote = reader.ReadUInt32();
         if (!player.IsAlive || (player.UnitFlags & UnitFlags.PreventAnim) != 0 || RejectMuted(session, player))
@@ -539,6 +558,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static void HandleWho(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 26)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint levelMin = reader.ReadUInt32();
         uint levelMax = reader.ReadUInt32();
@@ -547,7 +571,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         uint raceMask = reader.ReadUInt32();
         uint classMask = reader.ReadUInt32();
         uint zoneCount = reader.ReadUInt32();
-        if (zoneCount > 10)
+        if (zoneCount > 10 || reader.Remaining < (zoneCount * 4) + 4)
         {
             return; // client limit; vmangos drops the request
         }
@@ -599,8 +623,8 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             uint race = (uint)other.Race;
             uint cls = (uint)other.Class;
             if (level < levelMin || level > levelMax
-                || (classMask & (1u << (int)cls)) == 0
-                || (raceMask & (1u << (int)race)) == 0)
+                || cls >= 32 || (classMask & (1u << (int)cls)) == 0
+                || race >= 32 || (raceMask & (1u << (int)race)) == 0)
             {
                 continue;
             }

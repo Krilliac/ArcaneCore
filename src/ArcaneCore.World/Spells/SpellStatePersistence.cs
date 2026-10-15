@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Spells;
 
 /// <summary>
@@ -287,8 +288,13 @@ public sealed class SpellStatePersistence
         {
             scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException)
         {
+            /* expected on shutdown */
+        }
+        catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-spellstate-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -305,12 +311,32 @@ public sealed class SpellStatePersistence
             }
         }
 
-        await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
+        if (!Invariant.Check(_scopes is not null, "SpellStatePersistence WriteAsync requires a scope factory") || _scopes is not { } scopes)
+        {
+            return;
+        }
+
         try
         {
-            if (scope.ServiceProvider.GetService<ICharacterSpellStateStore>() is not { } store)
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            try
             {
-                // No store: the state lives in memory for this process only.
+                if (scope.ServiceProvider.GetService<ICharacterSpellStateStore>() is not { } store)
+                {
+                    // No store: the state lives in memory for this process only.
+                    lock (_lock)
+                    {
+                        if (_unsaved.TryGetValue(characterId, out SpellStateSnapshot? current) && ReferenceEquals(current, snapshot))
+                        {
+                            _unsaved.Remove(characterId);
+                            _lastFailure.Remove(characterId);
+                        }
+                    }
+
+                    return;
+                }
+
+                await store.SaveAsync(characterId, ToRows(snapshot)).ConfigureAwait(false);
                 lock (_lock)
                 {
                     if (_unsaved.TryGetValue(characterId, out SpellStateSnapshot? current) && ReferenceEquals(current, snapshot))
@@ -319,37 +345,26 @@ public sealed class SpellStatePersistence
                         _lastFailure.Remove(characterId);
                     }
                 }
-
-                return;
             }
-
-            await store.SaveAsync(characterId, ToRows(snapshot)).ConfigureAwait(false);
-            lock (_lock)
+            catch (CharacterOwnershipRejectedException ex)
             {
-                if (_unsaved.TryGetValue(characterId, out SpellStateSnapshot? current) && ReferenceEquals(current, snapshot))
+                FaultLedger.Shared.Record("writequeue-spellstate-ownership", ex);
+                lock (_lock)
                 {
-                    _unsaved.Remove(characterId);
-                    _lastFailure.Remove(characterId);
+                    _lastFailure[characterId] = ex;
                 }
+
+                FailTerminal(ex, scope.ServiceProvider);
             }
         }
-        catch (CharacterOwnershipRejectedException ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             lock (_lock)
             {
                 _lastFailure[characterId] = ex;
             }
 
-            FailTerminal(ex, scope.ServiceProvider);
-        }
-        catch (Exception ex)
-        {
-            lock (_lock)
-            {
-                _lastFailure[characterId] = ex;
-            }
-
-            _logger.LogError(ex, "Saving the cooldowns and auras of character {Character} failed; kept in memory", characterId);
+            _logger.LogFault("writequeue-spellstate", ex, "Saving the cooldowns and auras of character {Character} failed; kept in memory", characterId);
         }
     }
 
@@ -363,21 +378,30 @@ public sealed class SpellStatePersistence
             }
         }
 
-        await using AsyncServiceScope scope = _scopes!.CreateAsyncScope();
+        if (!Invariant.Check(_scopes is not null, "SpellStatePersistence DeleteAsync requires a scope factory") || _scopes is not { } scopes)
+        {
+            return;
+        }
+
         try
         {
-            if (scope.ServiceProvider.GetService<ICharacterSpellStateStore>() is { } store)
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            try
             {
-                await store.DeleteCharacterAsync(characterId).ConfigureAwait(false);
+                if (scope.ServiceProvider.GetService<ICharacterSpellStateStore>() is { } store)
+                {
+                    await store.DeleteCharacterAsync(characterId).ConfigureAwait(false);
+                }
+            }
+            catch (CharacterOwnershipRejectedException ex)
+            {
+                FaultLedger.Shared.Record("writequeue-spellstate-ownership", ex);
+                FailTerminal(ex, scope.ServiceProvider);
             }
         }
-        catch (CharacterOwnershipRejectedException ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FailTerminal(ex, scope.ServiceProvider);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Deleting the cooldowns and auras of character {Character} failed", characterId);
+            _logger.LogFault("writequeue-spellstate-delete", ex, "Deleting the cooldowns and auras of character {Character} failed", characterId);
         }
     }
 }

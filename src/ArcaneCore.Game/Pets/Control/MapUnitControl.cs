@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Pets.Control;
 
@@ -86,18 +87,25 @@ public sealed class MapUnitControl : IMapUpdater
 
         foreach (Unit controlled in _links.Keys.ToArray())
         {
-            if (controlled is not Creature { AI: PetAI ai, Summon: null } charmed || !charmed.IsAlive)
+            try
             {
-                continue;
-            }
+                if (controlled is not Creature { AI: PetAI ai, Summon: null } charmed || !charmed.IsAlive)
+                {
+                    continue;
+                }
 
-            if (charmed.CharmerGuid == victim.Guid)
-            {
-                ai.OwnerAttackedBy(attacker);
+                if (charmed.CharmerGuid == victim.Guid)
+                {
+                    ai.OwnerAttackedBy(attacker);
+                }
+                else if (charmed.CharmerGuid == attacker.Guid)
+                {
+                    ai.OwnerAttacked(victim);
+                }
             }
-            else if (charmed.CharmerGuid == attacker.Guid)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                ai.OwnerAttacked(victim);
+                FaultLedger.Shared.Record("map-unit-control", ex);
             }
         }
     }
@@ -127,41 +135,48 @@ public sealed class MapUnitControl : IMapUpdater
 
         foreach ((Unit controlled, Link link) in _links.ToArray())
         {
-            if (!_links.ContainsKey(controlled))
+            try
             {
-                continue; // released by an earlier link this tick
-            }
-
-            // The controlled unit left the map (despawned, unloaded, teleported): vmangos removes its auras with AURA_REMOVE_BY_DELETE,
-            // which only does the controller's half.
-            if (!ReferenceEquals(controlled.Map, _map))
-            {
-                _links.Remove(controlled);
-                if (_map.FindObject(link.Controller) is Player controllerPlayer && controllerPlayer.CharmGuid == controlled.Guid)
+                if (!_links.ContainsKey(controlled))
                 {
-                    link.Service.ReleaseController(controllerPlayer, controlled);
+                    continue; // released by an earlier link this tick
                 }
 
-                continue;
-            }
-
-            // The controller left the map: vmangos Uncharm in its RemoveFromWorld releases the target.
-            if (_map.FindObject(link.Controller) is not Unit controller)
-            {
-                link.Service.RemoveCharmAuras(controlled);
-                link.Service.Spells?.RemoveAurasByType(controlled, Spells.AuraType.ModPossessPet);
-                if (_links.ContainsKey(controlled))
+                // The controlled unit left the map (despawned, unloaded, teleported): vmangos removes its auras with AURA_REMOVE_BY_DELETE,
+                // which only does the controller's half.
+                if (!ReferenceEquals(controlled.Map, _map))
                 {
                     _links.Remove(controlled);
-                    link.Service.ForceRelease(controlled);
+                    if (_map.FindObject(link.Controller) is Player controllerPlayer && controllerPlayer.CharmGuid == controlled.Guid)
+                    {
+                        link.Service.ReleaseController(controllerPlayer, controlled);
+                    }
+
+                    continue;
                 }
 
-                continue;
-            }
+                // The controller left the map: vmangos Uncharm in its RemoveFromWorld releases the target.
+                if (_map.FindObject(link.Controller) is not Unit controller)
+                {
+                    link.Service.RemoveCharmAuras(controlled);
+                    link.Service.Spells?.RemoveAurasByType(controlled, Spells.AuraType.ModPossessPet);
+                    if (_links.ContainsKey(controlled))
+                    {
+                        _links.Remove(controlled);
+                        link.Service.ForceRelease(controlled);
+                    }
 
-            if (controlled is Player charmedPlayer && !charmedPlayer.IsPossessedState)
+                    continue;
+                }
+
+                if (controlled is Player charmedPlayer && !charmedPlayer.IsPossessedState)
+                {
+                    UpdateCharmedPlayer(link.Service, charmedPlayer, controller);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                UpdateCharmedPlayer(link.Service, charmedPlayer, controller);
+                FaultLedger.Shared.Record("map-unit-control", ex);
             }
         }
     }
@@ -330,13 +345,20 @@ public sealed class MapUnitControl : IMapUpdater
         _pending.RemoveAll(static p => p.RemainingMs == 0);
         foreach (Pending pending in _due)
         {
-            if (ReferenceEquals(pending.Unit.Map, _map))
+            try
             {
-                pending.Action();
+                if (ReferenceEquals(pending.Unit.Map, _map))
+                {
+                    pending.Action();
+                }
+                else if (pending.Unit is Player player)
+                {
+                    Redirect(player, pending);
+                }
             }
-            else if (pending.Unit is Player player)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                Redirect(player, pending);
+                FaultLedger.Shared.Record("map-unit-control", ex);
             }
         }
 

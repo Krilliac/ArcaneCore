@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Locomotion;
@@ -61,14 +62,27 @@ internal sealed class MapEnvironment : IMapUpdater
             for (int i = 0; i < count; i++)
             {
                 Player player = players[i];
-                LocomotionState state = player.Locomotion;
-                if (state.LastEnvironmentSample is not { } sample || !ReferenceEquals(sample.Map, map)
-                    || sample.X != player.X || sample.Y != player.Y || sample.Z != player.Z)
+                try
                 {
-                    LiquidEnvironment.UpdateTerrainFlags(player);
-                }
+                    LocomotionState state = player.Locomotion;
+                    if (state.LastEnvironmentSample is not { } sample || !ReferenceEquals(sample.Map, map)
+                        || sample.X != player.X || sample.Y != player.Y || sample.Z != player.Z)
+                    {
+                        LiquidEnvironment.UpdateTerrainFlags(player);
+                    }
 
-                UpdateMirrorTimers(map, player, diffMs);
+                    UpdateMirrorTimers(map, player, diffMs);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    map.Logger.LogFault(
+                        "map-environment",
+                        ex,
+                        "MapEnvironment fault updating player {Player} (guid={Guid}) on map {MapId}",
+                        player.Name,
+                        player.Guid.Low,
+                        map.MapId);
+                }
             }
         }
         finally
@@ -79,16 +93,29 @@ internal sealed class MapEnvironment : IMapUpdater
 
     public void OnPlayerRemoved(Map map, Player player)
     {
-        // A player that leaves has no liquid to be in and no timer to run; the next map starts from nothing.
-        if (LocomotionStates.TryGet(player, out LocomotionState? state))
+        try
         {
-            state.Environment = EnvironmentFlags.None;
-            state.LastEnvironmentSample = null;
-            foreach (MirrorTimer timer in state.MirrorTimers)
+            // A player that leaves has no liquid to be in and no timer to run; the next map starts from nothing.
+            if (LocomotionStates.TryGet(player, out LocomotionState? state))
             {
-                timer.Stop();
-                timer.FetchStatus();
+                state.Environment = EnvironmentFlags.None;
+                state.LastEnvironmentSample = null;
+                foreach (MirrorTimer timer in state.MirrorTimers)
+                {
+                    timer.Stop();
+                    timer.FetchStatus();
+                }
             }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            map.Logger.LogFault(
+                "map-environment",
+                ex,
+                "MapEnvironment fault removing player {Player} (guid={Guid}) from map {MapId}",
+                player.Name,
+                player.Guid.Low,
+                map.MapId);
         }
     }
 

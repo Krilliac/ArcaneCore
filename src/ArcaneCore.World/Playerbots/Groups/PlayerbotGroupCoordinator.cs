@@ -11,6 +11,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Loot;
@@ -198,7 +199,18 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         _bots.Clear();
         foreach (PlayerbotGroupBot bot in bots) _bots[bot.BotId] = bot;
-        foreach (BotGroup group in _groups.ToArray()) Advance(group);
+        foreach (BotGroup group in _groups.ToArray())
+        {
+            try
+            {
+                Advance(group);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("playerbot-group-coordinator", ex, "Playerbot group {Group} failed during coordinator update", group.Id);
+            }
+        }
+
         _scanElapsed = unchecked(_scanElapsed + elapsedMs);
         if (_scanElapsed < ScanMs) return;
         _scanElapsed = 0;
@@ -396,10 +408,10 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// </summary>
     private void ShareQuests(BotGroup group)
     {
-        if (group.Run is not null || services.GetService<QuestNpcFeature>()?.Services is not { } quests) return;
+        if (_world is not { } world || group.Run is not null || services.GetService<QuestNpcFeature>()?.Services is not { } quests) return;
         var joined = new List<(Member Member, Player Player)>();
         foreach (Member member in group.Members.Where(m => m.Joined))
-            if (_world!.FindOnlinePlayer(member.Guid) is { IsAlive: true } player) joined.Add((member, player));
+            if (world.FindOnlinePlayer(member.Guid) is { IsAlive: true } player) joined.Add((member, player));
         foreach ((Member member, Player sharer) in joined)
         {
             if (member.Real || member.AI is not { } ai || quests.StateOf(sharer) is not { Loaded: true } state) continue;
@@ -502,8 +514,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         QuestNpcServices? quests = services.GetService<QuestNpcFeature>()?.Services;
         CreatureContent? creatures = services.GetService<CreatureWorldFeature>()?.Content;
-        if (quests is null || creatures is null || QuestState(player) is not { } state || player.Map is null) return null;
-        WorldMaps maps = WorldMaps.Of(_world!);
+        if (_world is not { } world || quests is null || creatures is null || QuestState(player) is not { } state || player.Map is null) return null;
+        WorldMaps maps = WorldMaps.Of(world);
         if (maps.Registry.Find(player.MapId) is { IsDungeon: true } || maps.Registry.Find(player.MapId) is { IsBattleground: true }) return null;
 
         foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses.OrderBy(s => s.Key))
@@ -584,7 +596,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             IReadOnlyList<CreatureSpawn> inside = creatures.GetSpawns(mapId, entry);
             if (inside.Count == 0) continue;
             if (EntranceTo(maps, player.MapId, mapId, new Vector3(player.X, player.Y, player.Z)) is not { } entrance) continue;
-            AreaTriggerTeleport teleport = maps.FindAreaTriggerTeleport(entrance.Id)!;
+            if (maps.FindAreaTriggerTeleport(entrance.Id) is not { } teleport) continue;
             int size = instance.IsRaid ? Math.Max(PlayerbotGroupContent.InstanceGroupSize(instance), flagged)
                 : Math.Max(flagged >= 2 ? Math.Min(flagged, PlayerbotGroupContent.PartySize) : PlayerbotGroupContent.InstanceGroupSize(instance), 2);
             if (instance.IsRaid && !_options.Groups.RaidsEnabled) return null;
@@ -752,13 +764,14 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     private void Advance(BotGroup group)
     {
+        if (_world is not { } world) return;
         uint now = Now;
         // A bot that stopped, became scripted or joined a real player's group leaves this one.
         foreach (Member member in group.Members.Where(m => !m.Real).ToArray())
             if (!_bots.TryGetValue(member.BotId, out PlayerbotGroupBot bot) || bot.Session.Player is null)
                 DropMember(group, member.BotId, "gone");
         if (!_groups.Contains(group)) return;
-        if (group.LeaderPlayer(_world!) is not { } leader)
+        if (group.LeaderPlayer(world) is not { } leader)
         {
             Finish(group, success: false, "leader-gone");
             return;
@@ -794,7 +807,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             return;
         }
 
-        if (group.Members.Any(m => m.Joined && _world!.FindOnlinePlayer(m.Guid) is { IsAlive: true } p && p.Combat.IsInCombat))
+        if (group.Members.Any(m => m.Joined && world.FindOnlinePlayer(m.Guid) is { IsAlive: true } p && p.Combat.IsInCombat))
             group.LastCombatMs = Math.Max(1u, now);
 
         if (group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging && !group.InFight(now))
@@ -830,7 +843,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 break;
             case PlayerbotGroupState.Entering:
                 if (CheckWipe(group, leader)) break;
-                if (group.Members.Where(m => m.Joined).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p || p.MapId == group.Goal.MapId || m.Real))
+                if (group.Members.Where(m => m.Joined).All(m => world.FindOnlinePlayer(m.Guid) is not { } p || p.MapId == group.Goal.MapId || m.Real))
                 {
                     group.Run?.Apply(PlayerbotRunSignal.AllInside);
                     Enter(group, PlayerbotGroupState.Engaging);
@@ -858,7 +871,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 break;
             case PlayerbotGroupState.Wiped:
                 // The survivors get a moment to turn and run (the killer turns on its next victim at its next update).
-                if (unchecked(now - group.StateSinceMs) >= WipeSettleMs && group.Members.Where(m => m.Joined).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p || !p.IsAlive || !p.Combat.IsInCombat))
+                if (unchecked(now - group.StateSinceMs) >= WipeSettleMs && group.Members.Where(m => m.Joined).All(m => world.FindOnlinePlayer(m.Guid) is not { } p || !p.IsAlive || !p.Combat.IsInCombat))
                 {
                     if (group.Run is { } wiped)
                     {
@@ -877,8 +890,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
                 break;
             case PlayerbotGroupState.Regrouping:
-                if (group.Members.Where(m => m.Joined && !m.Real).All(m => _world!.FindOnlinePlayer(m.Guid) is { IsAlive: true } p && !p.Combat.IsInCombat)
-                    && !group.AnyResting(_world!))
+                if (group.Members.Where(m => m.Joined && !m.Real).All(m => world.FindOnlinePlayer(m.Guid) is { IsAlive: true } p && !p.Combat.IsInCombat)
+                    && !group.AnyResting(world))
                 {
                     group.Run?.Apply(PlayerbotRunSignal.Regrouped);
                     Enter(group, PlayerbotGroupState.Gathering);
@@ -886,8 +899,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 else if (group.StepTimedOut(now, stepLimit)) Finish(group, success: false, "regroup-timeout");
                 break;
             case PlayerbotGroupState.Leaving:
-                if (group.Members.Where(m => m.Joined && !m.Real).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p
-                        || WorldMaps.Of(_world!).Registry.Find(p.MapId) is not { IsDungeon: true }))
+                if (group.Members.Where(m => m.Joined && !m.Real).All(m => world.FindOnlinePlayer(m.Guid) is not { } p
+                        || WorldMaps.Of(world).Registry.Find(p.MapId) is not { IsDungeon: true }))
                 {
                     group.Run?.Apply(PlayerbotRunSignal.Left);
                     Enter(group, PlayerbotGroupState.Disbanding);
@@ -902,7 +915,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     private void AdvanceForming(BotGroup group, Player leader, GroupManager? groupManager)
     {
-        if (groupManager is null) return;
+        if (groupManager is null || _world is not { } world) return;
         uint now = Now;
         Group? formed = groupManager.GetGroup(leader.Guid);
         foreach (Member member in group.Members.Where(m => !m.Joined))
@@ -922,7 +935,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             : (formed.IsRaid ? Group.MaxRaidSize : PlayerbotGroupContent.PartySize) - formed.MemberCount - group.Members.Count(m => m.Invited && !m.Joined);
         foreach (Member member in group.Members.Where(m => !m.Joined && !m.Invited).Take(Math.Max(0, room)).ToArray())
         {
-            if (_world!.FindOnlinePlayer(member.Guid) is null) continue;
+            if (world.FindOnlinePlayer(member.Guid) is null)
+            {
+                if (unchecked(now - group.StateSinceMs) > InviteTimeoutMs)
+                    member.Refused = true;
+                continue;
+            }
             member.Invited = true;
             member.InvitedMs = now;
             LeaderAct(group, leader, WorldOpcode.CmsgGroupInvite, Cstring(member.Name));
@@ -930,13 +948,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 member.Refused = true;
         }
 
-        foreach (Member member in group.Members.Where(m => m.Real && m.Invited && !m.Joined))
+        foreach (Member member in group.Members.Where(m => m.Real && m.Invited && !m.Joined).ToArray())
             if (member.Refused || unchecked(now - member.InvitedMs) > InviteTimeoutMs || groupManager.GetInvite(member.Guid) is null && !(formed?.IsMember(member.Guid) ?? false))
             {
                 _declinedPlayers[member.Guid] = unchecked(now + SetAsideMs);
                 group.Members.Remove(member);
                 Note($"group {group.Id}: {member.Name} did not join");
-                break;
             }
 
         if (group.Members.Any(m => !m.Joined && (m.Refused || m.Invited && unchecked(now - m.InvitedMs) > InviteTimeoutMs)))
@@ -984,7 +1001,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     internal const float QuestApproachYards = 30f;
 
     private bool Gathered(BotGroup group, Player leader)
-        => group.Members.Where(m => m.Joined && !m.Real && m.Guid != leader.Guid).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p
+        => _world is { } world && group.Members.Where(m => m.Joined && !m.Real && m.Guid != leader.Guid).All(m => world.FindOnlinePlayer(m.Guid) is not { } p
             || !p.IsAlive || ReferenceEquals(p.Map, leader.Map) && Distance(p, leader) <= GatherYards);
 
     /// <summary>
@@ -1016,11 +1033,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>A wipe: every living member dead, or half the group or more dead while someone fights (<see cref="Party.PlayerbotPartyAI.IsWiping"/>).</summary>
     private bool CheckWipe(BotGroup group, Player leader)
     {
+        if (_world is not { } world) return false;
         int alive = 0, dead = 0;
         bool fighting = false;
         foreach (Member member in group.Members.Where(m => m.Joined))
         {
-            if (_world!.FindOnlinePlayer(member.Guid) is not { } player) continue;
+            if (world.FindOnlinePlayer(member.Guid) is not { } player) continue;
             if (player.IsAlive)
             {
                 alive++;
@@ -1045,10 +1063,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// </summary>
     private bool Complete(BotGroup group)
     {
-        group.UpdateObjective(_world!);
+        if (_world is not { } world) return false;
+        group.UpdateObjective(world);
         if (!group.HadQuest) return group.ObjectiveKilled;
         foreach (Member member in group.Members.Where(m => m.Joined && !m.Real))
-            if (_world!.FindOnlinePlayer(member.Guid) is { } player && !GoalDone(player, group.Goal)) return false;
+            if (world.FindOnlinePlayer(member.Guid) is { } player && !GoalDone(player, group.Goal)) return false;
         return true;
     }
 
@@ -1067,7 +1086,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// </summary>
     private bool WatchStall(BotGroup group, Player leader, uint now)
     {
-        if (group.Solo || group.Members.Any(m => m.Real) || group.MissingSinceMs != 0
+        if (_world is not { } world || group.Solo || group.Members.Any(m => m.Real) || group.MissingSinceMs != 0
             || group.State is PlayerbotGroupState.Forming or PlayerbotGroupState.Gathering or PlayerbotGroupState.Regrouping
                 or PlayerbotGroupState.Wiped or PlayerbotGroupState.Leaving or PlayerbotGroupState.Disbanding)
         {
@@ -1079,7 +1098,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         members.Clear();
         foreach (Member member in group.Members)
         {
-            if (!member.Joined || member.AI is not { } ai || _world!.FindOnlinePlayer(member.Guid) is not { } player) continue;
+            if (!member.Joined || member.AI is not { } ai || world.FindOnlinePlayer(member.Guid) is not { } player) continue;
             members.Add(new PlayerbotGroupStallMember(member.BotId, player.MapId, new Vector3(player.X, player.Y, player.Z),
                 player.Combat.IsInCombat || ai.Resting || ai.Looting, ai.Target?.Guid.Value ?? 0));
         }
@@ -1298,9 +1317,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// </summary>
     private bool EvacuateIfStranded(PlayerbotGroupBot bot, Player player)
     {
-        if (!player.IsAlive || player.Map is not { } map || WorldMaps.Of(_world!).Registry.Find(player.MapId) is not { IsDungeon: true }) return false;
+        if (_world is not { } world || !player.IsAlive || player.Map is not { } map || WorldMaps.Of(world).Registry.Find(player.MapId) is not { IsDungeon: true }) return false;
         if (GroupManagerOrNull()?.GetGroup(player.Guid) is not null) return false;
-        if (ExitOf(_world!, player.MapId) is not { } exit || WorldMaps.Of(_world!).FindAreaTriggerTeleport(exit.Id) is not { } teleport) return false;
+        if (ExitOf(world, player.MapId) is not { } exit || WorldMaps.Of(world).FindAreaTriggerTeleport(exit.Id) is not { } teleport) return false;
         var goal = new PlayerbotGroupGoal(PlayerbotGroupGoalKind.Dungeon, 0, 0, player.MapId, teleport.TargetMap,
             new Vector3(teleport.TargetX, teleport.TargetY, teleport.TargetZ), 0, new Vector3(exit.X, exit.Y, exit.Z), 1, 0, "stranded");
         var group = new BotGroup(_nextId++, goal, bot.BotId, player.Guid, Now) { Solo = true, Succeeded = true, Reason = "evacuated" };

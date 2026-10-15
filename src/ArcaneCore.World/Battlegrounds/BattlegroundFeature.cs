@@ -14,6 +14,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Characters;
@@ -94,7 +95,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    _logger.LogWarning(ex, "battleground content could not be read; the built-in templates are used and no spawn is event-gated");
+                    _logger.LogFault(LogLevel.Warning, "battleground-content-load", ex, "battleground content could not be read; the built-in templates are used and no spawn is event-gated");
                 }
             }
         }
@@ -207,6 +208,14 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
                 continue;
             }
 
+            if (!Invariant.Check(
+                float.IsFinite(alliance.X) && float.IsFinite(alliance.Y) && float.IsFinite(alliance.Z) && float.IsFinite(alliance.Orientation)
+                && float.IsFinite(horde.X) && float.IsFinite(horde.Y) && float.IsFinite(horde.Z) && float.IsFinite(horde.Orientation),
+                $"battleground {type}: start location has non-finite coordinates"))
+            {
+                continue;
+            }
+
             (uint winMark, uint loseMark) = type switch
             {
                 BattlegroundType.AlteracValley => (24955u, 24954u),
@@ -247,10 +256,25 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             return;
         }
 
-        manager.Update(diffMs);
+        try
+        {
+            manager.Update(diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("battleground-manager-tick", ex, "battleground manager tick failed");
+        }
+
         foreach (MatchRuntime match in _matches.Values.ToArray())
         {
-            match.Update(diffMs);
+            try
+            {
+                match.Update(diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("battleground-match-tick", ex, "battleground match {Type} instance {InstanceId} tick failed", match.Type, match.InstanceId);
+            }
         }
 
         WireSpiritGuideTimer();
@@ -293,7 +317,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
         if (manager.TemplateOf(type) is not { } template || player.Level < template.MinLevel)
         {
-            player.Session.Send(Protocol.WorldOpcode.SmsgNotification, Packets.ChatPackets.BuildNotification(BattlegroundStrings.Mangos(715)!));
+            player.Session.Send(Protocol.WorldOpcode.SmsgNotification, Packets.ChatPackets.BuildNotification(BattlegroundStrings.Mangos(715) ?? string.Empty));
             return;
         }
 
@@ -431,7 +455,16 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
     /// <summary>vmangos <c>SetBattleGroundEntryPoint</c>: the position of <paramref name="from"/> (the player itself or its group leader).</summary>
     internal void StoreEntryPoint(ObjectGuid member, Player from)
-        => _entryPoints[member] = new BattlegroundEntryPoint(from.MapId, from.X, from.Y, from.Z, from.Orientation, from.ZoneId);
+    {
+        if (!Invariant.Check(
+            !member.IsEmpty && float.IsFinite(from.X) && float.IsFinite(from.Y) && float.IsFinite(from.Z) && float.IsFinite(from.Orientation),
+            $"cannot store battleground entry point for {member} from ({from.X}, {from.Y}, {from.Z}, {from.Orientation})"))
+        {
+            return;
+        }
+
+        _entryPoints[member] = new BattlegroundEntryPoint(from.MapId, from.X, from.Y, from.Z, from.Orientation, from.ZoneId);
+    }
 
     internal void ForgetEntryPoint(ObjectGuid player) => _entryPoints.TryRemove(player, out _);
 
@@ -493,7 +526,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _logger.LogWarning(ex, "a character_battleground_data write failed");
+                _logger.LogFault("battleground-write-loop", ex, "a character_battleground_data write failed");
             }
         }
     }

@@ -4,6 +4,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.CrowdControl;
 using ArcaneCore.Game.Spells.Rules.Immunity;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -384,7 +385,14 @@ public sealed partial class SpellSystem
         {
             for (int i = 0; i < count; i++)
             {
-                UpdateAuraHolder(state, snapshot[i], diffMs);
+                try
+                {
+                    UpdateAuraHolder(state, snapshot[i], diffMs);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("aura-tick", ex);
+                }
             }
         }
         finally
@@ -395,7 +403,7 @@ public sealed partial class SpellSystem
 
     private void UpdateAuraHolder(UnitSpellState state, SpellAuraHolder holder, uint diffMs)
     {
-        if (holder.IsRemoved)
+        if (holder is null || holder.IsRemoved)
         {
             return;
         }
@@ -451,7 +459,14 @@ public sealed partial class SpellSystem
             {
                 aura.TickCount++;
                 using ProcEventScope tickEvent = BeginProcEvent(); // one tick is one event: its procs, its damage and the kill it causes
-                AuraHandlers.GetValueOrDefault(aura.Type)?.Tick?.Invoke(this, holder, aura);
+                try
+                {
+                    AuraHandlers.GetValueOrDefault(aura.Type)?.Tick?.Invoke(this, holder, aura);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("aura-tick", ex);
+                }
             }
         }
 

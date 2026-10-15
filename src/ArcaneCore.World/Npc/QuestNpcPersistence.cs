@@ -349,9 +349,9 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                     {
                         await store.SaveQuestsAsync(pending.CharacterId, rows, ownership: pending.Ownership).ConfigureAwait(false);
                     }
-                    else
+                    else if (pending.TaxiMask is { } taxiMask)
                     {
-                        await store.SaveTaxiMaskAsync(pending.CharacterId, pending.TaxiMask!, ownership: pending.Ownership).ConfigureAwait(false);
+                        await store.SaveTaxiMaskAsync(pending.CharacterId, taxiMask, ownership: pending.Ownership).ConfigureAwait(false);
                     }
                 }
                 else
@@ -363,12 +363,14 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
             }
             catch (CharacterOwnershipRejectedException ex)
             {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-quest-ownership", ex);
                 EnterTerminalFailure(pending.CharacterId, ex);
                 pending.Done?.TrySetException(ex);
                 logger.LogError(ex, "quest/taxi save rejected by the ownership fence; queue is terminal");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-quest", ex);
                 lock (_gate)
                 {
                     if (_characters.TryGetValue(pending.CharacterId, out CharacterState? state))
@@ -459,7 +461,10 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         {
             try { FatalFailure?.Invoke(failure); }
             catch (Exception callbackError) when (callbackError is not OutOfMemoryException)
-            { logger.LogError(callbackError, "quest save queue fatal-failure callback failed"); }
+            {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue-quest-callback", callbackError);
+                logger.LogError(callbackError, "quest save queue fatal-failure callback failed");
+            }
         }
     }
 

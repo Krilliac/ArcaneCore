@@ -1,10 +1,12 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.World.WorldState;
 
@@ -45,6 +47,7 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
     /// <summary>What an update needs to know of one portal's dragon.</summary>
     public enum DragonStatus { Absent, Alive, Dead }
 
+    private readonly ILogger _logger = (ILogger?)logger ?? NullLogger.Instance;
     private readonly Creature?[] _dragons = new Creature?[Portals.Length];
     private WorldRuntime? _world;
     private uint _sinceUpdateMs;
@@ -87,7 +90,14 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
             _sinceUpdateMs += diff;
             if (_sinceUpdateMs < UpdateIntervalMs) return;
             _sinceUpdateMs = 0;
-            Update();
+            try
+            {
+                Update();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("nightmare-dragons.tick", ex, "failed to update Dragons of Nightmare on world tick");
+            }
         };
     }
 
@@ -105,18 +115,26 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
             for (int i = 0; i < Portals.Length; i++)
             {
                 if ((killed & (1 << i)) != 0) continue;
-                switch (StatusOf(i))
+                try
                 {
-                    case DragonStatus.Dead:
-                        killed |= (byte)(1 << i); // SaveCreatureRespawnTime(max): a dead dragon stays dead while the event runs
-                        break;
-                    case DragonStatus.Absent:
-                        Spawn(i, EntryAt(i)); // a living dragon whose grid unloaded (or a restart): back once the grid is loaded
-                        ++alive;
-                        break;
-                    default:
-                        ++alive;
-                        break;
+                    switch (StatusOf(i))
+                    {
+                        case DragonStatus.Dead:
+                            killed |= (byte)(1 << i); // SaveCreatureRespawnTime(max): a dead dragon stays dead while the event runs
+                            break;
+                        case DragonStatus.Absent:
+                            Spawn(i, EntryAt(i)); // a living dragon whose grid unloaded (or a restart): back once the grid is loaded
+                            ++alive;
+                            break;
+                        default:
+                            ++alive;
+                            break;
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    ++alive;
+                    _logger.LogFault("nightmare-dragons.portal-status", ex, "failed to update Dragons of Nightmare portal {Portal}", i);
                 }
             }
 
@@ -127,7 +145,17 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
             {
                 // urand(4 days, 7 days), then PermutateDragons and StopEvent.
                 long respawn = NowUnix() + Random.NextInt64(4 * Day, (7 * Day) + 1);
-                for (int i = 0; i < Portals.Length; i++) Despawn(i);
+                for (int i = 0; i < Portals.Length; i++)
+                {
+                    try
+                    {
+                        Despawn(i);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        _logger.LogFault("nightmare-dragons.portal-despawn", ex, "failed to despawn Dragons of Nightmare portal {Portal}", i);
+                    }
+                }
                 Save(s with
                 {
                     RespawnUnix = respawn,
@@ -147,7 +175,17 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
         {
             // StartEvent(66): the dragons appear.
             Save(s = s with { Active = true, KilledMask = 0 });
-            for (int i = 0; i < Portals.Length; i++) Spawn(i, EntryAt(i));
+            for (int i = 0; i < Portals.Length; i++)
+            {
+                try
+                {
+                    Spawn(i, EntryAt(i));
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("nightmare-dragons.portal-spawn", ex, "failed to spawn Dragons of Nightmare portal {Portal}", i);
+                }
+            }
             logger?.LogInformation("Dragons of Nightmare: {Dragons}", string.Join(", ", Portals.Select((p, i) => $"{EntryAt(i)} at {p.Name}")));
         }
     }
@@ -168,9 +206,9 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
             if (scope.ServiceProvider.GetService<INightmareDragonsStore>()?.LoadAsync().GetAwaiter().GetResult() is { } saved)
                 State = saved;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger?.LogError(ex, "could not load the Dragons of Nightmare state");
+            _logger.LogFault("nightmare-dragons.load", ex, "could not load the Dragons of Nightmare state");
         }
     }
 

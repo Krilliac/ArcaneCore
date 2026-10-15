@@ -23,7 +23,9 @@ public sealed record SelfDiagnosisValues(
     long OverflowFaults,
     IReadOnlyList<FaultSnapshot> TopFaults,
     long InvariantFailures,
-    IReadOnlyList<InvariantFailure> TopInvariants);
+    IReadOnlyList<InvariantFailure> TopInvariants,
+    IReadOnlyList<string>? DiagnosisNotes = null,
+    IReadOnlyDictionary<string, (int Signatures, long TotalCount)>? FaultsBySubsystem = null);
 
 /// <summary>
 /// Thread-safe, non-throwing self-diagnosis builder that inspects process and runtime health
@@ -36,6 +38,7 @@ public static class SelfDiagnosisReport
     public static SelfDiagnosisValues Capture(FaultLedger? ledger = null)
     {
         FaultLedger targetLedger = ledger ?? FaultLedger.Shared;
+        var notes = new List<string>();
         int processors = 1;
         int poolThreads = 0;
         long pendingItems = 0;
@@ -47,6 +50,7 @@ public static class SelfDiagnosisReport
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            notes.Add($"ThreadPool probe failed ({ex.GetType().Name}: {ex.Message})");
         }
 
         bool starvationWarning = pendingItems > 2L * processors;
@@ -69,6 +73,7 @@ public static class SelfDiagnosisReport
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            notes.Add($"GC probe failed ({ex.GetType().Name}: {ex.Message})");
         }
 
         bool highMemoryWarning = highThreshold > 0 && memoryLoad >= highThreshold;
@@ -77,15 +82,22 @@ public static class SelfDiagnosisReport
         int distinctFaults = 0;
         long overflowFaults = 0;
         IReadOnlyList<FaultSnapshot> topFaults = [];
+        IReadOnlyDictionary<string, (int Signatures, long TotalCount)> faultsBySubsystem =
+            new SortedDictionary<string, (int Signatures, long TotalCount)>(StringComparer.Ordinal);
         try
         {
             totalFaults = targetLedger.Total;
             distinctFaults = targetLedger.Distinct;
             overflowFaults = targetLedger.Find(FaultLedger.OverflowId)?.Count ?? 0;
             topFaults = [.. targetLedger.Snapshot().Where(f => f.Id != FaultLedger.OverflowId).Take(3)];
+            if (totalFaults > 0)
+            {
+                faultsBySubsystem = targetLedger.BySubsystem();
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            notes.Add($"FaultLedger probe failed ({ex.GetType().Name}: {ex.Message})");
         }
 
         long invariantFailures = 0;
@@ -97,6 +109,7 @@ public static class SelfDiagnosisReport
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            notes.Add($"Invariant probe failed ({ex.GetType().Name}: {ex.Message})");
         }
 
         return new SelfDiagnosisValues(
@@ -116,7 +129,9 @@ public static class SelfDiagnosisReport
             overflowFaults,
             topFaults,
             invariantFailures,
-            topInvariants);
+            topInvariants,
+            notes,
+            faultsBySubsystem);
     }
 
     /// <summary>Capture and format a self-diagnosis report as console/chat lines.</summary>
@@ -127,13 +142,14 @@ public static class SelfDiagnosisReport
     public static IReadOnlyList<string> Format(SelfDiagnosisValues values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        var lines = new List<string>(12);
+        var lines = new List<string>(14);
         try
         {
             bool warning = values.ThreadPoolStarvationWarning
                 || values.HighMemoryPressureWarning
                 || values.TotalFaults > 0
-                || values.InvariantFailures > 0;
+                || values.InvariantFailures > 0
+                || values.DiagnosisNotes is { Count: > 0 };
             string poolWarn = values.ThreadPoolStarvationWarning ? " [WARNING: pending > 2x processors]" : string.Empty;
             lines.Add(string.Create(CultureInfo.InvariantCulture,
                 $"Self-diagnosis: {(warning ? "WARN" : "OK")} | ThreadPool: threads={values.ThreadPoolThreads}, pending={values.ThreadPoolPendingWorkItems}, processors={values.ProcessorCount}{poolWarn}"));
@@ -144,6 +160,20 @@ public static class SelfDiagnosisReport
 
             lines.Add(string.Create(CultureInfo.InvariantCulture,
                 $"Faults: total={values.TotalFaults}, distinct={values.DistinctFaults}, overflow={values.OverflowFaults}"));
+
+            IReadOnlyDictionary<string, (int Signatures, long TotalCount)>? bySubsystem = values.FaultsBySubsystem;
+            if ((bySubsystem is null || bySubsystem.Count == 0) && FaultLedger.Shared.Total > 0)
+            {
+                bySubsystem = FaultLedger.Shared.BySubsystem();
+            }
+
+            if ((values.TotalFaults > 0 || FaultLedger.Shared.Total > 0) && bySubsystem is { Count: > 0 })
+            {
+                string summary = string.Join(", ", bySubsystem.Select(
+                    static kv => string.Create(CultureInfo.InvariantCulture, $"{kv.Key}={kv.Value.TotalCount} ({kv.Value.Signatures} sig)")));
+                lines.Add("  subsystems: " + summary);
+            }
+
             foreach (FaultSnapshot fault in values.TopFaults)
             {
                 string stack = !string.IsNullOrEmpty(fault.SampleStack)
@@ -160,10 +190,18 @@ public static class SelfDiagnosisReport
                 lines.Add(string.Create(CultureInfo.InvariantCulture,
                     $"  invariant x{inv.Count} {inv.Member} ({inv.File}:{inv.Line}): {inv.LastMessage}"));
             }
+
+            if (values.DiagnosisNotes is { Count: > 0 })
+            {
+                foreach (string note in values.DiagnosisNotes)
+                {
+                    lines.Add("  note: " + note);
+                }
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            lines.Add("Self-diagnosis formatting error: " + ex.GetType().Name);
+            lines.Add($"Self-diagnosis formatting error ({ex.GetType().Name}: {ex.Message})");
         }
 
         return lines;

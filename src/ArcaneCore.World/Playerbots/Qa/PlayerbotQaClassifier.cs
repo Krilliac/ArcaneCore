@@ -333,11 +333,11 @@ internal static class PlayerbotQaClassifier
                 continue;
             }
 
-            uint rank = observed?.Rank ?? template!.Value.Rank;
-            byte minLevel = observed?.MinLevel ?? template!.Value.MinLevel;
-            byte maxLevel = observed?.MaxLevel ?? template!.Value.MaxLevel;
+            uint rank = observed?.Rank ?? template?.Rank ?? 0;
+            byte minLevel = observed?.MinLevel ?? template?.MinLevel ?? 0;
+            byte maxLevel = observed?.MaxLevel ?? template?.MaxLevel ?? 0;
             byte attackerLevel = observed?.Level ?? maxLevel;
-            bool guard = observed?.Guard ?? template!.Value.Guard;
+            bool guard = observed?.Guard ?? template?.Guard ?? false;
             bool? hostile = observed?.Hostile;
             string rankName = rank switch { 0 => "normal", 1 => "elite", 2 => "rare elite", 3 => "world boss", 4 => "rare", _ => rank.ToString(CultureInfo.InvariantCulture) };
             descriptions.Add(string.Create(CultureInfo.InvariantCulture,

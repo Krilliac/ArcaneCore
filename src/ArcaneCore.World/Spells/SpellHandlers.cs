@@ -27,9 +27,21 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_CAST_SPELL: u32 spell, SpellCastTargets (vmangos HandleCastSpellOpcode; gtker cmsg_cast_spell.wowm).</summary>
     private static void HandleCastSpell(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 6)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint spellId = reader.ReadUInt32();
         SpellCastTargets targets = SpellCastTargets.Read(ref reader);
+        if ((targets.HasDest && (!float.IsFinite(targets.Dest.X) || !float.IsFinite(targets.Dest.Y) || !float.IsFinite(targets.Dest.Z)))
+            || ((targets.Mask & SpellCastTargetFlags.SourceLocation) != 0
+                && (!float.IsFinite(targets.Source.X) || !float.IsFinite(targets.Source.Y) || !float.IsFinite(targets.Source.Z))))
+        {
+            return;
+        }
+
         int answered = session.ClientRejectionsSent;
         SpellCastResult result = Spells(session).HandleCastRequest(player, spellId, targets);
         if (result != SpellCastResult.CastOk && session.SilentDropLogEnabled && session.ClientRejectionsSent == answered)

@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
@@ -49,13 +50,19 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         Writes = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), loggers.CreateLogger<RestWriteQueue>());
         Writes.FatalFailure += ex =>
         {
+            FaultLedger.Shared.Record("rest.writes-fatal", ex);
             _logger.LogCritical(ex, "Stopping application after fatal rest write failure");
             try
             {
                 _services.GetService<IHostApplicationLifetime>()?.StopApplication();
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException disposedEx)
             {
+                _logger.LogDebug(disposedEx, "Host application lifetime was already disposed while stopping after fatal rest write failure");
+            }
+            catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+            {
+                _logger.LogFault("rest.stop-application", stopEx, "Stopping application after fatal rest write failure failed");
             }
         };
         _rest = new Lazy<RestService>(Build, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -105,7 +112,14 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
             long now = DeathHooks.For(world).Clock.UnixSeconds;
             foreach (Player player in _tracked.Keys)
             {
-                Writes.Save((int)player.Guid.Low, ToRow(Rest.Capture(player, now)));
+                try
+                {
+                    Writes.Save((int)player.Guid.Low, ToRow(Rest.Capture(player, now)));
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("rest.stop-save", ex, "Capturing rest state on shutdown failed for player {PlayerGuid}", player.Guid);
+                }
             }
 
             _tracked.Clear();
@@ -227,7 +241,15 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         }
 
         uint now = world.NowMs;
-        Rest.Update(now, this);
+        try
+        {
+            Rest.Update(now, this);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("rest.update", ex, "Rest accrual update failed at {NowMs} ms", now);
+        }
+
         uint interval = Rest.Options.SaveIntervalSeconds;
         _sinceSaveScanMs += diffMs;
         if (interval == 0 || _sinceSaveScanMs < 1000)
@@ -241,8 +263,15 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         {
             if (unchecked(now - tracked.NextSaveMs) < uint.MaxValue / 2)
             {
-                tracked.NextSaveMs = now + (interval * 1000u);
-                Writes.Save((int)player.Guid.Low, ToRow(Rest.Capture(player, unixNow)));
+                try
+                {
+                    tracked.NextSaveMs = now + (interval * 1000u);
+                    Writes.Save((int)player.Guid.Low, ToRow(Rest.Capture(player, unixNow)));
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("rest.periodic-save", ex, "Periodic rest save failed for player {PlayerGuid}", player.Guid);
+                }
             }
         }
     }

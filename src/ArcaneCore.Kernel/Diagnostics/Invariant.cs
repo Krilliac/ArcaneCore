@@ -180,6 +180,92 @@ public static class Invariant
     }
 
     /// <summary>
+    /// Release-mode non-null invariant: returns <c>true</c> when <paramref name="value"/> is non-null;
+    /// otherwise records a check failure and returns <c>false</c>.
+    /// </summary>
+    public static bool CheckNotNull<T>(
+        [NotNullWhen(true)] T? value,
+        string name,
+        [CallerMemberName] string member = "",
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
+        where T : class
+    {
+        if (value is not null)
+        {
+            return true;
+        }
+
+        FailCheck($"Expected '{name}' to be non-null.", member, file, line);
+        return false;
+    }
+
+    /// <summary>
+    /// Release-mode finite-float invariant: returns <c>true</c> when <see cref="float.IsFinite(float)"/> holds;
+    /// otherwise records a check failure and returns <c>false</c>.
+    /// </summary>
+    public static bool CheckFinite(
+        float value,
+        string name,
+        [CallerMemberName] string member = "",
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
+    {
+        if (float.IsFinite(value))
+        {
+            return true;
+        }
+
+        FailCheck($"Expected '{name}' to be finite, got {value}.", member, file, line);
+        return false;
+    }
+
+    /// <summary>
+    /// Release-mode world-coordinate invariant: returns <c>true</c> when <paramref name="x"/>, <paramref name="y"/>,
+    /// and <paramref name="z"/> are finite and within <c>[-64000, 64000]</c>; otherwise records a check failure and returns <c>false</c>.
+    /// </summary>
+    public static bool CheckFiniteCoordinates(
+        float x,
+        float y,
+        float z,
+        string context = "coordinates",
+        [CallerMemberName] string member = "",
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
+    {
+        if (float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z)
+            && MathF.Abs(x) <= 64_000f && MathF.Abs(y) <= 64_000f && MathF.Abs(z) <= 64_000f)
+        {
+            return true;
+        }
+
+        FailCheck($"Invalid {context} ({x}, {y}, {z}).", member, file, line);
+        return false;
+    }
+
+    /// <summary>
+    /// Release-mode inclusive integer range invariant: returns <c>true</c> when <paramref name="value"/> lies in
+    /// <c>[min..max]</c>; otherwise records a check failure and returns <c>false</c>.
+    /// </summary>
+    public static bool CheckRange(
+        int value,
+        int min,
+        int max,
+        string name,
+        [CallerMemberName] string member = "",
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
+    {
+        if (value >= min && value <= max)
+        {
+            return true;
+        }
+
+        FailCheck($"Expected '{name}' in [{min}..{max}], got {value}.", member, file, line);
+        return false;
+    }
+
+    /// <summary>
     /// Stop in the attached debugger, when one is attached and <c>Diagnostics:BreakOnInvariant</c> is on.
     /// Otherwise nothing: an unattended process never waits for a debugger. Called by every failure
     /// path; callers may also call it directly at a point they want to inspect.

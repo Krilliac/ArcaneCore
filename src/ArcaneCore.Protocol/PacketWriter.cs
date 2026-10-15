@@ -55,6 +55,20 @@ public sealed class PacketWriter
     }
 
     /// <summary>
+    /// Write a finite little-endian float, recording an invariant check failure and substituting <c>0f</c>
+    /// if <paramref name="value"/> is NaN or infinite.
+    /// </summary>
+    public void WriteFiniteSingle(float value)
+    {
+        if (!Invariant.CheckFinite(value, nameof(value)))
+        {
+            value = 0f;
+        }
+
+        WriteSingle(value);
+    }
+
+    /// <summary>
     /// Write a packed GUID: a mask byte with bit i set when byte i of the GUID is non-zero,
     /// followed by those bytes low to high (vmangos ByteBuffer::appendPackGUID).
     /// </summary>
@@ -90,6 +104,7 @@ public sealed class PacketWriter
     /// <summary>Write a UTF-8 string followed by a null terminator.</summary>
     public void WriteCString(string value)
     {
+        ArgumentNullException.ThrowIfNull(value);
         int byteCount = Encoding.UTF8.GetByteCount(value);
         EnsureCapacity(byteCount + 1);
         int written = Encoding.UTF8.GetBytes(value, _buffer.AsSpan(_length));
@@ -103,7 +118,7 @@ public sealed class PacketWriter
     /// <summary>Overwrite a previously written little-endian uint32 (e.g. a count known only later).</summary>
     public void PatchUInt32(int position, uint value)
     {
-        if (position < 0 || position + 4 > _length)
+        if (position < 0 || position > _length - 4)
         {
             throw new ArgumentOutOfRangeException(nameof(position));
         }
@@ -122,12 +137,20 @@ public sealed class PacketWriter
 
     private void EnsureCapacity(int additional)
     {
+        if (!Invariant.Check(additional >= 0 && additional <= Array.MaxLength - _length, $"invalid additional capacity {additional} at length {_length}"))
+        {
+            throw new ArgumentOutOfRangeException(nameof(additional));
+        }
+
         if (_length + additional <= _buffer.Length)
         {
             return;
         }
 
-        Array.Resize(ref _buffer, Math.Max(_buffer.Length * 2, _length + additional));
+        long doubled = (long)_buffer.Length * 2;
+        long required = (long)_length + additional;
+        int nextSize = (int)Math.Min(Array.MaxLength, Math.Max(doubled, required));
+        Array.Resize(ref _buffer, nextSize);
         Invariant.Assert(_length + additional <= _buffer.Length, $"buffer of {_buffer.Length} bytes cannot take {additional} more at {_length}");
     }
 }

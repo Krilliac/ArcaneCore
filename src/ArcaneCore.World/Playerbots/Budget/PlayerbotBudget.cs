@@ -322,7 +322,7 @@ internal sealed class PlayerbotBudget(WorldSession session, PlayerbotOptions opt
     private void PlanRiding(Player player, QuestNpcServices services, ISpellLearner learner, PlayerbotServiceIndex index, FactionTemplateCatalog? factions)
     {
         PlayerbotRidingStatus r = Riding;
-        SpellStore store = session.Services.GetService<SpellFeature>()!.System.Store;
+        if (session.Services.GetService<SpellFeature>()?.System.Store is not { } store) return;
         uint map = player.Map?.MapId ?? player.MapId;
         foreach (PlayerbotServiceIndex.Site site in index.MountsTrainers((byte)player.Race))
         {

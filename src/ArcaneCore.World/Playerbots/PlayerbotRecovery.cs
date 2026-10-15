@@ -10,6 +10,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Stealth;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -355,6 +356,10 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 return PlayerbotRecoveryStep.SpiritHealer;
             case PlayerbotCorpsePlace.OtherMap:
                 return entranceKnown ? PlayerbotRecoveryStep.WalkToEntrance : PlayerbotRecoveryStep.SpiritHealer;
+            case PlayerbotCorpsePlace.ThisMap:
+                break;
+            default:
+                return PlayerbotRecoveryStep.SpiritHealer;
         }
 
         if (!atCorpse) return PlayerbotRecoveryStep.WalkToCorpse;
@@ -443,7 +448,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         // Never overridden by the landing (KeepBodyOverLanding): the healer is the way out of a body death loop, and an unsafe landing
         // is left at once after the resurrection (EscapeLanding).
         if (_healerRequested && !_preferSpiritHealer && ghost
-            && (place != PlayerbotCorpsePlace.ThisMap || (_corpseRunResumedFor != corpse!.Guid && HealerOutcomeKnown(player, corpse))))
+            && (place != PlayerbotCorpsePlace.ThisMap || (corpse is { } reqCorpse && _corpseRunResumedFor != reqCorpse.Guid && HealerOutcomeKnown(player, reqCorpse))))
             _preferSpiritHealer = true;
 
         // Only when the spirit healer can be had at all (one in sight, or a graveyard for this place, where one stands): with
@@ -457,11 +462,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         // above takes the healer whatever the landing: at most two kept bodies per death-loop window.
         // Not once the fallback went back to this body (ResumeCorpseRun): its healer could not be reached, or there was none.
         // Nor, mostly, for a bot the healer would sicken (KeepBodyOverSickness): the corpse run is its way back but for a death loop.
-        if (ghost && place == PlayerbotCorpsePlace.ThisMap && !_preferSpiritHealer && UnsafeBody is { } judge
-            && _corpseRunResumedFor != corpse!.Guid && HealerOutcomeKnown(player, corpse!) && judge(player, corpse!) is { Reason: not PlayerbotUnsafeBody.None } verdict
+        if (ghost && place == PlayerbotCorpsePlace.ThisMap && corpse is { } bodyOnMap && !_preferSpiritHealer && UnsafeBody is { } judge
+            && _corpseRunResumedFor != bodyOnMap.Guid && HealerOutcomeKnown(player, bodyOnMap) && judge(player, bodyOnMap) is { Reason: not PlayerbotUnsafeBody.None } verdict
             && (verdict.Reason == PlayerbotUnsafeBody.Hazard
-                ? !CanReclaimSubmergedFromDryShore(player, corpse!)
-                : !KeepBodyOverLanding(player, corpse!) && !KeepBodyOverSickness(player, corpse!, verdict.Reason)))
+                ? !CanReclaimSubmergedFromDryShore(player, bodyOnMap)
+                : !KeepBodyOverLanding(player, bodyOnMap) && !KeepBodyOverSickness(player, bodyOnMap, verdict.Reason)))
         {
             // The body is not worth it (submerged, a repeat death there, a camp too strong, or outside the home with the healer nearer it):
             // take the spirit healer now rather than revive where the bot would die again.
@@ -469,20 +474,20 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             UnsafeReason = verdict.Reason;
             LoggerOf().LogInformation(
                 "Playerbot {Bot} takes the spirit healer instead of its body at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Reason}{Detail}",
-                player.Name, corpse!.X, corpse.Y, corpse.Z, corpse.MapId, Describe(verdict.Reason),
+                player.Name, bodyOnMap.X, bodyOnMap.Y, bodyOnMap.Z, bodyOnMap.MapId, Describe(verdict.Reason),
                 verdict.Detail is { Length: > 0 } detail ? " (" + detail + ")" : string.Empty);
         }
 
         PlayerbotThinkProbe.Phase("recovery entrance");
-        AreaTriggerTemplate? entrance = place == PlayerbotCorpsePlace.OtherMap ? FindEntrance(player, corpse!.MapId) : null;
+        AreaTriggerTemplate? entrance = place == PlayerbotCorpsePlace.OtherMap && corpse is { } otherCorpse ? FindEntrance(player, otherCorpse.MapId) : null;
         PlayerbotThinkProbe.Phase("recovery revive spot");
-        bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && WithinReclaimDistance(player, corpse!);
+        bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && corpse is { } sameMapCorpse && WithinReclaimDistance(player, sameMapCorpse);
         long wait = atCorpse ? player.Map?.Combat.CorpseReclaimWaitSeconds(player) ?? 0 : 0;
-        bool submergedAtCorpse = atCorpse && wait <= 0 && player.Map is { } currentMap
-            && PlayerbotWater.Submerged(currentMap, new Vector3(corpse!.X, corpse.Y, corpse.Z), player.Locomotion.CollisionHeight)
+        bool submergedAtCorpse = atCorpse && wait <= 0 && player.Map is { } currentMap && corpse is { } submergedCorpse
+            && PlayerbotWater.Submerged(currentMap, new Vector3(submergedCorpse.X, submergedCorpse.Y, submergedCorpse.Z), player.Locomotion.CollisionHeight)
             && !IsDryShore(currentMap, new Vector3(player.X, player.Y, player.Z));
         bool hostile = atCorpse && wait <= 0 && (Camped(player, Hazards?.Invoke(player) ?? []) || submergedAtCorpse);
-        Vector3? spot = hostile && !stalled && !_preferSpiritHealer ? ChooseReviveSpot(player, corpse!) : null;
+        Vector3? spot = hostile && !stalled && !_preferSpiritHealer && corpse is { } spotCorpse ? ChooseReviveSpot(player, spotCorpse) : null;
         PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: _preferSpiritHealer,
             reviveSpotKnown: spot is not null);
         LastStep = step;
@@ -515,20 +520,24 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             case PlayerbotRecoveryStep.WalkToReviveSpot:
                 // Not progress for the no-progress bound: a camp that keeps moving must not keep the ghost walking for good.
                 PlayerbotThinkProbe.Phase("recovery revive walk");
-                return Walk(player, spot!.Value, _spotKey!, elapsedMs, now, countsAsProgress: false);
+                if (spot is not { } spotPos || _spotKey is not { } spotKey) return false;
+                return Walk(player, spotPos, spotKey, elapsedMs, now, countsAsProgress: false);
 
             case PlayerbotRecoveryStep.Reclaim:
-                if (!StandStill(player)) return false;
-                return session.TryManagedAction(WorldOpcode.CmsgReclaimCorpse, PlayerbotNavigation.GuidPayload(corpse!.Guid.Value));
+                if (!StandStill(player) || corpse is not { } reclaimCorpse) return false;
+                return session.TryManagedAction(WorldOpcode.CmsgReclaimCorpse, PlayerbotNavigation.GuidPayload(reclaimCorpse.Guid.Value));
 
             case PlayerbotRecoveryStep.WalkToCorpse:
                 PlayerbotThinkProbe.Phase("recovery corpse walk");
-                return Walk(player, new Vector3(corpse!.X, corpse.Y, corpse.Z), corpse.Guid, elapsedMs, now);
+                if (corpse is not { } walkCorpse) return false;
+                return Walk(player, new Vector3(walkCorpse.X, walkCorpse.Y, walkCorpse.Z), walkCorpse.Guid, elapsedMs, now);
 
             case PlayerbotRecoveryStep.WalkToEntrance:
                 PlayerbotThinkProbe.Phase("recovery entrance walk");
-                return Walk(player, new Vector3(entrance!.X, entrance.Y, entrance.Z), entrance, elapsedMs, now);
+                if (entrance is not { } walkEntrance) return false;
+                return Walk(player, new Vector3(walkEntrance.X, walkEntrance.Y, walkEntrance.Z), walkEntrance, elapsedMs, now);
 
+            case PlayerbotRecoveryStep.SpiritHealer:
             default:
                 // The way back to the body is lost (stalled, stuck, no body, no entrance): take the spirit healer, with a fresh bound.
                 _spiritHealer = true;
@@ -619,7 +628,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             ? _detourTriedFor != healer.Guid
             : graveyard is not null && !graveyardInReach && _graveyardDetourTriedFor != graveyard.Id;
         PlayerbotSpiritHealerStep step = DecideSpiritHealer(healer is not null, inReach, graveyard is not null, stalled,
-            bodyRunLeft: bodyHere && _corpseRunResumedFor != corpse!.Guid, detourLeft: detourLeft,
+            bodyRunLeft: bodyHere && corpse is { } bodyForRun && _corpseRunResumedFor != bodyForRun.Guid, detourLeft: detourLeft,
             serverAccepts: serverAccepts);
         if (step == PlayerbotSpiritHealerStep.DetourToHealer)
         {
@@ -664,7 +673,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
             // No way round within the bounds either: the body, else the fault.
             step = DecideSpiritHealer(healer is not null, false, graveyard is not null, stalled: true,
-                bodyRunLeft: bodyHere && _corpseRunResumedFor != corpse!.Guid);
+                bodyRunLeft: bodyHere && corpse is { } bodyAfterDetour && _corpseRunResumedFor != bodyAfterDetour.Guid);
         }
 
         LastSpiritHealerStep = step;
@@ -674,7 +683,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             case PlayerbotSpiritHealerStep.ResumeCorpseRun:
                 // Nothing to walk to and nobody to wait for: back to the body, with a fresh bound, once per death. The healer is not
                 // asked for again in this death unless one can be had (HealerOutcomeKnown); a second stall here faults as before.
-                _corpseRunResumedFor = corpse!.Guid;
+                if (corpse is not { } resumeCorpse) return false;
+                _corpseRunResumedFor = resumeCorpse.Guid;
                 _spiritHealer = false;
                 _preferSpiritHealer = false;
                 UnsafeReason = PlayerbotUnsafeBody.None;
@@ -682,15 +692,15 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 MarkProgress(now);
                 LoggerOf().LogInformation(
                     "Playerbot {Bot} goes back to its body at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Why} at ({GX:F1}, {GY:F1}, {GZ:F1})",
-                    player.Name, corpse.X, corpse.Y, corpse.Z, corpse.MapId,
+                    player.Name, resumeCorpse.X, resumeCorpse.Y, resumeCorpse.Z, resumeCorpse.MapId,
                     healer is not null ? $"the spirit healer {healer.Entry} {Distance(player, healer.X, healer.Y, healer.Z):F1} yd away cannot be reached"
                         : graveyard is not null ? $"graveyard {graveyard.Id} {Distance(player, graveyard.X, graveyard.Y, graveyard.Z):F1} yd away cannot be reached"
                         : "no spirit healer in sight and no graveyard for it", player.X, player.Y, player.Z);
                 return false;
             case PlayerbotSpiritHealerStep.Activate:
             {
-                if (!StandStill(player)) return false;
-                if (!session.TryManagedAction(WorldOpcode.CmsgSpiritHealerActivate, PlayerbotNavigation.GuidPayload(healer!.Guid.Value)))
+                if (!StandStill(player) || healer is not { } activateHealer) return false;
+                if (!session.TryManagedAction(WorldOpcode.CmsgSpiritHealerActivate, PlayerbotNavigation.GuidPayload(activateHealer.Guid.Value)))
                     return false;
                 if (player.IsAlive)
                 {
@@ -701,22 +711,26 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 }
 
                 // Still dead: the server refused. Not progress (the fallback faults after NoProgressMs), but no longer silent.
-                ReportRefusal(player, healer);
+                ReportRefusal(player, activateHealer);
                 return true;
             }
             case PlayerbotSpiritHealerStep.WalkToHealer:
-                return Walk(player, new Vector3(healer!.X, healer.Y, healer.Z), healer.Guid, elapsedMs, now);
+            case PlayerbotSpiritHealerStep.DetourToHealer:
+                if (healer is not { } walkHealer) return false;
+                return Walk(player, new Vector3(walkHealer.X, walkHealer.Y, walkHealer.Z), walkHealer.Guid, elapsedMs, now);
             case PlayerbotSpiritHealerStep.WalkToGraveyard:
             {
-                bool walked = Walk(player, new Vector3(graveyard!.X, graveyard.Y, graveyard.Z), graveyard, elapsedMs, now);
-                if (!walked && !graveyardInReach && !_walkWait.Active && _graveyardDetourTriedFor != graveyard.Id)
-                    return TryDetourToGraveyard(player, graveyard, elapsedMs, now, out _);
+                if (graveyard is not { } walkGraveyard) return false;
+                bool walked = Walk(player, new Vector3(walkGraveyard.X, walkGraveyard.Y, walkGraveyard.Z), walkGraveyard, elapsedMs, now);
+                if (!walked && !graveyardInReach && !_walkWait.Active && _graveyardDetourTriedFor != walkGraveyard.Id)
+                    return TryDetourToGraveyard(player, walkGraveyard, elapsedMs, now, out _);
                 return walked;
             }
             case PlayerbotSpiritHealerStep.WaitForHealer:
                 // Not progress: the no-progress bound turns a ghost that never finds a healer or a graveyard into the fault.
                 StandStill(player);
                 return false;
+            case PlayerbotSpiritHealerStep.Fault:
             default:
                 if (TryRelocateToGraveyard(player, graveyard ?? HealerGraveyard(player), now)
                     || TryRelocateToHealer(player, healer, now))
@@ -798,6 +812,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     private void RelocateGhost(Player player, float x, float y, float z, float orientation, long now)
     {
+        Invariant.Check(float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z),
+            $"Ghost relocation coordinates must be finite: ({x}, {y}, {z})");
         StandStill(player);
         float facing = float.IsFinite(orientation) ? orientation : player.Orientation;
         if (session.Services.GetService<TeleportFeature>()?.Teleports is { } teleports
@@ -897,12 +913,12 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         if (_keepBody.Body == corpse.Guid && _keepBody.AtMs >= 0 && now - _keepBody.AtMs < KeepBodyRecheckMs) return _keepBody.Keep;
         bool keep = false;
         Vector3? landingAt = null;
-        if (LandingUnsafe is { } unsafeAt && SpiritHealerLanding(player, corpse) is { } landing && unsafeAt(player, landing))
+        if (player.Map is { } playerMap && LandingUnsafe is { } unsafeAt && SpiritHealerLanding(player, corpse) is { } landing && unsafeAt(player, landing))
         {
             var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
             List<PlayerbotThreat> hostiles = [.. ThreatsAround(player, body, BodyThreatYards), .. Hazards?.Invoke(player) ?? []];
             keep = FindReviveSpot(body, body, hostiles, candidate => candidate,
-                candidate => !PlayerbotWater.Submerged(player.Map!, candidate, player.Locomotion.CollisionHeight)) is not null;
+                candidate => !PlayerbotWater.Submerged(playerMap, candidate, player.Locomotion.CollisionHeight)) is not null;
             landingAt = landing;
         }
 
@@ -950,6 +966,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             PlayerbotUnsafeBody.DiedHere or PlayerbotUnsafeBody.OutsideHome => true,
             PlayerbotUnsafeBody.TooStrong => ClearSpotNear(player, corpse),
             PlayerbotUnsafeBody.Hazard => CanReclaimSubmergedFromDryShore(player, corpse),
+            PlayerbotUnsafeBody.None => false,
             _ => false,
         };
         if (keep && BodyKeptOverSickness == PlayerbotUnsafeBody.None)
@@ -1002,10 +1019,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// <summary>A spot inside the reclaim radius of the body clear of every threat round it (the geometry of <see cref="FindReviveSpot"/>).</summary>
     private bool ClearSpotNear(Player player, Corpse corpse)
     {
+        if (player.Map is not { } playerMap) return false;
         var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
         List<PlayerbotThreat> hostiles = [.. ThreatsAround(player, body, BodyThreatYards), .. Hazards?.Invoke(player) ?? []];
         return FindReviveSpot(body, body, hostiles, candidate => candidate,
-            candidate => !PlayerbotWater.Submerged(player.Map!, candidate, player.Locomotion.CollisionHeight)) is not null;
+            candidate => !PlayerbotWater.Submerged(playerMap, candidate, player.Locomotion.CollisionHeight)) is not null;
     }
 
     /// <summary>
@@ -1049,7 +1067,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             _detourRoute = false;
         }
 
-        PlayerbotRoute route = _route!;
+        if (_route is not { } route) return false;
         PlayerbotThinkProbe.Phase("recovery walk advance");
         bool advanced = PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, session.World.NowMs);
         float left = RouteLeft(player, route, goal);
@@ -1488,6 +1506,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         PlayerbotUnsafeBody.TooStrong => "a creature there is too strong for it",
         PlayerbotUnsafeBody.Hazard => "the body is submerged",
         PlayerbotUnsafeBody.OutsideHome => "the body lies outside its home and the healer is nearer home",
+        PlayerbotUnsafeBody.None => "none",
         _ => "none",
     };
 

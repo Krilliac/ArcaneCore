@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Ops.Announce;
@@ -53,10 +54,18 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         monitor.StartTicking(world.Options.TickIntervalMs);
         monitor.BodyStats = () =>
         {
-            TickStatsSnapshot stats = world.Stats.Snapshot();
-            return new TickBodySummary(stats.Samples, stats.P50Micros, stats.P99Micros, stats.MaxMicros, stats.Overruns);
+            try
+            {
+                TickStatsSnapshot stats = world.Stats.Snapshot();
+                return new TickBodySummary(stats.Samples, stats.P50Micros, stats.P99Micros, stats.MaxMicros, stats.Overruns);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("watchdog-body-stats", ex);
+                return default;
+            }
         };
-        monitor.HangDetail = inProgress => Describe(world, inProgress);
+        monitor.HangDetail = inProgress => SafeDescribe(world, inProgress);
         if (services.GetService<HostLoadSampler>() is { Enabled: true } hostLoad)
         {
             monitor.HostLoad = hostLoad;
@@ -73,13 +82,20 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             monitor.Alerted = alert =>
             {
                 ReportHangToQa(alert);
-                announcer?.Announce(
-                    AnnounceCategory.Faults,
-                    alert.Kind == TickAlertKind.Hang ? AnnounceSeverity.Critical : AnnounceSeverity.Warning,
-                    alert.Text,
-                    alert.Detail,
-                    gmOnly: true,
-                    dedupKey: alert.Kind == TickAlertKind.Hang ? (alert.InProgress ? "tick-Hang-running" : "tick-Hang-done") : "tick-" + alert.Kind);
+                try
+                {
+                    announcer?.Announce(
+                        AnnounceCategory.Faults,
+                        alert.Kind == TickAlertKind.Hang ? AnnounceSeverity.Critical : AnnounceSeverity.Warning,
+                        alert.Text,
+                        alert.Detail,
+                        gmOnly: true,
+                        dedupKey: alert.Kind == TickAlertKind.Hang ? (alert.InProgress ? "tick-Hang-running" : "tick-Hang-done") : "tick-" + alert.Kind);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("watchdog-alert", ex);
+                }
             };
         }
 
@@ -171,6 +187,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("watchdog-qa", ex);
             logger.LogDebug(ex, "the tick hang could not be reported to bot QA");
         }
     }
@@ -204,10 +221,22 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         return Task.CompletedTask;
     }
 
-
-
     /// <summary>How far back a recorded slow tick still explains a hang or overrun line.</summary>
     private static readonly TimeSpan DetailWindow = TickStats.SlowTickRetention;
+
+    private string SafeDescribe(WorldRuntime world, bool inProgress)
+    {
+        try
+        {
+            return Describe(world, inProgress);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _facts = HangFacts.Unknown;
+            FaultLedger.Shared.Record("watchdog-describe", ex);
+            return "watchdog detail unavailable: " + ex.GetType().Name;
+        }
+    }
 
     /// <summary>
     /// Watchdog thread, only when a hang or overrun line is about to be logged: where the tick is (in progress), or the phase split
@@ -264,5 +293,18 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
     }
 
     // World thread, once per tick: no allocation, no lock, no log.
-    private void OnTick(uint diffMs) => _monitor!.OnTick(_clock.NowMicros);
+    private void OnTick(uint diffMs)
+    {
+        try
+        {
+            if (_monitor is { } monitor)
+            {
+                monitor.OnTick(_clock.NowMicros);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("watchdog-tick", ex);
+        }
+    }
 }

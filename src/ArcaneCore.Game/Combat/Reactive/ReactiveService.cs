@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Combat;
 
@@ -146,7 +147,19 @@ public sealed class ReactiveService
     {
         foreach (Unit unit in _active.ToArray())
         {
-            UpdateUnit(unit, diffMs);
+            try
+            {
+                if (unit is null)
+                {
+                    continue;
+                }
+
+                UpdateUnit(unit, diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-reactive", ex);
+            }
         }
     }
 
@@ -322,27 +335,65 @@ public sealed class ReactiveUpdater(ReactiveService reactives) : IMapUpdater
     public void Update(Map map, uint diffMs)
     {
         ArgumentNullException.ThrowIfNull(map);
-        foreach (Unit unit in reactives.ActiveUnits.Where(u => u.Map is null).ToArray())
+        foreach (Unit unit in reactives.ActiveUnits.Where(u => u is not null && (u.Map is null || !u.IsInWorld)).ToArray())
         {
-            reactives.Forget(unit);
+            try
+            {
+                reactives.Forget(unit);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-reactive", ex);
+            }
         }
 
         // Only the windows of this map's units run down here, so each runs once per world tick.
-        foreach (Unit unit in reactives.ActiveUnits.Where(u => ReferenceEquals(u.Map, map)).ToArray())
+        foreach (Unit unit in reactives.ActiveUnits.Where(u => u is not null && u.IsInWorld && ReferenceEquals(u.Map, map)).ToArray())
         {
-            reactives.UpdateUnit(unit, diffMs);
+            try
+            {
+                reactives.UpdateUnit(unit, diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-reactive", ex);
+            }
         }
 
-        foreach (Player player in map.Players)
+        foreach (Player player in map.Players.ToArray())
         {
-            reactives.AuraStates.UpdateHealthState(player);
+            try
+            {
+                if (player is null || !player.IsInWorld || player.Map is null || !ReferenceEquals(player.Map, map))
+                {
+                    continue;
+                }
+
+                reactives.AuraStates.UpdateHealthState(player);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-reactive", ex);
+            }
         }
 
         if (map.FindUpdater<MapCombat>() is { } combat)
         {
             foreach (Unit unit in combat.TrackedUnits.ToArray())
             {
-                reactives.AuraStates.UpdateHealthState(unit);
+                try
+                {
+                    if (unit is null || !unit.IsInWorld || unit.Map is null || !ReferenceEquals(unit.Map, map))
+                    {
+                        continue;
+                    }
+
+                    reactives.AuraStates.UpdateHealthState(unit);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("map-reactive", ex);
+                }
             }
         }
     }

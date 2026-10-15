@@ -99,6 +99,7 @@ public sealed class PlayerbotBatchCoordinator
         ReadOnlySpan<PlayerbotBatchSlot> activeBots,
         PlayerbotInferenceEngine inferenceEngine)
     {
+        ArgumentNullException.ThrowIfNull(inferenceEngine);
         int batchCount = Math.Min(activeBots.Length, PlayerbotInferenceEngine.MaxBatchSize);
         if (batchCount <= 0)
         {

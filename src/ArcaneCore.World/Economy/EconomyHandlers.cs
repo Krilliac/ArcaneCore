@@ -18,7 +18,13 @@ public sealed class EconomyHandlers : IOpcodeHandlerGroup
     public void Register(OpcodeTable table)
     {
         table.OnWorld(WorldOpcode.MsgQueryNextMailTime, (s, p, _) => Feature(s).QueryNextMailTime(s, p));
-        table.OnWorld(WorldOpcode.CmsgGetMailList, (s, p, d) => Feature(s).GetMailList(s, p, Guid(d)));
+        table.OnWorld(WorldOpcode.CmsgGetMailList, (s, p, d) =>
+        {
+            if (d.Length >= 8)
+            {
+                Feature(s).GetMailList(s, p, Guid(d));
+            }
+        });
         table.OnWorld(WorldOpcode.CmsgSendMail, HandleSendMail);
         table.OnWorld(WorldOpcode.CmsgMailTakeMoney, (s, p, d) => MailCommand(d, (box, id) => Feature(s).TakeMoney(s, p, box, id)));
         table.OnWorld(WorldOpcode.CmsgMailTakeItem, (s, p, d) => MailCommand(d, (box, id) => Feature(s).TakeItem(s, p, box, id)));
@@ -26,19 +32,41 @@ public sealed class EconomyHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgMailReturnToSender, (s, p, d) => MailCommand(d, (box, id) => Feature(s).ReturnToSender(s, p, box, id)));
         table.OnWorld(WorldOpcode.CmsgMailDelete, (s, p, d) => MailCommand(d, (box, id) => Feature(s).DeleteMail(s, p, box, id)));
         table.OnWorld(WorldOpcode.CmsgMailCreateTextItem, (s, p, d) => MailCommand(d, (box, id) => Feature(s).CreateTextItem(s, p, box, id)));
-        table.OnWorld(WorldOpcode.CmsgItemTextQuery, (s, p, d) => Feature(s).QueryItemText(s, p, new PacketReader(d).ReadUInt32()));
+        table.OnWorld(WorldOpcode.CmsgItemTextQuery, (s, p, d) =>
+        {
+            if (d.Length >= 4)
+            {
+                Feature(s).QueryItemText(s, p, new PacketReader(d).ReadUInt32());
+            }
+        });
 
-        table.OnWorld(WorldOpcode.MsgAuctionHello, (s, p, d) => Feature(s).AuctionHello(s, p, Guid(d)));
+        table.OnWorld(WorldOpcode.MsgAuctionHello, (s, p, d) =>
+        {
+            if (d.Length >= 8)
+            {
+                Feature(s).AuctionHello(s, p, Guid(d));
+            }
+        });
         table.OnWorld(WorldOpcode.CmsgAuctionSellItem, HandleSellItem);
         table.OnWorld(WorldOpcode.CmsgAuctionListItems, HandleListItems);
         table.OnWorld(WorldOpcode.CmsgAuctionListOwnerItems, (s, p, d) =>
         {
+            if (d.Length < 12)
+            {
+                return;
+            }
+
             var r = new PacketReader(d);
             ObjectGuid auctioneer = new(r.ReadUInt64());
             Feature(s).ListOwnerAuctions(s, p, auctioneer, r.ReadUInt32());
         });
         table.OnWorld(WorldOpcode.CmsgAuctionListBidderItems, (s, p, d) =>
         {
+            if (d.Length < 12)
+            {
+                return;
+            }
+
             // guid, u32 start, u32 count, u32[count] outbid auction ids (vmangos AuctionListBidderItem::Read, Packets/AuctionHouse.cpp:11-23;
             // wow_messages cmsg_auction_list_bidder_items). A body without the list (older tools) lists no outbid ids; a count larger than
             // the body is cut to the ids present.
@@ -59,6 +87,11 @@ public sealed class EconomyHandlers : IOpcodeHandlerGroup
         });
         table.OnWorld(WorldOpcode.CmsgAuctionPlaceBid, (s, p, d) =>
         {
+            if (d.Length < 16)
+            {
+                return;
+            }
+
             var r = new PacketReader(d);
             ObjectGuid auctioneer = new(r.ReadUInt64());
             uint auctionId = r.ReadUInt32();
@@ -66,12 +99,31 @@ public sealed class EconomyHandlers : IOpcodeHandlerGroup
         });
         table.OnWorld(WorldOpcode.CmsgAuctionRemoveItem, (s, p, d) =>
         {
+            if (d.Length < 12)
+            {
+                return;
+            }
+
             var r = new PacketReader(d);
             ObjectGuid auctioneer = new(r.ReadUInt64());
             Feature(s).CancelAuction(s, p, auctioneer, r.ReadUInt32());
         });
 
-        table.OnWorld(WorldOpcode.CmsgInitiateTrade, (s, p, d) => Feature(s).InitiateTrade(s, p, Guid(d)));
+        table.OnWorld(WorldOpcode.CmsgInitiateTrade, (s, p, d) =>
+        {
+            if (d.Length < 8)
+            {
+                return;
+            }
+
+            ObjectGuid targetGuid = Guid(d);
+            if (targetGuid == p.Guid)
+            {
+                return;
+            }
+
+            Feature(s).InitiateTrade(s, p, targetGuid);
+        });
         table.OnWorld(WorldOpcode.CmsgBeginTrade, (s, p, _) => Feature(s).BeginTrade(p));
         table.OnWorld(WorldOpcode.CmsgBusyTrade, (s, p, _) => Feature(s).DeclineTrade(p, TradeStatus.Busy));
         table.OnWorld(WorldOpcode.CmsgIgnoreTrade, (s, p, _) => Feature(s).DeclineTrade(p, TradeStatus.IgnoreYou));
@@ -80,22 +132,44 @@ public sealed class EconomyHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgCancelTrade, (s, p, _) => Feature(s).CancelTradeRequest(p));
         table.OnWorld(WorldOpcode.CmsgSetTradeItem, (s, p, d) =>
         {
+            if (d.Length < 3)
+            {
+                return;
+            }
+
             var r = new PacketReader(d);
             byte tradeSlot = r.ReadByte();
             byte bag = r.ReadByte();
             Feature(s).SetTradeItem(p, tradeSlot, bag, r.ReadByte());
         });
-        table.OnWorld(WorldOpcode.CmsgClearTradeItem, (s, p, d) => Feature(s).ClearTradeItem(p, new PacketReader(d).ReadByte()));
-        table.OnWorld(WorldOpcode.CmsgSetTradeGold, (s, p, d) => Feature(s).SetTradeGold(p, new PacketReader(d).ReadUInt32()));
+        table.OnWorld(WorldOpcode.CmsgClearTradeItem, (s, p, d) =>
+        {
+            if (d.Length >= 1)
+            {
+                Feature(s).ClearTradeItem(p, new PacketReader(d).ReadByte());
+            }
+        });
+        table.OnWorld(WorldOpcode.CmsgSetTradeGold, (s, p, d) =>
+        {
+            if (d.Length >= 4)
+            {
+                Feature(s).SetTradeGold(p, new PacketReader(d).ReadUInt32());
+            }
+        });
     }
 
     private static EconomyFeature Feature(WorldSession session) => session.Services.GetRequiredService<EconomyFeature>();
 
-    private static ObjectGuid Guid(byte[] payload) => new(new PacketReader(payload).ReadUInt64());
+    private static ObjectGuid Guid(byte[] payload) => payload.Length < 8 ? ObjectGuid.Empty : new(new PacketReader(payload).ReadUInt64());
 
     /// <summary>guid mailbox, u32 mail id (take money/item, mark read, return, delete, create text item).</summary>
     private static void MailCommand(byte[] payload, Action<ObjectGuid, uint> action)
     {
+        if (payload.Length < 12)
+        {
+            return;
+        }
+
         var r = new PacketReader(payload);
         ObjectGuid mailbox = new(r.ReadUInt64());
         action(mailbox, r.ReadUInt32());
@@ -104,11 +178,21 @@ public sealed class EconomyHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_SEND_MAIL: guid mailbox, cstr receiver, cstr subject, cstr body, u32, u32, guid item, u32 money, u32 cod, u32, u32.</summary>
     private static void HandleSendMail(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 35)
+        {
+            return;
+        }
+
         var r = new PacketReader(payload);
         ObjectGuid mailbox = new(r.ReadUInt64());
         string receiver = r.ReadCString();
         string subject = r.ReadCString();
         string body = r.ReadCString();
+        if (r.Remaining < 24)
+        {
+            return;
+        }
+
         r.Skip(8);
         ObjectGuid item = new(r.ReadUInt64());
         uint money = r.ReadUInt32();
@@ -119,6 +203,11 @@ public sealed class EconomyHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_AUCTION_SELL_ITEM: guid auctioneer, guid item, u32 bid, u32 buyout, u32 duration in minutes.</summary>
     private static void HandleSellItem(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 28)
+        {
+            return;
+        }
+
         var r = new PacketReader(payload);
         ObjectGuid auctioneer = new(r.ReadUInt64());
         ObjectGuid item = new(r.ReadUInt64());
@@ -131,10 +220,20 @@ public sealed class EconomyHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_AUCTION_LIST_ITEMS: guid, u32 list start, cstr name, u8 min level, u8 max level, u32 slot, class, subclass, quality, u8 usable.</summary>
     private static void HandleListItems(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 32)
+        {
+            return;
+        }
+
         var r = new PacketReader(payload);
         ObjectGuid auctioneer = new(r.ReadUInt64());
         uint listFrom = r.ReadUInt32();
         string name = r.ReadCString();
+        if (r.Remaining < 19)
+        {
+            return;
+        }
+
         byte levelMin = r.ReadByte();
         byte levelMax = r.ReadByte();
         uint inventoryType = r.ReadUInt32();

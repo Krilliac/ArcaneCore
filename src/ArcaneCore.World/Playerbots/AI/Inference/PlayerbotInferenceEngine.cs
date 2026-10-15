@@ -229,6 +229,22 @@ public sealed unsafe class PlayerbotInferenceEngine : IDisposable
         {
             ReadOnlySpan<float> logits = new(_outputBuffer + (i * ActionLogitsCount), ActionLogitsCount);
 
+            bool allFinite = true;
+            for (int j = 0; j < ActionLogitsCount; j++)
+            {
+                if (!float.IsFinite(logits[j]))
+                {
+                    allFinite = false;
+                    break;
+                }
+            }
+
+            if (!allFinite)
+            {
+                outActions[i] = new IdleAction(0.5f);
+                continue;
+            }
+
             // Hardware-accelerated SIMD ArgMax over the first 4 action-type logits.
             int actionType = TensorPrimitives.IndexOfMax(logits[..4]);
 

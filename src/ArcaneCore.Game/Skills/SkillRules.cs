@@ -100,6 +100,11 @@ public static class SkillRules
     /// </summary>
     public static float? CombatGainChance(bool defence, uint playerLevel, uint victimLevel, uint currentSkill, float intellect)
     {
+        if (playerLevel == 0)
+        {
+            return null;
+        }
+
         uint currentMax = 5 * playerLevel;
         if (currentMax <= currentSkill)
         {
@@ -129,7 +134,7 @@ public static class SkillRules
         {
             if (currentMax * 0.9f > currentSkill)
             {
-                chance = Math.Min(100.0f, currentMax * 0.9f * 50 / currentSkill);
+                chance = currentSkill == 0 ? 100.0f : Math.Min(100.0f, currentMax * 0.9f * 50 / currentSkill);
             }
             else
             {

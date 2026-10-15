@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Skills;
 
 /// <summary>
@@ -124,7 +125,11 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
-                // shutdown: the worker was cancelled
+                /* expected on shutdown */
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("writequeue-skill-dispose", ex, "Skill save coordinator failed while draining on dispose");
             }
         }
 
@@ -165,8 +170,9 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
         {
             await done.Task.WaitAsync(timeout).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
+            FaultLedger.Shared.Record("writequeue-skill-flush-timeout", ex);
             lock (_waitersLock)
             {
                 _waiters.RemoveAll(w => ReferenceEquals(w.Done, done));
@@ -203,8 +209,13 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
         {
             scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException)
         {
+            /* expected on shutdown */
+        }
+        catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-skill-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -221,6 +232,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
+                /* expected on shutdown */
                 break;
             }
 
@@ -252,6 +264,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
                 }
                 catch (OperationCanceledException)
                 {
+                    /* expected on shutdown */
                     break;
                 }
 
@@ -273,54 +286,59 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             }
         }
 
-        await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         try
         {
-            ICharacterSkillStore? store = scope.ServiceProvider.GetService<ICharacterSkillStore>();
-            if (store is null)
+            await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
+            try
             {
-                if (!_warnedNoStore)
+                ICharacterSkillStore? store = scope.ServiceProvider.GetService<ICharacterSkillStore>();
+                if (store is null)
                 {
-                    _warnedNoStore = true;
-                    _logger.LogWarning("No ICharacterSkillStore is registered; character skills are not persisted");
+                    if (!_warnedNoStore)
+                    {
+                        _warnedNoStore = true;
+                        _logger.LogWarning("No ICharacterSkillStore is registered; character skills are not persisted");
+                    }
                 }
-            }
-            else
-            {
-                await store.ReplaceSnapshotAsync(characterId, entry.Snapshot, _stop.Token).ConfigureAwait(false);
-            }
+                else
+                {
+                    await store.ReplaceSnapshotAsync(characterId, entry.Snapshot, _stop.Token).ConfigureAwait(false);
+                }
 
-            // Remove only the snapshot that was written: a newer one stays queued.
-            _pending.TryRemove(new KeyValuePair<int, Entry>(characterId, entry));
-            lock (_waitersLock)
-            {
-                _lastFailure.Remove(characterId);
-            }
+                // Remove only the snapshot that was written: a newer one stays queued.
+                _pending.TryRemove(new KeyValuePair<int, Entry>(characterId, entry));
+                lock (_waitersLock)
+                {
+                    _lastFailure.Remove(characterId);
+                }
 
-            return true;
+                return true;
+            }
+            catch (CharacterOwnershipRejectedException ex)
+            {
+                FaultLedger.Shared.Record("writequeue-skill-ownership", ex);
+                lock (_waitersLock)
+                {
+                    _lastFailure[characterId] = ex;
+                }
+
+                FailTerminal(ex, scope.ServiceProvider);
+                return false;
+            }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
+            /* expected on shutdown */
             return false;
         }
-        catch (CharacterOwnershipRejectedException ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             lock (_waitersLock)
             {
                 _lastFailure[characterId] = ex;
             }
 
-            FailTerminal(ex, scope.ServiceProvider);
-            return false;
-        }
-        catch (Exception ex)
-        {
-            lock (_waitersLock)
-            {
-                _lastFailure[characterId] = ex;
-            }
-
-            _logger.LogError(ex, "Saving the skills of character {Character} failed; it is retried", characterId);
+            _logger.LogFault("writequeue-skill", ex, "Saving the skills of character {Character} failed; it is retried", characterId);
             return false;
         }
     }

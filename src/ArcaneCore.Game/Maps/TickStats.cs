@@ -306,18 +306,38 @@ public sealed class TickStats
 
             if (target < 0)
             {
+                if (_slowTicks[0] is not { } oldestEntry)
+                {
+                    return;
+                }
+
+                SlowTickEntry fastestEntry = oldestEntry;
                 int oldest = 0, fastest = 0;
                 for (int i = 1; i < _slowTicks.Length; i++)
                 {
-                    if (_slowTicks[i]!.Timestamp < _slowTicks[oldest]!.Timestamp) oldest = i;
-                    if (_slowTicks[i]!.DurationMicros < _slowTicks[fastest]!.DurationMicros) fastest = i;
+                    if (_slowTicks[i] is not { } current)
+                    {
+                        continue;
+                    }
+
+                    if (current.Timestamp < oldestEntry.Timestamp)
+                    {
+                        oldest = i;
+                        oldestEntry = current;
+                    }
+
+                    if (current.DurationMicros < fastestEntry.DurationMicros)
+                    {
+                        fastest = i;
+                        fastestEntry = current;
+                    }
                 }
 
-                if (Stopwatch.GetElapsedTime(_slowTicks[oldest]!.Timestamp, stamp) > SlowTickRetention)
+                if (Stopwatch.GetElapsedTime(oldestEntry.Timestamp, stamp) > SlowTickRetention)
                 {
                     target = oldest;
                 }
-                else if (durationMicros > _slowTicks[fastest]!.DurationMicros)
+                else if (durationMicros > fastestEntry.DurationMicros)
                 {
                     target = fastest;
                 }

@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Stealth;
 
@@ -37,7 +38,15 @@ public sealed class StealthDetectionUpdater : IMapUpdater
     public void Update(Map map, uint diffMs)
     {
         ArgumentNullException.ThrowIfNull(map);
-        _registry.Prune(_isGone);
+        try
+        {
+            _registry.Prune(_isGone);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("map-stealth", ex);
+        }
+
         if (_registry.Count == 0)
         {
             // Nothing to detect: no per-player work at all. The timers restart (first pass after 1000 ms) when a unit stealths.
@@ -47,19 +56,31 @@ public sealed class StealthDetectionUpdater : IMapUpdater
 
         foreach (Player player in map.Players.ToArray())
         {
-            if (!_timers.TryGetValue(player, out int timer))
+            try
             {
-                timer = FirstPassMs;
-            }
+                if (player is null || !player.IsInWorld || player.Map is null || !ReferenceEquals(player.Map, map))
+                {
+                    continue;
+                }
 
-            if (diffMs >= (uint)timer)
-            {
-                Pass(map, player);
-                _timers[player] = _periodMs;
+                if (!_timers.TryGetValue(player, out int timer))
+                {
+                    timer = FirstPassMs;
+                }
+
+                if (diffMs >= (uint)timer)
+                {
+                    Pass(map, player);
+                    _timers[player] = _periodMs;
+                }
+                else
+                {
+                    _timers[player] = timer - (int)diffMs;
+                }
             }
-            else
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _timers[player] = timer - (int)diffMs;
+                FaultLedger.Shared.Record("map-stealth", ex);
             }
         }
     }
@@ -76,23 +97,30 @@ public sealed class StealthDetectionUpdater : IMapUpdater
         float rangeSq = range * range;
         foreach (Unit unit in _registry.Stealthed())
         {
-            if (ReferenceEquals(unit, player) || !ReferenceEquals(unit.Map, map))
+            try
             {
-                continue;
-            }
-
-            if (!player.VisibleObjects.Contains(unit.Guid))
-            {
-                float dx = player.X - unit.X;
-                float dy = player.Y - unit.Y;
-                float dz = player.Z - unit.Z;
-                if ((dx * dx) + (dy * dy) + (dz * dz) > rangeSq)
+                if (unit is null || !unit.IsInWorld || unit.Map is null || ReferenceEquals(unit, player) || !ReferenceEquals(unit.Map, map))
                 {
                     continue;
                 }
-            }
 
-            map.UpdateVisibilityWithDetection(player, unit);
+                if (!player.VisibleObjects.Contains(unit.Guid))
+                {
+                    float dx = player.X - unit.X;
+                    float dy = player.Y - unit.Y;
+                    float dz = player.Z - unit.Z;
+                    if ((dx * dx) + (dy * dy) + (dz * dz) > rangeSq)
+                    {
+                        continue;
+                    }
+                }
+
+                map.UpdateVisibilityWithDetection(player, unit);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-stealth", ex);
+            }
         }
     }
 }

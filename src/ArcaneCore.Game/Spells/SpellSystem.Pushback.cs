@@ -136,7 +136,7 @@ public sealed partial class SpellSystem
             }
 
             foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == cast.Spell.Id
-                && h.CasterGuid == cast.Caster.Guid && ReferenceEquals(ResolveAuraCaster(h), cast.Caster) && !h.IsPermanent))
+                && h.CasterGuid == cast.Caster.Guid && ReferenceEquals(ResolveAuraCaster(h), cast.Caster) && !h.IsPermanent).ToArray())
             {
                 ShortenHolderForPushback(holder, delay);
                 shortened.Add(holder);

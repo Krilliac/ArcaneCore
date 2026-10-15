@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
@@ -184,8 +185,16 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
         if (_initialiseWith is { } active)
         {
             _initialiseWith = null;
-            _delayMs = service.Initialize(active);
             _elapsedMs = 0;
+            try
+            {
+                _delayMs = service.Initialize(active);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _delayMs = 1_000;
+                logger.LogFault("game-events.initialize", ex, "failed to initialize game event service on world tick");
+            }
             return;
         }
 
@@ -193,7 +202,15 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
         if (_elapsedMs >= _delayMs)
         {
             _elapsedMs = 0;
-            _delayMs = service.Update();
+            try
+            {
+                _delayMs = service.Update();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _delayMs = 1_000;
+                logger.LogFault("game-events.update", ex, "failed to update game event service on world tick");
+            }
         }
     }
 
@@ -215,9 +232,9 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
                         await store.SetDisabledAsync(eventId, disabled).ConfigureAwait(false);
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    logger.LogError(ex, "storing the disabled flag of game event {EventId} failed", eventId);
+                    logger.LogFault("game-events.persist-disabled", ex, "storing the disabled flag of game event {EventId} failed", eventId);
                 }
             }, TaskScheduler.Default).Unwrap();
         }
@@ -336,9 +353,9 @@ internal sealed class GameEventStatusWriter(IServiceProvider services, ILogger l
             await store.ReplaceActiveAsync([.. set.Select(e => (int)e)]).ConfigureAwait(false);
             return true;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "storing the running game events failed; it is retried by the next change");
+            logger.LogFault("game-events.status-write", ex, "storing the running game events failed; it is retried by the next change");
             return false;
         }
     }

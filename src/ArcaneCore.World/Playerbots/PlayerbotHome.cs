@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -119,7 +120,7 @@ internal sealed class PlayerbotHomeArea
         get
         {
             if (_zoneId is { } known) return known;
-            uint zone = _zones!.ZoneAt(Centre.X, Centre.Y, Centre.Z);
+            uint zone = _zones is { } zones ? zones.ZoneAt(Centre.X, Centre.Y, Centre.Z) : 0;
             _zoneId = zone;
             if (zone == 0) _zoneUnknown?.Invoke(this);
             return zone;
@@ -153,7 +154,7 @@ internal sealed class PlayerbotHomeArea
     /// known or the terrain does not know the position's zone (fail closed).
     /// </summary>
     internal bool InZone(float x, float y, float z)
-        => !ZoneClipped || ZoneId is not 0 and var zone && _zones!.ZoneAt(x, y, z) == zone;
+        => !ZoneClipped || ZoneId is not 0 and var zone && _zones is { } zones && zones.ZoneAt(x, y, z) == zone;
 
     internal static bool IsNullIsland(uint mapId, float x, float y)
         => mapId is 0 or 1 && MathF.Abs(x) < 1f && MathF.Abs(y) < 1f;
@@ -593,16 +594,20 @@ internal sealed class PlayerbotHomeReturn
             return false;
         }
 
+        if (teleports is null) return false;
+
         // A teleport under way (this one, not yet acknowledged, or any other): wait for it, start nothing. Not for the escape from an
         // unsafe landing: the near teleport pending then is the resurrection's own, INTO the landing (the corpse's graveyard,
         // GraveyardRepopService.TeleportToCorpseGraveyard), and a near teleport is replaced by the next one (TeleportService.TeleportTo).
-        if (teleports!.IsBeingTeleported(player) && !(urgent && teleports.IsBeingTeleportedNear(player))) return !urgent;
+        if (teleports.IsBeingTeleported(player) && !(urgent && teleports.IsBeingTeleportedNear(player))) return !urgent;
         if (!urgent && !CanTeleportNow(nowMs))
         {
             Refuse(player, area, reason, "teleported home less than 5 minutes ago", nowMs);
             return false;
         }
 
+        Invariant.Check(float.IsFinite(area.Centre.X) && float.IsFinite(area.Centre.Y) && float.IsFinite(area.Centre.Z),
+            $"Home teleport destination coordinates must be finite: ({area.Centre.X}, {area.Centre.Y}, {area.Centre.Z})");
         PlayerbotMovementControl.Stop(session, player);
         var from = new Vector3(player.X, player.Y, player.Z);
         uint fromMap = player.MapId;
@@ -643,7 +648,8 @@ internal sealed class PlayerbotHomeReturn
         if (_teleportRetryPending && unchecked((int)(nowMs - _teleportRetryAt)) < 0) return "a refused teleport waits for its retry";
         if ((player.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) != 0) return "in the air";
         if (RefusalOf(session, teleports, player, area, options) is { } refusal) return refusal;
-        if (teleports!.IsBeingTeleported(player)) return "a teleport under way";
+        if (teleports is null) return "no teleport service";
+        if (teleports.IsBeingTeleported(player)) return "a teleport under way";
         return CanTeleportNow(nowMs) ? null : "teleported home less than 5 minutes ago";
     }
 
@@ -742,7 +748,7 @@ internal sealed class PlayerbotHomeReturn
             _stuckMs = 0;
         }
 
-        if (!PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, nowMs))
+        if (_route is not { } routeToAdvance || !PlayerbotNavigation.TryAdvance(session, routeToAdvance, options, elapsedMs, nowMs))
         {
             float afterDistance = area.DistanceTo(player.X, player.Y);
             Distance = afterDistance;
@@ -804,6 +810,7 @@ internal sealed class PlayerbotHomeReturn
                     PlayerbotHomeState.OffMap => "off-map",
                     PlayerbotHomeState.Returning => string.Create(CultureInfo.InvariantCulture, $"returning:{rounded}"),
                     PlayerbotHomeState.Blocked => string.Create(CultureInfo.InvariantCulture, $"blocked:{rounded}"),
+                    PlayerbotHomeState.Inside => rounded < 0 ? "inside" : string.Create(CultureInfo.InvariantCulture, $"inside:{rounded}"),
                     _ => rounded < 0 ? "inside" : string.Create(CultureInfo.InvariantCulture, $"inside:{rounded}"),
                 };
                 _report = Teleports == 0 ? state : string.Create(CultureInfo.InvariantCulture, $"{state},teleports={Teleports}");

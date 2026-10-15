@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using ArcaneCore.Game.WorldState;
@@ -91,17 +92,23 @@ public sealed class GameEventCommands : ICommandGroup
             return handled;
         }
 
+        if (service is not { } activeService || definition is not { } eventDefinition)
+        {
+            context.Reply(EventNotExistText);
+            return true;
+        }
+
         WorldStateHooks hooks = WorldStateHooks.For(context.World);
         TimeZoneInfo zone = hooks.LocalZone;
         DateTimeOffset now = hooks.Time.UtcNow;
-        uint delay = GameEventSchedule.NextCheckSeconds(definition!, now, hooks.GameEventSettings.LeapDayMode);
+        uint delay = GameEventSchedule.NextCheckSeconds(eventDefinition, now, hooks.GameEventSettings.LeapDayMode);
         DateTimeOffset next = now.AddSeconds(delay);
-        string nextText = next >= definition!.Start && next < definition.End ? Stamp(next, zone) : "-";
+        string nextText = next >= eventDefinition.Start && next < eventDefinition.End ? Stamp(next, zone) : "-";
         context.Reply(string.Format(
             CultureInfo.InvariantCulture, EventInfoText,
-            definition.Id, definition.Description, service!.IsActiveEvent(definition.Id) ? ActiveStateText : string.Empty,
-            Stamp(definition.Start, zone), Stamp(definition.End, zone),
-            SecsToTimeString(definition.OccurenceMinutes * 60L), SecsToTimeString(definition.LengthMinutes * 60L), nextText));
+            eventDefinition.Id, eventDefinition.Description, activeService.IsActiveEvent(eventDefinition.Id) ? ActiveStateText : string.Empty,
+            Stamp(eventDefinition.Start, zone), Stamp(eventDefinition.End, zone),
+            SecsToTimeString(eventDefinition.OccurenceMinutes * 60L), SecsToTimeString(eventDefinition.LengthMinutes * 60L), nextText));
         return true;
     }
 
@@ -112,20 +119,26 @@ public sealed class GameEventCommands : ICommandGroup
             return handled;
         }
 
-        if (service!.IsActiveEvent(definition!.Id))
+        if (service is not { } activeService || definition is not { } eventDefinition)
         {
-            context.Reply(string.Format(CultureInfo.InvariantCulture, AlreadyActiveText, definition.Id));
+            context.Reply(EventNotExistText);
             return true;
         }
 
-        if (definition.Disabled)
+        if (activeService.IsActiveEvent(eventDefinition.Id))
         {
-            context.Reply(string.Format(CultureInfo.InvariantCulture, IsDisabledText, definition.Id));
+            context.Reply(string.Format(CultureInfo.InvariantCulture, AlreadyActiveText, eventDefinition.Id));
             return true;
         }
 
-        context.Reply(string.Format(CultureInfo.InvariantCulture, StartedText, definition.Id, definition.Description));
-        service.StartEvent(definition.Id, overwrite: true);
+        if (eventDefinition.Disabled)
+        {
+            context.Reply(string.Format(CultureInfo.InvariantCulture, IsDisabledText, eventDefinition.Id));
+            return true;
+        }
+
+        context.Reply(string.Format(CultureInfo.InvariantCulture, StartedText, eventDefinition.Id, eventDefinition.Description));
+        activeService.StartEvent(eventDefinition.Id, overwrite: true);
         return true;
     }
 
@@ -136,14 +149,20 @@ public sealed class GameEventCommands : ICommandGroup
             return handled;
         }
 
-        if (!service!.IsActiveEvent(definition!.Id))
+        if (service is not { } activeService || definition is not { } eventDefinition)
         {
-            context.Reply(string.Format(CultureInfo.InvariantCulture, NotActiveText, definition.Id));
+            context.Reply(EventNotExistText);
             return true;
         }
 
-        context.Reply(string.Format(CultureInfo.InvariantCulture, StoppedText, definition.Id, definition.Description));
-        service.StopEvent(definition.Id, overwrite: true);
+        if (!activeService.IsActiveEvent(eventDefinition.Id))
+        {
+            context.Reply(string.Format(CultureInfo.InvariantCulture, NotActiveText, eventDefinition.Id));
+            return true;
+        }
+
+        context.Reply(string.Format(CultureInfo.InvariantCulture, StoppedText, eventDefinition.Id, eventDefinition.Description));
+        activeService.StopEvent(eventDefinition.Id, overwrite: true);
         return true;
     }
 
@@ -154,14 +173,20 @@ public sealed class GameEventCommands : ICommandGroup
             return handled;
         }
 
-        if (!definition!.Disabled)
+        if (service is not { } activeService || definition is not { } eventDefinition)
         {
-            context.Reply(string.Format(CultureInfo.InvariantCulture, AlreadyEnabledText, definition.Id));
+            context.Reply(EventNotExistText);
             return true;
         }
 
-        context.Reply(string.Format(CultureInfo.InvariantCulture, EnabledText, definition.Id, definition.Description));
-        service!.EnableEvent(definition.Id, enable: true);
+        if (!eventDefinition.Disabled)
+        {
+            context.Reply(string.Format(CultureInfo.InvariantCulture, AlreadyEnabledText, eventDefinition.Id));
+            return true;
+        }
+
+        context.Reply(string.Format(CultureInfo.InvariantCulture, EnabledText, eventDefinition.Id, eventDefinition.Description));
+        activeService.EnableEvent(eventDefinition.Id, enable: true);
         return true;
     }
 
@@ -172,14 +197,20 @@ public sealed class GameEventCommands : ICommandGroup
             return handled;
         }
 
-        if (definition!.Disabled)
+        if (service is not { } activeService || definition is not { } eventDefinition)
         {
-            context.Reply(string.Format(CultureInfo.InvariantCulture, AlreadyDisabledText, definition.Id));
+            context.Reply(EventNotExistText);
             return true;
         }
 
-        context.Reply(string.Format(CultureInfo.InvariantCulture, DisabledText, definition.Id, definition.Description));
-        service!.EnableEvent(definition.Id, enable: false);
+        if (eventDefinition.Disabled)
+        {
+            context.Reply(string.Format(CultureInfo.InvariantCulture, AlreadyDisabledText, eventDefinition.Id));
+            return true;
+        }
+
+        context.Reply(string.Format(CultureInfo.InvariantCulture, DisabledText, eventDefinition.Id, eventDefinition.Description));
+        activeService.EnableEvent(eventDefinition.Id, enable: false);
         return true;
     }
 
@@ -188,7 +219,12 @@ public sealed class GameEventCommands : ICommandGroup
     /// <paramref name="handled"/> is what the handler returns when this fails: false (show the syntax) for a bad argument, true after
     /// the "Event not exist!" reply.
     /// </summary>
-    private static bool TryGetEvent(CommandContext context, string args, out GameEventService? service, out GameEventDefinition? definition, out bool handled)
+    private static bool TryGetEvent(
+        CommandContext context,
+        string args,
+        [NotNullWhen(true)] out GameEventService? service,
+        [NotNullWhen(true)] out GameEventDefinition? definition,
+        out bool handled)
     {
         service = Service(context);
         definition = null;
@@ -199,14 +235,15 @@ public sealed class GameEventCommands : ICommandGroup
         }
 
         handled = true;
-        if (service is null || id > ushort.MaxValue || !service.IsValidEvent((ushort)id))
+        if (service is not { } activeService || id > ushort.MaxValue || !activeService.IsValidEvent((ushort)id)
+            || activeService.Find((ushort)id) is not { } foundDefinition)
         {
             context.Reply(EventNotExistText);
             return false;
         }
 
-        definition = service.Find((ushort)id);
-        return definition is not null;
+        definition = foundDefinition;
+        return true;
     }
 
     /// <summary>vmangos <c>ExtractUint32KeyFromLink(&amp;args, "Hgameevent", id)</c>: a number, or the id inside a shift-click event link.</summary>

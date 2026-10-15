@@ -110,7 +110,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
     {
         if (go.Entry == GoGauntletGate1 && Encounters[TypeBaronRun] == EncounterState.NotStarted)
         {
-            foreach (Player participant in Instance.Players)
+            foreach (Player participant in Instance.Players.ToArray())
             {
                 CastPlayerSpell?.Invoke(participant, SpellBaronUltimatum);
             }
@@ -379,7 +379,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                     {
                         SetData(TypeBaronRun, EncounterState.Done);
                         CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
-                        foreach (Player player in Instance.Players)
+                        foreach (Player player in Instance.Players.ToArray())
                         {
                             creatures?.RemoveAuras(player, SpellBaronUltimatum);
                             CreatureCredit?.Invoke(player, NpcYsida, GetSingleCreatureFromStorage(NpcYsida)?.Guid ?? default);

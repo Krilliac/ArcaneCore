@@ -10,6 +10,7 @@ using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.AntiCheat;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
@@ -276,7 +277,18 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
         float score = _scores.Add(characterId, finding.Weight, now, options.DecayPerSecond);
         Recorded++;
         AntiCheatAction action = AntiCheatEscalation.Decide(score, options);
-        FindingRecorded?.Invoke(player, finding, score, action);
+        if (FindingRecorded is { } handlers)
+        {
+            try
+            {
+                handlers.Invoke(player, finding, score, action);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("anticheat-finding", ex, "AntiCheat: FindingRecorded subscriber threw for player {Player}", player.Name);
+            }
+        }
+
         if (action == AntiCheatAction.None)
         {
             return;
@@ -460,9 +472,9 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
                 dedupKey: $"ban:{accountId}",
                 staffHandled: true);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "AntiCheat: autoban of account {Account} failed", accountId);
+            logger.LogFault("anticheat-autoban", ex, "AntiCheat: autoban of account {Account} failed", accountId);
             string failed = string.Create(CultureInfo.InvariantCulture, $"account {accountId} (character {characterName}): {ex.GetType().Name}");
             StaffNotice(accountId, "autoban failure", $"{AlertPrefix}Could not autoban {failed}.");
             _announcer?.Announce(
@@ -480,44 +492,51 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
 
     private void OnWorldTick(uint diffMs)
     {
-        if (!_teleportsHooked && services.GetService<TeleportFeature>() is { } teleports)
+        try
         {
-            _teleportsHooked = true;
-            try
+            if (!_teleportsHooked && services.GetService<TeleportFeature>() is { } teleports)
             {
-                teleports.Teleports.TeleportCompleted += OnServerRelocation;
-                teleports.Teleports.FarTeleportExecuting += OnServerRelocation;
-                teleports.Teleports.NearTeleportStarting += (player, _) => OnServerRelocation(player);
+                _teleportsHooked = true;
+                try
+                {
+                    teleports.Teleports.TeleportCompleted += OnServerRelocation;
+                    teleports.Teleports.FarTeleportExecuting += OnServerRelocation;
+                    teleports.Teleports.NearTeleportStarting += (player, _) => OnServerRelocation(player);
+                }
+                catch (InvalidOperationException)
+                {
+                    // the teleport feature is not attached in this host: the position check still re-baselines
+                }
             }
-            catch (InvalidOperationException)
+
+            // A kick or autoban window that ended with lines held back: one summary line per account and kind.
+            foreach (SuppressedNotices held in _staffLimiter.TakeExpired())
             {
-                // the teleport feature is not attached in this host: the position check still re-baselines
+                SendToStaff($"{AlertPrefix}{StaffNoticeLimiter.SummaryFor(held)}");
             }
-        }
 
-        // A kick or autoban window that ended with lines held back: one summary line per account and kind.
-        foreach (SuppressedNotices held in _staffLimiter.TakeExpired())
+            AntiCheatOptions options = _options;
+            _sincePruneMs += diffMs;
+            if (_sincePruneMs >= 60_000)
+            {
+                _sincePruneMs = 0;
+                _scores.Prune(_world?.NowMs ?? 0, options.DecayPerSecond);
+            }
+
+            _sinceFlushMs += diffMs;
+            if (_sinceFlushMs < (uint)options.Log.FlushIntervalSeconds * 1000 || _log.Count == 0 || !_flush.IsCompleted)
+            {
+                return;
+            }
+
+            _sinceFlushMs = 0;
+            IReadOnlyList<AntiCheatLogEntry> batch = _log.Take(options.Log.MaxRowsPerFlush);
+            _flush = Task.Run(() => FlushAsync(batch));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            SendToStaff($"{AlertPrefix}{StaffNoticeLimiter.SummaryFor(held)}");
+            logger.LogFault("anticheat-tick", ex, "AntiCheat: world tick faulted");
         }
-
-        AntiCheatOptions options = _options;
-        _sincePruneMs += diffMs;
-        if (_sincePruneMs >= 60_000)
-        {
-            _sincePruneMs = 0;
-            _scores.Prune(_world?.NowMs ?? 0, options.DecayPerSecond);
-        }
-
-        _sinceFlushMs += diffMs;
-        if (_sinceFlushMs < (uint)options.Log.FlushIntervalSeconds * 1000 || _log.Count == 0 || !_flush.IsCompleted)
-        {
-            return;
-        }
-
-        _sinceFlushMs = 0;
-        IReadOnlyList<AntiCheatLogEntry> batch = _log.Take(options.Log.MaxRowsPerFlush);
-        _flush = Task.Run(() => FlushAsync(batch));
     }
 
     /// <summary>Write one batch (one round trip). A failure is logged at most once a minute and the batch is dropped: the log never grows without bound.</summary>
@@ -531,8 +550,9 @@ public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiChea
                 await store.AppendAsync(batch).ConfigureAwait(false);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("anticheat-flush", ex);
             if (_flushGate.TryEnter(out int suppressed))
             {
                 logger.LogWarning(ex, "AntiCheat: could not write {Rows} violation log row(s); they are dropped ({Suppressed} more failures since the last line)", batch.Count, suppressed);

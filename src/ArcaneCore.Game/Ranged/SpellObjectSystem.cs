@@ -2,6 +2,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Ranged;
@@ -39,32 +40,49 @@ public sealed class SpellObjectSystem(SpellSystem spells) : IMapUpdater
 
     public void Update(Map map, uint diffMs)
     {
+        if (map is null)
+        {
+            return;
+        }
+
         foreach (SpellCreatedObject entry in spells.SpellObjects.All.ToArray())
         {
-            GameObjectMapSystem? system = entry.Object.System;
-            if (system is null)
+            try
             {
-                // The object left the world: free the slot, start the creating spell's cooldown.
-                spells.RemoveSpellObject(entry, null, startEventCooldown: true);
-                continue;
-            }
+                if (entry?.Object is not { } go)
+                {
+                    continue;
+                }
 
-            if (!ReferenceEquals(system.Map, map))
-            {
-                continue; // another map's system looks after it
-            }
+                GameObjectMapSystem? system = go.System;
+                if (system is null)
+                {
+                    // The object left the world: free the slot, start the creating spell's cooldown.
+                    spells.RemoveSpellObject(entry, null, startEventCooldown: true);
+                    continue;
+                }
 
-            if (!entry.Owner.IsInWorld || !ReferenceEquals(entry.Owner.Map, map))
-            {
-                spells.RemoveSpellObject(entry, system, startEventCooldown: false);
-                continue;
-            }
+                if (!ReferenceEquals(system.Map, map))
+                {
+                    continue; // another map's system looks after it
+                }
 
-            entry.Age++;
-            if (!entry.SpawnAnimSent && entry.Age >= SpawnAnimAge && entry.Object.IsSpawned)
+                if (entry.Owner is null || !entry.Owner.IsInWorld || entry.Owner.Map is null || !ReferenceEquals(entry.Owner.Map, map))
+                {
+                    spells.RemoveSpellObject(entry, system, startEventCooldown: false);
+                    continue;
+                }
+
+                entry.Age++;
+                if (!entry.SpawnAnimSent && entry.Age >= SpawnAnimAge && go.IsSpawned)
+                {
+                    entry.SpawnAnimSent = true;
+                    map.BroadcastToObservers(go, WorldOpcode.SmsgGameobjectSpawnAnim, SpellObjectPackets.SpawnAnim(go.Guid));
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                entry.SpawnAnimSent = true;
-                map.BroadcastToObservers(entry.Object, WorldOpcode.SmsgGameobjectSpawnAnim, SpellObjectPackets.SpawnAnim(entry.Object.Guid));
+                FaultLedger.Shared.Record("map-spell-object", ex);
             }
         }
     }

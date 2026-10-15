@@ -8,6 +8,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Game.WorldState.Zones;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Features;
@@ -81,6 +82,11 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
 
     private void OnMapCreated(Map map)
     {
+        if (!Invariant.CheckNotNull(map, nameof(map)))
+        {
+            return;
+        }
+
         if (map.InstanceId != 0 || _scripts.ContainsKey(map) || _host is null)
         {
             return;
@@ -98,12 +104,25 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         }
 
         _scripts[map] = script;
-        script.Setup();
-        logger.LogInformation("outdoor PvP: {Script} running on map {Map} ({Points} capture point(s))", script.GetType().Name, map.MapId, script.CapturePoints.Count);
+        try
+        {
+            script.Setup();
+            logger.LogInformation("outdoor PvP: {Script} running on map {Map} ({Points} capture point(s))", script.GetType().Name, map.MapId, script.CapturePoints.Count);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _scripts.Remove(map);
+            logger.LogFault("outdoorpvp-setup", ex, "outdoor PvP setup failed on map {Map}", map.MapId);
+        }
     }
 
     private void OnMapUnloading(Map map)
     {
+        if (!Invariant.CheckNotNull(map, nameof(map)))
+        {
+            return;
+        }
+
         if (!_scripts.Remove(map, out OutdoorPvPZoneScript? script))
         {
             return;
@@ -134,9 +153,9 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
                 return saved.MaxResources;
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "could not load the Silithyst state");
+            logger.LogFault("outdoorpvp-silithyst-load", ex, "could not load the Silithyst state");
         }
 
         return SilithusCatalog.DefaultMaxResources;
@@ -160,16 +179,35 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
     {
         foreach (OutdoorPvPZoneScript script in _scripts.Values.ToArray())
         {
-            script.Tick(diffMs);
+            try
+            {
+                script.Tick(diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("outdoorpvp-tick", ex, "outdoor PvP script {Script} tick failed", script.GetType().Name);
+            }
         }
 
-        _host?.UpdateCreatureGroups();
+        try
+        {
+            _host?.UpdateCreatureGroups();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("outdoorpvp-creature-groups", ex, "outdoor PvP creature group update failed");
+        }
     }
 
     // ------------------------------------------------------------------ zone presence
 
     public void OnZoneChanged(Player player, uint oldZone, uint newZone, uint newArea, AreaTemplate? zoneEntry)
     {
+        if (!Invariant.CheckNotNull(player, nameof(player)) || !Invariant.Check(!player.Guid.IsEmpty, "OutdoorPvPFeature.OnZoneChanged: player must have a valid GUID"))
+        {
+            return;
+        }
+
         OutdoorPvPZoneScript? next = player.Map is { InstanceId: 0 } ? ScriptFor(player.MapId, newZone) : null;
         if (_present.TryGetValue(player.Guid, out var current))
         {
@@ -181,22 +219,48 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
             }
 
             _present.Remove(player.Guid);
-            current.Script.OnPlayerLeave(new OutdoorPvPPlayer(player.Guid, current.Team), loggingOut: false);
+            try
+            {
+                current.Script.OnPlayerLeave(new OutdoorPvPPlayer(player.Guid, current.Team), loggingOut: false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("outdoorpvp-zone-leave", ex, "outdoor PvP leave failed for {Player}", player.Guid);
+            }
         }
 
         if (next is not null)
         {
             _present[player.Guid] = (next, player.Team);
-            next.OnPlayerEnter(new OutdoorPvPPlayer(player.Guid, player.Team));
+            try
+            {
+                next.OnPlayerEnter(new OutdoorPvPPlayer(player.Guid, player.Team));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("outdoorpvp-zone-enter", ex, "outdoor PvP enter failed for {Player}", player.Guid);
+            }
         }
     }
 
     private void OnPlayerLoggingOut(Player player)
     {
+        if (!Invariant.CheckNotNull(player, nameof(player)) || !Invariant.Check(!player.Guid.IsEmpty, "OutdoorPvPFeature.OnPlayerLoggingOut: player must have a valid GUID"))
+        {
+            return;
+        }
+
         _flagRemovedAt.Remove(player.Guid);
         if (_present.Remove(player.Guid, out var current))
         {
-            current.Script.OnPlayerLeave(new OutdoorPvPPlayer(player.Guid, current.Team), loggingOut: true);
+            try
+            {
+                current.Script.OnPlayerLeave(new OutdoorPvPPlayer(player.Guid, current.Team), loggingOut: true);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("outdoorpvp-logout", ex, "outdoor PvP logout leave failed for {Player}", player.Guid);
+            }
         }
     }
 
@@ -205,9 +269,21 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
     /// <summary>vmangos Player::SendInitWorldStates → <c>ZoneScript::FillInitialWorldStates</c> for the zone's script.</summary>
     public void Fill(Player player, uint zoneId, List<WorldStatePair> states)
     {
+        if (!Invariant.CheckNotNull(player, nameof(player)) || !Invariant.CheckNotNull(states, nameof(states)))
+        {
+            return;
+        }
+
         if (player.Map is { InstanceId: 0 } && ScriptFor(player.MapId, zoneId) is { } script)
         {
-            script.FillInitialWorldStates(states);
+            try
+            {
+                script.FillInitialWorldStates(states);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("outdoorpvp-worldstates", ex, "outdoor PvP FillInitialWorldStates failed for zone {Zone}", zoneId);
+            }
         }
     }
 
@@ -216,9 +292,21 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
     /// <summary>vmangos HandleAreaTriggerOpcode → <c>ZoneScript::HandleAreaTrigger</c> of the player's zone script.</summary>
     public void OnAreaTrigger(Player player, uint triggerId)
     {
+        if (!Invariant.CheckNotNull(player, nameof(player)) || !Invariant.Check(!player.Guid.IsEmpty, "OutdoorPvPFeature.OnAreaTrigger: player must have a valid GUID"))
+        {
+            return;
+        }
+
         if (_present.TryGetValue(player.Guid, out var current))
         {
-            current.Script.HandleAreaTrigger(new OutdoorPvPPlayer(player.Guid, current.Team), triggerId);
+            try
+            {
+                current.Script.HandleAreaTrigger(new OutdoorPvPPlayer(player.Guid, current.Team), triggerId);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("outdoorpvp-areatrigger", ex, "outdoor PvP area trigger {Trigger} failed for {Player}", triggerId, player.Guid);
+            }
         }
     }
 
@@ -246,7 +334,14 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
             || (_flagRemovedAt.TryGetValue(player.Guid, out uint at) && at == World.NowMs);
         if (held && _present.TryGetValue(player.Guid, out var current))
         {
-            current.Script.HandleDropFlag(new OutdoorPvPPlayer(player.Guid, current.Team), SilithusCatalog.SpellSilithystFlag);
+            try
+            {
+                current.Script.HandleDropFlag(new OutdoorPvPPlayer(player.Guid, current.Team), SilithusCatalog.SpellSilithystFlag);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("outdoorpvp-drop-flag", ex, "outdoor PvP drop flag failed for {Player}", player.Guid);
+            }
         }
     }
 

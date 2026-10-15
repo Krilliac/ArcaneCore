@@ -195,12 +195,29 @@ public sealed class UnitCombat
     }
 
     /// <summary>The unhasted time without the 2000 ms default for an unset main hand (what damage scaling reads).</summary>
-    internal uint GetUnhastedTime(WeaponAttackType type) => (uint)(Field(type) / _speedPct[(int)type]);
+    internal uint GetUnhastedTime(WeaponAttackType type)
+    {
+        int index = (int)type;
+        if ((uint)index >= (uint)_speedPct.Length)
+        {
+            return 0u;
+        }
+
+        float pct = _speedPct[index];
+        return float.IsFinite(pct) && pct > 0f ? (uint)(Field(type) / pct) : (uint)Field(type);
+    }
 
     /// <summary>vmangos Unit::SetAttackTime (Unit.h:407): the field holds <paramref name="value"/> times the speed multiplier.</summary>
     public void SetAttackTime(WeaponAttackType type, uint value, bool resetTimer = true)
     {
-        StoreField(type, value * _speedPct[(int)type]);
+        int index = (int)type;
+        if ((uint)index >= (uint)_speedPct.Length)
+        {
+            return;
+        }
+
+        float pct = _speedPct[index];
+        StoreField(type, value * (float.IsFinite(pct) && pct > 0f ? pct : 1.0f));
         if (resetTimer)
         {
             ResetAttackTimer(type);

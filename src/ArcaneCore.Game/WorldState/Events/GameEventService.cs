@@ -460,8 +460,9 @@ public sealed class GameEventService : IGameEventState
         {
             action();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("game-event", ex);
             _logger.LogError(ex, "game event {What} failed", what);
         }
     }

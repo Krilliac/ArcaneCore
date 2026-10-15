@@ -193,8 +193,8 @@ public sealed class ScenarioContext
 
         WorldSessionAttach(bot, _bots.FindSession(id) ?? throw new ScenarioAssertionException($"bot {name} has no session"));
         _logins.Add(bot);
-        await WaitUntilAsync($"{name} is in the world", () => bot.Session!.Player is { IsInWorld: true }).ConfigureAwait(false);
-        bot.Guid = await World.InvokeAsync(() => bot.Session!.Player!.Guid).ConfigureAwait(false);
+        await WaitUntilAsync($"{name} is in the world", () => bot.Session?.Player is { IsInWorld: true }).ConfigureAwait(false);
+        bot.Guid = await World.InvokeAsync(() => bot.RequirePlayer().Guid).ConfigureAwait(false);
         return bot;
     }
 
@@ -260,7 +260,7 @@ public sealed class ScenarioContext
         TeleportService teleports = Services.GetRequiredService<TeleportFeature>().Teleports;
         bool started = await World.InvokeAsync(() => teleports.TeleportTo(bot.RequirePlayer(), mapId, x, y, z, orientation)).ConfigureAwait(false);
         if (!started) throw new ScenarioAssertionException($"{bot.Name} cannot be teleported to map {mapId} ({x:F1}, {y:F1}, {z:F1})");
-        await WaitUntilAsync($"{bot.Name} arrives on map {mapId}", () => bot.Session!.Player is { IsInWorld: true, Map: { } map } player
+        await WaitUntilAsync($"{bot.Name} arrives on map {mapId}", () => bot.Session?.Player is { IsInWorld: true, Map: { } map } player
             && map.MapId == mapId && teleports.StageOf(player) is null
             && MathF.Abs(player.X - x) < 1f && MathF.Abs(player.Y - y) < 1f).ConfigureAwait(false);
     }
@@ -271,7 +271,7 @@ public sealed class ScenarioContext
     /// </summary>
     public async Task PlaceFacingAsync(ScenarioBot a, ScenarioBot b, float distance = 2f)
     {
-        (uint map, float x, float y, float z) = await a.ReadAsync(p => (p.Map!.MapId, p.X, p.Y, p.Z)).ConfigureAwait(false);
+        (uint map, float x, float y, float z) = await a.ReadAsync(p => (p.Map?.MapId ?? p.MapId, p.X, p.Y, p.Z)).ConfigureAwait(false);
         await PlaceAsync(a, map, x, y, z, 0f).ConfigureAwait(false);
         await PlaceAsync(b, map, x + distance, y, z, MathF.PI).ConfigureAwait(false);
     }
@@ -400,11 +400,12 @@ public sealed class ScenarioContext
         (ObjectGuid Leader, ObjectGuid[] Members)? group = await World.InvokeAsync(() => groups.GetGroup(leader.Guid) is { } g
             ? (g.LeaderGuid, g.Members.Select(m => m.Guid).ToArray())
             : ((ObjectGuid, ObjectGuid[])?)null).ConfigureAwait(false);
-        Expect(group is not null, $"{leader.Name} is not in a group");
-        ExpectEqual(leader.Guid, group!.Value.Leader, "group leader");
+        if (group is not { } actualGroup)
+            throw new ScenarioAssertionException($"{leader.Name} is not in a group");
+        ExpectEqual(leader.Guid, actualGroup.Leader, "group leader");
         ObjectGuid[] expected = [leader.Guid, .. members.Select(m => m.Guid)];
-        Expect(expected.Select(g => g.Value).Order().SequenceEqual(group.Value.Members.Select(g => g.Value).Order()),
-            $"group roster: expected [{string.Join(", ", expected.Select(g => g.Value.ToString("X")))}], got [{string.Join(", ", group.Value.Members.Select(g => g.Value.ToString("X")))}]");
+        Expect(expected.Select(g => g.Value).Order().SequenceEqual(actualGroup.Members.Select(g => g.Value).Order()),
+            $"group roster: expected [{string.Join(", ", expected.Select(g => g.Value.ToString("X")))}], got [{string.Join(", ", actualGroup.Members.Select(g => g.Value.ToString("X")))}]");
     }
 
     /// <summary>The bot's quest log state of <paramref name="quest"/> (null: not in the log).</summary>

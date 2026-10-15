@@ -139,6 +139,11 @@ public sealed class MetricsStore : IDisposable
 
         public void Record(double value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
         {
+            if (!Diagnostics.Invariant.Check(double.IsFinite(value), $"Metric '{instrument.Name}' recorded non-finite value {value}."))
+            {
+                return;
+            }
+
             Series series = tags.Length == 0 ? _untagged : Find(tags);
             lock (series)
             {
@@ -147,7 +152,10 @@ public sealed class MetricsStore : IDisposable
                     case MetricKind.Histogram:
                         int bucket = Array.BinarySearch(DefaultBounds, value);
                         bucket = bucket >= 0 ? bucket : ~bucket; // upper-inclusive bounds (le)
-                        series.Buckets![bucket]++;
+                        if (series.Buckets is { } buckets && (uint)bucket < (uint)buckets.Length)
+                        {
+                            buckets[bucket]++;
+                        }
                         series.Count++;
                         series.Sum += value;
                         break;

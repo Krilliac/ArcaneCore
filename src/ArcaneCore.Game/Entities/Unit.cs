@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Entities;
@@ -54,14 +55,86 @@ public abstract partial class Unit : WorldObject
     /// </summary>
     public ref readonly MovementInfo Movement => ref _movement;
 
-    public float WalkSpeed { get; set; } = BaseWalkSpeed;
-    public float RunSpeed { get; set; } = BaseRunSpeed;
-    public float RunBackSpeed { get; set; } = BaseRunBackSpeed;
-    public float SwimSpeed { get; set; } = BaseSwimSpeed;
-    public float SwimBackSpeed { get; set; } = BaseSwimBackSpeed;
-    public float TurnRate { get; set; } = BaseTurnRate;
+    public float WalkSpeed
+    {
+        get;
+        set
+        {
+            if (Invariant.Check(float.IsFinite(value) && value >= 0f, $"Unit {Guid} assigned invalid WalkSpeed {value}"))
+            {
+                field = value;
+            }
+        }
+    } = BaseWalkSpeed;
 
-    public override float BoundingRadius => GetFloat(UpdateFields.UnitFieldBoundingradius);
+    public float RunSpeed
+    {
+        get;
+        set
+        {
+            if (Invariant.Check(float.IsFinite(value) && value >= 0f, $"Unit {Guid} assigned invalid RunSpeed {value}"))
+            {
+                field = value;
+            }
+        }
+    } = BaseRunSpeed;
+
+    public float RunBackSpeed
+    {
+        get;
+        set
+        {
+            if (Invariant.Check(float.IsFinite(value) && value >= 0f, $"Unit {Guid} assigned invalid RunBackSpeed {value}"))
+            {
+                field = value;
+            }
+        }
+    } = BaseRunBackSpeed;
+
+    public float SwimSpeed
+    {
+        get;
+        set
+        {
+            if (Invariant.Check(float.IsFinite(value) && value >= 0f, $"Unit {Guid} assigned invalid SwimSpeed {value}"))
+            {
+                field = value;
+            }
+        }
+    } = BaseSwimSpeed;
+
+    public float SwimBackSpeed
+    {
+        get;
+        set
+        {
+            if (Invariant.Check(float.IsFinite(value) && value >= 0f, $"Unit {Guid} assigned invalid SwimBackSpeed {value}"))
+            {
+                field = value;
+            }
+        }
+    } = BaseSwimBackSpeed;
+
+    public float TurnRate
+    {
+        get;
+        set
+        {
+            if (Invariant.Check(float.IsFinite(value) && value >= 0f, $"Unit {Guid} assigned invalid TurnRate {value}"))
+            {
+                field = value;
+            }
+        }
+    } = BaseTurnRate;
+
+    public override float BoundingRadius
+    {
+        get
+        {
+            float radius = GetFloat(UpdateFields.UnitFieldBoundingradius);
+            return float.IsFinite(radius) && radius >= 0f ? radius : base.BoundingRadius;
+        }
+    }
 
     // --- common unit fields -------------------------------------------------------
 
@@ -70,6 +143,9 @@ public abstract partial class Unit : WorldObject
         get => GetUInt32(UpdateFields.UnitFieldHealth);
         set => SetUInt32(UpdateFields.UnitFieldHealth, value);
     }
+
+    /// <summary>Health as a percentage in [0, 100], guarded against a zero <see cref="MaxHealth"/> denominator.</summary>
+    public float HealthPercent => MaxHealth > 0 ? Math.Clamp((float)Health * 100f / MaxHealth, 0f, 100f) : 0f;
 
     /// <summary>
     /// Alive in vmangos' sense (Unit::IsAlive: death state ALIVE). A released ghost has 1 health
@@ -111,10 +187,30 @@ public abstract partial class Unit : WorldObject
     }
 
     /// <summary>DBC native scale for the current native display, retained for geometry restoration.</summary>
-    public float NativeScale { get; internal set; } = 1.0f;
+    public float NativeScale
+    {
+        get;
+        internal set
+        {
+            if (Invariant.Check(float.IsFinite(value) && value > 0f, $"Unit {Guid} assigned invalid NativeScale {value}"))
+            {
+                field = value;
+            }
+        }
+    } = 1.0f;
 
     /// <summary>Explicit native object-scale override selected from creature data, if any.</summary>
-    public float NativeScaleOverride { get; internal set; }
+    public float NativeScaleOverride
+    {
+        get;
+        internal set
+        {
+            if (Invariant.Check(float.IsFinite(value) && value >= 0f, $"Unit {Guid} assigned invalid NativeScaleOverride {value}"))
+            {
+                field = value;
+            }
+        }
+    }
 
     /// <summary>UNIT_FIELD_BYTES_0: race, class, gender, power type (vmangos Unit::GetRace etc.).</summary>
     public Race Race => (Race)GetByte(UpdateFields.UnitFieldBytes0, 0);
@@ -152,9 +248,20 @@ public abstract partial class Unit : WorldObject
     /// </summary>
     public void ApplyMovement(in MovementInfo movement, uint serverTimeMs)
     {
+        if (!Invariant.Check(float.IsFinite(movement.X) && float.IsFinite(movement.Y) && float.IsFinite(movement.Z),
+                $"WorldObject {Guid} relocated to non-finite position ({movement.X}, {movement.Y}, {movement.Z}) on map {MapId}"))
+        {
+            MarkRejectedNonFiniteRelocation();
+            return;
+        }
+
+        float safeOrientation = float.IsFinite(movement.Orientation)
+            ? movement.Orientation
+            : (float.IsFinite(Orientation) ? Orientation : 0f);
         _movement = movement;
         _movement.Time = serverTimeMs;
-        SetPosition(movement.X, movement.Y, movement.Z, movement.Orientation);
+        _movement.Orientation = safeOrientation;
+        SetPosition(movement.X, movement.Y, movement.Z, safeOrientation);
     }
 
     /// <summary>
@@ -191,6 +298,27 @@ public abstract partial class Unit : WorldObject
     /// <summary>Place the unit (teleport, spawn, login) with a fresh, stationary movement state.</summary>
     public void Relocate(float x, float y, float z, float orientation, uint serverTimeMs)
     {
+        if (!Invariant.Check(float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z),
+                $"WorldObject {Guid} relocated to non-finite position ({x}, {y}, {z}) on map {MapId}"))
+        {
+            MarkRejectedNonFiniteRelocation();
+            if (float.IsFinite(orientation))
+            {
+                Orientation = orientation;
+                _movement.Orientation = orientation;
+            }
+            else if (!float.IsFinite(Orientation))
+            {
+                Orientation = 0f;
+                _movement.Orientation = 0f;
+            }
+
+            return;
+        }
+
+        float safeOrientation = float.IsFinite(orientation)
+            ? orientation
+            : (float.IsFinite(Orientation) ? Orientation : 0f);
         MovementFlags kept = _movement.Flags & RelocationKeptFlags;
 
         // A teleport, spell relocation, taxi stop or login ends any fall in progress (vmangos SetFallInformation(0),
@@ -200,7 +328,7 @@ public abstract partial class Unit : WorldObject
             state.ResetFall();
         }
 
-        SetPosition(x, y, z, orientation);
+        SetPosition(x, y, z, safeOrientation);
         _movement = new MovementInfo
         {
             Flags = kept,
@@ -208,7 +336,7 @@ public abstract partial class Unit : WorldObject
             X = x,
             Y = y,
             Z = z,
-            Orientation = orientation,
+            Orientation = safeOrientation,
         };
     }
 }

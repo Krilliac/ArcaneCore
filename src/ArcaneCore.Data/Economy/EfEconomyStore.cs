@@ -5,6 +5,7 @@ using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Characters.ServerMail;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using Microsoft.Data.Sqlite;
@@ -71,7 +72,8 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
                 }
 
                 IReadOnlyList<InventoryItemData> stored = await new EfItemStore(db).GetInventoryAsync(id, cancellationToken).ConfigureAwait(false);
-                if (!EconomyRequestValidation.SameInventory(stored, participant.Before.Inventory!.Items))
+                if (participant.Before.Inventory is not { } beforeInventory
+                    || !EconomyRequestValidation.SameInventory(stored, beforeInventory.Items))
                 {
                     return EconomyCommitResult.Conflict;
                 }
@@ -102,16 +104,18 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
                     return EconomyCommitResult.CharacterMissing;
                 }
 
-                touched.UnionWith(participant.Before.Inventory!.Items.Select(i => i.Item.Guid)
-                    .Except(participant.After.Inventory!.Items.Select(i => i.Item.Guid)));
-                touched.UnionWith(participant.After.Inventory!.Items.Select(i => i.Item.Guid)
-                    .Except(participant.Before.Inventory!.Items.Select(i => i.Item.Guid)));
+                IReadOnlyList<InventoryItemData> beforeItems = participant.Before.Inventory?.Items ?? [];
+                IReadOnlyList<InventoryItemData> afterItems = participant.After.Inventory?.Items ?? [];
+                touched.UnionWith(beforeItems.Select(i => i.Item.Guid)
+                    .Except(afterItems.Select(i => i.Item.Guid)));
+                touched.UnionWith(afterItems.Select(i => i.Item.Guid)
+                    .Except(beforeItems.Select(i => i.Item.Guid)));
             }
 
             // Each participant's diff removes rows it no longer owns. In a swap, a row the other
             // participant now holds may have been staged for deletion by its previous owner's
             // diff; any row kept by some After inventory survives (its values are the new owner's).
-            HashSet<uint> kept = [.. request.Participants.SelectMany(p => p.After.Inventory!.Items.Select(i => i.Item.Guid))];
+            HashSet<uint> kept = [.. request.Participants.SelectMany(p => (p.After.Inventory?.Items ?? []).Select(i => i.Item.Guid))];
             foreach (var entry in db.ChangeTracker.Entries<ItemInstanceRow>()
                 .Where(e => e.State == EntityState.Deleted && kept.Contains(e.Entity.Guid)).ToList())
             {
@@ -154,12 +158,22 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
         }
         catch (Exception commitError)
         {
+            if (commitError is not OperationCanceledException and not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("data-economy.commit", commitError);
+            }
+
             try
             {
                 await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception rollbackError)
             {
+                if (rollbackError is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("data-economy.commit-rollback", rollbackError);
+                }
+
                 throw new AggregateException("Economy commit and rollback failed; discard the context.", commitError, rollbackError);
             }
 
@@ -268,8 +282,13 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new AuctionSnapshot(auctions, escrow);
         }
-        catch
+        catch (Exception snapshotError)
         {
+            if (snapshotError is not OperationCanceledException and not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("data-economy.auction-snapshot", snapshotError);
+            }
+
             try
             {
                 await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
@@ -277,7 +296,7 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
             catch (Exception rollbackError) when (rollbackError is not OutOfMemoryException)
             {
                 // The original failure propagates; the dedicated context is discarded by its scope. The failed rollback is counted (the store has no logger).
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("economy.auction-snapshot-rollback", rollbackError);
+                FaultLedger.Shared.Record("economy.auction-snapshot-rollback", rollbackError);
             }
 
             throw;
@@ -316,8 +335,13 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
             return await db.Database.UseTransactionAsync(connection.BeginTransaction(deferred: true), cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("the SQLite snapshot transaction was not attached");
         }
-        catch
+        catch (Exception snapshotOpenError)
         {
+            if (snapshotOpenError is not OperationCanceledException and not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("data-economy.begin-snapshot", snapshotOpenError);
+            }
+
             await db.Database.CloseConnectionAsync().ConfigureAwait(false);
             throw;
         }
@@ -337,9 +361,10 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
             {
                 EconomyParticipant? owner = request.Participants.SingleOrDefault(p => p.Before.Id == escrow.CharacterId);
                 uint guid = escrow.Item.Guid;
-                if (owner is null
-                    || !owner.Before.Inventory!.Items.Any(i => i.Item.Guid == guid)
-                    || owner.After.Inventory!.Items.Any(i => i.Item.Guid == guid))
+                if (owner?.Before.Inventory is not { } beforeInventory
+                    || owner.After.Inventory is not { } afterInventory
+                    || !beforeInventory.Items.Any(i => i.Item.Guid == guid)
+                    || afterInventory.Items.Any(i => i.Item.Guid == guid))
                 {
                     return false;
                 }
@@ -359,9 +384,10 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
             case ReleaseFromEscrow release:
             {
                 EconomyParticipant? owner = request.Participants.SingleOrDefault(p => p.Before.Id == release.CharacterId);
-                if (owner is null
-                    || owner.Before.Inventory!.Items.Any(i => i.Item.Guid == release.ItemGuid)
-                    || !owner.After.Inventory!.Items.Any(i => i.Item.Guid == release.ItemGuid))
+                if (owner?.Before.Inventory is not { } beforeInventory
+                    || owner.After.Inventory is not { } afterInventory
+                    || beforeInventory.Items.Any(i => i.Item.Guid == release.ItemGuid)
+                    || !afterInventory.Items.Any(i => i.Item.Guid == release.ItemGuid))
                 {
                     return false;
                 }
@@ -655,11 +681,13 @@ public static class EconomyRequestValidation
             ValidateInventory(participant.After.Inventory);
             if (participant.ConsumedItemGuids is { } consumed)
             {
+                IReadOnlyList<InventoryItemData> beforeItems = ItemsOf(participant.Before);
+                IReadOnlyList<InventoryItemData> afterItems = ItemsOf(participant.After);
                 if (consumed.Any(guid => guid == 0) || consumed.Distinct().Count() != consumed.Count
-                    || consumed.Any(guid => !participant.Before.Inventory!.Items.Any(item => item.Item.Guid == guid)
-                        || participant.After.Inventory!.Items.Any(item => item.Item.Guid == guid)
+                    || consumed.Any(guid => !beforeItems.Any(item => item.Item.Guid == guid)
+                        || afterItems.Any(item => item.Item.Guid == guid)
                         || request.Participants.Any(other => other.Before.Id != participant.Before.Id
-                            && other.After.Inventory!.Items.Any(item => item.Item.Guid == guid))
+                            && ItemsOf(other.After).Any(item => item.Item.Guid == guid))
                         || request.Changes.OfType<EscrowFromInventory>().Any(change => change.Item.Guid == guid)))
                 {
                     throw new ArgumentException("Consumed item GUIDs must be distinct, owned in Before, absent in After, and not handed to another participant or escrow.", nameof(request));
@@ -677,7 +705,7 @@ public static class EconomyRequestValidation
         List<uint> minted = [.. request.Changes.OfType<MintEscrowItem>().Select(m => m.Item.Guid)
             .Concat(request.Changes.OfType<CreateEscrowItem>().Select(c => c.Item.Guid))];
         if (minted.Distinct().Count() != minted.Count
-            || minted.Any(guid => request.Participants.Any(p => p.Before.Inventory!.Items.Concat(p.After.Inventory!.Items).Any(i => i.Item.Guid == guid))))
+            || minted.Any(guid => request.Participants.Any(p => ItemsOf(p.Before).Concat(ItemsOf(p.After)).Any(i => i.Item.Guid == guid))))
         {
             throw new ArgumentException("An item created into escrow must be created once and must not appear in any participant's inventory.", nameof(request));
         }
@@ -691,7 +719,7 @@ public static class EconomyRequestValidation
             throw new ArgumentException("A server mail record must be unique in its request and accompany a letter to its character.", nameof(request));
         }
 
-        List<uint> held = [.. request.Participants.SelectMany(p => p.After.Inventory!.Items.Select(i => i.Item.Guid))];
+        List<uint> held = [.. request.Participants.SelectMany(p => ItemsOf(p.After).Select(i => i.Item.Guid))];
         if (held.Distinct().Count() != held.Count)
         {
             throw new ArgumentException("An item cannot end in two inventories.", nameof(request));
@@ -731,11 +759,14 @@ public static class EconomyRequestValidation
         return result;
     }
 
+    private static IReadOnlyList<InventoryItemData> ItemsOf(CharacterState state)
+        => state.Inventory?.Items ?? [];
+
     private static HashSet<uint> Lost(EconomyParticipant p)
-        => [.. p.Before.Inventory!.Items.Select(i => i.Item.Guid).Except(p.After.Inventory!.Items.Select(i => i.Item.Guid))];
+        => [.. ItemsOf(p.Before).Select(i => i.Item.Guid).Except(ItemsOf(p.After).Select(i => i.Item.Guid))];
 
     private static HashSet<uint> Gained(EconomyParticipant p)
-        => [.. p.After.Inventory!.Items.Select(i => i.Item.Guid).Except(p.Before.Inventory!.Items.Select(i => i.Item.Guid))];
+        => [.. ItemsOf(p.After).Select(i => i.Item.Guid).Except(ItemsOf(p.Before).Select(i => i.Item.Guid))];
 
     public static bool SameInventory(IReadOnlyList<InventoryItemData> first, IReadOnlyList<InventoryItemData> second)
     {

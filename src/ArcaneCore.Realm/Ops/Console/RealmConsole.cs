@@ -86,6 +86,7 @@ public sealed class RealmConsole : IHostedService
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("realm-console", ex);
             _logger.LogError(ex, "realm console command failed");
             _output.WriteLine(RealmConsoleCommands.Prefix + "The command failed; see the server log.");
         }

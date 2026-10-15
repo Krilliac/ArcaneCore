@@ -294,19 +294,22 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
     private async Task PublishAsync(IReadOnlyList<QaFindingView> findings, CancellationToken passToken)
     {
+        if (_publisher is not { } publisher) return;
         // The publisher stops when the caller's token or the feature's own (StopAsync) is cancelled, so a long rate-limit wait never outlives shutdown.
         using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(passToken, _cts.Token);
         CancellationToken cancellationToken = linked.Token;
         try
         {
-            await _publisher!.RunAsync(findings, cancellationToken).ConfigureAwait(false);
+            await publisher.RunAsync(findings, cancellationToken).ConfigureAwait(false);
             Persist();
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
+            _log.LogDebug(ex, "Bot QA publishing canceled during shutdown");
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("playerbot-qa", ex);
             _log.LogError(ex, "Bot QA publishing failed; the findings stay pending and the next pass tries again");
         }
     }
@@ -376,6 +379,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("playerbot-qa", ex);
                 _log.LogError(ex, "Bot QA pass failed; its findings are unchanged and the next pass tries again");
             }
         }

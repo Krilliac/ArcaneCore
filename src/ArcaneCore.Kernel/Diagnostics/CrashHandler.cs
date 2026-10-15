@@ -195,8 +195,9 @@ public sealed class CrashHandler : IDisposable
     private void OnFirstChance(object? sender, FirstChanceExceptionEventArgs e)
     {
         // Every throw in the process lands here, including throws inside the sink: the thread-static
-        // guard in Report makes a nested one a no-op.
-        if (_reporting)
+        // guard in Report makes a nested one a no-op. Expected cancellation signals are skipped so
+        // FirstChanceExceptions remains signal-rich in Debug mode.
+        if (_reporting || e.Exception is OperationCanceledException)
         {
             return;
         }

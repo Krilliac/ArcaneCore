@@ -54,8 +54,9 @@ internal sealed class PlayerbotRidingTrips(WorldSession session, PlayerbotOption
                 { State: SpellCastState.Preparing or SpellCastState.Casting };
 
     private PlayerbotRidingTripKind Wanted(Player player)
-        => Budget!.TrainingDue(player) ? PlayerbotRidingTripKind.Trainer
-            : Budget.MountPurchaseDue(player) ? PlayerbotRidingTripKind.Vendor : PlayerbotRidingTripKind.None;
+        => Budget is not { } budget ? PlayerbotRidingTripKind.None
+            : budget.TrainingDue(player) ? PlayerbotRidingTripKind.Trainer
+            : budget.MountPurchaseDue(player) ? PlayerbotRidingTripKind.Vendor : PlayerbotRidingTripKind.None;
 
     /// <summary>A riding trip is worth making: the budget says so, the trip is not resting, and a site is known on the bot's map.</summary>
     internal bool HasCandidate(Player player)
@@ -141,10 +142,11 @@ internal sealed class PlayerbotRidingTrips(WorldSession session, PlayerbotOption
     /// <summary>Builds the trainer or vendor spawns of the bot's map the faction check lets it approach; rebuilt when the kind or map changes, or every minute.</summary>
     private bool Refresh(Player player, QuestNpcServices services)
     {
+        if (player.Map is not { } playerMap || Budget is not { } budget) return false;
         PlayerbotRidingTripKind wanted = Wanted(player);
-        uint map = player.Map!.MapId;
+        uint map = playerMap.MapId;
         uint now = session.World.NowMs;
-        uint vendor = Budget!.Riding.MountVendor;
+        uint vendor = budget.Riding.MountVendor;
         if (wanted == _kind && map == _mapId && vendor == _vendorEntry && unchecked((int)(now - _indexUntil)) < 0) return true;
         PlayerbotServiceIndex? index = PlayerbotServiceIndex.Get(session, services, player);
         if (index is null) return false;
@@ -156,8 +158,9 @@ internal sealed class PlayerbotRidingTrips(WorldSession session, PlayerbotOption
         IEnumerable<PlayerbotServiceIndex.Site> sites = wanted switch
         {
             PlayerbotRidingTripKind.Trainer => index.MountsTrainers((byte)player.Race),
-            PlayerbotRidingTripKind.Vendor => index.MountOffers.Where(o => o.Vendor.Entry == Budget!.Riding.MountVendor)
+            PlayerbotRidingTripKind.Vendor => index.MountOffers.Where(o => o.Vendor.Entry == vendor)
                 .Select(o => o.Vendor).DistinctBy(v => v.Entry),
+            PlayerbotRidingTripKind.None => [],
             _ => [],
         };
         foreach (PlayerbotServiceIndex.Site site in sites)

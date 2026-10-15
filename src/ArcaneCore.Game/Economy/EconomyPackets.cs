@@ -64,6 +64,11 @@ public static class EconomyPackets
                 case MailMessageType.Creature or MailMessageType.GameObject or MailMessageType.Auction:
                     w.WriteUInt32(mail.SenderId);
                     break;
+                case MailMessageType.Item:
+                    break;
+                default:
+                    ArcaneCore.Kernel.Diagnostics.Invariant.Check(false, $"Mail {mail.Id} has unexpected MessageType {(byte)mail.MessageType}.");
+                    break;
             }
 
             ItemInstanceData? item = view.Item;

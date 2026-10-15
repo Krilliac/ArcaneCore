@@ -35,18 +35,24 @@ public sealed class CombatHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static void HandleAttackSwing(WorldSession session, Player player, byte[] payload)
     {
-        var reader = new PacketReader(payload);
-        var guid = new ObjectGuid(reader.ReadUInt64());
-        if (player.Map is not { } map)
+        if (payload.Length < 8 || player.Map is not { } map)
         {
             return;
         }
 
+        var reader = new PacketReader(payload);
+        var guid = new ObjectGuid(reader.ReadUInt64());
         MapCombat combat = map.Combat;
         Unit? enemy = guid.Value == 0 ? null : combat.FindUnit(guid);
         if (enemy is null)
         {
             SendAttackStop(session, player, null);
+            return;
+        }
+
+        if (!player.IsAlive || ReferenceEquals(enemy, player) || guid == player.Guid)
+        {
+            SendAttackStop(session, player, enemy);
             return;
         }
 
@@ -86,6 +92,11 @@ public sealed class CombatHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_SETSHEATHED: u32 state (vmangos HandleSetSheathedOpcode → UNIT_FIELD_BYTES_2 byte 0).</summary>
     private static void HandleSetSheathed(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 4)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint state = reader.ReadUInt32();
         if (state >= MaxSheathState)

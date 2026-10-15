@@ -4,6 +4,7 @@ using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
@@ -96,7 +97,11 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             _logger.LogWarning("Honor hooks were already registered for this world; the channel rank source is not installed");
         }
 
-        _writes!.Start();
+        if (_writes is { } writes)
+        {
+            writes.Start();
+        }
+
         if (services.GetService<SpellFeature>() is { } spells)
         {
             service.InstallForSpells(spells.System);
@@ -248,13 +253,19 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             _writes = new HonorWriteQueue(scopes, loggers.CreateLogger<HonorWriteQueue>());
             _writes.FatalFailure += ex =>
             {
+                FaultLedger.Shared.Record("honor.writes-fatal", ex);
                 _logger.LogCritical(ex, "Stopping application after fatal honor write failure");
                 try
                 {
                     services.GetService<IHostApplicationLifetime>()?.StopApplication();
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException disposedEx)
                 {
+                    _logger.LogDebug(disposedEx, "Host application lifetime was already disposed while stopping after fatal honor write failure");
+                }
+                catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+                {
+                    _logger.LogFault("honor.stop-application", stopEx, "Stopping application after fatal honor write failure failed");
                 }
             };
 

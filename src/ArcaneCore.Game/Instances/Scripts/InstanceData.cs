@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -79,9 +80,21 @@ public abstract partial class InstanceData : IMapUpdater
     /// </summary>
     public void SaveToDB()
     {
-        if (GetSaveData() is { } data)
+        try
         {
-            Saving?.Invoke(this, data);
+            if (GetSaveData() is { } data)
+            {
+                Saving?.Invoke(this, data);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultRecording recording = FaultLedger.Shared.Record("instance-data.save-to-db", ex);
+            if (recording.ShouldLog)
+            {
+                Logger.LogError(ex, "Instance script SaveToDB failed on map {MapId} instance {InstanceId} (fault {FaultId}, count {Count})",
+                    Instance.MapId, Instance.InstanceId, recording.Id, recording.Count);
+            }
         }
     }
 
@@ -208,12 +221,54 @@ public abstract partial class InstanceData : IMapUpdater
     {
     }
 
-    void IMapUpdater.Update(Map map, uint diffMs) => Update(diffMs);
+    void IMapUpdater.Update(Map map, uint diffMs)
+    {
+        try
+        {
+            Update(diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultRecording recording = FaultLedger.Shared.Record("instance-data.update", ex);
+            if (recording.ShouldLog)
+            {
+                Logger.LogError(ex, "Instance script Update failed on map {MapId} instance {InstanceId} (fault {FaultId}, count {Count})",
+                    map.MapId, map.InstanceId, recording.Id, recording.Count);
+            }
+        }
+    }
 
-    void IMapUpdater.OnPlayerAdding(Map map, Player player) => OnPlayerEnter(player);
+    void IMapUpdater.OnPlayerAdding(Map map, Player player)
+    {
+        try
+        {
+            OnPlayerEnter(player);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultRecording recording = FaultLedger.Shared.Record("instance-data.player-enter", ex);
+            if (recording.ShouldLog)
+            {
+                Logger.LogError(ex, "Instance script OnPlayerEnter failed on map {MapId} instance {InstanceId} for player {PlayerGuid} (fault {FaultId}, count {Count})",
+                    map.MapId, map.InstanceId, player.Guid, recording.Id, recording.Count);
+            }
+        }
+    }
 
     void IMapUpdater.OnPlayerRemoved(Map map, Player player)
     {
-        OnPlayerLeave(player);
+        try
+        {
+            OnPlayerLeave(player);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultRecording recording = FaultLedger.Shared.Record("instance-data.player-leave", ex);
+            if (recording.ShouldLog)
+            {
+                Logger.LogError(ex, "Instance script OnPlayerLeave failed on map {MapId} instance {InstanceId} for player {PlayerGuid} (fault {FaultId}, count {Count})",
+                    map.MapId, map.InstanceId, player.Guid, recording.Id, recording.Count);
+            }
+        }
     }
 }

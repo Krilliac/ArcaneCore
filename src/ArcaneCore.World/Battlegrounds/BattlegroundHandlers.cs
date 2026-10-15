@@ -5,6 +5,7 @@ using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -111,7 +112,7 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
 
         if (feature.Manager.TemplateOf(type) is not { } template || player.Level < template.MinLevel)
         {
-            session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification(BattlegroundStrings.Mangos(715)!));
+            session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification(BattlegroundStrings.Mangos(715) ?? string.Empty));
             return;
         }
 
@@ -240,10 +241,19 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
 
     private static float Distance3d(Player player, float x, float y, float z)
     {
+        if (!Invariant.Check(
+            float.IsFinite(player.X) && float.IsFinite(player.Y) && float.IsFinite(player.Z)
+            && float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z),
+            $"non-finite battleground portal distance coordinates ({player.X}, {player.Y}, {player.Z}) -> ({x}, {y}, {z})"))
+        {
+            return float.PositiveInfinity;
+        }
+
         float dx = player.X - x;
         float dy = player.Y - y;
         float dz = player.Z - z;
-        return MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
+        float dist = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
+        return float.IsFinite(dist) ? dist : float.PositiveInfinity;
     }
 }
 

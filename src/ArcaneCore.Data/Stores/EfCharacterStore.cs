@@ -3,6 +3,7 @@ using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -56,6 +57,7 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
             catch (DbUpdateException ex) when (IsUniqueViolation(ex))
             {
                 // A generated id cannot collide, so the unique index that fired is the one on the name.
+                FaultLedger.Shared.Record("data-character.create-name-taken", ex);
                 throw new CharacterNameTakenException(character.Name, ex);
             }
             finally
@@ -106,6 +108,8 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
                 case MySqlConnector.MySqlException mysql when mysql.ErrorCode == MySqlConnector.MySqlErrorCode.DuplicateKeyEntry:
                 case Npgsql.PostgresException pg when pg.SqlState == "23505":
                     return true;
+                default:
+                    break;
             }
         }
 
@@ -218,8 +222,9 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
 
             return true;
         }
-        catch (CharacterDeletionRefusedException) when (transaction is not null)
+        catch (CharacterDeletionRefusedException ex) when (transaction is not null)
         {
+            FaultLedger.Shared.Record("data-character.delete-refused", ex);
             return false; // disposing the transaction rolls back any set-based deletes
         }
         finally
@@ -239,9 +244,14 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
         try
         {
             if (await StageStateAsync(state, cancellationToken, beganFenced: own).ConfigureAwait(false))
+            {
                 await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             if (transaction is not null)
+            {
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
         finally
         {

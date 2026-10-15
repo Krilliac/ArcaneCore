@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Data.Npc;
 using ArcaneCore.Game.Entities;
@@ -5,13 +6,14 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
-using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Characters;
-using ArcaneCore.World.Net;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Items;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,6 +33,7 @@ namespace ArcaneCore.World.Npc;
 /// </summary>
 public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcServicesFeature> logger) : IWorldFeature, ICharacterHooks, IDisposable
 {
+    private ILogger<NpcServicesFeature> Logger => logger;
     private readonly HashSet<Map> _maps = [];
     private readonly object _loadLock = new();
     private Tables? _tables;
@@ -60,13 +63,19 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
         _routeWrites = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), logger);
         _routeWrites.FatalFailure += ex =>
         {
+            FaultLedger.Shared.Record("npc-services.route-writes-fatal", ex);
             logger.LogCritical(ex, "Stopping application after fatal taxi flight write failure");
             try
             {
                 services.GetService<IHostApplicationLifetime>()?.StopApplication();
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException disposedEx)
             {
+                logger.LogDebug(disposedEx, "Host application lifetime was already disposed while stopping after fatal taxi flight write failure");
+            }
+            catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+            {
+                logger.LogFault("npc-services.stop-application", stopEx, "Stopping application after fatal taxi flight write failure failed");
             }
         };
         _routeWrites.Start();
@@ -156,14 +165,14 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
 
             services.GetService<IConfiguration>()?.GetSection(NpcServiceOptions.SectionName).Bind(Options);
             var tables = new Tables(
-                services.GetService<TaxiPathNodeCatalog>() ?? (Has(Options.TaxiPathNodeDbcPath)
-                    ? NpcServiceDbcReaders.LoadTaxiPathNodes(Options.TaxiPathNodeDbcPath!) : TaxiPathNodeCatalog.Empty),
-                services.GetService<SkillLineAbilityCatalog>() ?? (Has(Options.SkillLineAbilityDbcPath)
-                    ? NpcServiceDbcReaders.LoadSkillLineAbilities(Options.SkillLineAbilityDbcPath!) : SkillLineAbilityCatalog.Empty),
-                services.GetService<RepairCostTable>() ?? (Has(Options.DurabilityCostsDbcPath) && Has(Options.DurabilityQualityDbcPath)
-                    ? NpcServiceDbcReaders.LoadRepairCosts(Options.DurabilityCostsDbcPath!, Options.DurabilityQualityDbcPath!) : RepairCostTable.Empty),
-                services.GetService<BankBagSlotPriceTable>() ?? (Has(Options.BankBagSlotPricesDbcPath)
-                    ? NpcServiceDbcReaders.LoadBankBagSlotPrices(Options.BankBagSlotPricesDbcPath!) : BankBagSlotPriceTable.Empty));
+                services.GetService<TaxiPathNodeCatalog>() ?? (TryGetPath(Options.TaxiPathNodeDbcPath, out string? taxiPath)
+                    ? NpcServiceDbcReaders.LoadTaxiPathNodes(taxiPath) : TaxiPathNodeCatalog.Empty),
+                services.GetService<SkillLineAbilityCatalog>() ?? (TryGetPath(Options.SkillLineAbilityDbcPath, out string? skillPath)
+                    ? NpcServiceDbcReaders.LoadSkillLineAbilities(skillPath) : SkillLineAbilityCatalog.Empty),
+                services.GetService<RepairCostTable>() ?? (TryGetPath(Options.DurabilityCostsDbcPath, out string? durabilityCostsPath) && TryGetPath(Options.DurabilityQualityDbcPath, out string? durabilityQualityPath)
+                    ? NpcServiceDbcReaders.LoadRepairCosts(durabilityCostsPath, durabilityQualityPath) : RepairCostTable.Empty),
+                services.GetService<BankBagSlotPriceTable>() ?? (TryGetPath(Options.BankBagSlotPricesDbcPath, out string? bankBagPath)
+                    ? NpcServiceDbcReaders.LoadBankBagSlotPrices(bankBagPath) : BankBagSlotPriceTable.Empty));
             // Configured overrides of the imported creature_template service fields fail closed: an entry 0, an unknown trainer type,
             // a non-playable trainer class or a race above 8 refuses startup instead of silently refusing every trainee.
             foreach (NpcTemplateMetadata configured in Options.NpcTemplates)
@@ -175,11 +184,21 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             logger.LogInformation(
                 "NPC services: {Paths} flight paths with waypoints, {Abilities} skill line abilities, repair prices {Repair}",
                 tables.PathNodes.PathCount, tables.Abilities.Count, tables.Repair.IsEmpty ? "absent" : "loaded");
-            return _tables!;
+            return tables;
         }
     }
 
-    private static bool Has(string? path) => !string.IsNullOrWhiteSpace(path);
+    private static bool TryGetPath(string? path, [NotNullWhen(true)] out string? validPath)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            validPath = path;
+            return true;
+        }
+
+        validPath = null;
+        return false;
+    }
 
     private void OnMapCreated(Map map)
     {
@@ -343,9 +362,57 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
     /// <summary>Forwards each map's update to the current flight system.</summary>
     private sealed class FlightUpdater(NpcServicesFeature feature) : IMapUpdater
     {
-        public void Update(Map map, uint diffMs) => feature.Flights?.Update(map, diffMs);
+        public void Update(Map map, uint diffMs)
+        {
+            if (feature.Flights is not { } flights)
+            {
+                return;
+            }
 
-        public void OnPlayerRemoved(Map map, Player player) => feature.Flights?.OnPlayerRemoved(map, player);
+            try
+            {
+                flights.Update(map, diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultRecording recording = FaultLedger.Shared.Record("npc-services.flight-update", ex);
+                if (recording.ShouldLog)
+                {
+                    feature.Logger.LogError(
+                        ex,
+                        "Taxi flight update failed on map {MapId} instance {InstanceId} (diff={DiffMs} ms)",
+                        map.MapId,
+                        map.InstanceId,
+                        diffMs);
+                }
+            }
+        }
+
+        public void OnPlayerRemoved(Map map, Player player)
+        {
+            if (feature.Flights is not { } flights)
+            {
+                return;
+            }
+
+            try
+            {
+                flights.OnPlayerRemoved(map, player);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultRecording recording = FaultLedger.Shared.Record("npc-services.flight-player-removed", ex);
+                if (recording.ShouldLog)
+                {
+                    feature.Logger.LogError(
+                        ex,
+                        "Taxi flight cleanup failed for player {PlayerGuid} on map {MapId} instance {InstanceId}",
+                        player.Guid,
+                        map.MapId,
+                        map.InstanceId);
+                }
+            }
+        }
     }
 
     /// <summary>

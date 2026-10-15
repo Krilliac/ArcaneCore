@@ -3,6 +3,7 @@ using System.Reflection;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Configuration.Validation;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -229,7 +230,15 @@ public sealed class WiringAudit
     private bool HasRegistration(Type serviceDefinition, Type options)
     {
         Type enumerable = typeof(IEnumerable<>).MakeGenericType(serviceDefinition.MakeGenericType(options));
-        return _services.GetService(enumerable) is System.Collections.IEnumerable items && items.GetEnumerator().MoveNext();
+        if (_services.GetService(enumerable) is System.Collections.IEnumerable items)
+        {
+            foreach (object? _ in items)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static Type? OptionsArgument(Type parameterType)
@@ -318,8 +327,9 @@ internal sealed class WiringAuditReporter(WiringAudit audit, IHostApplicationLif
                     dedupKey: "wiring-findings");
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            FaultLedger.Shared.Record("wiring-audit", ex);
             try
             {
                 logger.LogWarning(ex, "wiring audit could not run");
@@ -331,7 +341,7 @@ internal sealed class WiringAuditReporter(WiringAudit audit, IHostApplicationLif
                     gmOnly: true,
                     dedupKey: "wiring-failed");
             }
-            catch (Exception)
+            catch (Exception inner) when (inner is not OutOfMemoryException)
             {
                 // A logger torn down by a concurrent shutdown: nothing left to tell, and this runs on a discarded task.
             }

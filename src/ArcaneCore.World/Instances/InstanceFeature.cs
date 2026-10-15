@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -41,16 +42,45 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
 
     /// <summary>A spatially verified client area trigger goes on to the map's instance script (ScriptDev2 AreaTrigger_at_* scripts).</summary>
     public void OnAreaTrigger(Player player, uint triggerId)
-        => player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>()?.OnAreaTrigger(player, triggerId);
+    {
+        if (!Invariant.CheckNotNull(player, nameof(player)) || !Invariant.Check(!player.Guid.IsEmpty, "InstanceFeature.OnAreaTrigger: player must have a valid GUID"))
+        {
+            return;
+        }
+
+        try
+        {
+            player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>()?.OnAreaTrigger(player, triggerId);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("instance-areatrigger", ex, "instance script area trigger {TriggerId} failed for {Player}", triggerId, player.Guid);
+        }
+    }
 
     /// <summary>
     /// The player's instance script may stop a trigger's database teleport (ScriptDev2 AreaTrigger scripts returning true;
     /// <see cref="Game.Instances.Scripts.InstanceData.BlocksAreaTriggerTeleport"/>). A silent refusal, as in the reference.
     /// </summary>
     public AreaTriggerVerdict Check(Player player, AreaTriggerTeleport teleport)
-        => player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>()?.BlocksAreaTriggerTeleport(player, teleport.Id) == true
-            ? AreaTriggerVerdict.Refuse(null)
-            : AreaTriggerVerdict.Allow;
+    {
+        if (!Invariant.CheckNotNull(player, nameof(player)) || !Invariant.Check(!player.Guid.IsEmpty, "InstanceFeature.Check: player must have a valid GUID"))
+        {
+            return AreaTriggerVerdict.Refuse(null);
+        }
+
+        try
+        {
+            return player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>()?.BlocksAreaTriggerTeleport(player, teleport.Id) == true
+                ? AreaTriggerVerdict.Refuse(null)
+                : AreaTriggerVerdict.Allow;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("instance-areatrigger-gate", ex, "instance script area trigger gate {TriggerId} failed for {Player}", teleport.Id, player.Guid);
+            return AreaTriggerVerdict.Refuse(null);
+        }
+    }
 
     /// <summary>Upper bound for draining the write queue or one world-thread round trip during a character deletion.</summary>
     public static readonly TimeSpan DeleteTimeout = TimeSpan.FromSeconds(10);
@@ -111,6 +141,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
 
     public void Attach(WorldRuntime world)
     {
+        ArgumentNullException.ThrowIfNull(world);
         _world = world;
         services.GetService<IConfiguration>()?.GetSection(InstanceOptions.SectionName).Bind(Options);
         InstanceStoreSnapshot snapshot = InstanceStoreSnapshot.Empty;
@@ -125,6 +156,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>());
         _writes.FatalFailure += error =>
         {
+            FaultLedger.Shared.Record("instance-write-queue-fatal", error, terminating: true);
             _logger.LogCritical(error, "Instance write queue entered terminal failure; requesting world shutdown");
             services.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>()?.StopApplication();
         };
@@ -180,11 +212,28 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
             {
                 foreach (Game.Groups.Group group in restored.Context.Groups.Groups)
                 {
-                    manager.RestoreStoredGroupBinds(group);
+                    try
+                    {
+                        manager.RestoreStoredGroupBinds(group);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        _logger.LogFault("instance-restore-group-binds", ex, "restoring group instance binds failed for group {GroupId}", group.Id);
+                    }
                 }
             }
         });
-        _scheduleTimer = new Timer(_ => world.Post(manager.UpdateSchedule), null, ScheduleIntervalMs, ScheduleIntervalMs);
+        _scheduleTimer = new Timer(_ => world.Post(() =>
+        {
+            try
+            {
+                manager.UpdateSchedule();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("instance-schedule-update", ex, "instance reset schedule update failed");
+            }
+        }), null, ScheduleIntervalMs, ScheduleIntervalMs);
         _logger.LogInformation("instances: {Instances} stored, {Binds} character binds", snapshot.Instances.Count, snapshot.Binds.Count);
     }
 
@@ -253,18 +302,42 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     // raid locks also gets it right after login so the lockout list is current at once.
     private void OnPlayerLoggedIn(Player player)
     {
-        if (_manager is { } manager && manager.GetPlayerBinds(player.Guid).Any(b => b.Permanent))
+        if (!Invariant.CheckNotNull(player, nameof(player)) || !Invariant.Check(!player.Guid.IsEmpty, "InstanceFeature.OnPlayerLoggedIn: player must have a valid GUID"))
         {
-            manager.SendRaidInfo(player);
+            return;
+        }
+
+        try
+        {
+            if (_manager is { } manager && manager.GetPlayerBinds(player.Guid).Any(b => b.Permanent))
+            {
+                manager.SendRaidInfo(player);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("instance-player-login", ex, "sending raid instance info on login failed for {Player}", player.Guid);
         }
     }
 
     private void OnPlayerLoggingOut(Player player)
     {
-        int characterId = (int)player.Guid.Low;
-        if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+        if (!Invariant.CheckNotNull(player, nameof(player)) || !Invariant.Check(!player.Guid.IsEmpty, "InstanceFeature.OnPlayerLoggingOut: player must have a valid GUID"))
         {
-            writes.RequestRetry(characterId);
+            return;
+        }
+
+        try
+        {
+            int characterId = (int)player.Guid.Low;
+            if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+            {
+                writes.RequestRetry(characterId);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("instance-player-logout", ex, "retrying retained instance writes on logout failed for {Player}", player.Guid);
         }
     }
 }

@@ -35,6 +35,7 @@ public static class Totp
 
     public static uint Generate(ReadOnlySpan<byte> key, long unixSeconds, int offset = 0)
     {
+        if (unixSeconds < 0) throw new ArgumentOutOfRangeException(nameof(unixSeconds));
         long counter = unixSeconds / 30 + offset;
         if (counter < 0) throw new ArgumentOutOfRangeException(nameof(unixSeconds));
         Span<byte> message = stackalloc byte[8];

@@ -397,13 +397,19 @@ public sealed class DurableIdBlockAllocator
 
     private async Task PrefetchNextBlockAsync()
     {
+        if (_reserveBlockAsync is not { } reserveBlockAsync)
+        {
+            return;
+        }
+
         try
         {
-            IdRangeBlock block = await _reserveBlockAsync!(Scope, BlockSize, CancellationToken.None).ConfigureAwait(false);
+            IdRangeBlock block = await reserveBlockAsync(Scope, BlockSize, CancellationToken.None).ConfigureAwait(false);
             EnqueueBlock(block);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            Diagnostics.FaultLedger.Shared.Record($"id-range-prefetch:{Scope}", ex);
             lock (_gate)
             {
                 _lastPrefetchError = ex;

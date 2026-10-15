@@ -54,6 +54,14 @@ public sealed partial class Creature : Unit, ICombatCreature
 
         // The live speed: slows, hastes and the wounded slowdown change it (Locomotion/Speed/UnitSpeed.cs); it starts as the template speed.
         float speed = run ? RunSpeed : WalkSpeed;
+        if (!ArcaneCore.Kernel.Diagnostics.Invariant.Check(float.IsFinite(speed) && speed > 0f, $"Creature {Guid} (Entry {Entry}) started spline with non-positive speed {speed}."))
+        {
+            speed = run ? BaseRunSpeed : BaseWalkSpeed;
+            if (!float.IsFinite(speed) || speed <= 0f)
+            {
+                speed = 2.5f;
+            }
+        }
         var start = new Vector3(X, Y, Z);
         float length = 0;
         Vector3 previous = start;
@@ -63,7 +71,9 @@ public sealed partial class Creature : Unit, ICombatCreature
             previous = path[i];
         }
 
-        uint duration = Math.Max(1u, (uint)MathF.Round(length / speed * 1000f));
+        uint duration = !float.IsFinite(length) || length <= 0f
+            ? 1u
+            : Math.Max(1u, (uint)Math.Clamp(MathF.Round(length / speed * 1000f), 1f, 86_400_000f));
         Vector3 end = path[^1];
         var spline = new CreatureSpline(splineId, X, Y, Z, end.X, end.Y, end.Z, run, facing.FinalAngle, clockMs, duration)
         {

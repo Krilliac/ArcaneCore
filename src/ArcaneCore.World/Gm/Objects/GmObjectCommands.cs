@@ -39,7 +39,7 @@ public sealed class GmObjectCommands : ICommandGroup
     ];
 
     /// <summary>The game object system of the invoker's map; null when the invoker is in no map.</summary>
-    internal static GameObjectMapSystem? SystemOf(CommandContext context) => context.Player.Map?.FindUpdater<GameObjectMapSystem>();
+    internal static GameObjectMapSystem? SystemOf(CommandContext context) => !context.IsConsole ? context.Player.Map?.FindUpdater<GameObjectMapSystem>() : null;
 
     /// <summary>The object with guid number <paramref name="counter"/> in the invoker's map (replies "not found" and returns null otherwise).</summary>
     private static GameObject? Find(CommandContext context, GameObjectMapSystem system, uint counter)
@@ -92,6 +92,14 @@ public sealed class GmObjectCommands : ICommandGroup
         }
 
         Player player = context.Player;
+        if (player.Map is null
+            || !float.IsFinite(player.X) || !float.IsFinite(player.Y) || !float.IsFinite(player.Z) || !float.IsFinite(player.Orientation)
+            || !GridDefines.IsValidMapCoord(player.X, player.Y, player.Z, player.Orientation))
+        {
+            TeleportCommands.ReplyInvalid(context, player.X, player.Y, player.MapId);
+            return true;
+        }
+
         GameObject? go = system.Summon(entry, player.X, player.Y, player.Z, player.Orientation, despawnSeconds);
         if (go is null)
         {
@@ -130,13 +138,18 @@ public sealed class GmObjectCommands : ICommandGroup
     private static bool Move(CommandContext context, string text)
     {
         var args = new CommandArgs(text);
-        Player player = context.Player;
-        float x = player.X, y = player.Y, z = player.Z;
         if (!args.ExtractUInt32(out uint counter))
         {
             return false;
         }
 
+        if (context.IsConsole)
+        {
+            return true;
+        }
+
+        Player player = context.Player;
+        float x = player.X, y = player.Y, z = player.Z;
         if (!args.IsEmpty && (!args.ExtractFloat(out x) || !args.ExtractFloat(out y) || !args.ExtractFloat(out z) || !args.IsEmpty))
         {
             return false;
@@ -155,7 +168,8 @@ public sealed class GmObjectCommands : ICommandGroup
 
         // The same check .go xyz / .tele apply (GridDefines.IsValidMapCoord, as TrinityCore's HandleGameObjectMoveCommand uses
         // MapManager::IsValidMapCoord): ExtractFloat accepts exponents, so "1e40" parses to infinity and "1e9" is far outside the map.
-        if (!GridDefines.IsValidMapCoord(x, y, z, go.Orientation))
+        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z) || !float.IsFinite(go.Orientation)
+            || !GridDefines.IsValidMapCoord(x, y, z, go.Orientation))
         {
             TeleportCommands.ReplyInvalid(context, x, y, player.MapId);
             return true;
@@ -174,7 +188,8 @@ public sealed class GmObjectCommands : ICommandGroup
     private static bool Turn(CommandContext context, string text)
     {
         var args = new CommandArgs(text);
-        if (!args.ExtractUInt32(out uint counter) || !args.ExtractOptFloat(out float orientation, context.Player.Orientation) || !args.IsEmpty)
+        float defaultOrientation = context.IsConsole ? 0f : context.Player.Orientation;
+        if (!args.ExtractUInt32(out uint counter) || !args.ExtractOptFloat(out float orientation, defaultOrientation) || !args.IsEmpty)
         {
             return false;
         }
@@ -191,7 +206,8 @@ public sealed class GmObjectCommands : ICommandGroup
         }
 
         // A non-finite orientation (or one beyond ±4π, the IsValidMapCoord bound) would be written to the facing and rotation fields as is.
-        if (!GridDefines.IsValidMapCoord(go.X, go.Y, go.Z, orientation))
+        if (!float.IsFinite(orientation) || !float.IsFinite(go.X) || !float.IsFinite(go.Y) || !float.IsFinite(go.Z)
+            || !GridDefines.IsValidMapCoord(go.X, go.Y, go.Z, orientation))
         {
             TeleportCommands.ReplyInvalid(context, go.X, go.Y, context.Player.MapId);
             return true;
@@ -227,7 +243,7 @@ public sealed class GmObjectCommands : ICommandGroup
     private static bool Near(CommandContext context, string text)
     {
         var args = new CommandArgs(text);
-        if (!args.ExtractOptFloat(out float radius, 10f) || !args.IsEmpty || !(radius > 0f) || radius > MaxNearRadius)
+        if (!args.ExtractOptFloat(out float radius, 10f) || !args.IsEmpty || !float.IsFinite(radius) || !(radius > 0f) || radius > MaxNearRadius)
         {
             return false;
         }
@@ -238,9 +254,14 @@ public sealed class GmObjectCommands : ICommandGroup
         }
 
         Player player = context.Player;
+        if (!float.IsFinite(player.X) || !float.IsFinite(player.Y) || !float.IsFinite(player.Z))
+        {
+            return true;
+        }
+
         List<(GameObject Go, float Distance)> near = [.. system.GameObjects
             .Select(g => (Go: g, Distance: GmDistance.Between(player, g)))
-            .Where(t => t.Distance <= radius)
+            .Where(t => float.IsFinite(t.Distance) && t.Distance <= radius)
             .OrderBy(t => t.Distance).ThenBy(t => t.Go.Guid.Counter)];
         context.Reply(string.Create(CultureInfo.InvariantCulture, $"Game objects within {radius:0.##} yards: {near.Count}"));
         foreach ((GameObject go, float distance) in near.Take(MaxNearRows))

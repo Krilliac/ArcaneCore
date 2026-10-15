@@ -36,12 +36,22 @@ public sealed class GroupHandlers : IOpcodeHandlerGroup
 
     private static string Name(byte[] payload)
     {
+        if (payload.Length == 0)
+        {
+            return string.Empty;
+        }
+
         var reader = new PacketReader(payload);
         return CharacterNames.Normalize(reader.ReadCString());
     }
 
     private static ObjectGuid Guid(byte[] payload)
     {
+        if (payload.Length < 8)
+        {
+            return ObjectGuid.Empty;
+        }
+
         var reader = new PacketReader(payload);
         return new ObjectGuid(reader.ReadUInt64());
     }
@@ -49,6 +59,11 @@ public sealed class GroupHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_LOOT_METHOD: u32 method, u64 master looter, u32 threshold.</summary>
     private static void HandleLootMethod(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 16)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint method = reader.ReadUInt32();
         var master = new ObjectGuid(reader.ReadUInt64());
@@ -59,8 +74,18 @@ public sealed class GroupHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_GROUP_CHANGE_SUB_GROUP: CString name, u8 subgroup.</summary>
     private static void HandleChangeSubGroup(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 2)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         string name = CharacterNames.Normalize(reader.ReadCString());
+        if (reader.Remaining < 1)
+        {
+            return;
+        }
+
         byte subGroup = reader.ReadByte();
         Groups(session).ChangeSubGroup(player, name, subGroup);
     }
@@ -68,8 +93,18 @@ public sealed class GroupHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_GROUP_SWAP_SUB_GROUP: CString name, CString other name.</summary>
     private static void HandleSwapSubGroup(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 2)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         string name = CharacterNames.Normalize(reader.ReadCString());
+        if (reader.Remaining < 1)
+        {
+            return;
+        }
+
         string other = CharacterNames.Normalize(reader.ReadCString());
         Groups(session).SwapSubGroup(player, name, other);
     }
@@ -77,6 +112,11 @@ public sealed class GroupHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_GROUP_ASSISTANT_LEADER: u64 guid, u8 set.</summary>
     private static void HandleAssistantLeader(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 9)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         var guid = new ObjectGuid(reader.ReadUInt64());
         bool set = reader.ReadByte() != 0;
@@ -86,8 +126,18 @@ public sealed class GroupHandlers : IOpcodeHandlerGroup
     /// <summary>MSG_RAID_TARGET_UPDATE: u8 icon; 0xFF asks for the list, otherwise a u64 target follows.</summary>
     private static void HandleTargetUpdate(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 1)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         byte icon = reader.ReadByte();
+        if (icon != 0xFF && reader.Remaining < 8)
+        {
+            return;
+        }
+
         ObjectGuid target = icon == 0xFF ? ObjectGuid.Empty : new ObjectGuid(reader.ReadUInt64());
         Groups(session).TargetIcon(player, icon, target);
     }
@@ -95,15 +145,30 @@ public sealed class GroupHandlers : IOpcodeHandlerGroup
     /// <summary>MSG_MINIMAP_PING: f32 x, f32 y.</summary>
     private static void HandleMinimapPing(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 8)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         float x = reader.ReadSingle();
         float y = reader.ReadSingle();
+        if (!float.IsFinite(x) || !float.IsFinite(y))
+        {
+            return;
+        }
+
         Groups(session).MinimapPing(player, x, y);
     }
 
     /// <summary>MSG_RANDOM_ROLL: u32 minimum, u32 maximum.</summary>
     private static void HandleRandomRoll(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 8)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint min = reader.ReadUInt32();
         uint max = reader.ReadUInt32();

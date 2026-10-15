@@ -153,7 +153,7 @@ public sealed class MarliAI : RaidBossAI
         if (System is not { } system || Me.Map?.FindUpdater<GameObjectMapSystem>() is not { } objects ||
             system.Content.FindTemplate(15041) is not { } spider) return false;
         int spawned = 0;
-        foreach (GameObject egg in objects.GameObjects.Where(g => g.Entry == 179985 && g.State == GameObjectState.Ready).Take((int)count))
+        foreach (GameObject egg in objects.GameObjects.Where(g => g.Entry == 179985 && g.State == GameObjectState.Ready).Take((int)count).ToArray())
         {
             egg.State = GameObjectState.Active;
             Creature add = system.SpawnTemporary(spider, egg.X, egg.Y, egg.Z, 0, Me);
@@ -166,7 +166,7 @@ public sealed class MarliAI : RaidBossAI
     {
         base.OnReachedHome();
         if (Me.Map?.FindUpdater<GameObjectMapSystem>() is { } objects)
-            foreach (GameObject egg in objects.GameObjects.Where(g => g.Entry == 179985)) egg.State = GameObjectState.Ready;
+            foreach (GameObject egg in objects.GameObjects.Where(g => g.Entry == 179985).ToArray()) egg.State = GameObjectState.Ready;
     }
     protected override void ResetActions() { base.ResetActions(); _spider = false; _formTimer = 35000; }
     protected override void UpdateCombat(uint diffMs)

@@ -277,6 +277,7 @@ public sealed class PlayerbotChaosEngine
         byte[] payload)
     {
         float prevX = player.X, prevY = player.Y, prevZ = player.Z, prevO = player.Orientation;
+        _ = player.ConsumeRejectedNonFiniteRelocation();
         Interlocked.Increment(ref _probesExecuted);
         Interlocked.Increment(ref _categoryCounts[(int)category]);
 
@@ -330,10 +331,13 @@ public sealed class PlayerbotChaosEngine
         float prevZ,
         float prevO)
     {
-        // 1. Coordinate finiteness invariant: a movement or teleport handler must never leave NaN/Infinity on a player.
-        if (!float.IsFinite(player.X) || !float.IsFinite(player.Y) || !float.IsFinite(player.Z) || !float.IsFinite(player.Orientation))
+        // 1. Coordinate finiteness invariant: a movement or teleport handler must never leave NaN/Infinity on a player
+        // or attempt a non-finite relocation that WorldObject/Unit had to reject at the entity boundary.
+        bool rejectedNonFinite = player.ConsumeRejectedNonFiniteRelocation();
+        if (rejectedNonFinite || !float.IsFinite(player.X) || !float.IsFinite(player.Y) || !float.IsFinite(player.Z) || !float.IsFinite(player.Orientation))
         {
             player.Relocate(prevX, prevY, prevZ, float.IsFinite(player.Orientation) ? player.Orientation : prevO, session.World.NowMs);
+            _ = player.ConsumeRejectedNonFiniteRelocation();
             Interlocked.Increment(ref _invariantRepairs);
             RecordFault(
                 botId,

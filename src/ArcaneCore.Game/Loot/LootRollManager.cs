@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Loot;
@@ -73,10 +74,19 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             }
 
             LootRoll roll = _rolls[i];
-            roll.RemainingMs -= diffMs;
-            if (!Prune(roll) || roll.RemainingMs <= 0 || AllVoted(roll))
+            try
             {
-                Resolve(roll); // disbanded, timed out, or everyone still in the group has voted since a member left it
+                roll.RemainingMs -= diffMs;
+                if (!Prune(roll) || roll.RemainingMs <= 0 || AllVoted(roll))
+                {
+                    Resolve(roll); // disbanded, timed out, or everyone still in the group has voted since a member left it
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _rolls.Remove(roll);
+                roll.Item.RollActive = false;
+                FaultLedger.Shared.Record("map-loot-roll", ex);
             }
         }
     }
@@ -92,14 +102,23 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             }
 
             LootRoll roll = _rolls[i];
-            Participant? who = FindParticipant(roll, player.Guid);
-            if (who is { Vote: null })
+            try
             {
-                who.Vote = RollVote.Pass;
-                if (AllVoted(roll))
+                Participant? who = FindParticipant(roll, player.Guid);
+                if (who is { Vote: null })
                 {
-                    Resolve(roll);
+                    who.Vote = RollVote.Pass;
+                    if (AllVoted(roll))
+                    {
+                        Resolve(roll);
+                    }
                 }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _rolls.Remove(roll);
+                roll.Item.RollActive = false;
+                FaultLedger.Shared.Record("map-loot-roll", ex);
             }
         }
     }

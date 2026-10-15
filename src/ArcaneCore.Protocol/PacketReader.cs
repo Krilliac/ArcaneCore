@@ -89,6 +89,20 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     }
 
     /// <summary>
+    /// Read a little-endian float that must be finite (not NaN or infinity); throws
+    /// <see cref="ArgumentOutOfRangeException"/> through <see cref="MalformedPacket.Throw"/> otherwise.
+    /// </summary>
+    public float ReadFiniteSingle()
+    {
+        if (!TryReadFiniteSingle(out float value))
+        {
+            MalformedPacket.Throw("non-finite or truncated float in payload");
+        }
+
+        return value;
+    }
+
+    /// <summary>
     /// Read a packed GUID: a mask byte whose bit i says byte i of the GUID follows
     /// (vmangos ByteBuffer::readPackGUID).
     /// </summary>
@@ -246,6 +260,58 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         return true;
     }
 
+    /// <summary>
+    /// Read a little-endian float when at least 4 bytes remain and the decoded value is finite
+    /// (<see cref="float.IsFinite(float)"/>); on failure the cursor stays where it was.
+    /// </summary>
+    public bool TryReadFiniteSingle(out float value)
+    {
+        if (Remaining < 4)
+        {
+            value = 0f;
+            return false;
+        }
+
+        float candidate = BinaryPrimitives.ReadSingleLittleEndian(_data.Slice(_position, 4));
+        if (!float.IsFinite(candidate))
+        {
+            value = 0f;
+            return false;
+        }
+
+        value = candidate;
+        _position += 4;
+        return true;
+    }
+
+    /// <summary>
+    /// Read three finite world coordinates (x, y, z) within [-64000, 64000]; on failure the cursor stays where it was.
+    /// </summary>
+    public bool TryReadFiniteCoordinates(out float x, out float y, out float z)
+    {
+        if (Remaining < 12)
+        {
+            x = y = z = 0f;
+            return false;
+        }
+
+        float cx = BinaryPrimitives.ReadSingleLittleEndian(_data.Slice(_position, 4));
+        float cy = BinaryPrimitives.ReadSingleLittleEndian(_data.Slice(_position + 4, 4));
+        float cz = BinaryPrimitives.ReadSingleLittleEndian(_data.Slice(_position + 8, 4));
+        if (!float.IsFinite(cx) || !float.IsFinite(cy) || !float.IsFinite(cz)
+            || MathF.Abs(cx) > 64_000f || MathF.Abs(cy) > 64_000f || MathF.Abs(cz) > 64_000f)
+        {
+            x = y = z = 0f;
+            return false;
+        }
+
+        x = cx;
+        y = cy;
+        z = cz;
+        _position += 12;
+        return true;
+    }
+
     /// <summary>Packed GUID; on failure the cursor is left where it was (the mask byte is not consumed).</summary>
     public bool TryReadPackedGuid(out ulong value)
     {
@@ -303,14 +369,14 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     /// <summary>A u32 count that must be at most <paramref name="max"/> (and not negative as an int); the cursor stays put when it is not.</summary>
     public bool TryReadCount(int max, out int count)
     {
-        if (Remaining < 4)
+        if (max < 0 || Remaining < 4)
         {
             count = 0;
             return false;
         }
 
         uint raw = BinaryPrimitives.ReadUInt32LittleEndian(_data.Slice(_position, 4));
-        if (raw > (uint)Math.Max(0, max))
+        if (raw > (uint)max)
         {
             count = 0;
             return false;
@@ -324,7 +390,7 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     /// <summary>A u8 count that must be at most <paramref name="max"/>; the cursor stays put when it is not.</summary>
     public bool TryReadByteCount(int max, out int count)
     {
-        if (Remaining < 1 || _data[_position] > Math.Max(0, max))
+        if (max < 0 || Remaining < 1 || _data[_position] > max)
         {
             count = 0;
             return false;

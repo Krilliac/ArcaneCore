@@ -6,6 +6,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Game.WorldState.States;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
@@ -89,17 +90,39 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         // QuestNpcFeature rebuilds its services when it attaches: install the cultist gossip on the first world command.
         world.Post(() =>
         {
-            using IServiceScope scope = scopes.CreateScope();
-            var creatureWorld = scope.ServiceProvider.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
-            scope.ServiceProvider.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.AddGossipScript(new CultistEngineerGossip(
-                id => creatureWorld?.Content.Ai.BroadcastTexts.Find((uint)id)?.Text, Random));
+            try
+            {
+                using IServiceScope scope = scopes.CreateScope();
+                var creatureWorld = scope.ServiceProvider.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
+                scope.ServiceProvider.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.AddGossipScript(new CultistEngineerGossip(
+                    id => creatureWorld?.Content.Ai.BroadcastTexts.Find((uint)id)?.Text, Random));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("scourge-invasion.install-gossip", ex, "failed to install Cultist Engineer gossip script");
+            }
         });
         events.ServiceCreated += Wire;
         if (events.Service is { } current) Wire(current);
         world.WorldTick += diffMs =>
         {
-            InstallInvasionAis(world);
-            OnTick(diffMs);
+            try
+            {
+                InstallInvasionAis(world);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("scourge-invasion.install-ais", ex, "failed to install Scourge invasion AIs on world tick");
+            }
+
+            try
+            {
+                OnTick(diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("scourge-invasion.on-tick", ex, "failed to tick Scourge invasion on world tick");
+            }
         };
         world.MapUnloading += map =>
         {
@@ -236,7 +259,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             .MinBy(z => Distance2(creature, ScourgeInvasionCatalog.MouthPositions[z.ZoneId]))?.ZoneId ?? 0;
 
     private static uint NearestCity(Creature creature)
-        => ScourgeInvasionCatalog.Cities.MinBy(c => c.Spawns.Min(p => Distance2(creature, p)))!.ZoneId;
+        => ScourgeInvasionCatalog.Cities.MinBy(c => c.Spawns.Min(p => Distance2(creature, p))) is { } city ? city.ZoneId : 0;
 
     /// <summary>PallidHorrorAI::JustDied: the capital's next attack is 45-60 minutes after this death.</summary>
     internal void OnCityAttackerDied(Creature creature, uint zoneId)
@@ -300,11 +323,15 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         {
             await _store.InFlight.ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
+        {
+            // Expected cancellation during shutdown.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The job's failure would have been logged by its apply on the world thread, which no longer runs: log it here.
             // The queued work below is still written.
-            logger.LogWarning(ex, "the Scourge invasion store job in flight at shutdown failed");
+            logger.LogFault(LogLevel.Warning, "scourge-invasion.stop-inflight", ex, "the Scourge invasion store job in flight at shutdown failed");
         }
 
         StoreOp[] ops = [.. _ops];
@@ -316,13 +343,17 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         {
             await RunStoreAsync(ops, deaths, full: false, NowUnix(), [], result).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            logger.LogError(ex, "could not write the queued Scourge invasion state at shutdown");
+            // Expected cancellation during shutdown.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("scourge-invasion.stop-flush", ex, "could not write the queued Scourge invasion state at shutdown");
         }
 
         if (result.DeathFailure is { } failure)
-            logger.LogError(failure, "could not persist Scourge Necropolis death at shutdown");
+            logger.LogFault("scourge-invasion.stop-necropolis-death", failure, "could not persist Scourge Necropolis death at shutdown");
     }
 
     private void Enqueue(StoreOp op)
@@ -380,7 +411,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             ex =>
             {
                 foreach ((uint, uint) done in result.FlushedDeaths) _pendingDeaths.Remove(done);
-                logger.LogError(ex, "could not refresh Scourge invasion state");
+                logger.LogFault("scourge-invasion.refresh-store", ex, "could not refresh Scourge invasion state");
             });
     }
 
@@ -396,10 +427,10 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             {
                 await op.Run(store).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
 #pragma warning disable CA2254 // each StoreOp carries a constant template
-                logger.LogError(ex, op.Failure, op.Zone);
+                logger.LogFault("scourge-invasion.store-op", ex, op.Failure, op.Zone);
 #pragma warning restore CA2254
             }
         }
@@ -411,9 +442,10 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                 result.FlushedDeaths.Add((zone, guid));
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // CreatureMapSystem's death transition already completed; the unsaved deaths stay pending for the next refresh.
+            FaultLedger.Shared.Record("scourge-invasion.necropolis-destroyed", ex);
             result.DeathFailure = ex;
         }
         ScourgeInvasionSnapshot snapshot = await store.LoadAsync().ConfigureAwait(false);
@@ -448,7 +480,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     {
         foreach ((uint, uint) done in result.FlushedDeaths) _pendingDeaths.Remove(done);
         if (result.DeathFailure is { } failure)
-            logger.LogError(failure, "could not persist Scourge Necropolis death; {Count} pending retry", _pendingDeaths.Count);
+            logger.LogFault("scourge-invasion.persist-necropolis-death", failure, "could not persist Scourge Necropolis death; {Count} pending retry", _pendingDeaths.Count);
         if (_ops.Count == 0) _intendedState = null;
         // A claim saved the capital's next timer: its summon is owed until a refresh finds the map (or the invasion stops).
         foreach ((ScourgeCityAttack city, int spawnIndex, uint entry) in result.Claims)
@@ -457,20 +489,41 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         {
             ScourgeInvasionSnapshot previous = Snapshot;
             Volatile.Write(ref _snapshot, current);
-            PublishWorldStates(previous, current);
+            try
+            {
+                PublishWorldStates(previous, current);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("scourge-invasion.publish-world-states", ex, "could not publish Scourge invasion world states");
+            }
         }
         // A start or stop queued after this job began is not in its snapshot: driving event 17 from it would undo the
         // operator's .event start/stop. The job that carries the queued change applies the events and summons.
         if (_intendedState is null)
         {
-            try
+            if (syncEvents)
             {
-                if (syncEvents) SyncEvents();
-                if (full) SyncChoreography();
+                try
+                {
+                    SyncEvents();
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    logger.LogFault("scourge-invasion.sync-events", ex, "could not sync Scourge invasion game events");
+                }
             }
-            catch (Exception ex)
+
+            if (full)
             {
-                logger.LogError(ex, "could not refresh Scourge invasion state");
+                try
+                {
+                    SyncChoreography();
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    logger.LogFault("scourge-invasion.sync-choreography", ex, "could not sync Scourge invasion choreography");
+                }
             }
         }
         else if (full)

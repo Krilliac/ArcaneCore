@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Spells.Interrupts;
 
@@ -23,19 +24,36 @@ public sealed class LiquidAuraInterruptUpdater(Func<SpellSystem?> spells, ILiqui
 
     public void Update(Map map, uint diffMs)
     {
-        foreach (Player player in map.Players)
+        if (map is null)
         {
-            bool hadState = _states.TryGetValue(player, out State last);
-            if (hadState && last.X == player.X && last.Y == player.Y && last.Z == player.Z)
-            {
-                continue;
-            }
+            return;
+        }
 
-            bool high = probe.IsHighLiquid(map, player);
-            _states[player] = new State(player.X, player.Y, player.Z, high);
-            if (last.High != high)
+        foreach (Player player in map.Players.ToArray())
+        {
+            try
             {
-                OnChanged(player, high);
+                if (player is null || !player.IsInWorld || player.Map is null || !ReferenceEquals(player.Map, map))
+                {
+                    continue;
+                }
+
+                bool hadState = _states.TryGetValue(player, out State last);
+                if (hadState && last.X == player.X && last.Y == player.Y && last.Z == player.Z)
+                {
+                    continue;
+                }
+
+                bool high = probe.IsHighLiquid(map, player);
+                _states[player] = new State(player.X, player.Y, player.Z, high);
+                if (last.High != high)
+                {
+                    OnChanged(player, high);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-liquid-interrupt", ex);
             }
         }
     }

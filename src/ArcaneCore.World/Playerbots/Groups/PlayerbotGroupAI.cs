@@ -320,6 +320,11 @@ internal sealed class PlayerbotGroupAI
                 WalkTo(player, group.Goal.Meeting, interval, toward: true);
                 return;
             case PlayerbotGroupState.Engaging:
+                if (group.Goal.InInstance && player.MapId == group.Goal.MeetingMap)
+                {
+                    WalkTo(player, group.Goal.Meeting, interval, toward: true);
+                    return;
+                }
                 if (group.Run is { CurrentBoss: null }) { Step = "lead:hold-loot"; HoldRun(player); return; } // every boss is dead: the coordinator lets the loot settle
                 if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
                 if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
@@ -436,7 +441,8 @@ internal sealed class PlayerbotGroupAI
         // Into the instance after the leader: walk into the entrance it took (its trigger brings the member into the group's instance).
         if (group.Goal.InInstance && player.MapId == group.Goal.MeetingMap
             && (leader is null || leader.MapId == group.Goal.MapId || !ReferenceEquals(leader.Map, player.Map))
-            && group.State is PlayerbotGroupState.Entering or PlayerbotGroupState.Engaging or PlayerbotGroupState.Regrouping)
+            && (group.State is PlayerbotGroupState.Entering or PlayerbotGroupState.Engaging or PlayerbotGroupState.Regrouping
+                || (group.State == PlayerbotGroupState.Gathering && leader is not null && leader.MapId == group.Goal.MapId && group.Run is not { Step: PlayerbotRunStep.Retry })))
         {
             Goal = PlayerbotGoalKind.Group;
             WalkTo(player, group.Goal.Meeting, interval, toward: true);
@@ -930,7 +936,7 @@ internal sealed class PlayerbotGroupAI
             return true;
         }
 
-        if (_route is null || _route.Complete || Vector3.Distance(_routeGoal, goal) > 2f)
+        if (_route is null || _route.Complete || _route.IsStaleFor(player.Map) || Vector3.Distance(_routeGoal, goal) > 2f)
         {
             PlanOutcome planned = toward
                 ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route)

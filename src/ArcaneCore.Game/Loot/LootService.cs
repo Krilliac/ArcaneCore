@@ -1183,8 +1183,17 @@ public sealed partial class LootService : IViewerFieldFilter
             case Creature creature when bag.Kind == LootSourceKind.Creature:
                 CreatureLootedOut(creature, bag);
                 break;
+            case Creature skinned when bag.Kind == LootSourceKind.Skinning:
+                bag.IsClosed = true;
+                skinned.SetUInt32(UpdateFields.UnitDynamicFlags, skinned.GetUInt32(UpdateFields.UnitDynamicFlags) & ~UnitDynFlagLootable);
+                AllLootRemovedFromCorpse(skinned);
+                _bags.Remove(bag.Source);
+                break;
             case GameObject go:
                 go.System?.OnLootReleased(go, bag);
+                break;
+            case Item:
+                _bags.Remove(bag.Source);
                 break;
         }
     }

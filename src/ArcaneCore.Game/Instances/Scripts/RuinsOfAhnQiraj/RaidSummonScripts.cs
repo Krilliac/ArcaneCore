@@ -28,7 +28,7 @@ public sealed class BuruEggAI(Creature creature) : CreatureAI(creature)
         // boss_buru.cpp npc_buru_eggAI::SpellHitTarget supplies the custom
         // explosion value before casting 5255. This host excludes a dead
         // spell caster from SpellHitTarget, so apply those values at death.
-        foreach (Player player in map.Players.Where(p => p.IsAlive))
+        foreach (Player player in map.Players.Where(p => p.IsAlive).ToArray())
         {
             float dx = Me.X - player.X, dy = Me.Y - player.Y, dz = Me.Z - player.Z;
             float distance = MathF.Sqrt(dx * dx + dy * dy + dz * dz);

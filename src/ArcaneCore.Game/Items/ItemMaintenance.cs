@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Items;
@@ -207,7 +208,6 @@ public sealed class ItemMaintenanceUpdater(ItemMechanicsOptions options, TimePro
 
         _elapsedMs = 0;
         long now = clock.GetUtcNow().ToUnixTimeSeconds();
-        List<Exception>? failures = null;
         foreach (Player player in map.Players.ToList())
         {
             try
@@ -216,14 +216,9 @@ public sealed class ItemMaintenanceUpdater(ItemMechanicsOptions options, TimePro
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                // One player's failure must not starve the rest of the map; Map.Update logs the aggregate.
-                (failures ??= []).Add(ex);
+                // One player's failure must not starve the rest of the map or trip the map updater 3-strike circuit breaker.
+                FaultLedger.Shared.Record("map-item-maintenance", ex);
             }
-        }
-
-        if (failures is not null)
-        {
-            throw new AggregateException("item maintenance failed for some players", failures);
         }
     }
 

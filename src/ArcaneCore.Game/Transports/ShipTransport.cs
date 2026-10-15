@@ -255,6 +255,11 @@ public sealed class ShipTransport : WorldObject
         uint diff = elapsed;
         _pathProgress = currentMsTime; // vmangos: unless a stop is pending, which nothing sets
 
+        if (!ArcaneCore.Kernel.Diagnostics.Invariant.Check(Period > 0, $"ShipTransport {Guid} (Entry {Entry}) has Period == 0."))
+        {
+            return;
+        }
+
         uint pathProgress = _pathProgress % Period;
 
         // Bounded where the reference loops until a frame matches: inconsistent frame times cannot hang the world thread.
@@ -361,7 +366,9 @@ public sealed class ShipTransport : WorldObject
             segmentPos = frame.DistUntilStop - dist;
         }
 
-        return segmentPos / frame.NextDistFromPrev;
+        return frame.NextDistFromPrev > 0f && float.IsFinite(frame.NextDistFromPrev)
+            ? segmentPos / frame.NextDistFromPrev
+            : 0f;
     }
 
     // ShipTransport::Create: the GAMEOBJECT_* fields from the template; position and rotation fields stay 0.

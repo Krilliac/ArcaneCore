@@ -3,6 +3,7 @@ using ArcaneCore.Data.Resilience;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Persistence;
 
 /// <summary>
@@ -224,7 +225,11 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         }
         catch (OperationCanceledException)
         {
-            // stopping
+            /* expected on shutdown */
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("writequeue-keyed-timer", ex, "{Queue} retained-retry timer failed unexpectedly", name);
         }
     }
 
@@ -275,9 +280,13 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
                         break;
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
             {
-                logger.LogError(ex, "{Queue} queue item {Kind} for {Key} failed unexpectedly", name, work.Kind, work.Key);
+                /* expected on shutdown */
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("writequeue-keyed-consume", ex, "{Queue} queue item {Kind} for {Key} failed unexpectedly", name, work.Kind, work.Key);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -322,9 +331,10 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
                 failure = null;
                 break;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 failure = ex;
+                FaultLedger.Shared.Record("writequeue-keyed-attempt", ex);
                 logger.LogWarning(ex, "{Queue} write {Key} failed (attempt {Attempt} of {Max})", name, key, attempt, MaxAttempts);
                 if (DatabaseTransience.IsBusy(ex))
                 {
@@ -354,7 +364,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
 
         if (failure is not null)
         {
-            logger.LogError(failure, "{Queue} write {Key} is retained after {Max} failed attempts", name, key, MaxAttempts);
+            logger.LogFault("writequeue-keyed", failure, "{Queue} write {Key} is retained after {Max} failed attempts", name, key, MaxAttempts);
         }
     }
 }

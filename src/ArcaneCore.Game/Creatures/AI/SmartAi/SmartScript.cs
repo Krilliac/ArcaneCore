@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 
 namespace ArcaneCore.Game.Creatures;
@@ -37,6 +38,9 @@ public sealed class SmartScript
     /// <summary>SMART_EVENT_PHASE_12, the highest phase (SmartScriptMgr.h:57).</summary>
     public const uint MaxPhase = 12;
 
+    /// <summary>Maximum recursive action/link/timed-event depth allowed before <see cref="Invariant.Check(bool, string, string, string, int)"/> refuses deeper recursion.</summary>
+    public const int MaxActionDepth = 8;
+
     /// <summary>The re-check delay of an event whose condition failed (SmartScript.cpp:4316-4318, RecalcTimer(e, 5000, 5000)).</summary>
     private const uint FailedConditionRecheckMs = 5000;
 
@@ -46,6 +50,7 @@ public sealed class SmartScript
     private readonly List<SmartHolder> _timedList = [];
     private readonly List<string> _unsupported = [];
     private bool _processingTimedList;
+    private int _actionDepth;
 
     internal SmartScript(CreatureSmartAI ai, IReadOnlyList<SmartScriptRow> rows, SmartScriptCatalog? catalog = null)
         : this(SmartScriptOwner.ForCreature(ai, catalog ?? SmartScriptCatalog.Empty), rows)
@@ -241,83 +246,90 @@ public sealed class SmartScript
 
     private void ProcessEvent(SmartHolder e, Unit? invoker, uint var0 = 0, SpellInfo? spell = null)
     {
-        if (!e.Active && e.Event != SmartEvent.Link) return;
-        if (e.Row.EventPhaseMask != 0 && !IsInPhase(e.Row.EventPhaseMask)) return;
-        if ((e.Flags & SmartEventFlags.NotRepeatable) != 0 && e.RunOnce) return;
-        SmartScriptRow r = e.Row;
-        switch (e.Event)
+        try
         {
-            case SmartEvent.Link:
-            case SmartEvent.Aggro:
-            case SmartEvent.Death:
-            case SmartEvent.Evade:
-            case SmartEvent.ReachedHome:
-            case SmartEvent.Reset:
-            case SmartEvent.AiInit:
-            case SmartEvent.JustCreated:
-                ProcessAction(e, invoker);
-                break;
-            case SmartEvent.Update:
-                ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
-                break;
-            case SmartEvent.UpdateOutOfCombat:
-                if (Me?.Combat.IsInCombat ?? false) return;
-                ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
-                break;
-            case SmartEvent.UpdateInCombat:
-                if (Me is null || !Me.Combat.IsInCombat) return;
-                ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
-                break;
-            case SmartEvent.HealthPct:
+            if (!e.Active && e.Event != SmartEvent.Link) return;
+            if (e.Row.EventPhaseMask != 0 && !IsInPhase(e.Row.EventPhaseMask)) return;
+            if ((e.Flags & SmartEventFlags.NotRepeatable) != 0 && e.RunOnce) return;
+            SmartScriptRow r = e.Row;
+            switch (e.Event)
             {
-                if (Me is null || !Me.Combat.IsInCombat || Me.MaxHealth == 0) return;
-                uint pct = (uint)(Me.Health * 100UL / Me.MaxHealth);
-                if (pct > r.EventParam2 || pct < r.EventParam1) return;
-                ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
-                break;
-            }
-            case SmartEvent.SpellHit:
-                if (spell is null) return;
-                if ((r.EventParam1 == 0 || spell.Id == r.EventParam1)
-                    && (r.EventParam2 == 0 || ((1u << (int)spell.School) & r.EventParam2) != 0))
+                case SmartEvent.Link:
+                case SmartEvent.Aggro:
+                case SmartEvent.Death:
+                case SmartEvent.Evade:
+                case SmartEvent.ReachedHome:
+                case SmartEvent.Reset:
+                case SmartEvent.AiInit:
+                case SmartEvent.JustCreated:
+                    ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.Update:
+                    ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
+                    break;
+                case SmartEvent.UpdateOutOfCombat:
+                    if (Me?.Combat.IsInCombat ?? false) return;
+                    ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
+                    break;
+                case SmartEvent.UpdateInCombat:
+                    if (Me is null || !Me.Combat.IsInCombat) return;
+                    ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
+                    break;
+                case SmartEvent.HealthPct:
                 {
-                    RecalcTimer(e, r.EventParam3, r.EventParam4);
-                    ProcessAction(e, invoker, spell);
+                    if (Me is null || !Me.Combat.IsInCombat || Me.MaxHealth == 0) return;
+                    uint pct = (uint)(Me.Health * 100UL / Me.MaxHealth);
+                    if (pct > r.EventParam2 || pct < r.EventParam1) return;
+                    ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
+                    break;
                 }
+                case SmartEvent.SpellHit:
+                    if (spell is null) return;
+                    if ((r.EventParam1 == 0 || spell.Id == r.EventParam1)
+                        && (r.EventParam2 == 0 || ((1u << (int)spell.School) & r.EventParam2) != 0))
+                    {
+                        RecalcTimer(e, r.EventParam3, r.EventParam4);
+                        ProcessAction(e, invoker, spell);
+                    }
 
-                break;
-            case SmartEvent.Kill:
-                // SmartScript.cpp SMART_EVENT_KILL: param3 player victims only, param4 the victim's entry (0 any); cooldown param1..param2.
-                if (Me is null || invoker is null) return;
-                if (r.EventParam3 != 0 && invoker is not Player) return;
-                if (r.EventParam4 != 0 && (invoker is not Creature killed || killed.Entry != r.EventParam4)) return;
-                RecalcTimer(e, r.EventParam1, r.EventParam2);
-                ProcessAction(e, invoker);
-                break;
-            case SmartEvent.SummonedUnit:
-                // SMART_EVENT_SUMMONED_UNIT: param1 the summon's entry (0 any); cooldown param2..param3.
-                if (invoker is not Creature summoned || (r.EventParam1 != 0 && summoned.Entry != r.EventParam1)) return;
-                RecalcTimer(e, r.EventParam2, r.EventParam3);
-                ProcessAction(e, invoker);
-                break;
-            case SmartEvent.ReceiveEmote:
-                // SMART_EVENT_RECEIVE_EMOTE: param1 the text emote (var0); cooldown param2..param3.
-                if (r.EventParam1 != var0) return;
-                RecalcTimer(e, r.EventParam2, r.EventParam3);
-                ProcessAction(e, invoker);
-                break;
-            case SmartEvent.TimedEventTriggered:
-                if (r.EventParam1 == var0) ProcessAction(e, invoker);
-                break;
-            case SmartEvent.AreaTriggerOnTrigger:
-                // SmartScript.cpp:4743-4749: param1 0 matches any trigger, else the trigger id (var0).
-                if (r.EventParam1 == 0 || r.EventParam1 == var0) ProcessAction(e, invoker);
-                break;
-            case SmartEvent.GossipHello:
-                // SmartScript.cpp:4499-4520: filter 0 always, 1 not when var0 (report use) is set, 2 only then. var0 is 0 on 1.12.
-                if ((r.EventParam1 == 1 && var0 != 0) || (r.EventParam1 == 2 && var0 == 0)) return;
-                ProcessAction(e, invoker);
-                break;
+                    break;
+                case SmartEvent.Kill:
+                    // SmartScript.cpp SMART_EVENT_KILL: param3 player victims only, param4 the victim's entry (0 any); cooldown param1..param2.
+                    if (Me is null || invoker is null) return;
+                    if (r.EventParam3 != 0 && invoker is not Player) return;
+                    if (r.EventParam4 != 0 && (invoker is not Creature killed || killed.Entry != r.EventParam4)) return;
+                    RecalcTimer(e, r.EventParam1, r.EventParam2);
+                    ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.SummonedUnit:
+                    // SMART_EVENT_SUMMONED_UNIT: param1 the summon's entry (0 any); cooldown param2..param3.
+                    if (invoker is not Creature summoned || (r.EventParam1 != 0 && summoned.Entry != r.EventParam1)) return;
+                    RecalcTimer(e, r.EventParam2, r.EventParam3);
+                    ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.ReceiveEmote:
+                    // SMART_EVENT_RECEIVE_EMOTE: param1 the text emote (var0); cooldown param2..param3.
+                    if (r.EventParam1 != var0) return;
+                    RecalcTimer(e, r.EventParam2, r.EventParam3);
+                    ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.TimedEventTriggered:
+                    if (r.EventParam1 == var0) ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.AreaTriggerOnTrigger:
+                    // SmartScript.cpp:4743-4749: param1 0 matches any trigger, else the trigger id (var0).
+                    if (r.EventParam1 == 0 || r.EventParam1 == var0) ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.GossipHello:
+                    // SmartScript.cpp:4499-4520: filter 0 always, 1 not when var0 (report use) is set, 2 only then. var0 is 0 on 1.12.
+                    if ((r.EventParam1 == 1 && var0 != 0) || (r.EventParam1 == 2 && var0 == 0)) return;
+                    ProcessAction(e, invoker);
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("smartai-action", ex);
         }
     }
 
@@ -339,184 +351,202 @@ public sealed class SmartScript
     /// <summary>AzerothCore ProcessAction: run-once marked, the chance rolled, the action on its targets, then the linked row.</summary>
     private void ProcessAction(SmartHolder e, Unit? invoker, SpellInfo? spell = null)
     {
-        e.RunOnce = true;
-        SmartScriptRow r = e.Row;
-        if (r.EventChance is > 0 and < 100 && r.EventChance <= Rand(1, 100)) return;
-        if (invoker is not null) LastInvoker = invoker;
-        List<WorldObject> targets = GetTargets(r, invoker ?? LastInvoker);
-        CreatureMapSystem? system = System;
-        Creature? me = Me;
-        switch (e.Action)
+        int depth = ++_actionDepth;
+        try
         {
-            case SmartAction.Talk:
-                if (me is not null)
-                {
-                    if (system is null) break;
-                    Unit? talkTarget = targets.OfType<Unit>().FirstOrDefault() ?? invoker;
-                    system.SayText(me, (int)r.ActionParam1, talkTarget);
-                }
-                else
-                {
-                    // SmartScript.cpp:221-266 without `me`: the speaker is the first creature target that is not a pet (a pet is never a
-                    // speaker or a text target), a player target leaves no speaker, and the text target falls back to the last invoker.
-                    Creature? speaker = targets.OfType<Creature>().FirstOrDefault(c => c.Summon is not { Kind: SummonKind.Pet });
-                    speaker?.System?.SayText(speaker, (int)r.ActionParam1, LastInvoker);
-                }
+            if (!Invariant.Check(depth <= MaxActionDepth,
+                $"SmartScript recursive action depth {depth} exceeds maximum {MaxActionDepth} (entryOrGuid={e.Row.EntryOrGuid}, id={e.Row.Id})"))
+            {
+                return;
+            }
 
-                break;
-            case SmartAction.Cast:
-                if (_owner.Go is not null) CastFromObject(r, targets);
-                else DoCast(r, targets);
-                break;
-            case SmartAction.SummonCreature:
-                if (system is null || me is null) break;
-                Unit? attack = r.ActionParam4 != 0 ? invoker : null;
-                if (r.TargetType == (byte)SmartTarget.Position || targets.Count == 0)
-                {
-                    (float x, float y, float z, float o) = r.TargetType == (byte)SmartTarget.Position
-                        ? (r.TargetX, r.TargetY, r.TargetZ, r.TargetO) : (me.X, me.Y, me.Z, me.Orientation);
-                    system.SummonAt(me, r.ActionParam1, x, y, z, o, attack, r.ActionParam3);
-                }
-                else
-                {
-                    foreach (WorldObject t in targets)
-                        system.SummonAt(me, r.ActionParam1, t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ, t.Orientation, attack, r.ActionParam3);
-                }
-
-                break;
-            case SmartAction.SetFaction:
-                // SMART_ACTION_SET_FACTION: every creature target takes param1, or its template faction back for 0.
-                foreach (Creature c in targets.OfType<Creature>()) c.FactionTemplate = r.ActionParam1 != 0 ? r.ActionParam1 : c.Template.Faction;
-                break;
-            case SmartAction.MorphToEntryOrModel:
-                // SMART_ACTION_MORPH_TO_ENTRY_OR_MODEL: a model of template param1, else model param2, else the native model.
-                foreach (Creature c in targets.OfType<Creature>())
-                {
-                    if (r.ActionParam1 != 0)
+            e.RunOnce = true;
+            SmartScriptRow r = e.Row;
+            if (r.EventChance is > 0 and < 100 && r.EventChance <= Rand(1, 100)) return;
+            if (invoker is not null) LastInvoker = invoker;
+            List<WorldObject> targets = GetTargets(r, invoker ?? LastInvoker);
+            CreatureMapSystem? system = System;
+            Creature? me = Me;
+            switch (e.Action)
+            {
+                case SmartAction.Talk:
+                    if (me is not null)
                     {
-                        if (system?.Content.FindTemplate(r.ActionParam1) is { } template)
-                            c.DisplayId = Creature.ChooseDisplayId(template, new Random((int)Rand(0, int.MaxValue - 1)));
+                        if (system is null) break;
+                        Unit? talkTarget = targets.OfType<Unit>().FirstOrDefault() ?? invoker;
+                        system.SayText(me, (int)r.ActionParam1, talkTarget);
                     }
-                    else c.DisplayId = r.ActionParam2 != 0 ? r.ActionParam2 : c.NativeDisplayId;
-                }
+                    else
+                    {
+                        // SmartScript.cpp:221-266 without `me`: the speaker is the first creature target that is not a pet (a pet is never a
+                        // speaker or a text target), a player target leaves no speaker, and the text target falls back to the last invoker.
+                        Creature? speaker = targets.OfType<Creature>().FirstOrDefault(c => c.Summon is not { Kind: SummonKind.Pet });
+                        speaker?.System?.SayText(speaker, (int)r.ActionParam1, LastInvoker);
+                    }
 
-                break;
-            case SmartAction.AutoAttack:
-                // SMART_ACTION_AUTO_ATTACK: `me` starts or stops its melee swing.
-                if (me?.AI is CreatureSmartAI smartAi) smartAi.SetMeleeEnabled(r.ActionParam1 != 0);
-                break;
-            case SmartAction.AllowCombatMovement:
-                // SMART_ACTION_ALLOW_COMBAT_MOVEMENT: `me` chases its victim or stands still.
-                if (me?.AI is { } meAi && meAi.CombatMovement != (r.ActionParam1 != 0))
+                    break;
+                case SmartAction.Cast:
+                    if (_owner.Go is not null) CastFromObject(r, targets);
+                    else DoCast(r, targets);
+                    break;
+                case SmartAction.SummonCreature:
+                    if (system is null || me is null) break;
+                    Unit? attack = r.ActionParam4 != 0 ? invoker : null;
+                    if (r.TargetType == (byte)SmartTarget.Position || targets.Count == 0)
+                    {
+                        (float x, float y, float z, float o) = r.TargetType == (byte)SmartTarget.Position
+                            ? (r.TargetX, r.TargetY, r.TargetZ, r.TargetO) : (me.X, me.Y, me.Z, me.Orientation);
+                        system.SummonAt(me, r.ActionParam1, x, y, z, o, attack, r.ActionParam3);
+                    }
+                    else
+                    {
+                        foreach (WorldObject t in targets)
+                            system.SummonAt(me, r.ActionParam1, t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ, t.Orientation, attack, r.ActionParam3);
+                    }
+
+                    break;
+                case SmartAction.SetFaction:
+                    // SMART_ACTION_SET_FACTION: every creature target takes param1, or its template faction back for 0.
+                    foreach (Creature c in targets.OfType<Creature>()) c.FactionTemplate = r.ActionParam1 != 0 ? r.ActionParam1 : c.Template.Faction;
+                    break;
+                case SmartAction.MorphToEntryOrModel:
+                    // SMART_ACTION_MORPH_TO_ENTRY_OR_MODEL: a model of template param1, else model param2, else the native model.
+                    foreach (Creature c in targets.OfType<Creature>())
+                    {
+                        if (r.ActionParam1 != 0)
+                        {
+                            if (system?.Content.FindTemplate(r.ActionParam1) is { } template)
+                                c.DisplayId = Creature.ChooseDisplayId(template, new Random((int)Rand(0, int.MaxValue - 1)));
+                        }
+                        else c.DisplayId = r.ActionParam2 != 0 ? r.ActionParam2 : c.NativeDisplayId;
+                    }
+
+                    break;
+                case SmartAction.AutoAttack:
+                    // SMART_ACTION_AUTO_ATTACK: `me` starts or stops its melee swing.
+                    if (me?.AI is CreatureSmartAI smartAi) smartAi.SetMeleeEnabled(r.ActionParam1 != 0);
+                    break;
+                case SmartAction.AllowCombatMovement:
+                    // SMART_ACTION_ALLOW_COMBAT_MOVEMENT: `me` chases its victim or stands still.
+                    if (me?.AI is { } meAi && meAi.CombatMovement != (r.ActionParam1 != 0))
+                    {
+                        meAi.CombatMovement = r.ActionParam1 != 0;
+                        system?.ApplyCombatMovement(me);
+                    }
+
+                    break;
+                case SmartAction.Die:
+                    // SMART_ACTION_DIE: `me` dies (no killer).
+                    if (system is not null && me is { IsAlive: true }) system.KillCreature(me);
+                    break;
+                case SmartAction.Sound:
+                    // SMART_ACTION_SOUND: each creature target plays sound param1 (players have no direct-sound seam here).
+                    if (system is null) break;
+                    foreach (Creature c in targets.OfType<Creature>()) system.PlayDirectSound(c, r.ActionParam1);
+                    break;
+                case SmartAction.CallForHelp:
+                    // SMART_ACTION_CALL_FOR_HELP: idle same-faction creatures within param1 yards join `me`'s fight.
+                    if (system is not null && me is not null) system.CallForHelp(me, r.ActionParam1);
+                    break;
+                case SmartAction.PlayEmote:
+                    // SmartScript.cpp SMART_ACTION_PLAY_EMOTE: every unit target plays the emote. Players have no emote seam here, so only creatures do.
+                    if (system is null) break;
+                    foreach (Creature c in targets.OfType<Creature>()) system.PlayEmote(c, r.ActionParam1);
+                    break;
+                case SmartAction.SetEmoteState:
+                    // SMART_ACTION_SET_EMOTE_STATE: UNIT_NPC_EMOTESTATE of every unit target.
+                    foreach (Unit u in targets.OfType<Unit>()) u.SetUInt32(UpdateFields.UnitNpcEmotestate, r.ActionParam1);
+                    break;
+                case SmartAction.Evade:
+                    // SMART_ACTION_EVADE: only `me` evades (the target is ignored).
+                    if (system is not null && me is { IsAlive: true }) system.EnterEvadeMode(me);
+                    break;
+                case SmartAction.RemoveAurasFromSpell:
+                    // SMART_ACTION_REMOVEAURASFROMSPELL: spell 0 strips every aura (creature targets only here), else the spell's auras go.
+                    if (system is null) break;
+                    foreach (Unit u in targets.OfType<Unit>())
+                    {
+                        if (r.ActionParam1 != 0) system.RemoveAuras(u, r.ActionParam1);
+                        else if (u is Creature c) system.RemoveAllAuras(c);
+                    }
+
+                    break;
+                case SmartAction.ForceDespawn:
+                    // SMART_ACTION_FORCE_DESPAWN: every creature target despawns after param1 ms (0 at once), as cmangos ForcedDespawn.
+                    if (system is null) break;
+                    foreach (Creature c in targets.OfType<Creature>().ToList()) system.ForcedDespawn(c, r.ActionParam1);
+                    break;
+                case SmartAction.SetEventPhase:
+                    SetPhase(r.ActionParam1);
+                    break;
+                case SmartAction.IncEventPhase:
+                    if (r.ActionParam1 != 0) SetPhase(Math.Min(MaxPhase, Phase + r.ActionParam1));
+                    else if (r.ActionParam2 != 0) SetPhase(r.ActionParam2 >= Phase ? 0 : Phase - r.ActionParam2);
+                    break;
+                case SmartAction.RandomPhase:
                 {
-                    meAi.CombatMovement = r.ActionParam1 != 0;
-                    system?.ApplyCombatMovement(me);
+                    uint[] phases = [.. new[] { r.ActionParam1, r.ActionParam2, r.ActionParam3, r.ActionParam4, r.ActionParam5, r.ActionParam6 }.Where(p => p != 0)];
+                    if (phases.Length > 0) SetPhase(phases[Rand(0, (uint)phases.Length - 1)]);
+                    break;
                 }
-
-                break;
-            case SmartAction.Die:
-                // SMART_ACTION_DIE: `me` dies (no killer).
-                if (system is not null && me is { IsAlive: true }) system.KillCreature(me);
-                break;
-            case SmartAction.Sound:
-                // SMART_ACTION_SOUND: each creature target plays sound param1 (players have no direct-sound seam here).
-                if (system is null) break;
-                foreach (Creature c in targets.OfType<Creature>()) system.PlayDirectSound(c, r.ActionParam1);
-                break;
-            case SmartAction.CallForHelp:
-                // SMART_ACTION_CALL_FOR_HELP: idle same-faction creatures within param1 yards join `me`'s fight.
-                if (system is not null && me is not null) system.CallForHelp(me, r.ActionParam1);
-                break;
-            case SmartAction.PlayEmote:
-                // SmartScript.cpp SMART_ACTION_PLAY_EMOTE: every unit target plays the emote. Players have no emote seam here, so only creatures do.
-                if (system is null) break;
-                foreach (Creature c in targets.OfType<Creature>()) system.PlayEmote(c, r.ActionParam1);
-                break;
-            case SmartAction.SetEmoteState:
-                // SMART_ACTION_SET_EMOTE_STATE: UNIT_NPC_EMOTESTATE of every unit target.
-                foreach (Unit u in targets.OfType<Unit>()) u.SetUInt32(UpdateFields.UnitNpcEmotestate, r.ActionParam1);
-                break;
-            case SmartAction.Evade:
-                // SMART_ACTION_EVADE: only `me` evades (the target is ignored).
-                if (system is not null && me is { IsAlive: true }) system.EnterEvadeMode(me);
-                break;
-            case SmartAction.RemoveAurasFromSpell:
-                // SMART_ACTION_REMOVEAURASFROMSPELL: spell 0 strips every aura (creature targets only here), else the spell's auras go.
-                if (system is null) break;
-                foreach (Unit u in targets.OfType<Unit>())
+                case SmartAction.RandomPhaseRange:
+                    SetPhase(Rand(r.ActionParam1, r.ActionParam2));
+                    break;
+                case SmartAction.CreateTimedEvent:
                 {
-                    if (r.ActionParam1 != 0) system.RemoveAuras(u, r.ActionParam1);
-                    else if (u is Creature c) system.RemoveAllAuras(c);
+                    bool repeats = r.ActionParam4 != 0 || r.ActionParam5 != 0;
+
+                    // The synthetic row carries no ConditionId: AzerothCore looks its conditions up by the synthetic id, which has none here.
+                    var timed = new SmartHolder(new SmartScriptRow
+                    {
+                        EntryOrGuid = r.EntryOrGuid, Id = (ushort)r.ActionParam1, EventType = (byte)SmartEvent.Update,
+                        EventChance = (byte)(r.ActionParam6 == 0 ? 100 : r.ActionParam6),
+                        EventFlags = repeats ? 0 : (uint)SmartEventFlags.NotRepeatable,
+                        EventParam1 = r.ActionParam2, EventParam2 = r.ActionParam3, EventParam3 = r.ActionParam4, EventParam4 = r.ActionParam5,
+                        ActionType = (byte)SmartAction.TriggerTimedEvent, ActionParam1 = r.ActionParam1,
+                        TargetType = r.TargetType, TargetParam1 = r.TargetParam1, TargetParam2 = r.TargetParam2,
+                        TargetParam3 = r.TargetParam3, TargetParam4 = r.TargetParam4,
+                        TargetX = r.TargetX, TargetY = r.TargetY, TargetZ = r.TargetZ, TargetO = r.TargetO,
+                    });
+                    InitTimer(timed);
+                    _stored.Add(timed);
+                    break;
                 }
-
-                break;
-            case SmartAction.ForceDespawn:
-                // SMART_ACTION_FORCE_DESPAWN: every creature target despawns after param1 ms (0 at once), as cmangos ForcedDespawn.
-                if (system is null) break;
-                foreach (Creature c in targets.OfType<Creature>().ToList()) system.ForcedDespawn(c, r.ActionParam1);
-                break;
-            case SmartAction.SetEventPhase:
-                SetPhase(r.ActionParam1);
-                break;
-            case SmartAction.IncEventPhase:
-                if (r.ActionParam1 != 0) SetPhase(Math.Min(MaxPhase, Phase + r.ActionParam1));
-                else if (r.ActionParam2 != 0) SetPhase(r.ActionParam2 >= Phase ? 0 : Phase - r.ActionParam2);
-                break;
-            case SmartAction.RandomPhase:
-            {
-                uint[] phases = [.. new[] { r.ActionParam1, r.ActionParam2, r.ActionParam3, r.ActionParam4, r.ActionParam5, r.ActionParam6 }.Where(p => p != 0)];
-                if (phases.Length > 0) SetPhase(phases[Rand(0, (uint)phases.Length - 1)]);
-                break;
-            }
-            case SmartAction.RandomPhaseRange:
-                SetPhase(Rand(r.ActionParam1, r.ActionParam2));
-                break;
-            case SmartAction.CreateTimedEvent:
-            {
-                bool repeats = r.ActionParam4 != 0 || r.ActionParam5 != 0;
-
-                // The synthetic row carries no ConditionId: AzerothCore looks its conditions up by the synthetic id, which has none here.
-                var timed = new SmartHolder(new SmartScriptRow
+                case SmartAction.TriggerTimedEvent:
+                    ProcessEventsFor(SmartEvent.TimedEventTriggered, null, r.ActionParam1);
+                    break;
+                case SmartAction.RemoveTimedEvent:
+                    _stored.RemoveAll(s => s.Row.Id == r.ActionParam1);
+                    break;
+                case SmartAction.MoveToPos:
                 {
-                    EntryOrGuid = r.EntryOrGuid, Id = (ushort)r.ActionParam1, EventType = (byte)SmartEvent.Update,
-                    EventChance = (byte)(r.ActionParam6 == 0 ? 100 : r.ActionParam6),
-                    EventFlags = repeats ? 0 : (uint)SmartEventFlags.NotRepeatable,
-                    EventParam1 = r.ActionParam2, EventParam2 = r.ActionParam3, EventParam3 = r.ActionParam4, EventParam4 = r.ActionParam5,
-                    ActionType = (byte)SmartAction.TriggerTimedEvent, ActionParam1 = r.ActionParam1,
-                    TargetType = r.TargetType, TargetParam1 = r.TargetParam1, TargetParam2 = r.TargetParam2,
-                    TargetParam3 = r.TargetParam3, TargetParam4 = r.TargetParam4,
-                    TargetX = r.TargetX, TargetY = r.TargetY, TargetZ = r.TargetZ, TargetO = r.TargetO,
-                });
-                InitTimer(timed);
-                _stored.Add(timed);
-                break;
+                    if (me is null) break;
+                    (float x, float y, float z)? point = r.TargetType == (byte)SmartTarget.Position
+                        ? (r.TargetX, r.TargetY, r.TargetZ)
+                        : targets.FirstOrDefault() is { } t ? (t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ) : null;
+                    if (point is { } p) me.Motion.MovePoint(r.ActionParam1, p.x, p.y, p.z, run: me.Combat.IsInCombat);
+                    break;
+                }
+                case SmartAction.CallTimedActionList:
+                case SmartAction.CallRandomTimedActionList:
+                case SmartAction.CallRandomRangeTimedActionList:
+                    CallTimedActionList(r, targets);
+                    break;
             }
-            case SmartAction.TriggerTimedEvent:
-                ProcessEventsFor(SmartEvent.TimedEventTriggered, null, r.ActionParam1);
-                break;
-            case SmartAction.RemoveTimedEvent:
-                _stored.RemoveAll(s => s.Row.Id == r.ActionParam1);
-                break;
-            case SmartAction.MoveToPos:
+
+            if (r.Link != 0 && r.Link != r.Id && _events.FirstOrDefault(l => l.Row.Id == r.Link) is { } linked)
             {
-                if (me is null) break;
-                (float x, float y, float z)? point = r.TargetType == (byte)SmartTarget.Position
-                    ? (r.TargetX, r.TargetY, r.TargetZ)
-                    : targets.FirstOrDefault() is { } t ? (t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ) : null;
-                if (point is { } p) me.Motion.MovePoint(r.ActionParam1, p.x, p.y, p.z, run: me.Combat.IsInCombat);
-                break;
+                if (linked.Event == SmartEvent.Link) ProcessEvent(linked, invoker);
+                else _unsupported.Add($"row {r.Id} links to row {r.Link}, which is not a SMART_EVENT_LINK row");
             }
-            case SmartAction.CallTimedActionList:
-            case SmartAction.CallRandomTimedActionList:
-            case SmartAction.CallRandomRangeTimedActionList:
-                CallTimedActionList(r, targets);
-                break;
         }
-
-        if (r.Link != 0 && r.Link != r.Id && _events.FirstOrDefault(l => l.Row.Id == r.Link) is { } linked)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            if (linked.Event == SmartEvent.Link) ProcessEvent(linked, invoker);
-            else _unsupported.Add($"row {r.Id} links to row {r.Link}, which is not a SMART_EVENT_LINK row");
+            FaultLedger.Shared.Record("smartai-action", ex);
+        }
+        finally
+        {
+            _actionDepth--;
         }
     }
 

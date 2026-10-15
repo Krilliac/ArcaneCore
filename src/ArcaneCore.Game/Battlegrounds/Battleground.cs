@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Battlegrounds;
 
@@ -36,9 +37,16 @@ public abstract partial class Battleground
         Template = template ?? throw new ArgumentNullException(nameof(template));
         Options = options ?? throw new ArgumentNullException(nameof(options));
         Ports = ports ?? throw new ArgumentNullException(nameof(ports));
-        if (bracket is < 0 or > BattlegroundConstants.LastBracket)
+        if (!Invariant.Check(bracket is >= 0 and <= BattlegroundConstants.LastBracket, $"battleground bracket {bracket} is out of range"))
         {
             throw new ArgumentOutOfRangeException(nameof(bracket), bracket, "a battleground bracket is 0 to 5");
+        }
+
+        if (!Invariant.Check(
+            IsFinite(template.AllianceStart) && IsFinite(template.HordeStart),
+            $"battleground {template.Type} template has non-finite start coordinates"))
+        {
+            throw new ArgumentException($"battleground {template.Type} template has non-finite start coordinates", nameof(template));
         }
 
         Bracket = bracket;
@@ -52,6 +60,9 @@ public abstract partial class Battleground
         Winner = BattlegroundWinner.None;
         _activeEvents[BattlegroundConstants.EventDoor] = 0;   // door-event2 is always 0 (BattleGround.cpp:1013)
     }
+
+    private static bool IsFinite(BattlegroundStartLocation loc)
+        => float.IsFinite(loc.X) && float.IsFinite(loc.Y) && float.IsFinite(loc.Z) && float.IsFinite(loc.Orientation);
 
     // ------------------------------------------------------------------ identity
 
@@ -85,6 +96,11 @@ public abstract partial class Battleground
     /// <summary>vmangos <c>SetLevelRange</c>: the bracket's levels, set when the queue creates the match.</summary>
     public void SetLevelRange(uint minLevel, uint maxLevel)
     {
+        if (!Invariant.Check(minLevel <= maxLevel, $"battleground {Type} level range {minLevel}..{maxLevel} is inverted"))
+        {
+            return;
+        }
+
         MinLevel = minLevel;
         MaxLevel = maxLevel;
     }
@@ -444,14 +460,21 @@ public abstract partial class Battleground
     /// </summary>
     public virtual bool AddPlayer(ObjectGuid guid, Team team)
     {
+        if (!Invariant.Check(!guid.IsEmpty && (team is Team.Alliance or Team.Horde),
+            $"cannot add player {guid} with team {team} to battleground {Type}"))
+        {
+            return false;
+        }
+
         if (_players.ContainsKey(guid))
         {
             return false;
         }
 
+        int teamIdx = BattlegroundConstants.TeamIndex(team);
         _players[guid] = new Participant(team, CreateScore());
-        _playersCount[BattlegroundConstants.TeamIndex(team)]++;
-        _joinOrder[BattlegroundConstants.TeamIndex(team)].Add(guid);
+        _playersCount[teamIdx]++;
+        _joinOrder[teamIdx].Add(guid);
         Host.PlayerJoinedTeam(team, guid);
 
         // PlayerAddedToBGCheckIfBGIsRunning (BattleGround.cpp:1808-1822): a late joiner into an ended match is frozen and shown the result.
@@ -473,14 +496,24 @@ public abstract partial class Battleground
     /// </summary>
     public virtual void RemovePlayerAtLeave(ObjectGuid guid, bool teleportToEntryPoint, bool sendStatus, bool online = true)
     {
+        if (!Invariant.Check(!guid.IsEmpty, $"cannot remove empty player guid from battleground {Type}"))
+        {
+            return;
+        }
+
         bool participant = false;
         Team team = default;
         if (_players.Remove(guid, out Participant? entry))
         {
             participant = true;
             team = entry.Team;
-            _playersCount[BattlegroundConstants.TeamIndex(team)]--;
-            _joinOrder[BattlegroundConstants.TeamIndex(team)].Remove(guid);
+            int teamIdx = BattlegroundConstants.TeamIndex(team);
+            if (_playersCount[teamIdx] > 0)
+            {
+                _playersCount[teamIdx]--;
+            }
+
+            _joinOrder[teamIdx].Remove(guid);
         }
 
         if (online)
@@ -527,7 +560,8 @@ public abstract partial class Battleground
     /// <summary>Change a scoreboard value (vmangos <c>UpdatePlayerScore</c>, BattleGround.cpp:1254-1282).</summary>
     public virtual void UpdatePlayerScore(ObjectGuid player, BattlegroundScoreType type, uint value)
     {
-        if (!_players.TryGetValue(player, out Participant? p))
+        if (!Invariant.Check(!player.IsEmpty, $"cannot update battleground score for empty player guid in {Type}")
+            || !_players.TryGetValue(player, out Participant? p))
         {
             return;
         }
@@ -597,6 +631,11 @@ public abstract partial class Battleground
     /// </summary>
     public virtual void HandleKillPlayer(ObjectGuid victim, ObjectGuid? killer)
     {
+        if (!Invariant.Check(!victim.IsEmpty, $"battleground {Type} kill victim guid is empty"))
+        {
+            return;
+        }
+
         if (killer is { } k && _players.TryGetValue(k, out Participant? killerEntry) && _players.TryGetValue(victim, out Participant? victimEntry) && victimEntry.Team != killerEntry.Team)
         {
             UpdatePlayerScore(k, BattlegroundScoreType.HonorableKills, 1);

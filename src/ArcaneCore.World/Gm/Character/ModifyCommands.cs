@@ -44,7 +44,7 @@ public sealed class ModifyExtension : ICommandExtension
     private static bool ModifyTalentPoints(CommandContext context, string text)
     {
         var args = new CommandArgs(text);
-        if (!args.ExtractInt32(out int points) || points < 0)
+        if (!args.ExtractInt32(out int points) || points < 0 || !args.IsEmpty)
         {
             return false;
         }
@@ -137,6 +137,11 @@ public sealed class ModifyExtension : ICommandExtension
 
     private static bool ChangePower(CommandContext context, string text, PowerType power)
     {
+        if (power is not (PowerType.Energy or PowerType.Rage))
+        {
+            return false;
+        }
+
         var args = new CommandArgs(text);
         if (!args.ExtractUInt32(out uint requested))
         {
@@ -196,7 +201,7 @@ public sealed class ModifyExtension : ICommandExtension
                 target.SendSystemMessage(GmStrings.YoursEnergyChanged(caller, requested, displayedMax));
             }
         }
-        else
+        else if (power == PowerType.Rage)
         {
             context.Reply(GmStrings.YouChangeRage(link, requested, displayedMax));
             if (report)
@@ -251,9 +256,14 @@ public sealed class LevelCommands : ICommandGroup
                 addLevel = 1;
                 nameArg = args.ExtractArg();
             }
+
+            if (!args.IsEmpty)
+            {
+                return false;
+            }
         }
 
-        if (nameArg is null && !context.Player.Selection.IsEmpty && context.SelectedPlayerOrSelf() is null)
+        if (!context.IsConsole && nameArg is null && !context.Player.Selection.IsEmpty && context.SelectedPlayerOrSelf() is null)
         {
             context.Reply(GmStrings.LevelingCreaturesUnsupported);
             return true;
@@ -264,9 +274,14 @@ public sealed class LevelCommands : ICommandGroup
             return true;
         }
 
-        PlayerProgression progression = context.Session.Services.GetRequiredService<ProgressionFeature>().Progression;
+        if (context.Session.Services.GetService<ProgressionFeature>()?.Progression is not { } progression)
+        {
+            return true;
+        }
+
         int oldLevel = target.Level;
-        int newLevel = Math.Clamp(oldLevel + addLevel, 1, progression.MaxPlayerLevel);
+        long desiredLevel = (long)oldLevel + addLevel;
+        int newLevel = (int)Math.Clamp(desiredLevel, 1L, Math.Max(1, (int)progression.MaxPlayerLevel));
 
         ApplyLevel(context, target, progression, newLevel);
 
@@ -282,7 +297,7 @@ public sealed class LevelCommands : ICommandGroup
         // LevelChanged, whose subscribers recompute the talent points (a level-down resets an overspend) and save the
         // character, so the experience is cleared first and the save sees it.
         target.SetUInt32(UpdateFields.PlayerXp, 0);
-        progression.GiveLevel(target, (byte)newLevel);
+        progression.GiveLevel(target, (byte)Math.Clamp(newLevel, 1, byte.MaxValue));
 
         if (!context.IsInvoker(target))
         {
@@ -330,7 +345,12 @@ public sealed class LevelCommands : ICommandGroup
         }
 
         unit.Health = 1;
-        unit.SetUInt32(UpdateFields.UnitFieldPower1 + (int)unit.PowerType, 0);
+        int powerIndex = (int)unit.PowerType;
+        if ((uint)powerIndex < 5u)
+        {
+            unit.SetUInt32(UpdateFields.UnitFieldPower1 + powerIndex, 0);
+        }
+
         return true;
     }
 }

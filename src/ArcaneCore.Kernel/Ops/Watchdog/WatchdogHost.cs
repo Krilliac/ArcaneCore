@@ -80,8 +80,9 @@ public sealed class WatchdogHost : IHostedService
             {
                 monitor.Stop();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                Diagnostics.FaultLedger.Shared.Record($"watchdog-stop:{monitor.Name}", ex);
                 _logger.LogError(WatchdogEvents.MonitorFault, ex, "watchdog monitor {Monitor} failed to stop", monitor.Name);
             }
         }
@@ -98,9 +99,10 @@ public sealed class WatchdogHost : IHostedService
             {
                 _monitors[i].Check(nowMicros);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 _faults.Increment();
+                Diagnostics.FaultLedger.Shared.Record($"watchdog-check:{_monitors[i].Name}", ex);
                 if (_faultLimiters[i].TryAcquire(nowMicros, out long suppressed))
                 {
                     _logger.LogError(WatchdogEvents.MonitorFault, ex, "watchdog monitor {Monitor} failed ({Suppressed} suppressed)", _monitors[i].Name, suppressed);

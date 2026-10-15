@@ -178,11 +178,17 @@ public sealed partial class QuestNpcFeature
         {
             if (budget.IsCancellationRequested && !_settlementStop.IsCancellationRequested)
             {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest-settlement-timeout", ex);
                 // Timings in ms since the settlement began; -1: that phase was not reached.
                 _logger.LogWarning("quest reward settlement for character {Character}, quest {Quest} ran out of its {Budget}s budget after "
                     + "{Elapsed} ms (saved at {Saved} ms, drains done at {Drained} ms, transaction started: {Started}); the reward is refused "
                     + "unless the stored rows show it committed", id, operation.Plan.QuestId, allowed.TotalSeconds, clock.ElapsedMilliseconds,
                     savedMs, drainedMs, transactionStarted);
+            }
+            else if (!_settlementStop.IsCancellationRequested)
+            {
+                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest-settlement", ex);
+                _logger.LogError(ex, "quest reward settlement failed for character {Character}, quest {Quest}", id, operation.Plan.QuestId);
             }
             else
             {
@@ -198,6 +204,7 @@ public sealed partial class QuestNpcFeature
                 }
                 catch (Exception reconciliationError) when (reconciliationError is not OutOfMemoryException)
                 {
+                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest-settlement-reconcile", reconciliationError);
                     _logger.LogError(reconciliationError, "could not reconcile quest reward for character {Character}", id);
                 }
             }
@@ -207,9 +214,9 @@ public sealed partial class QuestNpcFeature
             lock (_settlementGate)
             {
                 operation.Outcome = outcome;
-                if (!_settlementsStopping)
+                if (!_settlementsStopping && _world is { } world)
                 {
-                    _world!.Post(() => FinalizeSettlement(operation, publishLive: true));
+                    world.Post(() => FinalizeSettlement(operation, publishLive: true));
                 }
             }
         }
@@ -282,6 +289,7 @@ public sealed partial class QuestNpcFeature
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("quest-settlement-publish", ex);
             operation.Saves.QuarantineCharacter(id);
             Persistence.QuarantineCharacter(id);
             _logger.LogError(ex, "quest reward publication failed for character {Character}; fresh login is required", id);
@@ -375,13 +383,13 @@ public sealed partial class QuestNpcFeature
             ? quest is null ? !request.ExpectedQuest.Rewarded : quest with { Status = request.ExpectedQuest.Status } == request.ExpectedQuest
             : quest == request.ExpectedQuest;
         if (questBefore && character.Money == request.Before.Money && character.Level == request.Before.Level
-            && SameInventory(inventory, request.Before.Inventory!.Items))
+            && request.Before.Inventory is { } beforeInv && SameInventory(inventory, beforeInv.Items))
         {
             return RewardOutcome.Before;
         }
 
         return grantsPresent && quest == request.RewardedQuest && character.Money == request.After.Money && character.Level == request.After.Level
-            && SameInventory(inventory, request.After.Inventory!.Items) ? RewardOutcome.After : RewardOutcome.Unknown;
+            && request.After.Inventory is { } afterInv && SameInventory(inventory, afterInv.Items) ? RewardOutcome.After : RewardOutcome.Unknown;
     }
 
     private static bool SameInventory(IReadOnlyList<InventoryItemData> first, IReadOnlyList<InventoryItemData> second)

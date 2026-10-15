@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -386,45 +387,58 @@ public sealed partial class TotemSystem
     /// <summary>vmangos Totem::Update for every totem of <paramref name="map"/> (order of summoning).</summary>
     internal void Update(Map map, uint diffMs)
     {
-        foreach (TotemInfo info in _byGuid.Values.Where(t => ReferenceEquals(t.Creature.Map, map)).ToArray())
+        if (map is null)
         {
-            if (!_byGuid.ContainsKey(info.Creature.Guid))
-            {
-                continue;
-            }
+            return;
+        }
 
-            if (!IsOwnerValid(info, map) || !info.Creature.IsAlive)
+        foreach (TotemInfo info in _byGuid.Values.Where(t => t?.Creature is not null && ReferenceEquals(t.Creature.Map, map)).ToArray())
+        {
+            try
             {
-                Unsummon(info);
-                continue;
-            }
+                if (info?.Creature is not { } creature || !_byGuid.ContainsKey(creature.Guid))
+                {
+                    continue;
+                }
 
-            if (info.RemainingMs >= 0)
-            {
-                // "if (m_duration <= update_diff) UnSummon(); else m_duration -= update_diff;"
-                if (info.RemainingMs <= diffMs)
+                if (!creature.IsInWorld || creature.Map is null || !ReferenceEquals(creature.Map, map)
+                    || !IsOwnerValid(info, map) || !creature.IsAlive)
                 {
                     Unsummon(info);
                     continue;
                 }
 
-                info.RemainingMs -= (int)diffMs;
-            }
+                if (info.RemainingMs >= 0)
+                {
+                    // "if (m_duration <= update_diff) UnSummon(); else m_duration -= update_diff;"
+                    if (info.RemainingMs <= diffMs)
+                    {
+                        Unsummon(info);
+                        continue;
+                    }
 
-            if (!info.SpawnAnimSent)
+                    info.RemainingMs -= (int)diffMs;
+                }
+
+                if (!info.SpawnAnimSent)
+                {
+                    if (info.SpawnAnimDelay > 0)
+                    {
+                        info.SpawnAnimDelay--;
+                    }
+                    else
+                    {
+                        info.SpawnAnimSent = true;
+                        Send(creature, WorldOpcode.SmsgGameobjectSpawnAnim, creature.Guid);
+                    }
+                }
+
+                UpdateActiveTotem(info, map);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                if (info.SpawnAnimDelay > 0)
-                {
-                    info.SpawnAnimDelay--;
-                }
-                else
-                {
-                    info.SpawnAnimSent = true;
-                    Send(info.Creature, WorldOpcode.SmsgGameobjectSpawnAnim, info.Creature.Guid);
-                }
+                FaultLedger.Shared.Record("map-totem", ex);
             }
-
-            UpdateActiveTotem(info, map);
         }
     }
 

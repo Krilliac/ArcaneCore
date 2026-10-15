@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.WorldState;
 
 /// <summary>
@@ -278,8 +279,13 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
         {
             scopedServices?.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        catch (ObjectDisposedException)
+        catch (OperationCanceledException)
         {
+            /* expected on shutdown */
+        }
+        catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-exploredzones-stop-host", stopEx);
         }
 
         FatalFailure?.Invoke(ex);
@@ -351,9 +357,13 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
                         break;
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
             {
-                logger.LogError(ex, "explored-zones queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
+                /* expected on shutdown */
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("writequeue-exploredzones-consume", ex, "explored-zones queue item {Kind} for character {Character} failed unexpectedly", work.Kind, work.CharacterId);
                 work.Done?.TrySetException(ex);
             }
         }
@@ -391,9 +401,9 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             }
         }
 
-        if (failed > 0)
+        if (failed > 0 && Invariant.Check(first is not null, "explored-zones retry recorded failures without a first exception") && first is { } firstFailure)
         {
-            logger.LogWarning("explored-zones retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", first!.Message);
+            logger.LogWarning("explored-zones retry: {Failed} of {Total} retained characters still failing{Locked}; first: {Reason}", failed, retained.Length, locked ? " (the database is locked; the rest wait for the next sweep)" : "", firstFailure.Message);
         }
     }
 
@@ -455,12 +465,14 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             catch (CharacterOwnershipRejectedException ex)
             {
                 failure = ex;
+                FaultLedger.Shared.Record("writequeue-exploredzones-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);
                 break;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 failure = ex;
+                FaultLedger.Shared.Record("writequeue-exploredzones-attempt", ex);
                 if (!sweep)
                 {
                     logger.LogWarning(ex, "explored-zones write for character {Character} failed (attempt {Attempt} of {Max})", characterId, attempt, attempts);
@@ -489,7 +501,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
 
         if (failure is not null && !sweep)
         {
-            logger.LogError(failure, "explored-zones writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
+            logger.LogFault("writequeue-exploredzones", failure, "explored-zones writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }
 
         return failure;

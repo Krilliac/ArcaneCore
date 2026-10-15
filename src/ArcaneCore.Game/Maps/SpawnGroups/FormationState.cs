@@ -205,7 +205,7 @@ internal sealed class FormationState
         {
             float back = spread + (inter * rows);
             float hyp = MathF.Sqrt((back * back) + (inter * inter));
-            return (hyp <= 0 ? Pi : Pi + (side * MathF.Asin(inter / hyp)), hyp);
+            return (hyp <= 0 ? Pi : Pi + (side * MathF.Asin(Math.Clamp(inter / hyp, -1f, 1f))), hyp);
         }
     }
 

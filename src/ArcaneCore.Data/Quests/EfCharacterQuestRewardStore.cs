@@ -6,6 +6,7 @@ using ArcaneCore.Data.Characters.WorldState;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Reputation;
@@ -37,17 +38,19 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
         }
 
         // Copy before the first await: callers may subsequently reuse their lists.
+        IReadOnlyList<uint> learnedSpells = request.LearnedSpells is { } spells ? [.. spells] : [];
+        IReadOnlyList<CharacterReputationRow> reputationAfter = request.ReputationAfter is { } rows ? [.. rows] : [];
         request = request with
         {
             Before = Copy(request.Before),
             After = Copy(request.After),
             // Detached copies: the caller may reuse its lists, and the loops below must not see them change.
-            LearnedSpells = request.LearnedSpells is { } spells ? [.. spells] : [],
-            ReputationAfter = request.ReputationAfter is { } rows ? [.. rows] : [],
+            LearnedSpells = learnedSpells,
+            ReputationAfter = reputationAfter,
         };
         Validate(request);
-        if ((request.LearnedSpells!.Count > 0 && db.Model.FindEntityType(typeof(CharacterSpellRow)) is null)
-            || (request.ReputationAfter!.Count > 0 && db.Model.FindEntityType(typeof(CharacterReputationEntity)) is null))
+        if ((learnedSpells.Count > 0 && db.Model.FindEntityType(typeof(CharacterSpellRow)) is null)
+            || (reputationAfter.Count > 0 && db.Model.FindEntityType(typeof(CharacterReputationEntity)) is null))
         {
             throw new InvalidOperationException("The reward carries spell or reputation grants but the character model has no such table.");
         }
@@ -106,12 +109,13 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
 
             IReadOnlyList<InventoryItemData> stored = await new EfItemStore(db).GetInventoryAsync(id, cancellationToken)
                 .ConfigureAwait(false);
-            if (!SameInventory(stored, request.Before.Inventory!.Items))
+            if (request.Before.Inventory is not { } beforeInventory
+                || !SameInventory(stored, beforeInventory.Items))
             {
                 return QuestRewardCommitResult.Conflict;
             }
 
-            List<uint> guids = request.After.Inventory!.Items.Select(i => i.Item.Guid).ToList();
+            List<uint> guids = (request.After.Inventory?.Items ?? []).Select(i => i.Item.Guid).ToList();
             // General inventory persistence permits transfers. Quest rewards must never
             // reassign a GUID owned or placed under another character.
             if (await db.Set<ItemInstanceRow>().AsNoTracking()
@@ -125,7 +129,7 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
             // The spell and faction rows are read and written through the context's sets, never through
             // their module stores: those call SaveChanges and clear the tracker, which would flush or
             // drop the staged character, inventory and quest changes before the single save below.
-            List<uint> learned = [.. request.LearnedSpells!];
+            List<uint> learned = [.. learnedSpells];
             Dictionary<uint, CharacterReputationEntity> factions = [];
             HashSet<uint> known = [];
             if (learned.Count > 0)
@@ -135,7 +139,7 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                     .Select(r => r.Spell).ToListAsync(cancellationToken).ConfigureAwait(false)];
             }
 
-            List<uint> touched = [.. request.ReputationAfter!.Select(r => r.Faction)];
+            List<uint> touched = [.. reputationAfter.Select(r => r.Faction)];
             if (touched.Count > 0)
             {
                 factions = await db.Set<CharacterReputationEntity>()
@@ -150,7 +154,7 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                 db.Set<CharacterSpellRow>().Add(new CharacterSpellRow { CharacterId = id, Spell = spell });
             }
 
-            foreach (CharacterReputationRow faction in request.ReputationAfter!)
+            foreach (CharacterReputationRow faction in reputationAfter)
             {
                 if (factions.TryGetValue(faction.Faction, out CharacterReputationEntity? entity))
                 {
@@ -235,12 +239,22 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
         }
         catch (Exception rewardError)
         {
+            if (rewardError is not OperationCanceledException and not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("data-quest-reward.commit", rewardError);
+            }
+
             try
             {
                 await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception rollbackError)
             {
+                if (rollbackError is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("data-quest-reward.rollback", rollbackError);
+                }
+
                 throw new AggregateException("Quest reward and rollback failed; discard the context.", rewardError, rollbackError);
             }
 

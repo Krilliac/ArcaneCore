@@ -62,7 +62,7 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
         GameObjectTemplate? template = feature?.Content.FindTemplate(entry);
         session.Send(WorldOpcode.SmsgGameobjectQueryResponse, feature is null || template is null
             ? template is null ? GameObjectPackets.QueryUnknown(entry) : GameObjectPackets.QueryResponse(template)
-            : feature.QueryCache.Get(entry, template, static (_, t) => GameObjectPackets.QueryResponse(t!)));
+            : feature.QueryCache.Get(entry, template, static (id, t) => t is null ? GameObjectPackets.QueryUnknown(id) : GameObjectPackets.QueryResponse(t)));
         return Task.CompletedTask;
     }
 

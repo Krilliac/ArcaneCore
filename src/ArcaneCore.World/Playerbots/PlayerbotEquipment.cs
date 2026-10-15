@@ -82,13 +82,6 @@ internal sealed class PlayerbotEquipment(WorldSession session)
 
             if (store?.Get(itemSpell.SpellId) is { } useSpell)
             {
-                if (PlayerbotMountRules.IsMountSpell(useSpell))
-                {
-                    if (spellbook is null || !spellbook.HasSpell(player, useSpell.Id))
-                        return true;
-                    continue;
-                }
-
                 for (int i = 0; i < useSpell.Effects.Count; i++)
                 {
                     SpellEffectInfo eff = useSpell.Effects[i];

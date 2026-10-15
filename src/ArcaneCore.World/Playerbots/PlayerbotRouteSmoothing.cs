@@ -93,6 +93,7 @@ internal static class PlayerbotRouteSmoothing
             CompletedQuestReturn = route.CompletedQuestReturn,
             CrossBesidePlaceMarks = route.CrossBesidePlaceMarks,
             Chase = route.Chase,
+            Pathfinder = route.Pathfinder,
         };
     }
 

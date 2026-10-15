@@ -130,6 +130,21 @@ public sealed class FaultLedger
         }
     }
 
+    /// <summary>
+    /// Record <paramref name="exception"/> unless it represents an expected cancellation (<see cref="OperationCanceledException"/>
+    /// with <paramref name="cancellationToken"/> cancelled, or <see cref="TaskCanceledException"/>).
+    /// </summary>
+    public FaultRecording RecordIfUnexpected(string site, Exception exception, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        if (exception is OperationCanceledException && (cancellationToken.IsCancellationRequested || exception is TaskCanceledException))
+        {
+            return new FaultRecording(OverflowId, 0, false, 0);
+        }
+
+        return Record(site, exception);
+    }
+
     /// <summary>Record the fault and log it through <paramref name="logger"/> unless throttled (see <see cref="FaultLedgerLogging"/>).</summary>
     public void Log(ILogger logger, LogLevel level, string site, Exception exception, string message, params object?[] args)
     {
@@ -170,6 +185,55 @@ public sealed class FaultLedger
         }
 
         return list;
+    }
+
+    /// <summary>Group recorded faults by subsystem prefix (the portion of <see cref="FaultSnapshot.Site"/> before <c>'-'</c> or <c>':'</c>).</summary>
+    public IReadOnlyDictionary<string, (int Signatures, long TotalCount)> BySubsystem()
+    {
+        var result = new SortedDictionary<string, (int Signatures, long TotalCount)>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, FaultEntry> pair in _entries)
+        {
+            FaultSnapshot snap = pair.Value.ToSnapshot();
+            if (snap.Count <= 0)
+            {
+                continue;
+            }
+
+            string site = string.IsNullOrWhiteSpace(snap.Site) ? "unknown" : snap.Site.Trim();
+            int dash = site.IndexOf('-');
+            int colon = site.IndexOf(':');
+            int split = (dash, colon) switch
+            {
+                ( > 0, > 0) => Math.Min(dash, colon),
+                ( > 0, _) => dash,
+                (_, > 0) => colon,
+                _ => -1,
+            };
+            string subsystem = split > 0 ? site[..split] : site;
+            if (result.TryGetValue(subsystem, out (int Signatures, long TotalCount) agg))
+            {
+                result[subsystem] = (agg.Signatures + 1, agg.TotalCount + snap.Count);
+            }
+            else
+            {
+                result[subsystem] = (1, snap.Count);
+            }
+        }
+
+        FaultSnapshot overflow = _overflow.ToSnapshot();
+        if (overflow.Count > 0)
+        {
+            if (result.TryGetValue(OverflowId, out (int Signatures, long TotalCount) agg))
+            {
+                result[OverflowId] = (agg.Signatures + 1, agg.TotalCount + overflow.Count);
+            }
+            else
+            {
+                result[OverflowId] = (1, overflow.Count);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>One signature by id, or null.</summary>

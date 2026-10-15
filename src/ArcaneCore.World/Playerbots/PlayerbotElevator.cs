@@ -1059,7 +1059,7 @@ internal static class PlayerbotElevator
         if ((player.Movement.Flags & MovementFlags.OnTransport) != 0 && !PlayerbotMotion.SendStepOff(session, player, at, player.Orientation))
             return ElevatorStep.Traveling;
         if (!PlayerbotMotion.StartFall(session, player, at, player.Orientation)) return ElevatorStep.Traveling;
-        trip.FallYards = at.Z - floor;
+        trip.FallYards = MathF.Max(0f, at.Z - floor);
         trip.FallLanding = at with { Z = floor };
         trip.FallTimeMs = (uint)MathF.Ceiling(MathF.Sqrt(2f * trip.FallYards / PlayerbotFollowDrop.Gravity) * 1000f);
         Enter(trip, ElevatorStage.Falling, now);

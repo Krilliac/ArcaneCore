@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Persistence;
 
 /// <summary>
@@ -390,8 +391,13 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             {
                 await RecoverAsync(id, default).ConfigureAwait(false);
             }
-            catch (Exception)
+            catch (OperationCanceledException)
             {
+                /* expected on shutdown */
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("writequeue-character-recover", ex);
                 // SaveRetainingFailureAsync keeps the snapshot and original failure below.
             }
         }
@@ -496,8 +502,14 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 deferred = await RecoverAsync(slot.Id, token, trustedSettlement: settlement && state is null).ConfigureAwait(false);
             }
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
         {
+            /* expected on shutdown */
+            error = ex;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("writequeue-character-slot", ex);
             error = ex;
         }
 
@@ -621,6 +633,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             }
             catch (CharacterOwnershipRejectedException ex)
             {
+                FaultLedger.Shared.Record("writequeue-character-ownership", ex);
                 EnterTerminalFailure(state, ex);
                 throw;
             }
@@ -645,27 +658,29 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                         $"{streak} consecutive locked-database failures, {retained} snapshot(s) retained, next pause {(long)pause.TotalMilliseconds} ms", "save-busy-storm");
                 }
 
+                FaultLedger.Shared.Record("writequeue-character-busy", ex);
                 _logger.LogWarning(ex, "saving character {Id} failed: the database is locked by another writer; snapshot retained, saves pause {PauseMs} ms then retry", state.Id, (long)pause.TotalMilliseconds);
                 return true;
             }
-            catch (Exception ex) when (attempt < MaxAttempts && !cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (attempt < MaxAttempts && !cancellationToken.IsCancellationRequested && ex is not OutOfMemoryException)
             {
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex);
                 }
 
+                FaultLedger.Shared.Record("writequeue-character-retry", ex);
                 _logger.LogWarning(ex, "saving character {Id} failed (attempt {Attempt}); retrying", state.Id, attempt);
                 await Task.Delay(200 * attempt, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex);
                 }
 
-                _logger.LogError(ex, "saving character {Id} failed; authoritative snapshot retained", state.Id);
+                _logger.LogFault("writequeue-character", ex, "saving character {Id} failed; authoritative snapshot retained", state.Id);
                 Announce(AnnounceSeverity.Error, "A character save failed; the snapshot is retained", $"character {state.Id}: {ex.GetType().Name}: {ex.Message}", "save-failed");
                 throw;
             }
@@ -732,7 +747,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         {
             try { FatalFailure?.Invoke(failure); }
             catch (Exception callbackError) when (callbackError is not OutOfMemoryException)
-            { _logger.LogError(callbackError, "character save queue fatal-failure callback failed"); }
+            { _logger.LogFault("writequeue-character-callback", callbackError, "character save queue fatal-failure callback failed"); }
         }
     }
 
@@ -882,7 +897,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             waiter.Registration = waiter.Token.Register(
                 static state =>
                 {
-                    var (queue, owner, pending) = ((CharacterSaveQueue, Slot, Waiter))state!;
+                    if (!Invariant.Check(state is (CharacterSaveQueue, Slot, Waiter), "character save waiter registration state missing")
+                        || state is not (CharacterSaveQueue queue, Slot owner, Waiter pending))
+                    {
+                        return;
+                    }
+
                     queue.CancelWaiter(owner, pending);
                 },
                 (this, slot, waiter));

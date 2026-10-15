@@ -249,7 +249,14 @@ public sealed partial class SpellSystem
         {
             for (int i = 0; i < stateCount; i++)
             {
-                UpdateState(states[i], diffMs, now);
+                try
+                {
+                    UpdateState(states[i], diffMs, now);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("spell-update", ex);
+                }
             }
         }
         finally
@@ -329,6 +336,7 @@ public sealed partial class SpellSystem
     {
         if (state.CurrentCast is { State: SpellCastState.Finished } terminal)
         {
+            Invariant.Check(false, $"Unit {state.Unit.Guid} had CurrentCast (spell={terminal.Spell.Id}) left in terminal state {terminal.State}.");
             _logger.LogWarning(
                 "spell-state invariant healed for unit {Guid}: CurrentCast (spell={SpellId}) was left in terminal state {State}; clearing",
                 state.Unit.Guid, terminal.Spell.Id, terminal.State);
@@ -339,6 +347,7 @@ public sealed partial class SpellSystem
             && state.CurrentCast is not { State: SpellCastState.Casting, Spell.IsChanneled: true }
             && state.Unit.GetUInt32(UpdateFields.UnitChannelSpell) is var channelSpell && channelSpell != 0)
         {
+            Invariant.Check(false, $"Unit {state.Unit.Guid} had UnitChannelSpell={channelSpell} set without an active channel or pending reset.");
             _logger.LogWarning(
                 "spell-state invariant healed for unit {Guid}: UnitChannelSpell={SpellId} was set without an active channel or pending reset; clearing",
                 state.Unit.Guid, channelSpell);
@@ -1094,6 +1103,18 @@ public sealed partial class SpellSystem
             return SpellCastResult.NotReady;
         }
 
+        if (targets.HasDest
+            && (!float.IsFinite(targets.Dest.X) || !float.IsFinite(targets.Dest.Y) || !float.IsFinite(targets.Dest.Z)))
+        {
+            return SpellCastResult.BadTargets;
+        }
+
+        if ((targets.Mask & SpellCastTargetFlags.SourceLocation) != 0
+            && (!float.IsFinite(targets.Source.X) || !float.IsFinite(targets.Source.Y) || !float.IsFinite(targets.Source.Z)))
+        {
+            return SpellCastResult.BadTargets;
+        }
+
         // Registered first checks (stand state): vmangos Spell.cpp:5309.
         SpellCastResult start = RunCastChecks(SpellCheckPhase.Start, caster, spell, targets, unitTarget, triggered, strict, castItem);
         if (start != SpellCastResult.CastOk)
@@ -1221,7 +1242,11 @@ public sealed partial class SpellSystem
 
         if (needsUnit)
         {
-            Unit target = checkedTarget!;
+            if (checkedTarget is not { } target)
+            {
+                return SpellCastResult.BadTargets;
+            }
+
             // vmangos Spell.cpp:3112-3117 resolves a resurrection's body to its owner, and 5780-5788 checks the body's line of sight
             // (the resurrect effect checks, ResurrectEffects.CheckCorpse): the range is never measured to the ghost, which may have
             // left for a graveyard.
@@ -1355,6 +1380,11 @@ public sealed partial class SpellSystem
 
     private static SpellCastResult CheckDestRange(Unit caster, SpellInfo spell, SpellCastTargets targets, bool strict, Rules.ISpellModifiers? modifiers = null)
     {
+        if (!float.IsFinite(targets.Dest.X) || !float.IsFinite(targets.Dest.Y) || !float.IsFinite(targets.Dest.Z))
+        {
+            return SpellCastResult.BadTargets;
+        }
+
         if (spell.RangeIndex == SpellConstants.RangeIndexSelfOnly || spell.Range.Max <= 0)
         {
             return SpellCastResult.CastOk;
@@ -1541,7 +1571,8 @@ public sealed partial class SpellSystem
             // percent multiplier (aura 72: Clearcasting, cost talents). Casters lane, mana-spend-rule.
             if (((uint)spell.Attributes & Casters.CasterAttributes.ScalesWithCreatureLevel) != 0 && caster.Level > 0)
             {
-                cost = (int)(cost / ((1.117f * spell.SpellLevel / caster.Level) - 0.1327f));
+                float denom = (1.117f * spell.SpellLevel / caster.Level) - 0.1327f;
+                cost = denom > 0.0001f ? (int)(cost / denom) : 0;
             }
 
             cost = (int)(cost * (1.0f + caster.GetFloat(UpdateFields.UnitFieldPowerCostMultiplier + (int)spell.School)));

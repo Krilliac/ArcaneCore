@@ -42,7 +42,7 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
         {
             // The 5875 request always has the three-byte item prefix and the
             // two-byte target mask, even for SELF (wow_messages 1.12).
-            if (payload.Length < 5)
+            if (payload.Length < 5 || !player.IsAlive)
             {
                 return;
             }
@@ -96,6 +96,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_SWAP_ITEM: u8 dst bag, u8 dst slot, u8 src bag, u8 src slot (WorldSession::HandleSwapItem).</summary>
     private static void HandleSwapItem(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 4)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         byte dstBag = reader.ReadByte();
         byte dstSlot = reader.ReadByte();
@@ -133,6 +138,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_SWAP_INV_ITEM: u8 src slot, u8 dst slot, both in the player's own slots (WorldSession::HandleSwapInvItemOpcode).</summary>
     private static void HandleSwapInvItem(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 2)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         byte srcSlot = reader.ReadByte();
         byte dstSlot = reader.ReadByte();
@@ -168,6 +178,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_AUTOEQUIP_ITEM: u8 src bag, u8 src slot (WorldSession::HandleAutoEquipItemOpcode).</summary>
     private static void HandleAutoEquipItem(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 2)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         byte srcBag = reader.ReadByte();
         byte srcSlot = reader.ReadByte();
@@ -177,6 +192,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_AUTOSTORE_BAG_ITEM: u8 src bag, u8 src slot, u8 dst bag (WorldSession::HandleAutoStoreBagItemOpcode).</summary>
     private static void HandleAutoStoreBagItem(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 3)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         byte srcBag = reader.ReadByte();
         byte srcSlot = reader.ReadByte();
@@ -196,6 +216,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_SPLIT_ITEM: u8 src bag, u8 src slot, u8 dst bag, u8 dst slot, u8 count (WorldSession::HandleSplitItemOpcode).</summary>
     private static void HandleSplitItem(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 5)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         byte srcBag = reader.ReadByte();
         byte srcSlot = reader.ReadByte();
@@ -239,6 +264,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_DESTROYITEM: u8 bag, u8 slot, u8 count, u8 data1-3 (unused) (WorldSession::HandleDestroyItemOpcode).</summary>
     private static void HandleDestroyItem(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 3)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         byte bag = reader.ReadByte();
         byte slot = reader.ReadByte();
@@ -252,6 +282,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static async Task HandleItemQuerySingleAsync(WorldSession session, byte[] payload)
     {
+        if (payload.Length < 4)
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         uint entry = reader.ReadUInt32();
         ItemsFeature items = session.Services.GetRequiredService<ItemsFeature>();

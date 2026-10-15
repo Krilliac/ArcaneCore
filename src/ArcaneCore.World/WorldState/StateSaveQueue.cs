@@ -83,8 +83,9 @@ internal sealed class StateSaveQueue<TKey, TState>(Func<TState, Task> save, ILog
             await save(state).ConfigureAwait(false);
             Interlocked.Increment(ref _written);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record($"state-save-queue:{what}", ex);
             logger?.LogError(ex, "could not save the {What} state", what);
         }
     }

@@ -97,7 +97,7 @@ public sealed class AvWorldBossAI : EscortAI
 
         if (System is { } system && Me.Map is { } map)
         {
-            foreach (Player player in map.Players)
+            foreach (Player player in map.Players.ToArray())
             {
                 if (player.IsAlive)
                 {

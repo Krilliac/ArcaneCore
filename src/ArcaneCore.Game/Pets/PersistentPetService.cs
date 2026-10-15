@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 
@@ -26,13 +27,12 @@ public sealed partial class SummonService
     /// <summary>Capture only the current player controlled pet; guardians, critters and wild summons are excluded.</summary>
     public PersistentPetSnapshot? CaptureCurrentPet(Player owner)
     {
-        if (owner.Class != Class.Hunter || owner.Map?.FindObject(owner.PetGuid) is not Creature { Summon: { Kind: SummonKind.Pet, Charm: not null } } pet
+        if (owner.Class != Class.Hunter || owner.Map?.FindObject(owner.PetGuid) is not Creature { Summon: { Kind: SummonKind.Pet, Charm: { } charm } } pet
             || pet.OwnerGuid != owner.Guid)
         {
             return null;
         }
 
-        CharmInfo charm = pet.Summon!.Charm!;
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         List<PersistentPetCooldown> cooldowns = [];
         if (_spells is { } spellSystem)
@@ -445,9 +445,12 @@ public sealed partial class SummonService
             creature.Summon = new SummonLinks(SummonKind.Pet, owner.Guid, 0, TotemSlots.None, 0);
             ApplyOwner(creature, owner, 0);
             InitPet(creature, SummonKind.Pet, owner, snapshot.PetNumber);
-            creature.Summon.Charm!.Name = string.IsNullOrWhiteSpace(snapshot.Name) ? creature.Template.Name : snapshot.Name;
-            creature.Summon.Charm.NameTimestamp = snapshot.NameTimestamp;
-            creature.Summon.Charm.RenameAllowed = snapshot.RenameAllowed;
+            if (creature.Summon.Charm is { } initCharm)
+            {
+                initCharm.Name = string.IsNullOrWhiteSpace(snapshot.Name) ? creature.Template.Name : snapshot.Name;
+                initCharm.NameTimestamp = snapshot.NameTimestamp;
+                initCharm.RenameAllowed = snapshot.RenameAllowed;
+            }
             creature.UnitFlags |= UnitFlags.PetAbandon;
             if (snapshot.RenameAllowed)
             {
@@ -466,10 +469,19 @@ public sealed partial class SummonService
                 : Math.Min(snapshot.Health, creature.MaxHealth);
             creature.SetUInt32(UpdateFields.UnitFieldPower1, Math.Min(snapshot.Mana, creature.GetUInt32(UpdateFields.UnitFieldMaxpower1)));
             creature.SetUInt32(UpdateFields.UnitFieldPower5, snapshot.Happiness);
-            creature.Summon.Charm!.ReactState = (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2);
+            if (creature.Summon.Charm is { } reactCharm)
+            {
+                reactCharm.ReactState = (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2);
+            }
             PetLoyalty.Restore(creature, snapshot.LoyaltyLevel, snapshot.LoyaltyPoints, snapshot.TrainingPoints);
             return new CreatureHome(owner.X, owner.Y, owner.Z, owner.Orientation);
         }, snapshot.PetNumber);
+
+        CharmInfo? maybeCharm = pet.Summon?.Charm;
+        if (!Invariant.Check(maybeCharm is not null, $"SpawnCached pet {pet.Guid} is missing CharmInfo") || maybeCharm is not { } charm)
+        {
+            return null;
+        }
 
         foreach (PersistentPetSpell spell in snapshot.Spells)
         {
@@ -477,7 +489,7 @@ public sealed partial class SummonService
             {
                 continue;
             }
-            pet.Summon!.Charm!.LearnSpell(spell.SpellId, spell.Passive ? ActionType.Passive : spell.Autocast ? ActionType.Enabled : ActionType.Disabled);
+            charm.LearnSpell(spell.SpellId, spell.Passive ? ActionType.Passive : spell.Autocast ? ActionType.Enabled : ActionType.Disabled);
             if (spell.Passive)
             {
                 spellSystem.CastSpell(pet, spell.SpellId, SpellCastTargets.ForSelf(), triggered: true);
@@ -492,10 +504,10 @@ public sealed partial class SummonService
         for (int i = 0; i < Math.Min(snapshot.ActionBar.Count, CharmInfo.ActionBarSize); i++)
         {
             ActionButton button = new(snapshot.ActionBar[i]);
-            pet.Summon!.Charm!.SetActionBar(i, button.Action, button.Type);
+            charm.SetActionBar(i, button.Action, button.Type);
         }
         pet.UnitFlags |= UnitFlags.PetAbandon;
-        if (pet.Summon?.Charm?.RenameAllowed == true)
+        if (charm.RenameAllowed)
         {
             pet.UnitFlags |= UnitFlags.PetRename;
         }
@@ -508,7 +520,7 @@ public sealed partial class SummonService
         AttachPetAi(pet);
         owner.SetPetGuid(pet.Guid);
         owner.Session.Send(WorldOpcode.SmsgPetSpells,
-            PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
+            PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
         RememberPetForSpiritHealer(owner, pet); // Pet::LoadPetFromDB: "save pet for resurrection by spirit healer"
         if (_spells is { } auraSpells)
         {

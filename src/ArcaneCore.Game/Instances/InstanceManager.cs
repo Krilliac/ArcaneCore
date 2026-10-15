@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -8,6 +9,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -142,10 +144,16 @@ public sealed partial class InstanceManager : IMapResolver
         return id;
     }
 
-    private bool IsBattlegroundMap(uint mapId, out IMapResolver resolver)
+    private bool IsBattlegroundMap(uint mapId, [NotNullWhen(true)] out IMapResolver? resolver)
     {
-        resolver = BattlegroundMaps!;
-        return BattlegroundMaps is not null && Registry.Find(mapId) is { IsBattleground: true };
+        if (BattlegroundMaps is { } bgResolver && Registry.Find(mapId) is { IsBattleground: true })
+        {
+            resolver = bgResolver;
+            return true;
+        }
+
+        resolver = null;
+        return false;
     }
 
     /// <summary>
@@ -315,7 +323,7 @@ public sealed partial class InstanceManager : IMapResolver
     /// <inheritdoc />
     public Map ResolveLoginMap(Player player)
     {
-        if (IsBattlegroundMap(player.MapId, out IMapResolver battlegrounds))
+        if (IsBattlegroundMap(player.MapId, out IMapResolver? battlegrounds))
         {
             return battlegrounds.ResolveLoginMap(player);
         }
@@ -346,7 +354,7 @@ public sealed partial class InstanceManager : IMapResolver
     /// <inheritdoc />
     public bool CanEnter(Player player, uint mapId)
     {
-        if (IsBattlegroundMap(mapId, out IMapResolver battlegrounds))
+        if (IsBattlegroundMap(mapId, out IMapResolver? battlegrounds))
         {
             return battlegrounds.CanEnter(player, mapId);
         }
@@ -364,7 +372,7 @@ public sealed partial class InstanceManager : IMapResolver
     /// <inheritdoc />
     public Map? ResolveEntry(Player player, uint mapId)
     {
-        if (IsBattlegroundMap(mapId, out IMapResolver battlegrounds))
+        if (IsBattlegroundMap(mapId, out IMapResolver? battlegrounds))
         {
             return battlegrounds.ResolveEntry(player, mapId);
         }
@@ -413,7 +421,17 @@ public sealed partial class InstanceManager : IMapResolver
         uint characterId = player.Guid.Counter;
         _lastInstance[player.Guid] = (map.MapId, map.InstanceId);
         _persistence.PlayerEnteredInstance(characterId, map.MapId, map.InstanceId);
-        map.FindUpdater<InstanceData>()?.OnPlayerEnter(player);
+        if (map.FindUpdater<InstanceData>() is { } instanceData)
+        {
+            try
+            {
+                instanceData.OnPlayerEnter(player);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("instances.script-player-enter", ex, "Instance script OnPlayerEnter failed on map {MapId} instance {InstanceId} for player {PlayerGuid}", map.MapId, map.InstanceId, player.Guid);
+            }
+        }
 
         // vmangos: "raid instance welcome" (SendInstanceResetWarning on entering a raid).
         if (mapState.Save.Template.IsRaid)
@@ -432,7 +450,7 @@ public sealed partial class InstanceManager : IMapResolver
     /// <inheritdoc />
     public Map? ResolveCorpseMap(uint mapId, uint instanceId)
     {
-        if (IsBattlegroundMap(mapId, out IMapResolver battlegrounds))
+        if (IsBattlegroundMap(mapId, out IMapResolver? battlegrounds))
         {
             return battlegrounds.ResolveCorpseMap(mapId, instanceId);
         }
@@ -684,36 +702,50 @@ public sealed partial class InstanceManager : IMapResolver
         long now = Now;
         foreach ((uint mapId, RaidSchedule schedule) in _raidSchedules)
         {
-            while (schedule.Stage < RaidEventOffsets.Length && now >= schedule.ResetTime - RaidEventOffsets[schedule.Stage])
+            try
             {
-                if (schedule.Stage == RaidEventOffsets.Length - 1)
+                while (schedule.Stage < RaidEventOffsets.Length && now >= schedule.ResetTime - RaidEventOffsets[schedule.Stage])
                 {
-                    GlobalRaidReset(mapId, schedule);
-                    break;
-                }
+                    if (schedule.Stage == RaidEventOffsets.Length - 1)
+                    {
+                        GlobalRaidReset(mapId, schedule);
+                        break;
+                    }
 
-                // Skip warnings whose time already passed with the next one due.
-                bool nextDue = now >= schedule.ResetTime - RaidEventOffsets[schedule.Stage + 1];
-                if (!nextDue)
-                {
-                    SendResetWarnings(mapId, (uint)Math.Max(0, schedule.ResetTime - now));
-                }
+                    // Skip warnings whose time already passed with the next one due.
+                    bool nextDue = now >= schedule.ResetTime - RaidEventOffsets[schedule.Stage + 1];
+                    if (!nextDue)
+                    {
+                        SendResetWarnings(mapId, (uint)Math.Max(0, schedule.ResetTime - now));
+                    }
 
-                schedule.Stage++;
+                    schedule.Stage++;
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("instances.update-raid-schedule", ex, "Failed to update raid reset schedule for map {MapId}", mapId);
             }
         }
 
         foreach (InstanceSave save in _saves.Values.Where(s => !s.Template.IsRaid && s.ResetScheduled && now >= s.ResetTime).ToArray())
         {
-            Map? map = _world.FindMap(save.MapId, save.InstanceId);
-            if (map is null)
+            try
             {
-                ResetSave(save);
+                Map? map = _world.FindMap(save.MapId, save.InstanceId);
+                if (map is null)
+                {
+                    ResetSave(save);
+                }
+                else if (map.PlayerCount == 0 && map.TransitCount == 0 && _mapStates.TryGetValue(map, out InstanceMapState? state))
+                {
+                    state.ResetAfterUnload = true;
+                    state.UnloadTimerMs = InstanceOptions.MinUnloadDelayMs;
+                }
             }
-            else if (map.PlayerCount == 0 && map.TransitCount == 0 && _mapStates.TryGetValue(map, out InstanceMapState? state))
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                state.ResetAfterUnload = true;
-                state.UnloadTimerMs = InstanceOptions.MinUnloadDelayMs;
+                _logger.LogFault("instances.update-save-reset", ex, "Failed to process scheduled reset for map {MapId} instance {InstanceId}", save.MapId, save.InstanceId);
             }
         }
     }
@@ -729,7 +761,14 @@ public sealed partial class InstanceManager : IMapResolver
 
         foreach (Player player in map.Players.ToArray())
         {
-            UpdateHomebindTimer(player, diffMs);
+            try
+            {
+                UpdateHomebindTimer(player, diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("instances.homebind-timer", ex, "Failed to update homebind timer for player {PlayerGuid} on map {MapId} instance {InstanceId}", player.Guid, map.MapId, map.InstanceId);
+            }
         }
 
         if (state.UnloadTimerMs > 0)
@@ -737,7 +776,14 @@ public sealed partial class InstanceManager : IMapResolver
             if (diffMs >= state.UnloadTimerMs)
             {
                 state.UnloadTimerMs = 0;
-                _world.UnloadMap(map);
+                try
+                {
+                    _world.UnloadMap(map);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogFault("instances.unload-map", ex, "Failed to unload empty instance map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
+                }
             }
             else
             {
@@ -899,21 +945,42 @@ public sealed partial class InstanceManager : IMapResolver
             save.Data = text;
             _persistence.InstanceDataSaved(save);
         };
-        data.Initialize();
-        if (save.Data is { } stored)
+        try
         {
-            data.Load(stored);
+            data.Initialize();
+            if (save.Data is { } stored)
+            {
+                data.Load(stored);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("instances.script-init", ex, "Instance script Initialize/Load failed on map {MapId} instance {InstanceId}", map.MapId, map.InstanceId);
         }
 
         map.AddUpdater(data);
         foreach (Creature creature in map.FindUpdater<CreatureMapSystem>()?.Creatures.ToArray() ?? [])
         {
-            data.OnCreatureCreate(creature);
+            try
+            {
+                data.OnCreatureCreate(creature);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("instances.script-creature-create", ex, "Instance script OnCreatureCreate failed on map {MapId} instance {InstanceId} for creature {CreatureEntry}", map.MapId, map.InstanceId, creature.Entry);
+            }
         }
 
         foreach (GameObject go in map.FindUpdater<GameObjectMapSystem>()?.GameObjects.ToArray() ?? [])
         {
-            data.OnObjectCreate(go);
+            try
+            {
+                data.OnObjectCreate(go);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("instances.script-object-create", ex, "Instance script OnObjectCreate failed on map {MapId} instance {InstanceId} for object {ObjectEntry}", map.MapId, map.InstanceId, go.Entry);
+            }
         }
     }
 
@@ -1794,7 +1861,27 @@ public sealed class InstanceMapState
 /// <summary>Drives one instance map's unload timer and its players' homebind timers.</summary>
 internal sealed class InstanceMapUpdater(InstanceManager manager) : IMapUpdater
 {
-    public void Update(Map map, uint diffMs) => manager.UpdateMap(map, diffMs);
+    public void Update(Map map, uint diffMs)
+    {
+        try
+        {
+            manager.UpdateMap(map, diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("instances.map-updater", ex);
+        }
+    }
 
-    public void OnPlayerRemoved(Map map, Player player) => manager.PlayerLeftMap(map, player);
+    public void OnPlayerRemoved(Map map, Player player)
+    {
+        try
+        {
+            manager.PlayerLeftMap(map, player);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("instances.player-removed", ex);
+        }
+    }
 }

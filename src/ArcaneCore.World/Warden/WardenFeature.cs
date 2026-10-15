@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
@@ -117,9 +118,9 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
             await using Data.Content.WorldDbContext db = await factory.CreateDbContextAsync().ConfigureAwait(false);
             ApplyRows(await Data.World.Warden.WardenCheckStore.LoadAsync(db).ConfigureAwait(false));
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "Warden: loading warden_checks failed; running the configured scans only");
+            logger.LogFault("warden-load-checks", ex, "Warden: loading warden_checks failed; running the configured scans only");
         }
     }
 
@@ -165,26 +166,40 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
     {
         foreach ((WorldSession session, Tracked tracked) in _sessions)
         {
-            if (session.State == SessionState.Closed)
+            try
             {
-                if (_sessions.TryRemove(session, out Tracked? removed))
+                if (session.State == SessionState.Closed)
                 {
-                    Drive(session, removed, static (w, _) => w.Flush(), 0u); // the held protocol verdict count is reported, not dropped with the session
+                    if (_sessions.TryRemove(session, out Tracked? removed))
+                    {
+                        Drive(session, removed, static (w, _) => w.Flush(), 0u); // the held protocol verdict count is reported, not dropped with the session
+                    }
+
+                    continue;
                 }
 
-                continue;
+                Drive(session, tracked, static (w, diff) => w.Update(diff), diffMs);
             }
-
-            Drive(session, tracked, static (w, diff) => w.Update(diff), diffMs);
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("warden-tick", ex, "Warden: world tick update faulted for account {AccountId}", session.AccountId);
+            }
         }
 
         // A staff line window that ended with lines held back: one summary line per account and action (world thread).
         WorldRuntime? world = _world;
         if (world is not null)
         {
-            foreach (SuppressedNotices held in _staffLimiter.TakeExpired())
+            try
             {
-                SendToStaff(world, $"{StaffPrefix}{StaffNoticeLimiter.SummaryFor(held)}");
+                foreach (SuppressedNotices held in _staffLimiter.TakeExpired())
+                {
+                    SendToStaff(world, $"{StaffPrefix}{StaffNoticeLimiter.SummaryFor(held)}");
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault("warden-tick", ex, "Warden: staff notice flush faulted");
             }
         }
     }
@@ -217,7 +232,18 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
         foreach (WardenVerdict verdict in batch)
         {
             logger.LogWarning("Warden: account {Account} ({AccountId}): {Reason}; action {Action}", session.AccountName, session.AccountId, verdict.Reason, verdict.Action);
-            Verdict?.Invoke(session, verdict);
+            if (Verdict is { } handlers)
+            {
+                try
+                {
+                    handlers.Invoke(session, verdict);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    logger.LogFault("warden-verdict", ex, "Warden: Verdict subscriber threw for account {AccountId}", session.AccountId);
+                }
+            }
+
             if (verdict.Action != WardenAction.Log)
             {
                 (acting ??= []).Add(verdict);
@@ -340,9 +366,9 @@ public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeatu
 
             await bans.BanAccountAsync(new BanRequest(accountId, _options.BanSeconds, $"Warden: {reason}", BanAuthor)).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "Warden: ban of account {Account} failed", accountId);
+            logger.LogFault("warden-ban", ex, "Warden: ban of account {Account} failed", accountId);
         }
     }
 }

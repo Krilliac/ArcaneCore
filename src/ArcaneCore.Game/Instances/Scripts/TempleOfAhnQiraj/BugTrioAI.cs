@@ -27,7 +27,7 @@ public abstract class BugTrioAI(Creature creature, TempleOfAhnQirajInstance temp
     public override void OnAggro(Unit target)
     {
         base.OnAggro(target);
-        foreach (Creature other in System?.Creatures.Where(c => c.IsAlive && c.Guid != Me.Guid && c.Entry is 15511 or 15543 or 15544) ?? [])
+        foreach (Creature other in System?.Creatures.Where(c => c.IsAlive && c.Guid != Me.Guid && c.Entry is 15511 or 15543 or 15544).ToArray() ?? [])
             if (!other.Combat.IsInCombat) other.AI?.AttackStart(target);
     }
 
@@ -37,7 +37,7 @@ public abstract class BugTrioAI(Creature creature, TempleOfAhnQirajInstance temp
         if (Temple.GetData(TempleOfAhnQirajInstance.BugTrio) == EncounterState.Done) return;
         Me.ClearLootRecipient();
         System?.ForcedDespawn(Me, 4000);
-        foreach (Creature survivor in System?.Creatures.Where(c => c.IsAlive && c.Guid != Me.Guid && c.Entry is 15511 or 15543 or 15544) ?? [])
+        foreach (Creature survivor in System?.Creatures.Where(c => c.IsAlive && c.Guid != Me.Guid && c.Entry is 15511 or 15543 or 15544).ToArray() ?? [])
             if (survivor.AI is BugTrioAI ai) ai.BeginDevour(Me);
     }
 
