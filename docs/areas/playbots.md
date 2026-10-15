@@ -16,6 +16,16 @@ Configuration is `World:Playerbots` (`Enabled`, `MaxBots` 8, `MaxRegisteredBots`
 `MaxActionsPerTick` 48, `AllowedMaps` [0, 1], `FaultBackoffSeconds` 30, `MaxFaults` 3,
 `FaultWindowSeconds` 3600, `AllowLocalLlm`, ...; off by default).
 
+**Think cadence.** Motion runs every tick for every bot; a bot *thinks* (targets, spells, retreat) when the rotation reaches it
+(`PlayerbotThinkRotation`). The tick's think time is `PlayerbotThinkBudget`: `clamp(ThinkBudgetTickShare x (tick interval - the time the
+world spent on everything but the bots) - what the bots already used this tick, ThinkBudgetMinMs, ThinkBudgetMaxMs)`, defaults
+0.6 / 8 ms / 30 ms (min = max is a fixed budget; at least one bot always thinks). Two lanes: a bot in combat, dead or a ghost that has
+not thought for `CombatThinkIntervalMs` (300) is thought for first, for at most `CombatLaneShare` (0.7) of the budget; then every bot from
+the fair cursor (the rest of the budget, so a crowd of fights cannot starve the others). With room for everyone every bot still thinks
+every tick. `.playerbot cadence` prints the last minute's think gap p50/p95/p99/max (all bots and the combat/dead lane), thinks per tick,
+the budget and the share of ticks that ended on the time or action budget (the same line is logged once a minute). A bot silent for
+longer than `ThinkStarvedGapMs` (10 s, 0 = off) is reported once per episode as the `cadence/think-starved` anomaly.
+
 **Caps.** `MaxBots` (0..1000) bounds the bots **running** at once: a stopped, faulted or quarantined bot holds no slot, and a
 start beyond it is refused with `playerbot-capacity` (a startup restore or quarantine retry waits for a slot). `MaxRegisteredBots`
 (0..10000) bounds `.playerbot create` (`playerbot-registry-full`); every registered bot is a real account and character. Both

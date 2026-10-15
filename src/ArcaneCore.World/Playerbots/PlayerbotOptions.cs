@@ -48,10 +48,43 @@ public sealed class PlayerbotOptions
 
     /// <summary>
     /// The most managed client actions all bots may send in one world tick (1..64). The tick's think time is bounded separately, by
-    /// the 8 ms <see cref="PlayerbotThinkRotation.TickBudgetMs"/>: with about 1000 bots the action budget must not be the first limit a
+    /// <see cref="ThinkBudgetMinMs"/>..<see cref="ThinkBudgetMaxMs"/> (<see cref="PlayerbotThinkBudget"/>): with about 1000 bots the action budget must not be the first limit a
     /// tick meets, or each bot waits more ticks for its share of actions and its movement lease runs out between thinks.
     /// </summary>
     public int MaxActionsPerTick { get; set; } = 48;
+
+    /// <summary>
+    /// The least wall time (ms, 1..200) a world tick spends on the bots' thinks, however loaded the tick is: the guarantee that a busy
+    /// server still thinks (<see cref="PlayerbotThinkBudget"/>). At least one bot always thinks per tick. Equal to
+    /// <see cref="ThinkBudgetMaxMs"/> it is a fixed budget.
+    /// </summary>
+    public double ThinkBudgetMinMs { get; set; } = 8;
+
+    /// <summary>The most wall time (ms, at least <see cref="ThinkBudgetMinMs"/>, at most 200) a world tick spends on the bots' thinks, however idle the rest of the tick is.</summary>
+    public double ThinkBudgetMaxMs { get; set; } = 30;
+
+    /// <summary>
+    /// The share (0.05..0.95) of a tick's slack (tick interval minus the time the world spent on everything but the bots) the bots' work
+    /// may take; the think budget is this share of the slack less what the bots already used this tick, between the min and the max.
+    /// </summary>
+    public double ThinkBudgetTickShare { get; set; } = 0.6;
+
+    /// <summary>
+    /// Milliseconds (50..60000) after which a bot that is in combat, dead or a ghost is due for the think lane that comes first
+    /// (<see cref="PlayerbotThinkRotation.TickLanes"/>). Under load such a bot thinks about this often; with room for everyone every bot
+    /// thinks every tick as before.
+    /// </summary>
+    public int CombatThinkIntervalMs { get; set; } = 300;
+
+    /// <summary>The share (0.1..0.9) of the think budget the combat lane may use; the rest is kept for the other bots so they are never starved by a crowd of fights.</summary>
+    public double CombatLaneShare { get; set; } = 0.7;
+
+    /// <summary>
+    /// A bot that goes longer than this many milliseconds (1000..3600000) of world time without a think is reported once per episode as a
+    /// "cadence think-starved" anomaly (<see cref="PlayerbotAnomalies"/>); 0 turns the report off. The default is the ghost walk's stuck
+    /// bound (<see cref="PlayerbotRecovery.StuckMs"/>).
+    /// </summary>
+    public int ThinkStarvedGapMs { get; set; } = 10_000;
 
     /// <summary>
     /// How far (flat yards, 0.5..100) the target of a chase may move from the place the chase route was planned to before the route is
@@ -223,6 +256,17 @@ public sealed class PlayerbotOptions
         if (MaxBulkCommand is < 1 or > MaxBotsCeiling) throw new InvalidOperationException($"{SectionName}: MaxBulkCommand must be 1..{MaxBotsCeiling}.");
         if (ThinkIntervalMs is < 50 or > 60_000) throw new InvalidOperationException($"{SectionName}: ThinkIntervalMs must be 50..60000.");
         if (MaxActionsPerTick is < 1 or > 64) throw new InvalidOperationException($"{SectionName}: MaxActionsPerTick must be 1..64.");
+        if (!double.IsFinite(ThinkBudgetMinMs) || ThinkBudgetMinMs is < 1 or > 200)
+            throw new InvalidOperationException($"{SectionName}: ThinkBudgetMinMs must be 1..200.");
+        if (!double.IsFinite(ThinkBudgetMaxMs) || ThinkBudgetMaxMs < ThinkBudgetMinMs || ThinkBudgetMaxMs > 200)
+            throw new InvalidOperationException($"{SectionName}: ThinkBudgetMaxMs must be ThinkBudgetMinMs..200.");
+        if (!double.IsFinite(ThinkBudgetTickShare) || ThinkBudgetTickShare is < 0.05 or > 0.95)
+            throw new InvalidOperationException($"{SectionName}: ThinkBudgetTickShare must be 0.05..0.95.");
+        if (CombatThinkIntervalMs is < 50 or > 60_000) throw new InvalidOperationException($"{SectionName}: CombatThinkIntervalMs must be 50..60000.");
+        if (!double.IsFinite(CombatLaneShare) || CombatLaneShare is < 0.1 or > 0.9)
+            throw new InvalidOperationException($"{SectionName}: CombatLaneShare must be 0.1..0.9.");
+        if (ThinkStarvedGapMs != 0 && ThinkStarvedGapMs is < 1000 or > 3_600_000)
+            throw new InvalidOperationException($"{SectionName}: ThinkStarvedGapMs must be 0 (off) or 1000..3600000.");
         if (!float.IsFinite(ChaseReplanYards) || ChaseReplanYards is < 0.5f or > 100f) throw new InvalidOperationException($"{SectionName}: ChaseReplanYards must be 0.5..100.");
         if (!double.IsFinite(SlowThinkLogMs) || SlowThinkLogMs is < 0 or > 60_000) throw new InvalidOperationException($"{SectionName}: SlowThinkLogMs must be 0..60000.");
         if (MaxThinkSearchNodes != 0 && MaxThinkSearchNodes is < ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes or > 10_000_000)
