@@ -61,6 +61,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private bool _updateScratchInUse;
     private readonly Dictionary<ObjectGuid, Dictionary<Player, uint>> _questFlagsSent = [];
     private readonly Dictionary<uint, uint[]> _questLootItems = [];
+    private LootContent? _questLootContent; // the loot tables _questLootItems was computed from (a loot reload replaces them)
     private readonly HashSet<uint> _warnedMissingTemplates = [];
     private readonly Dictionary<ObjectGuid, long> _despawnAt = [];
     private readonly Dictionary<uint, uint> _spawnEntries = [];
@@ -1418,11 +1419,18 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return [];
         }
 
+        LootContent content = Loot.Content;
+        if (!ReferenceEquals(content, _questLootContent))
+        {
+            _questLootItems.Clear(); // computed from the tables a live reload replaced
+            _questLootContent = content;
+        }
+
         if (!_questLootItems.TryGetValue(lootId, out uint[]? items))
         {
-            IEnumerable<LootStoreRow> rows = Loot.Content.GetRows(LootTableKind.GameObject, lootId);
+            IEnumerable<LootStoreRow> rows = content.GetRows(LootTableKind.GameObject, lootId);
             rows = rows.Concat(rows.Where(r => r.MinCountOrRef < 0)
-                .SelectMany(r => Loot.Content.GetRows(LootTableKind.Reference, (uint)-r.MinCountOrRef)));
+                .SelectMany(r => content.GetRows(LootTableKind.Reference, (uint)-r.MinCountOrRef)));
             items = [.. rows.Where(r => r.ChanceOrQuestChance < 0 && r.MinCountOrRef >= 0).Select(r => r.Item).Distinct()];
             _questLootItems[lootId] = items;
         }
