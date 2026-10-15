@@ -6,6 +6,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
@@ -125,6 +126,9 @@ internal sealed class PlayerbotRisk
     /// <summary>How often the visible creatures are looked over for hazards.</summary>
     internal const uint HazardScanMs = 2_000;
     private uint _nextScanMs;
+    private readonly PlayerbotPhantomCombatWatch _phantomCombat = new();
+    private readonly PlayerbotRetreatLoopWatch _retreatLoop = new();
+    private uint _retreatDiedMs;
 
     internal PlayerbotRetreat Retreat { get; }
 
@@ -197,6 +201,7 @@ internal sealed class PlayerbotRisk
         // The trail runs on through a pull (a bot is in combat from its first swing, often well short of where it fights).
         Breadcrumbs.Track(player);
         ScanHazards(player);
+        if (!_session.IsInChaosProbe) _phantomCombat.Look(player, _session.World.NowMs);
         if (player.Combat.IsInCombat)
         {
             EndEscape(); // aggroed on the way out: the fight is judged as any other
@@ -215,6 +220,7 @@ internal sealed class PlayerbotRisk
         // The killers: those attackers, and the enemies of the fight being watched (not those of an earlier one).
         (ObjectGuid Guid, uint Entry)[] killers = [.. (attackers ?? [])
             .Concat((Tracker.Active ? Tracker.LastEnemies : []).Select(c => (c.Guid, c.Entry))).Distinct()];
+        CheckKnownDanger(player, killers);
         if (Enabled && killers.Length > 0)
             Memory.Remember(player.MapId, new Vector3(player.X, player.Y, player.Z), killers, _session.World.NowMs,
                 _options.Risk.DangerMemorySeconds);
@@ -222,7 +228,7 @@ internal sealed class PlayerbotRisk
             Hazards.Add(player.MapId, new Vector3(player.X, player.Y, player.Z), PlayerbotHazards.DeathYards, _session.World.NowMs,
                 _options.Risk.DangerMemorySeconds, "death");
         // A death on the way out of a retreat is the retreat's end: the place where the fight turned is remembered as for any other.
-        if (Retreat.Active) NoteRetreatEnd("died");
+        if (Retreat.Active) NoteRetreatEnd(player, "died");
 
         Retreat.Stop("died");
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
@@ -232,6 +238,37 @@ internal sealed class PlayerbotRisk
         _boxedSinceMs = 0;
         Detour = null;
         _waitUntilMs = 0;
+        _retreatLoop.Reset();
+    }
+
+    /// <summary>
+    /// <c>risk/died-in-known-hazard</c>: the bot died to a creature it had fled from or died to before (the danger memory), or inside the
+    /// reach of a creature hazard the risk model held (a creature with a lethal spell, or one fled from:
+    /// <see cref="PlayerbotHazards"/>). Strong-creature hazards, place marks and a death during a retreat (which walks where it must)
+    /// do not count: a pull of a strong quest creature and a reclaim at the body are by design. Cost: only at a death.
+    /// </summary>
+    private void CheckKnownDanger(Player player, (ObjectGuid Guid, uint Entry)[] killers)
+    {
+        uint now = _session.World.NowMs;
+        // A retreat that ended in this death remembers its enemies first (NoteRetreatEnd): that memory is not older knowledge.
+        if (!Enabled || Retreat.Active || _session.IsInChaosProbe
+            || (_retreatDiedMs != 0 && unchecked(now - _retreatDiedMs) < 30_000)) return;
+        foreach ((ObjectGuid guid, uint entry) in killers)
+            if (Memory.IsRemembered(guid, now))
+            {
+                PlayerbotAnomalies.Report(player, "risk", "died-in-known-hazard",
+                    $"killed by creature {entry} that the danger memory already held (fled from or died to before)");
+                return;
+            }
+
+        var here = new Vector3(player.X, player.Y, player.Z);
+        foreach (PlayerbotHazard hazard in Hazards.Active(player.MapId, now))
+            if (!hazard.Creature.IsEmpty && hazard.Kind != PlayerbotHazards.StrongKind && hazard.Covers(here))
+            {
+                PlayerbotAnomalies.Report(player, "risk", "died-in-known-hazard",
+                    $"died inside a '{hazard.Kind}' hazard of creature {hazard.Creature.Value:X} (radius {hazard.Radius:F1})");
+                return;
+            }
     }
 
     internal bool IsRemembered(Creature creature) => Enabled && Memory.IsRemembered(creature.Guid, _session.World.NowMs);
@@ -1049,9 +1086,16 @@ internal sealed class PlayerbotRisk
     private bool _refusalCounted;
 
     /// <summary>A retreat ended (by <see cref="UpdateRetreat"/> or by the bot's death in <see cref="OnDeath"/>): remember the flight and count the outcome. Gated on <see cref="Enabled"/> in one place.</summary>
-    private void NoteRetreatEnd(string? outcome)
+    private void NoteRetreatEnd(Player player, string? outcome)
     {
         if (!Enabled) return;
+        if (outcome == "died")
+        {
+            _retreatDiedMs = Math.Max(1u, _session.World.NowMs);
+            PlayerbotAnomalies.Report(player, "risk", "retreat-died",
+                $"died during a retreat begun for '{Retreat.Reason}' after escapes [{string.Join('+', Retreat.UsedEscapes)}]", AnomalySeverity.Info);
+        }
+
         RememberFlight();
         RetreatStats.Record(outcome);
     }
@@ -1082,6 +1126,7 @@ internal sealed class PlayerbotRisk
         }
         Detour = null;
         Retreat.Start(player, enemies, Tracker.Anchors, Breadcrumbs.Points, reason);
+        _retreatLoop.Started(player, _session.World.NowMs, reason);
     }
 
     /// <summary>One think of a running retreat; true while it owns the bot. A retreat that got away starts the recovery wait.</summary>
@@ -1089,10 +1134,16 @@ internal sealed class PlayerbotRisk
     {
         if (!Retreat.Active) return false;
         if (Retreat.Update(player, interval)) return true;
-        NoteRetreatEnd(Retreat.Outcome);
+        NoteRetreatEnd(player, Retreat.Outcome);
         Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
         if (Retreat.Outcome == "safe") BeginWait(player);
-        else if (Retreat.Outcome == "cornered") _cornered = true;
+        else if (Retreat.Outcome == "cornered")
+        {
+            _cornered = true;
+            PlayerbotAnomalies.Report(player, "risk", "retreat-cornered",
+                $"retreat for '{Retreat.Reason}' ended with the bot still threatened (gave up after {Retreat.UsedEscapes.Count} escapes); it fights on",
+                AnomalySeverity.Info);
+        }
         return false;
     }
 }
