@@ -146,7 +146,8 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     /// </summary>
     internal void AfterThink(PlayerbotBrain brain, Player player, uint nowMs)
     {
-        Combat.AfterThink(brain, player, nowMs);
+        try { Combat.AfterThink(brain, player, nowMs); }
+        catch (Exception error) when (error is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.policy-telemetry", error); }
         ulong bot = player.Guid.Value;
         if (!_bots.TryGetValue(bot, out BotState? state))
         {

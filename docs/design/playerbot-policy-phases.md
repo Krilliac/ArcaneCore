@@ -19,6 +19,21 @@ Telemetry is off by default. It writes goal records (`"k":"goal"`), an optional 
 the combat-decision records phase 4 will need (`"k":"fight"`, `"k":"skip"`; docs/areas/playbots.md, Combat decisions). Output is
 bounded and rotating, and is written off the world thread.
 
+### Pending: the opportunity goal (branch `claude/bot-opportunity`, not on main yet)
+
+That branch adds an opportunity goal: chests, locked chests, gathering nodes and rares, with reward weighed against risk by
+`PlayerbotRiskModel` and the guards cleared to reach the target. Once it lands on main, it joins the policy like this:
+
+1. **One more candidate goal.** Add `Opportunity` to `PlayerbotPolicyGoal` at its ladder position and add its open-goal probe to
+   `PolicySnapshot`. Map its `PlayerbotGoalKind` in `PlayerbotPolicySchema.GoalOf` and add a promotion case in `TryPromotedGoal` under
+   its rung's guards. Changing the goal list changes the weights-file layout, so a model trained before that point is refused (by
+   design: the names must match).
+2. **An `"k":"opportunity"` record per opportunity decision**, written by the combat telemetry from a sink call in the opportunity
+   controller (the same pattern as `PlayerbotRisk.CombatSink`). It carries the features (bot level, health and mana, distance, target
+   kind), the estimated `reward` and `risk`, `guards` (the guard count), `engaged` (0 or 1), and `o`: `loot` (the value looted, in
+   copper), `died`, and `seconds` (time spent from the decision to the loot, the abandonment or the death).
+3. **Phase 3** learns the risk-appetite weighting from those records alongside the goal records.
+
 ## Phase 3: train the goal policy and A/B it (staged, gated)
 
 Branch `claude/bot-policy-phase3`, stacked on phases 1 and 2. It adds `AbPolicyShare` (the bot's arm, by a hash of its guid), the
@@ -66,4 +81,5 @@ Gates, all required before phase 4 starts:
   the next fight.
 - **Retreat.** `fight.retreat` (the verdict that ran, or the stay closest to running) with `died`, `damage_pct` and `ttk`.
 - **Rest.** `fight.rest` (health and mana at the fight's end, `rested`) with `downtime` and the next fight's outcome.
-- **Target choice.** `fight.targets` (each in-fight switch) with `ttk`, `damage_pct` and `died`.
+- **Target choice.** `fight.targets`: each pick's candidate set (`c`), the chosen index (`pick`) and that target's own `ttk`, with the
+  fight's `damage_pct` and `died`.

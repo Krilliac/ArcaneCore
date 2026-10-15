@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Policy;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,9 @@ internal sealed partial class PlayerbotBrain
 
     /// <summary>The session's services (the policy telemetry reads the quest log through them).</summary>
     internal IServiceProvider Services => _session.Services;
+
+    /// <summary>The bot's session (the policy telemetry reads its auras through it).</summary>
+    internal WorldSession Session => _session;
 
     /// <summary>
     /// The policy hook, at the top of the out-of-combat goal ladder (world thread). Decides from the current snapshot's scores (the ladder

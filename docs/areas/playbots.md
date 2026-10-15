@@ -673,24 +673,30 @@ server.
 
 **Combat decisions** (telemetry only, written with the goal records when telemetry is on; a later phase may score them, gated in
 [docs/design/playerbot-policy-phases.md](../design/playerbot-policy-phases.md)). Nothing here changes a decision: the risk model tells
-`PlayerbotCombatTelemetry` what it assessed (`PlayerbotRisk.CombatSink`, after `Assess` and after `Judge`), and the rest is observed
-after each think. Two kinds of record:
+`PlayerbotCombatTelemetry` what it assessed and whether the choice took it (`PlayerbotRisk.CombatSink`, after `Assess` and after
+`Judge`; a sink fault is counted and never reaches the decision), and the rest is observed after each think. Two kinds of record:
 
 - `fight`, one per fight (from the first think in combat to the first out of it, or the bot's death), written when the bot's next fight
   starts (so its downtime is known) or after ten minutes without one (`downtime` null). Its keys:
-  - `engage`: the pull that started it, or null with risk scoring off. It holds `f` (`level`, `health`, `mana` (1 without mana),
+  - `engage`: the pull the risk model took (an engage, or a detour with a route), when the fight's first target is that creature; null
+    with risk scoring off or when something else started the fight (a wanderer that aggroed first). It holds `f` (`level`, `health`, `mana` (1 without mana),
     `level_diff`, `elite`, `health_ratio`, `distance`, `risk`, `reward`, `adds`), `decision` (`engage` or `detour`), `reason` and
     `entry`.
-  - `targets`: each in-fight switch of target, at most four, with `f` (`attackers`, `target_health`, `level_diff`, `distance`,
-    `attacking_bot`).
+  - `targets`: each target pick (the first and each switch, at most four): `c`, the live enemies it chose among (at most four, the
+    chosen one always included), each `target_health`, `level_diff`, `distance`, `attacking_bot`, `elite`; `pick`, the index of the
+    chosen one; and `ttk`, seconds from the pick to that target's death (null if it lived). The target is the bot's melee victim, else
+    its own target when that is one of the enemies.
   - `retreat`: the retreat decision, null with risk scoring off. It is the verdict that ran (`retreat` 1) or the stay closest to
     running (`retreat` 0, the least time to die per time to kill). It holds `f` (`health`, `dps_in`, `dps_out`, `enemies`,
     `time_to_kill`, `time_to_die`, `target_health`) and `reason`.
-  - `rest`: `f` (health and mana at the fight's end) and `rested` (1 when the bot began to rest within 5 s).
+  - `rest`: `f` (health, mana and resurrection sickness at the fight's end) and `rested` (1 when the bot's goal became `Rest` within
+    5 s of the looting that followed the fight, or of the fight's end; `Rest` also covers waiting with no food and waiting sickness out,
+    which `sick` helps tell apart).
   - `o`: `died`, `killed` (the first target died), `ttk` (seconds to that, or null), `fight` (seconds), `damage` (health lost,
-    summed over thinks), `damage_pct` (of maximum health) and `downtime` (seconds to the next fight).
-- `skip`, a pull candidate the risk model turned down (`decision` `avoid` or `rest`; once a minute per creature, at most eight
-  waiting per bot), with the same `f`, `reason` and `entry`, and `o.wait` (seconds until the bot's next fight, null past ten minutes).
+    summed over thinks from the think before the fight; a heal within one think hides that much damage), `damage_pct` (of maximum
+    health) and `downtime` (seconds to the next fight; null past ten minutes, or when the bot left first).
+- `skip`, a pull candidate the choice did not take (`decision` `avoid`, `rest`, or a `detour` with no route; once a minute per
+  creature, at most eight waiting per bot), with the same `f`, `reason` and `entry`, and `o.wait` (seconds until the bot's next fight, null past ten minutes).
 
 **Training (phase 3, staged separately).** An offline trainer and an A/B report (for `tools/playerbot-policy/`) are staged on their own
 branch, to land once the server has run with telemetry on. They fit

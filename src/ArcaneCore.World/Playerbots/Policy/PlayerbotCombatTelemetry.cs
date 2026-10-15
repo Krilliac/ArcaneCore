@@ -17,39 +17,47 @@ internal interface IPlayerbotTelemetryRecord
 }
 
 /// <summary>
-/// Where the risk model tells the combat telemetry what it decided (world thread, inside a think): each pull candidate it assessed and
-/// each in-fight verdict. <see cref="PlayerbotRisk.CombatSink"/> is null unless the policy telemetry is on.
+/// Where the risk model tells the combat telemetry what it decided (world thread, inside a think): each pull candidate it assessed,
+/// with whether the choice took it, and each in-fight verdict. <see cref="PlayerbotRisk.CombatSink"/> is null unless the policy telemetry
+/// is on; the risk model guards the calls, so a sink fault never changes a decision.
 /// </summary>
 internal interface IPlayerbotCombatSink
 {
-    void Assessed(Player player, Creature candidate, in PlayerbotEngagement verdict, uint nowMs);
+    /// <param name="taken">The choice took this candidate (an engage, or a detour with a route); false: it was turned down.</param>
+    void Assessed(Player player, Creature candidate, in PlayerbotEngagement verdict, bool taken, uint nowMs);
 
     void Judged(Player player, in PlayerbotFightFacts facts, in PlayerbotFightVerdict verdict, uint nowMs);
 }
 
 /// <summary>
-/// Combat-adjacent decision telemetry for a later combat policy (docs/areas/playbots.md, Goal policy, Combat decisions): the four
-/// decisions a policy may one day score (engage or skip a pull, retreat, rest after a fight, which target in a fight) with their features,
-/// the option the rules chose, and what followed. Nothing here changes a decision. One <c>fight</c> record per fight (from the first think
-/// in combat to the first out of it, or the bot's death) and one <c>skip</c> record per pull candidate the risk model turned down
-/// (once a minute per creature). World thread.
+/// Combat-adjacent decision telemetry for a later combat policy (docs/areas/playbots.md, Combat decisions): the four decisions a policy
+/// may one day score (engage or skip a pull, retreat, rest after a fight, which target in a fight) with their features, the option the
+/// rules chose, and what followed. Nothing here changes a decision. One <c>fight</c> record per fight (from the first think in combat to
+/// the first out of it, or the bot's death) and one <c>skip</c> record per pull candidate turned down (once a minute per creature).
+/// World thread.
 /// </summary>
 internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord> enqueue, Func<long> unixMs) : IPlayerbotCombatSink
 {
     /// <summary>A candidate turned down is recorded again only after this long.</summary>
     internal const uint SkipRepeatMs = 60_000;
 
-    /// <summary>The most turned-down candidates one bot holds while waiting for its next pull.</summary>
+    /// <summary>The most turned-down candidates one bot holds while waiting for its next fight.</summary>
     internal const int MaxPendingSkips = 8;
 
-    /// <summary>The most in-fight target switches one fight record keeps.</summary>
+    /// <summary>The most target picks one fight record keeps (the first and three switches).</summary>
     internal const int MaxTargets = 4;
+
+    /// <summary>The most candidates one target pick lists (the chosen one always among them).</summary>
+    internal const int MaxCandidates = 4;
 
     /// <summary>An engage verdict this old when a fight starts did not start it.</summary>
     internal const uint EngageFreshMs = 30_000;
 
-    /// <summary>After a fight, a rest begun within this long is the rest decision.</summary>
+    /// <summary>After a fight (and its looting), a rest begun within this long is the rest decision.</summary>
     internal const uint RestLookMs = 5_000;
+
+    /// <summary>Looting after a fight pushes the rest window back by at most this long.</summary>
+    internal const uint LootMaxMs = 30_000;
 
     /// <summary>Downtime longer than this (no next fight) is written as null.</summary>
     internal const uint DowntimeCapMs = 600_000;
@@ -62,39 +70,44 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
     internal static readonly string[] FightFeatureNames =
         ["health", "dps_in", "dps_out", "enemies", "time_to_kill", "time_to_die", "target_health"];
 
-    /// <summary>An in-fight target's features (fight record, <c>targets[].f</c>).</summary>
-    internal static readonly string[] TargetFeatureNames = ["attackers", "target_health", "level_diff", "distance", "attacking_bot"];
+    /// <summary>One in-fight target candidate's features (fight record, <c>targets[].c[]</c>).</summary>
+    internal static readonly string[] TargetFeatureNames = ["target_health", "level_diff", "distance", "attacking_bot", "elite"];
+
+    /// <summary>The state at a fight's end the rest decision is taken on (fight record, <c>rest.f</c>).</summary>
+    internal static readonly string[] RestFeatureNames = ["health", "mana", "sick"];
 
     private readonly Dictionary<ulong, Bot> _bots = [];
+    private readonly List<Creature> _enemies = [];
 
     internal long Fights { get; private set; }
 
     internal long Skips { get; private set; }
 
-    public void Assessed(Player player, Creature candidate, in PlayerbotEngagement verdict, uint nowMs)
+    public void Assessed(Player player, Creature candidate, in PlayerbotEngagement verdict, bool taken, uint nowMs)
     {
         Bot bot = BotOf(player);
         bot.LastSeenMs = nowMs;
-        float[] features = CandidateFeatures(player, candidate, verdict);
-        if (verdict.Decision is PlayerbotEngageDecision.Engage or PlayerbotEngageDecision.Detour)
+        if (taken)
         {
-            bot.Engage = new Choice(nowMs, unixMs(), candidate.Guid.Value, features, verdict);
+            bot.Engage = new Choice(nowMs, unixMs(), candidate.Guid.Value, CandidateFeatures(player, candidate, verdict), verdict);
             return;
         }
         ulong guid = candidate.Guid.Value;
         if (bot.SkipSeen.TryGetValue(guid, out uint seen) && unchecked(nowMs - seen) < SkipRepeatMs) return;
+        if (bot.Skips.Count >= MaxPendingSkips) return;
         if (bot.SkipSeen.Count >= 64) bot.SkipSeen.Clear();
         bot.SkipSeen[guid] = nowMs;
-        if (bot.Skips.Count >= MaxPendingSkips) return;
-        bot.Skips.Add(new Choice(nowMs, unixMs(), guid, features, verdict));
+        bot.Skips.Add(new Choice(nowMs, unixMs(), guid, CandidateFeatures(player, candidate, verdict), verdict));
     }
 
     public void Judged(Player player, in PlayerbotFightFacts facts, in PlayerbotFightVerdict verdict, uint nowMs)
     {
-        if (BotOf(player).Fight is not { } fight) return;
+        Bot bot = BotOf(player);
+        // The judgement runs inside the think, before AfterThink: the fight starts here when this is its first think in combat.
+        Fight fight = bot.Fight ?? StartFight(bot, player, nowMs);
         // The retreat decision of a fight: the verdict that ran, else the stay closest to running (the least time to die per time to kill).
-        float margin = verdict.TimeToDie / MathF.Max(verdict.TimeToKill, 0.1f);
         if (fight.Retreat is { Retreat: true }) return;
+        float margin = verdict.TimeToDie / MathF.Max(verdict.TimeToKill, 0.1f);
         if (verdict.Retreat || fight.Retreat is null || margin < fight.RetreatMargin)
         {
             fight.Retreat = verdict;
@@ -121,35 +134,21 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
         bool alive = player.IsAlive;
         bool inCombat = player.Combat.IsInCombat;
 
-        if (bot.Fight is null && inCombat && alive)
-        {
-            Choice? engage = bot.Engage is { } pending && unchecked(nowMs - pending.AtMs) < EngageFreshMs ? pending : null;
-            bot.Engage = null;
-            bot.Fight = new Fight(nowMs, unixMs(), player.MapId, player.ZoneId, engage, player.Health, player.MaxHealth);
-            if (bot.After is { } after) Emit(player, bot, after, downtimeMs: unchecked(nowMs - after.EndMs));
-            foreach (Choice skip in bot.Skips) Enqueue(new PlayerbotSkipRecord(skip, player, waitMs: unchecked(nowMs - skip.AtMs)));
-            bot.Skips.Clear();
-        }
+        if (bot.Fight is null && inCombat && alive) StartFight(bot, player, nowMs);
 
         if (bot.Fight is { } fight)
         {
             if (player.Health < fight.LastHealth) fight.Damage += fight.LastHealth - player.Health;
             fight.LastHealth = player.Health;
-            // A caster's spell target is not its melee victim: the brain's own target stands in.
-            if ((player.Combat.Victim as Creature ?? brain.InspectionTarget) is { } victim && victim.Guid.Value != fight.LastVictim)
-            {
-                if (fight.LastVictim != 0 && fight.Targets.Count < MaxTargets) fight.Targets.Add(TargetFeatures(player, victim));
-                fight.LastVictim = victim.Guid.Value;
-                fight.FirstTarget ??= victim;
-            }
-            if (fight.KilledAtMs == 0 && fight.FirstTarget is { IsAlive: false }) fight.KilledAtMs = Math.Max(1u, nowMs);
+            FollowTargets(brain, player, fight, nowMs);
             if (!inCombat || !alive)
             {
                 bot.Fight = null;
                 bot.After = new After(fight, nowMs, Died: !alive, Health: player.MaxHealth > 0 ? (float)player.Health / player.MaxHealth : 0f,
-                    Mana: ManaPct(player));
+                    Mana: ManaPct(player), Sick: alive && PlayerbotSickness.IsSick(brain.Session, player)) { RestFromMs = nowMs };
             }
         }
+        bot.LastHealth = player.Health;
 
         if (bot.Fight is null && bot.Skips.Count > 0 && unchecked(nowMs - bot.Skips[0].AtMs) > DowntimeCapMs)
         {
@@ -159,28 +158,84 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
 
         if (bot.After is { } done && bot.Fight is null)
         {
-            uint since = unchecked(nowMs - done.EndMs);
-            if (since <= RestLookMs && brain.Goal == PlayerbotGoalKind.Rest) done.Rested = true;
-            if (since > DowntimeCapMs) Emit(player, bot, done, downtimeMs: null);
+            // The loot comes first: the rest decision is the one taken after it.
+            if (brain.Goal == PlayerbotGoalKind.Loot && unchecked(nowMs - done.EndMs) <= LootMaxMs) done.RestFromMs = nowMs;
+            else if (unchecked(nowMs - done.RestFromMs) <= RestLookMs && brain.Goal == PlayerbotGoalKind.Rest) done.Rested = true;
+            if (unchecked(nowMs - done.EndMs) > DowntimeCapMs) Emit(player.Guid.Value, bot, done, downtimeMs: null);
         }
     }
 
-    /// <summary>Forget bots not seen for <paramref name="goneMs"/>; their unfinished fight is not written. Returns how many were dropped.</summary>
+    /// <summary>
+    /// Forget bots not seen for <paramref name="goneMs"/>: a finished fight still waiting for its downtime is written (downtime null),
+    /// a fight under way and its waiting skips are not. Returns how many bots were dropped.
+    /// </summary>
     internal int Sweep(uint nowMs, uint goneMs)
     {
         List<ulong>? remove = null;
         foreach ((ulong guid, Bot bot) in _bots)
             if (unchecked(nowMs - bot.LastSeenMs) > goneMs) (remove ??= []).Add(guid);
         if (remove is null) return 0;
-        foreach (ulong guid in remove) _bots.Remove(guid);
+        foreach (ulong guid in remove)
+        {
+            if (_bots[guid].After is { } after) Emit(guid, _bots[guid], after, downtimeMs: null);
+            _bots.Remove(guid);
+        }
         return remove.Count;
     }
 
-    private void Emit(Player player, Bot bot, After after, uint? downtimeMs)
+    private Fight StartFight(Bot bot, Player player, uint nowMs)
+    {
+        Choice? engage = bot.Engage is { } pending && unchecked(nowMs - pending.AtMs) < EngageFreshMs ? pending : null;
+        bot.Engage = null;
+        // The health before this think: the blow that started the fight counts.
+        var fight = new Fight(nowMs, unixMs(), player.MapId, player.ZoneId, engage, bot.LastHealth is > 0 and var last ? last : player.Health,
+            player.MaxHealth);
+        bot.Fight = fight;
+        if (bot.After is { } after) Emit(player.Guid.Value, bot, after, downtimeMs: unchecked(nowMs - after.EndMs));
+        foreach (Choice skip in bot.Skips) Enqueue(new PlayerbotSkipRecord(skip, player, waitMs: unchecked(nowMs - skip.AtMs)));
+        bot.Skips.Clear();
+        return fight;
+    }
+
+    /// <summary>A pick is the live enemy the bot fights (its melee victim, else its own target when that is an enemy) changing.</summary>
+    private void FollowTargets(PlayerbotBrain brain, Player player, Fight fight, uint nowMs)
+    {
+        foreach (TargetPick pick in fight.Targets)
+            if (pick.KilledAtMs == 0 && !pick.Chosen.IsAlive) pick.KilledAtMs = Math.Max(1u, nowMs);
+
+        _enemies.Clear();
+        if (player.Combat.Victim is Creature { IsAlive: true } victim) _enemies.Add(victim);
+        foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
+            if (unit is Creature { IsAlive: true } creature && ReferenceEquals(creature.Map, player.Map) && !_enemies.Contains(creature))
+                _enemies.Add(creature);
+        Creature? chosen = player.Combat.Victim as Creature is { IsAlive: true } meleeVictim ? meleeVictim
+            : brain.InspectionTarget is { IsAlive: true } own && _enemies.Contains(own) ? own : null;
+        if (chosen is null || chosen.Guid.Value == fight.LastChosen) return;
+        fight.LastChosen = chosen.Guid.Value;
+        if (fight.Targets.Count == 0)
+            // The pull: its engage verdict holds only when the fight is with the creature it chose (not a wanderer that came first).
+            fight.EngageMatched = fight.Engage is { } engage && engage.Target == chosen.Guid.Value;
+        if (fight.Targets.Count >= MaxTargets) return;
+
+        int at = _enemies.IndexOf(chosen);
+        if (at >= MaxCandidates) (_enemies[0], _enemies[at]) = (_enemies[at], _enemies[0]);
+        int count = Math.Min(_enemies.Count, MaxCandidates);
+        var candidates = new float[count][];
+        int pickIndex = 0;
+        for (int i = 0; i < count; i++)
+        {
+            candidates[i] = TargetFeatures(player, _enemies[i]);
+            if (ReferenceEquals(_enemies[i], chosen)) pickIndex = i;
+        }
+        fight.Targets.Add(new TargetPick(nowMs, chosen, candidates, pickIndex));
+        _enemies.Clear();
+    }
+
+    private void Emit(ulong botGuid, Bot bot, After after, uint? downtimeMs)
     {
         bot.After = null;
         Fights++;
-        enqueue(new PlayerbotFightRecord(player.Guid.Value, after, downtimeMs));
+        enqueue(new PlayerbotFightRecord(botGuid, after, downtimeMs));
     }
 
     private void Enqueue(PlayerbotSkipRecord record)
@@ -191,42 +246,40 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
 
     private Bot BotOf(Player player)
     {
-        if (!_bots.TryGetValue(player.Guid.Value, out Bot? bot) && _bots.Count < 65_536) _bots[player.Guid.Value] = bot = new Bot();
-        return bot ?? new Bot(); // past the cap: a throwaway state, nothing recorded for good
+        if (_bots.TryGetValue(player.Guid.Value, out Bot? bot)) return bot;
+        if (_bots.Count >= 65_536) return _overflow; // past the cap: one shared scratch state, its records unreliable but bounded
+        return _bots[player.Guid.Value] = new Bot();
     }
 
-    private static float[] CandidateFeatures(Player player, Creature candidate, in PlayerbotEngagement verdict)
-    {
-        float distance = MathF.Sqrt((player.X - candidate.X) * (player.X - candidate.X) + (player.Y - candidate.Y) * (player.Y - candidate.Y)
-            + (player.Z - candidate.Z) * (player.Z - candidate.Z));
-        return
-        [
-            player.Level / 60f,
-            player.MaxHealth > 0 ? (float)player.Health / player.MaxHealth : 0f,
-            ManaPct(player),
-            ((int)candidate.Level - (int)player.Level) / 10f,
-            candidate.Template.Rank is 1 or 2 or 3 ? 1f : 0f,
-            player.MaxHealth > 0 ? MathF.Min(10f, (float)candidate.MaxHealth / player.MaxHealth) / 10f : 0f,
-            MathF.Min(distance, 100f) / 50f,
-            verdict.Risk,
-            verdict.Reward,
-            verdict.Adds / 5f,
-        ];
-    }
+    private readonly Bot _overflow = new();
 
-    private static float[] TargetFeatures(Player player, Creature target)
+    private static float[] CandidateFeatures(Player player, Creature candidate, in PlayerbotEngagement verdict) =>
+    [
+        player.Level / 60f,
+        player.MaxHealth > 0 ? (float)player.Health / player.MaxHealth : 0f,
+        ManaPct(player),
+        ((int)candidate.Level - (int)player.Level) / 10f,
+        candidate.Template.Rank is 1 or 2 or 3 ? 1f : 0f,
+        player.MaxHealth > 0 ? MathF.Min(10f, (float)candidate.MaxHealth / player.MaxHealth) / 10f : 0f,
+        MathF.Min(Distance(player, candidate), 100f) / 50f,
+        verdict.Risk,
+        verdict.Reward,
+        verdict.Adds / 5f,
+    ];
+
+    private static float[] TargetFeatures(Player player, Creature target) =>
+    [
+        target.MaxHealth > 0 ? (float)target.Health / target.MaxHealth : 0f,
+        ((int)target.Level - (int)player.Level) / 10f,
+        MathF.Min(Distance(player, target), 60f) / 30f,
+        player.Combat.Attackers.Contains(target) ? 1f : 0f,
+        target.Template.Rank is 1 or 2 or 3 ? 1f : 0f,
+    ];
+
+    private static float Distance(Player player, Creature creature)
     {
-        float distance = MathF.Sqrt((player.X - target.X) * (player.X - target.X) + (player.Y - target.Y) * (player.Y - target.Y));
-        int attackers = player.Combat.Attackers.Count();
-        bool attackingBot = player.Combat.Attackers.Contains(target);
-        return
-        [
-            attackers / 5f,
-            target.MaxHealth > 0 ? (float)target.Health / target.MaxHealth : 0f,
-            ((int)target.Level - (int)player.Level) / 10f,
-            MathF.Min(distance, 60f) / 30f,
-            attackingBot ? 1f : 0f,
-        ];
+        float dx = player.X - creature.X, dy = player.Y - creature.Y, dz = player.Z - creature.Z;
+        return MathF.Sqrt(dx * dx + dy * dy + dz * dz);
     }
 
     /// <summary>Mana as 0..1; 1 for a bot without mana (rage, energy), which never waits for it.</summary>
@@ -240,6 +293,15 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
 
     internal sealed record Choice(uint AtMs, long UnixMs, ulong Target, float[] Features, PlayerbotEngagement Verdict);
 
+    internal sealed class TargetPick(uint atMs, Creature chosen, float[][] candidates, int pick)
+    {
+        public uint AtMs { get; } = atMs;
+        public Creature Chosen { get; } = chosen;
+        public float[][] Candidates { get; } = candidates;
+        public int Pick { get; } = pick;
+        public uint KilledAtMs;
+    }
+
     internal sealed class Fight(uint startMs, long unixMs, uint map, uint zone, Choice? engage, uint health, uint maxHealth)
     {
         public uint StartMs { get; } = startMs;
@@ -247,26 +309,27 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
         public uint Map { get; } = map;
         public uint Zone { get; } = zone;
         public Choice? Engage { get; } = engage;
+        public bool EngageMatched;
         public uint MaxHealth { get; } = maxHealth;
         public uint LastHealth = health;
         public long Damage;
-        public ulong LastVictim;
-        public Creature? FirstTarget;
-        public uint KilledAtMs;
-        public readonly List<float[]> Targets = [];
+        public ulong LastChosen;
+        public readonly List<TargetPick> Targets = [];
         public PlayerbotFightVerdict? Retreat;
         public float RetreatMargin;
         public float[]? RetreatFeatures;
     }
 
-    internal sealed record After(Fight Fight, uint EndMs, bool Died, float Health, float Mana)
+    internal sealed record After(Fight Fight, uint EndMs, bool Died, float Health, float Mana, bool Sick)
     {
+        public uint RestFromMs { get; set; }
         public bool Rested { get; set; }
     }
 
     private sealed class Bot
     {
         public uint LastSeenMs;
+        public uint LastHealth;
         public Choice? Engage;
         public Fight? Fight;
         public After? After;
@@ -281,6 +344,7 @@ internal sealed record PlayerbotFightRecord(ulong Bot, PlayerbotCombatTelemetry.
     public void WriteTo(IBufferWriter<byte> output)
     {
         PlayerbotCombatTelemetry.Fight fight = After.Fight;
+        PlayerbotCombatTelemetry.TargetPick? first = fight.Targets.Count > 0 ? fight.Targets[0] : null;
         using (var json = new Utf8JsonWriter(output))
         {
             json.WriteStartObject();
@@ -290,7 +354,7 @@ internal sealed record PlayerbotFightRecord(ulong Bot, PlayerbotCombatTelemetry.
             json.WriteString("bot", Bot.ToString("X", CultureInfo.InvariantCulture));
             json.WriteNumber("map", fight.Map);
             json.WriteNumber("zone", fight.Zone);
-            if (fight.Engage is { } engage)
+            if (fight is { Engage: { } engage, EngageMatched: true })
             {
                 json.WriteStartObject("engage");
                 PlayerbotSkipRecord.WriteChoice(json, engage);
@@ -298,10 +362,14 @@ internal sealed record PlayerbotFightRecord(ulong Bot, PlayerbotCombatTelemetry.
             }
             else json.WriteNull("engage");
             json.WriteStartArray("targets");
-            foreach (float[] target in fight.Targets)
+            foreach (PlayerbotCombatTelemetry.TargetPick pick in fight.Targets)
             {
                 json.WriteStartObject();
-                PlayerbotSkipRecord.WriteFeatures(json, target);
+                json.WriteStartArray("c");
+                foreach (float[] candidate in pick.Candidates) PlayerbotSkipRecord.WriteArray(json, candidate);
+                json.WriteEndArray();
+                json.WriteNumber("pick", pick.Pick);
+                WriteSeconds(json, "ttk", pick.KilledAtMs, pick.AtMs);
                 json.WriteEndObject();
             }
             json.WriteEndArray();
@@ -315,14 +383,13 @@ internal sealed record PlayerbotFightRecord(ulong Bot, PlayerbotCombatTelemetry.
             }
             else json.WriteNull("retreat");
             json.WriteStartObject("rest");
-            PlayerbotSkipRecord.WriteFeatures(json, [After.Health, After.Mana]);
+            PlayerbotSkipRecord.WriteFeatures(json, [After.Health, After.Mana, After.Sick ? 1f : 0f]);
             json.WriteNumber("rested", After.Rested ? 1 : 0);
             json.WriteEndObject();
             json.WriteStartObject("o");
             json.WriteNumber("died", After.Died ? 1 : 0);
-            json.WriteNumber("killed", fight.KilledAtMs != 0 ? 1 : 0);
-            if (fight.KilledAtMs != 0) json.WriteNumber("ttk", Math.Round(unchecked(fight.KilledAtMs - fight.StartMs) / 1000.0, 1));
-            else json.WriteNull("ttk");
+            json.WriteNumber("killed", first is { KilledAtMs: not 0 } ? 1 : 0);
+            WriteSeconds(json, "ttk", first?.KilledAtMs ?? 0, fight.StartMs);
             json.WriteNumber("fight", Math.Round(unchecked(After.EndMs - fight.StartMs) / 1000.0, 1));
             json.WriteNumber("damage", fight.Damage);
             json.WriteNumber("damage_pct", fight.MaxHealth > 0 ? Math.Round((double)fight.Damage / fight.MaxHealth, 3) : 0);
@@ -333,9 +400,15 @@ internal sealed record PlayerbotFightRecord(ulong Bot, PlayerbotCombatTelemetry.
         }
         output.Write("\n"u8);
     }
+
+    private static void WriteSeconds(Utf8JsonWriter json, string name, uint atMs, uint fromMs)
+    {
+        if (atMs != 0) json.WriteNumber(name, Math.Round(unchecked(atMs - fromMs) / 1000.0, 1));
+        else json.WriteNull(name);
+    }
 }
 
-/// <summary>A pull candidate the risk model turned down (<c>"k":"skip"</c>) and how long the bot then went without a fight.</summary>
+/// <summary>A pull candidate turned down (<c>"k":"skip"</c>) and how long the bot then went without a fight.</summary>
 internal sealed record PlayerbotSkipRecord(PlayerbotCombatTelemetry.Choice Choice, ulong Bot, uint Map, uint Zone, uint? WaitMs)
     : IPlayerbotTelemetryRecord
 {
@@ -373,8 +446,14 @@ internal sealed record PlayerbotSkipRecord(PlayerbotCombatTelemetry.Choice Choic
 
     internal static void WriteFeatures(Utf8JsonWriter json, float[] features)
     {
-        json.WriteStartArray("f");
-        foreach (float value in features) json.WriteNumberValue(float.IsFinite(value) ? MathF.Round(value, 4) : 0f);
+        json.WritePropertyName("f");
+        WriteArray(json, features);
+    }
+
+    internal static void WriteArray(Utf8JsonWriter json, float[] values)
+    {
+        json.WriteStartArray();
+        foreach (float value in values) json.WriteNumberValue(float.IsFinite(value) ? MathF.Round(value, 4) : 0f);
         json.WriteEndArray();
     }
 }
