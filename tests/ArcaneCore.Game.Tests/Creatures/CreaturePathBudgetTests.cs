@@ -298,5 +298,41 @@ public sealed class CreaturePathBudgetTests
             Assert.Equal(0, nav.SampleCalls);
         }
     }
+
+    [Fact]
+    public void CrowdedRandomWanderPass_CapsRandomSearchesAtEight_AndBacksOffFourToTenSeconds()
+    {
+        var spawns = new List<CreatureSpawn>(300);
+        for (uint i = 1; i <= 300; i++)
+        {
+            spawns.Add(Spawn(i, WolfEntry, 10f + (i % 20), 10f + (i / 20), movementType: 1, wander: 5f));
+        }
+
+        var content = new CreatureContent([Template()], spawns, [], [], [], CreatureAiContent.Empty);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);
+        using (runtime)
+        {
+            system.PathBudget = new CreaturePathBudget(MaxSearches: 64, MaxNodes: long.MaxValue);
+            var nav = new CountingSamplerPathfinder();
+            WorldCollision.Of(runtime).Install(pathfinder: nav);
+            AddPlayer(runtime, 1, 15f, 15f);
+
+            // Advance 1000 ms in one tick so all 300 random wanderers' initial 1 s timer expires together:
+            runtime.RunTick(1000);
+
+            Assert.Equal(8, nav.PathCalls);
+            Assert.Equal(8, nav.SampleCalls);
+            Assert.Equal(300 - 8, system.DeferredPathSearches);
+
+            // Over the next 3.5 seconds (35 x 100 ms), none of the 292 deferred wanderers re-hammer because crowded backoff is 4-10 s:
+            long deferredAfterBurst = system.DeferredPathSearches;
+            for (int i = 0; i < 35; i++)
+            {
+                runtime.RunTick(100);
+            }
+
+            Assert.Equal(deferredAfterBurst, system.DeferredPathSearches);
+        }
+    }
 }
 

@@ -116,7 +116,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         if (mover is ICreaturePathQuery { HasPathBudget: false } budgeted)
         {
             budgeted.NoteDeferred(creature);
-            _nextMoveMs = mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
+            _nextMoveMs = budgeted.IsCrowdedRandomPass ? mover.URand(4, 10) * 1000 : mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
             return true;
         }
 
@@ -162,13 +162,13 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
         if (plan.Outcome == PathOutcome.Deferred)
         {
-            _nextMoveMs = mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
+            _nextMoveMs = mover is ICreaturePathQuery { IsCrowdedRandomPass: true } ? mover.URand(4, 10) * 1000 : mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
             return true;
         }
 
         mover.MovePath(creature, plan.Corners, run, SplineFacing.None);
 
-        if (_wanderSteps > 0)
+        if (_wanderSteps > 0 && mover is not ICreaturePathQuery { IsCrowdedRandomPass: true })
         {
             _wanderSteps--;
             _nextMoveMs = 50;
@@ -177,7 +177,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         {
             // "Retail seems to use rounded numbers so we do as well" (vmangos).
             _nextMoveMs = mover.URand(4, 10) * 1000;
-            _wanderSteps = mover.URand(0, wander <= 1.0f ? 2 : 8);
+            _wanderSteps = mover is ICreaturePathQuery { IsCrowdedRandomPass: true } ? 0 : mover.URand(0, wander <= 1.0f ? 2 : 8);
         }
 
         return true;

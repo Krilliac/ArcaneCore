@@ -380,9 +380,13 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     /// </summary>
     internal static bool IsAcceptable(WorldSession session, in MovementInfo movement)
     {
+        bool chaosProbe = session.IsInChaosProbe;
         if (!float.IsFinite(movement.X) || !float.IsFinite(movement.Y) || !float.IsFinite(movement.Z) || !float.IsFinite(movement.Orientation))
         {
-            session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite world coordinates or orientation", session.RemoteEndpoint);
+            if (chaosProbe)
+                session.Logger.LogDebug("[{Endpoint}] chaos-probe movement packet rejected: non-finite world coordinates or orientation", session.RemoteEndpoint);
+            else
+                session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite world coordinates or orientation", session.RemoteEndpoint);
             return false;
         }
 
@@ -390,7 +394,10 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             && (!float.IsFinite(movement.TransportX) || !float.IsFinite(movement.TransportY)
                 || !float.IsFinite(movement.TransportZ) || !float.IsFinite(movement.TransportOrientation)))
         {
-            session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite transport coordinates or orientation", session.RemoteEndpoint);
+            if (chaosProbe)
+                session.Logger.LogDebug("[{Endpoint}] chaos-probe movement packet rejected: non-finite transport coordinates or orientation", session.RemoteEndpoint);
+            else
+                session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite transport coordinates or orientation", session.RemoteEndpoint);
             return false;
         }
 
@@ -399,7 +406,10 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
                 || !float.IsFinite(movement.JumpCosAngle) || !float.IsFinite(movement.JumpSinAngle)
                 || !float.IsFinite(movement.JumpXySpeed) || !float.IsFinite(movement.SplineElevation)))
         {
-            session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite pitch/jump/spline field under strict finiteness", session.RemoteEndpoint);
+            if (chaosProbe)
+                session.Logger.LogDebug("[{Endpoint}] chaos-probe movement packet rejected: non-finite pitch/jump/spline field under strict finiteness", session.RemoteEndpoint);
+            else
+                session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite pitch/jump/spline field under strict finiteness", session.RemoteEndpoint);
             return false;
         }
 

@@ -319,6 +319,8 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
 
     bool ICreaturePathQuery.HasPathBudget => HasPathBudget;
 
+    bool ICreaturePathQuery.IsCrowdedRandomPass => _inCrowdedRandomPass;
+
     void ICreaturePathQuery.NoteDeferred(Creature creature) => NoteDeferredPath(creature);
 
     /// <summary>vmangos MAP_ALTERAC_VALLEY: the map whose unreachable victims lose their threat after one second (Creature.cpp:1026-1027).</summary>

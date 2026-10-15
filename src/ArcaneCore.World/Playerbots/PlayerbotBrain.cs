@@ -983,7 +983,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
             PlayerbotThinkProbe.Phase("quest destinations");
             if (_quests.PreferredCreatureEntry == 0 && player.Combat.Victim is null
-                && (PlayerbotThinkProbe.Active?.Queries ?? 0) < 12
+                && (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)
                 && _destinations.HasQuestCandidate(player))
             {
                 // Available quest travel precedes optional idle grinding. Actual combat,
@@ -1042,7 +1042,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _lootOpened = false;
             if (_target is null)
             {
-                if ((PlayerbotThinkProbe.Active?.Queries ?? 0) < 12)
+                if (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)
                 {
                     PlayerbotThinkProbe.Phase("grind destinations");
                     uint huntEntry = _quests.PreferredCreatureEntry != 0 ? _quests.PreferredCreatureEntry : materialDropper;
@@ -2521,10 +2521,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
-        if (player.Map is null)
+        if (player.Map is null || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false })
             return;
         PlayerbotThinkProbe.Phase("explore candidates");
         if (TryExploreSpawns(player, elapsedMs)) return;
+        if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
         // Wander onward: keep roughly the current facing (within +-60 degrees, golden-ratio spread so successive legs
         // differ). Only after a refusal turn anywhere. The old golden-angle-from-zero choice sent each leg
         // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
@@ -2633,7 +2634,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private void ChainWanderLeg(Player player, uint elapsedMs)
     {
         if (_route is not { Complete: false } route || !ReferenceEquals(route, _wanderLeg) || ExploreMovementPaused(player, elapsedMs)
-            || route.Points.Count < 2) return;
+            || route.Points.Count < 2 || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
         if (!PlayerbotMotion.TryTimeToEnd(player, route, out uint remainingMs)) return;
         uint gap = PlayerbotMotion.ThinkGapMs(player);
         if (gap == 0) gap = (uint)_options.ThinkIntervalMs;

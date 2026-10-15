@@ -494,8 +494,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     public long HomePathTeleports { get; private set; }
 
     /// <summary>Whether another search fits the tick's budget. The last search may overshoot the node budget by one search's cap.</summary>
-    public bool HasPathBudget => _pathSearchesThisTick < PathBudget.MaxSearches && _pathNodesThisTick < PathBudget.MaxNodes;
+    public bool HasPathBudget => _pathSearchesThisTick < (_inCrowdedRandomPass ? _randomPassSearchLimit : PathBudget.MaxSearches) && _pathNodesThisTick < PathBudget.MaxNodes;
 
+    private bool _inCrowdedRandomPass;
+    private int _randomPassSearchLimit;
     private Creature? _pathFirstDeferred;
 
     /// <summary>
@@ -799,44 +801,56 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             }
         }
 
-        foreach (Creature creature in _randomMotionScratch)
+        if (_randomMotionScratch.Count > 256 && PathBudget.MaxSearches > 8)
         {
-            if (creature.DeathState == CreatureDeathState.Alive
-                && _creatures.ContainsKey(creature.Guid)
-                && (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default)))
-            {
-                long motionStart = Stopwatch.GetTimestamp();
-                try
-                {
-                    creature.Motion.Update(diffMs);
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    _logger.LogFault(
-                        "CreatureMapSystem.UpdateCreatureMotion",
-                        ex,
-                        "Creature random motion update fault for {Guid} (entry={Entry}, name={Name}, map={MapId}, pos=({X:F2},{Y:F2},{Z:F2}))",
-                        creature.Guid,
-                        creature.Entry,
-                        creature.Template.Name,
-                        Map.MapId,
-                        creature.X,
-                        creature.Y,
-                        creature.Z);
-                }
+            _inCrowdedRandomPass = true;
+            _randomPassSearchLimit = Math.Min(PathBudget.MaxSearches, _pathSearchesThisTick + 8);
+        }
 
-                long motionTicks = Stopwatch.GetTimestamp() - motionStart;
-                _timing.Motion += motionTicks;
-                if (motionTicks > _timing.SlowestCreatureTicks)
+        try
+        {
+            foreach (Creature creature in _randomMotionScratch)
+            {
+                if (creature.DeathState == CreatureDeathState.Alive
+                    && _creatures.ContainsKey(creature.Guid)
+                    && (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default)))
                 {
-                    _timing.SlowestCreatureTicks = motionTicks;
-                    _timing.SlowestEntry = creature.Entry;
-                    _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+                    long motionStart = Stopwatch.GetTimestamp();
+                    try
+                    {
+                        creature.Motion.Update(diffMs);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        _logger.LogFault(
+                            "CreatureMapSystem.UpdateCreatureMotion",
+                            ex,
+                            "Creature random motion update fault for {Guid} (entry={Entry}, name={Name}, map={MapId}, pos=({X:F2},{Y:F2},{Z:F2}))",
+                            creature.Guid,
+                            creature.Entry,
+                            creature.Template.Name,
+                            Map.MapId,
+                            creature.X,
+                            creature.Y,
+                            creature.Z);
+                    }
+
+                    long motionTicks = Stopwatch.GetTimestamp() - motionStart;
+                    _timing.Motion += motionTicks;
+                    if (motionTicks > _timing.SlowestCreatureTicks)
+                    {
+                        _timing.SlowestCreatureTicks = motionTicks;
+                        _timing.SlowestEntry = creature.Entry;
+                        _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+                    }
                 }
             }
         }
-
-        _randomMotionScratch.Clear();
+        finally
+        {
+            _inCrowdedRandomPass = false;
+            _randomMotionScratch.Clear();
+        }
     }
 
     /// <summary><see cref="UpdateAi"/>, its time added to the update's AI stage.</summary>

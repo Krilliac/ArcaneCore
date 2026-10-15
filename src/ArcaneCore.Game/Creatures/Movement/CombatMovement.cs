@@ -25,6 +25,9 @@ internal interface ICreaturePathQuery
 
     /// <summary>A chase/follow re-path was put off to a later update because <see cref="HasPathBudget"/> was false.</summary>
     void NoteDeferred(Creature creature);
+
+    /// <summary>True when Pass 2 random movement is running on a crowded continent map (&gt;256 active random-wandering creatures).</summary>
+    bool IsCrowdedRandomPass => false;
 }
 
 /// <summary>

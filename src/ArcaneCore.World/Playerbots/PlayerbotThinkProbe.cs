@@ -82,6 +82,12 @@ internal sealed class PlayerbotThinkProbe
     /// <summary>Navigation queries made through <see cref="Find"/> in this think.</summary>
     internal int Queries { get; private set; }
 
+    /// <summary>Total A* nodes created on this thread since <see cref="Begin"/>.</summary>
+    internal long TotalNodes => PathSearchCounters.NodesCreated - _searchBefore.Nodes;
+
+    /// <summary>True when this think has not yet spent a heavy pathfinding budget and may start optional destination/explore plans.</summary>
+    internal bool HasOptionalPlanBudget => Queries < 10 && TotalNodes < 16_384;
+
     /// <summary>Their time (Stopwatch ticks).</summary>
     internal long QueryTicks { get; private set; }
 
