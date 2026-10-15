@@ -58,6 +58,9 @@ public sealed class SqliteFirstCommandTimeoutTests : IDisposable
         string connection = new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, "characters.db"), Pooling = false, DefaultTimeout = stringTimeoutSeconds }.ToString();
         await using ServiceProvider provider = Build(connection);
         await provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
+        // Run the scenario once with no lock held, in its own scope, so the timed run below is a fresh context and connection but pays no
+        // one-time cost (JIT, EF's query and command pipeline): on a loaded runner that cold start alone took longer than the bound.
+        Assert.Null(await RunFreshAsync(provider, scenario));
 
         await using var holder = new SqliteConnection(connection);
         await holder.OpenAsync();
