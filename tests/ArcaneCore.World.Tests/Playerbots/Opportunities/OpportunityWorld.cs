@@ -41,6 +41,12 @@ internal static class OpportunityWorld
     internal const uint GreenItem = 95101, BlueItem = 95102, GreyItem = 95103, KeyItem = 95900;
     internal const uint KeyLock = 71, PickLock = 72, HerbLock = 73;
     internal const uint PickLockSpell = 1804;
+
+    /// <summary>The herb gathering spell (an OpenLock on <see cref="HerbLock"/>) and the rare creature with a blue item to drop (its entry is its spawn number).</summary>
+    internal const uint HerbSpell = 9201, RareEntry = 96700;
+
+    /// <summary>A Pick Lock whose range is 0: the server turns the cast down at once (out of range) and the cast never stays in flight.</summary>
+    internal const uint ShortPickSpell = 9202;
     internal const float StartX = -8949.95f, StartY = -132.49f, StartZ = 83.53f;
 
     internal static ulong ChestGuid(ChestSpawn spawn) => ObjectGuid.WithEntry(HighGuid.GameObject, spawn.Entry, spawn.Spawn).Value;
@@ -90,7 +96,8 @@ internal static class OpportunityWorld
             (LootTableKind.GameObject, new LootStoreRow(FreeChest, GreenItem, 100f, 0, 1, 1)),
             (LootTableKind.GameObject, new LootStoreRow(FreeChest, BlueItem, 50f, 0, 1, 1)),
             (LootTableKind.GameObject, new LootStoreRow(JunkChest, GreyItem, 100f, 0, 1, 1)),
-        ], []);
+            (LootTableKind.Creature, new LootStoreRow(RareEntry, BlueItem, 100f, 0, 1, 1)),
+        ], [new CreatureLootInfo(RareEntry, RareEntry, 0, 0, 0)]);
         context = new GameObjectTestContext(content, loot);
 
         var items = new ItemTestContent();
@@ -137,6 +144,16 @@ internal static class OpportunityWorld
                 {
                     Id = PickLockSpell, SpellName = "Pick Lock", RangeIndex = 12, Targets = 0x4000, CastingTimeIndex = 2,
                     Effect1 = 33, EffectImplicitTargetA1 = 23, EffectMiscValue1 = (int)LockType.PickLock, EffectBasePoints1 = -1, EffectBaseDice1 = 1, EffectDieSides1 = 1,
+                },
+                new SpellTemplateRow
+                {
+                    Id = ShortPickSpell, SpellName = "Short Pick", RangeIndex = 1, Targets = 0x4000, CastingTimeIndex = 2,
+                    Effect1 = 33, EffectImplicitTargetA1 = 23, EffectMiscValue1 = (int)LockType.PickLock, EffectBasePoints1 = -1, EffectBaseDice1 = 1, EffectDieSides1 = 1,
+                },
+                new SpellTemplateRow
+                {
+                    Id = HerbSpell, SpellName = "Herb Gathering", RangeIndex = 12, Targets = 0x4000, CastingTimeIndex = 2,
+                    Effect1 = 33, EffectImplicitTargetA1 = 23, EffectMiscValue1 = (int)LockType.Herbalism, EffectBasePoints1 = -1, EffectBaseDice1 = 1, EffectDieSides1 = 1,
                 },
             ],
             [new SpellCastTimeRow { Id = 2, CastTime = 500, MinCastTime = 500 }], [], [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 12, MaxRange = 5 }], [],

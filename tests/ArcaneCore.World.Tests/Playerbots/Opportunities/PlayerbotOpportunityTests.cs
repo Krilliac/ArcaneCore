@@ -8,8 +8,10 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Protocol;
+using System.Numerics;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Tests.GameObjects;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -128,10 +130,10 @@ public sealed class PlayerbotOpportunityTests
         return false;
     }
 
-    /// <summary>Gives the bot what a rogue of that Lockpicking skill has: the Pick Lock spell in its book and the skill.</summary>
-    private static void LearnPickLock(Rig rig, ushort skill)
+    /// <summary>Gives the bot what a picker of that Lockpicking skill has: the Pick Lock spell in its book and the skill.</summary>
+    private static void LearnPickLock(Rig rig, ushort skill, uint spell = PickLockSpell)
     {
-        Assert.True(rig.Bot.Session.Services.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().Spellbook.LearnSpell(rig.Player, PickLockSpell));
+        Assert.True(rig.Bot.Session.Services.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().Spellbook.LearnSpell(rig.Player, spell));
         rig.Player.Skills!.Set(SkillIds.Lockpicking, skill, skill);
     }
 
@@ -246,10 +248,10 @@ public sealed class PlayerbotOpportunityTests
     }
 
     [Fact]
-    public async Task APickLockChest_IsTakenOnlyByARogueWhoseSkillReachesTheLock()
+    public async Task APickLockChest_IsTakenOnlyByAPickerWhoseSkillReachesTheLock()
     {
         ChestSpawn locked = new(PickChest, 3, 3f, 0f);
-        // A warrior has no Pick Lock; a rogue with too little Lockpicking cannot yet; with the skill the rogue picks it.
+        // A bot without the spell cannot pick; one with too little Lockpicking cannot yet; with the skill the picker picks it.
         await using (Rig plain = await Rig.StartAsync([locked], playerClass: 1))
         {
             await RunClockAsync(plain, () => false, steps: 12);
@@ -257,21 +259,21 @@ public sealed class PlayerbotOpportunityTests
             Assert.Null(plain.Bot.Controller.ActiveKey);
         }
 
-        await using (Rig rogue = await Rig.StartAsync([locked], playerClass: 1))
+        await using (Rig picker = await Rig.StartAsync([locked]))
         {
-            await rogue.World(() => { LearnPickLock(rogue, 10); return true; });
-            await RunClockAsync(rogue, () => false, steps: 12);
-            Assert.Null(rogue.Bot.Controller.LastVerdict);
-            Assert.Null(rogue.Bot.Controller.ActiveKey);
+            await picker.World(() => { LearnPickLock(picker, 10); return true; });
+            await RunClockAsync(picker, () => false, steps: 12);
+            Assert.Null(picker.Bot.Controller.LastVerdict);
+            Assert.Null(picker.Bot.Controller.ActiveKey);
         }
 
-        await using (Rig rogue = await Rig.StartAsync([locked], playerClass: 1))
+        await using (Rig picker = await Rig.StartAsync([locked]))
         {
-            await rogue.World(() => { LearnPickLock(rogue, 25); return true; });
-            Assert.True(await RunClockAsync(rogue, () => rogue.Bot.Controller.ActiveKey == KeyOf(locked), steps: 40), "the rogue never started on the chest");
-            Assert.True(await RunAsync(rogue, () => rogue.Bot.Sink.Any(a => a.Opcode == WorldOpcode.CmsgLootRelease), steps: 400), "the rogue never picked the lock: " + rogue.Bot.Controller.Report + " " + string.Join(",", rogue.Bot.Session.DrainManagedPackets().Select(p => p.Opcode + ":" + Convert.ToHexString(p.Payload))));
-            await PlayLootAsync(rogue);
-            Assert.Equal(1u, await rogue.World(() => rogue.Player.Inventory.GetItemCount(GreenItem)));
+            await picker.World(() => { LearnPickLock(picker, 25); return true; });
+            Assert.True(await RunClockAsync(picker, () => picker.Bot.Controller.ActiveKey == KeyOf(locked), steps: 40), "the picker never started on the chest");
+            Assert.True(await RunAsync(picker, () => picker.Bot.Sink.Any(a => a.Opcode == WorldOpcode.CmsgLootRelease), steps: 400), "the picker never picked the lock: " + picker.Bot.Controller.Report + " " + string.Join(",", picker.Bot.Session.DrainManagedPackets().Select(p => p.Opcode + ":" + Convert.ToHexString(p.Payload))));
+            await PlayLootAsync(picker);
+            Assert.Equal(1u, await picker.World(() => picker.Player.Inventory.GetItemCount(GreenItem)));
         }
     }
 
@@ -286,7 +288,7 @@ public sealed class PlayerbotOpportunityTests
         Assert.Null(rig.Bot.Controller.LastVerdict);
     }
 
-    private static async Task<Rig> PickingRogueAsync(ChestSpawn locked)
+    private static async Task<Rig> PickingBotAsync(ChestSpawn locked)
     {
         Rig rig = await Rig.StartAsync([locked]);
         await rig.World(() => { LearnPickLock(rig, 25); return true; });
@@ -294,10 +296,10 @@ public sealed class PlayerbotOpportunityTests
         return rig;
     }
 
-    private static Task SendCastFailure(Rig rig, SpellCastResult reason) => rig.World(() =>
+    private static Task SendCastFailure(Rig rig, SpellCastResult reason, uint spell = PickLockSpell) => rig.World(() =>
     {
         var failure = new PacketWriter();
-        failure.WriteUInt32(PickLockSpell);
+        failure.WriteUInt32(spell);
         failure.WriteByte((byte)SpellCastResultStatus.Failure);
         failure.WriteByte((byte)reason);
         rig.Bot.Session.Send(WorldOpcode.SmsgCastResult, failure);
@@ -308,7 +310,7 @@ public sealed class PlayerbotOpportunityTests
     public async Task APickThatSlips_IsCastAgain_NotGivenUp()
     {
         ChestSpawn locked = new(PickChest, 3, 3f, 0f);
-        await using Rig rig = await PickingRogueAsync(locked);
+        await using Rig rig = await PickingBotAsync(locked);
         using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
         await SendCastFailure(rig, SpellCastResult.TryAgain);
         await rig.World(() => { rig.Bot.Step(); return true; });
@@ -322,7 +324,7 @@ public sealed class PlayerbotOpportunityTests
     public async Task APickThatFailsForGood_IsReportedOnce_AndSetAside()
     {
         ChestSpawn locked = new(PickChest, 3, 3f, 0f);
-        await using Rig rig = await PickingRogueAsync(locked);
+        await using Rig rig = await PickingBotAsync(locked);
         using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
         await SendCastFailure(rig, SpellCastResult.Interrupted);
         await rig.World(() => { rig.Bot.Step(); return true; });
@@ -528,6 +530,457 @@ public sealed class PlayerbotOpportunityTests
         await rig.World(() => { rig.Bot.Options.Opportunities.Nodes = false; return true; });
         rig.Clock += 20_000;
         Assert.False(await rig.World(() => rig.Bot.Controller.NodeVeto(go)), "the Nodes option off still vetoed");
+    }
+
+    // --- the node veto: risk, never value -------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(10)]
+    [InlineData(30)]
+    public async Task ANodeWithOneWeakSameLevelGuard_IsNotVetoed_ButAnEliteFarAboveIs(int level)
+    {
+        ChestSpawn node = new(NodeChest, 4, 3f, 0f); // its loot is one grey item: worth far less than MinValue, which must not matter
+        await using Rig rig = await Rig.StartAsync([node], tweak: o => o.Opportunities.MinValue = 5f);
+        await rig.World(() => { rig.Player.Level = (byte)level; return true; });
+        GameObject go = rig.ChestOf(node);
+        await AddGuardAsync(rig, 96510, 5f, 2f, (byte)level);
+        Assert.False(await rig.World(() => rig.Bot.Controller.NodeVeto(go)), "one ordinary same-level guard vetoed the node");
+
+        await AddGuardAsync(rig, 96511, 6f, 2f, (byte)(level + 9), 1, 400);
+        rig.Clock += 20_000; // past the veto cache
+        Assert.True(await rig.World(() => rig.Bot.Controller.NodeVeto(go)), "an elite far above the bot did not veto the node");
+    }
+
+    // --- crafting asks the veto -----------------------------------------------------------------------------------------
+
+    private static async Task<PlayerbotCrafting> GatheringBotAsync(Rig rig)
+    {
+        await rig.World(() =>
+        {
+            Assert.True(rig.Bot.Session.Services.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().Spellbook.LearnSpell(rig.Player, HerbSpell));
+            rig.Player.Skills!.Set(SkillIds.Herbalism, 10, 10);
+            return true;
+        });
+        return new PlayerbotCrafting(rig.Bot.Session, rig.Bot.Options);
+    }
+
+    private static Task<bool> GatherThink(Rig rig, PlayerbotCrafting crafting) => rig.World(() =>
+    {
+        rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+        return crafting.Update(rig.Player, 500);
+    });
+
+    [Fact]
+    public async Task Gathering_LeavesANodeTheVetoRefuses_AndTakesOneItDoesNot()
+    {
+        ChestSpawn node = new(NodeChest, 4, 3f, 0f);
+        await using Rig rig = await Rig.StartAsync([node]);
+        PlayerbotCrafting crafting = await GatheringBotAsync(rig);
+
+        crafting.GatherVeto = _ => true;
+        Assert.False(await GatherThink(rig, crafting), "the bot went for a node its veto refused");
+
+        crafting.GatherVeto = _ => false;
+        Assert.True(await GatherThink(rig, crafting), "the bot ignored a node its veto allowed");
+        Assert.Equal(NodeChest, crafting.TargetEntry);
+    }
+
+    [Fact]
+    public async Task Gathering_AsksTheOpportunityGoal_AboutTheGuardsBesideTheNode()
+    {
+        ChestSpawn node = new(NodeChest, 4, 3f, 0f);
+        await using Rig rig = await Rig.StartAsync([node]);
+        PlayerbotCrafting crafting = await GatheringBotAsync(rig);
+        crafting.GatherVeto = rig.Bot.Controller.NodeVeto;
+        await AddGuardAsync(rig, 96512, 5f, 2f, 9, 1, 400);
+        Assert.False(await GatherThink(rig, crafting), "the bot gathered a node an elite guards");
+
+        await rig.World(() => { rig.Bot.Options.Opportunities.Nodes = false; return true; });
+        rig.Clock += 20_000;
+        Assert.True(await GatherThink(rig, crafting), "with the Nodes option off the guards must not matter");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheBrain_GathersAnUnguardedNode_ButNotOneAnEliteGuards(bool guarded)
+    {
+        ChestSpawn node = new(NodeChest, 4, 3f, 0f);
+        await using Rig rig = await Rig.StartAsync([node]);
+        await GatheringBotAsync(rig);
+        if (guarded) await AddGuardAsync(rig, 96520, 5f, 2f, 12, 1, 400);
+
+        bool gathering = await RunBrainAsync(rig, () => rig.Bot.Brain.Goal == PlayerbotGoalKind.Vendor && rig.Bot.Brain.TargetEntry == NodeChest, steps: 40);
+        Assert.Equal(!guarded, gathering);
+    }
+
+    // --- the brain's targets: a guard let go, a guard it cannot take ---------------------------------------------------
+
+    /// <summary>A fight the opportunity goal accepts at a high appetite but the brain's own grind does not choose (a level-3 guard with 200 health: a risk of about 0.9).</summary>
+    private static void BoldButNotAGrinder(PlayerbotOptions o)
+    {
+        o.Opportunities.RiskAppetite = 4f;
+        o.Opportunities.PersonalityVariance = 0f;
+        o.Opportunities.MaxDeathProbability = 0.5f;
+    }
+
+    [Fact]
+    public async Task TheBrain_DropsTheGuardItWasHanded_WhenAnEliteJoinsThePack()
+    {
+        await using Rig rig = await Rig.StartAsync([Free], tweak: BoldButNotAGrinder);
+        await rig.World(() => { InstallOpenGround(rig.Host); return true; });
+        Creature guard = await AddGuardAsync(rig, 96410, 5f, 2f, 3, 0, 200);
+        Assert.True(await RunBrainAsync(rig, () => ReferenceEquals(rig.Bot.Brain.InspectionTarget, guard), steps: 60), "the brain never went for the guard: " + rig.Bot.Brain.Opportunities.Report);
+        Assert.Equal(KeyOf(Free), rig.Bot.Brain.Opportunities.ActiveKey);
+
+        await AddGuardAsync(rig, 96411, 6f, 2f, 12, 1, 400); // an elite far above joins the pack
+        Assert.True(await RunBrainAsync(rig, () => rig.Bot.Brain.Opportunities.ActiveKey is null, steps: 30), "the episode never ended: " + rig.Bot.Brain.Opportunities.Report);
+        Assert.Equal("elite-above", rig.Bot.Brain.Opportunities.LastVerdict!.Value.Reason);
+        Assert.False(ReferenceEquals(rig.Bot.Brain.InspectionTarget, guard), "the brain went on with the pull the goal gave up");
+    }
+
+    [Fact]
+    public async Task TheBrain_DropsTheGuardItWasHanded_WhenARealPlayerComesToTheChest()
+    {
+        await using Rig rig = await Rig.StartAsync([Free], tweak: BoldButNotAGrinder);
+        await rig.World(() => { InstallOpenGround(rig.Host); return true; });
+        Creature guard = await AddGuardAsync(rig, 96412, 5f, 2f, 3, 0, 200);
+        Assert.True(await RunBrainAsync(rig, () => ReferenceEquals(rig.Bot.Brain.InspectionTarget, guard), steps: 60), "the brain never went for the guard: " + rig.Bot.Brain.Opportunities.Report);
+
+        await using WorldTestClient client = await rig.Host.EnterWorldAsync("OPPREAL2", "Realtwo");
+        Player human = await rig.Host.PlayerAsync("Realtwo");
+        await rig.Host.WaitForWorldAsync(() => rig.Player.VisibleObjects.Contains(human.Guid), "the player is visible");
+        Assert.True(await RunBrainAsync(rig, () => rig.Bot.Brain.Opportunities.ActiveKey is null, steps: 30), "the episode never ended: " + rig.Bot.Brain.Opportunities.Report);
+        Assert.False(ReferenceEquals(rig.Bot.Brain.InspectionTarget, guard), "the brain went on with the pull the goal gave up: " + rig.Bot.Brain.Opportunities.Report + " goal=" + rig.Bot.Brain.Goal);
+    }
+
+    [Fact]
+    public async Task AGuardTheBrainWillNotTake_EndsTheEpisodeAtOnce_AsUnreachable_AndIsNotPulledAgain()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        Creature guard = await AddGuardAsync(rig, 96420, 5f, 2f);
+        bool blocked = false;
+        rig.Bot.Controller.Untakeable = (_, creature) => blocked && ReferenceEquals(creature, guard);
+
+        OpportunityStep first = await rig.World(() => rig.Bot.Step());
+        Assert.Same(guard, first.Pull);
+        blocked = true; // the brain's chase found no way to it, or another player tagged it
+
+        OpportunityStep next = await rig.World(() => rig.Bot.Step());
+        Assert.Null(next.Pull);
+        Assert.False(next.Busy);
+        Assert.Same(guard, next.Abandon);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.Equal(1, capture.Count(Key("unreachable")));
+        Assert.True(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(Free), rig.Clock));
+        Assert.InRange(rig.Bot.Controller.Ledger.DeferredUntil(KeyOf(Free), rig.Clock) - rig.Clock, 59_000u, 60_000u);
+
+        // Not planned again, however often the bot thinks, until the backoff ends.
+        for (int i = 0; i < 6; i++)
+        {
+            rig.Clock += 2_500;
+            OpportunityStep again = await rig.World(() => rig.Bot.Step());
+            Assert.Null(again.Pull);
+            Assert.Null(rig.Bot.Controller.ActiveKey);
+        }
+
+        Assert.Equal(1, capture.Count(Key("unreachable")));
+    }
+
+    [Fact]
+    public async Task AFindWhoseFirstGuardTheBrainWillNotTake_IsNotStarted_AndIsLookedAtAgainLater()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        Creature guard = await AddGuardAsync(rig, 96421, 5f, 2f);
+        rig.Bot.Controller.Untakeable = (_, creature) => ReferenceEquals(creature, guard);
+
+        OpportunityStep step = await rig.World(() => rig.Bot.Step());
+        Assert.False(step.Busy);
+        Assert.Null(step.Pull);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.False(capture.Any(Key("unreachable")), capture.Describe());
+        Assert.True(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(Free), rig.Clock));
+        Assert.False(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(Free), rig.Clock + PlayerbotOpportunities.RefusedRecheckMs + 1));
+    }
+
+    [Fact]
+    public async Task TheBrain_GivesUpAGuardItCannotPlanAWalkTo_InsteadOfPullingItAtEveryThink()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]); // no ground installed: no route to the guard can be planned
+        using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        Creature guard = await AddGuardAsync(rig, 96430, 5f, 2f);
+        PlayerbotOpportunities controller = rig.Bot.Brain.Opportunities;
+        Assert.True(await RunBrainAsync(rig, () => controller.Ledger.IsDeferred(KeyOf(Free), rig.Host.World.NowMs), steps: 80),
+            "the episode went on with a guard that cannot be reached: " + controller.Report);
+        Assert.Equal(1, capture.Count(Key("unreachable")));
+        Assert.Null(controller.ActiveKey);
+
+        for (int i = 0; i < 12; i++)
+        {
+            await rig.World(() => { rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5); rig.Bot.Brain.Update(500); return true; });
+            Assert.Null(controller.ActiveKey);
+            Assert.False(ReferenceEquals(rig.Bot.Brain.InspectionTarget, guard), "the brain took the guard it gave up");
+        }
+
+        Assert.Equal(1, capture.Count(Key("unreachable")));
+    }
+
+    // --- rares ----------------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ARare_IsPulledAndFought_ThenLeftAloneForItsRecheck()
+    {
+        await using Rig rig = await Rig.StartAsync([]);
+        Creature rare = await AddGuardAsync(rig, RareEntry, 5f, 2f, 1, 4, 20);
+
+        OpportunityStep first = await rig.World(() => rig.Bot.Step());
+        Assert.True(first.Busy);
+        Assert.Same(rare, first.Pull); // the rare itself is the pull
+        Assert.Equal(rare.Guid.Value, rig.Bot.Controller.ActiveKey);
+        Assert.Contains("opportunity=rare", rig.Bot.Controller.Report);
+        OpportunityStep again = await rig.World(() => rig.Bot.Step());
+        Assert.Same(rare, again.Pull);
+
+        await Kill(rig, rare);
+        OpportunityStep over = await rig.World(() => rig.Bot.Step());
+        Assert.False(over.Busy);
+        Assert.Null(over.Abandon); // a dead rare is the brain's to loot
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.True(rig.Bot.Controller.Ledger.IsDeferred(rare.Guid.Value, rig.Clock + PlayerbotOpportunities.RareRecheckMs - 1));
+        Assert.False(rig.Bot.Controller.Ledger.IsDeferred(rare.Guid.Value, rig.Clock + PlayerbotOpportunities.RareRecheckMs + 1));
+    }
+
+    [Fact]
+    public async Task ARare_IsLeftAlone_WhenTheRaresOptionIsOff_OrTheCreatureIsNoRare()
+    {
+        await using (Rig off = await Rig.StartAsync([], tweak: o => o.Opportunities.Rares = false))
+        {
+            await AddGuardAsync(off, RareEntry, 5f, 2f, 1, 4, 20);
+            await RunClockAsync(off, () => false, steps: 12);
+            Assert.Null(off.Bot.Controller.ActiveKey);
+            Assert.Null(off.Bot.Controller.LastVerdict);
+        }
+
+        await using (Rig plain = await Rig.StartAsync([]))
+        {
+            await AddGuardAsync(plain, RareEntry, 5f, 2f, 1, 0, 20); // the same loot, but an ordinary creature
+            await RunClockAsync(plain, () => false, steps: 12);
+            Assert.Null(plain.Bot.Controller.ActiveKey);
+            Assert.Null(plain.Bot.Controller.LastVerdict);
+        }
+    }
+
+    [Fact]
+    public async Task ARareFarAboveTheBot_IsRefused_AndNotPulled()
+    {
+        await using Rig rig = await Rig.StartAsync([]);
+        await AddGuardAsync(rig, RareEntry, 5f, 2f, 9, 4, 400);
+        Assert.True(await RunClockAsync(rig, () => rig.Bot.Controller.LastVerdict is not null, steps: 20));
+        Assert.Equal(OpportunityDecision.Refuse, rig.Bot.Controller.LastVerdict!.Value.Decision);
+        Assert.Equal("over-level", rig.Bot.Controller.LastVerdict!.Value.Reason);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+    }
+
+    // --- the ways an episode ends ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AFightThatGoesBadly_SetsTheFindAside_WithTheFailureBackoff()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        Creature guard = await AddGuardAsync(rig, 96440, 5f, 2f);
+        Assert.Same(guard, (await rig.World(() => rig.Bot.Step())).Pull);
+
+        // A retreat or a death in the bot's danger memory during the episode.
+        await rig.World(() =>
+        {
+            rig.Bot.Brain.Risk.Memory.Remember(rig.Player.MapId, new Vector3(StartX, StartY, StartZ), [(guard.Guid, guard.Entry)], rig.Clock, 60);
+            return true;
+        });
+        OpportunityStep next = await rig.World(() => rig.Bot.Step());
+        Assert.False(next.Busy);
+        Assert.Same(guard, next.Abandon);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.Equal("fight-went-badly", rig.Bot.Controller.LastVerdict!.Value.Reason);
+        Assert.InRange(rig.Bot.Controller.Ledger.DeferredUntil(KeyOf(Free), rig.Clock) - rig.Clock, 59_000u, 60_000u);
+    }
+
+    [Fact]
+    public async Task AnEpisodeThatRunsPastItsLimit_IsGivenUp_WithTheFailureBackoff()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        Creature guard = await AddGuardAsync(rig, 96441, 5f, 2f);
+        Assert.Same(guard, (await rig.World(() => rig.Bot.Step())).Pull);
+
+        rig.Clock += PlayerbotOpportunities.EpisodeMaxMs - 1_000;
+        Assert.Same(guard, (await rig.World(() => rig.Bot.Step())).Pull); // not yet
+        rig.Clock += 2_000;
+        OpportunityStep next = await rig.World(() => rig.Bot.Step());
+        Assert.False(next.Busy);
+        Assert.Same(guard, next.Abandon);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.Equal("timeout", rig.Bot.Controller.LastVerdict!.Value.Reason);
+        Assert.InRange(rig.Bot.Controller.Ledger.DeferredUntil(KeyOf(Free), rig.Clock) - rig.Clock, 59_000u, 60_000u);
+    }
+
+    [Fact]
+    public async Task ADeathDuringTheEpisode_SetsTheFindAside_WithTheFailureBackoff()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        Creature guard = await AddGuardAsync(rig, 96442, 5f, 2f);
+        Assert.Same(guard, (await rig.World(() => rig.Bot.Step())).Pull);
+        await rig.World(() =>
+        {
+            rig.Player.Map!.Combat.DealDamage(guard, rig.Player, 100_000);
+            Assert.False(rig.Player.IsAlive);
+            return true;
+        });
+
+        OpportunityStep next = await rig.World(() => rig.Bot.Step());
+        Assert.False(next.Busy);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.InRange(rig.Bot.Controller.Ledger.DeferredUntil(KeyOf(Free), rig.Clock) - rig.Clock, 59_000u, 60_000u);
+    }
+
+    [Fact]
+    public async Task TheBrainTellingTheGoalItDied_SetsTheFindAside_WithTheFailureBackoff()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        await AddGuardAsync(rig, 96443, 5f, 2f);
+        Assert.NotNull((await rig.World(() => rig.Bot.Step())).Pull);
+        await rig.World(() => { rig.Bot.Controller.BotDied(); return true; });
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.InRange(rig.Bot.Controller.Ledger.DeferredUntil(KeyOf(Free), rig.Clock) - rig.Clock, 59_000u, 60_000u);
+    }
+
+    [Fact]
+    public async Task TheClaimOnAFind_IsKeptAlive_ThroughAFightTheGoalIsNotAskedToThinkDuring()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        await AddGuardAsync(rig, 96444, 5f, 2f);
+        Assert.NotNull((await rig.World(() => rig.Bot.Step())).Pull);
+        for (int i = 0; i < 6; i++)
+        {
+            rig.Clock += PlayerbotClaims.ClaimLifeMs / 2; // far longer than a claim lives, in all
+            await rig.World(() => { rig.Bot.Controller.KeepClaim(); return true; });
+        }
+
+        Assert.Equal(rig.Player.Guid.Value, rig.Claims.OwnerOf(KeyOf(Free), rig.Clock));
+    }
+
+    // --- Pick Lock: the cast cap ----------------------------------------------------------------------------------------
+
+    private static async Task<bool> TakeServerReplyAsync(Rig rig, int steps = 100)
+    {
+        for (int i = 0; i < steps; i++)
+        {
+            if (await rig.World(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgCastResult).Count > 0)) return true;
+            await Task.Delay(10);
+        }
+
+        return false;
+    }
+
+    [Fact]
+    public async Task APickThatKeepsSlipping_IsCastEightTimes_ThenReportedAndGivenUp()
+    {
+        ChestSpawn locked = new(PickChest, 3, 3f, 0f);
+        await using Rig rig = await Rig.StartAsync([locked]);
+        // The server turns every cast of this pick down at once (range 0), so no cast stays in flight; the replies are ours to send.
+        await rig.World(() => { LearnPickLock(rig, 25, ShortPickSpell); return true; });
+        using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        Assert.True(await RunAsync(rig, () => rig.Bot.Controller.Report.Contains("phase=await"), steps: 40), "the first cast was never sent: " + rig.Bot.Controller.Report);
+
+        for (int cast = 1; cast <= PlayerbotOpportunities.MaxPickAttempts; cast++)
+        {
+            Assert.True(await TakeServerReplyAsync(rig), "the server never answered cast " + cast);
+            await SendCastFailure(rig, SpellCastResult.TryAgain, ShortPickSpell);
+            await rig.World(() => { rig.Bot.Step(); return true; });
+            if (cast == PlayerbotOpportunities.MaxPickAttempts) break;
+            Assert.Contains("phase=open", rig.Bot.Controller.Report);
+            await rig.World(() => { rig.Bot.Step(); return true; }); // the next cast goes out
+            Assert.Contains("phase=await", rig.Bot.Controller.Report);
+        }
+
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.Equal("pick-failed", rig.Bot.Controller.LastVerdict!.Value.Reason);
+        Assert.Equal(1, capture.Count(Key("chest-pick-failed")));
+        Assert.Contains("after 8 cast(s)", capture.Describe());
+        Assert.True(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(locked), rig.Clock));
+
+        // The cap holds: no ninth cast.
+        for (int i = 0; i < 3; i++) await rig.World(() => { rig.Bot.Step(); return true; });
+        Assert.False(await TakeServerReplyAsync(rig, steps: 15), "a ninth cast went out");
+    }
+
+    // --- refused finds are not weighed again at once ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task ARefusedFind_IsNotWeighedAgainAtTheNextScan_ButIsAfterTheRecheck()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        Creature guard = await AddGuardAsync(rig, 96450, 5f, 2f, 9, 1, 400);
+        await rig.World(() => { rig.Bot.Step(); return true; });
+        Assert.Equal(OpportunityDecision.Refuse, rig.Bot.Controller.LastVerdict!.Value.Decision);
+        Assert.True(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(Free), rig.Clock));
+
+        // The guard goes; the next scan, 2 s on, does not look at the chest (set aside), the one after the recheck does.
+        await Kill(rig, guard);
+        rig.Clock += PlayerbotOpportunities.ScanEveryMs + 100;
+        OpportunityStep soon = await rig.World(() => rig.Bot.Step());
+        Assert.False(soon.Busy);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        rig.Clock += PlayerbotOpportunities.RefusedRecheckMs;
+        await rig.World(() => { rig.Bot.Step(); return true; });
+        Assert.Equal(KeyOf(Free), rig.Bot.Controller.ActiveKey);
+    }
+
+    // --- interrupting a quest or grind goal ------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AnInterruptingBot_AsksMoreOfAFind_ThanOneWithNothingToDrop()
+    {
+        await using Rig rig = await Rig.StartAsync([Free], tweak: o => { o.Opportunities.MinValue = 20f; o.Opportunities.PersonalityVariance = 0f; });
+        await rig.World(() => { rig.Bot.Step(); return true; });
+        OpportunityVerdict probe = rig.Bot.Controller.LastVerdict!.Value;
+        Assert.Equal("low-value", probe.Reason);
+        Assert.True(probe.Net > 1f, probe.ToString());
+
+        // A bar between the net worth and 1.5 times itself: met by a bot with nothing to drop, not by one that would drop a goal.
+        rig.Bot.Options.Opportunities.MinValue = probe.Net / 1.25f;
+        rig.Clock += PlayerbotOpportunities.RefusedRecheckMs + 1_000;
+        await rig.World(() => { rig.Bot.Step(interrupting: true); return true; });
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.Equal("low-value", rig.Bot.Controller.LastVerdict!.Value.Reason);
+
+        rig.Clock += PlayerbotOpportunities.RefusedRecheckMs + 1_000;
+        await rig.World(() => { rig.Bot.Step(interrupting: false); return true; });
+        Assert.Equal(KeyOf(Free), rig.Bot.Controller.ActiveKey);
+    }
+
+    [Fact]
+    public async Task TheBrain_AsksMoreOfAFind_WhileItIsOnAQuestGoal_ThanOnAnyOther()
+    {
+        await using Rig rig = await Rig.StartAsync([Free], tweak: o => { o.Opportunities.MinValue = 20f; o.Opportunities.PersonalityVariance = 0f; });
+        PlayerbotOpportunities controller = rig.Bot.Brain.Opportunities;
+        controller.Clock = () => rig.Clock;
+        await rig.World(() => { rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5); rig.Bot.Brain.Update(500); return true; });
+        OpportunityVerdict probe = controller.LastVerdict!.Value;
+        Assert.Equal("low-value", probe.Reason);
+
+        rig.Bot.Options.Opportunities.MinValue = probe.Net / 1.25f;
+        System.Reflection.FieldInfo goal = typeof(PlayerbotBrain).GetField("_goal", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+        rig.Clock += PlayerbotOpportunities.RefusedRecheckMs + 1_000;
+        await rig.World(() => { goal.SetValue(rig.Bot.Brain, PlayerbotGoalKind.Quest); rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5); rig.Bot.Brain.Update(500); return true; });
+        Assert.Null(controller.ActiveKey);
+        Assert.Equal("low-value", controller.LastVerdict!.Value.Reason);
+
+        rig.Clock += PlayerbotOpportunities.RefusedRecheckMs + 1_000;
+        await rig.World(() => { goal.SetValue(rig.Bot.Brain, PlayerbotGoalKind.Explore); rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5); rig.Bot.Brain.Update(500); return true; });
+        Assert.Equal(KeyOf(Free), controller.ActiveKey);
     }
 
     // --- anomalies ----------------------------------------------------------------------------------------------------

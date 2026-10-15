@@ -27,7 +27,7 @@ candidates weighed per scan. Outside the bot's home area (`PlayerbotHomeArea`) n
 |---|---|---|
 | Chest | A `GAMEOBJECT_TYPE_CHEST` nobody has opened (ready, no loot window, no user, not in use), with a loot table, no quest or event gate, no linked trap, not a multi-open vein, within the level gate, with no lock or a lock that opens with a click. | `Chests` |
 | Locked chest | The same, behind a key lock the bot holds the key to (`GameObjectLocks.CheckDirectUse`), or a Pick Lock lock where the bot knows Pick Lock and its Lockpicking skill reaches the lock (`GatheringRules.CanOpenLock`: a rogue). | `LockedChests` |
-| Node | A herb or mining node. The gathering itself is `PlayerbotCrafting`'s; only the risk side is here (`NodeVeto`, wired to `PlayerbotCrafting.GatherVeto`): a guarded node the bot would not fight for is left alone. An unguarded node is never vetoed. | `Nodes` |
+| Node | A herb or mining node. The gathering itself is `PlayerbotCrafting`'s; only the risk side is here (`NodeVeto`, wired to `PlayerbotCrafting.GatherVeto`): a guarded node is left alone only when the guards are a hard refusal (an elite far above, a guard five levels above, a pack larger than `MaxGuards`, a creature that kills outright, remembered danger), too dangerous for the bot as it is now, or the bot too hurt to face them. The node's worth never vetoes it (the bot gathers it anyway), so one ordinary same-level guard does not. An unguarded node is never vetoed. | `Nodes` |
 | Rare | A living rare or rare-elite creature the bot can attack and nobody else has tagged. | `Rares` |
 
 ## The decision
@@ -100,11 +100,13 @@ at most three minutes:
 |---|---|
 | Someone else opened it, or it is gone | Dropped at once, nothing recorded (if it respawns the scan finds it again). |
 | Another bot holds the claim, or a real player stands within 12 yards of the chest | Left alone for 30 seconds, no strike. |
-| A retreat or death during the episode (danger memory grew), the verdict turns to refuse, no route, no loot window, the walk stops, timeout | Set aside, keyed by guid, for 60 s, doubling to 120 s, 240 s and at most 300 s (`PlayerbotOpportunityLedger.Defer`). |
+| A retreat or death during the episode (danger memory grew; a death also at once, `BotDied`), the verdict turns to refuse, no route to the chest, no loot window, the walk stops, timeout, or the next guard to pull is one the brain would not take as a target (unreachable, set aside as someone else's, outside the home area: the brain's `IsUntakeable`, anomaly `unreachable`) | Set aside, keyed by guid, for 60 s, doubling to 120 s, 240 s and at most 300 s (`PlayerbotOpportunityLedger.Defer`). |
 | The find was taken | Not looked at again until it respawns, and never sooner than 60 s. |
 | The bot is recovering | The goal becomes `Rest` (the health wait), no strike. |
 
-A find set aside is not even weighed until its time is up, so a stuck chest never costs a scan.
+A find set aside is not even weighed until its time is up, so a stuck chest never costs a scan. A find that is weighed and refused is set aside for 20 seconds (no strike), so the scan does not weigh it again every 2 seconds; a wait is looked at again at once.
+
+A guard the controller handed to the brain as its target is taken back when the episode ends without a fight (refused, a player at the chest, no way to the guard): the brain drops it unless the bot is already in combat with it. While the bot fights the guards the brain keeps the claim on the find alive (`KeepClaim`).
 
 ## Anomalies
 

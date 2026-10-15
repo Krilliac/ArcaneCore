@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 
@@ -113,6 +114,57 @@ public sealed class PlayerbotOpportunityModelTests
         float upgrade = PlayerbotOpportunityModel.LootUnits(items, 0, 10, id => id == 1 ? green : grey, t => t.Entry == 1 ? 1f : null);
         Assert.Equal(PlayerbotOpportunityModel.QualityUnits(2) + (1f / PlayerbotOpportunityModel.KillCopper(10)), noUpgrade, 3);
         Assert.Equal(noUpgrade + PlayerbotOpportunityModel.UpgradeBase + PlayerbotOpportunityModel.UpgradeScale, upgrade, 3);
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(30)]
+    public void ANodeVerdict_OnRiskOnly_NeverRefusesOnValue_ButStillRefusesWhatIsDangerous(int level)
+    {
+        byte bot = (byte)level;
+        OpportunityFacts weak = Facts(0.05f, bot, Guard(bot, 1f, 40)); // a node worth almost nothing, one ordinary same-level guard
+        Assert.Equal("low-value", Decide(weak).Reason); // as a find to travel for it is not worth the trip...
+        OpportunityVerdict asNode = Decide(weak with { RiskOnly = true }); // ...but as a node the bot gathers anyway, only the guard matters
+        Assert.Equal(OpportunityDecision.Engage, asNode.Decision);
+
+        Assert.Equal("elite-above", Decide(Facts(0.05f, bot, Guard((byte)(bot + 8), 1f, 40, rank: 1)) with { RiskOnly = true }).Reason);
+        Assert.Equal("over-level", Decide(Facts(0.05f, bot, Guard((byte)(bot + 6), 1f, 40)) with { RiskOnly = true }).Reason);
+        Assert.Equal(OpportunityDecision.Refuse, Decide(Facts(0.05f, bot, Guard(bot, 80f, 400)) with { RiskOnly = true }).Decision); // it would kill the bot
+        Assert.Equal("pack-of-5", Decide(Facts(0.05f, bot, Guard(bot, 1f, 40), Guard(bot, 1f, 40), Guard(bot, 1f, 40), Guard(bot, 1f, 40), Guard(bot, 1f, 40)) with { RiskOnly = true }).Reason);
+    }
+
+    [Fact]
+    public void ALootGroup_ExpectsWhatTheGeneratorRolls_WhateverTheChancesAddUpTo()
+    {
+        static LootStoreRow Row(uint item, float chance) => new(1, item, chance, 1, 1, 1);
+        static Dictionary<uint, float> Expect(params LootStoreRow[] rows)
+            => PlayerbotOpportunityModel.ExpectedItems(new LootContent(rows.Select(r => (LootTableKind.GameObject, r)), []),
+                LootTableKind.GameObject, 1);
+
+        // Explicit chances that add up to more than 100: the roll runs out, the later rows get what is left (LootGenerator.PickFromGroup).
+        Dictionary<uint, float> over = Expect(Row(10, 80f), Row(11, 80f));
+        Assert.Equal(0.8f, over[10], 3);
+        Assert.Equal(0.2f, over[11], 3);
+        Assert.Equal(1f, over.Values.Sum(), 3); // one item per roll, never more
+
+        // A row at 100 takes the whole roll that reaches it; nothing after it is ever picked, not even the equal-chance rows.
+        Dictionary<uint, float> full = Expect(Row(10, 30f), Row(11, 100f), Row(12, 50f), Row(13, 0f));
+        Assert.Equal(0.3f, full[10], 3);
+        Assert.Equal(0.7f, full[11], 3);
+        Assert.False(full.ContainsKey(12));
+        Assert.False(full.ContainsKey(13));
+
+        // The zero-chance rows share what the explicit chances leave.
+        Dictionary<uint, float> shared = Expect(Row(10, 60f), Row(11, 0f), Row(12, 0f));
+        Assert.Equal(0.6f, shared[10], 3);
+        Assert.Equal(0.2f, shared[11], 3);
+        Assert.Equal(0.2f, shared[12], 3);
+
+        // A quest row takes its share of the roll but is worth nothing here.
+        Dictionary<uint, float> quest = Expect(Row(10, 50f), Row(11, -30f), Row(12, 0f));
+        Assert.Equal(0.5f, quest[10], 3);
+        Assert.False(quest.ContainsKey(11));
+        Assert.Equal(0.2f, quest[12], 3);
     }
 
     [Fact]

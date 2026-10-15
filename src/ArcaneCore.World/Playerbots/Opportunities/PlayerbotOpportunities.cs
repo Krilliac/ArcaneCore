@@ -24,7 +24,10 @@ namespace ArcaneCore.World.Playerbots;
 /// <summary>What <see cref="PlayerbotOpportunities.Update"/> asks of the brain this think.</summary>
 /// <param name="Busy">The controller drove the bot this think (walked, opened, waited): the brain does nothing else.</param>
 /// <param name="Pull">A guard (or the rare itself) to take as the bot's target now: the brain fights it through its ordinary combat path.</param>
-internal readonly record struct OpportunityStep(bool Busy, Creature? Pull = null, PlayerbotGoalKind Goal = PlayerbotGoalKind.Loot, uint TargetEntry = 0)
+/// <param name="Abandon">A live guard (or rare) an earlier think handed the brain as its target and the episode has now given up on (it was
+/// refused, set aside or failed): the brain drops it as its target unless the bot is already in combat with it.</param>
+internal readonly record struct OpportunityStep(bool Busy, Creature? Pull = null, PlayerbotGoalKind Goal = PlayerbotGoalKind.Loot, uint TargetEntry = 0,
+    Creature? Abandon = null)
 {
     /// <summary>Nothing for the controller to do: the brain goes on down its ladder.</summary>
     internal static OpportunityStep None => default;
@@ -75,6 +78,9 @@ internal sealed class PlayerbotOpportunities
     /// <summary>How long a find another bot or a player is on is left alone.</summary>
     internal const uint ContestedMs = 30_000;
 
+    /// <summary>A find the bot weighed and refused is not weighed again for this long (the scan looks every <see cref="ScanEveryMs"/>).</summary>
+    internal const uint RefusedRecheckMs = 20_000;
+
     /// <summary>A player this near the find is on it.</summary>
     internal const float PlayerNearYards = 12f;
 
@@ -91,8 +97,8 @@ internal sealed class PlayerbotOpportunities
     private readonly PlayerbotOpportunityLedger _ledger = new();
     private readonly Dictionary<(LootTableKind Kind, uint Entry), (float Units, uint UntilMs)> _lootCache = [];
     private readonly Dictionary<ulong, (bool Veto, uint UntilMs)> _vetoes = [];
-    private readonly List<PlayerbotThreat> _threats = [];
     private Episode? _episode;
+    private Creature? _released;
     private bool _scanned;
     private uint _nextScanMs;
     private TileWait _tileWait;
@@ -109,6 +115,13 @@ internal sealed class PlayerbotOpportunities
         _claims = claims ?? new PlayerbotClaims(64);
         NodeVeto = VetoNode;
     }
+
+    /// <summary>
+    /// The brain's filter for creatures it will not take as a target (unreachable, set aside as someone else's, outside the home area:
+    /// <c>PlayerbotBrain.IsUntakeable</c>). A guard the controller needs to pull that this refuses ends the episode as unreachable, so a
+    /// pull the brain would never carry out is not issued think after think. Null: every guard is takeable.
+    /// </summary>
+    internal Func<Player, Creature, bool>? Untakeable { get; set; }
 
     /// <summary>The clock the controller reads (world milliseconds); tests replace it to step through backoffs.</summary>
     internal Func<uint>? Clock { get; set; }
@@ -147,10 +160,47 @@ internal sealed class PlayerbotOpportunities
     internal OpportunityStep Update(Player player, uint elapsedMs, bool interrupting)
     {
         ArgumentNullException.ThrowIfNull(player);
+        OpportunityStep step = Think(player, elapsedMs, interrupting);
+        if (_released is { } released)
+        {
+            // The episode that handed the brain this guard as its target ended without a fight: the brain lets go of it.
+            _released = null;
+            step = step with { Abandon = released };
+        }
+
+        return step;
+    }
+
+    /// <summary>
+    /// Keeps the claim on the find alive while the brain is in a fight and does not ask for a think (a claim lapses
+    /// <see cref="PlayerbotClaims.ClaimLifeMs"/> after its last refresh, and a fight with the guards outlasts that).
+    /// </summary>
+    internal void KeepClaim()
+    {
+        if (_episode is { } episode) _claims.Refresh(episode.Key, episode.ClaimEpoch, Now);
+    }
+
+    /// <summary>The bot died: the find it was on is set aside with the failure backoff (the fight went as badly as it can).</summary>
+    internal void BotDied()
+    {
+        if (_episode is not { } episode) return;
+        _ledger.Defer(episode.Key, Now);
+        LastVerdict = new OpportunityVerdict(OpportunityDecision.Refuse, "died", 0f, 0f, 0f);
+        EndEpisode();
+    }
+
+    private OpportunityStep Think(Player player, uint elapsedMs, bool interrupting)
+    {
         PlayerbotOpportunityOptions options = _options.Opportunities;
         if (!options.Enabled || elapsedMs == 0 || !player.IsInWorld || !player.IsAlive || player.Map is not { } map)
         {
-            if (_episode is not null) EndEpisode();
+            if (_episode is not null)
+            {
+                // A death ends the episode like any failure (the backoff); a disabled goal or a map change just ends it.
+                if (options.Enabled && player.IsInWorld && !player.IsAlive) BotDied();
+                else EndEpisode();
+            }
+
             return OpportunityStep.None;
         }
 
@@ -179,14 +229,23 @@ internal sealed class PlayerbotOpportunities
         var finds = new List<Find>(MaxCandidates);
         CollectFinds(player, map, now, options, finds);
         if (finds.Count == 0) return;
-        PlayerbotThreat[] threats = BuildThreats(player);
+        List<PlayerbotThreat> threats = PlayerbotRecovery.Threats(player);
         Find? best = null;
         OpportunityVerdict bestVerdict = default;
         foreach (Find find in finds)
         {
-            OpportunityVerdict verdict = Evaluate(player, map, find, interrupting, committed: false, now, threats, out _);
+            OpportunityVerdict verdict = Evaluate(player, map, find, interrupting, committed: false, now, threats, out List<Creature> pack);
             LastVerdict = verdict;
+            // A refused find is not weighed again at the next scan: its numbers move slowly. A wait (hurt, recovering) is looked at again at once.
+            if (verdict.Decision == OpportunityDecision.Refuse) _ledger.SetAside(find.Key, now, RefusedRecheckMs);
             if (verdict.Decision != OpportunityDecision.Engage) continue;
+            // The first guard to pull is one the brain would never take as a target (unreachable, someone else's, outside the home): leave the find.
+            if (pack.Count > 0 && Untakeable?.Invoke(player, pack[0]) == true)
+            {
+                _ledger.SetAside(find.Key, now, RefusedRecheckMs);
+                continue;
+            }
+
             if (_claims.OwnerOf(find.Key, now) is var owner and not 0 && owner != player.Guid.Value) continue; // another bot is on it
             if (best is null || verdict.Net > bestVerdict.Net) (best, bestVerdict) = (find, verdict);
         }
@@ -309,22 +368,15 @@ internal sealed class PlayerbotOpportunities
         return null;
     }
 
-    private PlayerbotThreat[] BuildThreats(Player player)
-    {
-        _threats.Clear();
-        _threats.AddRange(PlayerbotRecovery.Threats(player));
-        return [.. _threats];
-    }
-
     // --- the arithmetic's inputs -----------------------------------------------------------------------------------
 
-    private OpportunityVerdict Evaluate(Player player, Map map, Find find, bool interrupting, bool committed, uint now, PlayerbotThreat[] threats, out List<Creature> pack)
+    private OpportunityVerdict Evaluate(Player player, Map map, Find find, bool interrupting, bool committed, uint now, List<PlayerbotThreat> threats, out List<Creature> pack)
     {
         pack = Pack(player, map, find, threats);
         return Decide(player, find, pack, interrupting, committed, now);
     }
 
-    private OpportunityVerdict Decide(Player player, Find find, List<Creature> pack, bool interrupting, bool committed, uint now)
+    private OpportunityVerdict Decide(Player player, Find find, List<Creature> pack, bool interrupting, bool committed, uint now, bool riskOnly = false)
     {
         PlayerbotRisk risk = _risk();
         var enemies = new List<RiskEnemy>(pack.Count);
@@ -346,6 +398,7 @@ internal sealed class PlayerbotOpportunities
             Recovering = !risk.Recovered(player) || risk.Retreat.Active,
             Interrupting = interrupting,
             Committed = committed,
+            RiskOnly = riskOnly,
             Personality = PlayerbotOpportunityModel.Personality(player.Guid.Value, _options.Opportunities.PersonalityVariance),
             FindIsEnemy = find.Kind == OpportunityKind.Rare,
         };
@@ -357,7 +410,7 @@ internal sealed class PlayerbotOpportunities
     /// creatures that would answer their call for assistance (vmangos Creature::CallAssistance, as <see cref="PlayerbotRisk"/> reads it).
     /// For a rare, the rare itself plus those two sets round it.
     /// </summary>
-    private List<Creature> Pack(Player player, Map map, Find find, PlayerbotThreat[] threats)
+    private List<Creature> Pack(Player player, Map map, Find find, List<PlayerbotThreat> threats)
     {
         var members = new List<Creature>();
         var counted = new HashSet<ObjectGuid>();
@@ -441,7 +494,7 @@ internal sealed class PlayerbotOpportunities
     }
 
     private static uint RespawnMsOf(GameObject chest)
-        => Math.Min(3_600_000u, Math.Max(chest.RespawnDelaySeconds, chest.Template.GetData(GameObjectMapSystem.ChestRestockData)) * 1000u);
+        => (uint)Math.Min(3_600_000UL, (ulong)Math.Max(chest.RespawnDelaySeconds, chest.Template.GetData(GameObjectMapSystem.ChestRestockData)) * 1000UL);
 
     // --- gathering nodes --------------------------------------------------------------------------------------------
 
@@ -454,9 +507,10 @@ internal sealed class PlayerbotOpportunities
         if (_vetoes.Count >= 64) _vetoes.Clear();
         var find = new Find(OpportunityKind.Node, node.Guid.Value, node.Guid, node.Entry, new Vector3(node.X, node.Y, node.Z), MathF.Sqrt(DistanceSq(player, node)),
             null, null, node.Template.GetData(1), (node.Template.MinGold + node.Template.MaxGold) / 2, 0u);
-        List<Creature> pack = Pack(player, map, find, BuildThreats(player));
-        // An unguarded node is never vetoed; a guarded one is taken when the guards are worth it as the bot is now.
-        bool veto = pack.Count > 0 && Decide(player, find, pack, interrupting: false, committed: false, now).Decision != OpportunityDecision.Engage;
+        List<Creature> pack = Pack(player, map, find, PlayerbotRecovery.Threats(player));
+        // An unguarded node is never vetoed. A guarded one is judged on the guards alone (the bot gathers it whatever it is worth, so a
+        // net value never vetoes it): it is left when the guards are a hard refusal or too dangerous (or the bot too hurt) as it is now.
+        bool veto = pack.Count > 0 && Decide(player, find, pack, interrupting: false, committed: false, now, riskOnly: true).Decision != OpportunityDecision.Engage;
         _vetoes[node.Guid.Value] = (veto, unchecked(now + VetoCacheMs));
         return veto;
     }
@@ -486,7 +540,7 @@ internal sealed class PlayerbotOpportunities
         public EpisodePhase Phase;
         public uint AwaitUntilMs;
         public bool Reported;
-        public int PickAttempts;
+        public int PickCasts;
         public Creature? Pull;
     }
 
@@ -535,7 +589,7 @@ internal sealed class PlayerbotOpportunities
 
         // Guards first, one pull at a time, weighed afresh against the bot as it is now.
         Find find = episode.Origin with { Distance = MathF.Sqrt(DistanceSq(player, chest)) };
-        OpportunityVerdict verdict = Evaluate(player, map, find, interrupting: false, committed: true, now, BuildThreats(player), out List<Creature> pack);
+        OpportunityVerdict verdict = Evaluate(player, map, find, interrupting: false, committed: true, now, PlayerbotRecovery.Threats(player), out List<Creature> pack);
         LastVerdict = verdict;
         if (verdict.Decision == OpportunityDecision.Refuse) return Fail(episode, now, verdict.Reason);
         if (verdict.Decision == OpportunityDecision.Wait)
@@ -544,17 +598,21 @@ internal sealed class PlayerbotOpportunities
             return Busy(episode, PlayerbotGoalKind.Rest);
         }
 
-        if (pack.Count > 0) return Pull(player, episode, pack);
+        if (pack.Count > 0) return Pull(player, episode, pack, now);
         episode.Pull = null;
         episode.Phase = EpisodePhase.Open;
         return Open(player, episode, chest, elapsedMs, now);
     }
 
     /// <summary>The next guard, nearest first (the one being walked to stays the pull until it dies or the pack changes).</summary>
-    private OpportunityStep Pull(Player player, Episode episode, List<Creature> pack)
+    private OpportunityStep Pull(Player player, Episode episode, List<Creature> pack, uint now)
     {
         episode.Phase = EpisodePhase.Clear;
         Creature pull = episode.Pull is { IsAlive: true } held && pack.Contains(held) ? held : pack[0];
+        // A guard the brain would not take as a target (unreachable, set aside, someone else's, outside the home) cannot be cleared: the
+        // find is given up now, with a backoff, instead of the same pull being issued at every think until the timeout.
+        if (Untakeable?.Invoke(player, pull) == true)
+            return Unreachable(player, episode, now, $"the guard {pull.Entry} ({pull.Guid.Value:X}) cannot be taken as a target");
         if (!ReferenceEquals(pull, episode.Pull))
         {
             PlayerbotRisk risk = _risk();
@@ -581,7 +639,7 @@ internal sealed class PlayerbotOpportunities
 
         if (PlayerbotBrain.IsSomeoneElses(player, rare, GroupsOf(player))) return Skip(episode, now);
         Find find = episode.Origin with { At = new Vector3(rare.X, rare.Y, rare.Z), Distance = MathF.Sqrt(DistanceSq(player, rare)), Rare = rare };
-        OpportunityVerdict verdict = Evaluate(player, map, find, interrupting: false, committed: true, now, BuildThreats(player), out List<Creature> pack);
+        OpportunityVerdict verdict = Evaluate(player, map, find, interrupting: false, committed: true, now, PlayerbotRecovery.Threats(player), out List<Creature> pack);
         LastVerdict = verdict;
         if (verdict.Decision == OpportunityDecision.Refuse) return Fail(episode, now, verdict.Reason);
         if (verdict.Decision == OpportunityDecision.Wait)
@@ -590,7 +648,7 @@ internal sealed class PlayerbotOpportunities
             return Busy(episode, PlayerbotGoalKind.Rest);
         }
 
-        return Pull(player, episode, pack);
+        return Pull(player, episode, pack, now);
     }
 
     /// <summary>A rare killed is looked at again after this (its respawn is long; the brain loots the corpse).</summary>
@@ -647,6 +705,7 @@ internal sealed class PlayerbotOpportunities
         }
 
         if (!sent) return Busy(episode, PlayerbotGoalKind.Loot);
+        if (episode.PickLock is not null) episode.PickCasts++;
         episode.Phase = EpisodePhase.Await;
         episode.AwaitUntilMs = unchecked(now + AwaitLootMs);
         return Busy(episode, PlayerbotGoalKind.Loot);
@@ -664,14 +723,14 @@ internal sealed class PlayerbotOpportunities
                 var reader = new PacketReader(packet.Payload);
                 if (reader.ReadUInt32() != pick.Id || reader.ReadByte() != (byte)SpellCastResultStatus.Failure) continue;
                 var reason = (SpellCastResult)reader.ReadByte();
-                if (reason == SpellCastResult.TryAgain && ++episode.PickAttempts < MaxPickAttempts)
+                if (reason == SpellCastResult.TryAgain && episode.PickCasts < MaxPickAttempts)
                 {
                     // The pick slipped: cast it again, as a player clicks the chest again.
                     episode.Phase = EpisodePhase.Open;
                     return Busy(episode, PlayerbotGoalKind.Loot);
                 }
 
-                ReportAnomaly(player, episode, "chest-pick-failed", $"chest {episode.Entry} ({episode.Guid.Value:X}): Pick Lock failed ({reason}) after {episode.PickAttempts + 1} cast(s)");
+                ReportAnomaly(player, episode, "chest-pick-failed", $"chest {episode.Entry} ({episode.Guid.Value:X}): Pick Lock failed ({reason}) after {episode.PickCasts} cast(s)");
                 return Fail(episode, now, "pick-failed");
             }
         }
@@ -741,7 +800,13 @@ internal sealed class PlayerbotOpportunities
 
     private void EndEpisode()
     {
-        if (_episode is { } episode) _claims.Leave(episode.Key, episode.ClaimEpoch);
+        if (_episode is { } episode)
+        {
+            _claims.Leave(episode.Key, episode.ClaimEpoch);
+            // A live guard handed to the brain as its target is let go of with the episode (a dead one is the brain's to loot).
+            if (episode.Pull is { IsAlive: true } pulled) _released = pulled;
+        }
+
         _episode = null;
         _route = null;
         _routeTarget = default;

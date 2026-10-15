@@ -67,6 +67,13 @@ internal sealed record OpportunityFacts
     /// <summary>The bot has already begun this find (it cleared a guard): the worth is not asked again, only the risk (no sunk-cost walk-away).</summary>
     public bool Committed { get; init; }
 
+    /// <summary>
+    /// Judge the guards only (a gathering node: the bot gathers it anyway, <see cref="PlayerbotOpportunities.NodeVeto"/> asks whether the
+    /// guards are safe to face): the net worth is never asked, so nothing is refused as <c>low-value</c>, and the guards are weighed
+    /// against the find's loot without the time cost.
+    /// </summary>
+    public bool RiskOnly { get; init; }
+
     /// <summary>The find is itself a creature to kill (a rare): <see cref="PlayerbotEngagementFacts.Enemies"/> starts with it and it is no guard.</summary>
     public bool FindIsEnemy { get; init; }
 
@@ -185,24 +192,24 @@ internal static class PlayerbotOpportunityModel
             ExpectGroup([.. group], weight, items);
     }
 
+    // Mirrors LootGenerator.PickFromGroup (vmangos LootGroup::Roll): one roll against the explicit chances in row order (a quest row
+    // takes its share too), a chance of 100 or more takes whatever roll is left, and the zero-chance rows share the rest equally.
     private static void ExpectGroup(IReadOnlyList<LootStoreRow> members, float weight, Dictionary<uint, float> items)
     {
-        float explicitChance = 0f;
+        float remaining = 1f;
         int equal = 0;
         foreach (LootStoreRow row in members)
         {
             float chance = Math.Abs(row.ChanceOrQuestChance);
-            if (chance == 0f) equal++;
-            else explicitChance += Math.Min(100f, chance);
+            if (chance == 0f) { equal++; continue; }
+            float share = chance >= 100f ? remaining : Math.Min(chance / 100f, remaining);
+            if (row.ChanceOrQuestChance > 0) Add(items, row, share * weight); // a quest item takes its share of the roll but is worth nothing here
+            remaining = Math.Max(0f, remaining - share);
         }
 
-        float left = Math.Max(0f, 100f - explicitChance);
+        if (equal == 0 || remaining <= 0f) return;
         foreach (LootStoreRow row in members)
-        {
-            if (row.ChanceOrQuestChance < 0) continue; // a quest item takes its share of the roll but is worth nothing here
-            float chance = row.ChanceOrQuestChance == 0f ? left / equal : Math.Min(100f, row.ChanceOrQuestChance);
-            Add(items, row, Math.Clamp(chance / 100f, 0f, 1f) * weight);
-        }
+            if (row.ChanceOrQuestChance == 0f) Add(items, row, remaining / equal * weight);
     }
 
     private static void Add(Dictionary<uint, float> items, LootStoreRow row, float probability)
@@ -265,7 +272,7 @@ internal static class PlayerbotOpportunityModel
         int guardCount = guards.Count - (facts.FindIsEnemy && guards.Count > 0 ? 1 : 0);
         if (guardCount > options.MaxGuards) return Verdict(OpportunityDecision.Refuse, $"pack-of-{guardCount}");
         float minValue = options.MinValue * (facts.Interrupting ? InterruptValueFactor : 1f);
-        if (net < minValue && !facts.Committed) return Verdict(OpportunityDecision.Refuse, "low-value");
+        if (net < minValue && !facts.Committed && !facts.RiskOnly) return Verdict(OpportunityDecision.Refuse, "low-value");
         if (guards.Count == 0) return Verdict(OpportunityDecision.Engage, "unguarded");
 
         if (engagement.Remembered) return Verdict(OpportunityDecision.Refuse, "remembered");
@@ -278,7 +285,7 @@ internal static class PlayerbotOpportunityModel
         var scaled = new PlayerbotRiskOptions { Tolerance = Math.Clamp(tolerance, 0.25f, 4f) };
         // The pack as one pull: its loot value is the find's, less the time cost; the guards' experience the model adds itself.
         PlayerbotEngagement assessed = PlayerbotRiskModel.Assess(
-            engagement with { LootValue = facts.LootUnits - timeCost, QuestObjective = false }, scaled);
+            engagement with { LootValue = facts.RiskOnly ? facts.LootUnits : facts.LootUnits - timeCost, QuestObjective = false }, scaled);
         float death = DeathProbability(assessed.Risk);
         switch (assessed.Decision)
         {
