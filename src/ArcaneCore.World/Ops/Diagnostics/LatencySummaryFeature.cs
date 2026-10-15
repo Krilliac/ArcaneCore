@@ -110,14 +110,10 @@ public sealed class LatencySummaryFeature : IWorldFeature
         }
 
         var top = new List<string>(TopOpcodes);
-        foreach ((string name, LatencyHistogram histogram, _) in Registry.TopByP99(LatencyNames.PacketHandlerPrefix, TopOpcodes))
+        foreach ((string name, _, LatencySnapshot recent) in Registry.TopByP99(LatencyNames.PacketHandlerPrefix, TopOpcodes, Window))
         {
-            LatencySnapshot recent = histogram.Snapshot(Window);
-            if (!recent.IsEmpty)
-            {
-                top.Add(string.Create(CultureInfo.InvariantCulture,
-                    $"{name[LatencyNames.PacketHandlerPrefix.Length..]} p99 {LatencySnapshot.Millis(recent.P99)} ms (p50 {LatencySnapshot.Millis(recent.P50)}, max {LatencySnapshot.Millis(recent.Max)}, n={recent.Count})"));
-            }
+            top.Add(string.Create(CultureInfo.InvariantCulture,
+                $"{name[LatencyNames.PacketHandlerPrefix.Length..]} p99 {LatencySnapshot.Millis(recent.P99)} ms (p50 {LatencySnapshot.Millis(recent.P50)}, max {LatencySnapshot.Millis(recent.Max)}, n={recent.Count})"));
         }
 
         if (top.Count > 0)

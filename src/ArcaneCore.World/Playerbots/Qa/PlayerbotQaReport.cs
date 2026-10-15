@@ -264,7 +264,7 @@ internal static class PlayerbotQaReport
         {
             QaFindingView f = ranked[i];
             sb.Append(CultureInfo.InvariantCulture, $"## {i + 1}. {f.KindLabel}: {Escape(redactor.Redact(f.Subject))}\n\n");
-            sb.Append(CultureInfo.InvariantCulture, $"- Id `{f.Id}`, severity {f.Severity:F1}, seen {f.Count} times by {f.DistinctBots} bots affected ({RateText(RatePerHour(f, generatedUtc))} over {ObservedHours(f, generatedUtc):F1} h), first {f.FirstSeenUtc:u}, last {f.LastSeenUtc:u}\n");
+            sb.Append(CultureInfo.InvariantCulture, $"- Id `{f.Id}`, severity {f.Severity:F1}, seen {f.Count} times, {f.DistinctBots} bots affected ({RateText(RatePerHour(f, generatedUtc))} over {ObservedHours(f, generatedUtc):F1} h), first {f.FirstSeenUtc:u}, last {f.LastSeenUtc:u}\n");
             sb.Append(CultureInfo.InvariantCulture, $"- Likely cause: {f.Cause}. {Escape(redactor.Redact(f.CauseDetail))}\n");
             if (f.QuestTitle is not null) sb.Append(CultureInfo.InvariantCulture, $"- {QuestLabel(f, "Quest")}: {Escape(redactor.Redact(f.QuestTitle))}\n");
             if (GoHint(f) is { } go) sb.Append(CultureInfo.InvariantCulture, $"- Go there: `{go}`\n");

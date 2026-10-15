@@ -148,9 +148,10 @@ public static class BuiltinCommands
         context.Reply("Core revision: ArcaneCore " + version + " (WoW 1.12.1 build 5875)");
         context.Reply(GmStrings.PlayersOnline(active, 0, Math.Max(stats?.MaxActive ?? 0, active), 0));
         context.Reply(GmStrings.Uptime(GmDuration.SecsToTimeString((long)context.World.Uptime.TotalSeconds)));
-        foreach (string line in ServerInfoDiagnostics.Format(ServerInfoDiagnostics.Capture(context.World, context.Session.Services)))
+        bool gm = context.Security >= AccountSecurity.GameMaster; // the latency lines name opcodes and database files: staff only, like the counts below
+        foreach (string line in ServerInfoDiagnostics.Format(ServerInfoDiagnostics.Capture(context.World, context.Session.Services), includeLatency: gm))
             context.Reply("Server diagnostics: " + line);
-        if (context.Security >= AccountSecurity.GameMaster) // counts only, but players see no server internals
+        if (gm)
         {
             context.Reply("Server diagnostics: " + ServerFaultCommands.InfoLine(FaultLedger.Shared, AnomalyLedger.Shared, DateTimeOffset.UtcNow));
             context.Reply("Server diagnostics: " + ServerFaultCommands.RatesLine(FaultLedger.Shared, AnomalyLedger.Shared));

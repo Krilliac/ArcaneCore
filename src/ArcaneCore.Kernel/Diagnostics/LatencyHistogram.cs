@@ -20,7 +20,7 @@ public readonly record struct LatencySnapshot(long Count, long Min, long Max, do
 
     /// <summary>
     /// The one text form of a latency distribution, for microsecond values shown in milliseconds:
-    /// <c>p50 4.1 ms p75 5.9 p90 7.9 p95 9.2 p99 18.0 p99.9 41.3 max 52.0 (n=12000, min 0.8, mean 4.6 ±2.1)</c>.
+    /// <c>p50 4.1 ms p75 5.9 p90 7.9 p95 9.2 p99 18.0 p99.9 41.3 max 52.0 (n=12000, min 0.8, mean 4.6 +/-2.1)</c>.
     /// Culture invariant; <c>no samples</c> when empty.
     /// </summary>
     public string Format()
@@ -31,7 +31,7 @@ public readonly record struct LatencySnapshot(long Count, long Min, long Max, do
         }
 
         return string.Create(CultureInfo.InvariantCulture,
-            $"p50 {Millis(P50)} ms p75 {Millis(P75)} p90 {Millis(P90)} p95 {Millis(P95)} p99 {Millis(P99)} p99.9 {Millis(P999)} max {Millis(Max)} (n={Count}, min {Millis(Min)}, mean {Millis(Mean)} ±{Millis(StdDev)})");
+            $"p50 {Millis(P50)} ms p75 {Millis(P75)} p90 {Millis(P90)} p95 {Millis(P95)} p99 {Millis(P99)} p99.9 {Millis(P999)} max {Millis(Max)} (n={Count}, min {Millis(Min)}, mean {Millis(Mean)} +/-{Millis(StdDev)})");
     }
 
     /// <inheritdoc/>
@@ -56,7 +56,7 @@ public readonly record struct LatencyWindows(LatencySnapshot Last1Min, LatencySn
 /// A fixed-memory, allocation-free, HDR-style latency histogram (the shared latency primitive of the diagnostics).
 /// <para>
 /// Layout: values 0..31 have a bucket each; above that every power-of-two range is split into 32 linear sub-buckets, up to <see cref="MaxValue"/>
-/// (2^40, about 12.7 days of microseconds; larger values count in the last bucket and <see cref="Snapshot()"/> still reports the exact maximum).
+/// (2^40, about 12.7 days of microseconds; larger values are clamped to it).
 /// A percentile is therefore exact below 32 and otherwise at most <see cref="RelativeError"/> (1/32, 3.1 %) above the exact nearest-rank value, never below.
 /// Count, minimum, maximum, mean and standard deviation are exact.
 /// </para>
@@ -64,7 +64,14 @@ public readonly record struct LatencyWindows(LatencySnapshot Last1Min, LatencySn
 /// Windows: the samples are also kept in <c>slices</c> ring slices of <c>sliceLength</c> each (default 45 x 20 s = 15 minutes), so
 /// <see cref="Snapshot(TimeSpan)"/> answers "the last 1 min" and "the last 15 min" besides the totals since start. A window of W covers the
 /// ceil(W / sliceLength) newest slices including the current, partly filled one, so it spans between W - sliceLength and W of recent time. A slice's
-/// bucket array is allocated the first time it is used (4.6 KB), so an idle histogram costs about 10 KB and a busy one about 220 KB.
+/// bucket array is allocated the first time it is used. A bucket array is <see cref="BucketCount"/> x 8 = 9,216 bytes, so the default configuration (45 slices
+/// plus the since-start array) costs up to 46 x 9 KB = about 424 KB when busy and about 20 KB when idle. A caller that keeps many histograms uses the compact
+/// configuration (<see cref="CompactSlices"/> slices of <see cref="CompactSliceLength"/>, no since-start array): at most 3 x 9 KB = 27 KB each, whose smallest window is one
+/// 5 minute slice.
+/// </para>
+/// <para>
+/// Range: a value above <see cref="MaxValue"/> counts in the last bucket and is recorded as <see cref="MaxValue"/> everywhere (the maximum, the mean and every percentile),
+/// so for such values the reported figures are clamped and the "never below the exact value" guarantee does not hold; this also keeps the sums far from overflow.
 /// </para>
 /// <para>
 /// Thread safety: any number of threads may call <see cref="Record(long)"/> and snapshot concurrently, lock-free on the hot path (about a dozen
@@ -96,11 +103,17 @@ public sealed class LatencyHistogram
     /// <summary>Default length of one slice.</summary>
     public static readonly TimeSpan DefaultSliceLength = TimeSpan.FromSeconds(20);
 
+    /// <summary>Slices of the compact configuration (3 x 5 minutes = 15 minutes).</summary>
+    public const int CompactSlices = 3;
+
+    /// <summary>Slice length of the compact configuration.</summary>
+    public static readonly TimeSpan CompactSliceLength = TimeSpan.FromMinutes(5);
+
     private readonly TimeProvider _time;
     private readonly long _sliceMicros;
     private readonly Slice[] _slices;
     private readonly object _rotateGate = new();
-    private readonly long[] _totalBuckets = new long[BucketCount];
+    private readonly long[]? _totalBuckets;
     private readonly Totals _total = new();
 
     /// <summary>A histogram on the system clock with the default 45 x 20 s windows (15 minutes).</summary>
@@ -109,14 +122,19 @@ public sealed class LatencyHistogram
     {
     }
 
-    /// <summary>A histogram on <paramref name="time"/> (tests drive a manual clock) with <paramref name="slices"/> ring slices of <paramref name="sliceLength"/>.</summary>
-    public LatencyHistogram(TimeProvider time, TimeSpan? sliceLength = null, int slices = DefaultSlices)
+    /// <summary>
+    /// A histogram on <paramref name="time"/> (tests drive a manual clock) with <paramref name="slices"/> ring slices of <paramref name="sliceLength"/>.
+    /// With <paramref name="keepTotals"/> false there is no since-start bucket array: <see cref="Snapshot()"/> then answers the whole retained span
+    /// (<see cref="Span"/>) and <see cref="Count"/> still counts since start.
+    /// </summary>
+    public LatencyHistogram(TimeProvider time, TimeSpan? sliceLength = null, int slices = DefaultSlices, bool keepTotals = true)
     {
         ArgumentNullException.ThrowIfNull(time);
         ArgumentOutOfRangeException.ThrowIfLessThan(slices, 1);
         TimeSpan length = sliceLength ?? DefaultSliceLength;
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(length, TimeSpan.Zero);
         _time = time;
+        _totalBuckets = keepTotals ? new long[BucketCount] : null;
         _sliceMicros = Math.Max(1, length.Ticks / (TimeSpan.TicksPerMillisecond / 1000));
         _slices = new Slice[slices];
         for (int i = 0; i < _slices.Length; i++)
@@ -143,7 +161,7 @@ public sealed class LatencyHistogram
         }
 
         long epoch = nowMicros / _sliceMicros;
-        Slice slice = _slices[(int)(epoch % _slices.Length)];
+        Slice? slice = _slices[(int)(epoch % _slices.Length)];
         if (Volatile.Read(ref slice.Epoch) != epoch)
         {
             slice = Rotate(epoch);
@@ -151,15 +169,30 @@ public sealed class LatencyHistogram
 
         int bucket = BucketOf(value);
         long clamped = Math.Min(value, MaxValue);
-        Interlocked.Increment(ref slice.Buckets![bucket]);
-        slice.Stats.Add(clamped, value);
-        Interlocked.Increment(ref _totalBuckets[bucket]);
-        _total.Add(clamped, value);
+
+        // A null slice: this writer stalled past a whole ring and its slice now holds newer samples; the sample counts in the totals only.
+        if (slice is not null)
+        {
+            Interlocked.Increment(ref slice.Buckets![bucket]);
+            slice.Stats.Add(clamped);
+        }
+
+        if (_totalBuckets is not null)
+        {
+            Interlocked.Increment(ref _totalBuckets[bucket]);
+        }
+
+        _total.Add(clamped);
     }
 
     /// <summary>Everything recorded since start. Any thread; allocation-free.</summary>
     public LatencySnapshot Snapshot()
     {
+        if (_totalBuckets is null)
+        {
+            return Snapshot(Span);
+        }
+
         Span<long> merged = stackalloc long[BucketCount];
         for (int i = 0; i < merged.Length; i++)
         {
@@ -223,7 +256,11 @@ public sealed class LatencyHistogram
                 slice.Stats.Clear();
             }
 
-            Array.Clear(_totalBuckets);
+            if (_totalBuckets is not null)
+            {
+                Array.Clear(_totalBuckets);
+            }
+
             _total.Clear();
         }
     }
@@ -262,12 +299,19 @@ public sealed class LatencyHistogram
 
     private long NowMicros() => (long)(_time.GetTimestamp() * (1_000_000d / _time.TimestampFrequency));
 
-    private Slice Rotate(long epoch)
+    private Slice? Rotate(long epoch)
     {
         Slice slice = _slices[(int)(epoch % _slices.Length)];
         lock (_rotateGate)
         {
-            if (Volatile.Read(ref slice.Epoch) != epoch)
+            long current = Volatile.Read(ref slice.Epoch);
+            if (current > epoch)
+            {
+                // A writer that stalled for a whole ring: the slice already belongs to a newer interval and must not be erased for an old sample.
+                return null;
+            }
+
+            if (current != epoch)
             {
                 if (slice.Buckets is null)
                 {
@@ -378,7 +422,7 @@ public sealed class LatencyHistogram
         private long _min = long.MaxValue;
         private long _max;
 
-        public void Add(long clamped, long exact)
+        public void Add(long exact)
         {
             Interlocked.Add(ref Sum, exact);
             double square = (double)exact * exact;
@@ -446,22 +490,39 @@ public sealed class LatencyHistogram
 /// <summary>
 /// The process-wide, name-keyed set of latency histograms the periodic summary prints (<c>db.character_save</c>, <c>nav.path_query</c>, <c>login.to_world</c>,
 /// <c>packet.handler.CMSG_...</c>). Bounded: at most <see cref="MaxNames"/> names; a request beyond that returns the single <see cref="OverflowName"/> histogram, so a
-/// caller that builds names from data can never grow memory without bound. Any thread; <see cref="Get"/> is a dictionary lookup on the hot path.
+/// caller that builds names from data can never grow memory without bound. Memory: a name under <see cref="LatencyNames.PacketHandlerPrefix"/> (up to 261 opcodes) and the overflow
+/// histogram use the compact configuration (at most 27 KB each, typically a few KB for an opcode that is rarely handled), every other name the default one (up to 424 KB each;
+/// the server registers fewer than ten). The hard ceiling is about 11 MB, the typical total 1 to 3 MB. Any thread; <see cref="Get"/> is a dictionary lookup on the hot path.
 /// </summary>
 public sealed class LatencyRegistry
 {
     /// <summary>The most distinct histograms the registry holds.</summary>
-    public const int MaxNames = 1024;
+    public const int MaxNames = 384;
 
     /// <summary>The name of the histogram that takes everything beyond <see cref="MaxNames"/>.</summary>
     public const string OverflowName = "(overflow)";
 
     private readonly ConcurrentDictionary<string, LatencyHistogram> _histograms = new(StringComparer.Ordinal);
-    private readonly LatencyHistogram _overflow = new();
+    private readonly TimeProvider _time;
+    private readonly LatencyHistogram _overflow;
     private readonly object _addGate = new();
 
     /// <summary>The process-wide registry.</summary>
     public static LatencyRegistry Shared { get; } = new();
+
+    /// <summary>A registry on the system clock.</summary>
+    public LatencyRegistry()
+        : this(TimeProvider.System)
+    {
+    }
+
+    /// <summary>A registry whose histograms read <paramref name="time"/> (tests drive a manual clock).</summary>
+    public LatencyRegistry(TimeProvider time)
+    {
+        ArgumentNullException.ThrowIfNull(time);
+        _time = time;
+        _overflow = new LatencyHistogram(time, LatencyHistogram.CompactSliceLength, LatencyHistogram.CompactSlices, keepTotals: false);
+    }
 
     /// <summary>The histogram called <paramref name="name"/>, created on first use.</summary>
     public LatencyHistogram Get(string name)
@@ -483,7 +544,9 @@ public sealed class LatencyRegistry
                 return _overflow;
             }
 
-            var created = new LatencyHistogram();
+            var created = name.StartsWith(LatencyNames.PacketHandlerPrefix, StringComparison.Ordinal)
+                ? new LatencyHistogram(_time, LatencyHistogram.CompactSliceLength, LatencyHistogram.CompactSlices, keepTotals: false)
+                : new LatencyHistogram(_time);
             _histograms[name] = created;
             return created;
         }
@@ -517,29 +580,34 @@ public sealed class LatencyRegistry
     }
 
     /// <summary>
-    /// The <paramref name="count"/> histograms whose name starts with <paramref name="prefix"/> that have the highest p99 since start (the cheap ranking: one pass over the
-    /// totals, no window merge), slowest first, each with its since-start snapshot. The prefix <c>packet.handler.</c> ranks the opcodes.
+    /// The <paramref name="count"/> histograms whose name starts with <paramref name="prefix"/> that have the highest p99 over the last <paramref name="window"/> (histograms with no
+    /// sample in the window are left out), slowest first, each with its snapshot of that window. The prefix <c>packet.handler.</c> ranks the opcodes. One window merge per
+    /// candidate, on the caller's thread; meant for a periodic pass or an operator command, not a hot path.
     /// </summary>
-    public IReadOnlyList<(string Name, LatencyHistogram Histogram, LatencySnapshot Total)> TopByP99(string prefix, int count)
+    public IReadOnlyList<(string Name, LatencyHistogram Histogram, LatencySnapshot Recent)> TopByP99(string prefix, int count, TimeSpan window)
     {
-        var ranked = new List<(string Name, LatencyHistogram Histogram, LatencySnapshot Total)>();
+        var ranked = new List<(string Name, LatencyHistogram Histogram, LatencySnapshot Recent)>();
         foreach (KeyValuePair<string, LatencyHistogram> pair in _histograms)
         {
             if (pair.Key.StartsWith(prefix, StringComparison.Ordinal) && pair.Value.Count > 0)
             {
-                ranked.Add((pair.Key, pair.Value, pair.Value.Snapshot()));
+                LatencySnapshot recent = pair.Value.Snapshot(window);
+                if (!recent.IsEmpty)
+                {
+                    ranked.Add((pair.Key, pair.Value, recent));
+                }
             }
         }
 
         ranked.Sort(static (a, b) =>
         {
-            int byP99 = b.Total.P99.CompareTo(a.Total.P99);
+            int byP99 = b.Recent.P99.CompareTo(a.Recent.P99);
             if (byP99 != 0)
             {
                 return byP99;
             }
 
-            int byMax = b.Total.Max.CompareTo(a.Total.Max);
+            int byMax = b.Recent.Max.CompareTo(a.Recent.Max);
             return byMax != 0 ? byMax : string.CompareOrdinal(a.Name, b.Name);
         });
         if (ranked.Count > count)

@@ -94,7 +94,9 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     private readonly Counter _frameP99;
     private readonly Counter _frameMax;
     private readonly CounterRegistry _counters;
-    private readonly LatencyHistogram _frameLatency = new();
+    private LatencyHistogram _frameLatency = new();
+    private bool _frameLatencyExternal;
+    private LatencyHistogram? _bodyLatency;
     private readonly LatencyGauges _frameGauges;
     private LatencyGauges? _bodyGauges;
     private (string Name, LatencyHistogram Histogram, Counter P50, Counter P99)[] _phases = [];
@@ -174,18 +176,23 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 
     /// <summary>
     /// Every frame time since start and over the last minute and 15 minutes, in microseconds, with p50..p99.9, mean and standard deviation (the frame ring keeps only
-    /// its newest samples). Recorded by <see cref="OnTick"/> on the monitor's own clock; read on any thread.
+    /// its newest samples). Recorded by <see cref="OnTick"/> on the monitor's own clock, unless <see cref="AttachLatency"/> gave the monitor the simulation's histogram,
+    /// which is then the single source; read on any thread.
     /// </summary>
     public LatencyHistogram FrameLatency => _frameLatency;
 
     /// <summary>
-    /// Give the monitor the simulation's own tick-body histogram and the histograms of the tick phases (name, histogram), so the summary and overrun lines show their
-    /// percentiles and the <c>watchdog.tick.body_*</c> and <c>watchdog.tick.phase_*</c> gauges are published. Call once, before the first <see cref="Check"/>.
+    /// Give the monitor the simulation's own histograms: the frame interval (which then replaces the monitor's own, so a frame is recorded once), the tick body and the tick
+    /// phases (name, histogram). The summary and overrun lines show their percentiles and the <c>watchdog.tick.body_*</c> and <c>watchdog.tick.phase_*</c> gauges are
+    /// published. Call once, before the first <see cref="OnTick"/> and <see cref="Check"/>.
     /// </summary>
-    public void AttachBodyLatency(LatencyHistogram body, IReadOnlyList<KeyValuePair<string, LatencyHistogram>> phases)
+    public void AttachLatency(LatencyHistogram frame, LatencyHistogram body, IReadOnlyList<KeyValuePair<string, LatencyHistogram>> phases)
     {
+        ArgumentNullException.ThrowIfNull(frame);
         ArgumentNullException.ThrowIfNull(body);
         ArgumentNullException.ThrowIfNull(phases);
+        _frameLatency = frame;
+        _frameLatencyExternal = true;
         _bodyGauges = new LatencyGauges(_counters, "watchdog.tick.body_", includeTail: true);
         _bodyLatency = body;
         _phases = [.. phases.Select(p => (p.Key, p.Value,
@@ -193,7 +200,9 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
             _counters.GetOrAdd("watchdog.tick.phase_" + p.Key + "_p99_us", CounterKind.Gauge)))];
     }
 
-    private LatencyHistogram? _bodyLatency;
+    // The histogram's own clock for an attached histogram, the monitor's clock for its own.
+    private LatencySnapshot FrameSnapshot(TimeSpan window, long nowMicros)
+        => _frameLatencyExternal ? _frameLatency.Snapshot(window) : _frameLatency.Snapshot(window, nowMicros);
 
     public bool Enabled => _options.Enabled;
 
@@ -253,7 +262,10 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         {
             long frame = nowMicros - last;
             _ring.Record(frame);
-            _frameLatency.Record(frame, nowMicros);
+            if (!_frameLatencyExternal)
+            {
+                _frameLatency.Record(frame, nowMicros);
+            }
             if (frame > _budgetMicros)
             {
                 _overruns++;
@@ -489,7 +501,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     /// <summary>Watchdog thread, every check: the percentile gauges of the newest minute of frames, tick bodies and tick phases (no allocation).</summary>
     private void PublishGauges(long nowMicros)
     {
-        LatencySnapshot frame = _frameLatency.Snapshot(OneMinute, nowMicros);
+        LatencySnapshot frame = FrameSnapshot(OneMinute, nowMicros);
         if (!frame.IsEmpty)
         {
             _frameGauges.Publish(frame);
@@ -519,10 +531,10 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     /// </summary>
     private string LatencyText(long nowMicros, bool full)
     {
-        var text = new StringBuilder("frame latency last 1 min: ").Append(_frameLatency.Snapshot(OneMinute, nowMicros).Format());
+        var text = new StringBuilder("frame latency last 1 min: ").Append(FrameSnapshot(OneMinute, nowMicros).Format());
         if (full)
         {
-            text.Append("; last 15 min: ").Append(_frameLatency.Snapshot(FifteenMinutes, nowMicros).Format());
+            text.Append("; last 15 min: ").Append(FrameSnapshot(FifteenMinutes, nowMicros).Format());
         }
 
         if (_bodyLatency is { } body)

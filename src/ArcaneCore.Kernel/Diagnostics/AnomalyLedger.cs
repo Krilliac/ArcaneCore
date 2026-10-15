@@ -344,8 +344,8 @@ public sealed class AnomalyLedger
         {
             if (!logger.IsEnabled(level)) return;
             logger.Log(level, LogEventId,
-                "Anomaly {AnomalyKey} {Subject}: {Detail} [count={Count} suppressed={Suppressed}] {Timing}",
-                notice.Key, notice.Subject, notice.Detail, notice.Count, notice.Suppressed, notice.Timing?.Describe() ?? string.Empty);
+                "Anomaly {AnomalyKey} {Subject}: {Detail} [count={Count} suppressed={Suppressed}]{Timing}",
+                notice.Key, notice.Subject, notice.Detail, notice.Count, notice.Suppressed, notice.Timing is { } timing ? " " + timing.Describe() : string.Empty);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

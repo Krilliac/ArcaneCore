@@ -154,6 +154,9 @@ internal sealed class GapRing
 internal sealed class SubjectTally(int capacity)
 {
     private readonly Dictionary<string, long> _counts = new(StringComparer.Ordinal);
+    private readonly List<string> _victims = [];
+    private long _victimCount;
+    private const int VictimBatch = 64;
 
     /// <summary>Subjects tracked now (at most the capacity).</summary>
     public int Count => _counts.Count;
@@ -175,46 +178,84 @@ internal sealed class SubjectTally(int capacity)
 
         string? lowest = null;
         long lowestCount = long.MaxValue;
-        foreach (KeyValuePair<string, long> pair in _counts)
+        while (_victims.Count > 0)
         {
-            if (pair.Value < lowestCount)
+            // Counts only grow, so a candidate still at the minimum count is still a minimum of the whole tally.
+            string candidate = _victims[^1];
+            _victims.RemoveAt(_victims.Count - 1);
+            if (_counts.TryGetValue(candidate, out long candidateCount) && candidateCount == _victimCount)
             {
-                lowest = pair.Key;
-                lowestCount = pair.Value;
+                lowest = candidate;
+                lowestCount = candidateCount;
+                break;
             }
         }
 
-        if (lowest is not null)
+        if (lowest is null)
         {
-            _counts.Remove(lowest);
+            // One scan collects every subject tied at the minimum (up to VictimBatch), so the next evictions need no scan.
+            foreach (KeyValuePair<string, long> pair in _counts)
+            {
+                if (pair.Value < lowestCount)
+                {
+                    lowestCount = pair.Value;
+                }
+            }
+
+            _victims.Clear();
+            _victimCount = lowestCount;
+            foreach (KeyValuePair<string, long> pair in _counts)
+            {
+                if (pair.Value == lowestCount && _victims.Count < VictimBatch)
+                {
+                    _victims.Add(pair.Key);
+                }
+            }
+
+            lowest = _victims[^1];
+            _victims.RemoveAt(_victims.Count - 1);
         }
 
-        _counts[subject] = lowestCount == long.MaxValue ? 1 : lowestCount + 1;
+        _counts.Remove(lowest);
+        _counts[subject] = lowestCount + 1;
     }
 
-    /// <summary>The <paramref name="n"/> highest counts, highest first, ties by name.</summary>
+    /// <summary>The <paramref name="n"/> highest counts, highest first, ties by name: a partial selection, O(tracked x n), no sort of the whole tally.</summary>
     public IReadOnlyList<SubjectCount> Top(int n)
     {
-        var list = new List<SubjectCount>(_counts.Count);
+        var top = new List<SubjectCount>(Math.Min(n, _counts.Count) + 1);
         foreach (KeyValuePair<string, long> pair in _counts)
         {
-            list.Add(new SubjectCount(pair.Key, pair.Value));
+            var entry = new SubjectCount(pair.Key, pair.Value);
+            if (top.Count == n && !Before(entry, top[^1]))
+            {
+                continue;
+            }
+
+            int at = top.Count;
+            while (at > 0 && Before(entry, top[at - 1]))
+            {
+                at--;
+            }
+
+            top.Insert(at, entry);
+            if (top.Count > n)
+            {
+                top.RemoveAt(top.Count - 1);
+            }
         }
 
-        list.Sort(static (a, b) =>
-        {
-            int byCount = b.Count.CompareTo(a.Count);
-            return byCount != 0 ? byCount : string.CompareOrdinal(a.Subject, b.Subject);
-        });
-        if (list.Count > n)
-        {
-            list.RemoveRange(n, list.Count - n);
-        }
-
-        return list;
+        return top;
     }
 
-    public void Clear() => _counts.Clear();
+    private static bool Before(SubjectCount a, SubjectCount b)
+        => a.Count != b.Count ? a.Count > b.Count : string.CompareOrdinal(a.Subject, b.Subject) < 0;
+
+    public void Clear()
+    {
+        _counts.Clear();
+        _victims.Clear();
+    }
 }
 
 /// <summary>The newest distinct strings, most recent first, deduplicated (a repeat moves to the front). Not thread safe: the owner locks.</summary>

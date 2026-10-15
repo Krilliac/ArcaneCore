@@ -134,9 +134,9 @@ internal static class ServerInfoDiagnostics
             }
         }
 
-        foreach ((string name, LatencyHistogram histogram, _) in LatencyRegistry.Shared.TopByP99(PacketPrefix, 3))
+        foreach ((string name, _, LatencySnapshot recent) in LatencyRegistry.Shared.TopByP99(PacketPrefix, 3, window))
         {
-            list.Add((name, histogram.Snapshot(window)));
+            list.Add((name, recent));
         }
 
         return [.. list.Where(entry => !entry.Last15Min.IsEmpty)];
@@ -186,7 +186,7 @@ internal static class ServerInfoDiagnostics
 
     private static double? Finite(double? value) => value is { } number && double.IsFinite(number) ? number : null;
 
-    internal static IReadOnlyList<string> Format(ServerInfoDiagnosticsValues value)
+    internal static IReadOnlyList<string> Format(ServerInfoDiagnosticsValues value, bool includeLatency = true)
     {
         string Rate(double? number) => number is { } value && double.IsFinite(value)
             ? value.ToString("F2", CultureInfo.InvariantCulture) + " ticks/s" : "unavailable";
@@ -201,7 +201,7 @@ internal static class ServerInfoDiagnostics
         string Active(int? number) => number?.ToString(CultureInfo.InvariantCulture) ?? "unavailable";
         string Phase(TickPhaseSummary? phase) => phase is { } p ? $"{Millis(p.MeanMicros)}/{Millis(p.MaxMicros)}" : "unavailable";
         static string Name(string name) => name.Length <= 40 ? name : name[..40];
-        return
+        string[] lines =
         [
             string.Create(CultureInfo.InvariantCulture,
                 $"Tick target: {value.TargetTickMs} ms ({Rate(value.TargetTicksPerSecond)}); observed: {Rate(value.ObservedTicksPerSecond)}"),
@@ -222,6 +222,15 @@ internal static class ServerInfoDiagnostics
                         : "; top: " + string.Join(", ", value.TopAllocatingFeatures.Select(feature => $"{Name(feature.Name)} {Allocated(feature.MeanBytes)}")))
                 : "unavailable"),
             "GC: " + (value.Gc ?? "unavailable"),
+        ];
+        if (!includeLatency)
+        {
+            return lines;
+        }
+
+        return
+        [
+            .. lines,
             "Tick body latency, last 1 min: " + Latency(value.TickBodyLatency?.Last1Min),
             "Tick body latency, last 15 min: " + Latency(value.TickBodyLatency?.Last15Min),
             "Tick frame latency, last 1 min: " + Latency(value.FrameLatency?.Last1Min),

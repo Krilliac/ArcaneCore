@@ -214,6 +214,40 @@ public sealed class LedgerTimingTests
     }
 
     [Fact]
+    public void Fault_AStormOfOneMessage_IsTalliedOncePerOccurrence_AndAnInterleavedMessageStillCounts()
+    {
+        (FaultLedger ledger, _) = Faults();
+        for (int i = 0; i < 100; i++) ledger.Record("site", Throw("same message"));
+        ledger.Record("site", Throw("other message"));
+        for (int i = 0; i < 3; i++) ledger.Record("site", Throw("same message"));
+
+        FaultSnapshot snap = Assert.Single(ledger.Snapshot());
+        Assert.Equal([new SubjectCount("same message", 103), new SubjectCount("other message", 1)], snap.TopMessages);
+        Assert.Equal(["same message", "other message"], snap.RecentMessages);
+    }
+
+    [Fact]
+    public void Anomaly_ManyNewSubjectsAtCapacity_KeepTheHeavySubjectOnTop_AndTheTopListSorted()
+    {
+        (AnomalyLedger ledger, _) = Anomalies();
+        for (int i = 0; i < 2_000; i++)
+        {
+            ledger.Report("bot", "stuck", "churn " + i, "d");
+            if (i % 4 == 0) ledger.Report("bot", "stuck", "heavy subject", "d");
+            if (i % 40 == 0) ledger.Report("bot", "stuck", "medium subject", "d");
+        }
+
+        AnomalySnapshot snap = Assert.Single(ledger.Snapshot());
+        Assert.Equal("heavy subject", snap.TopSubjects[0].Subject);
+        Assert.True(snap.TopSubjects[0].Count >= 500);
+        Assert.Equal(AnomalyLedger.SnapshotTopSubjects, snap.TopSubjects.Count);
+        for (int i = 1; i < snap.TopSubjects.Count; i++)
+        {
+            Assert.True(snap.TopSubjects[i - 1].Count >= snap.TopSubjects[i].Count);
+        }
+    }
+
+    [Fact]
     public void Fault_LongAndMultiLineMessages_AreCutToOneLine()
     {
         (FaultLedger ledger, _) = Faults();

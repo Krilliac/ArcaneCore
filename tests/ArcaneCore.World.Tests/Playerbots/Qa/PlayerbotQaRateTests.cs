@@ -57,7 +57,7 @@ public sealed class PlayerbotQaRateTests
 
         Assert.Contains("| # | Id | Severity | Seen | Rate/h | First seen | Last seen | Bots | Cause |", md, StringComparison.Ordinal);
         Assert.Contains("| 1 | `aaaaaaaa` | 30.0 | 12 | 6.0 | 2026-10-10 12:00:00Z | 30m ago | 4 |", md, StringComparison.Ordinal);
-        Assert.Contains("seen 12 times by 4 bots affected (6.0/h over 2.0 h), first 2026-10-10 12:00:00Z, last 2026-10-10 13:30:00Z", md, StringComparison.Ordinal);
+        Assert.Contains("seen 12 times, 4 bots affected (6.0/h over 2.0 h), first 2026-10-10 12:00:00Z, last 2026-10-10 13:30:00Z", md, StringComparison.Ordinal);
     }
 
     [Fact]

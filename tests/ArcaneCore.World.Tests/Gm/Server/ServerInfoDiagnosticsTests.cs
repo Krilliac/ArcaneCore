@@ -158,7 +158,7 @@ public sealed class ServerInfoDiagnosticsTests
 
         Assert.Equal(16, lines.Length);
         Assert.StartsWith("GC: ", lines[9]); // the first ten lines keep their positions
-        Assert.Matches(@"^Tick body latency, last 1 min: p50 4\.\d ms p75 4\.\d p90 4\.\d p95 4\.\d p99 4\.\d p99\.9 4\.\d max 4\.1 \(n=100, min 4\.0, mean 4\.\d ±0\.\d+\)$", lines[10]);
+        Assert.Matches(@"^Tick body latency, last 1 min: p50 4\.\d ms p75 4\.\d p90 4\.\d p95 4\.\d p99 4\.\d p99\.9 4\.\d max 4\.1 \(n=100, min 4\.0, mean 4\.\d \+/-0\.\d+\)$", lines[10]);
         Assert.Equal("Tick body latency, last 15 min: " + values.TickBodyLatency!.Value.Last15Min.Format(), lines[11]);
         Assert.Equal("Tick frame latency, last 1 min: " + values.FrameLatency!.Value.Last1Min.Format(), lines[12]);
         Assert.Equal("Tick frame latency, last 15 min: " + values.FrameLatency!.Value.Last15Min.Format(), lines[13]);

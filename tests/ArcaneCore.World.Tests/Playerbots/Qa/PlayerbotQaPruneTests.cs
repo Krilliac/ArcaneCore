@@ -299,10 +299,8 @@ public sealed class PlayerbotQaPruneTests : IDisposable
         Assert.Contains("## Stale (not seen since " + start.ToString("u"), md, StringComparison.Ordinal);
         Assert.True(md.IndexOf("current thing", StringComparison.Ordinal) < md.IndexOf("## Stale", StringComparison.Ordinal));
         Assert.True(md.IndexOf("## Stale", StringComparison.Ordinal) < md.IndexOf("stale thing", StringComparison.Ordinal));
-        Assert.Contains("| 1 | `c0000000` | 10.0 | 3 | ", md, StringComparison.Ordinal);
-        Assert.Contains(" | 1h ago | ", md, StringComparison.Ordinal);
-        Assert.Contains("| `50000000` | 90.0 | 50 | ", md, StringComparison.Ordinal);
-        Assert.Contains(" | 1d ago | ", md, StringComparison.Ordinal);
+        Assert.Contains("| 1 | `c0000000` | 10.0 | 3 | 1.5 | 2026-10-10 12:00:00Z | 1h ago | 2 | Unknown | stall | current thing | Pending |", md, StringComparison.Ordinal);
+        Assert.Contains("| `50000000` | 90.0 | 50 | 25.0 | 2026-10-10 12:00:00Z | 1d ago | 2 | stall | stale thing | Pending |", md, StringComparison.Ordinal);
         Assert.DoesNotContain("## 2.", md, StringComparison.Ordinal); // a stale finding has no detail block, only a row
     }
 

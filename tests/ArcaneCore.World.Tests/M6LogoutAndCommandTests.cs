@@ -223,12 +223,19 @@ public sealed class M6LogoutAndCommandTests
         var lines = new List<string>();
         for (int i = 0; i < 21; i++) lines.Add((await gm.ReadChatAsync()).Text); // ten diagnostics, six latency lines, faults and rates
         Assert.Contains(lines, l => l.StartsWith("Server diagnostics: faults: ", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("Server diagnostics: Tick body latency, last 1 min: ", StringComparison.Ordinal));
 
         await using WorldTestClient player = await host.EnterWorldAsync("FAULTPL", "Faultpl");
         await player.CollectAsync();
         await player.SendChatAsync(ChatType.Say, Language.Common, ".server info");
-        for (int i = 0; i < 19; i++) Assert.DoesNotContain("faults:", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
-        // A stray 20th line would be the first reply to the next command, so the negative check can fail.
+        for (int i = 0; i < 13; i++)
+        {
+            string text = (await player.ReadChatAsync()).Text;
+            Assert.DoesNotContain("faults:", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("latenc", text, StringComparison.Ordinal); // the latency lines are staff only
+        }
+
+        // A stray 14th line would be the first reply to the next command, so the negative check can fail.
         await player.SendChatAsync(ChatType.Say, Language.Common, ".server motd");
         Assert.StartsWith("Current Message of the day", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
     }
@@ -245,8 +252,7 @@ public sealed class M6LogoutAndCommandTests
         Assert.Equal("Players online: 1 (0 queued). Max online: 1 (0 queued).", (await client.ReadChatAsync()).Text);
         Assert.StartsWith("Server uptime: ", (await client.ReadChatAsync()).Text);
         foreach (string prefix in new[] { "Tick target:", "Tick frames:", "Tick work:", "Commands: pending=", "Managed bots:",
-            "Tick schedule: late=", "Tick phases mean/max: commands=", "Slowest features: ", "Tick allocation mean: ", "GC: ", "Tick body latency, last 1 min: ", "Tick body latency, last 15 min: ",
-            "Tick frame latency, last 1 min: ", "Tick frame latency, last 15 min: ", "Tick phases p50/p99 ms, last 1 min: ", "Other latencies, last 15 min" })
+            "Tick schedule: late=", "Tick phases mean/max: commands=", "Slowest features: ", "Tick allocation mean: ", "GC: " })
             Assert.StartsWith("Server diagnostics: " + prefix, (await client.ReadChatAsync()).Text);
 
         // vmangos prints the message as one text (LANG_MOTD_CURRENT); '@' only splits the login greeting.

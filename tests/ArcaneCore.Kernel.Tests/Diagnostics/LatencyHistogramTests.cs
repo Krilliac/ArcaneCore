@@ -146,7 +146,8 @@ public sealed class LatencyHistogramTests
         LatencySnapshot snap = histogram.Snapshot();
         Assert.Equal(2, snap.Count);
         Assert.Equal(0, snap.Min);
-        Assert.Equal(long.MaxValue, snap.Max);
+        Assert.Equal(LatencyHistogram.MaxValue, snap.Max); // clamped to the range, the same value the buckets and the sums use
+        Assert.Equal(LatencyHistogram.MaxValue / 2d, snap.Mean, 1);
     }
 
     [Fact]
@@ -211,7 +212,7 @@ public sealed class LatencyHistogramTests
         for (int i = 1; i <= 100; i++) histogram.Record(i * 100); // 0.1 ms .. 10 ms
 
         string text = histogram.Snapshot().Format();
-        Assert.Matches(@"^p50 \d+\.\d ms p75 \d+\.\d p90 \d+\.\d p95 \d+\.\d p99 \d+\.\d p99\.9 \d+\.\d max 10\.0 \(n=100, min 0\.1, mean \d+\.\d ±\d+\.\d\)$", text);
+        Assert.Matches(@"^p50 \d+\.\d ms p75 \d+\.\d p90 \d+\.\d p95 \d+\.\d p99 \d+\.\d p99\.9 \d+\.\d max 10\.0 \(n=100, min 0\.1, mean \d+\.\d \+/-\d+\.\d\)$", text);
         Assert.Equal(text, histogram.Snapshot().ToString());
     }
 
@@ -288,5 +289,65 @@ public sealed class LatencyHistogramTests
         Assert.Equal(50, overflow.Value.Count);
         Assert.Same(registry.Get("name0"), registry.Get("name0"));
         Assert.Same(registry.Get("brand-new"), registry.Get("another-new"));
+    }
+
+    [Fact]
+    public void AWriterStalledForAWholeRing_DoesNotEraseTheNewerSamplesOfItsSlice()
+    {
+        var histogram = new LatencyHistogram(new ManualClock());
+        long slice = (long)LatencyHistogram.DefaultSliceLength.TotalMilliseconds * 1000;
+        long oldNow = 5 * slice;
+        long newNow = (5 + LatencyHistogram.DefaultSlices) * slice; // the same ring slot, one lap later
+
+        histogram.Record(7_000, newNow);
+        histogram.Record(9_000, oldNow); // the stalled writer finally records with its old timestamp
+
+        LatencySnapshot recent = histogram.Snapshot(TimeSpan.FromMinutes(1), newNow);
+        Assert.Equal(1, recent.Count);
+        Assert.Equal(7_000, recent.Max);
+        Assert.Equal(2, histogram.Snapshot().Count); // the totals still count it
+    }
+
+    [Fact]
+    public void ACompactHistogram_HasNoTotalsArray_AndItsSmallestWindowIsOneSlice()
+    {
+        var clock = new ManualClock();
+        var compact = new LatencyHistogram(clock, LatencyHistogram.CompactSliceLength, LatencyHistogram.CompactSlices, keepTotals: false);
+        var normal = new LatencyHistogram(clock);
+        compact.Record(1_000, 0);
+        normal.Record(1_000, 0);
+        long fourMinutes = 4L * 60 * 1_000_000;
+
+        Assert.Equal(1, compact.Snapshot(TimeSpan.FromMinutes(1), fourMinutes).Count); // the 5 minute slice still covers it
+        Assert.True(normal.Snapshot(TimeSpan.FromMinutes(1), fourMinutes).IsEmpty);
+        Assert.Equal(compact.Span, normal.Span);
+        Assert.Equal(1, compact.Snapshot().Count); // since start answers the retained span
+        Assert.Equal(1, compact.Count);
+    }
+
+    [Fact]
+    public void PacketHandlerNames_GetTheCompactConfiguration_AndTheTopListRanksTheLast15Minutes()
+    {
+        var clock = new ManualClock();
+        var registry = new LatencyRegistry(clock);
+        const string Prefix = LatencyNames.PacketHandlerPrefix;
+        registry.Get(Prefix + "CMSG_SPIKED_EARLY").Record(900_000); // a huge outlier, then idle
+        registry.Get("db.other").Record(1_000);
+        clock.Advance(TimeSpan.FromMinutes(20));
+        for (int i = 0; i < 100; i++)
+        {
+            registry.Get(Prefix + "CMSG_STEADY").Record(5_000);
+            registry.Get(Prefix + "CMSG_SLOW_NOW").Record(20_000);
+        }
+
+        var top = registry.TopByP99(Prefix, 5, TimeSpan.FromMinutes(15));
+
+        Assert.Equal([Prefix + "CMSG_SLOW_NOW", Prefix + "CMSG_STEADY"], top.Select(t => t.Name).ToArray()); // the early spike is out of the window
+        Assert.Equal(20_000, top[0].Recent.P99);
+        Assert.Equal(100, top[0].Recent.Count);
+        // The compact configuration: a one minute window of the packet histogram reaches back a whole 5 minute slice.
+        clock.Advance(TimeSpan.FromMinutes(4));
+        Assert.Equal(100, registry.Get(Prefix + "CMSG_STEADY").Snapshot(TimeSpan.FromMinutes(1)).Count);
+        Assert.True(registry.Get("db.other").Snapshot(TimeSpan.FromMinutes(1)).IsEmpty);
     }
 }

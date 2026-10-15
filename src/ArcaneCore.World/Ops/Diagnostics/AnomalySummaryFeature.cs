@@ -178,6 +178,7 @@ public sealed class AnomalySummaryFeature : IWorldFeature
                 $"{d.Snapshot.Key}=+{d.Delta} (total={d.Snapshot.Count}, subjects={d.Snapshot.DistinctSubjects}, severity={d.Snapshot.Severity}, rate={d.Snapshot.Timing.RatePerHour15Min:F1}/h 15 min {d.Snapshot.Timing.RatePerHour1Hour:F1}/h 1 h)"))
             .ToArray();
 
+        LedgerTiming ledgerTiming = Ledger.Timing();
         _logger.LogInformation(
             "Anomaly summary (+{TotalDelta} new across {ActiveKeys} keys; ledger total={LedgerTotal}, distinct={LedgerDistinct}): {TopKeys}; ledger rate {LedgerRate15m:F1}/h last 15 min, {LedgerRate1h:F1}/h last 1 h",
             totalDelta,
@@ -185,8 +186,8 @@ public sealed class AnomalySummaryFeature : IWorldFeature
             Ledger.Total,
             Ledger.Distinct,
             string.Join(", ", topItems),
-            Ledger.Timing().RatePerHour15Min,
-            Ledger.Timing().RatePerHour1Hour);
+            ledgerTiming.RatePerHour15Min,
+            ledgerTiming.RatePerHour1Hour);
 
         return totalDelta;
     }

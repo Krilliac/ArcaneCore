@@ -65,7 +65,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
                 return default;
             }
         };
-        monitor.AttachBodyLatency(world.Stats.BodyLatency, world.Stats.PhaseLatencies);
+        monitor.AttachLatency(world.Stats.FrameLatency, world.Stats.BodyLatency, world.Stats.PhaseLatencies);
         monitor.HangDetail = inProgress => SafeDescribe(world, inProgress);
         if (services.GetService<HostLoadSampler>() is { Enabled: true } hostLoad)
         {

@@ -697,6 +697,9 @@ public sealed class FaultLedger
         private HashSet<string>? _overflowSeen;
         private readonly SubjectTally _messages = new(MaxTrackedMessages);
         private readonly RecentDistinct _recent = new(RecentMessageCount);
+        private string? _lastRaw;
+        private string _lastText = string.Empty;
+        private string _lastLine = string.Empty;
         private readonly RateWindow _rate = new();
         private GapRing? _gaps;
 
@@ -708,12 +711,30 @@ public sealed class FaultLedger
                 DateTimeOffset previous = _last;
                 _last = now;
                 _rate.Add(now);
-                string text = Truncate(exception.Message);
-                if (text.Length != 0)
+                string raw = exception.Message ?? string.Empty;
+                string text;
+                if (_lastRaw is not null && string.Equals(raw, _lastRaw, StringComparison.Ordinal))
                 {
+                    // The same message as the previous occurrence (a storm repeats one): one dictionary hit, no truncation, copy or recent-list work.
+                    text = _lastText;
+                    if (_lastLine.Length != 0)
+                    {
+                        _messages.Add(_lastLine);
+                    }
+                }
+                else
+                {
+                    text = Truncate(raw);
                     string line = text.ReplaceLineEndings(" ");
-                    _messages.Add(line.Length <= MaxTallyMessageLength ? line : line[..MaxTallyMessageLength]);
-                    _recent.Add(line);
+                    string tallied = line.Length <= MaxTallyMessageLength ? line : line[..MaxTallyMessageLength];
+                    _lastRaw = raw;
+                    _lastText = text;
+                    _lastLine = tallied;
+                    if (line.Length != 0)
+                    {
+                        _messages.Add(tallied);
+                        _recent.Add(line);
+                    }
                 }
 
                 if (_count > 1)
@@ -768,6 +789,7 @@ public sealed class FaultLedger
                 _overflowSeen?.Clear();
                 _messages.Clear();
                 _recent.Clear();
+                _lastRaw = null;
                 _rate.Clear();
                 _gaps?.Clear();
                 _message = string.Empty;
