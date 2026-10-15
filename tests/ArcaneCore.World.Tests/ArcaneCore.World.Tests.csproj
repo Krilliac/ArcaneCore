@@ -33,6 +33,11 @@
     <Compile Include="..\ArcaneCore.Game.Tests\Collision\NavMeshFixture.cs" Link="Playerbots\NavMeshFixture.cs" />
   </ItemGroup>
 
+  <!-- Steady-state allocation assertions that retry a window a cross-thread collection ran in, shared with ArcaneCore.Game.Tests. -->
+  <ItemGroup>
+    <Compile Include="..\ArcaneCore.Game.Tests\AllocationProbe.cs" Link="AllocationProbe.cs" />
+  </ItemGroup>
+
   <!-- Modules for the module-host tests: built first, then copied to hotfixtures/v1 and hotfixtures/v2 in the output. -->
   <ItemGroup>
     <ProjectReference Include="..\hotmodule-fixtures\HotFixtureV1\HotFixtureV1.csproj" ReferenceOutputAssembly="false" OutputItemType="HotFixtureV1Output" />
