@@ -1,6 +1,798 @@
+using System.Globalization;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Transports;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
+
 namespace ArcaneCore.World.Playerbots;
 
-/// <summary>Placeholder: filled by its lane (docs/areas/playbots.md, Travel).</summary>
+/// <summary>The stages of one bot's boat or zeppelin leg (<see cref="PlayerbotShip"/>).</summary>
+internal enum ShipStage : byte { ToDock, WaitShip, Board, Ride, Disembark, Done, Failed }
+
+/// <summary>
+/// One bot's boat or zeppelin leg (<see cref="PlayerbotShip"/>): the route, the port it leaves from and the one it rides to, and the state
+/// of the stage under way. Owned by <see cref="PlayerbotShip"/>'s per-bot table; world thread only. Read-only to callers (<see cref="PlayerbotShip.TripOf"/>).
+/// </summary>
+internal sealed class ShipTrip(ShipRoute route, bool fromA, uint nowMs, PlayerbotOptions options)
+{
+    public ShipRoute Route { get; } = route;
+    public bool FromA { get; } = fromA;
+    public TravelPlace From => FromA ? Route.PortA : Route.PortB;
+    public TravelPlace To => FromA ? Route.PortB : Route.PortA;
+    public ShipStage Stage { get; internal set; } = ShipStage.ToDock;
+    public uint StartedMs { get; } = nowMs;
+    public uint StageMs { get; internal set; } = nowMs;
+
+    /// <summary>The reason the leg failed (null while under way and after an arrival).</summary>
+    public string? Failure { get; internal set; }
+
+    /// <summary>The anomaly code of the failure (<see cref="PlayerbotShip.AnomalyArea"/>), null for a failure that is not one (a switch turned off).</summary>
+    public string? FailureCode { get; internal set; }
+
+    /// <summary><see cref="PlayerbotShip.Cancel"/> was asked while the bot was aboard: it rides to the next port, steps off and the leg ends there.</summary>
+    public bool Cancelled { get; internal set; }
+
+    /// <summary>The ride went past its bound (<see cref="PlayerbotShip.RideGraceMs"/>): reported once, and the bot steps off at the next port it reaches.</summary>
+    public bool Overdue { get; internal set; }
+
+    /// <summary>The ship has left the departure port with the bot aboard (only then may a stop at that port end the ride).</summary>
+    public bool Sailed { get; internal set; }
+
+    /// <summary>Where the bot stood on the dock before stepping aboard (it steps back there when boarding fails).</summary>
+    public Vector3 DockSpot { get; internal set; }
+
+    /// <summary>The bot's place on the deck (offset from the ship's origin).</summary>
+    public Vector3 Offset { get; internal set; }
+
+    public uint BoardedMs { get; internal set; }
+    public bool SteppedOff { get; internal set; }
+
+    /// <summary>The port the bot stepped off at (the arrival port, or the departure port after a ride that missed it).</summary>
+    public TravelPlace? LeftAt { get; internal set; }
+
+    internal PlayerbotOptions Options = options;
+    internal bool Returned;
+    internal bool Reported;
+    internal uint LastDriveMs = nowMs;
+    internal uint LastPumpMs = nowMs;
+    internal uint LastStepMs = nowMs;
+    internal int Attempts;
+    internal int Refusals;
+    internal PlayerbotRoute? Walk;
+    internal TileWait Tiles;
+    internal uint NextPlanMs = nowMs;
+    internal float Best = float.PositiveInfinity;
+    internal uint BestMs = nowMs;
+    internal Vector3? StepOff;
+}
+
+/// <summary>
+/// The leg driver of a boat or zeppelin crossing (docs/areas/playbots.md, "Travel"): the bot rides a real ship through the transport system
+/// as a 1.12 player does, a leg the journey planner (<see cref="PlayerbotTravelPlanner"/>) plans from <see cref="PlayerbotShipNetwork"/>.
+/// <list type="number">
+/// <item><see cref="ShipStage.ToDock"/>: walk (<see cref="PlayerbotNavigation.PlanToward"/> / <see cref="PlayerbotNavigation.TryAdvance"/>) to the
+/// walkable point nearest the departure port, the place the ship waits at; fails (<c>dock-unreachable</c>) after
+/// <see cref="MaxRefusedPlans"/> refused plans in a row or <see cref="NoProgressMs"/> without getting <see cref="ProgressYards"/> closer.</item>
+/// <item><see cref="ShipStage.WaitShip"/>: stand until the route's ship waits at this port (<see cref="PlayerbotShipNetwork.DockedAt"/>) with at
+/// least <see cref="BoardMarginMs"/> of its stop left; bounded by 1.5 round trips (<c>never-docked</c>).</item>
+/// <item><see cref="ShipStage.Board"/>: step from the dock onto the deck through the movement handler, one MSG_MOVE_HEARTBEAT every
+/// <see cref="StepIntervalMs"/> at most and never farther than the bot's own speed allows, then the heartbeat with MOVEFLAG_ONTRANSPORT, the
+/// ship's GUID and the bot's place on the deck (<see cref="PlayerbotMotion.SendAboard"/>); the server boards it
+/// (TransportMovementObserver.AfterApply → <c>TransportSystem.BoardFromClient</c>). Confirmed by <c>player.Transport</c>; after
+/// <see cref="MaxAttempts"/> heartbeats the server did not take the bot steps back onto the dock (<c>board-refused</c>).</item>
+/// <item><see cref="ShipStage.Ride"/>: aboard, the ship carries the bot (the server moves passengers with it, and a map change is a far
+/// teleport that keeps it aboard, acknowledged by <see cref="PlayerbotMovementControl.AcknowledgeTransfer"/>). Watched every think: still
+/// aboard (<c>left-ship</c>), on the ship's map (<c>wrong-map</c>), within the round trip plus <see cref="RideGraceMs"/> (<c>ride-overdue</c>,
+/// then it steps off at the next port it reaches).</item>
+/// <item><see cref="ShipStage.Disembark"/>: the ship waits at the arrival port: a heartbeat without MOVEFLAG_ONTRANSPORT at the floor beside
+/// the deck (<see cref="PlayerbotMotion.SendStepOff"/>; the server takes the bot off), then a short walk to the walkable point nearest the
+/// port. Confirmed by <c>player.Transport</c> null on the arrival map (<c>disembark-refused</c>, <c>wrong-map</c>).</item>
+/// </list>
+/// Every failure is reported once per leg (<see cref="PlayerbotAnomalies"/>, area <see cref="AnomalyArea"/>); a leg that arrives reports
+/// nothing. A failure at the departure dock backs that dock off (<see cref="PlayerbotTravelOptions.BackoffMs"/>, doubling per failure).
+/// A switch turned off (<see cref="PlayerbotTravelOptions.Boats"/>, <see cref="PlayerbotTravelOptions.Zeppelins"/>) ends a leg that has not
+/// boarded; aboard, the bot rides to the next port and the leg ends there. Nobody is ever put off a ship at sea.
+/// <para>
+/// The brain owns the call order (see the lane report): <see cref="Drive"/> every think before any other mover while <see cref="IsActive"/>,
+/// <see cref="Cancel"/> on death or when a controller takes the bot, nothing else moving the bot while <see cref="Drive"/> answers
+/// <see cref="TravelLegStep.Traveling"/>; optionally <see cref="Pump"/> every world tick (like PlayerbotTram.Pump) so a short stop at a port
+/// is not missed between thinks.
+/// </para>
+/// <para>Thread affinity: world thread. Per-bot state lives in a <see cref="ConditionalWeakTable{TKey,TValue}"/> keyed by the player.</para>
+/// </summary>
 internal static class PlayerbotShip
 {
+    internal const string AnomalyArea = "ship";
+
+    /// <summary>A bot this close (flat yards) to a port, within <see cref="DockHeightYards"/> of its height, stands at the dock; and this close to the docked ship it may step aboard.</summary>
+    internal const float BoardReachYards = 40f;
+
+    /// <summary>The height a dock may lie above or below the port's node (a pier above a boat at sea level; not the ground under a zeppelin tower).</summary>
+    internal const float DockHeightYards = 25f;
+
+    /// <summary>
+    /// The deck: a bot stands this high above the ship's origin (the shipped ship scenario's deck point, ShipCrossingScenario.DeckZ), within
+    /// this rectangle of it. UNVERIFIED against the hull models (the server has no transport collision): a place inside the
+    /// <see cref="TransportSystem.MaxPassengerOffset"/> bound the server checks, on the dock's side of the ship.
+    /// </summary>
+    internal const float DeckHeight = 6f, DeckHalfLength = 8f, DeckHalfWidth = 3f;
+
+    /// <summary>A stepping heartbeat at most this often (a moving client reports about every 500 ms; the step is the bot's speed times the time since the last one).</summary>
+    internal const uint StepIntervalMs = 250;
+
+    /// <summary>Within this of the deck point the bot is on the deck and sends the heartbeat aboard.</summary>
+    internal const float OnDeckYards = 0.5f;
+
+    /// <summary>Heartbeats aboard (or off) the server may not take before the leg fails; refused plans to the dock in a row likewise.</summary>
+    internal const int MaxAttempts = 3, MaxRefusedPlans = 3;
+
+    /// <summary>The ship's stop must leave this long to step aboard.</summary>
+    internal const uint BoardMarginMs = 2_000;
+
+    /// <summary>Walking that gains less than this on its target within <see cref="NoProgressMs"/> is stuck.</summary>
+    internal const float ProgressYards = 5f;
+
+    internal const uint NoProgressMs = 60_000;
+
+    /// <summary>After a path query found nothing, the next one waits this long.</summary>
+    internal const uint PlanRetryMs = 2_000;
+
+    /// <summary>A ride may last the round trip plus this before it is overdue.</summary>
+    internal const uint RideGraceMs = 60_000;
+
+    /// <summary>Where the bot steps off: the floor beside the deck, at most this much below or above it, within <see cref="StepOffRadiiYards"/>.</summary>
+    internal const float StepOffHeightYards = 8f;
+
+    private static readonly float[] StepOffRadiiYards = [4f, 8f, 12f, 16f, 20f, 25f, 30f];
+    private const int StepOffDirections = 16;
+
+    private static readonly ConditionalWeakTable<Player, ShipTrip> Trips = [];
+    private static readonly ConditionalWeakTable<Player, Dictionary<(uint Entry, bool FromA), DockMemo>> Docks = [];
+
+    private sealed class DockMemo
+    {
+        public int Failures;
+        public uint UntilMs;
+        public bool ShipMissingReported;
+    }
+
+    /// <summary>The bot's leg, under way or ended (inspection and tests).</summary>
+    internal static ShipTrip? TripOf(Player player) => Trips.TryGetValue(player, out ShipTrip? trip) ? trip : null;
+
+    /// <summary>Whether a leg is under way (not done, not failed).</summary>
+    internal static bool IsActive(Player player)
+        => Trips.TryGetValue(player, out ShipTrip? trip) && trip.Stage is not (ShipStage.Done or ShipStage.Failed);
+
+    /// <summary>Whether the bot rides the ship of its leg now (the server's passenger link).</summary>
+    internal static bool IsAboard(Player player)
+        => Trips.TryGetValue(player, out ShipTrip? trip) && trip.Stage is not (ShipStage.Done or ShipStage.Failed)
+            && player.Transport is { } ship && ship.Entry == trip.Route.Entry;
+
+    /// <summary>
+    /// Begin the leg on <paramref name="route"/> from port A (<paramref name="fromA"/>) or B. Refused (false, with why) when the means is
+    /// switched off, the bot's faction may not ride it, the bot is dead, aboard something or not on the departure map, the arrival map is
+    /// not one bots may walk (<see cref="PlayerbotOptions.AllowedMaps"/>), the ship does not sail (<c>ship-missing</c>, reported once until a
+    /// leg of that dock succeeds), or the departure dock is backed off. A leg of the same route and direction under way answers true.
+    /// </summary>
+    internal static bool TryBegin(WorldSession session, Player player, ShipRoute route, bool fromA, PlayerbotOptions options, out string? why)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(route);
+        ArgumentNullException.ThrowIfNull(options);
+        why = null;
+        if (Trips.TryGetValue(player, out ShipTrip? current) && current.Stage is not (ShipStage.Done or ShipStage.Failed))
+        {
+            if (current.Route.Entry == route.Entry && current.FromA == fromA) return true;
+            why = $"ship: a leg on ship {current.Route.Entry} is under way";
+            return false;
+        }
+
+        if (route.Means is not (TravelMeans.Boat or TravelMeans.Zeppelin)) return Refuse(out why, $"ship: {route.Means} is not a ship");
+        if (!PlayerbotShipNetwork.SwitchedOn(route.Means, options.Travel))
+            return Refuse(out why, $"ship: {(route.Means == TravelMeans.Boat ? "boats" : "zeppelins")} are switched off");
+        bool alliance = PlayerbotShipNetwork.IsAlliance(player);
+        if (!PlayerbotShipNetwork.Admits(route.Access, alliance))
+            return Refuse(out why, $"ship: the {route.Access} ship {route.Entry} does not take a {(alliance ? "Alliance" : "Horde")} bot");
+        if (!player.IsAlive || !player.IsInWorld || player.Map is null) return Refuse(out why, "ship: the bot is not alive in the world");
+        if (player.Transport is not null) return Refuse(out why, "ship: the bot is aboard another transport");
+        TravelPlace from = fromA ? route.PortA : route.PortB, to = fromA ? route.PortB : route.PortA;
+        if (player.MapId != from.MapId) return Refuse(out why, $"ship: the bot is on map {player.MapId}, the port on map {from.MapId}");
+        if (!PlayerbotMapPolicy.Allows(options.AllowedMaps, to.MapId, null, current: false))
+            return Refuse(out why, $"ship: bots may not walk map {to.MapId}");
+        uint now = session.World.NowMs;
+        DockMemo memo = MemoOf(player, route.Entry, fromA);
+        if (memo.Failures > 0 && unchecked((int)(memo.UntilMs - now)) > 0)
+            return Refuse(out why, string.Create(CultureInfo.InvariantCulture,
+                $"ship: the dock of ship {route.Entry} failed {memo.Failures} time(s); backed off for {unchecked(memo.UntilMs - now) / 1000} s"));
+        if (TransportSystem.Of(session.World)?.FindByEntry(route.Entry) is null)
+        {
+            if (!memo.ShipMissingReported && CanReport(session, player))
+            {
+                memo.ShipMissingReported = true;
+                PlayerbotAnomalies.Report(player, AnomalyArea, "ship-missing", string.Create(CultureInfo.InvariantCulture,
+                    $"ship {route.Entry} ({route.Means}) does not sail (transports off, or the route was not built)"));
+            }
+
+            return Refuse(out why, $"ship: ship {route.Entry} does not sail");
+        }
+
+        Trips.AddOrUpdate(player, new ShipTrip(route, fromA, now, options));
+        return true;
+    }
+
+    /// <summary>
+    /// One think of the leg. <see cref="TravelLegStep.Idle"/>: no leg (or its end was already answered). <see cref="TravelLegStep.Traveling"/>:
+    /// under way, nothing else moves the bot. <see cref="TravelLegStep.Arrived"/> / <see cref="TravelLegStep.Failed"/> once, when the leg ended
+    /// (here or in <see cref="Pump"/>); <paramref name="failure"/> then says why. A dead bot not aboard drops its leg (Idle); aboard, the ship
+    /// carries it on (the server revives a passenger at a map change).
+    /// </summary>
+    internal static TravelLegStep Drive(WorldSession session, Player player, PlayerbotOptions options, uint elapsedMs, out string? failure)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(options);
+        failure = null;
+        if (!Trips.TryGetValue(player, out ShipTrip? trip)) return TravelLegStep.Idle;
+        if (trip.Stage is ShipStage.Done or ShipStage.Failed) return Ended(trip, out failure);
+        uint now = session.World.NowMs;
+        trip.Options = options;
+        trip.LastDriveMs = now;
+        if (!player.IsAlive && !IsAboard(player))
+        {
+            Trips.Remove(player);
+            return TravelLegStep.Idle;
+        }
+
+        PlayerbotThinkProbe.Phase("ship");
+        Step(session, player, trip, options, Math.Max(1u, elapsedMs), now, pump: false);
+        return trip.Stage is ShipStage.Done or ShipStage.Failed ? Ended(trip, out failure) : TravelLegStep.Traveling;
+    }
+
+    /// <summary>
+    /// Per-tick sampling for the brain's integration (to be called from <see cref="PlayerbotMotion.Pump"/>, like PlayerbotTram.Pump): every
+    /// <see cref="StepIntervalMs"/> after the last <see cref="Drive"/> it notices the ship at the port, steps aboard and off, and watches the ride,
+    /// so a short stop is not missed between thinks. Walking (to the dock, off the pier) stays with <see cref="Drive"/>. An end reached here is
+    /// answered by the next <see cref="Drive"/>.
+    /// </summary>
+    internal static void Pump(WorldSession session, Player player, uint now)
+    {
+        if (!Trips.TryGetValue(player, out ShipTrip? trip) || trip.Stage is ShipStage.ToDock or ShipStage.Done or ShipStage.Failed) return;
+        if (trip.Stage == ShipStage.Disembark && trip.SteppedOff) return;
+        if (!player.IsAlive || !player.IsInWorld) return;
+        if (unchecked(now - trip.LastDriveMs) < StepIntervalMs || unchecked(now - trip.LastPumpMs) < StepIntervalMs) return;
+        trip.LastPumpMs = now;
+        Step(session, player, trip, trip.Options, StepIntervalMs, now, pump: true);
+    }
+
+    /// <summary>
+    /// Drop the leg (death, a controller taking the bot over). Not boarded yet: dropped (a bot half way up the gangway steps back onto the
+    /// dock first). Aboard: never put off at sea; the leg is marked cancelled and rides on to the next port, where <see cref="Drive"/> steps the
+    /// bot off and ends it. Walking off the pier: dropped.
+    /// </summary>
+    internal static void Cancel(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (!Trips.TryGetValue(player, out ShipTrip? trip) || trip.Stage is ShipStage.Done or ShipStage.Failed) return;
+        switch (trip.Stage)
+        {
+            case ShipStage.Ride:
+            case ShipStage.Disembark when !trip.SteppedOff:
+                trip.Cancelled = true;
+                return;
+            case ShipStage.Board when player.Transport is null && PlayerbotMotion.CanMove(player) && player.Session is WorldSession session:
+                PlayerbotMotion.SendStepOff(session, player, trip.DockSpot, player.Orientation);
+                break;
+        }
+
+        Trips.Remove(player);
+    }
+
+    private static TravelLegStep Ended(ShipTrip trip, out string? failure)
+    {
+        failure = trip.Stage == ShipStage.Failed ? trip.Failure : null;
+        if (trip.Returned) return TravelLegStep.Idle;
+        trip.Returned = true;
+        return trip.Stage == ShipStage.Done ? TravelLegStep.Arrived : TravelLegStep.Failed;
+    }
+
+    private static void Step(WorldSession session, Player player, ShipTrip trip, PlayerbotOptions options, uint elapsedMs, uint now, bool pump)
+    {
+        // Between maps (the ship's map change, or any teleport): the client half acknowledges it (PlayerbotMovementControl); nothing to do.
+        if (!player.IsInWorld || player.Map is not { } map
+            || session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true)
+            return;
+        ShipTransport? ship = TransportSystem.Of(session.World)?.FindByEntry(trip.Route.Entry);
+        if (ship is null)
+        {
+            Fail(session, player, trip, now, "ship-missing", $"ship {trip.Route.Entry} no longer sails (stage {trip.Stage})", backoff: true);
+            return;
+        }
+
+        switch (trip.Stage)
+        {
+            case ShipStage.ToDock:
+                if (!pump) ToDock(session, player, map, trip, options, elapsedMs, now);
+                return;
+            case ShipStage.WaitShip:
+                WaitShip(session, player, map, ship, trip, now);
+                return;
+            case ShipStage.Board:
+                Board(session, player, map, ship, trip, now);
+                return;
+            case ShipStage.Ride:
+                Ride(session, player, ship, trip, now);
+                return;
+            case ShipStage.Disembark:
+                Disembark(session, player, map, ship, trip, options, elapsedMs, now, pump);
+                return;
+        }
+    }
+
+    private static void ToDock(WorldSession session, Player player, Map map, ShipTrip trip, PlayerbotOptions options, uint elapsedMs, uint now)
+    {
+        if (!PlayerbotShipNetwork.SwitchedOn(trip.Route.Means, options.Travel))
+        {
+            PlayerbotMovementControl.Stop(session, player);
+            End(trip, now, $"{trip.Route.Means} switched off before boarding", code: null);
+            return;
+        }
+
+        if (map.MapId != trip.From.MapId)
+        {
+            Fail(session, player, trip, now, "wrong-map", $"on map {map.MapId} on the way to the port on map {trip.From.MapId}", backoff: false);
+            return;
+        }
+
+        if (AtPort(player, trip.From))
+        {
+            PlayerbotMovementControl.Stop(session, player);
+            trip.DockSpot = Position(player);
+            Enter(trip, ShipStage.WaitShip, now);
+            return;
+        }
+
+        if (!Walk(session, player, trip, trip.From.Position, options, elapsedMs, now, out string? why))
+            Fail(session, player, trip, now, "dock-unreachable", why!, backoff: true);
+    }
+
+    private static void WaitShip(WorldSession session, Player player, Map map, ShipTransport ship, ShipTrip trip, uint now)
+    {
+        if (!PlayerbotShipNetwork.SwitchedOn(trip.Route.Means, trip.Options.Travel))
+        {
+            End(trip, now, $"{trip.Route.Means} switched off while waiting for the ship", code: null);
+            return;
+        }
+
+        if (map.MapId != trip.From.MapId || !AtPort(player, trip.From))
+        {
+            // Pushed off the dock (a knock-back, a fear): walk back to it.
+            Enter(trip, ShipStage.ToDock, now);
+            return;
+        }
+
+        uint bound = WaitBoundMs(trip.Route);
+        if (unchecked(now - trip.StageMs) > bound)
+        {
+            Fail(session, player, trip, now, "never-docked", string.Create(CultureInfo.InvariantCulture,
+                $"ship {trip.Route.Entry} did not wait at the port ({trip.From.Position.X:F1},{trip.From.Position.Y:F1},{trip.From.Position.Z:F1}) on map {trip.From.MapId} within {bound / 1000} s"),
+                backoff: true);
+            return;
+        }
+
+        if (!PlayerbotShipNetwork.DockedAt(ship, trip.From) || StopLeftMs(ship) < BoardMarginMs) return;
+        if (Flat(Position(player), new Vector3(ship.X, ship.Y, ship.Z)) > BoardReachYards) return;
+        if (!PlayerbotMovementControl.Stop(session, player)) return;
+        trip.DockSpot = Position(player);
+        trip.Offset = DeckOffset(ship, trip.DockSpot);
+        trip.LastStepMs = now;
+        Enter(trip, ShipStage.Board, now);
+    }
+
+    private static void Board(WorldSession session, Player player, Map map, ShipTransport ship, ShipTrip trip, uint now)
+    {
+        if (ReferenceEquals(player.Transport, ship))
+        {
+            Boarded(trip, now);
+            return;
+        }
+
+        bool switchedOff = !PlayerbotShipNetwork.SwitchedOn(trip.Route.Means, trip.Options.Travel);
+        if (switchedOff || !PlayerbotShipNetwork.DockedAt(ship, trip.From) || map.MapId != trip.From.MapId)
+        {
+            // The ship sails before the bot is aboard (or the switch went off): back onto the dock.
+            PlayerbotMotion.SendStepOff(session, player, trip.DockSpot, player.Orientation);
+            if (switchedOff)
+            {
+                End(trip, now, $"{trip.Route.Means} switched off while boarding", code: null);
+                return;
+            }
+
+            if (++trip.Attempts >= MaxAttempts)
+            {
+                Fail(session, player, trip, now, "board-refused", $"the ship left {trip.Attempts} times before the bot was aboard", backoff: true);
+                return;
+            }
+
+            Enter(trip, ShipStage.WaitShip, now);
+            return;
+        }
+
+        Vector3 deck = Seat(ship, trip.Offset);
+        Vector3 at = Position(player);
+        float left = Vector3.Distance(at, deck);
+        if (left > OnDeckYards)
+        {
+            uint since = unchecked(now - trip.LastStepMs);
+            if (since < StepIntervalMs) return;
+            if (!PlayerbotMotion.Speed(player, trip.Options.MoveSpeed, out float speed, out _)) speed = Unit.BaseRunSpeed;
+            float stride = MathF.Min(left, MathF.Max(1f, speed * Math.Min(since, 2_000u) / 1000f));
+            Vector3 next = left - stride <= OnDeckYards ? deck : at + ((deck - at) * (stride / left));
+            if (PlayerbotMotion.SendStepOff(session, player, next, Heading(at, deck)))
+            {
+                trip.LastStepMs = now;
+            }
+            else if (++trip.Attempts >= MaxAttempts)
+            {
+                FailBoard(session, player, trip, now, "the server did not take the steps onto the deck");
+                return;
+            }
+
+            if (Vector3.Distance(Position(player), deck) > OnDeckYards) return;
+        }
+
+        // On the deck: the heartbeat that stands on the ship.
+        PlayerbotMotion.SendAboard(session, player, ship.Guid.Value, deck, player.Orientation, trip.Offset, 0f);
+        if (ReferenceEquals(player.Transport, ship))
+        {
+            Boarded(trip, now);
+            return;
+        }
+
+        if (++trip.Attempts >= MaxAttempts)
+            FailBoard(session, player, trip, now, string.Create(CultureInfo.InvariantCulture,
+                $"{trip.Attempts} heartbeats aboard ship {trip.Route.Entry} at offset ({trip.Offset.X:F1},{trip.Offset.Y:F1},{trip.Offset.Z:F1}) did not board it"));
+    }
+
+    private static void Boarded(ShipTrip trip, uint now)
+    {
+        trip.Attempts = 0;
+        trip.BoardedMs = now;
+        trip.Sailed = false;
+        Enter(trip, ShipStage.Ride, now);
+    }
+
+    private static void FailBoard(WorldSession session, Player player, ShipTrip trip, uint now, string why)
+    {
+        // Back onto the dock: a bot never stays half way up the gangway (the heartbeat without the ship also leaves it, if it boarded late).
+        PlayerbotMotion.SendStepOff(session, player, trip.DockSpot, player.Orientation);
+        Fail(session, player, trip, now, "board-refused", why, backoff: true);
+    }
+
+    private static void Ride(WorldSession session, Player player, ShipTransport ship, ShipTrip trip, uint now)
+    {
+        if (!ReferenceEquals(player.Transport, ship) || (player.Movement.Flags & MovementFlags.OnTransport) == 0)
+        {
+            Fail(session, player, trip, now, "left-ship", string.Create(CultureInfo.InvariantCulture,
+                $"no longer aboard ship {trip.Route.Entry} (transport {(player.Transport is { } other ? other.Entry.ToString(CultureInfo.InvariantCulture) : "none")}) {unchecked(now - trip.BoardedMs) / 1000} s after boarding"),
+                backoff: false);
+            return;
+        }
+
+        if (ship.CurrentMap is not { } shipMap || shipMap.MapId != player.MapId)
+        {
+            Fail(session, player, trip, now, "wrong-map", string.Create(CultureInfo.InvariantCulture,
+                $"aboard ship {trip.Route.Entry} on map {player.MapId} while the ship sails on map {ship.CurrentMap?.MapId.ToString(CultureInfo.InvariantCulture) ?? "none"}"),
+                backoff: false);
+            return;
+        }
+
+        if (ship.IsMoving) trip.Sailed = true;
+        uint riding = unchecked(now - trip.BoardedMs);
+        uint period = PeriodMs(trip.Route);
+        if (!trip.Overdue && riding > period + RideGraceMs)
+        {
+            trip.Overdue = true;
+            if (CanReport(session, player))
+            {
+                PlayerbotAnomalies.Report(player, AnomalyArea, "ride-overdue", string.Create(CultureInfo.InvariantCulture,
+                    $"aboard ship {trip.Route.Entry} for {riding / 1000} s (round trip {period / 1000} s) without reaching the port on map {trip.To.MapId}"));
+                trip.Reported = true;
+            }
+        }
+
+        if (riding > (2 * period) + RideGraceMs)
+        {
+            // Still aboard: never put off at sea. The ship carries the bot on; the caller learns the leg failed.
+            Fail(session, player, trip, now, "ride-overdue", string.Create(CultureInfo.InvariantCulture,
+                $"aboard ship {trip.Route.Entry} for {riding / 1000} s, two round trips, without stepping off"), backoff: false);
+            return;
+        }
+
+        if (PlayerbotShipNetwork.DockedAt(ship, trip.To)
+            || ((trip.Overdue || trip.Cancelled) && trip.Sailed && PlayerbotShipNetwork.DockedAt(ship, trip.From)))
+        {
+            trip.Attempts = 0;
+            trip.StepOff = null;
+            Enter(trip, ShipStage.Disembark, now);
+            Disembark(session, player, player.Map!, ship, trip, trip.Options, StepIntervalMs, now, pump: true);
+        }
+    }
+
+    private static void Disembark(WorldSession session, Player player, Map map, ShipTransport ship, ShipTrip trip, PlayerbotOptions options,
+        uint elapsedMs, uint now, bool pump)
+    {
+        if (!trip.SteppedOff)
+        {
+            TravelPlace port = PlayerbotShipNetwork.DockedAt(ship, trip.To) ? trip.To : trip.From;
+            if (!ReferenceEquals(player.Transport, ship))
+            {
+                Fail(session, player, trip, now, "left-ship", $"off ship {trip.Route.Entry} before stepping off at the port", backoff: false);
+                return;
+            }
+
+            if (!PlayerbotShipNetwork.DockedAt(ship, port))
+            {
+                // The ship sails on before the bot is off: it rides to the next port.
+                Enter(trip, ShipStage.Ride, now);
+                return;
+            }
+
+            if (!PlayerbotMotion.CanMove(player)) return;
+            trip.StepOff ??= StepOffPoint(map, Position(player));
+            PlayerbotMotion.SendStepOff(session, player, trip.StepOff.Value, Heading(Position(player), trip.StepOff.Value));
+            if (player.Transport is not null)
+            {
+                if (++trip.Attempts >= MaxAttempts)
+                    Fail(session, player, trip, now, "disembark-refused", string.Create(CultureInfo.InvariantCulture,
+                        $"{trip.Attempts} heartbeats off ship {trip.Route.Entry} at ({trip.StepOff.Value.X:F1},{trip.StepOff.Value.Y:F1},{trip.StepOff.Value.Z:F1}) did not take the bot off"),
+                        backoff: false);
+                return;
+            }
+
+            trip.SteppedOff = true;
+            trip.LeftAt = port;
+            trip.Refusals = 0;
+            trip.Walk = null;
+            trip.Best = float.PositiveInfinity;
+            trip.BestMs = now;
+            trip.NextPlanMs = now;
+            if (player.MapId != port.MapId)
+            {
+                Fail(session, player, trip, now, "wrong-map", $"stepped off on map {player.MapId}, the port lies on map {port.MapId}", backoff: false);
+                return;
+            }
+        }
+
+        if (pump) return; // the walk off the pier is the brain's (Drive)
+        TravelPlace at = trip.LeftAt ?? trip.To;
+        if (player.MapId != at.MapId)
+        {
+            Fail(session, player, trip, now, "wrong-map", $"on map {player.MapId} after stepping off at the port on map {at.MapId}", backoff: false);
+            return;
+        }
+
+        // A short walk off the pier, to the walkable point nearest the port: one route; the leg ends when it is walked (or none is needed).
+        if (trip.Walk is { Complete: false } walk && PlayerbotNavigation.TryAdvance(session, walk, options, elapsedMs, now)) return;
+        if (trip.Walk is null && unchecked(now - trip.StageMs) <= NoProgressMs)
+        {
+            if (unchecked((int)(trip.NextPlanMs - now)) > 0) return;
+            PlanOutcome outcome = PlayerbotNavigation.PlanToward(player, at.Position, options, ref trip.Tiles, now, out PlayerbotRoute? route);
+            if (outcome == PlanOutcome.Route && route is not null && route.Distance > ProgressYards)
+            {
+                trip.Walk = route;
+                PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now);
+                return;
+            }
+
+            if (outcome != PlanOutcome.Route && ++trip.Refusals < MaxRefusedPlans)
+            {
+                trip.NextPlanMs = unchecked(now + PlanRetryMs);
+                return;
+            }
+        }
+
+        PlayerbotMovementControl.Stop(session, player);
+        if (!AtPort(player, at))
+        {
+            Fail(session, player, trip, now, "dock-unreachable", string.Create(CultureInfo.InvariantCulture,
+                $"stepped off ship {trip.Route.Entry} but stands {Flat(Position(player), at.Position):F1} yd from the port on map {at.MapId}"), backoff: false);
+            return;
+        }
+
+        if (at != trip.To)
+        {
+            End(trip, now, trip.Cancelled ? "the leg was cancelled; stepped off at the departure port" : "the ride missed the arrival port; stepped off at the departure port",
+                code: null);
+            return;
+        }
+
+        trip.Stage = ShipStage.Done;
+        trip.StageMs = now;
+        trip.Failure = null;
+        if (Docks.TryGetValue(player, out Dictionary<(uint, bool), DockMemo>? docks)) docks.Remove((trip.Route.Entry, trip.FromA));
+    }
+
+    /// <summary>
+    /// Follow (planning when needed, one query per <see cref="PlanRetryMs"/>) a route towards <paramref name="target"/>. False (with why) after
+    /// <see cref="MaxRefusedPlans"/> refused plans in a row, or no <see cref="ProgressYards"/> gained within <see cref="NoProgressMs"/>.
+    /// </summary>
+    private static bool Walk(WorldSession session, Player player, ShipTrip trip, Vector3 target, PlayerbotOptions options, uint elapsedMs, uint now,
+        out string? why)
+    {
+        why = null;
+        float left = Vector3.Distance(Position(player), target);
+        if (left + ProgressYards <= trip.Best)
+        {
+            trip.Best = left;
+            trip.BestMs = now;
+        }
+        else if (unchecked(now - trip.BestMs) > NoProgressMs)
+        {
+            why = string.Create(CultureInfo.InvariantCulture, $"no progress towards the port for {NoProgressMs / 1000} s ({left:F1} yd left)");
+            return false;
+        }
+
+        if (trip.Walk is { Complete: false } route && PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now)) return true;
+        trip.Walk = null;
+        if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
+        PlanOutcome outcome = PlayerbotNavigation.PlanToward(player, target, options, ref trip.Tiles, now, out PlayerbotRoute? next);
+        if (outcome == PlanOutcome.Pending)
+        {
+            trip.NextPlanMs = unchecked(now + PlanRetryMs);
+            return true;
+        }
+
+        if (outcome != PlanOutcome.Route || next is null)
+        {
+            trip.NextPlanMs = unchecked(now + PlanRetryMs);
+            if (++trip.Refusals < MaxRefusedPlans) return true;
+            why = string.Create(CultureInfo.InvariantCulture, $"{trip.Refusals} plans towards the port were refused ({left:F1} yd left)");
+            return false;
+        }
+
+        trip.Refusals = 0;
+        trip.Walk = next;
+        PlayerbotNavigation.TryAdvance(session, next, options, elapsedMs, now);
+        return true;
+    }
+
+    private static void Fail(WorldSession session, Player player, ShipTrip trip, uint now, string code, string why, bool backoff)
+    {
+        if (trip.Stage is ShipStage.ToDock) PlayerbotMovementControl.Stop(session, player);
+        End(trip, now, why, code);
+        if (!trip.Reported && CanReport(session, player))
+        {
+            trip.Reported = true;
+            PlayerbotAnomalies.Report(player, AnomalyArea, code, string.Create(CultureInfo.InvariantCulture,
+                $"ship {trip.Route.Entry} ({trip.Route.Means}) from map {trip.From.MapId} to map {trip.To.MapId}: {why}"));
+        }
+
+        if (!backoff) return;
+        DockMemo memo = MemoOf(player, trip.Route.Entry, trip.FromA);
+        memo.Failures++;
+        memo.UntilMs = unchecked(now + trip.Options.Travel.BackoffMs(memo.Failures));
+    }
+
+    private static void End(ShipTrip trip, uint now, string why, string? code)
+    {
+        trip.Stage = ShipStage.Failed;
+        trip.StageMs = now;
+        trip.Failure = "ship: " + why;
+        trip.FailureCode = code;
+        trip.Walk = null;
+    }
+
+    private static void Enter(ShipTrip trip, ShipStage stage, uint now)
+    {
+        if (trip.Stage == stage) return;
+        trip.Stage = stage;
+        trip.StageMs = now;
+        trip.NextPlanMs = now;
+        trip.Best = float.PositiveInfinity;
+        trip.BestMs = now;
+        trip.Refusals = 0;
+        trip.Walk = null;
+    }
+
+    private static bool Refuse(out string? why, string reason)
+    {
+        why = reason;
+        return false;
+    }
+
+    private static DockMemo MemoOf(Player player, uint entry, bool fromA)
+    {
+        Dictionary<(uint Entry, bool FromA), DockMemo> docks = Docks.GetOrCreateValue(player);
+        if (!docks.TryGetValue((entry, fromA), out DockMemo? memo)) docks[(entry, fromA)] = memo = new DockMemo();
+        return memo;
+    }
+
+    private static bool CanReport(WorldSession session, Player player)
+        => !session.IsInChaosProbe && player.IsInWorld && !player.IsLoggingOut;
+
+    /// <summary>Whether the bot stands at <paramref name="port"/>'s dock: its map, within <see cref="BoardReachYards"/> flat and <see cref="DockHeightYards"/> of height.</summary>
+    internal static bool AtPort(Player player, TravelPlace port)
+        => player.MapId == port.MapId && Flat(Position(player), port.Position) <= BoardReachYards
+            && MathF.Abs(player.Z - port.Position.Z) <= DockHeightYards;
+
+    /// <summary>How long a ship waiting at a stop stays there (ms; 0 while it moves).</summary>
+    internal static uint StopLeftMs(ShipTransport ship)
+    {
+        if (ship.IsMoving || ship.Period == 0) return 0;
+        uint progress = ship.PathProgress % ship.Period;
+        uint departure = ship.CurrentFrame.DepartureTime;
+        return departure > progress ? departure - progress : 0;
+    }
+
+    internal static uint PeriodMs(ShipRoute route) => (uint)Math.Clamp(route.PeriodSeconds * 1000f, 1f, uint.MaxValue / 4f);
+
+    /// <summary>How long a bot waits at a port for its ship: one and a half round trips.</summary>
+    internal static uint WaitBoundMs(ShipRoute route) => PeriodMs(route) * 3 / 2;
+
+    /// <summary>The bot's place on the deck: its own position from the dock taken into the ship's frame, held inside the deck rectangle, at deck height.</summary>
+    internal static Vector3 DeckOffset(ShipTransport ship, Vector3 from)
+    {
+        float x = from.X, y = from.Y, z = from.Z, o = 0f;
+        ShipTransport.CalculatePassengerOffset(ref x, ref y, ref z, ref o, ship.X, ship.Y, ship.Z, ship.Orientation);
+        return new Vector3(Math.Clamp(x, -DeckHalfLength, DeckHalfLength), Math.Clamp(y, -DeckHalfWidth, DeckHalfWidth), DeckHeight);
+    }
+
+    /// <summary>The world position of <paramref name="offset"/> on <paramref name="ship"/> now (vmangos CalculatePassengerPosition).</summary>
+    internal static Vector3 Seat(ShipTransport ship, Vector3 offset)
+    {
+        float x = offset.X, y = offset.Y, z = offset.Z, o = 0f;
+        ship.CalculatePassengerPosition(ref x, ref y, ref z, ref o);
+        return new Vector3(x, y, z);
+    }
+
+    /// <summary>
+    /// Where a bot on the deck at <paramref name="deck"/> steps off: the nearest floor around it (rings of <see cref="StepOffRadiiYards"/>)
+    /// within <see cref="StepOffHeightYards"/> of the deck that the navigation mesh stands on; the floor under the bot when none is (the
+    /// walk off the pier then finds its way).
+    /// </summary>
+    internal static Vector3 StepOffPoint(Map map, Vector3 deck)
+    {
+        foreach (float radius in StepOffRadiiYards)
+        {
+            Vector3? best = null;
+            float bestDz = float.PositiveInfinity;
+            for (int i = 0; i < StepOffDirections; i++)
+            {
+                float angle = i * MathF.Tau / StepOffDirections;
+                float x = deck.X + (MathF.Cos(angle) * radius), y = deck.Y + (MathF.Sin(angle) * radius);
+                float floor = map.Collision.GetHeight(x, y, deck.Z + 2f);
+                if (!ValidHeight(floor) || MathF.Abs(floor - deck.Z) > StepOffHeightYards) continue;
+                var point = new Vector3(x, y, floor + 0.05f);
+                if (MathF.Abs(floor - deck.Z) >= bestDz || !PlayerbotNavigation.OnWalkableMesh(map, point)) continue;
+                best = point;
+                bestDz = MathF.Abs(floor - deck.Z);
+            }
+
+            if (best is { } found) return found;
+        }
+
+        float under = map.Collision.GetHeight(deck.X, deck.Y, deck.Z + 2f);
+        return ValidHeight(under) && under <= deck.Z ? new Vector3(deck.X, deck.Y, under + 0.05f) : deck;
+    }
+
+    private static bool ValidHeight(float height)
+        => float.IsFinite(height) && height > TerrainTile.InvalidHeight && height != TerrainTile.InvalidHeightValue;
+
+    private static Vector3 Position(Player player) => new(player.X, player.Y, player.Z);
+
+    private static float Flat(Vector3 a, Vector3 b) => Vector2.Distance(new(a.X, a.Y), new(b.X, b.Y));
+
+    private static float Heading(Vector3 from, Vector3 to)
+    {
+        float dx = to.X - from.X, dy = to.Y - from.Y;
+        return dx * dx + dy * dy > 1e-6f ? PlayerbotMotion.Normalize(MathF.Atan2(dy, dx)) : 0f;
+    }
 }
