@@ -1390,9 +1390,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         finally { _probe.End(); }
         double slowMs = _options.SlowThinkLogMs;
         bool slow = slowMs > 0 && _probe.ElapsedMs >= slowMs;
+        if (!slow) _slowThinks?.EndEpisode(active.Record.BotId);
         if (!slow && ThinkObserver is null) return; // the common case: nothing to describe, nothing allocated
         string goal = GoalOf(active, driver);
-        if (slow) (_slowThinks ??= new PlayerbotSlowThinkLog(logger)).Observe(_probe, slowMs, ClockMs, active.Record.BotId, active.Name, driver, goal);
+        if (slow) (_slowThinks ??= new PlayerbotSlowThinkLog(logger)).Observe(_probe, slowMs, ClockMs, active.Record.BotId, active.Name, driver, goal, active.Session.Player);
         if (ThinkObserver is { } observer)
         {
             _probe.Subject = (driver, goal);

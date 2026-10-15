@@ -52,6 +52,44 @@ public sealed class ManagedPlayerbotSlowThinkAnomalyTests
     }
 
     [Fact]
+    public void ConsecutiveSlowThinks_AreOneEpisode_AndAFastThinkStartsANewOne()
+    {
+        var log = new PlayerbotSlowThinkLog(NullLogger.Instance);
+        using AnomalyCapture capture = CaptureOf("Slowepisode");
+        Guid id = Guid.NewGuid();
+        Guid other = Guid.NewGuid();
+
+        // Two slow thinks in a row (a fresh probe each, as the feature has): one report.
+        Assert.True(log.Observe(ThinkOf(3), 1, 1, id, "Slowepisode", "its brain", "Explore"));
+        Assert.True(log.Observe(ThinkOf(3), 1, 2, id, "Slowepisode", "its brain", "Explore"));
+        Assert.Equal(1, capture.Count(ThinkSlow));
+
+        // Another bot's fast think does not end this bot's episode.
+        log.EndEpisode(other);
+        Assert.True(log.Observe(ThinkOf(3), 1, 3, id, "Slowepisode", "its brain", "Explore"));
+        Assert.Equal(1, capture.Count(ThinkSlow));
+
+        // This bot's fast think ends it: the next slow think is a new episode and reports again.
+        log.EndEpisode(id);
+        Assert.True(log.Observe(ThinkOf(3), 1, 4, id, "Slowepisode", "its brain", "Explore"));
+        Assert.Equal(2, capture.Count(ThinkSlow));
+    }
+
+    [Fact]
+    public void ThePerProbeFlag_IsSetWhenReported_SoTheSameThinkIsNeverReportedTwice()
+    {
+        var log = new PlayerbotSlowThinkLog(NullLogger.Instance);
+        using AnomalyCapture capture = CaptureOf("Slowflag");
+        PlayerbotThinkProbe probe = ThinkOf(3);
+        Assert.False(probe.SlowAnomalyReported);
+
+        Assert.True(log.Observe(probe, 1, 1, Guid.NewGuid(), "Slowflag", "its brain", "Explore"));
+        Assert.True(probe.SlowAnomalyReported);
+        Assert.True(log.Observe(probe, 1, 2, Guid.NewGuid(), "Slowflag", "its brain", "Explore")); // the same think seen again, even as another bot
+        Assert.Equal(1, capture.Count(ThinkSlow));
+    }
+
+    [Fact]
     public async Task ASlowControllerThink_FiresOnTheLedger_AndAFastOneDoesNot()
     {
         var accounts = new InMemoryAccountStore();
@@ -71,6 +109,7 @@ public sealed class ManagedPlayerbotSlowThinkAnomalyTests
         await host.WaitForWorldAsync(() => slow.Any(ThinkSlow), "the slow think to be reported");
 
         AnomalyNotice notice = slow.Notices.First();
+        Assert.Matches(@"^bot Slowfire \(guid [0-9A-F]+\)$", notice.Subject); // the standard bot subject, as every other bot anomaly
         Assert.Contains("(over 30.0 ms) driver=controller", notice.Detail, StringComparison.Ordinal);
         Assert.False(fast.Any(ThinkSlow), fast.Describe());
         await feature.ShutdownBeforeWorldStopAsync();

@@ -156,4 +156,46 @@ public sealed class PlayerbotGuildAnomalyTests
         await SocialTestSupport.WaitPassesAsync(healthy.Host, 5);
         Assert.False(quiet.Any(GuildFailed), quiet.Describe());
     }
+
+    [Fact]
+    public async Task InviteAcceptanceTheServerRefuses_Fires_AndAnAcceptedInviteIsSilent()
+    {
+        string[] bots = ["Orcannoy", "Humannoy"];
+        await using SocialWorld world = await SocialWorld.StartAsync(options =>
+        {
+            options.Social.Guilds.Enabled = false;
+            options.Social.Guilds.InvitePolicy = PlayerbotInvitePolicy.Anyone;
+        }, frozen: true);
+        await world.AddBotAsync(bots[0], race: 2); // an Orc: the other side
+        await world.AddBotAsync(bots[1]);
+        WorldTestClient player = await world.AddPlayerAsync("Annoymaker");
+        await world.Host.OnWorldAsync(() => SocialTestSupport.Social(world.Host).Context.Options.AllowTwoSideGuild = true);
+        await player.SendAsync(WorldOpcode.CmsgGuildCreate, SocialTestSupport.CString("Anomaly Mixed"));
+        await world.Host.WaitForWorldAsync(() => world.Guilds.GetByName("Anomaly Mixed") is not null, "the player's guild");
+        using AnomalyCapture capture = CaptureOf(bots);
+
+        foreach (string bot in bots)
+        {
+            await player.SendAsync(WorldOpcode.CmsgGuildInvite, SocialTestSupport.CString(bot));
+            await world.Host.WaitForWorldAsync(() => world.Guilds.InvitedTo(world.Host.World.FindOnlinePlayer(bot)!) != 0, $"{bot} to be invited");
+        }
+
+        // Between the invitation and the answer the server stops allowing two-side guilds: the Orc's accept is refused, the human's is not.
+        await world.Host.OnWorldAsync(() =>
+        {
+            SocialTestSupport.Social(world.Host).Context.Options.AllowTwoSideGuild = false;
+            var membership = new PlayerbotGuildMembership(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+            PlayerbotSocialPass pass = SocialTestSupport.BotPass(world.Host, nowMs: 0);
+            SocialTestSupport.TakeInvites(pass, membership);
+            membership.AnswerInvites(pass);
+        });
+
+        Assert.Equal(1, world.Log.Count(bots[0], WorldOpcode.CmsgGuildAccept));
+        Assert.Null(await world.GuildOfAsync(bots[0]));
+        Assert.NotNull(await world.GuildOfAsync(bots[1]));
+        Assert.Equal(1, capture.Count(GuildFailed));
+        AnomalyNotice notice = capture.Notices.Single();
+        Assert.Contains("bot Orcannoy ", notice.Subject, StringComparison.Ordinal);
+        Assert.Contains("guild invite acceptance for guild", notice.Detail, StringComparison.Ordinal);
+    }
 }

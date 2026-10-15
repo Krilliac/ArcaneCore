@@ -40,7 +40,7 @@ public sealed class PlayerbotQuestAnomalyTests
     }
 
     [Fact]
-    public async Task AcceptTheServerRefuses_Fires_OnceWithTheDiagnosedCode_AndIsNotRepeatedWhileSetAside()
+    public async Task AcceptTheServerRefuses_Fires_OnceAtTheStageDeadline_WithTheDiagnosedCode()
     {
         var items = new ItemTestContent();
         items.Templates.Templates.Add(new ItemTemplate { Entry = 9501, Name = "Quest crate", Class = (uint)ItemClass.Quest, Stackable = 1 });
@@ -49,48 +49,66 @@ public sealed class PlayerbotQuestAnomalyTests
         await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { SourceItem = 9501 }, manualClock: true);
         WorldSession session = quest.Session;
         var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
-        await quest.Host.OnWorldAsync(() =>
+        using AnomalyCapture capture = await quest.Host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
             while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
                 Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
-            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            AnomalyCapture c = PlayerbotAnomalies.CaptureFor(player);
             Assert.True(goals.HasCandidate(player));
-            for (int think = 0; think < 6; think++) Think(session, goals);
-
-            Assert.Equal(1, capture.Count(AcceptRefused));
-            AnomalyNotice notice = capture.Notices.Single(n => n.Key == AcceptRefused);
-            Assert.Equal(AnomalySeverity.Warning, notice.Severity);
-            Assert.Contains($"quest={QuestInteractionFixture.QuestId}", notice.Detail, StringComparison.Ordinal);
-            Assert.Contains("code=InventoryFull", notice.Detail, StringComparison.Ordinal);
-            Assert.False(capture.Any(GiverNotFound) || capture.Any(NoProgress), capture.Describe());
-            return true;
+            for (int think = 0; think < 4; think++) Think(session, goals);
+            return c;
         });
+
+        for (int second = 0; second < 30; second++)
+        {
+            await quest.Host.World.AdvanceClockAsync(1_000);
+            await quest.Host.OnWorldAsync(() => { Think(session, goals); return true; });
+        }
+
+        Assert.Equal(1, capture.Count(AcceptRefused));
+        AnomalyNotice notice = capture.Notices.Single(n => n.Key == AcceptRefused);
+        Assert.Equal(AnomalySeverity.Warning, notice.Severity);
+        Assert.Contains($"quest={QuestInteractionFixture.QuestId}", notice.Detail, StringComparison.Ordinal);
+        Assert.Contains("code=InventoryFull", notice.Detail, StringComparison.Ordinal);
+        Assert.False(capture.Any(GiverNotFound) || capture.Any(NoProgress), capture.Describe());
     }
 
     [Fact]
-    public async Task AGiverThatIsGoneBeforeItAnswers_FiresGiverNotFound_Once()
+    public async Task AGiverThatIsGoneBeforeItAnswers_FiresGiverNotFound_Once_AndTheStageStillRunsToItsDeadline()
     {
         await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
         WorldSession session = quest.Session;
         var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
-        await quest.Host.OnWorldAsync(() =>
+        using AnomalyCapture capture = await quest.Host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
-            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            AnomalyCapture c = PlayerbotAnomalies.CaptureFor(player);
             Assert.True(goals.HasCandidate(player));
             Think(session, goals); // the query goes out
             _ = session.DrainManagedPackets(); // its answer is lost
             ((Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!).Health = 0;
             for (int think = 0; think < 4; think++) Think(session, goals);
 
-            Assert.Equal(1, capture.Count(GiverNotFound));
-            AnomalyNotice notice = capture.Notices.Single(n => n.Key == GiverNotFound);
-            Assert.Contains("reason=giver-despawned-or-dead", notice.Detail, StringComparison.Ordinal);
-            Assert.Contains($"quest={QuestInteractionFixture.QuestId}", notice.Detail, StringComparison.Ordinal);
+            Assert.Equal(1, c.Count(GiverNotFound));
+            Assert.Contains("reason=giver-despawned-or-dead", c.Notices.Single(n => n.Key == GiverNotFound).Detail, StringComparison.Ordinal);
+            // Report only (H1): the exchange is not given up early, it waits for its deadline as it always did.
+            Assert.True(goals.Busy);
+            Assert.False(c.Any(AcceptRefused), c.Describe());
+            return c;
+        });
+
+        await quest.Host.World.AdvanceClockAsync(16_000);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Think(session, goals);
+            Assert.False(goals.Busy);
+            Assert.Equal(1, capture.Count(GiverNotFound)); // still the one episode
+            Assert.Equal(1, capture.Count(AcceptRefused));
             return true;
         });
     }
+
 
     [Fact]
     public async Task AQuestTakenAndHandedInNormally_ReportsNothing()
@@ -108,6 +126,37 @@ public sealed class PlayerbotQuestAnomalyTests
             for (int think = 0; think < 6; think++) Think(session, goals);
 
             Assert.False(AnyQuestAnomaly(capture), capture.Describe());
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AnObjectiveThatGainsNoCreditForThreeMinutesOfContestedHunting_FiresNoProgress_Once()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        var contention = new PlayerbotContention(new PlayerbotOptions { Enabled = true });
+        goals.Contention = contention;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            for (int think = 0; think < 4; think++) Think(session, goals);
+            Assert.NotNull(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId));
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+
+            // Silent while the contested time is under the limit (8 lost mobs = 160 s of 180 s).
+            for (int i = 0; i < 8; i++) contention.NoteLostMob(90);
+            Think(session, goals);
+            Assert.False(capture.Any(NoProgress), capture.Describe());
+
+            // Over it: the entry is set aside and the stall reported, once.
+            contention.NoteLostMob(90);
+            contention.NoteLostMob(90);
+            Think(session, goals);
+            Think(session, goals);
+            Assert.Equal(1, capture.Count(NoProgress));
+            Assert.Contains($"quest={QuestInteractionFixture.QuestId} entry=90 progress=0 reason=no-credit-timeout", capture.Notices.Single(n => n.Key == NoProgress).Detail, StringComparison.Ordinal);
             return true;
         });
     }

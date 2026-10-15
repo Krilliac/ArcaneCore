@@ -22,12 +22,16 @@ internal sealed class PlayerbotSlowThinkLog(ILogger logger)
     private long _windowStartMs = long.MinValue;
     private int _linesInWindow;
     private int _suppressed;
+    private readonly HashSet<Guid> _slowEpisode = [];
 
     /// <summary>Slow thinks seen (logged or not) since start.</summary>
     internal long Slow { get; private set; }
 
     /// <summary>Lines logged since start.</summary>
     internal long Logged { get; private set; }
+
+    /// <summary>A think of <paramref name="botId"/> that was not slow: its slow-think episode (consecutive slow thinks, reported once) is over.</summary>
+    internal void EndEpisode(Guid botId) => _slowEpisode.Remove(botId);
 
     /// <summary>
     /// Judge one ended think (<paramref name="probe"/>) against <paramref name="thresholdMs"/> (0 or less: off) and log it when slow
@@ -39,7 +43,7 @@ internal sealed class PlayerbotSlowThinkLog(ILogger logger)
     {
         if (thresholdMs <= 0 || probe.ElapsedMs < thresholdMs) return false;
         Slow++;
-        if (!probe.SlowAnomalyReported)
+        if (!probe.SlowAnomalyReported && _slowEpisode.Add(botId))
         {
             string anomalyDetail = string.Create(CultureInfo.InvariantCulture,
                 $"think {probe.ElapsedMs:F1} ms (over {thresholdMs:F1} ms) driver={driver} goal={goal} slowestPhase={probe.SlowestPhase}");
@@ -52,6 +56,7 @@ internal sealed class PlayerbotSlowThinkLog(ILogger logger)
                 string subject = string.IsNullOrWhiteSpace(name) ? $"bot {botId}" : $"bot {name} (id {botId})";
                 AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + "brain", "think-slow", subject, anomalyDetail, AnomalySeverity.Warning);
             }
+            probe.SlowAnomalyReported = true;
         }
         if (_windowStartMs == long.MinValue || nowMs - _windowStartMs >= WindowMs)
         {
