@@ -24,6 +24,15 @@ internal enum PlayerbotPolicySource : byte
     Refused,
 }
 
+/// <summary>A bot's arm of an A/B comparison (<see cref="PlayerbotPolicyOptions.AbPolicyShare"/>; telemetry <c>arm</c>).</summary>
+internal enum PlayerbotPolicyArm : byte
+{
+    /// <summary>The policy's choice is tried first.</summary>
+    Policy,
+    /// <summary>Scored, never promoted or explored: the ladder decides, and the scores only say what the policy would have chosen.</summary>
+    Ladder,
+}
+
 /// <summary>One snapshot of a bot's state taken for scoring (world thread).</summary>
 internal sealed class PlayerbotPolicyWindow(long sequence, uint takenAtMs, float[] features, PlayerbotPolicyGoalMask open, PlayerbotPolicyGoal? explore)
 {
@@ -63,9 +72,24 @@ internal sealed class PlayerbotPolicyAgent
         _engine = engine;
         BotGuid = botGuid;
         _random = new Random(unchecked((int)(botGuid ^ (botGuid >> 32)) ^ 0x5eed));
+        Arm = ArmOf(botGuid, engine.Options.AbPolicyShare);
     }
 
     internal ulong BotGuid { get; }
+
+    /// <summary>This bot's A/B arm, for good (a hash of its guid against <see cref="PlayerbotPolicyOptions.AbPolicyShare"/>).</summary>
+    internal PlayerbotPolicyArm Arm { get; }
+
+    /// <summary>The arm of a guid: a splitmix64 hash mapped to [0, 1) against the share, so consecutive guids spread over both arms.</summary>
+    internal static PlayerbotPolicyArm ArmOf(ulong botGuid, double policyShare)
+    {
+        if (policyShare >= 1) return PlayerbotPolicyArm.Policy;
+        ulong z = unchecked(botGuid + 0x9E3779B97F4A7C15UL);
+        z = unchecked((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL);
+        z = unchecked((z ^ (z >> 27)) * 0x94D049BB133111EBUL);
+        z ^= z >> 31;
+        return (z >> 11) * (1.0 / (1UL << 53)) < policyShare ? PlayerbotPolicyArm.Policy : PlayerbotPolicyArm.Ladder;
+    }
 
     /// <summary>The bot's current snapshot (null before the first).</summary>
     internal PlayerbotPolicyWindow? Window { get; private set; }
@@ -91,7 +115,7 @@ internal sealed class PlayerbotPolicyAgent
         PlayerbotPolicyGoal? explore = null;
         double rate = _engine.Options.ExplorationRate;
         // Grind is no runner-up: it is the ladder's floor and cannot be tried first.
-        if (rate > 0 && open.LadderPick is { } ladder && open.Without(ladder).Without(PlayerbotPolicyGoal.Grind) is { Count: > 0 } runnersUp
+        if (rate > 0 && Arm == PlayerbotPolicyArm.Policy && open.LadderPick is { } ladder && open.Without(ladder).Without(PlayerbotPolicyGoal.Grind) is { Count: > 0 } runnersUp
             && _random.NextDouble() < rate)
         {
             int nth = _random.Next(runnersUp.Count);
@@ -124,6 +148,8 @@ internal sealed class PlayerbotPolicyAgent
     internal PlayerbotPolicyVerdict Decide(uint nowMs)
     {
         PlayerbotPolicyVerdict verdict = DecideCore(nowMs);
+        // The ladder arm keeps what the policy would have chosen (its source and pick) but never tries it.
+        if (Arm == PlayerbotPolicyArm.Ladder) verdict = verdict with { Promote = null };
         LastVerdict = verdict;
         DecideCount++;
         switch (verdict.Source)

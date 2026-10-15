@@ -226,6 +226,39 @@ public sealed class PlayerbotPolicyEngineTests
     }
 
     [Fact]
+    public void TheAbArms_SplitTheBotsByTheirGuid_AtTheShare()
+    {
+        Assert.All(Enumerable.Range(1, 1000), i => Assert.Equal(PlayerbotPolicyArm.Policy, PlayerbotPolicyAgent.ArmOf((ulong)i, 1.0)));
+        Assert.All(Enumerable.Range(1, 1000), i => Assert.Equal(PlayerbotPolicyArm.Ladder, PlayerbotPolicyAgent.ArmOf((ulong)i, 0.0)));
+        // Consecutive guids (as the server hands them out) split near the share, and a bot's arm never changes.
+        int policy = Enumerable.Range(1, 10_000).Count(i => PlayerbotPolicyAgent.ArmOf((ulong)i, 0.5) == PlayerbotPolicyArm.Policy);
+        Assert.InRange(policy, 4_700, 5_300);
+        Assert.Equal(PlayerbotPolicyAgent.ArmOf(42, 0.5), PlayerbotPolicyAgent.ArmOf(42, 0.5));
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotPolicyOptions { Enabled = true, AbPolicyShare = 1.5 }.Validate());
+    }
+
+    [Fact]
+    public async Task TheLadderArm_IsScoredButNeverPromotesOrExplores()
+    {
+        // Share 0: every bot is in the ladder arm.
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true, AbPolicyShare = 0, ExplorationRate = 0.2 },
+            policy: new StubPolicy(PlayerbotPolicyGoal.Explore));
+        PlayerbotPolicyAgent agent = engine.CreateAgent(7);
+        Assert.Equal(PlayerbotPolicyArm.Ladder, agent.Arm);
+        for (uint i = 0; i < 50; i++)
+        {
+            PlayerbotPolicyWindow window = agent.Request(0, new float[PlayerbotPolicySchema.FeatureCount], TownOrExplore, i * 10_000);
+            Assert.Null(window.Explore);
+            engine.Dispatch();
+            await engine.WhenIdleAsync();
+            PlayerbotPolicyVerdict verdict = agent.Decide(i * 10_000 + 10);
+            Assert.Null(verdict.Promote);
+            // What the policy would have done is kept for the comparison.
+            Assert.Equal((PlayerbotPolicySource.Applied, PlayerbotPolicyGoal.Explore), (verdict.Source, verdict.Pick));
+        }
+    }
+
+    [Fact]
     public void Exploration_PicksOnlyOpenRunnersUp_AndIsOffByDefault()
     {
         PlayerbotPolicyGoalMask open = default(PlayerbotPolicyGoalMask).With(PlayerbotPolicyGoal.Quest).With(PlayerbotPolicyGoal.Town)

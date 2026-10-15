@@ -643,6 +643,11 @@ Training is described below.
 runner-up goals at random (never the ladder's own choice, never `Grind`), which its thinks then try first. It exists to gather telemetry the
 ladder alone never produces; it needs `Enabled`.
 
+**A/B arms.** `AbPolicyShare` (0..1, default 1): the share of bots in the policy arm. The rest are in the ladder arm, fixed per bot by a
+hash of its guid: they take snapshots and score them like the others, but never promote or explore, so they behave as the ladder alone
+and their telemetry (`arm` `ladder`, with the `pick` and `src` the policy would have had) is the comparison. The per-think counters count
+the ladder arm's would-be choices too.
+
 **Telemetry** (`World:Playerbots:Policy:Telemetry`, off by default; needs `Enabled`). One record per decision: the first think that had a
 snapshot's scores or exploration goal (a think on a stale snapshot, or before its scores came back, is not one, so a snapshot whose scores
 never came is not written), written after `OutcomeMinutes` (5) of world time with its outcome. JSON lines, one object per line:
@@ -659,6 +664,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 | `ladder`, `pick` | The ladder's choice; the policy's (or exploration's) choice, null when there were no scores. |
 | `src` | `agreed`, `applied`, `explored`, `nonfinite`, `floor` or `refused` (the promoted goal's controller did not act). |
 | `x` | 1 when the choice was exploration. |
+| `arm` | `policy` or `ladder`: the bot's A/B arm (`AbPolicyShare`). |
 | `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. |
 | `w` | The outcome window in seconds. |
 | `o` | The outcome over the window, in this order: `lvl`, `lp` (levels gained with their fractions: experience over the next level's, so it compares across levels and level-ups), `xp`, `money`, `items`, `quests` (with `lvl`, the stall-watch fingerprint delta: levels, experience, copper, item count, quests handed in), `stalls`, `deaths`, `anomalies` (the bot's anomaly-ledger reports). |
@@ -698,10 +704,12 @@ server.
 - `skip`, a pull candidate the choice did not take (`decision` `avoid`, `rest`, or a `detour` with no route; once a minute per
   creature, at most eight waiting per bot), with the same `f`, `reason` and `entry`, and `o.wait` (seconds until the bot's next fight, null past ten minutes).
 
-**Training (phase 3, staged separately).** An offline trainer and an A/B report (for `tools/playerbot-policy/`) are staged on their own
-branch, to land once the server has run with telemetry on. They fit
-progress per minute for each (state, goal) from the server's own telemetry only, and write the weights file above. No label may come
-from Claude or any other LLM: training data is what the server's bots did and what followed.
+**Training.** Offline, from the server's own telemetry only (`tools/playerbot-policy/`, README there):
+`train.py TELEMETRY_DIR -o model.json` fits progress per minute for each (state, goal) (levels with fractions, plus weighted quests,
+less weighted stalls, deaths and anomalies) as a ridge model per goal or a small ReLU network, holds out a fifth of the rows, refuses to
+write a model from fewer than `--min-rows` (1000), and writes the weights file above. `ab_report.py TELEMETRY_DIR` compares the two arms
+of a run with `AbPolicyShare` 0.5, per bot-hour, with bootstrap intervals over bots. No label may come from Claude or any other LLM:
+training data is what the server's bots did and what followed. Whether a model ships is decided on that report.
 
 ### Contention
 

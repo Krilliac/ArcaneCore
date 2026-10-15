@@ -31,6 +31,13 @@ public sealed class PlayerbotPolicyOptions
     /// </summary>
     public double ExplorationRate { get; set; }
 
+    /// <summary>
+    /// The share of bots (0..1) in the policy arm of an A/B comparison; the rest are in the ladder arm, which takes snapshots and scores
+    /// them but never promotes or explores, so its telemetry is the ladder's. A bot's arm is fixed by a hash of its guid. 1 (the default):
+    /// every bot uses the policy.
+    /// </summary>
+    public double AbPolicyShare { get; set; } = 1.0;
+
     /// <summary>Decision telemetry for training (<c>World:Playerbots:Policy:Telemetry</c>; off by default).</summary>
     public PlayerbotPolicyTelemetryOptions Telemetry { get; set; } = new();
 
@@ -47,6 +54,8 @@ public sealed class PlayerbotPolicyOptions
             throw new InvalidOperationException($"{section}: TickBudgetMs must be 0.1..50.");
         if (!double.IsFinite(ExplorationRate) || ExplorationRate is < 0 or > 0.2)
             throw new InvalidOperationException($"{section}: ExplorationRate must be 0..0.2.");
+        if (!double.IsFinite(AbPolicyShare) || AbPolicyShare is < 0 or > 1)
+            throw new InvalidOperationException($"{section}: AbPolicyShare must be 0..1.");
         if (Telemetry is null) throw new InvalidOperationException($"{section}:Telemetry is missing.");
         Telemetry.Validate();
         // Telemetry and exploration are made by the engine: asked for with the engine off, they would silently do nothing.

@@ -28,7 +28,7 @@ internal readonly record struct PlayerbotPolicyOutcome(int Levels, double LevelP
 internal sealed record PlayerbotPolicyRecord(
     long UnixMs, ulong Bot, uint Map, uint Zone, float[] Features, PlayerbotPolicyGoalMask Open, PlayerbotPolicyGoal? Ladder,
     PlayerbotPolicyGoal? Pick, PlayerbotPolicySource Source, bool Explored, PlayerbotPolicyGoal? Goal, PlayerbotGoalKind Kind,
-    uint WindowMs, PlayerbotPolicyOutcome Outcome) : IPlayerbotTelemetryRecord
+    uint WindowMs, PlayerbotPolicyOutcome Outcome, PlayerbotPolicyArm Arm = PlayerbotPolicyArm.Policy) : IPlayerbotTelemetryRecord
 {
     internal const int SchemaVersion = 1;
 
@@ -52,6 +52,7 @@ internal sealed record PlayerbotPolicyRecord(
             WriteGoal(json, "pick", Pick);
             json.WriteString("src", Source.ToString().ToLowerInvariant());
             json.WriteNumber("x", Explored ? 1 : 0);
+            json.WriteString("arm", Arm == PlayerbotPolicyArm.Ladder ? "ladder" : "policy");
             WriteGoal(json, "goal", Goal);
             json.WriteString("kind", Kind.ToString());
             json.WriteNumber("w", WindowMs / 1000);
@@ -203,7 +204,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
                 AnomaliesOf(state.Subject) - open.Anomalies);
             Enqueue(new PlayerbotPolicyRecord(open.UnixMs, player.Guid.Value, open.Map, open.Zone, open.Window.Features, open.Window.Open,
                 open.Window.LadderPick, open.Verdict.Pick, open.Verdict.Source, open.Window.Explore is not null,
-                PlayerbotPolicySchema.GoalOf(open.Kind), open.Kind, WindowMs, outcome));
+                PlayerbotPolicySchema.GoalOf(open.Kind), open.Kind, WindowMs, outcome, state.Agent?.Arm ?? PlayerbotPolicyArm.Policy));
         }
     }
 
