@@ -1117,7 +1117,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     botId, area.MapId, area.Centre.X, area.Centre.Y))
             {
                 AreaLevels = AreaLevelLookupOf(home.MapId),
-                AllowsLeaveQuests = Population.PopulationStartAreas.StageOfPlace(home.Place) == Population.StartHomeStage.Zone,
+                AllowsLeaveQuests = Population.PopulationStartAreas.StageOfPlace(home.Place) is Population.StartHomeStage.Zone or Population.StartHomeStage.Town,
+                Stay = Population.PopulationTownProgression.StayOf(home.Place),
+                WalkRangeYards = Population.PopulationTownProgression.StayOf(home.Place) == Population.TownStay.None ? 0f
+                    : _options.Population.TownProgressionTeleport ? _options.Population.TownWalkYards : 20000f,
+                TownTeleports = Population.PopulationTownProgression.StayOf(home.Place) != Population.TownStay.None && _options.Population.TownProgressionTeleport,
                 ValleyRadius = Population.PopulationStartAreas.ValleyRadiusOfPlace(home.Place),
                 LeavePolicy = _options.Population,
             }

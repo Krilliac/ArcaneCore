@@ -111,6 +111,18 @@ internal sealed class PlayerbotHomeArea
     /// </summary>
     internal float ValleyRadius { get; init; }
 
+    /// <summary>
+    /// A town home (<see cref="Population.PopulationTownProgression"/>): the bot walks to it from up to this many yards on the same side of the
+    /// water (the Auto return mode's teleport distance is at least this); 0 for every other home, which follows the Home options alone.
+    /// </summary>
+    internal float WalkRangeYards { get; init; }
+
+    /// <summary>A town home with <c>TownProgressionTeleport</c> on: water between the bot and the town makes the return a teleport. Off: the bot walks (the sweep assigns only towns it can reach).</summary>
+    internal bool TownTeleports { get; init; }
+
+    /// <summary>Where a town home sits in the capital/secondary cycle: an idle bot lingers at the centre of the town it stays in (<see cref="Population.TownStay.None"/> for other homes).</summary>
+    internal Population.TownStay Stay { get; init; }
+
     /// <summary>The live population options (<see cref="Population.PlayerbotPopulationOptions.LeaveHomeLevelMargin"/>); null reads a margin of 0.</summary>
     internal Population.PlayerbotPopulationOptions? LeavePolicy { get; init; }
 
@@ -602,12 +614,19 @@ internal sealed class PlayerbotHomeReturn
         {
             return LastJudgement = PlayerbotHomeTeleportReason.Island;
         }
+        // A town home is walked to from farther away than a Home-option home (WalkRangeYards), unless water no bot crosses lies between
+        // (Teldrassil): then the distance counts as unbounded and the bot takes the return teleport.
+        float teleportAt = PlayerbotHomeRules.TeleportDistanceFor(options, area.WalkRangeYards);
+        float distance = onMap && area.WalkRangeYards > 0f && area.TownTeleports
+            && Population.PopulationTownProgression.SeparatedByWater(mapId, player.X, player.Y, area.MapId, area.Centre.X, area.Centre.Y)
+            ? float.PositiveInfinity : Distance;
         int highest = 0;
-        if (onMap && options.ReturnMode == PlayerbotHomeReturnMode.Auto && !WalkBlocked && Distance <= options.TeleportDistanceYards
+        if (onMap && options.ReturnMode == PlayerbotHomeReturnMode.Auto && !WalkBlocked && distance <= teleportAt
             && area.AreaLevels is { } levels)
             highest = _highestAreaLevel ??= DangerLevelOnLine(new Vector3(player.X, player.Y, player.Z), area, levels);
-        var facts = new PlayerbotHomeFacts(onMap, Distance, highest, (int)player.Level, WalkBlocked);
-        return LastJudgement = PlayerbotHomeRules.Decide(facts, options);
+        var facts = new PlayerbotHomeFacts(onMap, distance, highest, (int)player.Level, WalkBlocked);
+        IPlayerbotHomeTravel travel = (player.Session as WorldSession)?.Services.GetService<IPlayerbotHomeTravel>() ?? DefaultHomeTravel.Instance;
+        return LastJudgement = travel.Decide(facts, options, teleportAt);
     }
 
     /// <summary>

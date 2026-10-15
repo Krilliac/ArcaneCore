@@ -2618,6 +2618,14 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         if (player.Map is null || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false })
             return;
+        if (_home is { Stay: not Population.TownStay.None } town && (player.Map?.MapId ?? player.MapId) == town.MapId)
+        {
+            // Idle with a town home: back to the inn and wait there rather than roam the wilderness (PlayerbotTownIdle).
+            TownIdleAction idle = _townIdle.Decide(town.Stay, town.DistanceTo(player.X, player.Y), _session.World.NowMs);
+            if (idle == TownIdleAction.Linger) { PlayerbotMovementControl.Stop(_session, player); TryBindAtInn(player, town); return; }
+            if (idle == TownIdleAction.WalkToTown) { WalkTowardTown(player, town, elapsedMs); return; }
+        }
+
         PlayerbotThinkProbe.Phase("explore candidates");
         if (TryExploreSpawns(player, elapsedMs)) return;
         if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
@@ -2650,6 +2658,59 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (_exploreRefusals == 1) _trace.Record(_session.World.NowMs, "wander-refused");
             PlayerbotMovementControl.Stop(_session, player);
         }
+    }
+
+    private readonly PlayerbotTownIdle _townIdle = new();
+    private uint _bindCheckAt;
+
+    /// <summary>
+    /// At the inn of the town it stays in, binds its home to that town through the server's own path (CMSG_BINDER_ACTIVATE to the
+    /// innkeeper within interaction distance, <see cref="ArcaneCore.Game.Npc.QuestNpcServices.BinderActivate"/>) when the bind is
+    /// elsewhere. Checked every 30 seconds at most; false when nothing was sent.
+    /// </summary>
+    private bool TryBindAtInn(Player player, PlayerbotHomeArea town)
+    {
+        uint now = _session.World.NowMs;
+        if (unchecked((int)(now - _bindCheckAt)) < 0 || !player.IsAlive || player.Combat.IsInCombat) return false;
+        _bindCheckAt = unchecked(now + 30_000);
+        HomeBind bind = player.Home;
+        if (!PlayerbotTownIdle.NeedsBind(bind.MapId, bind.X, bind.Y, town.MapId, town.Centre.X, town.Centre.Y)) return false;
+        if (_session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services is not { } services) return false;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false } info
+                || (info.NpcFlags & ArcaneCore.Game.Npc.NpcFlags.Innkeeper) == 0
+                || services.InteractableNpc(player, guid, ArcaneCore.Game.Npc.NpcFlags.Innkeeper) is null) continue;
+            var writer = new PacketWriter(8);
+            writer.WriteUInt64(guid.Value);
+            return _session.TryManagedAction(WorldOpcode.CmsgBinderActivate, writer.ToArray());
+        }
+
+        return false;
+    }
+
+    /// <summary>Plans and walks the next leg of an idle bot's way back to the centre of its town home (the wander planner, aimed inward).</summary>
+    private void WalkTowardTown(Player player, PlayerbotHomeArea town, uint elapsedMs)
+    {
+        if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
+        System.Numerics.Vector3 destination = InwardLeg(town, player, _exploreRefusals);
+        PlayerbotThinkProbe.Phase("explore town plan");
+        if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
+        {
+            AbandonRoute();
+            return;
+        }
+
+        if (_route is { } leg && PlayerbotNavigation.TryAdvance(_session, leg, _options, elapsedMs, _session.World.NowMs))
+        {
+            _exploreRefusals = 0;
+            _wanderLeg = leg;
+            return;
+        }
+
+        AbandonRoute();
+        _exploreRefusals++;
+        PlayerbotMovementControl.Stop(_session, player);
     }
 
     /// <summary>The wandering leg the bot walks now (<see cref="ChainWanderLeg"/> chains only after such a leg, never after one to a spawn).</summary>

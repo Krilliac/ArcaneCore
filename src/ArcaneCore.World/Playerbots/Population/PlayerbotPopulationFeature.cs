@@ -1177,6 +1177,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     internal const byte HomeOptOutBand = byte.MaxValue - 1;
 
     private int _sweeps;
+    private int _homeCursor;
     private readonly Dictionary<Guid, int> _homeRetrySweep = [];
     private readonly Dictionary<byte, StartPosition> _starts = [];
     private readonly object _optOutGate = new();
@@ -1250,8 +1251,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     }
 
     /// <summary>Stores and applies one start home, clipped to the start zone when the terrain knows the zone of the centre (a centre it does not know would give a home that contains nothing). Null on success, otherwise why not.</summary>
-    private async Task<string?> SetStartHomeAsync(ManagedPlayerbotFeature managed, Guid botId, uint mapId, Vector3 centre, string area,
+    private Task<string?> SetStartHomeAsync(ManagedPlayerbotFeature managed, Guid botId, uint mapId, Vector3 centre, string area,
         StartHomeStage stage, CancellationToken ct)
+        => SetPopulationHomeAsync(managed, botId, mapId, centre, PopulationStartAreas.RadiusOf(stage, _options.Population), PopulationStartAreas.PlaceOf(area, stage), ct);
+
+    /// <summary>Stores and applies one population home (start, zone or town), zone-clipped when the terrain knows the zone of the centre. Null on success, otherwise why not.</summary>
+    private async Task<string?> SetPopulationHomeAsync(ManagedPlayerbotFeature managed, Guid botId, uint mapId, Vector3 centre, float radius, string place,
+        CancellationToken ct)
     {
         if (!managed.AllowsHomeMap(mapId)) return $"map {mapId} is not an allowed playerbot map";
         if (_world is not { } world) return "the population feature is not attached";
@@ -1259,7 +1265,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         try
         {
             ManagedPlayerbotFeature.HomeOutcome outcome = await managed.SetHomesAsync([new ManagedPlayerbotFeature.HomeTarget(botId, mapId, centre)],
-                PopulationStartAreas.RadiusOf(stage, _options.Population), PopulationStartAreas.PlaceOf(area, stage), ct, zoneClipped: zone != 0, logFailures: false).ConfigureAwait(false);
+                radius, place, ct, zoneClipped: zone != 0, logFailures: false).ConfigureAwait(false);
             return outcome.Set == 1 ? null : "the home was not stored";
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
@@ -1275,6 +1281,190 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         if (bot.ZoneId == start.ZoneId) return true;
         float dx = bot.X - start.X, dy = bot.Y - start.Y;
         return (dx * dx) + (dy * dy) <= (float)pop.FreshZoneHomeRadius * pop.FreshZoneHomeRadius;
+    }
+
+    // ---- town progression (PopulationTownProgression) ----
+
+    private enum TownStepResult : byte
+    {
+        Unchanged,
+        Changed,
+        Clear,
+        Failed,
+    }
+
+    private Dictionary<string, ResolvedTown>? _towns;
+    private CreatureContent? _townsContent;
+    private readonly Dictionary<Guid, (string Active, long SinceMs)> _townPhase = [];
+    private string _unresolvedSignature = string.Empty;
+    private bool _unreachableReported;
+    private volatile bool _adoptRequested;
+
+    /// <summary>Tests: the creature content the town centres are read from, instead of the creature feature's.</summary>
+    internal Func<CreatureContent?>? TownContentSource { get; set; }
+
+    /// <summary><c>.playerbot population adopt</c>: the next sweeps take over the operator homes of the population's bots, until none is left.</summary>
+    internal void RequestAdopt() => _adoptRequested = true;
+
+    /// <summary>Whether an adoption requested by the command is still under way.</summary>
+    internal bool AdoptPending => _adoptRequested;
+
+    /// <summary>Tests: forget the stay clocks, as a restart does. The next sweep starts a fresh stay for every bot at the town it is homed in.</summary>
+    internal void ForgetTownPhases() => _townPhase.Clear();
+
+    /// <summary>Explore-atlas rings (160 yards each) round a town centre that must hold a creature of the bot's level for the town to fit it.</summary>
+    internal const int TownFitRings = 6;
+
+    /// <summary>Tests: whether a town (map, bot level, centre) holds creatures of the bot's level, instead of the explore atlas.</summary>
+    internal Func<uint, int, Vector3, bool>? TownFits { get; set; }
+
+    /// <summary>
+    /// Whether the area round a town centre has creatures of the bot's level (the explore atlas, <see cref="TownFitRings"/> rings): an
+    /// over-levelled bot in a town whose zone has nothing left for it moves on to the town of its level. True when the atlas does not
+    /// know the map (no data: the band alone decides).
+    /// </summary>
+    private bool FitsLevel(uint mapId, int level, Vector3 centre)
+    {
+        if (TownFits is { } fits) return fits(mapId, level, centre);
+        PlayerbotExploreAtlas? atlas = services.GetService<CreatureWorldFeature>()?.ExploreAtlas;
+        return atlas is null || !atlas.HasIndexedMap(mapId) || atlas.HasCellNear(mapId, (uint)level, centre, TownFitRings);
+    }
+
+    private IPlayerbotHomeTravel Travel => services.GetService<IPlayerbotHomeTravel>() ?? DefaultHomeTravel.Instance;
+
+    /// <summary>The resolved town centres, read on the world thread once per creature content; null while the content is not installed.</summary>
+    private async Task<Dictionary<string, ResolvedTown>?> TownsAsync(CancellationToken ct)
+    {
+        if (_world is not { } world) return null;
+        return await world.InvokeAsync(() =>
+        {
+            CreatureContent? content = TownContentSource is { } source ? source()
+                : services.GetService<CreatureWorldFeature>() is { ContentInstalled: true } feature ? feature.Content : null;
+            if (content is null) return null;
+            if (_towns is not null && ReferenceEquals(content, _townsContent)) return _towns;
+            _townsContent = content;
+            return _towns = PopulationTownProgression.Resolve(content);
+        }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The bots (running or parked) per level-band town they hold as their secondary home.</summary>
+    private static Dictionary<string, int> TownCounts(ManagedPlayerbotFeature managed, IEnumerable<Guid> bots)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (Guid id in bots)
+            if (managed.HomeOf(id) is { } home && PopulationTownProgression.TryParsePlace(home.Place, out TownPlace place) && place.Secondary is { } secondary)
+                counts[secondary] = counts.GetValueOrDefault(secondary) + 1;
+        return counts;
+    }
+
+    /// <summary>One anomaly (not one per bot, nor again for the same set) naming the towns the sweep needed and could not find in the world data.</summary>
+    private void ReportUnresolvedTowns(SortedSet<string> unresolved)
+    {
+        string signature = string.Join(',', unresolved);
+        if (signature.Length == 0 || signature == _unresolvedSignature) return;
+        _unresolvedSignature = signature;
+        AnomalyLedger.Shared.Report(
+            PlayerbotAnomalies.Prefix + "population",
+            "town-unresolved",
+            "population towns",
+            $"the centre of {unresolved.Count} town(s) could not be found (no spawn of their anchor NPC on the map): {signature}; bots fall back to the towns that did resolve, or to no home",
+            AnomalySeverity.Warning);
+    }
+
+    /// <summary>
+    /// One bot's town homes: its master (capital) and secondary (level-band town), and which of them it is homed in now (the stay
+    /// cycle). Stores the home when the place text, the centre or the radius differ from the stored one. A bot with no resolvable capital
+    /// is cleared (the old behaviour: no home); one whose towns are all out of reach without a teleport (<c>TownProgressionTeleport</c>
+    /// off) keeps its home; one with no usable secondary stays at its capital.
+    /// </summary>
+    private async Task<(TownStepResult Result, string? Error)> TownStepAsync(PassContext ctx, PopulationBotFacts bot, PlayerbotHome? home,
+        Dictionary<string, ResolvedTown> towns, Dictionary<string, int> counts, SortedSet<string> unresolved, CancellationToken ct)
+    {
+        ManagedPlayerbotFeature managed = ctx.Input.Managed;
+        PlayerbotPopulationOptions pop = ctx.Input.Pop;
+        long now = ctx.Input.ClockMs;
+        IPlayerbotHomeTravel travel = Travel;
+        bool blockedByTravel = false;
+        bool Usable(string key)
+        {
+            if (!towns.TryGetValue(key, out ResolvedTown town)) { unresolved.Add(key); return false; }
+            if (!managed.AllowsHomeMap(town.Row.MapId)) return false;
+            if (pop.TownProgressionTeleport || travel.CanReachWithoutTeleport(bot.MapId, new Vector3(bot.X, bot.Y, 0f), town.Row.MapId, town.Centre)) return true;
+            blockedByTravel = true;
+            return false;
+        }
+
+        TownPlace? current = home is not null && PopulationTownProgression.TryParsePlace(home.Place, out TownPlace parsed) ? parsed : null;
+
+        string? master = current?.Master;
+        bool masterOk = master is not null && PopulationTownProgression.Find(master) is { } masterRow && PopulationTownProgression.ServesTeam(masterRow, bot.Team) && Usable(master);
+        if (!masterOk) master = PopulationTownProgression.MasterFor(bot.Team, bot.Race, bot.BotId, pop.CapitalMajorSharePct, Usable);
+        if (master is null)
+        {
+            if (!blockedByTravel) return (TownStepResult.Clear, null);
+            ReportUnreachable(bot);
+            return (TownStepResult.Unchanged, null); // keep the old home: a bot is never stranded
+        }
+
+        string? secondary = current?.Secondary;
+        TownRow? secondaryRow = PopulationTownProgression.Find(secondary);
+        bool secondaryOk = secondaryRow is not null && PopulationTownProgression.ServesTeam(secondaryRow, bot.Team)
+            && PopulationTownProgression.StillServes(secondaryRow, bot.Level, pop.TownBandMargin) && Usable(secondary!)
+            && FitsLevel(secondaryRow.MapId, bot.Level, towns[secondary!].Centre);
+        bool secondaryChanged = false;
+        if (!secondaryOk)
+        {
+            if (secondary is not null && counts.TryGetValue(secondary, out int held) && held > 0) counts[secondary] = held - 1;
+            string? previous = secondary;
+            uint continent = PopulationStartAreas.ContinentOf(bot.Race);
+            Func<string, int> cap = key => PopulationTownProgression.CapOf(pop, key);
+            // A town whose zone holds creatures of the bot's level first; any town of the band when none does.
+            secondary = (PopulationTownProgression.PickSecondary(bot.Team, continent, bot.Level, counts, cap,
+                    key => Usable(key) && FitsLevel(towns[key].Row.MapId, bot.Level, towns[key].Centre))
+                ?? PopulationTownProgression.PickSecondary(bot.Team, continent, bot.Level, counts, cap, Usable))?.Key;
+            secondaryChanged = previous is not null && secondary != previous;
+            if (secondary is not null) counts[secondary] = counts.GetValueOrDefault(secondary) + 1;
+            if (secondary is null && blockedByTravel) ReportUnreachable(bot);
+        }
+
+        string active;
+        if (current is not { } existing) active = master; // a bot that has just graduated starts at its capital (trainers) before it heads out
+        else
+        {
+            string wasActive = existing.AtCapital ? master : existing.Active;
+            long since = _townPhase.TryGetValue(bot.BotId, out var phase) && phase.Active == wasActive ? phase.SinceMs : now;
+            active = PopulationTownProgression.NextActive(new TownPlace(wasActive, master, secondary), secondary, secondaryChanged, now - since,
+                PopulationTownProgression.StayMs(pop.CapitalStayMinMinutes, pop.CapitalStayMaxMinutes, bot.BotId),
+                PopulationTownProgression.StayMs(pop.SecondaryStayMinMinutes, pop.SecondaryStayMaxMinutes, bot.BotId));
+        }
+
+        ResolvedTown target = towns[active];
+        string place = PopulationTownProgression.PlaceOf(active, master, secondary);
+        float radius = target.Row.Capital ? pop.CapitalHomeRadius : pop.TownHomeRadius;
+        bool sameActive = _townPhase.TryGetValue(bot.BotId, out var known) && known.Active == active;
+        if (home is not null && home.Place == place && home.MapId == target.Row.MapId && (int)MathF.Round(home.Radius) == (int)radius)
+        {
+            if (!sameActive) _townPhase[bot.BotId] = (active, now); // first sight since the start: a fresh stay, no switch
+            return (TownStepResult.Unchanged, null);
+        }
+
+        string? error = await SetPopulationHomeAsync(managed, bot.BotId, target.Row.MapId, target.Centre, radius, place, ct).ConfigureAwait(false);
+        if (error is not null) return (TownStepResult.Failed, error);
+        if (!sameActive) _townPhase[bot.BotId] = (active, now);
+        return (TownStepResult.Changed, null);
+    }
+
+    /// <summary>With <c>TownProgressionTeleport</c> off: one Info anomaly (the first bot) that a town was left unassigned because it needs a boat, a zeppelin or a teleport.</summary>
+    private void ReportUnreachable(PopulationBotFacts bot)
+    {
+        if (_unreachableReported) return;
+        _unreachableReported = true;
+        AnomalyLedger.Shared.Report(
+            PlayerbotAnomalies.Prefix + "population",
+            "town-unreachable",
+            $"bot {bot.BotId:D}",
+            "a town of the progression needs a boat, a zeppelin or a teleport to reach and World:Playerbots:Population:TownProgressionTeleport is off: the bot keeps its home (or the towns it can walk to); further bots are not reported",
+            AnomalySeverity.Info);
     }
 
     /// <summary>
@@ -1297,21 +1487,67 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         int attempts = 0, changes = 0, failed = 0;
         string? firstError = null;
         var cleared = new List<Guid>();
-        foreach (PopulationBotFacts bot in ctx.Input.Running)
+        bool adopt = pop.AdoptOperatorHomes || _adoptRequested, completed = true, townsLoaded = false;
+        Dictionary<string, ResolvedTown>? towns = null;
+        Dictionary<string, int>? townCounts = null;
+        var unresolvedTowns = new SortedSet<string>(StringComparer.Ordinal);
+        // Round robin: a sweep that spent its attempts stops at the bot it reached, and the next one goes on from there, so the bots
+        // whose homes change on a cycle (the stays of the town homes) never starve the ones still waiting for their first.
+        IReadOnlyList<PopulationBotFacts> running = ctx.Input.Running;
+        int first = running.Count == 0 ? 0 : _homeCursor % running.Count;
+        _homeCursor = 0;
+        for (int offset = 0; offset < running.Count; offset++)
         {
-            if (attempts >= MaxHomeChangesPerSweep) break;
+            PopulationBotFacts bot = running[(first + offset) % running.Count];
+            if (attempts >= MaxHomeChangesPerSweep) { completed = false; _homeCursor = first + offset; break; }
             if (!ctx.Members.TryGetValue(bot.BotId, out PlayerbotPopulationMember? member)) continue;
             if (member.Band == HomeOptOutBand || IsOptedOut(bot.BotId)) continue;
             if (_homeRetrySweep.TryGetValue(bot.BotId, out int retryAt) && sweep < retryAt) continue;
             StartHomeStage want = PopulationStartAreas.StageFor(bot.Level, pop);
             PlayerbotHome? home = managed.HomeOf(bot.BotId);
-            bool ours = false;
+            bool ours = false, adopted = false;
             StartHomeStage have = StartHomeStage.None;
             string area = string.Empty;
-            if (home is not null && !(ours = PopulationStartAreas.TryParse(home.Place, out have, out area))) continue; // an operator's home
+            if (home is not null && !(ours = PopulationStartAreas.TryParse(home.Place, out have, out area)))
+            {
+                if (!adopt) continue; // an operator's home
+                // AdoptOperatorHomes / .playerbot population adopt: the operator's home of a population bot is replaced by the home of its level.
+                (home, adopted) = (null, true);
+            }
+
+            // A town home of a bot that is below the town levels again (a reset to level 1) is no start home: it starts over at its race's start.
+            if (ours && have == StartHomeStage.Town && want is not (StartHomeStage.Town or StartHomeStage.None)) (ours, home) = (false, null);
             if (want == StartHomeStage.None)
             {
-                if (ours) { cleared.Add(bot.BotId); attempts++; }
+                if (ours || adopted) { cleared.Add(bot.BotId); attempts++; }
+                continue;
+            }
+
+            if (want == StartHomeStage.Town)
+            {
+                if (!townsLoaded) { towns = await TownsAsync(ct).ConfigureAwait(false); townsLoaded = true; }
+                if (towns is null) continue; // the creature content is not installed yet: the next sweep
+                townCounts ??= TownCounts(managed, ctx.Members.Keys);
+                (TownStepResult step, string? townError) = await TownStepAsync(ctx, bot, home, towns, townCounts, unresolvedTowns, ct).ConfigureAwait(false);
+                switch (step)
+                {
+                    case TownStepResult.Changed:
+                        attempts++;
+                        changes++;
+                        _homeRetrySweep.Remove(bot.BotId);
+                        break;
+                    case TownStepResult.Clear:
+                        if (managed.HomeOf(bot.BotId) is not null) { cleared.Add(bot.BotId); attempts++; }
+                        _townPhase.Remove(bot.BotId);
+                        break;
+                    case TownStepResult.Failed:
+                        attempts++;
+                        failed++;
+                        firstError ??= townError;
+                        _homeRetrySweep[bot.BotId] = sweep + HomeRetrySweeps;
+                        break;
+                }
+
                 continue;
             }
 
@@ -1357,6 +1593,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         }
 
         if (cleared.Count > 0) changes += await managed.ClearHomesAsync(cleared, ct, byOperator: false).ConfigureAwait(false);
+        if (_adoptRequested && completed && failed == 0) _adoptRequested = false; // every operator home of the population is taken over
+        ReportUnresolvedTowns(unresolvedTowns);
         if (_homeRetrySweep.Count > 4096)
             foreach (Guid stale in _homeRetrySweep.Where(r => r.Value <= sweep).Select(r => r.Key).ToArray()) _homeRetrySweep.Remove(stale);
         if (failed > 0)

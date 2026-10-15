@@ -222,8 +222,8 @@ public sealed class PlayerbotPopulationOptions
     /// <summary>The radius in yards of the graduated home, between FreshGraduateLevel and FreshReleaseLevel (50..5000). 4500 covers every starter zone end-to-end from its level-1 spawn while ZoneClipped keeps the bot inside its start zone.</summary>
     public int FreshZoneHomeRadius { get; set; } = 4500;
 
-    /// <summary>The level at which a graduated home is removed (2..60; at least FreshGraduateLevel, equal skips the widened home).</summary>
-    public int FreshReleaseLevel { get; set; } = 12;
+    /// <summary>The level at which a graduated home is replaced by the town homes of the progression (TownProgression; removed when that is off) (2..60; at least FreshGraduateLevel, equal skips the widened home). 10 puts the bot in the town of the next zone as it finishes its start zone.</summary>
+    public int FreshReleaseLevel { get; set; } = 10;
 
     /// <summary>
     /// The most bots one start area (Northshire, Coldridge Valley, Shadowglen, Valley of Trials, Camp Narache, Deathknell; the dwarf and
@@ -244,6 +244,74 @@ public sealed class PlayerbotPopulationOptions
     /// 76 level 1 bots to Stormwind quests by the tram.
     /// </summary>
     public int TramMinLevel { get; set; } = 10;
+
+    /// <summary>
+    /// Town progression (on by default; needs FreshLaunch and FreshStartHome): from FreshReleaseLevel a bot has two homes, its faction
+    /// capital (the master) and the town of its level band (the secondary, <see cref="PopulationTownProgression"/>), and lives at one
+    /// of them at a time: SecondaryStayMin/MaxMinutes at the secondary, CapitalStayMin/MaxMinutes at the capital, and again. The secondary follows
+    /// the level (the next town once the level reaches the cap of the band); a town whose centre cannot be found in the world data is
+    /// reported once and the bot falls back to its capital alone (or, with none, no home). Off: a bot past FreshReleaseLevel has no home.
+    /// </summary>
+    public bool TownProgression { get; set; } = true;
+
+    /// <summary>The radius in yards of a secondary town home (50..5000), zone-clipped. 4500 covers the whole zone so its quests stay allowed; an idle bot still lingers at the town centre.</summary>
+    public int TownHomeRadius { get; set; } = 4500;
+
+    /// <summary>The radius in yards of a capital home (50..5000), zone-clipped to the city: the trainers, auction house, bank and vendors of the city lie inside it.</summary>
+    public int CapitalHomeRadius { get; set; } = 500;
+
+    /// <summary>The most bots one level-band town (secondary) may hold (0..1000; 0 = no cap). Bots spread over the towns of their band, least populated first; when every town of the band is at the cap the least populated still takes the bot.</summary>
+    public int TownCap { get; set; } = 60;
+
+    /// <summary>The share in percent (0..100) of each faction whose master capital is its main one (Stormwind for the Alliance, Orgrimmar for the Horde); the rest go to the other two capitals, a bot's own race's first.</summary>
+    public int CapitalMajorSharePct { get; set; } = 65;
+
+    /// <summary>The shortest time in minutes (5..1440) a bot stays at its level-band town before it heads to the capital. Each bot's stay is fixed per bot (by its id) between this and SecondaryStayMaxMinutes, so a fleet does not move in step.</summary>
+    public int SecondaryStayMinMinutes { get; set; } = 30;
+
+    /// <summary>The longest time in minutes (5..1440; at least SecondaryStayMinMinutes) a bot stays at its level-band town.</summary>
+    public int SecondaryStayMaxMinutes { get; set; } = 90;
+
+    /// <summary>The shortest time in minutes (1..240) a bot stays at its capital (errands, then idling near the inn) before it heads back out.</summary>
+    public int CapitalStayMinMinutes { get; set; } = 5;
+
+    /// <summary>The longest time in minutes (1..240; at least CapitalStayMinMinutes) a bot stays at its capital.</summary>
+    public int CapitalStayMaxMinutes { get; set; } = 15;
+
+    /// <summary>
+    /// Levels a bot stays at its level-band town past the maximum level of the town's band before the next town takes it (0..10; the
+    /// hysteresis margin of the band change). 0: it moves when its level reaches the maximum.
+    /// </summary>
+    public int TownBandMargin { get; set; }
+
+    /// <summary>
+    /// Per-town caps that replace TownCap, as a comma-separated list of key=cap (for example "sentinel-hill=30,thelsamar=80"; the keys
+    /// are those of PopulationTownProgression.Rows, caps 0..1000, 0 = no cap). Empty: TownCap for every town.
+    /// </summary>
+    public string TownCaps { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The teleport of a town home (on by default): a bot whose new town lies on another continent, across the water of Teldrassil or
+    /// farther than TownWalkYards takes the one return teleport (the Home teleport rules and cooldown) when it is homed there. Off:
+    /// bots reach a town on foot or by taxi only; a town that would need a boat, a zeppelin or a teleport is not assigned to that bot
+    /// (it keeps its old home, or takes a town it can walk to) and one Info anomaly says so. Bots never strand either way.
+    /// </summary>
+    public bool TownProgressionTeleport { get; set; } = true;
+
+    /// <summary>
+    /// The longest trip in yards (100..20000) a bot with a town home walks to it on the same continent; farther, or across the water of
+    /// Teldrassil, or to another continent, it takes the one return teleport (the Home teleport rules and cooldown). 4500 yards is
+    /// about 11 minutes on foot. Bots never take boats, zeppelins or trams themselves.
+    /// </summary>
+    public int TownWalkYards { get; set; } = 4500;
+
+    /// <summary>
+    /// Migration: the sweep also takes over the homes an operator set (any place text that is not the population's) for bots of the
+    /// population, replacing them with the home of the bot's level (a level 1 bot with a stale Sentinel Hill home gets its start area).
+    /// Off by default: operator homes are never touched. <c>.playerbot population adopt</c> does the same once, until no operator home
+    /// is left. Homes an operator cleared (.playerbot home clear) stay cleared.
+    /// </summary>
+    public bool AdoptOperatorHomes { get; set; }
 
     /// <summary>
     /// The safety brake of <c>.playerbot population rush</c>: the rush pauses while the world tick p95 is above this many milliseconds
@@ -364,6 +432,19 @@ public sealed class PlayerbotPopulationOptions
             : CheckRange(FreshStartZoneCap, 0, 1000) is { } sc ? $"FreshStartZoneCap {sc}"
             : CheckRange(LeaveHomeLevelMargin, 0, 10) is { } lm ? $"LeaveHomeLevelMargin {lm}"
             : CheckRange(TramMinLevel, 0, MaxLevel) is { } tl ? $"TramMinLevel {tl}"
+            : CheckRange(TownHomeRadius, PlayerbotHomeRadiusMin, PlayerbotHomeRadiusMax) is { } thr ? $"TownHomeRadius {thr}"
+            : CheckRange(CapitalHomeRadius, PlayerbotHomeRadiusMin, PlayerbotHomeRadiusMax) is { } chr ? $"CapitalHomeRadius {chr}"
+            : CheckRange(TownCap, 0, 1000) is { } tc ? $"TownCap {tc}"
+            : CheckRange(CapitalMajorSharePct, 0, 100) is { } cms ? $"CapitalMajorSharePct {cms}"
+            : CheckRange(SecondaryStayMinMinutes, 5, 1440) is { } ssn ? $"SecondaryStayMinMinutes {ssn}"
+            : CheckRange(SecondaryStayMaxMinutes, 5, 1440) is { } ssx ? $"SecondaryStayMaxMinutes {ssx}"
+            : SecondaryStayMaxMinutes < SecondaryStayMinMinutes ? "SecondaryStayMaxMinutes must be at least SecondaryStayMinMinutes"
+            : CheckRange(CapitalStayMinMinutes, 1, 240) is { } csn ? $"CapitalStayMinMinutes {csn}"
+            : CheckRange(CapitalStayMaxMinutes, 1, 240) is { } csx ? $"CapitalStayMaxMinutes {csx}"
+            : CapitalStayMaxMinutes < CapitalStayMinMinutes ? "CapitalStayMaxMinutes must be at least CapitalStayMinMinutes"
+            : CheckRange(TownBandMargin, 0, 10) is { } tbm ? $"TownBandMargin {tbm}"
+            : PopulationTownProgression.CheckCaps(TownCaps) is { } tcs ? $"TownCaps {tcs}"
+            : CheckRange(TownWalkYards, 100, 20000) is { } twy ? $"TownWalkYards {twy}"
             : null;
         if (problem is not null) throw new InvalidOperationException($"{SectionName}: {problem}.");
     }
