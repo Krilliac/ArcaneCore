@@ -479,10 +479,67 @@ internal sealed class PlayerbotHomeReturn
         _walkBlocked = false;
         _highestAreaLevel = null;
         _teleportRetryPending = false;
+        _returnTracked = false;
     }
 
     /// <summary>Decide where the bot stands against <paramref name="area"/>; keeps the hysteresis of a walk in progress.</summary>
     internal PlayerbotHomeState Evaluate(Player player, PlayerbotHomeArea area, uint nowMs)
+    {
+        if (!ReferenceEquals(_validatedArea, area))
+        {
+            _validatedArea = area;
+            CheckArea(player, area);
+        }
+
+        PlayerbotHomeState state = EvaluateCore(player, area, nowMs);
+        TrackReturn(player, area, state, nowMs);
+        return state;
+    }
+
+    /// <summary>A walk home (returning, or set aside as blocked) that has run this long (ms) without arriving: a 750-yard home is a couple of minutes' walk.</summary>
+    internal const uint ReturnBudgetMs = 900_000;
+
+    private PlayerbotHomeArea? _validatedArea;
+    private bool _returnTracked;
+    private bool _returnReported;
+    private uint _returnSince;
+
+    /// <summary>A home that can hold nothing: no finite centre, no radius, or the null island of a map where that is no place (<c>home/invalid</c>). Once per area.</summary>
+    private static void CheckArea(Player player, PlayerbotHomeArea area)
+    {
+        string? fault = !float.IsFinite(area.Centre.X) || !float.IsFinite(area.Centre.Y) || !float.IsFinite(area.Centre.Z) ? "its centre is not finite"
+            : !float.IsFinite(area.Radius) || area.Radius <= 0f ? "its radius is not a positive number"
+            : PlayerbotHomeArea.IsNullIsland(area.MapId, area.Centre.X, area.Centre.Y) ? "its centre is the null island"
+            : null;
+        if (fault is null || PlayerbotNavigationAnomalies.Silenced(player)) return;
+        PlayerbotAnomalies.Report(player, "home", "invalid",
+            string.Create(CultureInfo.InvariantCulture, $"home {area.Place ?? "(unnamed)"} on map {area.MapId} is invalid: {fault} (centre {area.Centre.X},{area.Centre.Y},{area.Centre.Z}, radius {area.Radius})"));
+    }
+
+    /// <summary>The return began at <c>_returnSince</c>; past <see cref="ReturnBudgetMs"/> it is reported once (<c>home/return-timeout</c>).</summary>
+    private void TrackReturn(Player player, PlayerbotHomeArea area, PlayerbotHomeState state, uint nowMs)
+    {
+        if (state is not (PlayerbotHomeState.Returning or PlayerbotHomeState.Blocked))
+        {
+            _returnTracked = false;
+            return;
+        }
+
+        if (!_returnTracked)
+        {
+            _returnTracked = true;
+            _returnReported = false;
+            _returnSince = nowMs;
+            return;
+        }
+
+        if (_returnReported || unchecked(nowMs - _returnSince) <= ReturnBudgetMs || PlayerbotNavigationAnomalies.Silenced(player)) return;
+        _returnReported = true;
+        PlayerbotAnomalies.Report(player, "home", "return-timeout",
+            string.Create(CultureInfo.InvariantCulture, $"{state.ToString().ToLowerInvariant()} for {unchecked(nowMs - _returnSince) / 60_000} min, {Distance:F0} yd from the centre of {area.Place ?? "its home"}, and never arrived"));
+    }
+
+    private PlayerbotHomeState EvaluateCore(Player player, PlayerbotHomeArea area, uint nowMs)
     {
         uint map = player.Map?.MapId ?? player.MapId;
         if (map != area.MapId)
@@ -678,6 +735,12 @@ internal sealed class PlayerbotHomeReturn
     {
         _teleportRetryPending = true;
         _teleportRetryAt = unchecked(nowMs + BlockedMs);
+        // A bot that is dead, fighting, grouped, dueling, on a battleground or just teleported is told no for a good reason; any other
+        // refusal (no teleport service, home map unknown or not allowed or an instance, the service said no) is a fault in the setup.
+        if (refusal is not ("dead" or "in combat" or "in a duel" or "in a group" or "on a battleground" or "teleported home less than 5 minutes ago")
+            && !PlayerbotNavigationAnomalies.Silenced(player))
+            PlayerbotAnomalies.Report(player, "home", "teleport-refused",
+                $"the teleport home to {area.Place ?? "its home"} (map {area.MapId}) was refused: {refusal} ({PlayerbotHomeRules.Describe(reason)})");
         if (player.Session is WorldSession session)
             LoggerOf(session).LogDebug("Playerbot {Bot} does not teleport home to {Place} ({Reason}): {Refusal}",
                 player.Name, area.Place ?? "its home", PlayerbotHomeRules.Describe(reason), refusal);
@@ -713,7 +776,7 @@ internal sealed class PlayerbotHomeReturn
             {
                 _route = null;
                 _stuckMs = 0;
-                if (Fail(nowMs)) return false;
+                if (Fail(player, nowMs)) return false;
             }
         }
         else if (_route is { Complete: true })
@@ -722,7 +785,7 @@ internal sealed class PlayerbotHomeReturn
             bool arrived = distance <= area.ReturnRadius && (area.ZoneUnknown || area.InZone(player.X, player.Y, player.Z));
             if (!arrived && (distance > _routeStartDistance - ProgressYards || distance > _bestDistance + 2f))
             {
-                if (Fail(nowMs)) return false;
+                if (Fail(player, nowMs)) return false;
             }
             else
             {
@@ -751,7 +814,7 @@ internal sealed class PlayerbotHomeReturn
                 _route = null;
                 PlayerbotMovementControl.Stop(session, player);
                 // A tile still being read is no failure of the walk home: plan again next think, for TileWait.MaxMs (then it counts).
-                if (planned == PlanOutcome.Refused) Fail(nowMs);
+                if (planned == PlanOutcome.Refused) Fail(player, nowMs);
                 return false;
             }
 
@@ -775,7 +838,7 @@ internal sealed class PlayerbotHomeReturn
                 && (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) == 0
                 && (afterDistance > _routeStartDistance - ProgressYards || afterDistance > _bestDistance + 2f))
             {
-                if (Fail(nowMs)) return false;
+                if (Fail(player, nowMs)) return false;
             }
         }
 
@@ -794,10 +857,14 @@ internal sealed class PlayerbotHomeReturn
         _blockedUntil = unchecked(nowMs + BlockedMs);
     }
 
-    private bool Fail(uint nowMs)
+    private bool Fail(Player player, uint nowMs)
     {
         if (++_failures < MaxFailures) return false;
         MarkBlocked(nowMs);
+        if (!PlayerbotNavigationAnomalies.Silenced(player))
+            PlayerbotAnomalies.Report(player, "home", "walk-blocked",
+                string.Create(CultureInfo.InvariantCulture, $"the walk home failed {MaxFailures} times in a row ({Distance:F0} yd from the centre); set aside for {BlockedMs / 1000}s"),
+                AnomalySeverity.Info);
         return true;
     }
 

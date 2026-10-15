@@ -363,6 +363,9 @@ internal static class PlayerbotNavigation
     {
         long pending = PendingMark;
         bool planned = PlanTowardSteps(player, goal, options, out route, completedQuestReturn, friendlyTownEnder);
+        // The outcome check (PlayerbotNavigationAnomalies): a pending tile read or a deferred async plan is no verdict, the rest is.
+        PlayerbotNavigationAnomalies.ObservePlan(player, goal, PlayerbotMotion.CurrentPosition(player), planned && route is not null,
+            PendingSince(pending) || PlayerbotAsyncNavigationPlan.Current is { Deferred: true } or { Exhausted: true });
         // A far goal that got no route, or only a few yards of one, may mean the bot stands on a fragment of mesh no walk leaves: the
         // one straight move off it, when the ground beside it is the mesh's large part (TryFragmentHop). Asked only then (never on a
         // pending tile read, which is no verdict on the route), never per tick.
@@ -783,6 +786,8 @@ internal static class PlayerbotNavigation
             // 1645.4, 1665.9, 132.6, where Graveweaver stopped): either refused every route from or through such a place, and a bot
             // that started or stood there never moved again. The motion snaps to a floor where it finds one (PlayerbotMotion).
             route = usable;
+            // The outcome of an exact plan: the route begins at the bot and ends at the destination (a partial plan closes on a goal by design).
+            if (!partial && usable is not null) PlayerbotNavigationAnomalies.CheckExactRoute(player, start, destination, path, usable);
             return true;
         }
 
