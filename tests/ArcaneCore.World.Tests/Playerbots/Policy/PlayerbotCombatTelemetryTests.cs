@@ -74,8 +74,10 @@ public sealed class PlayerbotCombatTelemetryTests
         string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
         try
         {
-            var telemetry = new PlayerbotPolicyTelemetry(new PlayerbotPolicyTelemetryOptions { Enabled = true }, directory);
-            await using (RiskTestWorld world = await RiskTestWorld.StartAsync())
+            await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+            // Record times follow the world's manual clock, so ten world minutes are ten minutes apart in the records too.
+            var telemetry = new PlayerbotPolicyTelemetry(new PlayerbotPolicyTelemetryOptions { Enabled = true }, directory,
+                new WorldClock(() => world.Host.World.NowMs));
             {
                 // An elite of the bot's level that hits far harder than it can take: the risk model turns it down every think.
                 Creature elite = await world.OnWorldAsync(() =>
@@ -94,6 +96,7 @@ public sealed class PlayerbotCombatTelemetryTests
             JsonElement[] skips = Directory.GetFiles(directory).SelectMany(File.ReadAllLines).Select(line => JsonDocument.Parse(line).RootElement)
                 .Where(root => root.GetProperty("k").GetString() == "skip").ToArray();
             // Over ten minutes of thinks the one creature is written about once a minute, never once a think, and at most the pending cap.
+            // Turned down on many thinks while in sight, written once a minute at most (the bot moves on; the spacing is pinned below).
             Assert.InRange(skips.Length, 1, PlayerbotCombatTelemetry.MaxPendingSkips);
             Assert.All(skips, skip =>
             {
@@ -103,8 +106,57 @@ public sealed class PlayerbotCombatTelemetryTests
                 Assert.Equal(JsonValueKind.Null, skip.GetProperty("o").GetProperty("wait").ValueKind); // no fight followed within the cap
             });
             long[] times = [.. skips.Select(skip => skip.GetProperty("t").GetInt64())];
-            Assert.All(times.Zip(times.Skip(1)), pair => Assert.True(pair.Second - pair.First >= PlayerbotCombatTelemetry.SkipRepeatMs - 1_000,
-                $"{pair.First} then {pair.Second}"));
+            Assert.All(times.Zip(times.Skip(1)), pair => Assert.InRange(pair.Second - pair.First, PlayerbotCombatTelemetry.SkipRepeatMs,
+                PlayerbotCombatTelemetry.SkipRepeatMs + 1_000));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public async Task ASkip_IsRecordedOncePerMinutePerCreature_UpToThePendingCap_AndATakenDetourIsNoSkip()
+    {
+        string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+            uint clockMs = 0;
+            var telemetry = new PlayerbotPolicyTelemetry(new PlayerbotPolicyTelemetryOptions { Enabled = true }, directory,
+                new WorldClock(() => clockMs));
+            await world.OnWorldAsync(() =>
+            {
+                Creature elite = world.Spawn(RiskTestWorld.Template(993_956, rank: 1), 20f, 0f);
+                Creature other = world.Spawn(RiskTestWorld.Template(993_957), -20f, 0f);
+                var avoid = new PlayerbotEngagement(993_956, 0.9f, 0.2f, PlayerbotEngageDecision.Avoid, "elite", 0);
+                var detour = new PlayerbotEngagement(993_957, 0.3f, 0.5f, PlayerbotEngageDecision.Detour, "path-adds-1", 1);
+                // Every second for 130 s: the elite is written at 0, 60 and 120 s. A routeless detour (not taken) is a skip too.
+                for (uint s = 0; s <= 130; s++)
+                {
+                    clockMs = s * 1000;
+                    telemetry.Combat.Assessed(world.Player, elite, avoid, taken: false, clockMs);
+                }
+                telemetry.Combat.Assessed(world.Player, other, detour, taken: false, 1000);
+                // A taken detour is the bot's pull, not a skip.
+                telemetry.Combat.Assessed(world.Player, other, detour with { Entry = 1 }, taken: true, 2000);
+                // Past the cap: nine distinct creatures cannot all wait.
+                for (int i = 0; i < 9; i++)
+                    telemetry.Combat.Assessed(world.Player, world.Spawn(RiskTestWorld.Template((uint)(993_960 + i)), 30f, i),
+                        avoid with { Entry = (uint)(993_960 + i) }, taken: false, 5000);
+                // No fight for ten minutes: the waiting skips are written with no wait.
+                telemetry.Combat.AfterThink(world.Brain, world.Player, PlayerbotCombatTelemetry.DowntimeCapMs + 10_000);
+                return true;
+            });
+            await telemetry.FlushAsync();
+            await telemetry.DisposeAsync();
+
+            JsonElement[] skips = Directory.GetFiles(directory).SelectMany(File.ReadAllLines).Select(line => JsonDocument.Parse(line).RootElement)
+                .Where(root => root.GetProperty("k").GetString() == "skip").ToArray();
+            Assert.Equal(PlayerbotCombatTelemetry.MaxPendingSkips, skips.Length);
+            long[] eliteTimes = [.. skips.Where(skip => skip.GetProperty("reason").GetString() == "elite" && skip.GetProperty("entry").GetUInt32() == 993_956)
+                .Select(skip => skip.GetProperty("t").GetInt64())];
+            Assert.Equal([0L, 60_000L, 120_000L], eliteTimes);
+            Assert.Single(skips, skip => skip.GetProperty("decision").GetString() == "detour");
+            Assert.DoesNotContain(skips, skip => skip.GetProperty("entry").GetUInt32() == 1);
+            Assert.All(skips, skip => Assert.Equal(JsonValueKind.Null, skip.GetProperty("o").GetProperty("wait").ValueKind));
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
@@ -112,9 +164,10 @@ public sealed class PlayerbotCombatTelemetryTests
     [Fact]
     public async Task TheSink_ChangesNoDecision()
     {
-        (IReadOnlyList<string> without, IReadOnlyList<uint> healthWithout) = await TraceAsync(withSink: false);
-        (IReadOnlyList<string> with, IReadOnlyList<uint> healthWith) = await TraceAsync(withSink: true);
-        // Damage rolls are random, so the two runs' fights part once a blow lands differently: decisions are compared up to there.
+        (IReadOnlyList<string> without, IReadOnlyList<string> healthWithout) = await TraceAsync(withSink: false);
+        (IReadOnlyList<string> with, IReadOnlyList<string> healthWith) = await TraceAsync(withSink: true);
+        // Damage rolls are random, so the two runs' fights part once a blow (the bot's or the mob's) lands differently: decisions are
+        // compared up to there.
         int same = 0;
         while (same < healthWithout.Count && healthWithout[same] == healthWith[same]) same++;
         Assert.Equal(without.Take(same), with.Take(same));
@@ -123,7 +176,7 @@ public sealed class PlayerbotCombatTelemetryTests
         Assert.True(without.Take(same).Any(line => line.StartsWith("Combat", StringComparison.Ordinal)), $"the runs parted after {same} thinks");
     }
 
-    private static async Task<(IReadOnlyList<string> Decisions, IReadOnlyList<uint> Health)> TraceAsync(bool withSink)
+    private static async Task<(IReadOnlyList<string> Decisions, IReadOnlyList<string> Health)> TraceAsync(bool withSink)
     {
         string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
         try
@@ -136,14 +189,14 @@ public sealed class PlayerbotCombatTelemetryTests
             await world.SeeAsync(first, elite);
             if (withSink) await world.OnWorldAsync(() => world.Brain.Risk.CombatSink = telemetry.Combat);
             var trace = new List<string>();
-            var health = new List<uint>();
+            var health = new List<string>();
             for (int i = 0; i < 150; i++)
             {
                 await world.ThinkAsync();
                 trace.Add(await world.OnWorldAsync(() =>
                 {
                     if (withSink) telemetry.AfterThink(world.Brain, world.Player, world.Host.World.NowMs);
-                    health.Add(world.Player.Health);
+                    health.Add($"{world.Player.Health}/{first.Health}");
                     return $"{world.Brain.Goal}/{world.Brain.TargetEntry}/{world.Brain.InspectionTarget?.Entry ?? 0}/{world.Player.X:F1},{world.Player.Y:F1}";
                 }));
             }
@@ -178,5 +231,11 @@ public sealed class PlayerbotCombatTelemetryTests
             Assert.Equal(JsonValueKind.Null, lines[1].GetProperty("o").GetProperty("wait").ValueKind);
         }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    /// <summary>Wall time that follows the world's manual clock (from the Unix epoch), for record times in tests.</summary>
+    private sealed class WorldClock(Func<uint> nowMs) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch.AddMilliseconds(nowMs());
     }
 }

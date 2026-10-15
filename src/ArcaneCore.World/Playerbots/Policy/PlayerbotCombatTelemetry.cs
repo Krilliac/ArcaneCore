@@ -85,7 +85,7 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
 
     public void Assessed(Player player, Creature candidate, in PlayerbotEngagement verdict, bool taken, uint nowMs)
     {
-        Bot bot = BotOf(player);
+        if (BotOf(player) is not { } bot) return;
         bot.LastSeenMs = nowMs;
         if (taken)
         {
@@ -102,7 +102,7 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
 
     public void Judged(Player player, in PlayerbotFightFacts facts, in PlayerbotFightVerdict verdict, uint nowMs)
     {
-        Bot bot = BotOf(player);
+        if (BotOf(player) is not { } bot) return;
         // The judgement runs inside the think, before AfterThink: the fight starts here when this is its first think in combat.
         Fight fight = bot.Fight ?? StartFight(bot, player, nowMs);
         // The retreat decision of a fight: the verdict that ran, else the stay closest to running (the least time to die per time to kill).
@@ -129,7 +129,7 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
     internal void AfterThink(PlayerbotBrain brain, Player player, uint nowMs)
     {
         brain.Risk.CombatSink = this;
-        Bot bot = BotOf(player);
+        if (BotOf(player) is not { } bot) return;
         bot.LastSeenMs = nowMs;
         bool alive = player.IsAlive;
         bool inCombat = player.Combat.IsInCombat;
@@ -206,7 +206,8 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
         _enemies.Clear();
         if (player.Combat.Victim is Creature { IsAlive: true } victim) _enemies.Add(victim);
         foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
-            if (unit is Creature { IsAlive: true } creature && ReferenceEquals(creature.Map, player.Map) && !_enemies.Contains(creature))
+            // As the risk model counts enemies (PlayerbotRisk.ObserveFight): an evading creature is not one.
+            if (unit is Creature { IsAlive: true, IsInEvadeMode: false } creature && ReferenceEquals(creature.Map, player.Map) && !_enemies.Contains(creature))
                 _enemies.Add(creature);
         Creature? chosen = player.Combat.Victim as Creature is { IsAlive: true } meleeVictim ? meleeVictim
             : brain.InspectionTarget is { IsAlive: true } own && _enemies.Contains(own) ? own : null;
@@ -244,14 +245,12 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
         enqueue(record);
     }
 
-    private Bot BotOf(Player player)
+    /// <summary>The bot's state; null past the cap (65,536 bots): such a bot is not recorded at all.</summary>
+    private Bot? BotOf(Player player)
     {
         if (_bots.TryGetValue(player.Guid.Value, out Bot? bot)) return bot;
-        if (_bots.Count >= 65_536) return _overflow; // past the cap: one shared scratch state, its records unreliable but bounded
-        return _bots[player.Guid.Value] = new Bot();
+        return _bots.Count >= 65_536 ? null : _bots[player.Guid.Value] = new Bot();
     }
-
-    private readonly Bot _overflow = new();
 
     private static float[] CandidateFeatures(Player player, Creature candidate, in PlayerbotEngagement verdict) =>
     [
