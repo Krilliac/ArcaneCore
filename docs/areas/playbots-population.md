@@ -488,7 +488,7 @@ the fresh launch has **two homes** and lives at one at a time:
   The Sepulcher, Tarren Mill, Hammerfall/Grom'gol, Stonard/Kargath, Revantusk; Auberdine, Astranaar, Theramore, Feathermoon; the
   Crossroads/Camp Taurajo, Splintertree/Sun Rock, Freewind Post, Shadowprey, Brackenwall, Camp Mojache; neutral Ratchet, Gadgetzan,
   Marshal's Refuge, Everlook, Cenarion Hold). There are no rows for the 5-10 start-zone hubs (Goldshire, Dolanaar, Razor Hill, Bloodhoof):
-  the town stage begins at `FreshReleaseLevel` 10, where a band ending at 10 no longer serves, so such a row could never be picked.
+  the town stage begins at `FreshReleaseLevel` 10, where a band ending at 10 no longer serves, so such a row could never be picked at the default `FreshReleaseLevel`.
 
 The town centres are not coordinates: each row names the innkeeper (or, where the data has none, the flight master) whose first spawn on
 the town's map is the centre, read from the creature content when the sweep first needs it (`Resolve`). A town that does not resolve is
@@ -506,13 +506,19 @@ destinations, which stay inside the active home) do their errands; the level-ban
 quests. Leave-home quests (a turn-in outside the home, at most `LeaveTurnInYards` = 3000 yards from its centre: the same zone or the next
 band's town) are allowed only from the level-band town and the start zone, never from a capital (`AllowsLeaveQuests`).
 
-A bot with **no reachable secondary** (with `TownProgressionTeleport` off, a bot on Teldrassil: every town of its level is across the water)
-gets no town home: a capital-only home would hold it at the inn for good. A town home it already had is dropped, a start or operator home
-stays, and the bot explores like an unhomed one. Capital-only place text, whenever one is read, has no stay and so no idle rule.
+A bot with a reachable capital but **no reachable secondary** (with `TownProgressionTeleport` off, a bot on Teldrassil: every town of its
+level is across the water) gets no town home: a capital-only home would hold it at the inn for good. A town home it already had is dropped,
+a start, zone or operator home stays, and the bot explores like an unhomed one. A bot with **no reachable capital at all** (for example one
+inside a dungeon, with the teleport off) keeps whatever home it has, a town home included. The one Info anomaly (`town-unreachable`) is
+reported once per process for each combination of where the bot stands (a continent, or another map) and which of those two outcomes
+applied, and its text says which. A bot younger than the first town of its own continent (only with a `FreshReleaseLevel` below 10, for
+example a Kalimdor Horde bot at level 6 to 9) gets no town rather than one on another continent. Capital-only place text, whenever one is
+read, has no stay and so no idle rule.
 
 **Sweep details.** The home sweep resumes where the previous one stopped (round robin), so bots whose homes change on a cycle never starve
 those still waiting for their first. `.playerbot population adopt` is a request generation: a sweep retires only the generation it began with,
-and only when every operator home was taken over (towns not loaded yet, a town the bot cannot reach, or a failure leave it pending). An
+and only when every operator home was taken over (towns not loaded yet, a town the bot cannot reach, or a failure leave it pending; the
+operator home of a zone-level bot that has left its start country is cleared, as a release). An
 unresolved town and a town on a map `AllowedMaps` refuses are each reported once per process (`town-unresolved`, `town-map-not-allowed`). The
 town state of a bot that is no longer in the population is dropped.
 
@@ -520,8 +526,11 @@ town state of a bot that is no longer in the population is dropped.
 (`PlayerbotTownIdle`): at the capital always, at the level-band town for two minutes in turn with four minutes of normal exploring. At the
 inn it binds its hearthstone through the server's own path (CMSG_BINDER_ACTIVATE to the innkeeper), so a bind or hearth teleport no longer
 sends a graduate back to its start valley. If the spot beside the innkeeper cannot be reached (a counter, an upper floor, Undercity), the walk
-is given up after `WalkStallMs` (20 s) without getting a yard closer, the bot stands where it is for `StallDeferMs` (3 min), and tries once
-more; it never re-plans on every think. The pull back to the home goes to the active home only.
+is given up after `WalkStallMs` (20 s) without getting a yard closer and the bot stands where it is for `StallDeferMs` (3 min); it then tries
+again, so an unreachable spot costs one 20 s attempt every 3 min 20 s, never a re-plan on every think. The progress window restarts
+whenever a walk decision follows any other decision, or a pause of more than `WalkResumeGapMs` (5 s) between two walk decisions (a quest,
+a fight, an errand, the explore window), so an interrupted walk is judged from where it resumes. It binds only when an innkeeper is within
+interaction distance (5 yards plus the bounding radii) of the bot, so a stalled bot far from the inn does not bind. The pull back to the home goes to the active home only.
 
 **Travel.** A trip within `TownWalkYards` on the same side of the water is walked (`PlayerbotHomeArea.WalkRangeYards`); a longer one, one
 across the water of Teldrassil (Darnassus from Darkshore), or one to another continent takes the existing return teleport with its

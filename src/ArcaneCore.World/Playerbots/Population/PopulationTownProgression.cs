@@ -63,7 +63,7 @@ internal static class PopulationTownProgression
     /// <summary>
     /// The 46 rows: the six capitals and the level-band towns from level 10 up. There are no rows for the 5-10 start-zone hubs
     /// (Goldshire, Dolanaar, Razor Hill, Bloodhoof): a bot is in the town stage from <c>FreshReleaseLevel</c> (10), at which a band that
-    /// ends at 10 no longer serves it, so such a row could never be picked. Kharanos and Brill (to 12) serve levels 10 and 11.
+    /// ends at 10 no longer serves it, so such a row could never be picked at the default FreshReleaseLevel. Kharanos and Brill (to 12) serve levels 10 and 11.
     /// </summary>
     internal static readonly IReadOnlyList<TownRow> Rows =
     [
@@ -243,6 +243,10 @@ internal static class PopulationTownProgression
     /// <summary>Whether a secondary still serves the level: the hysteresis, a bot stays until its level reaches the town's maximum.</summary>
     internal static bool StillServes(TownRow row, int level, int margin = 0) => !row.Capital && level >= row.MinLevel && level < row.MaxLevel + margin;
 
+    /// <summary>Whether <paramref name="level"/> is below the first band of every level-band town of the team on <paramref name="continent"/> (true also when it has none).</summary>
+    internal static bool BelowBands(Team team, uint continent, int level)
+        => !Rows.Any(r => !r.Capital && r.MapId == continent && ServesTeam(r, team) && r.MinLevel <= level);
+
     /// <summary>
     /// The level-band town for a bot: among the usable towns of the team whose band holds <paramref name="level"/>, on the bot's own
     /// continent first (another continent only when the own one has none), the least populated under <paramref name="cap"/> (0: no cap;
@@ -256,6 +260,8 @@ internal static class PopulationTownProgression
         ArgumentNullException.ThrowIfNull(usable);
         TownRow[] serving = [.. Rows.Where(r => ServesTeam(r, team) && StillServes(r, level) && usable(r.Key))];
         TownRow[] own = [.. serving.Where(r => r.MapId == continent)];
+        // Younger than every town of its own continent: no town, not one on another continent (a bot below the town table).
+        if (own.Length == 0 && BelowBands(team, continent, level)) return null;
         TownRow[] pool = own.Length != 0 ? own : serving;
         if (pool.Length == 0) return null;
         TownRow[] open = [.. pool.Where(r => cap(r.Key) <= 0 || counts.GetValueOrDefault(r.Key) < cap(r.Key))];

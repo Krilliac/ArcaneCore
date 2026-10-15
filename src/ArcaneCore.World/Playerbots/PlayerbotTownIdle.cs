@@ -52,8 +52,18 @@ internal sealed class PlayerbotTownIdle
     /// <summary>A stalled walk is not tried again for this long (ms): the bot stays where it stands, as at the inn, so it never re-plans every think.</summary>
     internal const uint StallDeferMs = 180_000;
 
+    /// <summary>
+    /// A walk to the inn is one run of consecutive <see cref="TownIdleAction.WalkToTown"/> decisions. After any other decision, or a pause
+    /// between two walk decisions longer than this (ms: ten default think intervals, so a loaded server's think gap of a few seconds does
+    /// not split a walk), the bot was doing something else (a quest, combat, an errand, the explore window, a chained wander leg) and the
+    /// progress window restarts: the walk is judged by the progress it makes from where it resumes.
+    /// </summary>
+    internal const uint WalkResumeGapMs = 5_000;
+
     private bool _exploring;
     private uint _until;
+    private TownIdleAction _last = TownIdleAction.Explore;
+    private uint _lastAt;
     private bool _started;
     private float _bestDistance = float.MaxValue;
     private uint _bestAt;
@@ -62,6 +72,13 @@ internal sealed class PlayerbotTownIdle
 
     /// <summary>The action for the bot's idle think, <paramref name="distance"/> yards from the town centre.</summary>
     internal TownIdleAction Decide(TownStay stay, float distance, uint nowMs)
+    {
+        TownIdleAction action = Choose(stay, distance, nowMs);
+        (_last, _lastAt) = (action, nowMs);
+        return action;
+    }
+
+    private TownIdleAction Choose(TownStay stay, float distance, uint nowMs)
     {
         if (stay == TownStay.None) return TownIdleAction.Explore;
         if (stay == TownStay.Secondary) Advance(nowMs);
@@ -73,6 +90,8 @@ internal sealed class PlayerbotTownIdle
             return TownIdleAction.Linger;
         }
 
+        // Not a continuation of a walk (another action came in between, or a long pause): the progress window starts afresh here.
+        if (!_deferred && (_last != TownIdleAction.WalkToTown || unchecked(nowMs - _lastAt) > WalkResumeGapMs)) _bestDistance = float.MaxValue;
         return WalkStalled(distance, nowMs) ? TownIdleAction.Linger : TownIdleAction.WalkToTown;
     }
 

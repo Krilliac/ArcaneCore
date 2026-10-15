@@ -1426,8 +1426,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         if (master is null)
         {
             if (!blockedByTravel) return (TownStepResult.Clear, null);
-            ReportUnreachable(bot);
-            return (TownStepResult.Unchanged, null); // keep the old home: a bot is never stranded
+            ReportUnreachable(bot, noCapital: true);
+            return (TownStepResult.Unchanged, null); // no capital reachable: the bot keeps the home it has
         }
 
         string? secondary = current?.Secondary;
@@ -1454,12 +1454,20 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                     key => Usable(key) && FitsLevel(towns[key].Row.MapId, bot.Level, towns[key].Centre))
                 ?? PopulationTownProgression.PickSecondary(bot.Team, continent, bot.Level, counts, cap, Usable))?.Key;
             secondaryChanged = previous is not null && secondary != previous;
+            if (secondaryChanged || previous is null) _unfitSweeps.Remove(bot.BotId); // the count belonged to the town the bot left
             if (secondary is not null) counts[secondary] = counts.GetValueOrDefault(secondary) + 1;
+            if (secondary is null && PopulationTownProgression.BelowBands(bot.Team, continent, bot.Level))
+            {
+                // Younger than the first town of its own continent (a lowered FreshReleaseLevel): no town, rather than one overseas and a
+                // capital-only home. A town home it has is dropped, any other home stays.
+                return (home is not null && current is not null ? TownStepResult.Clear : TownStepResult.Unchanged, null);
+            }
+
             if (secondary is null && blockedByTravel)
             {
                 // Nothing to progress to that the bot can reach: it must not be parked at a capital (a capital home lingers at the inn for
                 // good). A town home of the progression is dropped, so the bot explores as an unhomed one; any other home stays.
-                ReportUnreachable(bot);
+                ReportUnreachable(bot, noCapital: false);
                 return (home is not null && current is not null ? TownStepResult.Clear : TownStepResult.Unchanged, null);
             }
         }
@@ -1496,13 +1504,18 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     /// the real reason: a bot on a continent needs a boat, a zeppelin or a teleport; a bot on another map (a dungeon, a battleground) is
     /// not on a continent at all.
     /// </summary>
-    private void ReportUnreachable(PopulationBotFacts bot)
+    private void ReportUnreachable(PopulationBotFacts bot, bool noCapital)
     {
         bool continent = bot.MapId is 0 or 1;
-        if (!_townAnomaliesReported.Add(continent ? "unreachable:continent" : "unreachable:other-map")) return;
+        if (!_townAnomaliesReported.Add($"unreachable:{(continent ? "continent" : "other-map")}:{(noCapital ? "no-capital" : "no-secondary")}")) return;
+        // The outcome is what the sweep did: a bot with a reachable capital but no reachable secondary gets no town home (a capital-only
+        // home would park it; a town home it had is dropped, any other home stays); a bot with no reachable capital at all keeps its home.
+        string outcome = noCapital
+            ? "no capital is reachable, so it keeps the home it has (a town home included)"
+            : "it gets no town home (a capital-only home would park it at the inn; a town home it had is dropped, a start, zone or operator home stays) and it explores until a town is reachable";
         string detail = continent
-            ? $"a town of the progression is across water from the bot (map {bot.MapId}) and needs a boat, a zeppelin or a teleport, and World:Playerbots:Population:TownProgressionTeleport is off: the bot keeps a home that is not a town home, or none, and explores; further bots are not reported"
-            : $"the bot stands on map {bot.MapId}, which is not a continent (a dungeon, raid or battleground), so every town needs a teleport and World:Playerbots:Population:TownProgressionTeleport is off: its town home is dropped until it is back on a continent; further bots are not reported";
+            ? $"a town of the progression is across water from the bot (map {bot.MapId}) and needs a boat, a zeppelin or a teleport, and World:Playerbots:Population:TownProgressionTeleport is off: {outcome}; further bots with this outcome are not reported"
+            : $"the bot stands on map {bot.MapId}, which is not a continent (a dungeon, raid or battleground), so every town needs a teleport and World:Playerbots:Population:TownProgressionTeleport is off: {outcome}; further bots with this outcome are not reported";
         AnomalyLedger.Shared.Report(
             PlayerbotAnomalies.Prefix + "population",
             "town-unreachable",
@@ -1645,7 +1658,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 }
 
                 // A bot of the graduated levels that already left its start country is released, not pulled back.
-                if (want == StartHomeStage.Zone && !InStartCountry(bot, start, pop)) continue;
+                if (want == StartHomeStage.Zone && !InStartCountry(bot, start, pop))
+                {
+                    // An operator home being adopted is cleared (the bot is released, as the level says); adoption is not left pending for it.
+                    if (adopted) { cleared.Add(bot.BotId); attempts++; }
+                    continue;
+                }
+
                 attempts++;
                 error = await SetStartHomeAsync(managed, bot.BotId, start.MapId, new Vector3(start.X, start.Y, start.Z), botArea, want, ct).ConfigureAwait(false);
             }

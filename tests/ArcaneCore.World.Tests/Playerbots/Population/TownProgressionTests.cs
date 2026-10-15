@@ -933,6 +933,94 @@ public sealed class TownProgressionTests
     }
 
     [Fact]
+    public async Task TheDangerRule_TeleportsTheWayToATownHome_OnlyWhenTheProgressionMayTeleport()
+    {
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 1);
+        Guid bot = Bots(world).Single();
+        await PlaceOnTeldrassilAsync(world, bot);
+        var darnassus = new Vector3(10128f, 2225f, 1329f); // the same island, 1,300 yards away: a walk, unless an area on the way is too high
+        // Level 60 everywhere but at the town itself (level 5): the way there is dangerous for the bot (the Danger rule).
+        var levels = new PlayerbotAreaLevelLookup((x, y, _) => x > 10000f && y > 2000f ? 5 : 60);
+        (PlayerbotHomeTeleportReason On, PlayerbotHomeTeleportReason Off) reasons = await world.Host.World.InvokeAsync(() =>
+        {
+            Player player = world.Bots.FindSession(bot)!.Player!;
+            Map? map = player.Map;
+            player.Map = null;
+            PlayerbotHomeTeleportReason Judge(bool teleports)
+            {
+                var area = new PlayerbotHomeArea(1, darnassus, 300f, "town:darnassus;m=darnassus;s=auberdine")
+                {
+                    Stay = TownStay.Capital, WalkRangeYards = teleports ? 4500f : 20000f, TownTeleports = teleports, AreaLevels = levels,
+                };
+                var returning = new PlayerbotHomeReturn();
+                returning.Evaluate(player, area, 1000);
+                return returning.Judge(player, area, new PlayerbotHomeOptions());
+            }
+
+            try { return (Judge(true), Judge(false)); }
+            finally { player.Map = map; }
+        });
+
+        Assert.Equal(PlayerbotHomeTeleportReason.Danger, reasons.On);
+        Assert.Equal(PlayerbotHomeTeleportReason.None, reasons.Off);
+    }
+
+    [Fact]
+    public async Task WithTheTeleportOff_ANightElfWithAZoneHome_KeepsItAtLevelTenAndAbove_AndIsNeverGivenATownHome()
+    {
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 3, o => o.Population.TownProgressionTeleport = false);
+        world.Population.FreshStartHome = true;
+        Guid[] bots = Bots(world);
+        await NextPassAsync(world);                                   // level 1: the start homes
+        foreach (Guid id in bots)
+        {
+            await PlaceOnTeldrassilAsync(world, id);
+            await SetLevelAsync(world, id, 6);
+        }
+
+        await NextPassAsync(world);                                   // level 6: the zone homes
+        string[] zone = [.. bots.Select(id => world.Bots.HomeOf(id)!.Place!)];
+        Assert.All(zone, place => Assert.StartsWith("zone:", place));
+        foreach (Guid id in bots) await SetLevelAsync(world, id, 12);
+        for (int i = 0; i < 3; i++) await NextPassAsync(world);
+
+        Assert.Equal(zone, bots.Select(id => world.Bots.HomeOf(id)!.Place!));
+        Assert.All(bots, id => Assert.Equal(TownStay.None, world.Bots.FindBrain(id)!.Home!.Stay));
+    }
+
+    [Fact]
+    public void ABotYoungerThanTheFirstTownOfItsContinent_IsSentToNoTownOverseas()
+    {
+        var none = new Dictionary<string, int>();
+        Assert.Null(PopulationTownProgression.PickSecondary(Team.Horde, 1, 7, none, _ => 0, _ => true));     // Kalimdor's first Horde town serves from 10
+        Assert.Null(PopulationTownProgression.PickSecondary(Team.Alliance, 1, 9, none, _ => 0, _ => true));
+        Assert.Equal("crossroads", PopulationTownProgression.PickSecondary(Team.Horde, 1, 10, none, _ => 0, _ => true)!.Key);
+        Assert.NotNull(PopulationTownProgression.PickSecondary(Team.Horde, 0, 7, none, _ => 0, _ => true)); // Brill serves from 5
+        // A bot of age whose own continent's towns are all unusable still falls back overseas.
+        Assert.NotNull(PopulationTownProgression.PickSecondary(Team.Horde, 1, 30, none, _ => 0, r => PopulationTownProgression.Find(r)!.MapId == 0));
+    }
+
+    [Fact]
+    public async Task AnAdoptedOperatorHome_OfABotThatLeftItsStartCountry_IsClearedAndTheRequestIsRetired()
+    {
+        await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 1);
+        world.Population.FreshStartHome = true;
+        Guid bot = Bots(world).Single();
+        await SetLevelAsync(world, bot, 7);                           // the zone stage
+        await world.Host.World.InvokeAsync(() =>
+        {
+            Player player = world.Bots.FindSession(bot)!.Player!;
+            player.MapId = 1;                                         // not on the race's start map: out of its start country
+            return true;
+        });
+        await world.Bots.SetHomesAsync([new ManagedPlayerbotFeature.HomeTarget(bot, 0, new Vector3(-10653f, 1166f, 35f))], 750f, "Sentinel Hill");
+        world.Feature.RequestAdopt();
+        await NextPassAsync(world);
+        Assert.Null(world.Bots.HomeOf(bot));
+        Assert.False(world.Feature.AdoptPending);
+    }
+
+    [Fact]
     public async Task ASweepThatSpendsItsAttempts_ContinuesWhereItStopped_SoNoBotStaysHomeless()
     {
         const int fleet = 30; // more than the 25 attempts of a sweep; the stays of one minute re-home every homed bot at every sweep
@@ -978,15 +1066,40 @@ public sealed class TownProgressionTests
         Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 90f, 0));
         Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 60f, 10_000));
         Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 30f, 25_000));
-        // Stuck 6 yards from the spot (a counter, an upper floor): not a yard closer in WalkStallMs, the walk is given up and the bot stands.
-        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, 30_000));
-        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, 30_000 + PlayerbotTownIdle.WalkStallMs - 1));
-        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 6f, 30_000 + PlayerbotTownIdle.WalkStallMs));
-        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 6f, 30_000 + PlayerbotTownIdle.WalkStallMs + 60_000));
-        // After the deferral it tries once more, and gives up again after another stall window.
-        uint retry = 30_000 + PlayerbotTownIdle.WalkStallMs + PlayerbotTownIdle.StallDeferMs;
+        // Stuck 6 yards from the spot (a counter, an upper floor), thinking every second: not a yard closer in WalkStallMs, the walk is given up.
+        uint at = 30_000;
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, at));
+        for (uint step = 1_000; step < PlayerbotTownIdle.WalkStallMs; step += 1_000)
+            Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, at + step));
+        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 6f, at + PlayerbotTownIdle.WalkStallMs));
+        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 6f, at + PlayerbotTownIdle.WalkStallMs + 60_000));
+        // After the deferral it tries again, and gives up again after another stall window.
+        uint retry = at + PlayerbotTownIdle.WalkStallMs + PlayerbotTownIdle.StallDeferMs;
         Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, retry));
+        for (uint step = 1_000; step < PlayerbotTownIdle.WalkStallMs; step += 1_000)
+            Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 6f, retry + step));
         Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 6f, retry + PlayerbotTownIdle.WalkStallMs));
+    }
+
+    [Fact]
+    public void AWalkInterruptedByAnotherAction_RestartsItsProgressWindow_WhereverItResumes()
+    {
+        var idle = new PlayerbotTownIdle();
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 40f, 0));
+        // A quest, a fight or the explore window takes the bot away (no walk decision for a minute); it comes back farther from the inn.
+        uint back = 60_000;
+        Assert.True(back > PlayerbotTownIdle.WalkStallMs + PlayerbotTownIdle.WalkResumeGapMs);
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 300f, back));
+        Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 290f, back + 2_000));
+        // The same after another action was decided in between (a secondary's explore window).
+        var secondary = new PlayerbotTownIdle();
+        Assert.Equal(TownIdleAction.WalkToTown, secondary.Decide(TownStay.Secondary, 40f, 0));
+        Assert.Equal(TownIdleAction.Explore, secondary.Decide(TownStay.Secondary, 400f, PlayerbotTownIdle.LingerMs + 1));
+        Assert.Equal(TownIdleAction.WalkToTown, secondary.Decide(TownStay.Secondary, 500f, PlayerbotTownIdle.LingerMs + PlayerbotTownIdle.ExploreMs + 2_000));
+        // A resumed walk that really makes no progress is still given up, 20 s after its last progress.
+        for (uint step = 3_000; step < 2_000 + PlayerbotTownIdle.WalkStallMs; step += 1_000)
+            Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, 290f, back + step));
+        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 290f, back + 2_000 + PlayerbotTownIdle.WalkStallMs));
     }
 
     [Fact]
@@ -998,7 +1111,8 @@ public sealed class TownProgressionTests
         foreach (Guid id in bots) await SetLevelAsync(world, id, 15);
         await NextPassAsync(world);
         Assert.Equal(2, world.Feature.TownStateCount);
-        world.Feature.ForgetDeletedBots(new HashSet<Guid> { bots[1] }); // what every sweep does with the population's bots
+        Assert.True(await world.Members.DeleteAsync(bots[0])); // the bot leaves the population
+        await NextPassAsync(world);
         Assert.Equal(1, world.Feature.TownStateCount);
     }
 
