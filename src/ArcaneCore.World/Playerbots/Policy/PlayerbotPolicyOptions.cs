@@ -2,7 +2,8 @@ namespace ArcaneCore.World.Playerbots.Policy;
 
 /// <summary>
 /// <c>World:Playerbots:Policy</c>: the bots' goal policy engine (<see cref="PlayerbotPolicyEngine"/>; docs/areas/playbots.md, Goal policy).
-/// Off by default; on, with no <see cref="ModelPath"/>, it scores with the rule ladder itself and the bots behave as without it.
+/// Off by default; on, with no <see cref="ModelPath"/>, it scores with the rule ladder itself, so it always agrees with the ladder and the
+/// bots choose the goals they would without it (its snapshots still add the rungs' probes to a think every <see cref="IntervalMs"/>).
 /// </summary>
 public sealed class PlayerbotPolicyOptions
 {
@@ -40,6 +41,8 @@ public sealed class PlayerbotPolicyOptions
             throw new InvalidOperationException($"{section}: ModelPath must be at most 260 characters and contain no control characters.");
         if (IntervalMs is < 500 or > 60_000) throw new InvalidOperationException($"{section}: IntervalMs must be 500..60000.");
         if (StaleAfterMs is < 500 or > 120_000) throw new InvalidOperationException($"{section}: StaleAfterMs must be 500..120000.");
+        // Shorter, and every snapshot cycle would end in a gap where each think finds its snapshot stale.
+        if (StaleAfterMs < IntervalMs) throw new InvalidOperationException($"{section}: StaleAfterMs must be at least IntervalMs.");
         if (!double.IsFinite(TickBudgetMs) || TickBudgetMs is < 0.1 or > 50)
             throw new InvalidOperationException($"{section}: TickBudgetMs must be 0.1..50.");
         if (!double.IsFinite(ExplorationRate) || ExplorationRate is < 0 or > 0.2)

@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Playerbots.Policy;
 /// <para>
 /// Weights file (JSON): <c>{"format":"arcanecore.playerbot-policy","version":1,"features":[...],"goals":[...],"mean":[...]?,"scale":[...]?,
 /// "layers":[{"inputs":I,"outputs":O,"activation":"relu"|"linear","weights":[O*I, row-major by output],"bias":[O]}]}</c>. The feature and
-/// goal names must equal <see cref="PlayerbotPolicySchema"/>'s, in order. <c>tools/playerbot-policy/train.py</c> writes it.
+/// goal names must equal <see cref="PlayerbotPolicySchema"/>'s, in order. An offline trainer writes it from the policy telemetry (docs/areas/playbots.md, Goal policy).
 /// </para>
 /// </summary>
 public sealed class PlayerbotModelPolicy : IPlayerbotPolicy

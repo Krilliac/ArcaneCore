@@ -25,6 +25,7 @@ public sealed class PlayerbotPolicyBrainTests
         PlayerbotPolicyStats stats = engine.Stats;
         Assert.True(stats.Agreed > 0, $"agreed {stats.Agreed}, missing {stats.Missing}");
         Assert.Equal(0, stats.Applied);
+        Assert.Equal(0, stats.Refused);
         Assert.True(stats.Scored > 0, $"scored {stats.Scored}");
         // And the ladder did choose the grind target on its own: what the next test's model overrides.
         Assert.Contains(ladderOnly, line => line.Contains(":Grind/", StringComparison.Ordinal));
@@ -61,6 +62,41 @@ public sealed class PlayerbotPolicyBrainTests
             Assert.Null(world.Brain.InspectionTarget);
             return true;
         });
+        await engine.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task UnderResurrectionSickness_APromotionIsRefused_AndTheBotStandsDown()
+    {
+        // Explore is always open, so this model would walk a sick bot off; the ladder stands every rung below town down instead.
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true },
+            policy: new PlayerbotPolicyEngineTests.StubPolicy(PlayerbotPolicyGoal.Explore));
+        await using RiskTestWorld world = await StartAsync();
+        world.Brain.PolicyEngine = engine;
+        Creature mob = await world.OnWorldAsync(() =>
+        {
+            PlayerbotSicknessTestKit.Apply(world.Host.WorldServices, world.Player);
+            return world.Spawn(Mob(), 50f, 0f);
+        });
+        await world.SeeAsync(mob);
+
+        for (int i = 0; i < Thinks; i++)
+        {
+            await world.ThinkAsync();
+            await world.OnWorldAsync(() => { engine.Dispatch(); return true; });
+            await engine.WhenIdleAsync();
+            await world.OnWorldAsync(() =>
+            {
+                Assert.NotEqual(PlayerbotGoalKind.Explore, world.Brain.Goal);
+                Assert.NotEqual(PlayerbotPolicySource.Applied, world.Brain.PolicyAgent?.LastVerdict?.Source);
+                return true;
+            });
+        }
+
+        PlayerbotPolicyStats stats = engine.Stats;
+        // Not vacuous: the model did pick Explore over the ladder, and the refusal is what kept the bot resting.
+        Assert.True(stats.Refused > 0, $"refused {stats.Refused}, applied {stats.Applied}, missing {stats.Missing}");
+        Assert.Equal(PlayerbotGoalKind.Rest, await world.OnWorldAsync(() => world.Brain.Goal));
         await engine.DisposeAsync();
     }
 

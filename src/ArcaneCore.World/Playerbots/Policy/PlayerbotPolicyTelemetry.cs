@@ -14,10 +14,15 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.Playerbots.Policy;
 
 /// <summary>A bot's progress counters at one moment: the stall watch's fingerprint fields the outcome is measured on.</summary>
-internal readonly record struct PlayerbotPolicyProgress(uint Level, uint Experience, uint Money, uint Items, int QuestsRewarded);
+internal readonly record struct PlayerbotPolicyProgress(uint Level, uint Experience, uint NextLevelExperience, uint Money, uint Items, int QuestsRewarded)
+{
+    /// <summary>The level with the fraction of it gained (experience over the next level's; a capped level has no fraction).</summary>
+    internal double Levels => Level + (NextLevelExperience > 0 ? Math.Min(1.0, (double)Experience / NextLevelExperience) : 0.0);
+}
 
 /// <summary>What a decision led to over its outcome window.</summary>
-internal readonly record struct PlayerbotPolicyOutcome(int Levels, long Experience, long Money, long Items, int Quests, int Stalls, int Deaths, long Anomalies);
+internal readonly record struct PlayerbotPolicyOutcome(int Levels, double LevelProgress, long Experience, long Money, long Items, int Quests, int Stalls, int Deaths,
+    long Anomalies);
 
 /// <summary>One telemetry record: a decision and its outcome (<c>docs/areas/playbots.md</c>, Goal policy telemetry).</summary>
 internal sealed record PlayerbotPolicyRecord(
@@ -51,6 +56,7 @@ internal sealed record PlayerbotPolicyRecord(
             json.WriteNumber("w", WindowMs / 1000);
             json.WriteStartObject("o");
             json.WriteNumber("lvl", Outcome.Levels);
+            json.WriteNumber("lp", Math.Round(Outcome.LevelProgress, 4));
             json.WriteNumber("xp", Outcome.Experience);
             json.WriteNumber("money", Outcome.Money);
             json.WriteNumber("items", Outcome.Items);
@@ -140,11 +146,22 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
         state.WasAlive = player.IsAlive;
 
         PlayerbotPolicyProgress? progress = null;
+        if (brain.PolicyAgent is { } fresh && !ReferenceEquals(fresh, state.Agent))
+        {
+            // A new brain (a replaced one, a driver change back to the brain): the old brain's open decisions measured its counters, not
+            // these, so they end unfinished, and this brain's think count starts again.
+            if (state.Agent is not null) Interlocked.Add(ref _unfinished, state.Open.Count);
+            state.Open.Clear();
+            state.Agent = fresh;
+            state.LastDecideCount = 0;
+        }
         if (brain.PolicyAgent is { } agent && agent.DecideCount != state.LastDecideCount)
         {
             state.LastDecideCount = agent.DecideCount;
-            // The first think that used a snapshot is its decision; a stale snapshot describes a state long gone and is not one.
-            if (agent.LastVerdict is { Window: { Recorded: false } window } verdict && verdict.Source != PlayerbotPolicySource.Stale)
+            // A snapshot's decision is the first think that had its scores (or its exploration goal): a stale snapshot describes a state
+            // long gone, and a think before the scores came back left the ladder in charge only for want of them.
+            if (agent.LastVerdict is { Window: { Recorded: false } window } verdict
+                && verdict.Source is not (PlayerbotPolicySource.Stale or PlayerbotPolicySource.Missing))
             {
                 window.Recorded = true;
                 if (state.Open.Count < MaxOpenPerBot)
@@ -163,6 +180,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
             PlayerbotPolicyProgress now = progress ??= ProgressOf(brain, player);
             var outcome = new PlayerbotPolicyOutcome(
                 (int)now.Level - (int)open.Start.Level,
+                now.Levels - open.Start.Levels,
                 (long)now.Experience - open.Start.Experience,
                 (long)now.Money - open.Start.Money,
                 (long)now.Items - open.Start.Items,
@@ -221,7 +239,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
         if (brain.Services.GetService<Npc.QuestNpcFeature>()?.Services.StateOf(player) is { Loaded: true } state)
             foreach (ArcaneCore.Game.Quests.QuestStatusData status in state.Quests.Statuses.Values)
                 if (status.Rewarded) rewarded++;
-        return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, rewarded);
+        return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.GetUInt32(UpdateFields.PlayerNextLevelXp), player.Money, items, rewarded);
     }
 
     private long AnomaliesOf(string subject) => _anomalies.TryGetValue(subject, out long count) ? count : 0;
@@ -281,6 +299,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
         public int Deaths;
         public uint LastSeenMs;
         public long LastDecideCount;
+        public PlayerbotPolicyAgent? Agent;
         public readonly Queue<OpenDecision> Open = new();
     }
 
@@ -290,8 +309,9 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
 
 /// <summary>
 /// Bounded rotating telemetry files: <c>policy-NNNNNNNN.jsonl</c> in one folder, each at most <c>maxFileBytes</c>, at most
-/// <c>maxFiles</c> of them (the oldest is deleted first), so the folder never holds more than their product. Not thread-safe: the
-/// caller serialises.
+/// <c>maxFiles</c> of them (the oldest is deleted first, before the next is made), so the folder never holds more than their product: when
+/// an old file cannot be deleted (a reader holds it), no new file is made and the lines are refused until it can be. Not thread-safe:
+/// the caller serialises.
 /// </summary>
 internal sealed class PlayerbotPolicyTelemetryWriter : IDisposable
 {
@@ -301,6 +321,7 @@ internal sealed class PlayerbotPolicyTelemetryWriter : IDisposable
     private readonly int _maxFiles;
     private FileStream? _current;
     private long _sequence;
+    private bool _disposed;
 
     internal PlayerbotPolicyTelemetryWriter(string directory, long maxFileBytes, int maxFiles)
     {
@@ -315,37 +336,45 @@ internal sealed class PlayerbotPolicyTelemetryWriter : IDisposable
 
     internal string Directory { get; }
 
-    /// <summary>Lines refused because one alone is larger than a file may be.</summary>
+    /// <summary>Lines refused: one alone larger than a file may be, no room for a new file (an old one held open), or after disposal.</summary>
     internal long Refused { get; private set; }
 
-    /// <summary>Append one line (with its newline). False when the line alone is over the file size limit (refused, counted).</summary>
+    /// <summary>Append one line (with its newline). False when it was refused (counted in <see cref="Refused"/>).</summary>
     internal bool Write(ReadOnlySpan<byte> line)
     {
-        if (line.Length > _maxFileBytes)
+        if (_disposed || line.Length > _maxFileBytes || (_current is null || _current.Length + line.Length > _maxFileBytes) && !Rotate())
         {
             Refused++;
             return false;
         }
-        if (_current is null || _current.Length + line.Length > _maxFileBytes) Rotate();
         _current!.Write(line);
         return true;
     }
 
     internal void Flush() => _current?.Flush();
 
-    private void Rotate()
+    /// <summary>Close the current file and start the next, deleting the oldest first to stay within the bound. False: no room (no file).</summary>
+    private bool Rotate()
     {
         _current?.Dispose();
         _current = null;
+        string[] files = [.. Files().OrderBy(SequenceOf)];
+        int kept = files.Length;
+        for (int i = 0; i < files.Length && kept > _maxFiles - 1; i++)
+        {
+            try
+            {
+                File.Delete(files[i]);
+                kept--;
+            }
+            // A reader holds it: tried again on the next line. Oldest first, so no newer file goes in its place.
+            catch (IOException) { break; }
+            catch (UnauthorizedAccessException) { break; }
+        }
+        if (kept > _maxFiles - 1) return false;
         string path = Path.Combine(Directory, Prefix + (++_sequence).ToString("D8", CultureInfo.InvariantCulture) + Suffix);
         _current = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        string[] files = [.. Files().OrderBy(SequenceOf)];
-        for (int i = 0; i < files.Length - _maxFiles; i++)
-        {
-            try { File.Delete(files[i]); }
-            catch (IOException) { } // a reader holds it: it goes on the next rotation
-            catch (UnauthorizedAccessException) { }
-        }
+        return true;
     }
 
     internal IEnumerable<string> Files() => System.IO.Directory.EnumerateFiles(Directory, Prefix + "*" + Suffix).Where(file => SequenceOf(file) > 0);
@@ -360,6 +389,7 @@ internal sealed class PlayerbotPolicyTelemetryWriter : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         _current?.Dispose();
         _current = null;
     }

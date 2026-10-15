@@ -113,6 +113,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private Chaos.PlayerbotChaosEngine? _chaos;
     private Policy.PlayerbotPolicyEngine? _policy;
     private uint _policyReportMs;
+    private bool _policyReportArmed;
 
     /// <summary>World time this feature has seen, in ms (the fault backoff and window run on it).</summary>
     private long ClockMs => Interlocked.Read(ref _clockMs);
@@ -1094,9 +1095,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 policy.Telemetry = new Policy.PlayerbotPolicyTelemetry(_options.Policy.Telemetry,
                     Path.Combine(contentRoot, _options.Policy.Telemetry.Directory), _setAsideTime, logger);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
             {
+                // The host's disk or folder: an environment site (PlayerbotQaFaultFeed.EnvironmentSites).
                 FaultLedger.Shared.Record("playerbot.policy-telemetry-io", ex);
+                logger.LogWarning(ex, "Playerbot goal policy telemetry could not start ({Type}: {Message}); the policy runs without it", ex.GetType().Name, ex.Message);
+            }
+            catch (ArgumentException ex)
+            {
+                // A bad folder name, or a limit the writer refuses: possibly a defect, so not the environment site.
+                FaultLedger.Shared.Record("playerbot.policy-telemetry", ex);
                 logger.LogWarning(ex, "Playerbot goal policy telemetry could not start ({Type}: {Message}); the policy runs without it", ex.GetType().Name, ex.Message);
             }
         }
@@ -1118,16 +1126,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             policy.Dispatch();
             if (_world is not { } world) return;
             policy.Telemetry?.Sweep(world.NowMs);
-            if (unchecked((int)(world.NowMs - _policyReportMs)) < 0) return;
-            bool first = _policyReportMs == 0;
+            bool first = !_policyReportArmed;
+            if (!first && unchecked((int)(world.NowMs - _policyReportMs)) < 0) return;
+            _policyReportArmed = true;
             _policyReportMs = unchecked(world.NowMs + 300_000);
             if (first) return;
             Policy.PlayerbotPolicyStats stats = policy.Stats;
             logger.LogInformation(
                 "Playerbot goal policy {Policy}: {Submitted} snapshots, {Scored} scored, {Dropped} dropped, {Unscored} unscored over {Overruns} budget overruns, {Errors} errors; "
-                + "decisions {Applied} applied, {Agreed} agreed, {Explored} explored, {Missing} missing, {Stale} stale, {NonFinite} non-finite",
+                + "thinks {Applied} applied, {Agreed} agreed, {Floor} floor, {Explored} explored, {Missing} missing, {Stale} stale, {NonFinite} non-finite; {Refused} promotions refused",
                 stats.Policy, stats.Submitted, stats.Scored, stats.Dropped, stats.Unscored, stats.Overruns, stats.Errors,
-                stats.Applied, stats.Agreed, stats.Explored, stats.Missing, stats.Stale, stats.NonFinite);
+                stats.Applied, stats.Agreed, stats.Floor, stats.Explored, stats.Missing, stats.Stale, stats.NonFinite, stats.Refused);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

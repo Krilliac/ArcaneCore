@@ -178,6 +178,33 @@ public sealed class PlayerbotPolicyEngineTests
         PlayerbotPolicyVerdict verdict = agent.Decide(10);
         Assert.Null(verdict.Promote);
         Assert.Equal(PlayerbotPolicySource.Floor, verdict.Source);
+        Assert.Equal((1L, 0L), (engine.Stats.Floor, engine.Stats.Agreed));
+    }
+
+    [Fact]
+    public async Task ARefusedPromotion_LeavesTheLadderInCharge_ForTheRestOfItsSnapshot()
+    {
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true }, policy: new StubPolicy(PlayerbotPolicyGoal.Explore));
+        PlayerbotPolicyAgent agent = engine.CreateAgent(5);
+        agent.Request(0, new float[PlayerbotPolicySchema.FeatureCount], TownOrExplore, nowMs: 0);
+        engine.Dispatch();
+        await engine.WhenIdleAsync();
+
+        Assert.Equal(PlayerbotPolicyGoal.Explore, agent.Decide(10).Promote);
+        agent.Refuse();
+        Assert.Equal(PlayerbotPolicySource.Refused, agent.LastVerdict?.Source);
+        Assert.Null(agent.LastVerdict?.Promote);
+        // Later thinks on the same snapshot do not try it again.
+        PlayerbotPolicyVerdict next = agent.Decide(20);
+        Assert.Null(next.Promote);
+        Assert.Equal(PlayerbotPolicySource.Refused, next.Source);
+
+        // A new snapshot may promote again.
+        agent.Request(0, new float[PlayerbotPolicySchema.FeatureCount], TownOrExplore, nowMs: 3000);
+        engine.Dispatch();
+        await engine.WhenIdleAsync();
+        Assert.Equal(PlayerbotPolicyGoal.Explore, agent.Decide(3010).Promote);
+        Assert.Equal(2, engine.Stats.Refused); // the refusal, and the think after it
     }
 
     [Fact]
@@ -235,6 +262,8 @@ public sealed class PlayerbotPolicyEngineTests
         Assert.Throws<InvalidOperationException>(() => new PlayerbotPolicyOptions { ExplorationRate = 0.05 }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotPolicyOptions { Enabled = true, ExplorationRate = 0.5 }.Validate());
         new PlayerbotPolicyOptions { Enabled = true, ExplorationRate = 0.1, Telemetry = { Enabled = true } }.Validate();
+        // Scores that go stale before the next snapshot would leave a ladder-only gap in every cycle.
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotPolicyOptions { Enabled = true, IntervalMs = 5000, StaleAfterMs = 4000 }.Validate());
     }
 
     private static PlayerbotPolicyGoal? PlayerbotGoalOrNull(PlayerbotPolicyGoal goal) => goal;

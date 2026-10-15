@@ -59,6 +59,39 @@ public sealed class PlayerbotPolicyTelemetryTests
     }
 
     [Fact]
+    public void AnOldFileHeldOpen_StopsNewFiles_RatherThanBreakTheBound()
+    {
+        string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            byte[] line = new byte[200];
+            line.AsSpan().Fill((byte)'x');
+            line[^1] = (byte)'\n';
+            using var writer = new PlayerbotPolicyTelemetryWriter(directory, maxFileBytes: 1024, maxFiles: 2);
+            for (int i = 0; i < 10; i++) Assert.True(writer.Write(line)); // five lines a file: two files
+            Assert.Equal(2, writer.Files().Count());
+
+            string oldest = writer.Files().OrderBy(f => f, StringComparer.Ordinal).First();
+            using (new FileStream(oldest, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) // no delete sharing: the oldest cannot go
+            {
+                Assert.False(writer.Write(line));
+                Assert.Equal(1, writer.Refused);
+                Assert.Equal(2, writer.Files().Count());
+                Assert.All(writer.Files(), file => Assert.InRange(new FileInfo(file).Length, 1, 1024));
+            }
+            // Released: the oldest goes and writing resumes within the bound.
+            Assert.True(writer.Write(line));
+            Assert.Equal(2, writer.Files().Count());
+            Assert.DoesNotContain(oldest, writer.Files());
+
+            writer.Dispose();
+            Assert.False(writer.Write(line)); // a late line after disposal opens no file
+            Assert.Equal(2, writer.Files().Count());
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public async Task ARecord_HasTheDocumentedShape()
     {
         string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
@@ -89,7 +122,8 @@ public sealed class PlayerbotPolicyTelemetryTests
             Assert.Equal("Explore", root.GetProperty("kind").GetString());
             Assert.Equal(300, root.GetProperty("w").GetInt32());
             JsonElement outcome = root.GetProperty("o");
-            Assert.Equal(["lvl", "xp", "money", "items", "quests", "stalls", "deaths", "anomalies"], outcome.EnumerateObject().Select(p => p.Name));
+            Assert.Equal(["lvl", "lp", "xp", "money", "items", "quests", "stalls", "deaths", "anomalies"], outcome.EnumerateObject().Select(p => p.Name));
+            Assert.Equal(0.125, outcome.GetProperty("lp").GetDouble(), 4);
             Assert.Equal(120, outcome.GetProperty("xp").GetInt64());
             Assert.Equal(-5, outcome.GetProperty("money").GetInt64());
             Assert.Equal(1, outcome.GetProperty("deaths").GetInt32());
@@ -147,6 +181,6 @@ public sealed class PlayerbotPolicyTelemetryTests
         var open = default(PlayerbotPolicyGoalMask).With(PlayerbotPolicyGoal.Town).With(PlayerbotPolicyGoal.Explore);
         return new PlayerbotPolicyRecord(unixMs, 0xABC, 0, 12, features, open, PlayerbotPolicyGoal.Town, PlayerbotPolicyGoal.Explore,
             PlayerbotPolicySource.Explored, Explored: true, PlayerbotPolicyGoal.Explore, PlayerbotGoalKind.Explore, 300_000,
-            new PlayerbotPolicyOutcome(0, 120, -5, 2, 0, 0, 1, 0));
+            new PlayerbotPolicyOutcome(0, 0.125, 120, -5, 2, 0, 0, 1, 0));
     }
 }

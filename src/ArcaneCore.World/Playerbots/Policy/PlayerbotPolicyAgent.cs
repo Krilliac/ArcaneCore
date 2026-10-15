@@ -17,6 +17,11 @@ internal enum PlayerbotPolicySource : byte
     NonFinite,
     /// <summary>The scores chose <see cref="PlayerbotPolicyGoal.Grind"/>, the ladder's floor, which cannot be moved ahead: the ladder decides.</summary>
     Floor,
+    /// <summary>
+    /// The promoted goal's controller did not act (its rules or a jumped rung's guard said no): the ladder decides, for the rest of the
+    /// snapshot too, so a promotion is refused once, not on every think.
+    /// </summary>
+    Refused,
 }
 
 /// <summary>One snapshot of a bot's state taken for scoring (world thread).</summary>
@@ -31,6 +36,9 @@ internal sealed class PlayerbotPolicyWindow(long sequence, uint takenAtMs, float
 
     /// <summary>The first think that used this snapshot has been told to the telemetry.</summary>
     internal bool Recorded { get; set; }
+
+    /// <summary>Its promotion was refused (<see cref="PlayerbotPolicySource.Refused"/>): no think on it promotes again.</summary>
+    internal bool Refused { get; set; }
 }
 
 /// <summary>A think's goal decision: the goal to try before the ladder (null: the ladder decides) and why.</summary>
@@ -65,7 +73,7 @@ internal sealed class PlayerbotPolicyAgent
     /// <summary>The latest think's decision on <see cref="Window"/> (telemetry reads it after the think).</summary>
     internal PlayerbotPolicyVerdict? LastVerdict { get; private set; }
 
-    /// <summary>How many thinks decided (<see cref="Decide"/>; telemetry tells a new decision from the last one by it).</summary>
+    /// <summary>How many thinks decided (<see cref="Decide"/>; telemetry tells a new think from the last one by it).</summary>
     internal long DecideCount { get; private set; }
 
     /// <summary>A new snapshot is due (world thread).</summary>
@@ -126,9 +134,22 @@ internal sealed class PlayerbotPolicyAgent
             case PlayerbotPolicySource.Missing: _engine.CountMissing(); break;
             case PlayerbotPolicySource.Stale: _engine.CountStale(); break;
             case PlayerbotPolicySource.NonFinite: _engine.CountNonFinite(); break;
-            case PlayerbotPolicySource.Floor: _engine.CountAgreed(); break;
+            case PlayerbotPolicySource.Floor: _engine.CountFloor(); break;
+            case PlayerbotPolicySource.Refused: _engine.CountRefused(); break;
         }
         return verdict;
+    }
+
+    /// <summary>
+    /// This think's promotion was refused (world thread): the think's verdict becomes <see cref="PlayerbotPolicySource.Refused"/> and the
+    /// snapshot promotes nothing more.
+    /// </summary>
+    internal void Refuse()
+    {
+        if (LastVerdict is not { Promote: not null, Window: { } window } verdict) return;
+        window.Refused = true;
+        LastVerdict = verdict with { Promote = null, Source = PlayerbotPolicySource.Refused };
+        _engine.CountRefused();
     }
 
     private PlayerbotPolicyVerdict DecideCore(uint nowMs)
@@ -136,6 +157,7 @@ internal sealed class PlayerbotPolicyAgent
         if (Window is not { } window) return new(null, PlayerbotPolicySource.Missing, null, Window);
         uint age = unchecked(nowMs - window.TakenAtMs);
         if (age > int.MaxValue || age > (uint)_engine.Options.StaleAfterMs) return new(null, PlayerbotPolicySource.Stale, null, window);
+        if (window.Refused) return new(null, PlayerbotPolicySource.Refused, null, window);
         if (window.Explore is { } explore) return new(explore, PlayerbotPolicySource.Explored, explore, window);
         if (Volatile.Read(ref _latest) is not { } scores || scores.Sequence != window.Sequence) return new(null, PlayerbotPolicySource.Missing, null, Window);
         PlayerbotPolicyGoal? best = null;

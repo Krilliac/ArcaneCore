@@ -43,7 +43,11 @@ internal sealed partial class PlayerbotBrain
             PlayerbotPolicyGoalMask open = PolicySnapshot(player, _policyFeatures);
             agent.Request(player.MapId, _policyFeatures, open, now);
         }
-        return verdict.Promote is { } goal && TryPromotedGoal(player, goal, interval);
+        if (verdict.Promote is not { } goal) return false;
+        if (TryPromotedGoal(player, goal, interval)) return true;
+        // Its rules said no (sickness, a quest target in sight, nothing to do there): the ladder decides for the rest of this snapshot.
+        agent.Refuse();
+        return false;
     }
 
     /// <summary>
@@ -57,6 +61,7 @@ internal sealed partial class PlayerbotBrain
         if (_quests.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Quest);
         if (_town.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Town);
         Creature? seen = FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped);
+        // The ladder's own guards, as of now: the verdict is applied on later thinks, where the promotion rechecks them.
         bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0 && seen is not null;
         if (!visibleQuestTarget && _trainers.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Train);
         if (!visibleQuestTarget && _riding.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Mount);
@@ -94,11 +99,14 @@ internal sealed partial class PlayerbotBrain
     /// <summary>
     /// Try the goal the policy put ahead of the ladder, under the guards its own rung has (world thread). The controller rechecks the live
     /// rules, as it does in the ladder; false (it did not act) leaves the ladder to run, so a refused promotion costs one extra check.
+    /// The guards of the rungs the promotion jumps are rechecked too: resurrection sickness stands every rung below town down
+    /// (<see cref="StandDownWhileSick"/>), and a quest creature in sight keeps a bot off the trainer and riding trips.
     /// </summary>
     private bool TryPromotedGoal(Player player, PlayerbotPolicyGoal goal, uint interval)
     {
         bool optionalBudget = PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true;
         PlayerbotThinkProbe.Phase(PolicyPhase(goal));
+        if (goal != PlayerbotPolicyGoal.Town && PlayerbotSickness.Holder(_session, player) is { IsPermanent: false, Duration: > 0 }) return false;
         switch (goal)
         {
             case PlayerbotPolicyGoal.Town:
@@ -110,7 +118,8 @@ internal sealed partial class PlayerbotBrain
 
             case PlayerbotPolicyGoal.Train:
                 // Only from a standing start: the ladder's own rung stops an idle fight first, which is not a choice a policy makes.
-                if (!optionalBudget || _attacking || player.Combat.Victim is not null || !_trainers.HasCandidate(player)) return false;
+                if (!optionalBudget || _attacking || player.Combat.Victim is not null || QuestTargetInSight(player) || !_trainers.HasCandidate(player))
+                    return false;
                 _target = null;
                 AbandonRoute();
                 if (!_trainers.Update(player, interval)) return false;
@@ -119,7 +128,8 @@ internal sealed partial class PlayerbotBrain
                 return true;
 
             case PlayerbotPolicyGoal.Mount:
-                if (!optionalBudget || _attacking || player.Combat.Victim is not null || !_riding.HasCandidate(player)) return false;
+                if (!optionalBudget || _attacking || player.Combat.Victim is not null || QuestTargetInSight(player) || !_riding.HasCandidate(player))
+                    return false;
                 _target = null;
                 AbandonRoute();
                 if (!_riding.Update(player, interval)) return false;
@@ -156,6 +166,9 @@ internal sealed partial class PlayerbotBrain
                 return false;
         }
     }
+
+    private bool QuestTargetInSight(Player player)
+        => _quests.PreferredCreatureEntry != 0 && FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is not null;
 
     private static string PolicyPhase(PlayerbotPolicyGoal goal) => goal switch
     {

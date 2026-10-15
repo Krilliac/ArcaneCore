@@ -58,6 +58,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private const uint WeaponBow = 2, WeaponGun = 3, WeaponCrossbow = 18;
     private uint _cooldownMs;
+    private bool _cooldownClockedThisThink;
     private uint _repairBackoffUntil;
     private PlayerbotRoute? _route;
     private ObjectGuid _routeTarget;
@@ -97,7 +98,12 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     {
         if (elapsedMs == 0 || !player.IsInWorld || !player.IsAlive || player.Combat.IsInCombat)
             return false;
-        _cooldownMs = elapsedMs >= _cooldownMs ? 0 : _cooldownMs - elapsedMs;
+        // A second Update in one announced think (the goal policy's promotion, then the ladder's rung) does not run the cooldown twice.
+        if (!_thinksAreAnnounced || !_cooldownClockedThisThink)
+        {
+            _cooldownMs = elapsedMs >= _cooldownMs ? 0 : _cooldownMs - elapsedMs;
+            _cooldownClockedThisThink = true;
+        }
         QuestNpcServices? services = session.Services.GetService<QuestNpcFeature>()?.Services;
         if (services is null)
             return false;
@@ -356,6 +362,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         _thinksAreAnnounced = true;
         _repairPlansThisThink = 0;
         _repairClockedThisThink = false;
+        _cooldownClockedThisThink = false;
         MarkThinkQueries();
     }
 

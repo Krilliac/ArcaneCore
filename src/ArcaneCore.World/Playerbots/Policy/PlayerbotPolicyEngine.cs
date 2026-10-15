@@ -20,7 +20,7 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
     /// <summary>The anomaly area of the engine's reports (<c>bot-policy/...</c>).</summary>
     internal const string AnomalyArea = "policy";
 
-    /// <summary>Rows one map batch holds; snapshots past it wait for the next tick, and past twice it are dropped (counted).</summary>
+    /// <summary>Rows one map batch holds; a snapshot past it is dropped (counted) and that think's scores are missing.</summary>
     internal const int MaxBatch = 1024;
 
     // Rows the worker scores between two budget checks.
@@ -33,7 +33,7 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
     private int _disposed;
 
     private long _submitted, _scored, _dropped, _overruns, _unscored, _errors;
-    private long _applied, _agreed, _missing, _stale, _nonFinite, _explored;
+    private long _applied, _agreed, _missing, _stale, _nonFinite, _explored, _floor, _refused;
 
     /// <summary>Make an engine. Never throws for a bad model: it reports one anomaly and scores with the ladder.</summary>
     internal PlayerbotPolicyEngine(PlayerbotPolicyOptions options, ILogger? logger = null, string? contentRoot = null, IPlayerbotPolicy? policy = null)
@@ -166,18 +166,21 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
         }
     }
 
-    // Decision counters (world thread, PlayerbotPolicyAgent.Decide).
+    // Per-think counters (world thread, PlayerbotPolicyAgent.Decide and Refuse).
     internal void CountApplied() => Interlocked.Increment(ref _applied);
     internal void CountAgreed() => Interlocked.Increment(ref _agreed);
     internal void CountMissing() => Interlocked.Increment(ref _missing);
     internal void CountStale() => Interlocked.Increment(ref _stale);
     internal void CountNonFinite() => Interlocked.Increment(ref _nonFinite);
     internal void CountExplored() => Interlocked.Increment(ref _explored);
+    internal void CountFloor() => Interlocked.Increment(ref _floor);
+    internal void CountRefused() => Interlocked.Increment(ref _refused);
 
     internal PlayerbotPolicyStats Stats => new(Policy.Name, ModelLoaded, ModelError,
         Interlocked.Read(ref _submitted), Interlocked.Read(ref _scored), Interlocked.Read(ref _dropped), Interlocked.Read(ref _overruns),
         Interlocked.Read(ref _unscored), Interlocked.Read(ref _errors), Interlocked.Read(ref _applied), Interlocked.Read(ref _agreed),
-        Interlocked.Read(ref _missing), Interlocked.Read(ref _stale), Interlocked.Read(ref _nonFinite), Interlocked.Read(ref _explored));
+        Interlocked.Read(ref _missing), Interlocked.Read(ref _stale), Interlocked.Read(ref _nonFinite), Interlocked.Read(ref _explored),
+        Interlocked.Read(ref _floor), Interlocked.Read(ref _refused));
 
     public async ValueTask DisposeAsync()
     {
@@ -209,7 +212,10 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
 /// <summary>One bot's scores for one snapshot (immutable; published by the worker).</summary>
 internal sealed record PlayerbotPolicyScores(long Sequence, float[] Values);
 
-/// <summary>The engine's counters (inspection, <c>.playerbot policy</c>, tests).</summary>
+/// <summary>
+/// The engine's counters (the feature's five-minute log line, tests). <c>Applied</c> to <c>Refused</c> count thinks, not snapshots: every
+/// think on a snapshot decides again, and a refused promotion counts once as <c>Refused</c> on top of the think's own source.
+/// </summary>
 internal readonly record struct PlayerbotPolicyStats(string Policy, bool ModelLoaded, string? ModelError,
     long Submitted, long Scored, long Dropped, long Overruns, long Unscored, long Errors,
-    long Applied, long Agreed, long Missing, long Stale, long NonFinite, long Explored);
+    long Applied, long Agreed, long Missing, long Stale, long NonFinite, long Explored, long Floor, long Refused);

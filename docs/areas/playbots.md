@@ -77,7 +77,7 @@ banners, as it does the classic-db goobers; never Alterac Valley), fill the queu
 `PlayerbotBattlegroundCoordinator` and `PlayerbotBattlegroundAI` (`World:Playerbots:Battlegrounds`, live; `.playerbot battlegrounds`):
 `docs/areas/playbots-battlegrounds.md`.
 
-The goal ladder can be re-ranked by a built-in CPU goal policy (`World:Playerbots:Policy`, **off by default**; with no `ModelPath` it scores with the ladder itself and the bots behave exactly as without it). It replaced the ONNX/TensorRT batch pass and the local Ollama planner; see Goal policy below.
+The goal ladder can be re-ranked by a built-in CPU goal policy (`World:Playerbots:Policy`, **off by default**; with no `ModelPath` it scores with the ladder itself, so it always agrees and the bots choose the goals they would without it). It replaced the ONNX/TensorRT batch pass and the local Ollama planner; see Goal policy below.
 
 ### Autonomous and scripted mode
 
@@ -597,7 +597,10 @@ to autonomous mode resumes the brain with whatever state it had before.
 
 `World:Playerbots:Policy` (`src/ArcaneCore.World/Playerbots/Policy/`, off by default) lets a scored policy re-rank the out-of-combat goal
 ladder in `PlayerbotBrain.Update`. It is **advisory**: the rule ladder stays the default and the fallback, and a promoted goal is tried by its
-own controller under its own rung's guards, which recheck the live rules. Chat (`World:Playerbots:Chat`) is separate and unaffected.
+own controller under its own rung's guards, which recheck the live rules, and under the guards of the rungs it jumps: resurrection
+sickness stands every promotion but `Town` down (as the ladder stands every rung below town down), and a quest creature in sight keeps
+a bot off a `Train` or `Mount` trip. A promotion its controller refuses leaves the ladder in charge for the rest of that snapshot
+(counted `refused`), so it is not retried every think. Chat (`World:Playerbots:Chat`) is separate and unaffected.
 
 **Goals.** `PlayerbotPolicyGoal`, in ladder order: `Quest` (a giver or ender in sight), `Town` (vendor, trainer list, repair), `Train`,
 `Mount`, `QuestTravel` (a giver or ender out of sight), `Grind` (a creature in sight), `Explore` (always open). The first open goal is the
@@ -608,6 +611,8 @@ a promotion) and `Grind` is the floor (a policy that picks it leaves the ladder 
 home). Each think it first **decides** from the bot's current snapshot: the best open goal by the snapshot's scores, tried first when it is not
 the ladder's own choice; then, every `IntervalMs` (3000), it takes a **new snapshot** (features plus the open goals, from the same probes the
 rungs check) for the next batch. With no engine (`Enabled` false) the hook returns at once and the ladder runs exactly as it always has.
+With the engine on and the rule ladder scoring, the policy always agrees, but its snapshots still run the rungs' probes (which refresh
+the same candidate caches the rungs use) every `IntervalMs`: the goals chosen are the ladder's, the think's work is not quite the same.
 
 **Features** (`PlayerbotPolicySchema.FeatureNames`, each about 0..1): level, money, free bag slots, quests in the log, quests ready to hand in,
 goals the stall watch set aside (deferred or suspended), stalls, zone, map, attackable creatures in sight, health, inside the home area.
@@ -616,8 +621,9 @@ goals the stall watch set aside (deferred or suspended), stalls, zone, map, atta
 task as one batch (one batch in flight per map; at most 1024 rows, past that a snapshot is dropped and counted). The worker scores them in
 chunks within `TickBudgetMs` (2 ms wall time per map batch; the rows past it are left unscored and the overrun counted) and publishes each
 bot's scores. The brain uses them on a later think, while the snapshot is no older than `StaleAfterMs` (4500 world ms). Late, missing,
-dropped or non-finite (NaN, infinite) scores make that think fall back to the ladder. Every decision is counted (`applied`, `agreed`, `floor`,
-`explored`, `missing`, `stale`, `non-finite`) and the feature logs one Info line of the counters every five minutes while the policy is on.
+dropped or non-finite (NaN, infinite) scores make that think fall back to the ladder. Every think on a snapshot decides again and is
+counted (`applied`, `agreed`, `floor`, `explored`, `missing`, `stale`, `non-finite`, `refused`; a refused promotion also counts once as
+`refused` on top of its think's own source), and the feature logs one Info line of the counters every five minutes while the policy is on.
 
 **Policies.** `IPlayerbotPolicy.Score(features, count, scores)`: a batch of rows in, one score per goal per row out, higher is better.
 `RuleBasedPolicy` scores each goal by its ladder rank, so its best open goal is always the ladder's own choice (the default, and the fallback).
@@ -630,15 +636,16 @@ scoring it, and deployed servers have none.
 "features":[...],"goals":[...],"mean":[...],"scale":[...],"layers":[{"inputs":I,"outputs":O,"activation":"relu"|"linear","weights":[O*I],
 "bias":[O]}]}`. The feature and goal names must equal the server's, in order (a model trained on another layout is refused). A file that is
 missing, unreadable, malformed, of the wrong layout or with a non-finite number **never stops the server**: it is reported once
-(anomaly `bot-policy/model-load-failed`, with the reason), logged as a warning, and the ladder scores instead. The training script is
-`tools/playerbot-policy/` (phase 3, below).
+(anomaly `bot-policy/model-load-failed`, with the reason), logged as a warning, and the ladder scores instead.
+Training is described below.
 
 **Exploration.** `ExplorationRate` (0..0.2, default 0): the chance that a snapshot, instead of being scored, names one of the ladder's open
 runner-up goals at random (never the ladder's own choice, never `Grind`), which its thinks then try first. It exists to gather telemetry the
 ladder alone never produces; it needs `Enabled`.
 
-**Telemetry** (`World:Playerbots:Policy:Telemetry`, off by default; needs `Enabled`). One record per decision (the first think that used a
-snapshot; a stale snapshot is not one), written after `OutcomeMinutes` (5) of world time with its outcome. JSON lines, one object per line:
+**Telemetry** (`World:Playerbots:Policy:Telemetry`, off by default; needs `Enabled`). One record per decision: the first think that had a
+snapshot's scores or exploration goal (a think on a stale snapshot, or before its scores came back, is not one, so a snapshot whose scores
+never came is not written), written after `OutcomeMinutes` (5) of world time with its outcome. JSON lines, one object per line:
 
 | Key | Meaning |
 |---|---|
@@ -649,21 +656,24 @@ snapshot; a stale snapshot is not one), written after `OutcomeMinutes` (5) of wo
 | `f` | The feature vector (`FeatureNames` order). |
 | `open` | The open goals (bit `1 << goal`). |
 | `ladder`, `pick` | The ladder's choice; the policy's (or exploration's) choice, null when there were no scores. |
-| `src` | `agreed`, `applied`, `explored`, `missing`, `nonfinite` or `floor`. |
+| `src` | `agreed`, `applied`, `explored`, `nonfinite`, `floor` or `refused` (the promoted goal's controller did not act). |
 | `x` | 1 when the choice was exploration. |
 | `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. |
 | `w` | The outcome window in seconds. |
-| `o` | The outcome over the window: `lvl`, `xp`, `money`, `items`, `quests` (the stall-watch fingerprint delta: levels, experience, copper, item count, quests handed in), `stalls`, `deaths`, `anomalies` (the bot's anomaly-ledger reports). |
+| `o` | The outcome over the window, in this order: `lvl`, `lp` (levels gained with their fractions: experience over the next level's, so it compares across levels and level-ups), `xp`, `money`, `items`, `quests` (with `lvl`, the stall-watch fingerprint delta: levels, experience, copper, item count, quests handed in), `stalls`, `deaths`, `anomalies` (the bot's anomaly-ledger reports). |
 
 The world thread only queues finished records (8192 at most; past that a record is dropped and counted); a writer task formats and appends
 them to `Directory` (`telemetry/playerbot-policy`, relative to the profile folder) as `policy-NNNNNNNN.jsonl`, each at most `MaxFileBytes`
-(16 MiB), at most `MaxFiles` (16) of them, the oldest deleted first. A decision whose bot leaves before its window ends is dropped, never
-written with a partial outcome. A full disk or missing folder stops the telemetry (fault site `playerbot.policy-telemetry-io`), never the
+(16 MiB), at most `MaxFiles` (16) of them, the oldest deleted before the next is made (when a reader holds the oldest open, no new file is
+made and lines are refused and counted until it can be deleted). A decision whose bot leaves, or gets a new brain, before its window ends
+is dropped, never written with a partial outcome; deaths are seen only on thinks the brain drives (not while a group or battleground
+driver has the bot). A full disk or missing folder stops the telemetry (fault site `playerbot.policy-telemetry-io`), never the
 server.
 
-**Training (phase 3, staged).** `tools/playerbot-policy/train.py` fits progress-per-minute for each (state, goal) from the server's own
-telemetry only, and writes the weights file above; `tools/playerbot-policy/ab-report.py` compares a policy half of the fleet with a ladder
-half. No label may come from Claude or any other LLM: training data is what the server's bots did and what followed.
+**Training (phase 3, staged separately).** An offline trainer and an A/B report (for `tools/playerbot-policy/`) are staged on their own
+branch, to land once the server has run with telemetry on. They fit
+progress per minute for each (state, goal) from the server's own telemetry only, and write the weights file above. No label may come
+from Claude or any other LLM: training data is what the server's bots did and what followed.
 
 ### Contention
 
