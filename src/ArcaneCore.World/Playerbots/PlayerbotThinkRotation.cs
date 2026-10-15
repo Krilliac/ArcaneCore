@@ -15,7 +15,7 @@ namespace ArcaneCore.World.Playerbots;
 /// <para>
 /// Two lanes (<see cref="TickLanes"/>, 2026-10-15): a bot that is fighting, dead or a ghost decides things that cannot wait seconds (targets,
 /// spells, retreat), so the bots among them that are <i>due</i> (their own, shorter interval went by) are thought for first, from a
-/// cursor of their own, for at most a share of the tick's time. Then every bot, due or not, is thought for from the main cursor exactly
+/// cursor of their own, for at most a share of the tick's time and of its shared actions. Then every bot, due or not, is thought for from the main cursor exactly
 /// as before, skipping the ones the first lane already did this tick, for the rest of the time. The main cursor advances by what it
 /// walked, skipped bots included, so the bound ceil(N / K) of the paragraph above holds for every bot with K the main lane's
 /// walk per tick, which is never below the thinks the reserved (1 - share) of the budget buys, whatever the first lane does; and a
@@ -99,15 +99,28 @@ internal sealed class PlayerbotThinkRotation
     /// <summary>The first lane's visits in the last <see cref="TickLanes"/> (tests, metrics).</summary>
     internal int LastPriorityVisits { get; private set; }
 
+    /// <summary>The actions of the tick's shared budget the main lane keeps: the first lane stops once no more than this is left.</summary>
+    internal static int ActionReserve(int maxActions, double priorityShare)
+        => Math.Max(1, (int)Math.Ceiling(maxActions * (1 - Math.Clamp(priorityShare, 0, 1))));
+
     /// <summary>
     /// <see cref="TickWithin(int, double, Func{int, bool}, Func{double})"/> in two lanes. First the bots <paramref name="classify"/> calls
     /// <see cref="ThinkLane.Priority"/>, from a cursor of their own, until <paramref name="priorityShare"/> of <paramref name="budgetMs"/>
-    /// went by; then every bot from the main cursor (a bot of the first lane that was not reached is thought for here in its turn), skipping
-    /// the ones already thought for this tick, until <paramref name="budgetMs"/> went by. The first visit of each lane is exempt from the
-    /// time check (a tick spends at most the budget plus two thinks), so each lane's cursor moves on whatever one think costs. Returns the
-    /// thinks made; <see cref="LastTickTimeLimited"/> is set when either lane left bots because the time went by.
+    /// went by or no more than <paramref name="actionReserve"/> of the shared actions (<paramref name="actionsLeft"/>) are left; then every
+    /// bot from the main cursor (a bot of the first lane that was not reached is thought for here in its turn), skipping the ones already
+    /// thought for this tick, until <paramref name="budgetMs"/> went by or <paramref name="visit"/> refuses.
+    /// <para>
+    /// Guarantees: a lane starts no think after its time ran out, and the first lane never takes the last
+    /// <paramref name="actionReserve"/> actions, so the main lane has actions left. The main lane's first visit is exempt from the time check
+    /// (its cursor moves on whatever one think costs), so a tick spends at most the budget plus the overrun of the last first-lane think plus
+    /// one main-lane think; a think that starts in time may end later (it spends the actions it needs, so a single first-lane think can
+    /// still overspend the reserve). If the main lane is refused on its first visit only because the first lane spent the actions, its
+    /// cursor does not move: that bot is first next tick.
+    /// </para>
+    /// Returns the thinks made; <see cref="LastTickTimeLimited"/> is set when either lane left bots because the time went by.
     /// </summary>
-    internal int TickLanes(int count, double budgetMs, double priorityShare, Func<int, ThinkLane> classify, Func<int, bool> visit, Func<double> elapsedMs)
+    internal int TickLanes(int count, double budgetMs, double priorityShare, Func<int, ThinkLane> classify, Func<int, bool> visit, Func<double> elapsedMs,
+        Func<int>? actionsLeft = null, int actionReserve = 0)
     {
         LastTickTimeLimited = false;
         LastPriorityVisits = 0;
@@ -128,18 +141,17 @@ internal sealed class PlayerbotThinkRotation
         int tick = _tickNumber;
         double priorityMs = budgetMs * Math.Clamp(priorityShare, 0, 1);
         int thinks = 0;
-        bool firstOfLane = true;
         Walk(ref _priorityCursor, count, index =>
         {
             if (classify(index) != ThinkLane.Priority) return true; // not this lane's business: passed over at no cost
-            if (!firstOfLane && elapsedMs() >= priorityMs)
+            if (actionsLeft is not null && actionsLeft() <= actionReserve) return false; // the rest of the actions are the main lane's
+            if (elapsedMs() >= priorityMs)
             {
                 // Only a lane that still had a due bot to think for was cut short by the time.
                 LastTickTimeLimited = true;
                 return false;
             }
 
-            firstOfLane = false;
             if (!visit(index)) return false;
             _stamp[index] = tick;
             thinks++;
@@ -147,16 +159,28 @@ internal sealed class PlayerbotThinkRotation
             return true;
         });
 
-        firstOfLane = true;
+        bool firstOfLane = true;
+        bool refusedFirst = false;
+        int mainThinks = 0;
+        int cursorBefore = _cursor >= count ? _cursor % count : _cursor;
         Walk(ref _cursor, count, index =>
         {
             if (_stamp[index] == tick) return true; // thought for in the first lane this tick
             if (!firstOfLane && elapsedMs() >= budgetMs) { LastTickTimeLimited = true; return false; }
+            bool first = firstOfLane;
             firstOfLane = false;
-            if (!visit(index)) return false;
+            if (!visit(index))
+            {
+                refusedFirst |= first;
+                return false;
+            }
+
             thinks++;
+            mainThinks++;
             return true;
         });
+        // The shared actions went to the first lane: this bot was not refused for its own sake, so it keeps its place at the head.
+        if (refusedFirst && mainThinks == 0 && LastPriorityVisits > 0) _cursor = cursorBefore;
         return thinks;
     }
 }

@@ -13958,7 +13958,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The share (0.1..0.9) of the think budget the combat lane may use; the rest is kept for the other bots so they are never starved by a crowd of fights.",
+      "meaning": "The share (0.1..0.9) of the think time budget and of `MaxActionsPerTick` the combat lane may use; the rest of both is kept for the other bots so they are never starved by a crowd of fights (the lane stops when less than the rest of the actions is left, and a single think may still overspend it).",
       "allowed": "a number, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

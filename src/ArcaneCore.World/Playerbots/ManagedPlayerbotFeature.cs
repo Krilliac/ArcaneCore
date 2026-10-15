@@ -1381,7 +1381,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 thinks++;
                 return true;
             },
-            () => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds);
+            () => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds,
+            () => budget.Remaining, PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare));
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
         _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited, budgetMs);
         ReportStarvedBots(bots, now);

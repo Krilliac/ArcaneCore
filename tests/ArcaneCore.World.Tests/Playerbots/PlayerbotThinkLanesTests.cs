@@ -110,15 +110,77 @@ public sealed class PlayerbotThinkLanesTests
     }
 
     [Fact]
-    public void ABotOfTheFirstLane_IsThoughtForOncePerTick_AndAtLeastOneBotAlwaysThinks()
+    public void WithNoTimeLeft_TheFirstLaneThinksNobody_AndTheMainLaneStillThinksOneBot()
     {
         var rotation = new PlayerbotThinkRotation();
         var seen = new List<int>();
-        // Everyone is first lane and the budget is already spent: still exactly one visit per lane pass, never the same bot twice.
         rotation.TickLanes(5, 0, 0.7, _ => PlayerbotThinkRotation.ThinkLane.Priority, i => { seen.Add(i); return true; }, () => 100);
-        Assert.Equal([0, 1], seen);
+        Assert.Equal([0], seen); // the first lane starts nothing after its time; the main lane's first visit is its guarantee
+        Assert.Equal(0, rotation.LastPriorityVisits);
         Assert.True(rotation.LastTickTimeLimited);
-        Assert.Equal(1, rotation.LastPriorityVisits);
+    }
+
+    /// <summary>Runs <paramref name="ticks"/> ticks where a think costs <paramref name="actionsPerThink"/> of <paramref name="maxActions"/> actions (the feature's refuse-at-zero rule).</summary>
+    private static Run SimulateActions(int bots, Func<int, bool> inCombat, int actionsPerThink, int maxActions, double share, int combatIntervalMs, int ticks, bool reserve)
+    {
+        var rotation = new PlayerbotThinkRotation();
+        var last = new double[bots];
+        Array.Fill(last, -1);
+        var longest = new double[bots];
+        var thinks = new int[bots];
+        int reserved = reserve ? PlayerbotThinkRotation.ActionReserve(maxActions, share) : 0;
+        for (int tick = 0; tick < ticks; tick++)
+        {
+            double now = tick * (double)TickMs;
+            int left = maxActions;
+            rotation.TickLanes(bots, budgetMs: 1000, share,
+                index => inCombat(index) && (last[index] < 0 || now - last[index] >= combatIntervalMs)
+                    ? PlayerbotThinkRotation.ThinkLane.Priority : PlayerbotThinkRotation.ThinkLane.Normal,
+                index =>
+                {
+                    if (left <= 0) return false;
+                    left = Math.Max(0, left - actionsPerThink);
+                    if (last[index] >= 0) longest[index] = Math.Max(longest[index], now - last[index]);
+                    last[index] = now;
+                    thinks[index]++;
+                    return true;
+                },
+                () => 0, () => left, reserved);
+        }
+
+        return new Run(longest, thinks);
+    }
+
+    [Fact]
+    public void TheCombatLane_CannotSpendTheSharedActions_SoTheQuietBotsStillThink()
+    {
+        // The review's case: 750 bots, 200 fighters at 3 actions a think always due, 48 actions a tick. Unreserved, the fights spend all 48
+        // first and the main lane is refused every tick: its 550 quiet bots got 0 thinks in 2000 ticks.
+        const int bots = 750;
+        bool Fighting(int i) => i % 15 < 4; // 200 of 750 (about; counted below)
+        Run run = SimulateActions(bots, Fighting, actionsPerThink: 3, maxActions: 48, share: 0.7, combatIntervalMs: 50, ticks: 2000, reserve: true);
+
+        int mainThinksPerTick = PlayerbotThinkRotation.ActionReserve(48, 0.7) / 3; // 15 actions kept: 5 thinks
+        int bound = (bots + mainThinksPerTick - 1) / mainThinksPerTick;            // ceil(N / K) ticks for every bot
+        double worst = Enumerable.Range(0, bots).Where(i => !Fighting(i)).Max(i => run.LongestGapMs[i]);
+        Assert.All(Enumerable.Range(0, bots).Where(i => !Fighting(i)), i => Assert.True(run.Thinks[i] > 0, $"quiet bot {i} never thought"));
+        Assert.True(worst <= bound * TickMs, $"a quiet bot waited {worst} ms (bound {bound * TickMs} ms)");
+    }
+
+    [Fact]
+    public void AMainLaneRefusedOnlyBecauseTheFirstLaneSpentTheActions_KeepsItsPlaceAtTheHead()
+    {
+        var rotation = new PlayerbotThinkRotation();
+        for (int tick = 0; tick < 3; tick++)
+        {
+            int left = 2;
+            var seen = new List<int>();
+            // Bots 0 and 1 fight and spend both actions (no reserve asked for): the main lane's first bot is refused.
+            rotation.TickLanes(6, 1000, 0.7, i => i < 2 ? PlayerbotThinkRotation.ThinkLane.Priority : PlayerbotThinkRotation.ThinkLane.Normal,
+                i => { if (left <= 0) return false; left--; seen.Add(i); return true; }, () => 0, () => left, actionReserve: 0);
+            Assert.Equal([0, 1], seen);
+            Assert.Equal(0, rotation.Cursor); // before: Math.Max(1, 0) moved it on by one, past a bot that never got a turn
+        }
     }
 
     [Fact]
@@ -234,6 +296,46 @@ public sealed class PlayerbotThinkLanesTests
         Assert.False(PlayerbotThinkStarvation.ShouldReport(100, 200, 1000, ref reported));
     }
 
+    private static async Task<(double Budget, int IntervalMs)> FeatureBudgetAsync(Action<PlayerbotOptions> configure, double atLeast = 0)
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners, configure: configure);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        // The feature starts at the old 8 ms; the first ticks replace it with the option-driven budget.
+        DateTime deadline = DateTime.UtcNow.AddSeconds(40);
+        while (DateTime.UtcNow < deadline && await host.World.InvokeAsync(() => feature.LastThinkBudgetMs) == PlayerbotThinkRotation.TickBudgetMs) await Task.Delay(20);
+        // The first sample (a slow start-up tick) is smoothed away over a few dozen ticks.
+        double budget = await host.World.InvokeAsync(() => feature.LastThinkBudgetMs);
+        while (budget < atLeast && DateTime.UtcNow < deadline.AddSeconds(15))
+        {
+            await Task.Delay(100);
+            budget = await host.World.InvokeAsync(() => feature.LastThinkBudgetMs);
+        }
+
+        int interval = host.World.Options.TickIntervalMs;
+        await feature.ShutdownBeforeWorldStopAsync();
+        return (budget, interval);
+    }
+
+    [Fact]
+    public async Task TheFeatureBudget_FollowsTheOptionsAndTheTickSlack()
+    {
+        // A fixed budget: min = max.
+        Assert.Equal(12, (await FeatureBudgetAsync(o => { o.ThinkBudgetMinMs = 12; o.ThinkBudgetMaxMs = 12; })).Budget);
+        // A tiny share of the tick, floor 1: at most max(1, 0.05 x interval) (the old 8 ms constant or the ceiling would show here).
+        (double small, int interval) = await FeatureBudgetAsync(o => { o.ThinkBudgetMinMs = 1; o.ThinkBudgetMaxMs = 30; o.ThinkBudgetTickShare = 0.05; });
+        Assert.InRange(small, 1, Math.Max(1, 0.05 * interval));
+        // A big share of an almost idle test world: between half and all of 0.95 x interval (the test host's tick is short), under the ceiling.
+        (double big, _) = await FeatureBudgetAsync(o => { o.ThinkBudgetMinMs = 1; o.ThinkBudgetMaxMs = 30; o.ThinkBudgetTickShare = 0.95; },
+            atLeast: Math.Min(30, 0.95 * interval) * 0.5);
+        double expected = Math.Min(30, 0.95 * interval);
+        Assert.InRange(big, expected * 0.5, expected);
+        Assert.NotEqual(PlayerbotThinkRotation.TickBudgetMs, big);
+    }
+
     [Fact]
     public void TheCadenceReport_CarriesTheLaneSplitTheBudgetAndTheP99_AndTheCommandPrintsThem()
     {
@@ -330,13 +432,16 @@ public sealed class PlayerbotThinkLanesTests
         var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 1000, burnMs: 1200, "Hitbot");
         try
         {
-            DateTime deadline = DateTime.UtcNow.AddSeconds(40);
-            while (DateTime.UtcNow < deadline && capture.Count(Starved) < 6) await Task.Delay(100);
-            Assert.True(capture.Count(Starved) >= 6, "no starved bot was reported: " + capture.Describe());
-            Dictionary<string, int> thinksNow = await host.World.InvokeAsync(() => new Dictionary<string, int>(thinks));
-            Dictionary<string, int> reports = capture.Notices
-                .GroupBy(n => n.Subject.Split(' ')[1])
-                .ToDictionary(g => g.Key, g => g.Count());
+            // Three full cycles of thinks (about 11 s), then compare in one world-thread call so nothing moves meanwhile.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < deadline && await host.World.InvokeAsync(() => thinks.Values.Sum()) < 9) await Task.Delay(100);
+            (Dictionary<string, int> thinksNow, Dictionary<string, int> reports) = await host.World.InvokeAsync(() => (
+                new Dictionary<string, int>(thinks),
+                capture.Notices.GroupBy(n => n.Subject.Split(' ')[1]).ToDictionary(g => g.Key, g => g.Count())));
+            Assert.True(thinksNow.Values.Sum() >= 9, "the bots did not think three cycles");
+            Assert.Equal(3, reports.Count); // every bot was starved and reported
+            // One report per silence: a bot's reports never exceed its thinks (+1 for the silence in progress). Reported every tick, the two bots
+            // that sit out a tick would each report once per tick of the cycle, about twice per think.
             foreach ((string name, int count) in reports)
                 Assert.True(count <= thinksNow.GetValueOrDefault(name) + 1,
                     $"{name}: {count} reports for {thinksNow.GetValueOrDefault(name)} thinks (more than one per episode)");
