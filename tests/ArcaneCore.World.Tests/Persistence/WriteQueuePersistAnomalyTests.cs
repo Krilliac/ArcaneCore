@@ -157,11 +157,8 @@ public sealed class WriteQueuePersistAnomalyTests
         Assert.Single(capture.Of("write-retry-exhausted", queue)); // still one report for the one episode
     }
 
-    // Only the two queues that tell a terminal rejection from exhausted retries. Honor, Rest, ExploredZones, TaxiFlight and Social also report
-    // write-retry-exhausted (attempts=3) for a rejection that was attempted once: recorded as a finding, not pinned here.
     [Theory]
-    [InlineData("ReputationWriteQueue")]
-    [InlineData("InstanceWriteQueue")]
+    [MemberData(nameof(Queues))]
     public async Task OwnershipRejection_IsNotAlsoReportedAsExhaustedRetries(string queue)
     {
         await using QueueRig rig = QueueRig.Create(queue);
@@ -173,5 +170,64 @@ public sealed class WriteQueuePersistAnomalyTests
         await rig.FlushAsync().WaitAsync(Wait);
 
         Assert.Empty(capture.Of("write-retry-exhausted", queue));
+    }
+
+    [Theory]
+    [MemberData(nameof(Queues))]
+    public async Task WriteRetryExhausted_IsNotRepeated_ByTheLoginBarrierRetryingTheSameRetainedWrite(string queue)
+    {
+        await using QueueRig rig = QueueRig.Create(queue);
+        rig.Store.Fail = true;
+        using AnomalyCapture capture = PersistAnomalies.Capture();
+
+        rig.Write(4109);
+        await rig.FlushAsync().WaitAsync(Wait);
+        Assert.Single(capture.Of("write-retry-exhausted", queue));
+
+        await rig.RetryAsync(4109); // a full attempt cycle that fails again
+        await rig.RetryAsync(4109);
+
+        Assert.True(rig.Store.Attempts >= 6, $"the barrier did not retry the retained write ({rig.Store.Attempts} attempts)");
+        Assert.Single(capture.Of("write-retry-exhausted", queue));
+        Assert.True(rig.HasRetained(4109));
+    }
+
+    [Theory]
+    [MemberData(nameof(Queues))]
+    public async Task WriteRetryExhausted_IsReportedAgain_ForANewEpisodeAfterTheWriteLanded(string queue)
+    {
+        await using QueueRig rig = QueueRig.Create(queue);
+        rig.Store.Fail = true;
+        using AnomalyCapture capture = PersistAnomalies.Capture();
+
+        rig.Write(4110);
+        await rig.FlushAsync().WaitAsync(Wait);
+        Assert.Single(capture.Of("write-retry-exhausted", queue));
+
+        rig.Store.Fail = false;
+        rig.Write(4110); // the next change carries the retained write and lands
+        await rig.FlushAsync().WaitAsync(Wait);
+        Assert.False(rig.HasRetained(4110));
+        Assert.Single(capture.Of("write-retry-exhausted", queue));
+
+        rig.Store.Fail = true;
+        rig.Write(4110);
+        await rig.FlushAsync().WaitAsync(Wait);
+
+        Assert.Equal(2, capture.Of("write-retry-exhausted", queue).Length);
+    }
+
+    [Theory]
+    [MemberData(nameof(Queues))]
+    public async Task WriteDroppedOnShutdown_IsReported_AfterTheQueueGateWasReleased(string queue)
+    {
+        await using QueueRig rig = QueueRig.Create(queue);
+        await rig.StopAsync().WaitAsync(Wait);
+        using var probe = new GateProbe(() => rig.HasRetained(4111));
+
+        rig.Write(4111);
+
+        Assert.Equal(1, probe.Reports);
+        Assert.False(probe.GateHeld, "the report was made while the queue's gate was held");
     }
 }

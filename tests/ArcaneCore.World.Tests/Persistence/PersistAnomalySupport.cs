@@ -43,6 +43,43 @@ internal static class PersistAnomalies
     public static string Dump(this AnomalyCapture capture) => capture.Describe();
 }
 
+/// <summary>
+/// Watches the persist reports and, for each one, asks another thread to run <paramref name="query"/> (a queue call that takes the queue's gate)
+/// while the report is still being made on the reporting thread. A query that cannot finish means the reporting thread holds the gate.
+/// </summary>
+internal sealed class GateProbe : IDisposable
+{
+    private readonly Func<bool> _query;
+    private int _reports;
+    private volatile bool _gateHeld;
+
+    public GateProbe(Func<bool> query)
+    {
+        _query = query;
+        AnomalyLedger.Shared.Reported += OnReported;
+    }
+
+    public int Reports => Volatile.Read(ref _reports);
+
+    public bool GateHeld => _gateHeld;
+
+    private void OnReported(AnomalyNotice notice)
+    {
+        if (notice.Subsystem != "persist")
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _reports);
+        if (!Task.Run(_query).Wait(TimeSpan.FromSeconds(2)))
+        {
+            _gateHeld = true;
+        }
+    }
+
+    public void Dispose() => AnomalyLedger.Shared.Reported -= OnReported;
+}
+
 /// <summary>What a fake store does on its next calls.</summary>
 internal sealed class StoreSwitch
 {
@@ -109,6 +146,12 @@ internal abstract class QueueRig : IAsyncDisposable
     /// <summary>Queue one retained-write sweep now, as the retry timer would; false when none was queued.</summary>
     public abstract bool PostSweep();
 
+    /// <summary>The queue's own thread-safe query, which takes its gate: used to prove a report is not made while the gate is held.</summary>
+    public abstract bool HasRetained(int characterId);
+
+    /// <summary>The login barrier (<c>FlushCharacterAsync</c>): retries a retained write and faults while it is still not durable; the fault is swallowed here.</summary>
+    public abstract Task RetryAsync(int characterId);
+
     public static QueueRig Create(string name) => name switch
     {
         nameof(HonorWriteQueue) => new HonorRig(),
@@ -166,6 +209,18 @@ internal abstract class QueueRig : IAsyncDisposable
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
+        public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
+        public override async Task RetryAsync(int characterId)
+        {
+            try
+            {
+                await _queue.FlushCharacterAsync(characterId).WaitAsync(Budget);
+            }
+            catch (InvalidOperationException)
+            {
+                // still not durable: the barrier faults, which is the point
+            }
+        }
         protected override ValueTask DisposeCoreAsync() => _provider.DisposeAsync();
     }
 
@@ -187,6 +242,18 @@ internal abstract class QueueRig : IAsyncDisposable
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
+        public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
+        public override async Task RetryAsync(int characterId)
+        {
+            try
+            {
+                await _queue.FlushCharacterAsync(characterId).WaitAsync(Budget);
+            }
+            catch (InvalidOperationException)
+            {
+                // still not durable: the barrier faults, which is the point
+            }
+        }
         protected override ValueTask DisposeCoreAsync() => _provider.DisposeAsync();
     }
 
@@ -208,6 +275,18 @@ internal abstract class QueueRig : IAsyncDisposable
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
+        public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
+        public override async Task RetryAsync(int characterId)
+        {
+            try
+            {
+                await _queue.FlushCharacterAsync(characterId).WaitAsync(Budget);
+            }
+            catch (InvalidOperationException)
+            {
+                // still not durable: the barrier faults, which is the point
+            }
+        }
         protected override ValueTask DisposeCoreAsync() => _provider.DisposeAsync();
     }
 
@@ -229,6 +308,18 @@ internal abstract class QueueRig : IAsyncDisposable
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
+        public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
+        public override async Task RetryAsync(int characterId)
+        {
+            try
+            {
+                await _queue.FlushCharacterAsync(characterId).WaitAsync(Budget);
+            }
+            catch (InvalidOperationException)
+            {
+                // still not durable: the barrier faults, which is the point
+            }
+        }
         protected override ValueTask DisposeCoreAsync() => _provider.DisposeAsync();
     }
 
@@ -250,6 +341,18 @@ internal abstract class QueueRig : IAsyncDisposable
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
+        public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
+        public override async Task RetryAsync(int characterId)
+        {
+            try
+            {
+                await _queue.FlushCharacterAsync(characterId).WaitAsync(Budget);
+            }
+            catch (InvalidOperationException)
+            {
+                // still not durable: the barrier faults, which is the point
+            }
+        }
         protected override ValueTask DisposeCoreAsync() => _provider.DisposeAsync();
     }
 
@@ -271,6 +374,18 @@ internal abstract class QueueRig : IAsyncDisposable
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
+        public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
+        public override async Task RetryAsync(int characterId)
+        {
+            try
+            {
+                await _queue.FlushCharacterAsync(characterId).WaitAsync(Budget);
+            }
+            catch (InvalidOperationException)
+            {
+                // still not durable: the barrier faults, which is the point
+            }
+        }
         protected override ValueTask DisposeCoreAsync() => _provider.DisposeAsync();
     }
 
@@ -292,6 +407,18 @@ internal abstract class QueueRig : IAsyncDisposable
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
+        public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
+        public override async Task RetryAsync(int characterId)
+        {
+            try
+            {
+                await _queue.FlushCharacterAsync(characterId).WaitAsync(Budget);
+            }
+            catch (InvalidOperationException)
+            {
+                // still not durable: the barrier faults, which is the point
+            }
+        }
         protected override ValueTask DisposeCoreAsync() => _provider.DisposeAsync();
     }
 

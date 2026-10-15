@@ -105,6 +105,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     public void SaveFactions(int characterId, IReadOnlyList<CharacterReputationRow> rows, CharacterOwnershipToken? ownership = null)
     {
         ArgumentNullException.ThrowIfNull(rows);
+        string? dropped;
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
@@ -114,20 +115,25 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 overlay.Rows[row.Faction] = row;
             }
 
-            Changed(characterId, unsaved);
+            dropped = Changed(characterId, unsaved);
         }
+
+        ReportDropped(characterId, dropped);
     }
 
     /// <summary>Merge the watched slot; the ownership token is captured and isolated per token exactly as <see cref="SaveFactions"/> does.</summary>
     public void SaveWatchedFaction(int characterId, int watched, CharacterOwnershipToken? ownership = null)
     {
+        string? dropped;
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
             Overlay overlay = unsaved.Target(ownership);
             overlay.Watched = watched;
-            Changed(characterId, unsaved);
+            dropped = Changed(characterId, unsaved);
         }
+
+        ReportDropped(characterId, dropped);
     }
 
     /// <summary>
@@ -136,14 +142,17 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     /// </summary>
     public void DeleteCharacter(int characterId)
     {
+        string? dropped;
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
             unsaved.Overlays.Clear(); // the removal is token-independent, so an earlier ownership rejection or retained write must not block it
             unsaved.DeleteFailure = null;
             unsaved.DeleteRequested++;
-            Changed(characterId, unsaved);
+            dropped = Changed(characterId, unsaved);
         }
+
+        ReportDropped(characterId, dropped);
     }
 
     /// <summary>
@@ -267,24 +276,18 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     }
 
     /// <summary>Under <see cref="_gate"/>: a change was merged; queue one write unless one is already waiting.</summary>
-    private void Changed(int characterId, Unsaved unsaved)
+    private string? Changed(int characterId, Unsaved unsaved)
     {
         if (_stopped)
         {
             unsaved.RecordQueueFailure(new InvalidOperationException("the reputation write queue is stopped; the change was not persisted"));
             logger.LogError("reputation change for character {Character} arrived after the queue stopped; not persisted", characterId);
-            AnomalyLedger.Shared.Report(
-                "persist",
-                "write-dropped-on-shutdown",
-                $"character {characterId}",
-                $"queue=ReputationWriteQueue character={characterId} reason=queue-stopped",
-                AnomalySeverity.Error);
-            return;
+            return "queue-stopped";
         }
 
         if (unsaved.Queued)
         {
-            return;
+            return null;
         }
 
         unsaved.Queued = true;
@@ -295,13 +298,26 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             Interlocked.Decrement(ref _pending);
             unsaved.RecordQueueFailure(new InvalidOperationException("the reputation write queue is closed; the change was not persisted"));
             logger.LogError("reputation change for character {Character} arrived after the queue closed; not persisted", characterId);
-            AnomalyLedger.Shared.Report(
-                "persist",
-                "write-dropped-on-shutdown",
-                $"character {characterId}",
-                $"queue=ReputationWriteQueue character={characterId} reason=queue-closed",
-                AnomalySeverity.Error);
+            return "queue-closed";
         }
+
+        return null;
+    }
+
+    /// <summary>Report a change refused by <see cref="Changed"/>; called after the gate is released.</summary>
+    private static void ReportDropped(int characterId, string? reason)
+    {
+        if (reason is null)
+        {
+            return;
+        }
+
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "write-dropped-on-shutdown",
+            $"character {characterId}",
+            $"queue=ReputationWriteQueue character={characterId} reason={reason}",
+            AnomalySeverity.Error);
     }
 
     private Task RetainedFailureTask(int characterId)
@@ -503,6 +519,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 bool rejected = IsOwnershipRejection(ex);
+                bool newEpisode = true;
                 lock (_gate)
                 {
                     // Never recreate an entry that a delete or a creation removed while the write was in flight.
@@ -510,6 +527,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     {
                         if (snapshot.Overlay is { } failedOverlay)
                         {
+                            newEpisode = failedOverlay.Failure is null; // a retained write failing again is the same episode
                             failedOverlay.Failure = ex;
                             if (rejected)
                             {
@@ -518,6 +536,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                         }
                         else
                         {
+                            newEpisode = unsaved.DeleteFailure is null;
                             unsaved.DeleteFailure = ex;
                         }
                     }
@@ -536,12 +555,16 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 }
                 else if (!sweep)
                 {
-                    AnomalyLedger.Shared.Report(
-                        "persist",
-                        "write-retry-exhausted",
-                        $"character {characterId}",
-                        $"queue=ReputationWriteQueue character={characterId} attempts={MaxAttempts} error={ex.GetType().Name}",
-                        AnomalySeverity.Error);
+                    if (newEpisode)
+                    {
+                        AnomalyLedger.Shared.Report(
+                            "persist",
+                            "write-retry-exhausted",
+                            $"character {characterId}",
+                            $"queue=ReputationWriteQueue character={characterId} attempts={MaxAttempts} error={ex.GetType().Name}",
+                            AnomalySeverity.Error);
+                    }
+
                     logger.LogFault("writequeue-reputation", ex, "reputation write for character {Character} failed; retained for retry", characterId);
                 }
                 else

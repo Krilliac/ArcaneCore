@@ -137,6 +137,34 @@ public sealed class CharacterSaveQueueAnomalyTests
     }
 
     [Fact]
+    public async Task WriteRetryExhausted_IsReportedOncePerRetainedSnapshot_NotOncePerBarrierRetry()
+    {
+        await using var rig = new Rig();
+        bool down = true;
+        rig.Store.OnSave = (_, _) => Volatile.Read(ref down) ? Task.FromException(new IOException("store down")) : Task.CompletedTask;
+        using AnomalyCapture capture = PersistAnomalies.Capture();
+
+        rig.Queue.Enqueue(State(52, 1));
+        Task first = rig.Queue.FlushCharacterAsync(52);
+        await Assert.ThrowsAsync<IOException>(() => first.WaitAsync(Wait));
+        Assert.Single(capture.Of("write-retry-exhausted", Queue));
+
+        await Assert.ThrowsAsync<IOException>(() => rig.Queue.FlushCharacterAsync(52).WaitAsync(Wait)); // the login barrier retries the retained snapshot: three more attempts
+        Assert.Equal(6, rig.Store.Attempts.Count);
+        Assert.Single(capture.Of("write-retry-exhausted", Queue));
+
+        Volatile.Write(ref down, false); // it finally writes: the episode ends
+        await rig.Queue.FlushCharacterAsync(52).WaitAsync(Wait);
+        Assert.Single(rig.Store.Saved);
+        Volatile.Write(ref down, true);
+        rig.Queue.Enqueue(State(52, 2));
+        await Assert.ThrowsAsync<IOException>(() => rig.Queue.FlushCharacterAsync(52).WaitAsync(Wait));
+
+        Assert.Equal(2, capture.Of("write-retry-exhausted", Queue).Length); // a new episode reports again
+        Volatile.Write(ref down, false);
+    }
+
+    [Fact]
     public async Task CircuitOpen_FiresOnce_WhenTheOwnershipFenceRejectsASnapshot_AndNotAgainForLaterCalls()
     {
         await using var rig = new Rig();

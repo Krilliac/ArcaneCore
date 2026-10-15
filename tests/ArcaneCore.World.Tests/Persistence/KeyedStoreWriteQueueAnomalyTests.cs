@@ -135,4 +135,68 @@ public sealed class KeyedStoreWriteQueueAnomalyTests
         Assert.Equal(3, rig.Store.Attempts);
         Assert.Empty(capture.Notices);
     }
+
+    [Fact]
+    public async Task WriteRetryExhausted_IsReportedOncePerStuckKey_NotOncePerRetainedRetry()
+    {
+        await using var rig = new Rig();
+        rig.Store.FailNext(1000);
+        using AnomalyCapture capture = PersistAnomalies.Capture();
+
+        rig.Queue.Save("group:8", s => s.SetAsync("group:8", 8));
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Queue.RetryRetainedAsync().WaitAsync(Wait));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Queue.RetryRetainedAsync().WaitAsync(Wait));
+
+        Assert.Equal(9, rig.Store.Attempts); // three cycles of three attempts really ran
+        Assert.Single(capture.Of("write-retry-exhausted", QueueName));
+    }
+
+    [Fact]
+    public async Task WriteRetryExhausted_IsReportedAgain_WhenTheKeyFailsAgainAfterItFinallyWrote()
+    {
+        await using var rig = new Rig();
+        using AnomalyCapture capture = PersistAnomalies.Capture();
+
+        rig.Store.FailNext(3);
+        rig.Queue.Save("group:6", s => s.SetAsync("group:6", 1));
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+        Assert.Single(capture.Of("write-retry-exhausted", QueueName));
+
+        await rig.Queue.RetryRetainedAsync().WaitAsync(Wait); // storage is back: the key finally writes
+        Assert.Empty(rig.Queue.RetainedKeys);
+
+        rig.Store.FailNext(3);
+        rig.Queue.Save("group:6", s => s.SetAsync("group:6", 2));
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+
+        Assert.Equal(2, capture.Of("write-retry-exhausted", QueueName).Length);
+    }
+
+    [Fact]
+    public async Task WriteRetryExhausted_ReportsTheTrueAttemptCount_WhenALockedDatabaseIsNotRetriedInline()
+    {
+        await using var rig = new Rig();
+        using AnomalyCapture capture = PersistAnomalies.Capture();
+
+        rig.Queue.Save("group:4", _ => Task.FromException(new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5)));
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+
+        AnomalyNotice notice = Assert.Single(capture.Of("write-retry-exhausted", QueueName));
+        Assert.Contains("attempts=1", notice.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("attempts=3", notice.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WriteDroppedOnShutdown_IsReported_AfterTheQueueGateWasReleased()
+    {
+        await using var rig = new Rig();
+        await rig.Queue.StopAsync().WaitAsync(Wait);
+        using var probe = new GateProbe(() => rig.Queue.RetainedKeys.Count > 0);
+
+        rig.Queue.Save("group:2", s => s.SetAsync("group:2", 2));
+
+        Assert.Equal(1, probe.Reports);
+        Assert.False(probe.GateHeld, "the report was made while the queue's gate was held");
+    }
 }
