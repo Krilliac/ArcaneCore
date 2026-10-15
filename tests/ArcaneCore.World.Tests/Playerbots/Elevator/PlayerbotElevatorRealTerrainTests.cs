@@ -147,6 +147,25 @@ public sealed class PlayerbotElevatorRealTerrainTests(ITestOutputHelper output)
         Assert.Null(network.Choose(ElevatorTestData.Kalimdor, new Vector3(-450f, -2650f, 96f), Bloodhoof, survey));
     }
 
+    [Fact]
+    public void UndercityVaultLift_ClassifiesSurfaceAboveVaultMaxZAsHigh_EvenWhen2DZoneReportsUndercity()
+    {
+        var undercityCar = new ElevatorCar(0, 20649, 20657, new Vector3(1596.22f, 291.798f, -40.76f), new Vector3(1596.22f, 291.798f, 55.65f), 16_667);
+        var lift = new ElevatorLift(0, [undercityCar]);
+        ElevatorRegions regions = ElevatorNetwork.RegionsOf(lift)!;
+        Assert.NotNull(regions);
+        Assert.True(regions.VaultLow);
+
+        // Even when the 2D ADT cell directly above Undercity reports zone 1497 (Undercity), a bot on the Ruins of Lordaeron surface
+        // at Z = +61.7 (> VaultMaxZ = -5) is on ElevatorLevel.High, while a bot underground at Z = -23.0 is on ElevatorLevel.Low.
+        var survey = new ElevatorSurvey(_ => (1497u, 1497u));
+        Assert.Equal(ElevatorLevel.High, ElevatorNetwork.LevelOf(lift, regions, survey, new Vector3(1582.9f, 316.8f, 61.7f)));
+        Assert.Equal(ElevatorLevel.High, ElevatorNetwork.LevelOf(lift, regions, survey, new Vector3(1720.0f, 239.0f, 62.0f)));
+        Assert.Equal(ElevatorLevel.Low, ElevatorNetwork.LevelOf(lift, regions, survey, new Vector3(1582.9f, 316.8f, -23.0f)));
+        Assert.Equal(ElevatorLevel.Low, ElevatorNetwork.LevelOf(lift, regions, survey, new Vector3(1720.0f, 239.0f, -40.0f)));
+        Assert.All(PlayerbotElevator.VaultLandingRadii, r => Assert.InRange(r, 11.5f, 14.0f));
+    }
+
     private static ElevatorLift Lift(ElevatorNetwork network, float x, float y)
         => network.Lifts.Single(l => Vector2.Distance(l.Centre, new Vector2(x, y)) < 15f);
 }

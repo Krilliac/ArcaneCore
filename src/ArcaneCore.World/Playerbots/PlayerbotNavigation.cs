@@ -1231,7 +1231,7 @@ internal static class PlayerbotNavigation
     /// Whether the mesh finds walkable (not steep) ground at <paramref name="point"/>: the path from it to itself is not refused (Detour
     /// locates no polygon there otherwise). One more query on a refused plan; a plan that succeeds never makes it.
     /// </summary>
-    private static bool OnWalkableMesh(Map map, Vector3 point)
+    internal static bool OnWalkableMesh(Map map, Vector3 point)
         => (PlayerbotThinkProbe.Find(map.Collision, point, point, new PathOptions { MaxPoints = 4, Mover = PathMover.Player,
             ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = 64 }).Type & PathType.NoPath) == 0;
 

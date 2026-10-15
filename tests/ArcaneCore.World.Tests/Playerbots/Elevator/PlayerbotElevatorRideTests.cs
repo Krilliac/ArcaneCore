@@ -238,6 +238,50 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         Assert.True(await world.OnWorldAsync(() => world.Player.X < ElevatorTestWorld.Cliff), "the bot crossed the cliff");
     }
 
+    [Fact]
+    public async Task WhenThinksAreSpaced15SecondsApart_PerTickPumpStillCatchesThe4SecondElevatorStopAndAlightsAtTheTop()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        ElevatorLift lift = await world.GreatLiftAsync();
+        PlayerbotOptions options = Options();
+        await world.OnWorldAsync(() => PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.Low, ElevatorTestWorld.Ratchet));
+
+        // Simulate a 900-bot server where each bot only runs Drive (Think) once every 15,000 ms, while PlayerbotMotion.Pump
+        // runs every 50 ms world tick. Without PlayerbotElevator.Pump, the 4-second elevator stop can slip between 15-second thinks.
+        ElevatorStep step = ElevatorStep.Traveling;
+        string? failure = null;
+        bool sawAboard = false;
+        for (uint tick = 0; tick < 1_800 && step == ElevatorStep.Traveling; tick++)
+        {
+            if (tick % 300 == 0)
+            {
+                (step, failure) = await world.OnWorldAsync(() =>
+                {
+                    PlayerbotMotion.NoteThinkGap(world.Player, 15_000);
+                    ElevatorStep s = PlayerbotElevator.Drive(world.Session, world.Player, options, 15_000, out string? why);
+                    return (s, why);
+                });
+                if (step != ElevatorStep.Traveling) break;
+            }
+
+            await world.AdvanceAsync(50);
+            bool aboardNow = await world.OnWorldAsync(() =>
+            {
+                PlayerbotMotion.Pump(world.Session, world.Player, world.Host.World.NowMs);
+                return PlayerbotElevator.TripOf(world.Player)?.Stage == ElevatorStage.Aboard
+                    && (world.Player.Movement.Flags & MovementFlags.OnTransport) != 0;
+            });
+            if (aboardNow) sawAboard = true;
+        }
+
+        Assert.Null(failure);
+        Assert.True(sawAboard, "the per-tick pump never boarded the car between 15s thinks");
+        Assert.Equal(ElevatorStep.Arrived, step);
+        Vector3 end = await world.OnWorldAsync(() => new Vector3(world.Player.X, world.Player.Y, world.Player.Z));
+        Assert.True(end.X >= ElevatorTestWorld.Cliff && MathF.Abs(end.Z - ElevatorTestWorld.TopFloor) < 1f, $"off at {end}, not on the plateau");
+    }
+
     private static async Task<ElevatorStage?> RunAsync(ElevatorTestWorld world, PlayerbotBrain brain, int thinks)
     {
         ElevatorStage? stage = null;

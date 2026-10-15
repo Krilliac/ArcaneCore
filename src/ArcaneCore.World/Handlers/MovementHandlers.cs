@@ -171,12 +171,13 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         antiCheat?.AfterMovement(player);
         CheckAndHealLifeStateDesync(session, player, opcode, in movement);
         // MovementHandler.cpp:1115-1131: a free move that is not a long fall is the unstuck point (SaveNoUndermapPosition: z + 3, then + 2).
-        if (!movement.HasFlag(MovementFlags.FallingFar) && !movement.HasFlag(MovementFlags.OnTransport)
+        if (!session.IsInChaosProbe
+            && !movement.HasFlag(MovementFlags.FallingFar) && !movement.HasFlag(MovementFlags.OnTransport)
             && (player.UnitFlags & (UnitFlags.RemoveClientControl | UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing)) == 0)
         {
             player.LastSafePosition = (player.MapId, movement.X, movement.Y, movement.Z + 5.0f, movement.Orientation);
         }
-        if (!relay)
+        if (!relay || session.IsInChaosProbe)
         {
             return;
         }

@@ -209,6 +209,14 @@ public sealed class PlayerbotChaosEngine
     public int StepBot(Guid botId, int botOrdinal, WorldSession session, Player player)
     {
         if (!ShouldRunForBot(botId, botOrdinal)) return 0;
+        if (PlayerbotElevator.IsTraveling(player)
+            || PlayerbotTram.IsTraveling(player)
+            || player.Movement.HasFlag(MovementFlags.OnTransport)
+            || (player.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        {
+            return 0;
+        }
+
         int count = Math.Clamp(_options.Chaos.ProbesPerThink, 1, PlayerbotChaosOptions.MaxProbesPerThink);
         return RunProbes(botId, session, player, count);
     }
@@ -293,6 +301,8 @@ public sealed class PlayerbotChaosEngine
         Random rng)
     {
         float prevX = player.X, prevY = player.Y, prevZ = player.Z, prevO = player.Orientation;
+        MovementInfo prevMovement = player.Movement;
+        var prevLastSafe = player.LastSafePosition;
         StandState prevStandState = player.StandState;
         _ = player.ConsumeRejectedNonFiniteRelocation();
         Interlocked.Increment(ref _probesExecuted);
@@ -322,7 +332,21 @@ public sealed class PlayerbotChaosEngine
         }
 
         // Verify post-probe state & self-heal any invariant breach.
-        VerifyAndHealAfterProbe(botId, session, player, category, probeName, opcode, payload, prevX, prevY, prevZ, prevO, prevStandState);
+        VerifyAndHealAfterProbe(
+            botId,
+            session,
+            player,
+            category,
+            probeName,
+            opcode,
+            payload,
+            prevX,
+            prevY,
+            prevZ,
+            prevO,
+            in prevMovement,
+            prevLastSafe,
+            prevStandState);
     }
 
     private void DispatchProbePacket(WorldSession session, Player player, WorldOpcode opcode, byte[] payload)
@@ -422,8 +446,12 @@ public sealed class PlayerbotChaosEngine
         float prevY,
         float prevZ,
         float prevO,
+        in MovementInfo prevMovement,
+        (uint MapId, float X, float Y, float Z, float O)? prevLastSafe,
         StandState prevStandState)
     {
+        player.LastSafePosition = prevLastSafe;
+
         // Rescue bots previously persisted near (0, 0, 0) on continents 0/1 by earlier movement fuzzing.
         if (player.MapId is 0 or 1
             && MathF.Abs(prevX) < 100f
@@ -460,6 +488,18 @@ public sealed class PlayerbotChaosEngine
             // Prevent fuzzed movement packets (e.g., all-zero or random-float MSG_MOVE_* frames) from relocating bots
             // to Null Island (0, 0, 0) or through walls/air during chaos probes.
             player.Relocate(prevX, prevY, prevZ, prevO, session.World.NowMs);
+        }
+
+        // Restore pre-probe MovementInfo flags & transport binding if a fuzzed MSG_MOVE_* packet or Relocate stripped them
+        // (Unit.Relocate clears OnTransport and Forward, which otherwise aborts active PlayerbotMotion routes or drops bots off elevators).
+        if (player.Movement.Flags != prevMovement.Flags || player.Movement.TransportGuid != prevMovement.TransportGuid)
+        {
+            MovementInfo restored = prevMovement;
+            restored.X = player.X;
+            restored.Y = player.Y;
+            restored.Z = player.Z;
+            restored.Orientation = float.IsFinite(player.Orientation) ? player.Orientation : 0f;
+            player.ApplyMovement(restored, session.World.NowMs);
         }
 
         // Cancel any logout timer started by a fuzzed CMSG_LOGOUT_REQUEST so the chaos bot remains in the world.
