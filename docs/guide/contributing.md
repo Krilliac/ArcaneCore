@@ -57,6 +57,8 @@ Besides the build and tests, these run on their own and report on the PR:
 | `dependency-review.yml` | New or changed package references and their known advisories; a new dependency with a high or critical advisory fails the check, with a summary comment. |
 | `workflow-security.yml` | zizmor over `.github/` (template injection, token permissions, unpinned actions), when a PR touches workflows. |
 | `scorecard.yml` | OpenSSF Scorecard of the repository's supply-chain posture, on `main` and weekly. |
+| `claude-code-review.yml` | A Claude code review of each non-draft PR from this repository, as inline comments on the changed lines (skipped for a fork PR, which gets no secrets). |
+| `claude.yml` | `@claude` in an issue, PR comment or review asks Claude to answer or make the change; only someone with write access can summon it. |
 
 Third-party actions are pinned to a commit SHA with the version in a comment; `.github/dependabot.yml` bumps them, and the NuGet
 packages, weekly in grouped PRs (EF Core and Microsoft.Extensions majors are held back: see `Directory.Build.props`).
