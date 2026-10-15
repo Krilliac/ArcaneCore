@@ -447,29 +447,18 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
 
     private static void ReportNonFiniteMovement(WorldSession session, string detail)
     {
-        if (session.Player is { } player)
+        // Every caller of IsAcceptable runs inside a player's handler, so the session always has its player here.
+        if (session.Player is not { } player || player.Locomotion.SuppressAnomalies)
         {
-            if (player.Locomotion.SuppressAnomalies)
-            {
-                return;
-            }
+            return;
+        }
 
-            player.Locomotion.LastNonFiniteReportServerMs = session.World.NowMs;
-            AnomalyLedger.Shared.Report(
-                "move",
-                "non-finite",
-                $"player {player.Name} (guid {player.Guid.Low})",
-                detail,
-                AnomalySeverity.Error);
-        }
-        else
-        {
-            AnomalyLedger.Shared.Report(
-                "move",
-                "non-finite",
-                $"player session (account {session.AccountId})",
-                detail,
-                AnomalySeverity.Error);
-        }
+        player.Locomotion.LastNonFiniteReportServerMs = session.World.NowMs;
+        AnomalyLedger.Shared.Report(
+            "move",
+            "non-finite",
+            $"player {player.Name} (guid {player.Guid.Low})",
+            detail,
+            AnomalySeverity.Error);
     }
 }

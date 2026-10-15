@@ -169,6 +169,12 @@ public sealed class LocomotionState
     /// <summary>Server timestamp of the last <c>move/speed-violation</c> report for this unit.</summary>
     public uint? LastSpeedViolationReportMs { get; internal set; }
 
+    /// <summary>Whether <c>move/speed-violation</c> has been reported for the current episode (ends after a run of legitimate packets or a quiet period).</summary>
+    public bool SpeedViolationInEpisode { get; internal set; }
+
+    /// <summary>Consecutive legitimate packets seen since the last violation of the current episode.</summary>
+    public int SpeedLegitStreak { get; internal set; }
+
     /// <summary>Server timestamp of the last server-initiated teleport or knockback relocation.</summary>
     public uint? LastTeleportOrKnockbackMs { get; internal set; }
 
