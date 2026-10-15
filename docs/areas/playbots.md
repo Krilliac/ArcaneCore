@@ -675,6 +675,84 @@ sends CMSG_ACTIVATETAXI for a single hop and the express opcode for several (whi
 UNVERIFIED). Intermediate legs are charged by the server when each starts, as for a player. Cross-map paths and scripted (SEND_TAXI) paths are
 not used.
 
+### Travel
+
+A bot crosses to a far place the way a 1.12 player does, by its own means (`World:Playerbots:Travel`; every key live; not vmangos keys).
+A caller begins a journey through the `IPlayerbotTravel` service (`CanReach`, `TryBegin`, `IsTraveling`); `.playerbot travel $name #map #x
+#y #z` begins one for live validation and prints the planned legs. The brain drives it. Nothing writes the bot's position: every leg goes
+through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, CMSG_GAMEOBJ_USE, group, trade and taxi requests).
+
+- **Means.** Walking (with the Deeprun Tram, lifts and known flight paths taking over long stretches of a walk), flight paths
+  (`PlayerbotTaxi`; its switch is `World:Playerbots:Taxi:Enabled`), boats and zeppelins (`PlayerbotShip` on the routes of
+  `PlayerbotShipNetwork`: the classic `gameobject_template` entries 20808, 176231, 176310, 176244, 177233 are boats, 164871, 175080, 176495
+  Horde zeppelins; Booty Bay - Ratchet takes both factions, the other boats the Alliance; each route's two ports are its TaxiPathNode stop
+  frames), the hearthstone (`PlayerbotHearthstone`: item 6948, its on-use spell, to the bind point), a mage bot's own Teleport and a portal
+  a mage bot opens on request (`PlayerbotMageService`, `PlayerbotPortalBoard`).
+- **The planner** (`PlayerbotTravelPlanner`, pure) searches a small graph (start, goal, every port, the bind point, each own-teleport
+  destination, each portal's mage and destination) for the fewest seconds whose copper fits the spend cap: the lesser of the bot's money and
+  `MaxTravelSpendCopper`. Costs: a walk is the straight line times 1.3 at 7 yards a second; a flight the walks to the departure node and from
+  the landing node plus the hops at 32 yards a second, its fare the undiscounted path price; a boat or zeppelin its round trip (`period`), free;
+  the hearthstone and a Teleport 15 s; a portal 25 s plus the fee. Two walks never follow each other; the hearthstone and each Teleport are
+  used at most once. Ties: fewer legs, then less copper.
+- **Facts** (`PlayerbotTravel.BuildFacts`, from the bot's real state): faction, level, money; the hearthstone when it is ready (switch on,
+  carried, off cooldown); the bot's own Teleports (spell known, rune carried, off cooldown); the portals of listed mages of its faction within
+  `MageServiceRadiusYards` on its map; the ship routes the bot may ride (faction, the Boats and Zeppelins switches, a route with a backed-off
+  dock left out). Two places are walkable when they are on one map and, where the map's walking region graph answers, in one walkable
+  component (the check `IsUnreachableOnFoot` makes); a place the graph cannot place (no navmesh, the graph or a tile not read yet, a point
+  at sea such as a port, a small fragment) counts as joined, and the walk's own failure then replans. A flight needs a known departure node
+  within `MaxWalkToMasterYards` of the stretch's start, a stretch of at least `MinRouteYards`, and a known landing node the fare to which fits
+  the cap (the search `TryTravelByTaxi` makes).
+- **The journey** (`PlayerbotTravel.Drive`). The brain drives, every think and before the taxi, tram and lift drivers: `PlayerbotShip.Drive`,
+  `PlayerbotHearthstone.Drive`, `PlayerbotMageService.Drive` (the bot's own mage leg), `PlayerbotMageService.DriveMage` (a mage serving the
+  board), then the journey. A leg driver that answers Traveling owns the bot that think (no stall judged, no target held). The journey walks
+  its walk legs itself and only begins the others on their drivers. A walk right before a boat, zeppelin or portal leg ends within 100 yards
+  of that leg's start (the next driver walks the last yards to its dock or mage). Within 10 yards of the goal the journey has arrived. A fight
+  makes the journey yield (the brain fights) until it is over, except aboard a ship; a fight on the way to a dock drops that ship leg, and the
+  journey begins it again afterwards. A switch turned off (Travel `Enabled`, or the means of the next leg) ends the journey at its next safe
+  point without a report; each driver has its own safe point (aboard a ship, the bot rides to the next port and steps off there).
+- **Failure.** A failed leg (its driver reported it once) defers only that leg (`GiveUpTransitLeg`: no quest set aside, no dead-end pin);
+  the journey replans once from where the bot stands, leaving out the failed means or point on top of the drivers' backoffs; a second
+  failure, or a replan with no route, fails the journey (`travel/leg-failed`, once). A journey is bounded by twice its planned seconds plus
+  ten minutes (`travel/overdue`). Nothing is reported on arrival. Death, a controller, a battleground or a bot-led group taking the bot
+  over cancels the journey and its legs (`PlayerbotTravel.CancelLegs`); a bot aboard a ship is never put off at sea (its leg rides to the
+  next port, driven by the feature until it stepped off, then the new driver takes it). Chaos probes keep off a bot mid-leg.
+- **Ships.** Walk to the walkable point nearest the departure port; wait for the route's ship to wait there with at least 2 s of its stop
+  left (bounded by 1.5 round trips); step onto the deck through movement heartbeats and the heartbeat with MOVEFLAG_ONTRANSPORT (the server
+  boards it); ride (the server carries passengers through the map change); step off at the arrival port and walk off the pier. Sampled
+  every world tick (`PlayerbotShip.Pump` from `PlayerbotMotion.Pump`) so a short stop is not missed. A failure at the departure dock backs
+  that dock off.
+- **Hearthstone.** Stop, CMSG_USE_ITEM for the stone, wait out the cast standing still, confirm the bot stands at its bind point. The
+  brain's own bind-point escapes use it too: when the hearthstone is ready the bot hearths instead of the direct teleport; only an escape
+  made for the bot's safety (an urgent escape, a bot stranded on ground no route leaves or among creatures too strong for it) falls back
+  to the direct teleport when the stone is not ready; the walk to a completed quest's unreachable ender then does not go to the bind point.
+- **Mage service.** An idle mage bot (alive, out of combat, ungrouped, on no trip of its own) lists itself on the in-world portal board
+  with the portals it knows and can cast; a requester's journey asks for a portal of a listed mage near it; the matched mage stops, buys a
+  Rune of Portals from a vendor stocking it within 300 yards when it has none, waits for the requester, takes the fee
+  (`MageServiceFeeCopper`) by a real trade, casts the Portal, invites the requester into its party when the portal is party-only, and leaves
+  that party when the requester went through. The bot-group coordinator leaves a serving mage and a requester alone. A mage's own Teleport
+  is a CMSG_CAST_SPELL at itself.
+- **Transit backoff.** A failed transit point (a flight path node, a tram entrance, a lift, a ship's departure dock) waits
+  `TransitBackoffSeconds` (60), doubling per failure of that point up to `TransitBackoffMaxSeconds` (300); a success clears it.
+- **Config** (`World:Playerbots:Travel`): `Enabled` (true), `Boats` (true), `Zeppelins` (true), `Hearthstone` (true), `MageService`
+  (true), `MageServiceRadiusYards` (150, 10..1000), `MageServiceFeeCopper` (0, 0..100000), `MaxTravelSpendCopper` (10000, 0..10000000),
+  `TransitBackoffSeconds` (60, 10..3600), `TransitBackoffMaxSeconds` (300, 10..86400, not below `TransitBackoffSeconds`). Flight paths:
+  `World:Playerbots:Taxi:Enabled` (true).
+- **Anomaly codes.** `travel`: `leg-failed`, `overdue`. `ship`: `ship-missing`, `never-docked`, `board-refused`, `left-ship`, `wrong-map`,
+  `ride-overdue`, `disembark-refused`, `dock-unreachable`, `route-bad-data`. `hearth`: `no-hearthstone`, `on-cooldown`, `use-refused`,
+  `cast-interrupted`, `not-arrived`, `services-unavailable`. `mage`: `teleport-cast-refused`, `cast-interrupted`, `not-arrived`,
+  `match-expired`, `mage-gone`, `mage-unreachable`, `fee-trade-failed`, `party-invite-refused`, `portal-cast-refused`, `portal-not-spawned`,
+  `portal-not-opened`, `portal-not-used`, `portal-vanished`, `portal-unreachable`, `portal-use-refused`, `rune-purchase-failed`,
+  `request-lost`, `services-unavailable`.
+- **Off-thread reachability** (`PlayerbotTravel.CanReachStatic`, for the home progression's sweep): the same map, or maps the faction's
+  ship routes join, from the routes the world thread published at the first journey; no switch and no walk is judged there.
+
+Known limits. The deck point (6 yards above the ship's origin, inside an 8 by 3 yard rectangle) and the zeppelin tower climb are
+UNVERIFIED against the hull models and real terrain (the server has no transport collision); the ship tests run on a flat synthetic world.
+The region-graph walk check only separates places the graph can place (ports at sea are not), so a walk across water can be planned and
+then fail and replan. Quest goals do not begin journeys yet (a quest whose ender is on another continent is still skipped, see
+"Intercontinent quest handoffs"); journeys come from `IPlayerbotTravel` callers and the GM command. Portal fees need trading on
+(`EconomyFeature`); party-only portals need the requester ungrouped.
+
 ### Home area
 
 A managed bot can be anchored to an area. Without one it follows its own goals anywhere on the map (its starting-zone quest log, trainers,
@@ -905,6 +983,7 @@ bots in the service snapshot only, never on a real player.
 | `.playerbot dismiss <sel>` | Administrator | End a follow or stay; the bots go back to autonomous play. |
 | `.playerbot near [#radius]` | GameMaster | List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal, distance (at most 20 lines). |
 | `.playerbot revive <sel>` | Administrator | Revive the dead bots among the selection, as `.revive` does. |
+| `.playerbot travel $id\|$name #map #x #y #z` | Administrator | One running bot begins a journey to the place by its own means ([Travel](#travel)); the reply lists the planned legs (means, end, seconds, copper), or the planner's refusal (travel off, no route, a leg of another journey under way). |
 | `.playerbot start <sel> [force]`, `.playerbot stop <sel> [force]` | Administrator | Start or stop every registered bot the selector names; one summary comes back when the worker finishes. |
 
 **Selector `<sel>`.** `all`, a name **prefix** with one trailing star (`Wfbot*`; letters only, a bare star or a star inside a
