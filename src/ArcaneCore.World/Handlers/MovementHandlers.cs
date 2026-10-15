@@ -354,24 +354,37 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     /// </summary>
     internal static void ApplyObserved(WorldSession session, Player player, WorldOpcode opcode, MovementInfo movement)
     {
-        MovementInfo previous = player.Movement;
-        var context = new MovementObserverContext(player, session.World, opcode);
-        MovementObservers.Before(context, in previous, ref movement, session.Logger);
-        Invariant.Check(
-            float.IsFinite(movement.X) && float.IsFinite(movement.Y) && float.IsFinite(movement.Z) && float.IsFinite(movement.Orientation),
-            $"MovementHandlers.ApplyObserved non-finite coordinates after observers for player {player.Guid.Low}");
-        player.ApplyClientMovement(movement, session.World.NowMs);
-        MovementObservers.After(context, in previous, session.Logger);
-
-        // vmangos Player::SetPosition (Player.cpp:5949-5958) -> Unit::HandleInterruptsOnMovement (Unit.cpp:10131-10140), reached from
-        // HandleMovementOpcodes -> HandleMoverRelocation (MovementHandler.cpp:1113): a changed position, or MOVEFLAG_MASK_XZ on the
-        // block (forward, backward, strafe; not pitch, jump or turning), ends a text-emote state (/dance). Players and managed bots
-        // both land here.
-        MovementInfo stored = player.Movement;
-        bool positionChanged = stored.X != previous.X || stored.Y != previous.Y || stored.Z != previous.Z;
-        if (positionChanged || (stored.Flags & MovementFlags.MaskXz) != 0)
+        bool previousSuppress = player.Locomotion.SuppressAnomalies;
+        if (session.IsInChaosProbe)
         {
-            player.ClearEmoteState();
+            player.Locomotion.SuppressAnomalies = true;
+        }
+
+        try
+        {
+            MovementInfo previous = player.Movement;
+            var context = new MovementObserverContext(player, session.World, opcode);
+            MovementObservers.Before(context, in previous, ref movement, session.Logger);
+            Invariant.Check(
+                float.IsFinite(movement.X) && float.IsFinite(movement.Y) && float.IsFinite(movement.Z) && float.IsFinite(movement.Orientation),
+                $"MovementHandlers.ApplyObserved non-finite coordinates after observers for player {player.Guid.Low}");
+            player.ApplyClientMovement(movement, session.World.NowMs);
+            MovementObservers.After(context, in previous, session.Logger);
+
+            // vmangos Player::SetPosition (Player.cpp:5949-5958) -> Unit::HandleInterruptsOnMovement (Unit.cpp:10131-10140), reached from
+            // HandleMovementOpcodes -> HandleMoverRelocation (MovementHandler.cpp:1113): a changed position, or MOVEFLAG_MASK_XZ on the
+            // block (forward, backward, strafe; not pitch, jump or turning), ends a text-emote state (/dance). Players and managed bots
+            // both land here.
+            MovementInfo stored = player.Movement;
+            bool positionChanged = stored.X != previous.X || stored.Y != previous.Y || stored.Z != previous.Z;
+            if (positionChanged || (stored.Flags & MovementFlags.MaskXz) != 0)
+            {
+                player.ClearEmoteState();
+            }
+        }
+        finally
+        {
+            player.Locomotion.SuppressAnomalies = previousSuppress;
         }
     }
 
@@ -385,9 +398,14 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         if (!float.IsFinite(movement.X) || !float.IsFinite(movement.Y) || !float.IsFinite(movement.Z) || !float.IsFinite(movement.Orientation))
         {
             if (chaosProbe)
+            {
                 session.Logger.LogDebug("[{Endpoint}] chaos-probe movement packet rejected: non-finite world coordinates or orientation", session.RemoteEndpoint);
+            }
             else
+            {
                 session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite world coordinates or orientation", session.RemoteEndpoint);
+                ReportNonFiniteMovement(session, $"Non-finite world coordinates or orientation in movement packet: pos=({movement.X}, {movement.Y}, {movement.Z}, o={movement.Orientation}).");
+            }
             return false;
         }
 
@@ -396,9 +414,14 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
                 || !float.IsFinite(movement.TransportZ) || !float.IsFinite(movement.TransportOrientation)))
         {
             if (chaosProbe)
+            {
                 session.Logger.LogDebug("[{Endpoint}] chaos-probe movement packet rejected: non-finite transport coordinates or orientation", session.RemoteEndpoint);
+            }
             else
+            {
                 session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite transport coordinates or orientation", session.RemoteEndpoint);
+                ReportNonFiniteMovement(session, $"Non-finite transport coordinates or orientation in movement packet: transport=0x{movement.TransportGuid:X} offset=({movement.TransportX}, {movement.TransportY}, {movement.TransportZ}, o={movement.TransportOrientation}).");
+            }
             return false;
         }
 
@@ -408,12 +431,45 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
                 || !float.IsFinite(movement.JumpXySpeed) || !float.IsFinite(movement.SplineElevation)))
         {
             if (chaosProbe)
+            {
                 session.Logger.LogDebug("[{Endpoint}] chaos-probe movement packet rejected: non-finite pitch/jump/spline field under strict finiteness", session.RemoteEndpoint);
+            }
             else
+            {
                 session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite pitch/jump/spline field under strict finiteness", session.RemoteEndpoint);
+                ReportNonFiniteMovement(session, $"Non-finite pitch/jump/spline field in movement packet: pitch={movement.Pitch}, jumpZ={movement.JumpZSpeed}, jumpCos={movement.JumpCosAngle}, jumpSin={movement.JumpSinAngle}, jumpXY={movement.JumpXySpeed}, splineElev={movement.SplineElevation}.");
+            }
             return false;
         }
 
         return MovementValidator.IsValid(movement, session.StrictMovementFiniteness);
+    }
+
+    private static void ReportNonFiniteMovement(WorldSession session, string detail)
+    {
+        if (session.Player is { } player)
+        {
+            if (player.Locomotion.SuppressAnomalies)
+            {
+                return;
+            }
+
+            player.Locomotion.LastNonFiniteReportServerMs = session.World.NowMs;
+            AnomalyLedger.Shared.Report(
+                "move",
+                "non-finite",
+                $"player {player.Name} (guid {player.Guid.Low})",
+                detail,
+                AnomalySeverity.Error);
+        }
+        else
+        {
+            AnomalyLedger.Shared.Report(
+                "move",
+                "non-finite",
+                $"player session (account {session.AccountId})",
+                detail,
+                AnomalySeverity.Error);
+        }
     }
 }

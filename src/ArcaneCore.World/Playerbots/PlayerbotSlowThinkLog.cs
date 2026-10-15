@@ -1,4 +1,6 @@
 using System.Globalization;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots;
@@ -32,10 +34,25 @@ internal sealed class PlayerbotSlowThinkLog(ILogger logger)
     /// and the rate limit allows. Returns whether it was slow.
     /// </summary>
     /// <param name="goal">The bot's goal, target entry and quest ("n/a" when its brain did not drive this think).</param>
-    internal bool Observe(PlayerbotThinkProbe probe, double thresholdMs, long nowMs, Guid botId, string name, string driver, string goal)
+    internal bool Observe(PlayerbotThinkProbe probe, double thresholdMs, long nowMs, Guid botId, string name, string driver, string goal,
+        Player? player = null)
     {
         if (thresholdMs <= 0 || probe.ElapsedMs < thresholdMs) return false;
         Slow++;
+        if (!probe.SlowAnomalyReported)
+        {
+            string anomalyDetail = string.Create(CultureInfo.InvariantCulture,
+                $"think {probe.ElapsedMs:F1} ms (over {thresholdMs:F1} ms) driver={driver} goal={goal} slowestPhase={probe.SlowestPhase}");
+            if ((player ?? probe.Player) is { } subjectPlayer)
+            {
+                PlayerbotAnomalies.Report(subjectPlayer, "brain", "think-slow", anomalyDetail, AnomalySeverity.Warning);
+            }
+            else
+            {
+                string subject = string.IsNullOrWhiteSpace(name) ? $"bot {botId}" : $"bot {name} (id {botId})";
+                AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + "brain", "think-slow", subject, anomalyDetail, AnomalySeverity.Warning);
+            }
+        }
         if (_windowStartMs == long.MinValue || nowMs - _windowStartMs >= WindowMs)
         {
             _windowStartMs = nowMs;

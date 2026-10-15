@@ -149,6 +149,8 @@ internal static class PlayerbotCombatView
             }
         }
 
+        var comboService = session.Services.GetService<ComboFeature>()?.Service;
+
         bool CanCast(SpellInfo spell, RotationUnit target)
         {
             if (blocked(spell) || !units.TryGetValue(target.Guid, out Unit? unit)) return false;
@@ -156,6 +158,10 @@ internal static class PlayerbotCombatView
             if (spell.StartRecoveryTime > 0 && !system.IsGlobalCooldownReady(player, spell.StartRecoveryCategory)) return false;
             if (spell.CasterAuraState != AuraState.None && !HasAuraState(player, spell.CasterAuraState)) return false;
             if (spell.TargetAuraState != AuraState.None && !HasAuraState(unit, spell.TargetAuraState)) return false;
+            if (spell.NeedsComboPoints && comboService is { } combo
+                && SpellSystem.IsExplicitUnitTarget(spell.Effects[0].TargetA)
+                && unit.Guid != combo.GetComboTarget(player))
+                return false;
             if (spell.IsPositive && ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpell(system, unit, spell, ReferenceEquals(unit, player))) return false;
             if (spell.Effects.Any(e => !e.IsEmpty && e.TargetA == SpellImplicitTarget.UnitCasterPet) && petStatus != RotationPetStatus.Alive) return false;
             if (!HasPower(player, spell)) return false;

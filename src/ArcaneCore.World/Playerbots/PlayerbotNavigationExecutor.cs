@@ -159,6 +159,23 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
         _worker = Task.Run(WorkerLoopAsync);
     }
 
+    [ThreadStatic] private static PlanLease? t_currentLease;
+
+    private static void ReportExecutorPlanDropped(string reason, uint? mapId = null, Vector3? start = null, Vector3? destination = null)
+    {
+        string where = mapId is { } map && start is { } from && destination is { } to
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $" on map {map} from ({from.X:F1},{from.Y:F1},{from.Z:F1}) toward ({to.X:F1},{to.Y:F1},{to.Z:F1})")
+            : string.Empty;
+        AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + "nav", "plan-dropped", "navigation executor", reason + where, AnomalySeverity.Warning);
+    }
+
+    internal static void AttachCurrentLease(PlayerbotAsyncNavigationPlan plan)
+    {
+        if (t_currentLease is { Plan: null } lease)
+            lease.Plan = plan;
+    }
+
     /// <summary>Number of submitted jobs whose result has not yet been consumed.</summary>
     internal int Outstanding => DefaultOutstanding();
 
@@ -168,9 +185,16 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
         lock (_gate)
         {
             lease = null!;
-            if (_disposed || _plans.Count >= DefaultCapacity) return false;
+            if (_disposed) return false;
+            if (_plans.Count >= DefaultCapacity)
+            {
+                ReportExecutorPlanDropped("plan lease capacity exhausted");
+                return false;
+            }
+
             var admitted = new PlanLease(this);
             _plans.Add(admitted);
+            t_currentLease = admitted;
             lease = admitted;
             return true;
         }
@@ -186,8 +210,16 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
         job = null!;
         lock (_gate)
         {
-            if (_disposed || !_capacity.Wait(0))
+            if (_disposed)
                 return false;
+            if (!_capacity.Wait(0))
+            {
+                if (t_currentLease?.Plan is { } plan && plan.MapId == request.MapId && plan.Start == request.Start)
+                    plan.ReportDropped("executor job capacity exhausted");
+                else
+                    ReportExecutorPlanDropped("executor job capacity exhausted", request.MapId, request.Start, request.Destination);
+                return false;
+            }
 
             // The job owns the linked source: caller cancellation and job disposal both cancel
             // the same token, including while the item is still queued.
@@ -378,10 +410,20 @@ internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposabl
     private sealed class PlanLease(PlayerbotNavigationExecutor owner) : IDisposable
     {
         private int _released;
+        internal PlayerbotAsyncNavigationPlan? Plan { get; set; }
+
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _released, 1) != 0) return;
-            lock (owner._gate) owner._plans.Remove(this);
+            if (ReferenceEquals(t_currentLease, this)) t_currentLease = null;
+            bool executorDisposed;
+            lock (owner._gate)
+            {
+                owner._plans.Remove(this);
+                executorDisposed = owner._disposed;
+            }
+
+            Plan?.OnLeaseReleased(executorDisposed);
         }
     }
 

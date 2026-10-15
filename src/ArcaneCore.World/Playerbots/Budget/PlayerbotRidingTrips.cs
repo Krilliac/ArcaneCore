@@ -136,6 +136,14 @@ internal sealed class PlayerbotRidingTrips(WorldSession session, PlayerbotOption
         _blocked.Clear();
         TargetEntry = 0;
         _backoffUntil = Math.Max(1u, unchecked(now + BackoffMs));
+        if (!session.IsInChaosProbe)
+        {
+            PlayerbotAnomalies.Report(player, "mount", "riding-refused",
+                $"riding {wanted.ToString().ToLowerInvariant()} trip refused or stalled ({_sites.Count} site(s) on map {player.Map?.MapId ?? player.MapId})");
+            if (wanted == PlayerbotRidingTripKind.Trainer)
+                PlayerbotAnomalies.Report(player, "progression", "train-failed",
+                    $"riding trainer trip refused or stalled ({_sites.Count} site(s) on map {player.Map?.MapId ?? player.MapId})");
+        }
         return false;
     }
 

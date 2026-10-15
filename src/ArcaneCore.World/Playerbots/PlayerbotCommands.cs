@@ -470,6 +470,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         context.Reply($"BOTINSPECT budget={value.Budget ?? "none"}");
         context.Reply(value.Master is null ? "BOTINSPECT party=none"
             : $"BOTINSPECT party=master:{value.Master} mode:{value.PartyMode?.ToString().ToLowerInvariant()}");
+        context.Reply($"BOTINSPECT anomalies={value.Anomalies ?? "none"}");
         if (value.Corpse is { } corpse)
         {
             string distance = corpse.Distance?.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable";

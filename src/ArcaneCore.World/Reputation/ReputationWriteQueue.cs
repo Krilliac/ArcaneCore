@@ -246,6 +246,12 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
         if (failed.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue ReputationWriteQueue",
+                $"queue=ReputationWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"reputation writes did not drain for characters {string.Join(", ", failed)}", first);
         }
     }
@@ -267,6 +273,12 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         {
             unsaved.RecordQueueFailure(new InvalidOperationException("the reputation write queue is stopped; the change was not persisted"));
             logger.LogError("reputation change for character {Character} arrived after the queue stopped; not persisted", characterId);
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"character {characterId}",
+                $"queue=ReputationWriteQueue character={characterId} reason=queue-stopped",
+                AnomalySeverity.Error);
             return;
         }
 
@@ -283,6 +295,12 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             Interlocked.Decrement(ref _pending);
             unsaved.RecordQueueFailure(new InvalidOperationException("the reputation write queue is closed; the change was not persisted"));
             logger.LogError("reputation change for character {Character} arrived after the queue closed; not persisted", characterId);
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"character {characterId}",
+                $"queue=ReputationWriteQueue character={characterId} reason=queue-closed",
+                AnomalySeverity.Error);
         }
     }
 
@@ -507,11 +525,23 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 if (rejected)
                 {
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "circuit-open",
+                        "queue ReputationWriteQueue",
+                        $"queue=ReputationWriteQueue character={characterId} reason=terminal-ownership-failure error={ex.GetType().Name}",
+                        AnomalySeverity.Warning);
                     logger.LogFault(LogLevel.Critical, "writequeue-reputation-ownership", ex, "reputation write for character {Character} was rejected by the character ownership fence; stopping application", characterId);
                     StopHost(ex);
                 }
                 else if (!sweep)
                 {
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "write-retry-exhausted",
+                        $"character {characterId}",
+                        $"queue=ReputationWriteQueue character={characterId} attempts={MaxAttempts} error={ex.GetType().Name}",
+                        AnomalySeverity.Error);
                     logger.LogFault("writequeue-reputation", ex, "reputation write for character {Character} failed; retained for retry", characterId);
                 }
                 else

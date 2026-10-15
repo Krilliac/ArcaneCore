@@ -103,6 +103,8 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     /// <summary>Record the character's current state and queue a write unless one is waiting.</summary>
     public void Save(int characterId, CharacterRestState state)
     {
+        bool droppedStopped = false;
+        bool droppedClosed = false;
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
@@ -112,22 +114,30 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             {
                 unsaved.Failure = _terminalFailure ?? new InvalidOperationException("the rest write queue is stopped; the change was not persisted");
                 logger.LogError("rested state of character {Character} arrived after the queue stopped; not persisted", characterId);
-                return;
+                droppedStopped = true;
             }
-
-            if (unsaved.Queued)
+            else if (!unsaved.Queued)
             {
-                return;
+                unsaved.Queued = true;
+                Interlocked.Increment(ref _pending);
+                if (!_channel.Writer.TryWrite(new Work(characterId, Kind.Write, null)))
+                {
+                    unsaved.Queued = false;
+                    Interlocked.Decrement(ref _pending);
+                    unsaved.Failure = new InvalidOperationException("the rest write queue is closed; the change was not persisted");
+                    droppedClosed = true;
+                }
             }
+        }
 
-            unsaved.Queued = true;
-            Interlocked.Increment(ref _pending);
-            if (!_channel.Writer.TryWrite(new Work(characterId, Kind.Write, null)))
-            {
-                unsaved.Queued = false;
-                Interlocked.Decrement(ref _pending);
-                unsaved.Failure = new InvalidOperationException("the rest write queue is closed; the change was not persisted");
-            }
+        if (droppedStopped || droppedClosed)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"character {characterId}",
+                $"queue=RestWriteQueue character={characterId} reason={(droppedStopped ? "queue-stopped" : "queue-closed")}",
+                AnomalySeverity.Error);
         }
     }
 
@@ -221,6 +231,12 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
         if (failed.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue RestWriteQueue",
+                $"queue=RestWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"rested-state writes did not drain for characters {string.Join(", ", failed)}", first);
         }
 
@@ -274,6 +290,12 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             return;
         }
 
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "circuit-open",
+            "queue RestWriteQueue",
+            $"queue=RestWriteQueue reason=terminal-ownership-failure error={ex.GetType().Name}",
+            AnomalySeverity.Warning);
         logger.LogCritical(ex, "rest write queue entered terminal failure after character ownership rejection");
         try
         {
@@ -492,6 +514,12 @@ public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
         if (failure is not null && !sweep)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-retry-exhausted",
+                $"character {characterId}",
+                $"queue=RestWriteQueue character={characterId} attempts={attempts} error={failure.GetType().Name}",
+                AnomalySeverity.Error);
             logger.LogFault("writequeue-rest", failure, "rested-state writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }
 

@@ -1,3 +1,4 @@
+using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
@@ -50,6 +51,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>How often quest dynamic flags are re-evaluated for viewers (the quest journal has no change events yet).</summary>
     public const uint QuestFlagRefreshMs = 1000;
 
+    /// <summary>Consecutive refused Use/OpenLock attempts by the same player on the same object within <see cref="UseRefusedLoopWindowMs"/> before reporting <c>gameobject/use-refused-loop</c>.</summary>
+    public const int UseRefusedLoopThreshold = 5;
+
+    /// <summary>Time window (ms) for <c>gameobject/use-refused-loop</c> tracking.</summary>
+    public const long UseRefusedLoopWindowMs = 10_000;
+
     private GameObjectContent _content;
     private readonly ILogger _logger;
     private readonly Dictionary<GridCoord, List<GameObjectSpawn>> _spawnsByGrid = [];
@@ -65,6 +72,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private readonly Dictionary<ObjectGuid, long> _despawnAt = [];
     private readonly Dictionary<uint, uint> _spawnEntries = [];
     private readonly Dictionary<GameObjectType, Func<Player, GameObject, GameObjectUseResult>> _useHandlers = [];
+    private readonly Dictionary<(ObjectGuid Player, ObjectGuid Go), (long WindowStartMs, int Count, bool Reported)> _refusedUseAttempts = [];
+    private readonly HashSet<ObjectGuid> _reportedDoorCollisionMissing = [];
+    private readonly HashSet<ObjectGuid> _reportedDoorStateDesync = [];
     private long _clockMs;
     private long _nextQuestRefreshMs;
     private uint _nextTemporaryCounter;
@@ -285,11 +295,74 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
                 UpdateRestock(go);
                 UpdateTypeBehaviour(go);
+                if (go.Type == GameObjectType.Door)
+                {
+                    AuditDoorObject(go);
+                }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("map-gameobject", ex);
             }
+        }
+    }
+
+    /// <summary>
+    /// Audits a door gameobject for missing closed-door collision (<c>door/collision-missing</c>) and
+    /// state mismatch between its activation/encounter state and its visual/collision state (<c>door/state-desync</c>).
+    /// </summary>
+    public void AuditDoorObject(GameObject go)
+    {
+        ArgumentNullException.ThrowIfNull(go);
+        if (go.Type != GameObjectType.Door || !go.IsSpawned)
+        {
+            return;
+        }
+
+        bool closed = go.State == GameObjectState.Ready;
+        bool missingCollision = closed && (
+            go.Template.DisplayId == 0
+            || !float.IsFinite(go.Template.Size)
+            || go.Template.Size <= 0f);
+        if (missingCollision)
+        {
+            if (_reportedDoorCollisionMissing.Add(go.Guid))
+            {
+                AnomalyLedger.Shared.Report(
+                    "door",
+                    "collision-missing",
+                    $"go {go.Guid} entry {go.Entry} map {Map.MapId}",
+                    $"Closed door (State={go.State}, DisplayId={go.Template.DisplayId}, Size={go.Template.Size}) has no active collision model.", AnomalySeverity.Warning);
+            }
+        }
+        else
+        {
+            _reportedDoorCollisionMissing.Remove(go.Guid);
+        }
+
+        string? desyncDetail = null;
+        byte spawnState = go.Spawn?.State ?? (byte)GameObjectState.Ready;
+        if (go.LootState == GameObjectLootState.Activated
+            && go.State == GameObjectState.Ready
+            && spawnState == (byte)GameObjectState.Ready)
+        {
+            desyncDetail = $"Door has LootState=Activated from Ready spawn state but visual/collision State is still Ready.";
+        }
+
+        if (desyncDetail is not null)
+        {
+            if (_reportedDoorStateDesync.Add(go.Guid))
+            {
+                AnomalyLedger.Shared.Report(
+                    "door",
+                    "state-desync",
+                    $"go {go.Guid} entry {go.Entry} map {Map.MapId}",
+                    desyncDetail, AnomalySeverity.Warning);
+            }
+        }
+        else
+        {
+            _reportedDoorStateDesync.Remove(go.Guid);
         }
     }
 
@@ -317,6 +390,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     {
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
+        GameObjectUseResult result = UseCore(player, guid, go);
+        RecordUseAttemptOutcome(player, guid, go, result);
+        return result;
+    }
+
+    private GameObjectUseResult UseCore(Player player, ObjectGuid guid, GameObject? go)
+    {
         GameObjectUseResult result = CheckUsable(player, go);
         if (result != GameObjectUseResult.Ok || go is null)
         {
@@ -420,6 +500,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     {
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
+        GameObjectUseResult result = OpenLockCore(player, go, lockType, keyItemId, skillBonus, onChestOpened);
+        RecordUseAttemptOutcome(player, guid, go, result);
+        return result;
+    }
+
+    private GameObjectUseResult OpenLockCore(Player player, GameObject? go, LockType lockType, uint keyItemId, uint skillBonus,
+        Action<GameObject>? onChestOpened)
+    {
         GameObjectUseResult result = CheckUsable(player, go);
         if (result != GameObjectUseResult.Ok || go is null)
         {
@@ -497,6 +585,75 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         return result;
+    }
+
+    internal const int MaxTrackedRefusedUseAttempts = 1024;
+
+    internal int TrackedRefusedUseAttempts => _refusedUseAttempts.Count;
+
+    private void PruneRefusedUseAttempts(long nowMs)
+    {
+        List<(ObjectGuid Player, ObjectGuid Go)>? expired = null;
+        foreach (KeyValuePair<(ObjectGuid Player, ObjectGuid Go), (long WindowStartMs, int Count, bool Reported)> entry in _refusedUseAttempts)
+        {
+            if (nowMs - entry.Value.WindowStartMs > UseRefusedLoopWindowMs)
+            {
+                (expired ??= []).Add(entry.Key);
+            }
+        }
+
+        if (expired is not null)
+        {
+            foreach ((ObjectGuid Player, ObjectGuid Go) key in expired)
+            {
+                _refusedUseAttempts.Remove(key);
+            }
+        }
+
+        if (_refusedUseAttempts.Count >= MaxTrackedRefusedUseAttempts)
+        {
+            _refusedUseAttempts.Clear(); // still full of live episodes: a hard bound beats unbounded growth
+        }
+    }
+
+    internal void RecordUseAttemptOutcome(Player player, ObjectGuid guid, GameObject? go, GameObjectUseResult result)
+    {
+        var key = (player.Guid, guid);
+        if (result == GameObjectUseResult.Ok)
+        {
+            _refusedUseAttempts.Remove(key);
+            return;
+        }
+
+        long nowMs = _clockMs;
+        if (_refusedUseAttempts.Count >= MaxTrackedRefusedUseAttempts)
+        {
+            // Bound the table: drop every episode whose window has already lapsed (they would restart at count 1 anyway).
+            PruneRefusedUseAttempts(nowMs);
+        }
+
+        if (!_refusedUseAttempts.TryGetValue(key, out (long WindowStartMs, int Count, bool Reported) state)
+            || nowMs - state.WindowStartMs > UseRefusedLoopWindowMs)
+        {
+            state = (nowMs, 1, false);
+        }
+        else
+        {
+            state.Count++;
+        }
+
+        if (state.Count >= UseRefusedLoopThreshold && !state.Reported)
+        {
+            state.Reported = true;
+            string entryLabel = go is not null ? $"entry {go.Entry} " : string.Empty;
+            AnomalyLedger.Shared.Report(
+                "gameobject",
+                "use-refused-loop",
+                $"player {player.Guid} go {guid} {entryLabel}map {Map.MapId}",
+                $"GameObject use refused {state.Count} times within {UseRefusedLoopWindowMs} ms (last reason={result}).", AnomalySeverity.Warning);
+        }
+
+        _refusedUseAttempts[key] = state;
     }
 
     /// <summary>

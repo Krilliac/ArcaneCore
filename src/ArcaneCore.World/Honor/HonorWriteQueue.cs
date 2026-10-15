@@ -259,6 +259,12 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
         if (failed.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue HonorWriteQueue",
+                $"queue=HonorWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"honor writes did not drain for characters {string.Join(", ", failed)}", first);
         }
 
@@ -285,6 +291,12 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         {
             unsaved.Failure = _terminalFailure ?? new InvalidOperationException("the honor write queue is stopped; the change was not persisted");
             logger.LogError("honor change for character {Character} arrived after the queue stopped; not persisted", characterId);
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"character {characterId}",
+                $"queue=HonorWriteQueue character={characterId} reason=queue-stopped",
+                AnomalySeverity.Error);
             return;
         }
 
@@ -301,6 +313,12 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             Interlocked.Decrement(ref _pending);
             unsaved.Failure = new InvalidOperationException("the honor write queue is closed; the change was not persisted");
             logger.LogError("honor change for character {Character} arrived after the queue closed; not persisted", characterId);
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"character {characterId}",
+                $"queue=HonorWriteQueue character={characterId} reason=queue-closed",
+                AnomalySeverity.Error);
         }
     }
 
@@ -338,6 +356,12 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             return;
         }
 
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "circuit-open",
+            "queue HonorWriteQueue",
+            $"queue=HonorWriteQueue reason=terminal-ownership-failure error={ex.GetType().Name}",
+            AnomalySeverity.Warning);
         logger.LogCritical(ex, "honor write queue entered terminal failure after character ownership rejection");
         try
         {
@@ -530,6 +554,12 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
             if (!sweep)
             {
+                AnomalyLedger.Shared.Report(
+                    "persist",
+                    "write-retry-exhausted",
+                    $"character {characterId}",
+                    $"queue=HonorWriteQueue character={characterId} attempts={MaxAttempts} error={ex.GetType().Name}",
+                    AnomalySeverity.Error);
                 logger.LogFault("writequeue-honor", ex, "honor write for character {Character} failed; retained for retry", characterId);
             }
             else

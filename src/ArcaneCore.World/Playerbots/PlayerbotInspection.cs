@@ -63,6 +63,12 @@ public sealed record PlayerbotInspection(string Name, PlayerbotGoalKind Goal, ui
 
     /// <summary>The money the bot saves for and what it may spend (<see cref="PlayerbotBudget.Report"/>: reserved lines with their costs, the riding plan, the next step).</summary>
     public string? Budget { get; init; }
+
+    /// <summary>Compact summary of recent <c>bot-*</c> anomalies recorded for this bot (<see cref="PlayerbotAnomalyHistory"/>), or null when none.</summary>
+    public string? Anomalies { get; init; }
+
+    /// <summary>Recent <c>bot-*</c> anomaly notices recorded for this bot (<see cref="PlayerbotAnomalyHistory"/>).</summary>
+    public IReadOnlyList<PlayerbotAnomalyRecord> RecentAnomalies { get; init; } = [];
 }
 
 internal static class PlayerbotInspector
@@ -102,6 +108,7 @@ internal static class PlayerbotInspector
                 CorpseDistance(player, body), CorpseDelayRemaining(session, player, body))
             : null;
         PlayerbotPartyAI? engagedParty = party is { IsEngaged: true } ? party : null;
+        IReadOnlyList<PlayerbotAnomalyRecord> recentAnomalies = PlayerbotAnomalyHistory.Shared.ForPlayer(player);
         return new(player.Name, engagedParty is { } pGoal ? pGoal.Goal : brain.Goal,
             engagedParty is { } pTarget ? pTarget.TargetEntry : brain.TargetEntry,
             brain.QuestId, player.MapId, player.Level,
@@ -123,6 +130,8 @@ internal static class PlayerbotInspector
             Risk = engagedParty is { } pRisk ? pRisk.RiskReport : brain.RiskReport,
             Home = brain.HomeDescription,
             Budget = brain.BudgetReport(player),
+            Anomalies = recentAnomalies.Count == 0 ? null : PlayerbotAnomalyHistory.FormatInspectSummary(recentAnomalies, DateTimeOffset.UtcNow),
+            RecentAnomalies = recentAnomalies,
         };
     }
 

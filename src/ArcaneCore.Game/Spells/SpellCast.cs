@@ -151,6 +151,13 @@ public sealed class SpellCast
     /// <summary>Damage pushbacks taken (cast bar or channel; vmangos m_delayAtDamageCount).</summary>
     public int PushbackCount { get; internal set; }
 
+    /// <summary>Total elapsed milliseconds spent in the current cast state (Preparing or Casting).</summary>
+    internal long ElapsedMs { get; set; }
+
+    internal bool StuckReported { get; set; }
+
+    internal bool ChannelOrphanReported { get; set; }
+
     internal float CastX { get; set; }
 
     internal float CastY { get; set; }

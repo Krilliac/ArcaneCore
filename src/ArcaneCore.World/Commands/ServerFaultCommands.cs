@@ -18,6 +18,9 @@ public sealed class ServerFaultCommands : ICommandExtension
     /// <summary>Faults listed when no count is given.</summary>
     public const int DefaultTop = 10;
 
+    /// <summary>Anomaly keys listed when no subsystem is given.</summary>
+    public const int DefaultAnomalyTop = 15;
+
     /// <summary>The most faults one listing shows.</summary>
     public const int MaxTop = 50;
 
@@ -31,10 +34,16 @@ public sealed class ServerFaultCommands : ICommandExtension
         new ChatCommand("faults", AccountSecurity.GameMaster,
             "Syntax: .server faults [top #count | show $id | summary | reset]\nList the exceptions the server caught, most frequent first; show one in full; summarize by subsystem and invariants; reset (administrator) clears the list.",
             Faults),
+        new ChatCommand("anomalies", AccountSecurity.GameMaster,
+            "Syntax: .server anomalies [$subsystem | show $key | reset]\nSummarize outcome anomalies by subsystem and top keys; list keys for one subsystem; show one key in full; reset (administrator) clears the ledger.",
+            Anomalies),
     ];
 
     private static bool Faults(CommandContext context, string args)
         => Run(args, context.Security, FaultLedger.Shared, DateTimeOffset.UtcNow, context.Reply);
+
+    private static bool Anomalies(CommandContext context, string args)
+        => RunAnomalies(args, context.Security, AnomalyLedger.Shared, DateTimeOffset.UtcNow, context.Reply);
 
     /// <summary>The command's logic apart from the invoker (tests call it with their own ledger). False means a usage error.</summary>
     internal static bool Run(string args, AccountSecurity security, FaultLedger ledger, DateTimeOffset now, Action<string> reply)
@@ -95,12 +104,64 @@ public sealed class ServerFaultCommands : ICommandExtension
         }
     }
 
+    /// <summary>The <c>.server anomalies</c> command's logic apart from the invoker (tests call it with their own ledger). False means a usage error.</summary>
+    internal static bool RunAnomalies(string args, AccountSecurity security, AnomalyLedger ledger, DateTimeOffset now, Action<string> reply)
+    {
+        string[] words = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length == 0)
+        {
+            AnomaliesOverview(ledger, DefaultAnomalyTop, now, reply);
+            return true;
+        }
+
+        switch (words[0].ToLowerInvariant())
+        {
+            case "show":
+                return words.Length == 2 && ShowAnomaly(ledger, words[1], now, reply);
+
+            case "reset":
+                if (words.Length != 1)
+                {
+                    return false;
+                }
+
+                if (security < ResetSecurity)
+                {
+                    reply("Only an administrator can reset the anomaly ledger.");
+                    return true;
+                }
+
+                long total = ledger.Total;
+                int distinct = ledger.Distinct;
+                ledger.Reset();
+                reply(string.Create(CultureInfo.InvariantCulture, $"Anomaly ledger cleared ({distinct} distinct, {total} total)."));
+                return true;
+
+            default:
+                if (words.Length != 1)
+                {
+                    return false;
+                }
+
+                AnomaliesSubsystem(ledger, words[0], now, reply);
+                return true;
+        }
+    }
+
     /// <summary>The <c>.server info</c> line: <c>faults: 12 (3 distinct, last 5 min ago)</c>.</summary>
     public static string InfoLine(FaultLedger ledger, DateTimeOffset now)
     {
         string last = ledger.LastSeen is { } at ? Age(now - at) + " ago" : "never";
         return string.Create(CultureInfo.InvariantCulture, $"faults: {ledger.Total} ({ledger.Distinct} distinct, last {last})");
     }
+
+    /// <summary>The <c>.server info</c> line including both the fault and anomaly ledgers.</summary>
+    public static string InfoLine(FaultLedger ledger, AnomalyLedger anomalies, DateTimeOffset now)
+        => string.Create(CultureInfo.InvariantCulture, $"{InfoLine(ledger, now)}; {AnomaliesInfoLine(anomalies)}");
+
+    /// <summary>The anomaly count summary: <c>anomalies: 42 (7 distinct)</c>.</summary>
+    public static string AnomaliesInfoLine(AnomalyLedger ledger)
+        => string.Create(CultureInfo.InvariantCulture, $"anomalies: {ledger.Total} ({ledger.Distinct} distinct)");
 
     /// <summary>Extracts the subsystem prefix of a fault site (the prefix before the first <c>'-'</c> or <c>':'</c>, or the whole site when neither separator is present).</summary>
     internal static string SubsystemOf(string site)
@@ -246,6 +307,86 @@ public sealed class ServerFaultCommands : ICommandExtension
             reply("  at " + frame);
         }
 
+        return true;
+    }
+
+    private static void AnomaliesOverview(AnomalyLedger ledger, int top, DateTimeOffset now, Action<string> reply)
+    {
+        reply(AnomaliesInfoLine(ledger));
+        IReadOnlyDictionary<string, (int Codes, long Total)> bySubsystem = ledger.BySubsystem();
+        if (bySubsystem.Count == 0)
+        {
+            reply("Anomaly subsystems: 0 anomalies recorded.");
+            return;
+        }
+
+        reply(string.Create(CultureInfo.InvariantCulture, $"Anomaly subsystems ({bySubsystem.Count}):"));
+        foreach (KeyValuePair<string, (int Codes, long Total)> pair in bySubsystem.OrderByDescending(p => p.Value.Total).ThenBy(p => p.Key, StringComparer.Ordinal))
+        {
+            reply(string.Create(CultureInfo.InvariantCulture, $"  {pair.Key}: {pair.Value.Total} total ({pair.Value.Codes} distinct)"));
+        }
+
+        IReadOnlyList<AnomalySnapshot> all = ledger.Snapshot();
+        int shown = 0;
+        foreach (AnomalySnapshot snap in all)
+        {
+            if (shown++ == top)
+            {
+                break;
+            }
+
+            string subject = snap.LastSubject.Length == 0 ? "(none)" : snap.LastSubject;
+            reply(string.Create(CultureInfo.InvariantCulture,
+                $"{shown,2}. {snap.Key} x{snap.Count} ({snap.DistinctSubjects} subjects, {snap.Severity}), last {Age(now - snap.LastSeen)} ago [{subject}]"));
+        }
+
+        if (all.Count > top)
+        {
+            reply(string.Create(CultureInfo.InvariantCulture, $"... {all.Count - top} more; use .server anomalies <subsystem> or .server anomalies show <key>."));
+        }
+    }
+
+    private static void AnomaliesSubsystem(AnomalyLedger ledger, string subsystem, DateTimeOffset now, Action<string> reply)
+    {
+        string normalized = AnomalyLedger.Normalise(subsystem);
+        IReadOnlyList<AnomalySnapshot> snapshots = ledger.Snapshot(normalized);
+        if (snapshots.Count == 0)
+        {
+            reply(string.Create(CultureInfo.InvariantCulture, $"No anomalies recorded for subsystem '{normalized}'."));
+            return;
+        }
+
+        long total = snapshots.Sum(s => s.Count);
+        reply(string.Create(CultureInfo.InvariantCulture, $"Subsystem '{normalized}': {total} total ({snapshots.Count} distinct):"));
+        int index = 0;
+        foreach (AnomalySnapshot snap in snapshots)
+        {
+            index++;
+            string subject = snap.LastSubject.Length == 0 ? "(none)" : snap.LastSubject;
+            reply(string.Create(CultureInfo.InvariantCulture,
+                $"{index,2}. {snap.Key} x{snap.Count} ({snap.DistinctSubjects} subjects, {snap.Severity}), last {Age(now - snap.LastSeen)} ago [{subject}]"));
+        }
+    }
+
+    private static bool ShowAnomaly(AnomalyLedger ledger, string key, DateTimeOffset now, Action<string> reply)
+    {
+        if (string.IsNullOrWhiteSpace(key) || !key.Contains('/', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        AnomalySnapshot? snap = ledger.Find(key);
+        if (snap is null)
+        {
+            reply("No anomaly recorded for key '" + key + "'.");
+            return true;
+        }
+
+        reply(string.Create(CultureInfo.InvariantCulture, $"Anomaly {snap.Key} (subsystem {snap.Subsystem}, code {snap.Code}, severity {snap.Severity})"));
+        reply(string.Create(CultureInfo.InvariantCulture,
+            $"Count {snap.Count} ({snap.DistinctSubjects} distinct subjects); first {snap.FirstSeen.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC, last {snap.LastSeen.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC ({Age(now - snap.LastSeen)} ago)"));
+        reply("Subject: " + (snap.LastSubject.Length == 0 ? "(none)" : snap.LastSubject.ReplaceLineEndings(" ")));
+        reply("Detail: " + (snap.LastDetail.Length == 0 ? "(none)" : snap.LastDetail.ReplaceLineEndings(" ")));
         return true;
     }
 

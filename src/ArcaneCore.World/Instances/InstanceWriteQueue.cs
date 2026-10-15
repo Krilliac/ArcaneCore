@@ -391,6 +391,12 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
         if (left.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue InstanceWriteQueue",
+                $"queue=InstanceWriteQueue undrainedTargets={left.Length} firstTarget={left[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"instance writes did not drain for {string.Join(", ", left)}", first);
         }
 
@@ -418,6 +424,12 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             Exception failure = _terminalFailure ?? new InvalidOperationException("the instance write queue is stopped; the change was not persisted");
             SetRetained(key, value, failure);
             logger.LogError("instance write for {Target} arrived after the queue stopped; retained as undrained", DescribeKey(key));
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue InstanceWriteQueue",
+                $"queue=InstanceWriteQueue target={DescribeKey(key)} reason=queue-stopped",
+                AnomalySeverity.Error);
             return;
         }
 
@@ -431,6 +443,12 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             Exception failure = _terminalFailure ?? new InvalidOperationException("the instance write queue is closed; the change was not persisted");
             SetRetained(key, value, failure);
             logger.LogError("instance write queue closed; write for {Target} retained as undrained", DescribeKey(key));
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue InstanceWriteQueue",
+                $"queue=InstanceWriteQueue target={DescribeKey(key)} reason=queue-closed",
+                AnomalySeverity.Error);
         }
     }
 
@@ -517,6 +535,12 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             return;
         }
 
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "circuit-open",
+            "queue InstanceWriteQueue",
+            $"queue=InstanceWriteQueue reason=terminal-ownership-failure error={ex.GetType().Name}",
+            AnomalySeverity.Warning);
         logger.LogCritical(ex, "instance write queue entered terminal failure after character ownership rejection");
         try
         {
@@ -636,6 +660,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     private async Task ExecuteWriteAsync(Work work)
     {
         Exception? failure = await TryWriteAsync(work.Key, work.Value, MaxAttempts).ConfigureAwait(false);
+        bool reportExhausted = false;
         lock (_gate)
         {
             if (IsObsoleteUnderGate(work.Key, work.Epoch))
@@ -652,9 +677,20 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 SetRetained(work.Key, work.Value, failure);
                 if (failure is not CharacterOwnershipRejectedException)
                 {
+                    reportExhausted = true;
                     logger.LogFault("writequeue-instance", failure, "instance write for {Target} failed; retained for retry", DescribeKey(work.Key));
                 }
             }
+        }
+
+        if (reportExhausted && failure is not null)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-retry-exhausted",
+                "queue InstanceWriteQueue",
+                $"queue=InstanceWriteQueue target={DescribeKey(work.Key)} attempts={MaxAttempts} error={failure.GetType().Name}",
+                AnomalySeverity.Error);
         }
 
         if (failure is null)

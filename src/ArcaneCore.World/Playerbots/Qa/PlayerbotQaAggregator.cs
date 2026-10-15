@@ -1089,7 +1089,7 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
         if (signal.EffectName.Length != 0) finding.EffectName = signal.EffectName;
         if (signal.Aura != 0) finding.Aura = signal.Aura;
         if (signal.Reason.Length != 0) finding.Reason = signal.Reason;
-        if ((QaKinds.Of(signal.Kind).SpellKind || signal.Kind == QaSignalKind.ServerFault) && signal.Detail.Length != 0) finding.ReasonDetail = signal.Detail;
+        if ((QaKinds.Of(signal.Kind).SpellKind || signal.Kind is QaSignalKind.ServerFault or QaSignalKind.Anomaly) && signal.Detail.Length != 0) finding.ReasonDetail = signal.Detail;
         if (signal.Item != 0) finding.Item = signal.Item;
         if (signal.Npc != 0) finding.Npc = signal.Npc;
         if (signal.GameObject != 0) finding.GameObject = signal.GameObject;
@@ -1224,6 +1224,8 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             QaSignalKind.RunFailed => (s.Reason.Length != 0 ? s.Reason : "failed") + " in " + (s.Detail.Length != 0 ? s.Detail : string.Create(CultureInfo.InvariantCulture, $"map {s.Map}"))
                 + " at " + (s.Stage.Length != 0 ? s.Stage : "unknown stage"),
             QaSignalKind.TickHang => "world tick hung in " + (s.Stage.Length != 0 ? s.Stage : "unknown phase") + ": " + (s.Reason.Length != 0 ? s.Reason : "unknown work"),
+            QaSignalKind.Anomaly => (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
+                + (s.Detail.Length != 0 ? ": " + Short(s.Detail) : string.Empty),
             _ => s.Kind.ToString(),
         };
     }

@@ -151,6 +151,8 @@ internal static partial class PlayerbotQaFingerprint
             QaSignalKind.TickHang => $"tickhang|phase={Token(s.Stage)}|item={Token(s.Reason)}",
             // The goal and what it names, never the bot's place: every bot that skips the same entry meets the same unjoined ground.
             QaSignalKind.UnreachableGoal => string.Create(CultureInfo.InvariantCulture, $"unreachable|goal={s.Goal}|quest={s.Quest}|target={s.Target}"),
+            // A recurring bot-* outcome anomaly is keyed by its normalised subsystem (Goal) and code (Reason).
+            QaSignalKind.Anomaly => $"anomaly|{Token(s.Goal)}|{Token(s.Reason)}",
             _ => throw new ArgumentOutOfRangeException(nameof(s)),
         });
     }

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 
 namespace ArcaneCore.World.Playerbots;
@@ -96,10 +97,16 @@ internal sealed class PlayerbotThinkProbe
     internal TileLoadDetail SlowestTile { get; private set; }
 
     /// <summary>The query that created the most nodes: its nodes, time, phase and ends.</summary>
-    internal (long Nodes, long Ticks, string Phase, Vector3 From, Vector3 To, int MaxNodes) Largest { get; private set; }
+    internal (long Nodes, long Ticks, string Phase, Vector3 From, Vector3 To, int MaxNodes) Largest { get; set; }
 
     /// <summary>What drove the bot and its goal after the think (set by the feature after <see cref="End"/>; benchmarks).</summary>
     internal (string Driver, string Goal) Subject { get; set; }
+
+    /// <summary>The player whose brain or driver ran inside this probe, when known.</summary>
+    internal Player? Player { get; set; }
+
+    /// <summary>Whether the slow-think anomaly for this probe has already been reported to <see cref="PlayerbotAnomalies"/>.</summary>
+    internal bool SlowAnomalyReported { get; set; }
 
     /// <summary>The think's time in Stopwatch ticks (after <see cref="End"/>).</summary>
     internal long ElapsedTicks => _elapsed;
@@ -123,6 +130,8 @@ internal sealed class PlayerbotThinkProbe
         Largest = default;
         Search = default;
         SlowestTile = default;
+        Player = null;
+        SlowAnomalyReported = false;
         _elapsed = 0;
         _searchBefore = PathSearchCounters.Current;
         PathSearchCounters.BeginTileCapture();

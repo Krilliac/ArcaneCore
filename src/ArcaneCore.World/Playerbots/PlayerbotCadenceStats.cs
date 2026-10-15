@@ -34,11 +34,15 @@ internal sealed class PlayerbotCadenceStats
     private readonly int[] _gaps = new int[Buckets];
     private long _gapCount;
     private uint _gapMax;
+    private long _overLeaseGaps;
     private long _thinks;
     private int _ticks;
     private int _timeLimited;
     private int _actionLimited;
     private uint _windowMs;
+
+    /// <summary>Total think gaps recorded that exceeded <see cref="PlayerbotMotion.MaxGapLeaseMs"/>.</summary>
+    internal long OverLeaseGaps => _overLeaseGaps;
 
     /// <summary>One bot's think came <paramref name="sinceLastMs"/> ms after its previous one.</summary>
     internal void RecordGap(uint sinceLastMs)
@@ -47,6 +51,7 @@ internal sealed class PlayerbotCadenceStats
         _gaps[(int)Math.Min(sinceLastMs / BucketMs, Buckets - 1)]++;
         _gapCount++;
         if (sinceLastMs > _gapMax) _gapMax = sinceLastMs;
+        if (sinceLastMs > PlayerbotMotion.MaxGapLeaseMs) _overLeaseGaps++;
     }
 
     /// <summary>One tick thought for <paramref name="thinks"/> bots, and stopped on a budget or ran through the rotation.</summary>

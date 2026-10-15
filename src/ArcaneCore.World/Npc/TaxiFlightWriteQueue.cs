@@ -221,6 +221,12 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
         if (failed.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue TaxiFlightWriteQueue",
+                $"queue=TaxiFlightWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"taxi route writes did not drain for characters {string.Join(", ", failed)}", first);
         }
 
@@ -233,6 +239,8 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
     /// <summary>A null <paramref name="route"/> is a delete.</summary>
     private void Request(int characterId, TaxiFlightRoute? route, Action? abandon)
     {
+        bool droppedStopped = false;
+        bool droppedClosed = false;
         lock (_gate)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
@@ -246,23 +254,31 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             {
                 unsaved.Failure = _terminalFailure ?? new InvalidOperationException("the taxi route write queue is stopped; the change was not persisted");
                 logger.LogError("taxi route change for character {Character} arrived after the queue stopped; not persisted", characterId);
-                return;
+                droppedStopped = true;
             }
-
-            if (unsaved.Queued)
+            else if (!unsaved.Queued)
             {
-                return;
+                unsaved.Queued = true;
+                Interlocked.Increment(ref _pending);
+                if (!_channel.Writer.TryWrite(new Work(characterId, Kind.Write, null)))
+                {
+                    unsaved.Queued = false;
+                    Interlocked.Decrement(ref _pending);
+                    unsaved.Failure = new InvalidOperationException("the taxi route write queue is closed; the change was not persisted");
+                    logger.LogError("taxi route change for character {Character} arrived after the queue closed; not persisted", characterId);
+                    droppedClosed = true;
+                }
             }
+        }
 
-            unsaved.Queued = true;
-            Interlocked.Increment(ref _pending);
-            if (!_channel.Writer.TryWrite(new Work(characterId, Kind.Write, null)))
-            {
-                unsaved.Queued = false;
-                Interlocked.Decrement(ref _pending);
-                unsaved.Failure = new InvalidOperationException("the taxi route write queue is closed; the change was not persisted");
-                logger.LogError("taxi route change for character {Character} arrived after the queue closed; not persisted", characterId);
-            }
+        if (droppedStopped || droppedClosed)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"character {characterId}",
+                $"queue=TaxiFlightWriteQueue character={characterId} reason={(droppedStopped ? "queue-stopped" : "queue-closed")}",
+                AnomalySeverity.Error);
         }
     }
 
@@ -300,6 +316,12 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             return;
         }
 
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "circuit-open",
+            "queue TaxiFlightWriteQueue",
+            $"queue=TaxiFlightWriteQueue reason=terminal-ownership-failure error={ex.GetType().Name}",
+            AnomalySeverity.Warning);
         logger.LogCritical(ex, "taxi route write queue entered terminal failure after character ownership rejection");
         try
         {
@@ -501,6 +523,12 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 {
                     if (!sweep)
                     {
+                        AnomalyLedger.Shared.Report(
+                            "persist",
+                            "write-retry-exhausted",
+                            $"character {characterId}",
+                            $"queue=TaxiFlightWriteQueue character={characterId} action={(operation.Route is null ? "delete" : "save")} attempts={MaxAttempts} error={ex.GetType().Name}",
+                            AnomalySeverity.Error);
                         logger.LogFault("writequeue-taxi", ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
                     }
                     else
@@ -511,6 +539,12 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     return ex;
                 }
 
+                AnomalyLedger.Shared.Report(
+                    "persist",
+                    "write-retry-exhausted",
+                    $"character {characterId}",
+                    $"queue=TaxiFlightWriteQueue character={characterId} action=save-abandoned attempts={MaxAttempts} error={ex.GetType().Name}",
+                    AnomalySeverity.Error);
                 logger.LogFault("writequeue-taxi", ex, "taxi route save for character {Character} failed; the route is abandoned and its row deleted", characterId);
                 Abandon(characterId, validAbandon);
                 operation = replacement;

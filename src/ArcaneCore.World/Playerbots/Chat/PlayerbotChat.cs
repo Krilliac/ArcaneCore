@@ -685,6 +685,13 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             if (wait > TimeSpan.Zero) state.CooldownUntil = now + wait;
         }
 
+        AnomalyLedger.Shared.Report(
+            PlayerbotAnomalies.Subsystem("chat"),
+            error == "timeout" ? "client-timeout" : "client-error",
+            $"provider {provider.Label}",
+            $"provider #{index} ({provider.Label}) failed: {error}",
+            AnomalySeverity.Warning);
+
         if (changed)
             _logger.LogWarning("Bot chat provider #{Index} ({Provider}) failed: {Error}; the next provider answers", index, provider.Label, error);
     }

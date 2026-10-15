@@ -198,7 +198,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     : active.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase);
                 if (!match) continue;
             }
-            else if (!Chaos.IsAssigned(active.Record.BotId) && botCount >= maxBots)
+            else if (Playerbots.Chaos.PlayerbotChaosEngine.IsTraveling(player)
+                || (!Chaos.IsAssigned(active.Record.BotId) && botCount >= maxBots))
             {
                 continue;
             }
@@ -935,7 +936,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (bot is not null)
             {
                 // An operator start that fails is reported and not retried; a quarantine retry that fails is one more fault.
-                (bool desired, string code) = quarantineRetry ? RecordFault(bot.BotId, "start-failed: " + ex.Message) : (false, "start-failed");
+                (bool desired, string code) = quarantineRetry ? RecordFault(bot.BotId, "start-failed: " + ex.Message, session?.Player) : (false, "start-failed");
                 bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = desired, State = ManagedPlayerbotState.Faulted, ErrorCode = code }, CancellationToken.None).ConfigureAwait(false);
                 CharacterRecord? character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
                 PublishStopped(bot, character?.Name ?? idOrName, character?.MapId ?? 0);
@@ -1262,7 +1263,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // think, the shared action budget or the per-tick time cap below (PlayerbotMotion).
         foreach (ActiveBot active in bots)
         {
-            if (active.Paused || active.Session.State != SessionState.InWorld || active.Session.Player is not { } mover) continue;
+            if (active.Paused) continue;
+            // A bot between maps has a player that is not in a world; its client half still has to acknowledge the transfer below.
+            if (active.Session.State != SessionState.InWorld || active.Session.Player is not { } mover)
+            {
+                ReportSessionLostOnce(active, "tick");
+                continue;
+            }
             try { PlayerbotMotion.Pump(active.Session, mover, world.NowMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "movement", ex); continue; }
             // Party intake, every tick for every autonomous bot (a scripted controller drains its own queue): invitations,
@@ -1769,10 +1776,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     {
                         if (Volatile.Read(ref active.FaultCode) is { } fault)
                         {
-                            (bool desired, string code) = RecordFault(active.Record.BotId, fault);
+                            (bool desired, string code) = RecordFault(active.Record.BotId, fault, active.Session.Player, active.AnomalySubject);
                             await StopCoreAsync(active.Record, desired, CancellationToken.None, code).ConfigureAwait(false);
                         }
-                        else await StopCoreAsync(active.Record, false, CancellationToken.None).ConfigureAwait(false);
+                        else
+                        {
+                            ReportSessionLostOnce(active, "checkpoint");
+                            await StopCoreAsync(active.Record, false, CancellationToken.None).ConfigureAwait(false);
+                        }
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
@@ -2038,6 +2049,30 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Volatile.Write(ref _savedSharedSetAsideVersion, version);
     }
 
+    private void ReportSessionLostOnce(ActiveBot active, string where)
+    {
+        if (active.Paused || _stopping || ResetInProgress || Volatile.Read(ref active.FaultCode) is not null)
+            return;
+        if (Interlocked.Exchange(ref active.SessionLostReported, 1) != 0)
+            return;
+
+        string detail = $"bot {active.Record.BotId:D} session lost while registered active ({where}, sessionState={active.Session.State}, hasPlayer={active.Session.Player is not null}, inWorld={active.Session.Player?.IsInWorld == true})";
+        if (active.Session.Player is { } player)
+        {
+            active.AnomalySubject = PlayerbotAnomalies.SubjectOf(player);
+            PlayerbotAnomalies.Report(player, "lifecycle", "session-lost", detail, AnomalySeverity.Warning);
+        }
+        else
+        {
+            AnomalyLedger.Shared.Report(
+                PlayerbotAnomalies.Subsystem("lifecycle"),
+                "session-lost",
+                active.AnomalySubject,
+                $"{detail} | map {active.MapId}",
+                AnomalySeverity.Warning);
+        }
+    }
+
     /// <summary>
     /// An exception out of a bot's update (world thread): log all of it, remember the fault for the checkpoint, close the session.
     /// The next checkpoint quarantines the bot (<see cref="RecordFault"/>).
@@ -2087,6 +2122,29 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
+        string thinkDetail = $"bot {active.Record.BotId:D} {what} failed ({ex.GetType().Name}: {ex.Message})";
+        if (active.Session.Player is { } faultPlayer)
+        {
+            active.AnomalySubject = PlayerbotAnomalies.SubjectOf(faultPlayer);
+            PlayerbotAnomalies.Report(faultPlayer, "lifecycle", "think-fault", thinkDetail, AnomalySeverity.Warning);
+        }
+        else
+        {
+            AnomalyLedger.Shared.Report(
+                PlayerbotAnomalies.Subsystem("lifecycle"),
+                "think-fault",
+                active.AnomalySubject,
+                $"{thinkDetail} | map {active.MapId}",
+                AnomalySeverity.Warning);
+        }
+
+        Quarantine quarantine = _quarantine.GetOrAdd(active.Record.BotId, static _ => new Quarantine());
+        lock (quarantine)
+        {
+            quarantine.Subject = active.AnomalySubject;
+            quarantine.MapId = active.MapId;
+        }
+
         Interlocked.CompareExchange(ref active.FaultCode, $"{what}: {ex.Message}", null);
         active.Session.Kick();
     }
@@ -2099,12 +2157,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// Count one fault of a bot and schedule its retry: whether the bot stays desired, and the error code to store. The
     /// <see cref="PlayerbotOptions.MaxFaults"/>-th fault within the window disables it (no retry).
     /// </summary>
-    private (bool Desired, string ErrorCode) RecordFault(Guid botId, string fault)
+    private (bool Desired, string ErrorCode) RecordFault(Guid botId, string fault, Player? player = null, string? fallbackSubject = null)
     {
         long now = ClockMs;
-        Quarantine quarantine = _quarantine.GetOrAdd(botId, _ => new Quarantine());
+        Quarantine quarantine = _quarantine.GetOrAdd(botId, static _ => new Quarantine());
         lock (quarantine)
         {
+            if (player is not null)
+            {
+                quarantine.Subject = PlayerbotAnomalies.SubjectOf(player);
+                quarantine.MapId = player.Map?.MapId ?? player.MapId;
+            }
+            else if (!string.IsNullOrEmpty(fallbackSubject))
+            {
+                quarantine.Subject = fallbackSubject;
+            }
+
+            string subject = quarantine.Subject ?? $"bot {botId:D}";
             quarantine.Faults.RemoveAll(at => now - at >= _options.FaultWindowSeconds * 1000L);
             quarantine.Faults.Add(now);
             int count = quarantine.Faults.Count;
@@ -2113,6 +2182,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 _quarantine.TryRemove(botId, out _);
                 logger.LogWarning("Playerbot {BotId} disabled after {Count} faults within {Window} s: {Fault}",
                     botId, count, _options.FaultWindowSeconds, fault);
+                string disabledDetail = $"bot {botId:D} disabled after {count} faults within {_options.FaultWindowSeconds} s: {fault}";
+                if (player is not null)
+                {
+                    PlayerbotAnomalies.Report(player, "lifecycle", "disabled", disabledDetail, AnomalySeverity.Error);
+                }
+                else
+                {
+                    AnomalyLedger.Shared.Report(
+                        PlayerbotAnomalies.Subsystem("lifecycle"),
+                        "disabled",
+                        subject,
+                        $"{disabledDetail} | map {quarantine.MapId}",
+                        AnomalySeverity.Error);
+                }
                 return (false, Code($"disabled after {count} faults: {fault}"));
             }
 
@@ -2120,6 +2203,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             quarantine.RetryAtMs = now + backoffMs;
             logger.LogWarning("Playerbot {BotId} quarantined for {Seconds} s (fault {Count} of {Max}): {Fault}",
                 botId, backoffMs / 1000, count, _options.MaxFaults, fault);
+            string quarantineDetail = $"bot {botId:D} quarantined for {backoffMs / 1000} s (fault {count} of {_options.MaxFaults}): {fault}";
+            if (player is not null)
+            {
+                PlayerbotAnomalies.Report(player, "lifecycle", "quarantined", quarantineDetail, AnomalySeverity.Warning);
+            }
+            else
+            {
+                AnomalyLedger.Shared.Report(
+                    PlayerbotAnomalies.Subsystem("lifecycle"),
+                    "quarantined",
+                    subject,
+                    $"{quarantineDetail} | map {quarantine.MapId}",
+                    AnomalySeverity.Warning);
+            }
             return (true, Code($"quarantined (fault {count}/{_options.MaxFaults}): {fault}"));
         }
 
@@ -2187,6 +2284,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         public readonly List<long> Faults = [];
         public long RetryAtMs = long.MaxValue;
+        public string? Subject;
+        public uint MapId;
     }
 
     private async Task ReconcileProvisioningAsync(IServiceProvider provider, CancellationToken cancellationToken)
@@ -2268,6 +2367,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public bool GroupDriven;
         public bool BattlegroundDriven;
         public string Name = session.Player?.Name ?? string.Empty;
+        public string AnomalySubject = session.Player is { } p ? PlayerbotAnomalies.SubjectOf(p) : $"bot {record.BotId:D}";
         public uint MapId = session.Player?.Map?.MapId ?? session.Player?.MapId ?? 0;
         public uint LastUpdateMs = session.World.NowMs;
         /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>
@@ -2275,6 +2375,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public volatile bool Paused;
         public IPlayerbotController? Controller;
         public string? FaultCode;
+        public int SessionLostReported;
         public int StallsLogged;
         public PlayerbotStatus? Status; // world thread: the last status line (StatusOf)
         private string? _stallSource;

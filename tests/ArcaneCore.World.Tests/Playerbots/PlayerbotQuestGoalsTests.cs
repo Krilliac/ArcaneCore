@@ -789,6 +789,28 @@ public sealed class PlayerbotQuestGoalsTests
         Assert.True(data.Quests.Single(q => q.Quest == QuestInteractionFixture.QuestId).Rewarded);
     }
 
+    [Theory]
+    [InlineData("InventoryFull", "inventory full", ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Info)]
+    [InlineData("RewardRefused", "reward refused by the server", ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Warning)]
+    public async Task TurnInRefusal_IsInfoForFullBags_AndWarningOtherwise(string code, string reason, ArcaneCore.Kernel.Diagnostics.AnomalySeverity expected)
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+
+            goals.RecordTurnInRefusal(player, QuestInteractionFixture.QuestId, QuestInteractionFixture.Entry, reason, code, quest.Host.World.NowMs);
+
+            var notice = Assert.Single(capture.Notices, n => n.Key == PlayerbotAnomalies.Key("quest", "turnin-refused"));
+            Assert.Equal(expected, notice.Severity);
+            return true;
+        });
+    }
+
+
     /// <summary>A world with the synthetic quest giver beside a managed player and a SQLite character database.</summary>
     private sealed class QuestHost : IAsyncDisposable
     {

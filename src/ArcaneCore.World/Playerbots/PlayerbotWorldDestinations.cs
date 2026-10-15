@@ -1191,7 +1191,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             return true;
         }
         _planLease = lease;
-        _navigationPlan = new PlayerbotAsyncNavigationPlan(map.MapId, request.Start, request.Dataset);
+        _navigationPlan = new PlayerbotAsyncNavigationPlan(map.MapId, request.Start, request.Dataset, player, destination);
         _awaitingRequest = request;
         _pendingIdentity = new(player, map, nav, _content, _contentVersion, _quests, Home, player.Level,
             preferredEntry, returnQuestId, questId, request.Start, graph, _options.MaxRouteYards, _options.MaxPathPoints);

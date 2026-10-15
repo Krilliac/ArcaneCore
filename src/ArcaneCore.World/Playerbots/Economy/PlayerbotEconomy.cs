@@ -6,6 +6,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
@@ -388,7 +389,21 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
         if (!player.IsQuestSettlementPending)
         {
             // Dropped or refused at once (a refusal is answered inside the handler): nothing was taken.
-            session.DrainManagedPackets(WorldOpcode.SmsgAuctionCommandResult);
+            bool itemMissing = false;
+            foreach (ManagedSessionPacket packet in session.DrainManagedPackets(WorldOpcode.SmsgAuctionCommandResult))
+            {
+                if (TryDecode(() => PlayerbotEconomyWire.DecodeCommandResult(packet.Payload), out PlayerbotAuctionResult immediate)
+                    && immediate.Action == AuctionAction.Started && immediate.Error == AuctionError.ItemNotFound)
+                    itemMissing = true;
+            }
+
+            if (!session.IsInChaosProbe)
+            {
+                if (itemMissing)
+                    PlayerbotAnomalies.Report(player, "economy", "item-not-found", $"auction listing item {item.Template.Entry} (guid {item.Guid}) not found by auction house");
+                PlayerbotAnomalies.Report(player, "economy", "ah-post-failed", $"auction listing for item {item.Template.Entry} (guid {item.Guid}) was rejected immediately");
+                PlayerbotAnomalies.Report(player, "economy", "sell-failed", $"auction listing for item {item.Template.Entry} (guid {item.Guid}) was rejected immediately");
+            }
             return true;
         }
 
@@ -410,7 +425,21 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
                 uint paid = _moneyBefore >= player.Money ? _moneyBefore - player.Money : 0;
                 _spent = unchecked(_spent + paid);
                 // The deposit is the one thing a listing costs the bot now; any other amount means the pricing assumption failed.
-                if (paid != _expectedCost) _listingFault = true;
+                if (player.Money > _moneyBefore || paid != _expectedCost)
+                {
+                    _listingFault = true;
+                    if (!session.IsInChaosProbe)
+                        PlayerbotAnomalies.Report(player, "economy", "money-invalid",
+                            $"auction listing deposit mismatch (before={_moneyBefore}, after={player.Money}, paid={paid}, expected={_expectedCost})",
+                            AnomalySeverity.Error);
+                }
+            }
+            else if (!session.IsInChaosProbe)
+            {
+                if (result.Error == AuctionError.ItemNotFound)
+                    PlayerbotAnomalies.Report(player, "economy", "item-not-found", $"auction listing failed with ItemNotFound (auction={result.AuctionId})");
+                PlayerbotAnomalies.Report(player, "economy", "ah-post-failed", $"auction listing failed with {result.Error} (auction={result.AuctionId})");
+                PlayerbotAnomalies.Report(player, "economy", "sell-failed", $"auction listing failed with {result.Error} (auction={result.AuctionId})");
             }
 
             _phase = PlayerbotEconomyPhase.Listing;
@@ -421,12 +450,22 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
         {
             // The settlement ended without a result (an unknown outcome): count what left the purse and carry on.
             _spent = unchecked(_spent + (_moneyBefore >= player.Money ? _moneyBefore - player.Money : 0));
+            if (!session.IsInChaosProbe)
+            {
+                PlayerbotAnomalies.Report(player, "economy", "ah-post-failed", "auction listing settlement ended without a command result");
+                PlayerbotAnomalies.Report(player, "economy", "sell-failed", "auction listing settlement ended without a command result");
+            }
             _phase = PlayerbotEconomyPhase.Listing;
             return true;
         }
 
         if (Reached(now, _operationDeadline))
         {
+            if (!session.IsInChaosProbe)
+            {
+                PlayerbotAnomalies.Report(player, "economy", "ah-post-failed", "auction listing timed out waiting for settlement");
+                PlayerbotAnomalies.Report(player, "economy", "sell-failed", "auction listing timed out waiting for settlement");
+            }
             Abort();
             return false;
         }
@@ -504,7 +543,14 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
             {
                 _purchases++;
                 PurchasesMade++;
-                _spent = unchecked(_spent + (_moneyBefore >= player.Money ? _moneyBefore - player.Money : 0));
+                uint paid = _moneyBefore >= player.Money ? _moneyBefore - player.Money : 0;
+                _spent = unchecked(_spent + paid);
+                if ((player.Money > _moneyBefore || paid != _expectedCost) && !session.IsInChaosProbe)
+                {
+                    PlayerbotAnomalies.Report(player, "economy", "money-invalid",
+                        $"auction buyout cost mismatch for auction {_bidAuction} (before={_moneyBefore}, after={player.Money}, paid={paid}, expected={_expectedCost})",
+                        AnomalySeverity.Error);
+                }
             }
             else
             {
@@ -654,10 +700,19 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
                     {
                         MoneyCollected += _letterMoney;
                         _letterMoney = 0;
+                        if (player.Money < _moneyBefore && !session.IsInChaosProbe)
+                        {
+                            PlayerbotAnomalies.Report(player, "economy", "money-invalid",
+                                $"mail money take decreased player money (before={_moneyBefore}, after={player.Money})",
+                                AnomalySeverity.Error);
+                        }
                     }
                     else
                     {
                         _letterBlocked = true;
+                        if (!session.IsInChaosProbe)
+                            PlayerbotAnomalies.Report(player, "economy", "sell-failed",
+                                $"taking auction mail money for letter {letter.Id} failed with {result.Result}");
                     }
 
                     break;
@@ -670,6 +725,14 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
                     else
                     {
                         _letterBlocked = true;
+                        if (!session.IsInChaosProbe)
+                        {
+                            if (result.Result == MailResult.InternalError)
+                                PlayerbotAnomalies.Report(player, "economy", "item-not-found",
+                                    $"auction mail item {letter.ItemEntry} in letter {letter.Id} could not be taken ({result.Result})");
+                            PlayerbotAnomalies.Report(player, "economy", "sell-failed",
+                                $"taking auction mail item {letter.ItemEntry} in letter {letter.Id} failed with {result.Result}");
+                        }
                     }
 
                     break;
@@ -755,6 +818,10 @@ internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions op
                 item = candidate;
                 return true;
             }
+
+            if (!session.IsInChaosProbe)
+                PlayerbotAnomalies.Report(player, "economy", "item-not-found",
+                    $"queued auction item {candidate.Template.Entry} (guid {candidate.Guid}, count {candidate.Count}) missing or changed in bags");
         }
 
         item = null;

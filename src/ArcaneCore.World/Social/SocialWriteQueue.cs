@@ -189,6 +189,12 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             if (_stopped)
             {
                 _logger.LogError("social write queue stopped; friend write for character {Character} lost", characterId);
+                AnomalyLedger.Shared.Report(
+                    "persist",
+                    "write-dropped-on-shutdown",
+                    $"character {characterId}",
+                    $"queue=SocialWriteQueue character={characterId} reason=queue-stopped",
+                    AnomalySeverity.Error);
                 return false;
             }
 
@@ -198,6 +204,12 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                 if (OverLimit(characterId))
                 {
                     _logger.LogWarning("character {Character} has too many social writes waiting ({Rows} in total); refusing", characterId, _rowsTotal);
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "queue-backlog",
+                        "queue SocialWriteQueue",
+                        $"queue=SocialWriteQueue character={characterId} rowsTotal={_rowsTotal}",
+                        AnomalySeverity.Warning);
                     return false;
                 }
 
@@ -430,6 +442,12 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
         if (left.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue SocialWriteQueue",
+                $"queue=SocialWriteQueue undrainedTargets={left.Length} firstTarget={left[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"social writes did not drain for {string.Join(", ", left)}", first);
         }
 
@@ -475,6 +493,12 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             Interlocked.Decrement(ref _pending);
             _logger.LogError("social write queue closed; write for {Kind} {Id} lost", key.Kind, key.A);
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue SocialWriteQueue",
+                $"queue=SocialWriteQueue kind={key.Kind} id={key.A} reason=queue-closed",
+                AnomalySeverity.Error);
             return false;
         }
 
@@ -570,6 +594,12 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             return;
         }
 
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "circuit-open",
+            "queue SocialWriteQueue",
+            $"queue=SocialWriteQueue reason=terminal-ownership-failure error={ex.GetType().Name}",
+            AnomalySeverity.Warning);
         _logger.LogCritical(ex, "social write queue entered terminal failure after character ownership rejection");
         try
         {
@@ -705,6 +735,16 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             }
 
             ReleaseKey(work.Key);
+        }
+
+        if (failure is not null)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-retry-exhausted",
+                "queue SocialWriteQueue",
+                $"queue=SocialWriteQueue kind={work.Key.Kind} id={work.Key.A} attempts={MaxAttempts} error={failure.GetType().Name}",
+                AnomalySeverity.Error);
         }
 
         if (failure is null)

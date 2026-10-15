@@ -63,6 +63,46 @@ public sealed partial class Creature : Unit, ICombatCreature
             }
         }
         var start = new Vector3(X, Y, Z);
+        bool hasNonFinite = !float.IsFinite(start.X) || !float.IsFinite(start.Y) || !float.IsFinite(start.Z)
+            || (facing.FinalAngle is { } finalAngle && !float.IsFinite(finalAngle));
+        for (int i = 0; i < path.Count; i++)
+        {
+            Vector3 p = path[i];
+            if (!float.IsFinite(p.X) || !float.IsFinite(p.Y) || !float.IsFinite(p.Z))
+            {
+                hasNonFinite = true;
+                break;
+            }
+        }
+
+        if (hasNonFinite)
+        {
+            CreatureAnomalies.ReportNonFinite(
+                this,
+                $"Creature {Guid} (entry {Entry}) started spline with non-finite coordinates from ({start.X}, {start.Y}, {start.Z}) on map {MapId}");
+            float safeX = float.IsFinite(start.X) ? start.X : (float.IsFinite(Home.X) ? Home.X : 0f);
+            float safeY = float.IsFinite(start.Y) ? start.Y : (float.IsFinite(Home.Y) ? Home.Y : 0f);
+            float safeZ = float.IsFinite(start.Z) ? start.Z : (float.IsFinite(Home.Z) ? Home.Z : 0f);
+            start = new Vector3(safeX, safeY, safeZ);
+            var sanitized = new Vector3[path.Count];
+            Vector3 prev = start;
+            for (int i = 0; i < path.Count; i++)
+            {
+                Vector3 p = path[i];
+                prev = new Vector3(
+                    float.IsFinite(p.X) ? p.X : prev.X,
+                    float.IsFinite(p.Y) ? p.Y : prev.Y,
+                    float.IsFinite(p.Z) ? p.Z : prev.Z);
+                sanitized[i] = prev;
+            }
+
+            path = sanitized;
+            if (facing.FinalAngle is { } badAngle && !float.IsFinite(badAngle))
+            {
+                facing = SplineFacing.None;
+            }
+        }
+
         float length = 0;
         Vector3 previous = start;
         for (int i = 0; i < path.Count; i++) // indexed: no boxed enumerator over the IReadOnlyList
@@ -75,7 +115,7 @@ public sealed partial class Creature : Unit, ICombatCreature
             ? 1u
             : Math.Max(1u, (uint)Math.Clamp(MathF.Round(length / speed * 1000f), 1f, 86_400_000f));
         Vector3 end = path[^1];
-        var spline = new CreatureSpline(splineId, X, Y, Z, end.X, end.Y, end.Z, run, facing.FinalAngle, clockMs, duration)
+        var spline = new CreatureSpline(splineId, start.X, start.Y, start.Z, end.X, end.Y, end.Z, run, facing.FinalAngle, clockMs, duration)
         {
             Path = path.Count > 1 ? [.. path] : [],
             Facing = facing,
@@ -126,6 +166,9 @@ public sealed partial class Creature : Unit, ICombatCreature
             Relocate(x, y, z, orientation, serverTimeMs);
         }
     }
+
+    /// <summary>Drop the active spline without relocating (used when the position it interpolates is not finite).</summary>
+    internal void DiscardSpline() => Spline = null;
 
     internal void ResetToHome(uint serverTimeMs)
     {

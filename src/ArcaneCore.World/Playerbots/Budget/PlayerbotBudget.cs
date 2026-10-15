@@ -239,7 +239,12 @@ internal sealed class PlayerbotBudget(WorldSession session, PlayerbotOptions opt
         if (failures >= VendorFailureLimit && unchecked((int)(now - until)) >= 0) failures = 0;
         failures++;
         _vendorFailures[entry] = (failures, failures >= VendorFailureLimit ? unchecked(now + VendorExclusionMs) : 0);
-        if (failures >= VendorFailureLimit) _dirty = true;
+        if (failures >= VendorFailureLimit)
+        {
+            _dirty = true;
+            if (!session.IsInChaosProbe && session.Player is { } player)
+                PlayerbotAnomalies.Report(player, "mount", "riding-refused", $"mount vendor {entry} excluded after {failures} failed visits");
+        }
     }
 
     /// <summary>The vendor has failed too often lately to plan a mount purchase at.</summary>

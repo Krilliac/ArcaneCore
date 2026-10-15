@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -163,6 +164,18 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            if (remaining > MaxReasonableCooldownMs)
+            {
+                uint subjectSpellId = ownerSpellId != 0 ? ownerSpellId : cooldown.Id;
+                AnomalyLedger.Shared.Report(
+                    "spell",
+                    "cooldown-invalid",
+                    FormatSpellSubject(subjectSpellId),
+                    $"unit={FormatUnitSubject(unit)} kind={cooldown.Kind} id={cooldown.Id} remainingMs={remaining}",
+                    AnomalySeverity.Warning);
+                remaining = MaxReasonableCooldownMs;
+            }
+
             state ??= GetOrCreateState(unit);
             uint until = (uint)Math.Min(uint.MaxValue, now + remaining);
             Dictionary<uint, uint> table = cooldown.Kind == SpellCooldownKind.Spell ? state.SpellCooldowns : state.CategoryCooldowns;
@@ -253,6 +266,17 @@ public sealed partial class SpellSystem
                 : AuraCasterOwner.Orphaned();
             var holder = new SpellAuraHolder(spell, unit, saved.CasterGuid, selfCast ? unit.Level : saved.CasterLevel, owner,
                 permanent ? -1 : Math.Max(saved.MaxDurationMs, remaining));
+            if (!permanent && (saved.MaxDurationMs <= 0 || saved.RemainingMs > saved.MaxDurationMs))
+            {
+                holder.DurationInvalidReported = true;
+                AnomalyLedger.Shared.Report(
+                    "aura",
+                    "duration-invalid",
+                    FormatSpellSubject(spell.Id),
+                    $"target={FormatUnitSubject(unit)} remainingMs={saved.RemainingMs} maxDurationMs={saved.MaxDurationMs}",
+                    AnomalySeverity.Warning);
+            }
+
             for (int i = 0; i < SpellConstants.MaxEffects; i++)
             {
                 SpellEffectInfo effect = spell.Effects[i];
@@ -264,9 +288,22 @@ public sealed partial class SpellSystem
 
                 var aura = new SpellAura(i, effect.AuraType, saved.Amounts.ElementAtOrDefault(i), effect.Amplitude, effect.MiscValue, unit.PowerType);
                 int timer = saved.PeriodicTimers.ElementAtOrDefault(i);
-                if (aura.IsPeriodic && timer > 0 && timer <= (int)aura.MaximumPeriodicTimer)
+                if (aura.IsPeriodic)
                 {
-                    aura.PeriodicTimer = timer;
+                    if (timer > 0 && timer <= (int)aura.MaximumPeriodicTimer)
+                    {
+                        aura.PeriodicTimer = timer;
+                    }
+                    else if (timer < 0 || timer > (int)aura.MaximumPeriodicTimer)
+                    {
+                        aura.PeriodicStalledReported = true;
+                        AnomalyLedger.Shared.Report(
+                            "aura",
+                            "periodic-stalled",
+                            FormatSpellSubject(spell.Id),
+                            $"target={FormatUnitSubject(unit)} effectIndex={i} auraType={effect.AuraType} persistedTimerMs={timer} maxTimerMs={aura.MaximumPeriodicTimer}",
+                            AnomalySeverity.Warning);
+                    }
                 }
 
                 holder.SetAura(aura);
@@ -282,7 +319,19 @@ public sealed partial class SpellSystem
                 holder.Duration = remaining;
             }
 
-            holder.StackAmount = (byte)Math.Clamp((int)saved.StackAmount, 1, Math.Max(1, (int)spell.StackAmount));
+            int maxAllowedStacks = Math.Max(1, (int)spell.StackAmount);
+            if (saved.StackAmount == 0 || saved.StackAmount > maxAllowedStacks)
+            {
+                holder.StackOverflowReported = true;
+                AnomalyLedger.Shared.Report(
+                    "aura",
+                    "stack-overflow",
+                    FormatSpellSubject(spell.Id),
+                    $"target={FormatUnitSubject(unit)} persistedStacks={saved.StackAmount} maxStackAmount={spell.StackAmount}",
+                    AnomalySeverity.Warning);
+            }
+
+            holder.StackAmount = (byte)Math.Clamp((int)saved.StackAmount, 1, maxAllowedStacks);
             foreach (SpellAura? restoredAura in holder.AuraSpan)
             {
                 // The saved amount is the stacked total; the one-stack value is recovered by division (exact for every stack the engine itself produced).

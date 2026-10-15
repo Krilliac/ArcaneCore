@@ -148,6 +148,66 @@ public sealed class LocomotionState
 
     public bool IsFalling => _falling;
 
+    /// <summary>Server time when the current continuous fall episode started, or null when not falling.</summary>
+    public uint? FallStartedAtMs { get; internal set; }
+
+    /// <summary>Whether <c>move/fall-without-landing</c> has already been reported for the current fall episode.</summary>
+    public bool FallWithoutLandingReported { get; internal set; }
+
+    /// <summary>True while a synthetic chaos probe packet is being processed and anomaly ledger reports should be suppressed.</summary>
+    public bool SuppressAnomalies { get; set; }
+
+    /// <summary>Server timestamp of the last <c>move/non-finite</c> report for this unit.</summary>
+    public uint? LastNonFiniteReportServerMs { get; set; }
+
+    /// <summary>Whether <c>move/under-map</c> has already been reported for the current under-map episode.</summary>
+    public bool UndermapReportedInEpisode { get; internal set; }
+
+    /// <summary>Server timestamp of the last terrain-height under-map sample for this unit.</summary>
+    public uint? LastUndermapSampleMs { get; internal set; }
+
+    /// <summary>Server timestamp of the last <c>move/speed-violation</c> report for this unit.</summary>
+    public uint? LastSpeedViolationReportMs { get; internal set; }
+
+    /// <summary>Server timestamp of the last server-initiated teleport or knockback relocation.</summary>
+    public uint? LastTeleportOrKnockbackMs { get; internal set; }
+
+    /// <summary>Last unknown transport GUID reported by <c>move/client-transport-unknown</c> in the current episode.</summary>
+    public ulong LastUnknownTransportGuid { get; internal set; }
+
+    /// <summary>Whether <c>transport/passenger-desync</c> has already been reported in the current episode.</summary>
+    public bool TransportDesyncReportedInEpisode { get; internal set; }
+
+    /// <summary>Whether <c>transport/passenger-left-behind</c> has already been reported in the current episode.</summary>
+    public bool PassengerLeftBehindReportedInEpisode { get; internal set; }
+
+    /// <summary>Server time when tracking of the current ghost travel episode started.</summary>
+    public uint? GhostTrackStartedAtMs { get; internal set; }
+
+    /// <summary>Server time when the ghost last made meaningful progress toward its corpse or spirit healer.</summary>
+    public uint? GhostLastProgressAtMs { get; internal set; }
+
+    /// <summary>Map id for which the current ghost travel progress baseline was recorded.</summary>
+    public uint GhostTrackedMapId { get; internal set; }
+
+    /// <summary>Closest 2D distance to the corpse or entrance achieved during the current ghost travel episode.</summary>
+    public float GhostBestTargetDistance { get; internal set; } = float.MaxValue;
+
+    /// <summary>Anchor X position for ghost movement progress when no same-map target exists.</summary>
+    public float GhostAnchorX { get; internal set; }
+
+    /// <summary>Anchor Y position for ghost movement progress when no same-map target exists.</summary>
+    public float GhostAnchorY { get; internal set; }
+
+    /// <summary>Whether <c>death/ghost-stuck</c> has already been reported in the current ghost episode.</summary>
+    public bool GhostStuckReported { get; internal set; }
+
+    /// <summary>Whether <c>death/corpse-missing</c> has already been reported in the current ghost episode.</summary>
+    public bool CorpseMissingReported { get; internal set; }
+
+    /// <summary>Whether <c>death/spirit-healer-unreachable</c> has already been reported in the current ghost episode.</summary>
+    public bool SpiritHealerUnreachableReported { get; internal set; }
+
     /// <summary>Where the player is in the liquids (vmangos Player::m_environmentFlags).</summary>
     public EnvironmentFlags Environment { get; set; }
 
@@ -176,6 +236,22 @@ public sealed class LocomotionState
     {
         _falling = false;
         _fallStartZ = 0.0f;
+        FallStartedAtMs = null;
+        FallWithoutLandingReported = false;
+    }
+
+    /// <summary>Clear per-death ghost anomaly episode flags when the player is alive or starts a fresh death cycle.</summary>
+    public void ResetDeathTracking()
+    {
+        GhostTrackStartedAtMs = null;
+        GhostLastProgressAtMs = null;
+        GhostTrackedMapId = 0;
+        GhostBestTargetDistance = float.MaxValue;
+        GhostAnchorX = 0f;
+        GhostAnchorY = 0f;
+        GhostStuckReported = false;
+        CorpseMissingReported = false;
+        SpiritHealerUnreachableReported = false;
     }
 
     /// <summary>Acknowledgements that matched nothing the server sent (vmangos OnWrongAckData; counted, never punished here).</summary>

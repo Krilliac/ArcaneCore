@@ -76,12 +76,19 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             if (eff.Effect is SpellEffectName.Skill or SpellEffectName.SkillStep)
             {
                 uint skillId = (uint)Math.Max(0, eff.MiscValue);
-                if (skillId == 0 || IsPreferredSkillForClass(player.Class, skillId)
-                    || (player.Skills?.GetValueBase(skillId) ?? 0) > 0)
+                if (skillId != 0 && !IsPreferredSkillForClass(player.Class, skillId)
+                    && (player.Skills?.GetValueBase(skillId) ?? 0) == 0)
                 {
-                    return true;
+                    return false;
                 }
             }
+        }
+
+        for (int i = 0; i < spell.Effects.Count; i++)
+        {
+            SpellEffectInfo eff = spell.Effects[i];
+            if (eff.Effect is SpellEffectName.Skill or SpellEffectName.SkillStep)
+                return true;
 
             if (eff.Effect is SpellEffectName.OpenLock or SpellEffectName.Skinning or SpellEffectName.EnchantItem or SpellEffectName.Disenchant)
                 return true;
@@ -309,6 +316,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                     if (planned == PlanOutcome.Refused || _route is null)
                     {
                         _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + RefusalBackoffMs);
+                        if (!_session.IsInChaosProbe)
+                            PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} spell focus {bestSpell.RequiresSpellFocus} unreachable");
                         return false;
                     }
                     _routeTarget = distantFocus.Guid;
@@ -319,6 +328,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             }
 
             _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + RefusalBackoffMs);
+            if (!_session.IsInChaosProbe)
+                PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} missing nearby spell focus {bestSpell.RequiresSpellFocus}");
             return false;
         }
 
@@ -326,6 +337,17 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         _routeTarget = default;
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
+
+        uint reagentId = 0, reagentBefore = 0;
+        for (int r = 0; r < bestSpell.Reagents.Count; r++)
+        {
+            if (bestSpell.Reagents[r].ItemId != 0 && bestSpell.Reagents[r].Count > 0)
+            {
+                reagentId = bestSpell.Reagents[r].ItemId;
+                reagentBefore = player.Inventory.GetItemCount(reagentId);
+                break;
+            }
+        }
 
         Goal = PlayerbotGoalKind.Vendor;
         TargetEntry = 0;
@@ -336,8 +358,13 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return false;
 
         // Back off briefly if the cast was immediately rejected (not preparing/casting and reagents unchanged).
-        if (_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is null)
+        if (_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is null
+            && (reagentId == 0 || player.Inventory.GetItemCount(reagentId) >= reagentBefore))
+        {
             _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + RefusalBackoffMs);
+            if (!_session.IsInChaosProbe)
+                PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} rejected with reagents present");
+        }
         return true;
     }
 
@@ -543,6 +570,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         {
             _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + RefusalBackoffMs);
             _refusedUntil[bestTarget.Guid.Value] = unchecked(now + RefusalBackoffMs);
+            if (!_session.IsInChaosProbe)
+                PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"enchant spell {bestSpell.Id} rejected on item {bestTarget.Entry}");
         }
         return true;
     }
@@ -974,8 +1003,11 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
 
         if (unchecked((int)(_gatherWaitUntilMs - now)) <= 0)
         {
+            ObjectGuid timedOutTarget = _gatheringTarget;
             _waitingForGatherLoot = false;
             _gatheringTarget = default;
+            if (!_session.IsInChaosProbe)
+                PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"gather or disenchant loot timed out for target {timedOutTarget}");
             return false;
         }
 

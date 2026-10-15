@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Playerbots.Chat;
 
@@ -45,7 +46,7 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(prompt);
-        if (provider.Endpoint is not { } endpoint) return BotChatResult.Fail(BotChatOutcome.Rejected);
+        if (provider.Endpoint is not { } endpoint) return ObserveResult(provider, BotChatResult.Fail(BotChatOutcome.Rejected));
         bool anthropic = provider.Kind == PlayerbotChatProviderKind.Anthropic;
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {
@@ -65,19 +66,33 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
         try
         {
             using HttpResponseMessage response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return BotChatResult.Fail(Classify(response.StatusCode), RetryAfter(response));
+            if (!response.IsSuccessStatusCode) return ObserveResult(provider, BotChatResult.Fail(Classify(response.StatusCode), RetryAfter(response)));
             byte[]? body = await ReadCappedAsync(response, cancellationToken).ConfigureAwait(false);
-            if (body is null) return BotChatResult.Fail(BotChatOutcome.BadResponse);
-            return anthropic ? ParseAnthropic(body) : ParseOpenAI(body);
+            if (body is null) return ObserveResult(provider, BotChatResult.Fail(BotChatOutcome.BadResponse));
+            return ObserveResult(provider, anthropic ? ParseAnthropic(body) : ParseOpenAI(body));
         }
         catch (OperationCanceledException)
         {
-            return BotChatResult.Fail(BotChatOutcome.Timeout);
+            return ObserveResult(provider, BotChatResult.Fail(BotChatOutcome.Timeout));
         }
         catch (Exception error) when (error is HttpRequestException or IOException)
         {
-            return BotChatResult.Fail(BotChatOutcome.NetworkError);
+            return ObserveResult(provider, BotChatResult.Fail(BotChatOutcome.NetworkError));
         }
+    }
+
+    private static BotChatResult ObserveResult(PlayerbotChatProviderOptions provider, BotChatResult result)
+    {
+        if (result.Outcome != BotChatOutcome.Ok)
+        {
+            AnomalyLedger.Shared.Report(
+                PlayerbotAnomalies.Subsystem("chat"),
+                result.Outcome == BotChatOutcome.Timeout ? "client-timeout" : "client-error",
+                $"provider {provider.Label}",
+                $"HTTP chat completion for {provider.Label} ended with {result.Outcome}",
+                AnomalySeverity.Warning);
+        }
+        return result;
     }
 
     public async Task<BotChatModeration> ModerateAsync(PlayerbotChatProviderOptions provider, string? apiKey, string text, CancellationToken cancellationToken)

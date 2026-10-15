@@ -267,6 +267,7 @@ internal static class PlayerbotMotion
         // Between maps the bot's brain does not run; the client half still ends its loading screen (PlayerbotMovementControl).
         if (PlayerbotMovementControl.AcknowledgeTransfer(session, player)) return;
         PlayerbotElevator.Pump(session, player, now);
+        PlayerbotTram.Pump(session, player, now);
         if (!States.TryGetValue(player, out MotionState? state) || state.Route is not { } route) return;
         state.World = session.World;
         if (!CanMove(player) || !player.IsInWorld || player.Map is not { } map || !ReferenceEquals(map, state.Map)
