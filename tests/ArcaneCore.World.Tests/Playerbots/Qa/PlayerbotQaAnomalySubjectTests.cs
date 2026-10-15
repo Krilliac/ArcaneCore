@@ -62,13 +62,22 @@ public sealed class PlayerbotQaAnomalySubjectTests
         string detail = string.Join("  \n ", Enumerable.Range(0, 60).Select(i => "word" + i));
         string subject = SubjectOf(detail);
         string example = subject["bot-motion/wall-crossed: ".Length..];
-        Assert.EndsWith("\u2026", example, StringComparison.Ordinal);
-        Assert.True(example.Length <= 121, example.Length.ToString());
+        Assert.EndsWith("...", example, StringComparison.Ordinal);
+        Assert.True(example.Length <= 123, example.Length.ToString());
         Assert.DoesNotContain("  ", example, StringComparison.Ordinal);
         Assert.DoesNotContain('\n', example);
-        string body = example[..^1];
+        string body = example[..^3];
         Assert.Matches(@"^(word\d+ )*word\d+$", body); // no word cut in the middle: it ends on a whole word
         Assert.StartsWith("word0 word1 ", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Subject_MasksAnObjectGuidInItsHighColonHexForm()
+    {
+        // ObjectGuid.ToString() is "{High}:{Value:X16}" (the craft-failed detail names its gather target this way).
+        string subject = SubjectOf("gather or disenchant loot timed out for target GameObject:F11000000000A1B2 near 3 nodes");
+        Assert.DoesNotContain("F11000000000A1B2", subject, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("target GameObject:# near 3 nodes", subject, StringComparison.Ordinal);
     }
 
     [Fact]

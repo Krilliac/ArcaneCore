@@ -27,7 +27,7 @@ internal static partial class PlayerbotQaFingerprint
     [GeneratedRegex(@"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}|0[xX][0-9a-fA-F]+|\d+", RegexOptions.CultureInvariant)]
     private static partial Regex VolatilePattern();
 
-    [GeneratedRegex(@"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}|0[xX][0-9a-fA-F]+|(?<=\bguids?\s*[:=]?\s*)\d[0-9a-fA-F]*\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}|0[xX][0-9a-fA-F]+|(?<=\bguids?\s*[:=]?\s*)\d[0-9a-fA-F]*\b|(?<=\b[A-Za-z]+:)[0-9a-fA-F]{16}\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex GuidLikePattern();
 
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
@@ -200,6 +200,7 @@ internal static partial class PlayerbotQaFingerprint
         if (flat.Length <= maxChars) return flat;
         int cut = flat.LastIndexOf(' ', maxChars);
         if (cut < maxChars / 2) cut = maxChars;
-        return flat[..cut].TrimEnd(' ', ',', ';', ':') + "…";
+        // ASCII "...": the 1.12 client's chat font has no glyph for U+2026.
+        return flat[..cut].TrimEnd(' ', ',', ';', ':') + "...";
     }
 }
