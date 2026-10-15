@@ -44,6 +44,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
     private QaSpellCoverageReport? _coverage;
     private WorldRuntime? _world;
     private PlayerbotQaFaultFeed? _faultFeed;
+    private PlayerbotQaAnomalyFeed? _anomalyFeed;
     private System.Diagnostics.Metrics.Meter? _findingsMeter;
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
@@ -54,6 +55,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
 
     /// <summary>Test seam: the fault ledger the server-fault signals are read from (default: the container's, else the process-wide one).</summary>
     internal FaultLedger? FaultSource { get; init; }
+
+    /// <summary>Test seam: the anomaly ledger the bot-anomaly signals are read from (default: the container's, else <see cref="AnomalyLedger.Shared"/>).</summary>
+    internal AnomalyLedger? AnomalySource { get; init; }
 
     /// <summary>Test seam: the clock of the passes, the age-out and the publisher (default: the system clock).</summary>
     internal TimeProvider Time { get; init; } = TimeProvider.System;
@@ -139,11 +143,12 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         if (services.GetService<MetricsOptions>() is { Enabled: true }) _findingsMeter = PlayerbotQaMeters.RegisterFindings(aggregator.Snapshot, this);
         if (services.GetService<IOpsAnnouncer>() is { } announcer)
         {
-            aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view);
+            aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view, Redactor);
         }
 
         // Only a host that registered the ledger (UseArcaneDiagnostics) feeds server faults; a bare provider has no ledger to read.
         if ((FaultSource ?? services.GetService<FaultLedger>()) is { } ledger) _faultFeed = new PlayerbotQaFaultFeed(ledger);
+        if ((AnomalySource ?? services.GetService<AnomalyLedger>()) is { } anomalyLedger) _anomalyFeed = new PlayerbotQaAnomalyFeed(anomalyLedger);
         if (services.GetService<SpellFeature>() is { } spells)
         {
             // Spell signals come straight from the spell system's observer seam, never from a log line (docs/areas/playbots-qa.md).
@@ -174,6 +179,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         {
             Drain();
             PollServerFaults();
+            PollAnomalies();
             Persist();
             Export();
         }
@@ -252,6 +258,30 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         return signals.Count;
     }
 
+    /// <summary>
+    /// Fold qualifying <c>bot-*</c> outcome anomalies from the anomaly ledger into the findings as <see cref="QaSignalKind.Anomaly"/> signals
+    /// (<see cref="PlayerbotQaAnomalyFeed"/>); how many signals. Runs on the QA task (or the test's caller), never on the world thread.
+    /// </summary>
+    internal int PollAnomalies()
+    {
+        if (Aggregator is null || _anomalyFeed is null) return 0;
+        IReadOnlyList<QaSignal> signals = _anomalyFeed.Pull();
+        DateTime now = Now;
+        foreach (QaSignal signal in signals)
+        {
+            try
+            {
+                if (Aggregator.Ingest(signal, _facts, now) is not null) PlayerbotQaMeters.CountOccurrences(signal.Kind, signal.Occurrences);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                if (Interlocked.Increment(ref _ingestFailures) == 1) _log.LogError(ex, "Bot QA could not fold a bot anomaly into its findings");
+            }
+        }
+
+        return signals.Count;
+    }
+
     /// <summary>The publish task of the latest pass (completed when none runs); tests await it.</summary>
     internal Task Publishing => _publishing;
 
@@ -264,6 +294,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IWorldFeatur
         if (Aggregator is null || _publisher is null) return;
         Drain();
         PollServerFaults();
+        PollAnomalies();
         TryComputeSpellCoverage();
         if (services.GetService<IPlayerbotService>() is { } bots)
         {

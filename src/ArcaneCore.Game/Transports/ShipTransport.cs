@@ -1,8 +1,10 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Transports;
@@ -24,6 +26,9 @@ public sealed class ShipTransport : WorldObject
     /// <summary>vmangos <c>ShipTransport::Update</c> <c>positionUpdateDelay</c>: the position is recomputed at most every 50 ms.</summary>
     public const uint PositionUpdateDelayMs = 50;
 
+    /// <summary>Elapsed moving time without waypoint/position advancement before <c>transport/stalled</c> is reported.</summary>
+    public const uint StallThresholdMs = 1000;
+
     /// <summary>GO_ANIMPROGRESS_DEFAULT.</summary>
     private const uint AnimProgressDefault = 100;
 
@@ -35,6 +40,8 @@ public sealed class ShipTransport : WorldObject
     private int _next;
     private uint _pathProgress;
     private int _positionTimer;
+    private uint _stalledMovingMs;
+    private bool _stallReported;
 
     internal ShipTransport(TransportSystem system, TransportTemplate template, int startFrame, uint nowMs)
         : base(GuidFor(template.Entry), Game.TypeId.GameObject, Game.TypeMask.Object | Game.TypeMask.GameObject, UpdateFields.GameobjectEnd)
@@ -182,18 +189,103 @@ public sealed class ShipTransport : WorldObject
         ArgumentNullException.ThrowIfNull(passenger);
         if (CurrentMap is null || !ReferenceEquals(passenger.Map, CurrentMap))
         {
+            if (CurrentMap is not null
+                && passenger is Player stranded
+                && !LocomotionEnvironment.For(CurrentMap).IsBeingTeleported(stranded)
+                && !stranded.IsLoggingOut
+                && !stranded.Locomotion.SuppressAnomalies
+                && !stranded.Locomotion.PassengerLeftBehindReportedInEpisode)
+            {
+                stranded.Locomotion.PassengerLeftBehindReportedInEpisode = true;
+                AnomalyLedger.Shared.Report(
+                    "transport",
+                    "passenger-left-behind",
+                    $"player {stranded.Name} (guid {stranded.Guid.Low})",
+                    $"Passenger is still attached to transport entry {Entry} on map {CurrentMap.MapId} while player map is {stranded.Map?.MapId.ToString() ?? "null"} without a pending teleport.",
+                    AnomalySeverity.Warning);
+            }
             return;
         }
 
         MovementInfo movement = passenger.Movement;
-        float x = movement.TransportX, y = movement.TransportY, z = movement.TransportZ, o = movement.TransportOrientation;
+        float tx = movement.TransportX, ty = movement.TransportY, tz = movement.TransportZ, to = movement.TransportOrientation;
+        if (!TransportSystem.IsOffsetWithinBounds(tx, ty, tz))
+        {
+            ReportPassengerLeftBehind(passenger, $"Passenger offset ({tx:F2}, {ty:F2}, {tz:F2}) on transport entry {Entry} exceeds max offset {TransportSystem.MaxPassengerOffset:F0}yd on map {CurrentMap.MapId}.");
+            return;
+        }
+
+        float x = tx, y = ty, z = tz, o = to;
         CalculatePassengerPosition(ref x, ref y, ref z, ref o);
         if (!GridDefines.IsValidMapCoord(x) || !GridDefines.IsValidMapCoord(y) || !GridDefines.IsValidZCoord(z))
         {
+            ReportPassengerDesync(passenger, $"Calculated passenger position ({x:F2}, {y:F2}, {z:F2}) from offset ({tx:F2}, {ty:F2}, {tz:F2}) on transport entry {Entry} is outside valid map coordinates on map {CurrentMap.MapId}.");
             return; // vmangos logs "[TRANSPORTS] Object ... has invalid position on transport." and leaves it
         }
 
+        if (passenger is Player validPlayer)
+        {
+            validPlayer.Locomotion.TransportDesyncReportedInEpisode = false;
+            validPlayer.Locomotion.PassengerLeftBehindReportedInEpisode = false;
+        }
+
         passenger.RelocateOnTransport(x, y, z, o);
+    }
+
+    private void ReportPassengerLeftBehind(Unit passenger, string detail)
+    {
+        if (passenger is Player player)
+        {
+            if (player.Locomotion.SuppressAnomalies || player.Locomotion.PassengerLeftBehindReportedInEpisode)
+            {
+                return;
+            }
+
+            player.Locomotion.PassengerLeftBehindReportedInEpisode = true;
+            AnomalyLedger.Shared.Report(
+                "transport",
+                "passenger-left-behind",
+                $"player {player.Name} (guid {player.Guid.Low})",
+                detail,
+                AnomalySeverity.Warning);
+        }
+        else
+        {
+            AnomalyLedger.Shared.Report(
+                "transport",
+                "passenger-left-behind",
+                $"creature entry {passenger.Guid.Entry} (guid {passenger.Guid.Counter})",
+                detail,
+                AnomalySeverity.Warning);
+        }
+    }
+
+    private void ReportPassengerDesync(Unit passenger, string detail)
+    {
+        if (passenger is Player player)
+        {
+            if (player.Locomotion.SuppressAnomalies || player.Locomotion.TransportDesyncReportedInEpisode)
+            {
+                return;
+            }
+
+            player.Locomotion.TransportDesyncReportedInEpisode = true;
+            AnomalyLedger.Shared.Report(
+                "transport",
+                "passenger-desync",
+                $"player {player.Name} (guid {player.Guid.Low})",
+                detail,
+                AnomalySeverity.Warning);
+        }
+        else
+        {
+            AnomalyLedger.Shared.Report(
+                "transport",
+                "passenger-desync",
+                $"creature entry {passenger.Guid.Entry} (guid {passenger.Guid.Counter})",
+                detail,
+                AnomalySeverity.Warning);
+        }
     }
 
     /// <summary>Transform an offset on this ship into world coordinates (vmangos <c>CalculatePassengerPosition</c>).</summary>
@@ -238,6 +330,7 @@ public sealed class ShipTransport : WorldObject
         IReadOnlyList<TransportKeyFrame> frames = Template.KeyFrames;
         if (frames.Count <= 1 || Period == 0)
         {
+            ReportStalled($"Transport entry {Entry} cannot advance: KeyFrames.Count={frames.Count}, Period={Period} on map {MapId}.");
             return;
         }
 
@@ -257,10 +350,14 @@ public sealed class ShipTransport : WorldObject
 
         if (!ArcaneCore.Kernel.Diagnostics.Invariant.Check(Period > 0, $"ShipTransport {Guid} (Entry {Entry}) has Period == 0."))
         {
+            ReportStalled($"Transport entry {Entry} has Period == 0 on map {MapId}.");
             return;
         }
 
         uint pathProgress = _pathProgress % Period;
+        float prevX = X, prevY = Y, prevZ = Z;
+        int prevFrame = _current;
+        bool exhaustedGuard = true;
 
         // Bounded where the reference loops until a frame matches: inconsistent frame times cannot hang the world thread.
         for (int guard = 0; guard <= frames.Count; guard++)
@@ -269,12 +366,14 @@ public sealed class ShipTransport : WorldObject
             if (pathProgress >= current.ArriveTime && pathProgress < current.DepartureTime)
             {
                 IsMoving = false;
+                exhaustedGuard = false;
                 break; // waiting at a stop
             }
 
             IsMoving = true;
             if (pathProgress >= current.DepartureTime && pathProgress < current.NextArriveTime)
             {
+                exhaustedGuard = false;
                 break; // between this frame and the next
             }
 
@@ -284,6 +383,8 @@ public sealed class ShipTransport : WorldObject
             {
                 TransportKeyFrame next = frames[_next];
                 _system.TeleportTransport(this, next.Node.MapId, next.Node.X, next.Node.Y, next.Node.Z, next.InitialOrientation);
+                _stalledMovingMs = 0;
+                _stallReported = false;
                 return;
             }
 
@@ -291,6 +392,11 @@ public sealed class ShipTransport : WorldObject
             {
                 _system.Refresh(this);
             }
+        }
+
+        if (exhaustedGuard)
+        {
+            ReportStalled($"Transport entry {Entry} exhausted keyframe lookup guard ({frames.Count} frames) at pathProgress={pathProgress}/{Period} on map {MapId}.");
         }
 
         _positionTimer -= (int)Math.Min(diff, int.MaxValue);
@@ -309,6 +415,45 @@ public sealed class ShipTransport : WorldObject
                 }
             }
         }
+
+        if (!IsMoving)
+        {
+            _stalledMovingMs = 0;
+            _stallReported = false;
+        }
+        else
+        {
+            float movedSq = ((X - prevX) * (X - prevX)) + ((Y - prevY) * (Y - prevY)) + ((Z - prevZ) * (Z - prevZ));
+            if (_current != prevFrame || (float.IsFinite(movedSq) && movedSq > 1e-4f))
+            {
+                _stalledMovingMs = 0;
+                _stallReported = false;
+            }
+            else
+            {
+                _stalledMovingMs = unchecked(_stalledMovingMs + diff);
+                if (_stalledMovingMs >= StallThresholdMs)
+                {
+                    ReportStalled($"Transport entry {Entry} is marked IsMoving at frame {_current} (pathProgress={pathProgress}/{Period}) on map {MapId} at ({X:F2}, {Y:F2}, {Z:F2}) but position has not advanced for {_stalledMovingMs}ms.");
+                }
+            }
+        }
+    }
+
+    private void ReportStalled(string detail)
+    {
+        if (_stallReported)
+        {
+            return;
+        }
+
+        _stallReported = true;
+        AnomalyLedger.Shared.Report(
+            "transport",
+            "stalled",
+            $"transport entry {Entry}",
+            detail,
+            AnomalySeverity.Warning);
     }
 
     /// <summary>vmangos <c>GenericTransport::UpdatePosition</c>: move the ship, then every passenger with it.</summary>

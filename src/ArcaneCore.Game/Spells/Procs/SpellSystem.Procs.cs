@@ -78,6 +78,12 @@ public sealed partial class SpellSystem
         ArgumentNullException.ThrowIfNull(actor);
         if (!Invariant.Check(_procDepth >= 0 && _procDepth <= MaxProcDepth, $"SpellSystem._procDepth={_procDepth} out of bounds [0, {MaxProcDepth}]"))
         {
+            AnomalyLedger.Shared.Report(
+                "proc",
+                "recursion-cut",
+                procEvent.ProcSpell is { } badSpell ? FormatSpellSubject(badSpell.Id) : FormatUnitSubject(actor),
+                $"actor={FormatUnitSubject(actor)} procDepth={_procDepth} maxProcDepth={MaxProcDepth}",
+                AnomalySeverity.Warning);
             if (_procDepth < 0)
             {
                 _procDepth = 0;
@@ -88,9 +94,20 @@ public sealed partial class SpellSystem
             }
         }
 
-        if (!actor.IsInWorld || actor.Map is null || (procEvent.Victim is { } v && !ReferenceEquals(v.Map, actor.Map)) || _procDepth >= MaxProcDepth
+        if (!actor.IsInWorld || actor.Map is null || (procEvent.Victim is { } v && !ReferenceEquals(v.Map, actor.Map))
             || IsQuestSettlementPending(actor) || IsQuestSettlementPending(procEvent.Victim))
         {
+            return;
+        }
+
+        if (_procDepth >= MaxProcDepth)
+        {
+            AnomalyLedger.Shared.Report(
+                "proc",
+                "recursion-cut",
+                procEvent.ProcSpell is { } cutSpell ? FormatSpellSubject(cutSpell.Id) : FormatUnitSubject(actor),
+                $"actor={FormatUnitSubject(actor)} victim={(procEvent.Victim is not null ? FormatUnitSubject(procEvent.Victim) : "none")} procDepth={_procDepth} maxProcDepth={MaxProcDepth}",
+                AnomalySeverity.Warning);
             return;
         }
 

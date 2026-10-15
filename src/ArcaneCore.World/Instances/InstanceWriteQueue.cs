@@ -45,6 +45,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Lock _gate = new();
     private readonly Dictionary<Key, Retained> _retained = [];
+    private readonly List<string> _droppedWrites = []; // under _gate: writes refused after the queue stopped, reported once the gate is released
     private readonly Dictionary<int, HashSet<Key>> _retainedByCharacter = [];
     private readonly Dictionary<int, long> _deletedCharacterEpoch = [];
     private readonly Dictionary<int, long> _deletedInstanceEpoch = [];
@@ -154,6 +155,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         {
             EnqueueWriteCore(new Key(KeyKind.InstanceSave, (int)save.InstanceId, 0), new Payload(Instance: record));
         }
+
+        ReportDroppedWrites();
     }
 
     public void InstanceDataSaved(InstanceSave save)
@@ -165,6 +168,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             {
                 EnqueueWriteCore(new Key(KeyKind.InstanceData, (int)save.InstanceId, 0), new Payload(Data: data));
             }
+
+            ReportDroppedWrites();
         }
     }
 
@@ -179,6 +184,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 EnqueueWriteCore(new Key(KeyKind.InstanceData, (int)instanceId, 0), new Payload(Data: data));
             }
         }
+
+        ReportDroppedWrites();
     }
 
     public void InstanceDeleted(uint instanceId)
@@ -193,6 +200,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             RemoveRetained(new Key(KeyKind.InstanceData, id, 0));
             EnqueueWriteCore(new Key(KeyKind.InstanceDelete, id, 0), default);
         }
+
+        ReportDroppedWrites();
     }
 
     public void PlayerBound(uint characterId, uint instanceId, bool permanent)
@@ -203,6 +212,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 new Key(KeyKind.PlayerBind, (int)characterId, (int)instanceId),
                 new Payload(Bind: new CharacterInstanceBindRecord((int)characterId, instanceId, permanent)));
         }
+
+        ReportDroppedWrites();
     }
 
     public void PlayerUnbound(uint characterId, uint instanceId)
@@ -211,6 +222,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         {
             EnqueueWriteCore(new Key(KeyKind.PlayerBind, (int)characterId, (int)instanceId), default);
         }
+
+        ReportDroppedWrites();
     }
 
     public void RaidResetTimeChanged(uint mapId, long resetTime)
@@ -221,6 +234,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 new Key(KeyKind.ResetTime, (int)mapId, 0),
                 new Payload(Reset: new InstanceResetRecord(mapId, resetTime)));
         }
+
+        ReportDroppedWrites();
     }
 
     public void PlayerEnteredInstance(uint characterId, uint mapId, uint instanceId)
@@ -231,6 +246,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 new Key(KeyKind.LastInstance, (int)characterId, 0),
                 new Payload(Last: new CharacterLastInstanceRecord((int)characterId, mapId, instanceId)));
         }
+
+        ReportDroppedWrites();
     }
 
     /// <summary>A stored group bind (vmangos <c>group_instance</c>), under the leader's character id.</summary>
@@ -242,6 +259,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 new Key(KeyKind.GroupBind, (int)leaderCharacterId, (int)instanceId),
                 new Payload(GroupBind: new GroupInstanceBindRecord((int)leaderCharacterId, instanceId, permanent)));
         }
+
+        ReportDroppedWrites();
     }
 
     public void GroupUnbound(uint leaderCharacterId, uint instanceId)
@@ -250,6 +269,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         {
             EnqueueWriteCore(new Key(KeyKind.GroupBind, (int)leaderCharacterId, (int)instanceId), default);
         }
+
+        ReportDroppedWrites();
     }
 
     /// <summary>
@@ -266,6 +287,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             PurgeRetainedCharacter(characterId, includeDelete: false);
             EnqueueWriteCore(new Key(KeyKind.CharacterDelete, characterId, 0), default);
         }
+
+        ReportDroppedWrites();
     }
 
     /// <summary>Drop anything retained for a deleted character or a reused id.</summary>
@@ -391,6 +414,12 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
         if (left.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue InstanceWriteQueue",
+                $"queue=InstanceWriteQueue undrainedTargets={left.Length} firstTarget={left[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"instance writes did not drain for {string.Join(", ", left)}", first);
         }
 
@@ -418,6 +447,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             Exception failure = _terminalFailure ?? new InvalidOperationException("the instance write queue is stopped; the change was not persisted");
             SetRetained(key, value, failure);
             logger.LogError("instance write for {Target} arrived after the queue stopped; retained as undrained", DescribeKey(key));
+            _droppedWrites.Add($"target={DescribeKey(key)} reason=queue-stopped");
             return;
         }
 
@@ -431,6 +461,33 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             Exception failure = _terminalFailure ?? new InvalidOperationException("the instance write queue is closed; the change was not persisted");
             SetRetained(key, value, failure);
             logger.LogError("instance write queue closed; write for {Target} retained as undrained", DescribeKey(key));
+            _droppedWrites.Add($"target={DescribeKey(key)} reason=queue-closed");
+        }
+    }
+
+    /// <summary>Reports the writes <see cref="EnqueueWriteCore"/> refused; called after the gate is released.</summary>
+    private void ReportDroppedWrites()
+    {
+        string[] dropped;
+        lock (_gate)
+        {
+            if (_droppedWrites.Count == 0)
+            {
+                return;
+            }
+
+            dropped = [.. _droppedWrites];
+            _droppedWrites.Clear();
+        }
+
+        foreach (string what in dropped)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue InstanceWriteQueue",
+                $"queue=InstanceWriteQueue {what}",
+                AnomalySeverity.Error);
         }
     }
 
@@ -517,6 +574,12 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             return;
         }
 
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "circuit-open",
+            "queue InstanceWriteQueue",
+            $"queue=InstanceWriteQueue reason=terminal-ownership-failure error={ex.GetType().Name}",
+            AnomalySeverity.Warning);
         logger.LogCritical(ex, "instance write queue entered terminal failure after character ownership rejection");
         try
         {
@@ -636,6 +699,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     private async Task ExecuteWriteAsync(Work work)
     {
         Exception? failure = await TryWriteAsync(work.Key, work.Value, MaxAttempts).ConfigureAwait(false);
+        bool reportExhausted = false;
         lock (_gate)
         {
             if (IsObsoleteUnderGate(work.Key, work.Epoch))
@@ -649,12 +713,24 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             }
             else
             {
+                bool alreadyRetained = _retained.ContainsKey(work.Key); // a retained write failing again is the same episode
                 SetRetained(work.Key, work.Value, failure);
                 if (failure is not CharacterOwnershipRejectedException)
                 {
+                    reportExhausted = !alreadyRetained;
                     logger.LogFault("writequeue-instance", failure, "instance write for {Target} failed; retained for retry", DescribeKey(work.Key));
                 }
             }
+        }
+
+        if (reportExhausted && failure is not null)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-retry-exhausted",
+                "queue InstanceWriteQueue",
+                $"queue=InstanceWriteQueue target={DescribeKey(work.Key)} attempts={MaxAttempts} error={failure.GetType().Name}",
+                AnomalySeverity.Error);
         }
 
         if (failure is null)

@@ -1,4 +1,6 @@
 using System.Globalization;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots;
@@ -20,6 +22,7 @@ internal sealed class PlayerbotSlowThinkLog(ILogger logger)
     private long _windowStartMs = long.MinValue;
     private int _linesInWindow;
     private int _suppressed;
+    private readonly HashSet<Guid> _slowEpisode = [];
 
     /// <summary>Slow thinks seen (logged or not) since start.</summary>
     internal long Slow { get; private set; }
@@ -27,15 +30,34 @@ internal sealed class PlayerbotSlowThinkLog(ILogger logger)
     /// <summary>Lines logged since start.</summary>
     internal long Logged { get; private set; }
 
+    /// <summary>A think of <paramref name="botId"/> that was not slow: its slow-think episode (consecutive slow thinks, reported once) is over.</summary>
+    internal void EndEpisode(Guid botId) => _slowEpisode.Remove(botId);
+
     /// <summary>
     /// Judge one ended think (<paramref name="probe"/>) against <paramref name="thresholdMs"/> (0 or less: off) and log it when slow
     /// and the rate limit allows. Returns whether it was slow.
     /// </summary>
     /// <param name="goal">The bot's goal, target entry and quest ("n/a" when its brain did not drive this think).</param>
-    internal bool Observe(PlayerbotThinkProbe probe, double thresholdMs, long nowMs, Guid botId, string name, string driver, string goal)
+    internal bool Observe(PlayerbotThinkProbe probe, double thresholdMs, long nowMs, Guid botId, string name, string driver, string goal,
+        Player? player = null)
     {
         if (thresholdMs <= 0 || probe.ElapsedMs < thresholdMs) return false;
         Slow++;
+        if (!probe.SlowAnomalyReported && _slowEpisode.Add(botId))
+        {
+            string anomalyDetail = string.Create(CultureInfo.InvariantCulture,
+                $"think {probe.ElapsedMs:F1} ms (over {thresholdMs:F1} ms) driver={driver} goal={goal} slowestPhase={probe.SlowestPhase}");
+            if ((player ?? probe.Player) is { } subjectPlayer)
+            {
+                PlayerbotAnomalies.Report(subjectPlayer, "brain", "think-slow", anomalyDetail, AnomalySeverity.Warning);
+            }
+            else
+            {
+                string subject = string.IsNullOrWhiteSpace(name) ? $"bot {botId}" : $"bot {name} (id {botId})";
+                AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + "brain", "think-slow", subject, anomalyDetail, AnomalySeverity.Warning);
+            }
+            probe.SlowAnomalyReported = true;
+        }
         if (_windowStartMs == long.MinValue || nowMs - _windowStartMs >= WindowMs)
         {
             _windowStartMs = nowMs;

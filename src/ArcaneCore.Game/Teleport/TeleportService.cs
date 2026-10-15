@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.WorldState.Zones;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -61,7 +62,83 @@ public sealed class TeleportService
         _beforeAddToMap = beforeAddToMap;
         _afterAddToMap = afterAddToMap;
         _logger = logger ?? NullLogger.Instance;
+        _world.WorldTick += OnWorldTick;
     }
+
+    private void OnWorldTick(uint diffMs)
+    {
+        _sinceStallSweepMs += diffMs;
+        if (_sinceStallSweepMs < StallSweepIntervalMs)
+        {
+            return;
+        }
+
+        _sinceStallSweepMs = 0;
+        CheckStalled(_world.NowMs);
+    }
+
+    /// <summary>
+    /// H1 outcome check: a teleport that sat in one stage past its budget never completed (the client's MSG_MOVE_TELEPORT_ACK or
+    /// MSG_MOVE_WORLDPORT_ACK did not arrive, or the scheduled far teleport never ran). One report per teleport
+    /// (<c>teleport/ack-timeout</c>, <c>teleport/far-stuck</c>); the entry stays so a late ack still completes. Runs once a second from
+    /// the world tick; cost is a walk over the pending teleports (normally none). World thread.
+    /// </summary>
+    /// <param name="nowMs">The world clock (<see cref="WorldRuntime.NowMs"/>).</param>
+    public void CheckStalled(uint nowMs)
+    {
+        if (_pending.Count == 0)
+        {
+            return;
+        }
+
+        foreach ((ObjectGuid guid, Pending pending) in _pending)
+        {
+            if (pending.StallReported)
+            {
+                continue;
+            }
+
+            uint stageMs = unchecked(nowMs - pending.StageSinceMs);
+            uint budget = pending.Stage switch
+            {
+                TeleportStage.Near => NearAckBudgetMs,
+                TeleportStage.Far => FarAckBudgetMs,
+                _ => ScheduledBudgetMs,
+            };
+            if (stageMs < budget || stageMs > int.MaxValue)
+            {
+                continue;
+            }
+
+            pending.StallReported = true;
+            Player? player = _world.FindOnlinePlayer(guid);
+            string detail = string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"teleport stuck in stage {pending.Stage} for {stageMs} ms (budget {budget} ms) from map {pending.SourceMap.MapId} to map {pending.Destination.MapId} at {pending.Destination.X:F1},{pending.Destination.Y:F1},{pending.Destination.Z:F1}");
+            string code = pending.Stage is TeleportStage.Near or TeleportStage.Far ? "ack-timeout" : "far-stuck";
+            if (player is not null)
+            {
+                ServerAnomalies.Report(player, ServerAnomalies.Teleport, code, detail);
+            }
+            else
+            {
+                ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+                    ServerAnomalies.Teleport, code, string.Create(System.Globalization.CultureInfo.InvariantCulture, $"player guid {guid.Value:X}"), detail);
+            }
+        }
+    }
+
+    /// <summary>Longest a same-map teleport may wait for the client's ack before it is reported (client ack is one round trip).</summary>
+    public const uint NearAckBudgetMs = 30_000;
+
+    /// <summary>Longest SMSG_NEW_WORLD may wait for the worldport ack (a loading screen; slow disks take tens of seconds).</summary>
+    public const uint FarAckBudgetMs = 90_000;
+
+    /// <summary>Longest a scheduled or arriving far teleport may take (both finish within a tick or two).</summary>
+    public const uint ScheduledBudgetMs = 10_000;
+
+    private const uint StallSweepIntervalMs = 1_000;
+    private uint _sinceStallSweepMs;
 
     /// <summary>
     /// Raised on the world thread when a teleport of a player has finished: after a same-map teleport was acknowledged, or after the
@@ -128,6 +205,12 @@ public sealed class TeleportService
             if (log)
             {
                 _logger.LogWarning("teleport of {Player} to invalid coordinates {X} {Y} {Z} {O} on map {MapId}", player.Name, x, y, z, orientation, mapId);
+                ServerAnomalies.Report(
+                    player,
+                    ServerAnomalies.Teleport,
+                    "invalid-destination",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"teleport refused: invalid destination {x} {y} {z} {orientation} on map {mapId}"),
+                    float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z) && float.IsFinite(orientation) ? AnomalySeverity.Warning : AnomalySeverity.Error);
             }
 
             return false;
@@ -140,6 +223,11 @@ public sealed class TeleportService
             if (log)
             {
                 _logger.LogWarning("teleport of {Player} to unknown map {MapId}", player.Name, mapId);
+                ServerAnomalies.Report(
+                    player,
+                    ServerAnomalies.Teleport,
+                    "map-not-loaded",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"teleport refused: map {mapId} is not in the map registry (destination {x:F1},{y:F1},{z:F1})"));
             }
 
             return false;
@@ -160,7 +248,18 @@ public sealed class TeleportService
 
         // vmangos TeleportTo → MapManager::CanPlayerEnter: the instance rules may refuse a far
         // teleport (raid group, full or resetting instance) before anything changes.
-        return current.MapId == mapId || _world.MapResolver is not { } resolver || resolver.CanEnter(player, mapId);
+        bool allowed = current.MapId == mapId || _world.MapResolver is not { } resolver || resolver.CanEnter(player, mapId);
+        if (!allowed && log)
+        {
+            ServerAnomalies.Report(
+                player,
+                ServerAnomalies.Teleport,
+                "entry-refused",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"teleport to map {mapId} refused by the instance rules (no instance for the player)"),
+                AnomalySeverity.Info);
+        }
+
+        return allowed;
     }
 
     /// <summary>
@@ -212,6 +311,7 @@ public sealed class TeleportService
             {
                 HonorlessTarget = leavesCombat,
                 StartedMs = _world.NowMs,
+                StageSinceMs = _world.NowMs,
             };
             if (leavesCombat)
             {
@@ -235,6 +335,7 @@ public sealed class TeleportService
         var pending = new Pending(destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation))
         {
             StartedMs = _world.NowMs,
+            StageSinceMs = _world.NowMs,
         };
         _pending[player.Guid] = pending;
         current.RunAfterUpdate(() => ExecuteTeleportFar(player, pending));
@@ -285,6 +386,7 @@ public sealed class TeleportService
         TeleportDestination dest = pending.Destination;
         SendTeleportToObservers(map, player, dest);
         ArriveNear(player, dest);
+        VerifyLanding(player, dest, map.MapId);
         SendTeleportToObservers(map, player, dest);
         UpdateZone(map, player);
 
@@ -338,6 +440,7 @@ public sealed class TeleportService
         }
 
         pending.Stage = TeleportStage.Arriving;
+        pending.StageSinceMs = _world.NowMs;
         _world.Post(() => CompleteTeleportFar(player, pending));
         return true;
     }
@@ -401,6 +504,7 @@ public sealed class TeleportService
         player.Relocate(dest.X, dest.Y, dest.Z, dest.Orientation, _world.NowMs);
         pending.Stage = TeleportStage.Far;
         pending.StartedMs = _world.NowMs;
+        pending.StageSinceMs = pending.StartedMs;
         if (ship is not null)
         {
             // Still aboard: the movement block keeps the ship and the offset, and the client loads the new map at its place on
@@ -440,20 +544,38 @@ public sealed class TeleportService
         {
             // vmangos: an invalid destination sends the player to its bind point.
             _logger.LogError("{Player} far-teleported to invalid destination {Dest}; using the bind point", player.Name, dest);
+            ServerAnomalies.Report(
+                player,
+                ServerAnomalies.Teleport,
+                "destination-invalid",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"far teleport destination map {dest.MapId} {dest.X} {dest.Y} {dest.Z} is invalid or not in the registry; sent to the bind point on map {player.Home.MapId}"));
             dest = new TeleportDestination(player.Home.MapId, player.Home.X, player.Home.Y, player.Home.Z, player.Orientation);
         }
 
         if (TryEnterMap(player, dest))
         {
+            VerifyLanding(player, dest, dest.MapId);
             HonorlessTargetDue?.Invoke(player, true);
         }
         else
         {
+            ServerAnomalies.Report(
+                player,
+                ServerAnomalies.Teleport,
+                "map-entry-failed",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} (not loaded, refused by the resolver or the player is already in it); returning to map {pending.Origin.MapId}"));
+
             // vmangos HandleReturnOnTeleportFail: back to where the teleport started.
             TeleportDestination origin = pending.Origin;
             if (!TryEnterMap(player, origin))
             {
                 _logger.LogError("{Player} could not enter map {MapId} nor return to map {Origin}; disconnecting", player.Name, dest.MapId, origin.MapId);
+                ServerAnomalies.Report(
+                    player,
+                    ServerAnomalies.Teleport,
+                    "return-failed",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} nor return to map {origin.MapId}; the session is kicked"),
+                    AnomalySeverity.Error);
                 player.Session.Kick();
             }
         }
@@ -503,6 +625,66 @@ public sealed class TeleportService
         TeleportCompleted?.Invoke(player);
         return true;
     }
+
+    /// <summary>
+    /// H1 outcome check, run when a teleport has put the player at <paramref name="dest"/>: the player must be on the requested map,
+    /// at a finite position, not in the void, and within <see cref="LandingToleranceYards"/> of the destination. Free on success (a few
+    /// comparisons); formats only on failure. A player aboard a ship lands at its offset, so the distance is not checked there.
+    /// </summary>
+    private static void VerifyLanding(Player player, TeleportDestination dest, uint expectedMapId)
+    {
+        float x = player.X;
+        float y = player.Y;
+        float z = player.Z;
+        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z))
+        {
+            ServerAnomalies.Report(player, ServerAnomalies.Teleport, "landed-non-finite", "player position is not finite after the teleport", AnomalySeverity.Error);
+            return;
+        }
+
+        if (z < LandingVoidHeight)
+        {
+            ServerAnomalies.Report(
+                player,
+                ServerAnomalies.Teleport,
+                "landed-under-map",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"player landed at z {z:F1}, below the void height {LandingVoidHeight:F0} (requested z {dest.Z:F1})"),
+                AnomalySeverity.Error);
+            return;
+        }
+
+        if (player.MapId != expectedMapId)
+        {
+            ServerAnomalies.Report(
+                player,
+                ServerAnomalies.Teleport,
+                "landed-off-destination",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"player is on map {player.MapId}, the teleport was to map {expectedMapId}"));
+            return;
+        }
+
+        if (player.Transport is not null)
+        {
+            return;
+        }
+
+        float dx = x - dest.X;
+        float dy = y - dest.Y;
+        float dz = z - dest.Z;
+        if (dx * dx + dy * dy + dz * dz > LandingToleranceYards * LandingToleranceYards)
+        {
+            ServerAnomalies.Report(
+                player,
+                ServerAnomalies.Teleport,
+                "landed-off-destination",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"player landed {MathF.Sqrt(dx * dx + dy * dy + dz * dz):F1} yards from the requested {dest.X:F1},{dest.Y:F1},{dest.Z:F1} (tolerance {LandingToleranceYards:F0})"));
+        }
+    }
+
+    /// <summary>How far from the requested point a teleport may land before it is reported (float noise and a relocation step).</summary>
+    public const float LandingToleranceYards = 5f;
+
+    private const float LandingVoidHeight = -500f;
 
     private static void UpdateZone(Map map, Player player)
     {
@@ -589,5 +771,11 @@ public sealed class TeleportService
         public bool HonorlessTarget { get; init; }
 
         public uint StartedMs { get; set; }
+
+        /// <summary>When the current <see cref="Stage"/> began (the stall budgets count from here).</summary>
+        public uint StageSinceMs { get; set; }
+
+        /// <summary>Whether the stall of this teleport was reported (one report per teleport).</summary>
+        public bool StallReported { get; set; }
     }
 }

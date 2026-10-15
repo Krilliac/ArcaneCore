@@ -98,8 +98,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// one tick at a time and let each checkpoint finish before game time moves on.
     /// </summary>
     internal Task LastCheckpoint => _checkpoint;
-    private PlayerbotLocalPlanner? _planner;
-    private readonly CancellationTokenSource _planningStop = new();
     private readonly ConcurrentDictionary<Guid, Quarantine> _quarantine = new();
     private long _clockMs;
     private Chat.PlayerbotChat? _chat;
@@ -113,8 +111,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private Chat.HttpBotChatClient? _chatClient;
     private PlayerbotNavigationExecutor? _navigationExecutor;
     private Chaos.PlayerbotChaosEngine? _chaos;
-    private AI.Inference.PlayerbotInferenceEngine? _inferenceEngine;
-    private AI.Inference.PlayerbotBatchCoordinator? _batchCoordinator;
+    private Policy.PlayerbotPolicyEngine? _policy;
+    private uint _policyReportMs;
+    private bool _policyReportArmed;
 
     /// <summary>World time this feature has seen, in ms (the fault backoff and window run on it).</summary>
     private long ClockMs => Interlocked.Read(ref _clockMs);
@@ -131,11 +130,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Adversarial server-breaker chaos engine (<c>.playerbot chaos</c>).</summary>
     internal Chaos.PlayerbotChaosEngine Chaos => _chaos ??= new Chaos.PlayerbotChaosEngine(_options, opcodes, logger, _setAsideTime);
 
-    /// <summary>Zero-allocation batched ONNX / SIMD inference engine (null when <c>World:Playerbots:Inference:Enabled</c> is false).</summary>
-    internal AI.Inference.PlayerbotInferenceEngine? InferenceEngine => _inferenceEngine;
-
-    /// <summary>Zero-allocation batched inference coordinator (null when <c>World:Playerbots:Inference:Enabled</c> is false).</summary>
-    internal AI.Inference.PlayerbotBatchCoordinator? BatchCoordinator => _batchCoordinator;
+    /// <summary>The goal policy engine (null when <c>World:Playerbots:Policy:Enabled</c> is false; docs/areas/playbots.md, Goal policy).</summary>
+    internal Policy.PlayerbotPolicyEngine? PolicyEngine => _policy;
 
     internal bool TryResolveBotId(string idOrName, out Guid botId, out string botName)
     {
@@ -214,16 +210,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     public void Attach(WorldRuntime world)
     {
         _options.Validate();
-        if (_options.AllowLocalLlm) _planner = new PlayerbotLocalPlanner(_options);
-        if (_options.Inference.Enabled)
-        {
-            _inferenceEngine = new AI.Inference.PlayerbotInferenceEngine(
-                _options.Inference.ModelPath,
-                _options.Inference.GpuDeviceId,
-                _options.Inference.EnableTensorRt,
-                _options.Inference.TensorRtCachePath);
-            _batchCoordinator = new AI.Inference.PlayerbotBatchCoordinator();
-        }
+        if (_options.Policy.Enabled) StartPolicy();
         _chat = new Chat.PlayerbotChat(_options,
             services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()),
             services.GetService<Chat.IBotChatEnvironment>() ?? new Chat.ProcessBotChatEnvironment(),
@@ -935,7 +922,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (bot is not null)
             {
                 // An operator start that fails is reported and not retried; a quarantine retry that fails is one more fault.
-                (bool desired, string code) = quarantineRetry ? RecordFault(bot.BotId, "start-failed: " + ex.Message) : (false, "start-failed");
+                (bool desired, string code) = quarantineRetry ? RecordFault(bot.BotId, "start-failed: " + ex.Message, session?.Player) : (false, "start-failed");
                 bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = desired, State = ManagedPlayerbotState.Faulted, ErrorCode = code }, CancellationToken.None).ConfigureAwait(false);
                 CharacterRecord? character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
                 PublishStopped(bot, character?.Name ?? idOrName, character?.MapId ?? 0);
@@ -1053,7 +1040,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     public async Task ShutdownBeforeWorldStopAsync()
     {
         _stopping = true;
-        await _planningStop.CancelAsync().ConfigureAwait(false);
         if (_world is not null) _world.Updated -= Update;
         await _checkpoint.ConfigureAwait(false);
         await _operations.WaitAsync().ConfigureAwait(false);
@@ -1084,8 +1070,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
         finally { _operations.Release(); }
-        if (_planner is { } planner) { _planner = null; await planner.DisposeAsync().ConfigureAwait(false); }
-        if (_inferenceEngine is { } inferenceEngine) { _inferenceEngine = null; _batchCoordinator = null; inferenceEngine.Dispose(); }
+        if (_policy is { } policy) { _policy = null; await policy.DisposeAsync().ConfigureAwait(false); }
         if (_navigationExecutor is { } navigationExecutor) { _navigationExecutor = null; await navigationExecutor.DisposeAsync().ConfigureAwait(false); }
         if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
         _chatClient?.Dispose();
@@ -1095,9 +1080,78 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
 
+    /// <summary>
+    /// Start the goal policy engine (<see cref="Attach"/>). Never throws for a bad model (one anomaly, then the rule ladder scores); a
+    /// telemetry folder that cannot be made is a fault and a warning, and the policy runs without telemetry.
+    /// </summary>
+    private void StartPolicy()
+    {
+        string contentRoot = services.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory;
+        var policy = new Policy.PlayerbotPolicyEngine(_options.Policy, logger, contentRoot);
+        if (_options.Policy.Telemetry.Enabled)
+        {
+            try
+            {
+                policy.Telemetry = new Policy.PlayerbotPolicyTelemetry(_options.Policy.Telemetry,
+                    Path.Combine(contentRoot, _options.Policy.Telemetry.Directory), _setAsideTime, logger);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                // The host's disk or folder: an environment site (PlayerbotQaFaultFeed.EnvironmentSites).
+                FaultLedger.Shared.Record("playerbot.policy-telemetry-io", ex);
+                logger.LogWarning(ex, "Playerbot goal policy telemetry could not start ({Type}: {Message}); the policy runs without it", ex.GetType().Name, ex.Message);
+            }
+            catch (ArgumentException ex)
+            {
+                // A bad folder name, or a limit the writer refuses: possibly a defect, so not the environment site.
+                FaultLedger.Shared.Record("playerbot.policy-telemetry", ex);
+                logger.LogWarning(ex, "Playerbot goal policy telemetry could not start ({Type}: {Message}); the policy runs without it", ex.GetType().Name, ex.Message);
+            }
+        }
+        logger.LogInformation(
+            "Playerbot goal policy on: {Policy}, a snapshot every {IntervalMs} ms, stale after {StaleMs} ms, {BudgetMs} ms per map batch, exploration {Rate}, telemetry {Telemetry}",
+            policy.Policy.Name, _options.Policy.IntervalMs, _options.Policy.StaleAfterMs, _options.Policy.TickBudgetMs, _options.Policy.ExplorationRate,
+            policy.Telemetry is null ? "off" : "on");
+        _policy = policy;
+    }
+
+    /// <summary>
+    /// End of tick (world thread): hand each map's policy snapshots to the worker, sweep the telemetry, and every five minutes log what the
+    /// policy did (one Info line, no bot named).
+    /// </summary>
+    private void UpdatePolicy(Policy.PlayerbotPolicyEngine policy)
+    {
+        try
+        {
+            policy.Dispatch();
+            if (_world is not { } world) return;
+            policy.Telemetry?.Sweep(world.NowMs);
+            bool first = !_policyReportArmed;
+            if (!first && unchecked((int)(world.NowMs - _policyReportMs)) < 0) return;
+            _policyReportArmed = true;
+            _policyReportMs = unchecked(world.NowMs + 300_000);
+            if (first) return;
+            Policy.PlayerbotPolicyStats stats = policy.Stats;
+            (long Queued, long Dropped, long Unfinished, long Written) telemetryCounts = policy.Telemetry?.Counts ?? default;
+            logger.LogInformation(
+                "Playerbot goal policy {Policy}: {Submitted} snapshots, {Scored} scored, {Dropped} dropped, {Unscored} unscored over {Overruns} budget overruns, {Errors} errors; "
+                + "thinks {Applied} applied, {Agreed} agreed, {Floor} floor, {Explored} explored, {Missing} missing, {Stale} stale, {NonFinite} non-finite, {Refused} refused; telemetry {Written} written, {TelemetryDropped} dropped, {Unfinished} unfinished, {TelemetryRefused} refused",
+                stats.Policy, stats.Submitted, stats.Scored, stats.Dropped, stats.Unscored, stats.Overruns, stats.Errors,
+                stats.Applied, stats.Agreed, stats.Floor, stats.Explored, stats.Missing, stats.Stale, stats.NonFinite, stats.Refused,
+                telemetryCounts.Written, telemetryCounts.Dropped, telemetryCounts.Unfinished, policy.Telemetry?.Refused ?? 0);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.policy", ex);
+            logger.LogWarning(ex, "Playerbot goal policy tick failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+        }
+    }
+
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
     {
-        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId) };
+        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy };
+        // The combat telemetry hears the risk model from the brain's first think (its first pull).
+        if (_policy?.Telemetry is { } telemetry) brain.Risk.CombatSink = telemetry.Combat;
         if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
         if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
@@ -1262,7 +1316,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // think, the shared action budget or the per-tick time cap below (PlayerbotMotion).
         foreach (ActiveBot active in bots)
         {
-            if (active.Paused || active.Session.State != SessionState.InWorld || active.Session.Player is not { } mover) continue;
+            if (active.Paused) continue;
+            // A session that is not in the world, or has no player, is skipped here: no motion pump, no party intake and no
+            // acknowledgement this tick. It is reported once as lifecycle/session-lost (report only; nothing here acts on it).
+            if (active.Session.State != SessionState.InWorld || active.Session.Player is not { } mover)
+            {
+                ReportSessionLostOnce(active, "tick");
+                continue;
+            }
             try { PlayerbotMotion.Pump(active.Session, mover, world.NowMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "movement", ex); continue; }
             // Party intake, every tick for every autonomous bot (a scripted controller drains its own queue): invitations,
@@ -1315,28 +1376,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
-        if (_options.Inference.Enabled && _inferenceEngine is { } inferenceEngine && _batchCoordinator is { } batchCoordinator && bots.Length > 0)
-        {
-            Span<AI.Inference.PlayerbotBatchSlot> slots = stackalloc AI.Inference.PlayerbotBatchSlot[AI.Inference.PlayerbotInferenceEngine.MaxBatchSize];
-            int slotCount = 0;
-            for (int i = 0; i < bots.Length && slotCount < slots.Length; i++)
-            {
-                ActiveBot active = bots[i];
-                if (active.Paused || active.Session.State != SessionState.InWorld || active.Session.Player is not { IsInWorld: true } botPlayer)
-                    continue;
-                slots[slotCount++] = AI.Inference.PlayerbotBatchSlot.FromPlayer(botPlayer);
-            }
-            if (slotCount > 0)
-            {
-                try { _ = batchCoordinator.UpdatePlayerbotsTick(slots[..slotCount], inferenceEngine); }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    FaultLedger.Shared.Record("playerbot.feature", ex);
-                    logger.LogWarning(ex, "Playerbot batch inference pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
-                }
-            }
-        }
-
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for, and a tick thinks
         // for no more bots once PlayerbotThinkRotation.TickBudgetMs went by (one think itself is bounded by MaxThinkSearchNodes).
@@ -1351,6 +1390,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         });
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
         _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited);
+        if (_policy is { } policy) UpdatePolicy(policy);
         if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
             logger.LogInformation(
                 "Playerbot cadence over the last minute: {Bots} bots, think gap p50 {GapP50Ms} ms, p95 {GapP95Ms} ms, max {GapMaxMs} ms; "
@@ -1381,11 +1421,18 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         string driver;
         try { driver = ThinkCore(active, budget, botOrdinal); }
         finally { _probe.End(); }
+        // The decision telemetry, outside the think's probe: what it costs is not the brain's.
+        if (driver == "brain" && _policy?.Telemetry is { } telemetry && active.Session.Player is { } thinker && _world is { } thinkWorld)
+        {
+            try { telemetry.AfterThink(active.Brain, thinker, thinkWorld.NowMs); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.policy-telemetry", ex); }
+        }
         double slowMs = _options.SlowThinkLogMs;
         bool slow = slowMs > 0 && _probe.ElapsedMs >= slowMs;
+        if (!slow) _slowThinks?.EndEpisode(active.Record.BotId);
         if (!slow && ThinkObserver is null) return; // the common case: nothing to describe, nothing allocated
         string goal = GoalOf(active, driver);
-        if (slow) (_slowThinks ??= new PlayerbotSlowThinkLog(logger)).Observe(_probe, slowMs, ClockMs, active.Record.BotId, active.Name, driver, goal);
+        if (slow) (_slowThinks ??= new PlayerbotSlowThinkLog(logger)).Observe(_probe, slowMs, ClockMs, active.Record.BotId, active.Name, driver, goal, active.Session.Player);
         if (ThinkObserver is { } observer)
         {
             _probe.Subject = (driver, goal);
@@ -1769,10 +1816,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     {
                         if (Volatile.Read(ref active.FaultCode) is { } fault)
                         {
-                            (bool desired, string code) = RecordFault(active.Record.BotId, fault);
+                            (bool desired, string code) = RecordFault(active.Record.BotId, fault, active.Session.Player, active.AnomalySubject);
                             await StopCoreAsync(active.Record, desired, CancellationToken.None, code).ConfigureAwait(false);
                         }
-                        else await StopCoreAsync(active.Record, false, CancellationToken.None).ConfigureAwait(false);
+                        else
+                        {
+                            ReportSessionLostOnce(active, "checkpoint");
+                            await StopCoreAsync(active.Record, false, CancellationToken.None).ConfigureAwait(false);
+                        }
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
@@ -2038,6 +2089,30 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Volatile.Write(ref _savedSharedSetAsideVersion, version);
     }
 
+    private void ReportSessionLostOnce(ActiveBot active, string where)
+    {
+        if (active.Paused || _stopping || ResetInProgress || Volatile.Read(ref active.FaultCode) is not null)
+            return;
+        if (Interlocked.Exchange(ref active.SessionLostReported, 1) != 0)
+            return;
+
+        string detail = $"bot {active.Record.BotId:D} session lost while registered active ({where}, sessionState={active.Session.State}, hasPlayer={active.Session.Player is not null}, inWorld={active.Session.Player?.IsInWorld == true})";
+        if (active.Session.Player is { } player)
+        {
+            active.AnomalySubject = PlayerbotAnomalies.SubjectOf(player);
+            PlayerbotAnomalies.Report(player, "lifecycle", "session-lost", detail, AnomalySeverity.Warning);
+        }
+        else
+        {
+            AnomalyLedger.Shared.Report(
+                PlayerbotAnomalies.Subsystem("lifecycle"),
+                "session-lost",
+                active.AnomalySubject,
+                $"{detail} | map {active.MapId}",
+                AnomalySeverity.Warning);
+        }
+    }
+
     /// <summary>
     /// An exception out of a bot's update (world thread): log all of it, remember the fault for the checkpoint, close the session.
     /// The next checkpoint quarantines the bot (<see cref="RecordFault"/>).
@@ -2087,6 +2162,29 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
+        string thinkDetail = $"bot {active.Record.BotId:D} {what} failed ({ex.GetType().Name}: {ex.Message})";
+        if (active.Session.Player is { } faultPlayer)
+        {
+            active.AnomalySubject = PlayerbotAnomalies.SubjectOf(faultPlayer);
+            PlayerbotAnomalies.Report(faultPlayer, "lifecycle", "think-fault", thinkDetail, AnomalySeverity.Warning);
+        }
+        else
+        {
+            AnomalyLedger.Shared.Report(
+                PlayerbotAnomalies.Subsystem("lifecycle"),
+                "think-fault",
+                active.AnomalySubject,
+                $"{thinkDetail} | map {active.MapId}",
+                AnomalySeverity.Warning);
+        }
+
+        Quarantine quarantine = _quarantine.GetOrAdd(active.Record.BotId, static _ => new Quarantine());
+        lock (quarantine)
+        {
+            quarantine.Subject = active.AnomalySubject;
+            quarantine.MapId = active.MapId;
+        }
+
         Interlocked.CompareExchange(ref active.FaultCode, $"{what}: {ex.Message}", null);
         active.Session.Kick();
     }
@@ -2099,12 +2197,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// Count one fault of a bot and schedule its retry: whether the bot stays desired, and the error code to store. The
     /// <see cref="PlayerbotOptions.MaxFaults"/>-th fault within the window disables it (no retry).
     /// </summary>
-    private (bool Desired, string ErrorCode) RecordFault(Guid botId, string fault)
+    private (bool Desired, string ErrorCode) RecordFault(Guid botId, string fault, Player? player = null, string? fallbackSubject = null)
     {
         long now = ClockMs;
-        Quarantine quarantine = _quarantine.GetOrAdd(botId, _ => new Quarantine());
+        Quarantine quarantine = _quarantine.GetOrAdd(botId, static _ => new Quarantine());
         lock (quarantine)
         {
+            if (player is not null)
+            {
+                quarantine.Subject = PlayerbotAnomalies.SubjectOf(player);
+                quarantine.MapId = player.Map?.MapId ?? player.MapId;
+            }
+            else if (!string.IsNullOrEmpty(fallbackSubject))
+            {
+                quarantine.Subject = fallbackSubject;
+            }
+
+            string subject = quarantine.Subject ?? $"bot {botId:D}";
             quarantine.Faults.RemoveAll(at => now - at >= _options.FaultWindowSeconds * 1000L);
             quarantine.Faults.Add(now);
             int count = quarantine.Faults.Count;
@@ -2113,6 +2222,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 _quarantine.TryRemove(botId, out _);
                 logger.LogWarning("Playerbot {BotId} disabled after {Count} faults within {Window} s: {Fault}",
                     botId, count, _options.FaultWindowSeconds, fault);
+                string disabledDetail = $"bot {botId:D} disabled after {count} faults within {_options.FaultWindowSeconds} s: {fault}";
+                if (player is not null)
+                {
+                    PlayerbotAnomalies.Report(player, "lifecycle", "disabled", disabledDetail, AnomalySeverity.Error);
+                }
+                else
+                {
+                    AnomalyLedger.Shared.Report(
+                        PlayerbotAnomalies.Subsystem("lifecycle"),
+                        "disabled",
+                        subject,
+                        $"{disabledDetail} | map {quarantine.MapId}",
+                        AnomalySeverity.Error);
+                }
                 return (false, Code($"disabled after {count} faults: {fault}"));
             }
 
@@ -2120,6 +2243,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             quarantine.RetryAtMs = now + backoffMs;
             logger.LogWarning("Playerbot {BotId} quarantined for {Seconds} s (fault {Count} of {Max}): {Fault}",
                 botId, backoffMs / 1000, count, _options.MaxFaults, fault);
+            string quarantineDetail = $"bot {botId:D} quarantined for {backoffMs / 1000} s (fault {count} of {_options.MaxFaults}): {fault}";
+            if (player is not null)
+            {
+                PlayerbotAnomalies.Report(player, "lifecycle", "quarantined", quarantineDetail, AnomalySeverity.Warning);
+            }
+            else
+            {
+                AnomalyLedger.Shared.Report(
+                    PlayerbotAnomalies.Subsystem("lifecycle"),
+                    "quarantined",
+                    subject,
+                    $"{quarantineDetail} | map {quarantine.MapId}",
+                    AnomalySeverity.Warning);
+            }
             return (true, Code($"quarantined (fault {count}/{_options.MaxFaults}): {fault}"));
         }
 
@@ -2187,6 +2324,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         public readonly List<long> Faults = [];
         public long RetryAtMs = long.MaxValue;
+        public string? Subject;
+        public uint MapId;
     }
 
     private async Task ReconcileProvisioningAsync(IServiceProvider provider, CancellationToken cancellationToken)
@@ -2268,6 +2407,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public bool GroupDriven;
         public bool BattlegroundDriven;
         public string Name = session.Player?.Name ?? string.Empty;
+        public string AnomalySubject = session.Player is { } p ? PlayerbotAnomalies.SubjectOf(p) : $"bot {record.BotId:D}";
         public uint MapId = session.Player?.Map?.MapId ?? session.Player?.MapId ?? 0;
         public uint LastUpdateMs = session.World.NowMs;
         /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>
@@ -2275,6 +2415,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public volatile bool Paused;
         public IPlayerbotController? Controller;
         public string? FaultCode;
+        public int SessionLostReported;
         public int StallsLogged;
         public PlayerbotStatus? Status; // world thread: the last status line (StatusOf)
         private string? _stallSource;

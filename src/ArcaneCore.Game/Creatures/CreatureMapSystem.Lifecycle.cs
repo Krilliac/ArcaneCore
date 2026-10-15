@@ -410,6 +410,7 @@ public sealed partial class CreatureMapSystem
                 CreatureWaypointPath path = _content.ResolveWaypointPath(creature.Spawn?.Guid ?? 0, creature.Template.Entry);
                 if (path.Points.Count == 0)
                 {
+                    ReportMissingWaypointPath(creature, 0, "creature_movement"); // report-only, once per spawn
                     // Reported once in aggregate at content load (CreatureContent.FindWaypointSpawnsWithoutPath); per creature only at debug.
                     bool wander = _options.Movement.MissingWaypointPathFallback == MissingWaypointPathFallback.Random;
                     _logger.LogDebug("{Creature} has waypoint movement but no creature_movement or creature_movement_template path; {Fallback}",

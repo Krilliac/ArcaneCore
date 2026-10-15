@@ -81,6 +81,11 @@ internal static class PlayerbotQaClassifier
                     + (s.Detail.Length != 0 ? " (" + s.Detail + ")" : string.Empty)
                     + ": an effect that silently does nothing, or a rule that drops it", title);
 
+            case QaSignalKind.Anomaly:
+                return new QaClassification(QaCause.BehaviourBug,
+                    "recurring bot outcome anomaly " + (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
+                    + (s.Detail.Length != 0 ? ": " + s.Detail : string.Empty), title);
+
             default:
                 // Every kind has a case above (PlayerbotQaKindExhaustivenessTests): a new kind must say how it is classified.
                 throw new ArgumentOutOfRangeException(nameof(s), s.Kind, "no classification for this bot QA kind");

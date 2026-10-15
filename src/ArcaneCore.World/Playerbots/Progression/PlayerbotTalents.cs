@@ -54,7 +54,7 @@ internal static class PlayerbotTalentPlanner
 
             int target = Math.Min(pick.Ranks, talent.RankCount);
             int known = TalentRules.HighestKnownRank(talent, hasSpell);
-            if (known >= target)
+            if (known < 0 || known >= target)
             {
                 continue;
             }
@@ -91,7 +91,7 @@ internal static class PlayerbotTalentPlanner
             foreach (TalentRecord talent in catalog.TalentsOfTab(tab.Id).OrderBy(t => t.Row).ThenBy(t => t.Column).ThenBy(t => t.Id))
             {
                 int known = TalentRules.HighestKnownRank(talent, hasSpell);
-                if (known < talent.RankCount && Legal(catalog, hasSpell, talent.Id, (uint)known, freePoints, classMask, refused))
+                if (known >= 0 && known < talent.RankCount && Legal(catalog, hasSpell, talent.Id, (uint)known, freePoints, classMask, refused))
                 {
                     return new PlayerbotTalentStep(talent.Id, (uint)known, FromBuild: false);
                 }
@@ -188,7 +188,12 @@ internal sealed class PlayerbotTalents(WorldSession session)
 
         if (TalentRules.HighestKnownRank(talent, knows) <= before)
         {
-            _refused.Add((step.TalentId, step.RankIndex)); // refused by the handler: no reply packet exists to say why
+            if (_refused.Add((step.TalentId, step.RankIndex)) && !session.IsInChaosProbe) // refused by the handler: no reply packet exists to say why
+            {
+                TalentLearnResult decision = TalentRules.EvaluateLearn(talents.Catalog, knows, step.TalentId, step.RankIndex, free, ClassMask(player));
+                PlayerbotAnomalies.Report(player, "progression", "talent-refused",
+                    $"talent {step.TalentId} rank {step.RankIndex} refused (outcome={decision.Outcome}, spell={decision.RankSpell}, free={free})");
+            }
         }
 
         return true;

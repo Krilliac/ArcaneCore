@@ -31,6 +31,7 @@ public sealed partial class SpellSystem
     private readonly Func<uint> _clock;
     private readonly ILogger _logger;
     private readonly HashSet<(string Kind, uint Value)> _reportedUnsupported = [];
+    private readonly HashSet<(string Kind, uint Value, uint SpellId)> _reportedUnsupportedAnomalies = [];
     private readonly Dictionary<SpellEffectName, SpellEffectHandler> _builtInEffectHandlers;
 
     public SpellSystem(
@@ -332,26 +333,111 @@ public sealed partial class SpellSystem
         }
     }
 
+    internal const uint MaxReasonableCooldownMs = 7u * 24u * 60u * 60u * 1000u;
+    internal const long CastStuckMarginMs = 10_000L;
+
+    internal static string FormatSpellSubject(uint spellId) => $"spell {spellId}";
+
+    internal static string FormatUnitSubject(Unit unit) => unit switch
+    {
+        Player player => $"player {player.Name} (guid {player.Guid.Counter})",
+        Creature creature => $"creature {creature.Entry} (guid {creature.Guid.Counter})",
+        _ when unit.Guid.HasEntry => $"creature {unit.Guid.Entry} (guid {unit.Guid.Counter})",
+        _ => $"unit {unit.Guid}",
+    };
+
     private void VerifySpellStateInvariants(UnitSpellState state)
     {
         if (state.CurrentCast is { State: SpellCastState.Finished } terminal)
         {
+            if (!terminal.StuckReported)
+            {
+                terminal.StuckReported = true;
+                AnomalyLedger.Shared.Report(
+                    "spell",
+                    "cast-stuck",
+                    FormatSpellSubject(terminal.Spell.Id),
+                    $"caster={FormatUnitSubject(state.Unit)} state={terminal.State} reason=terminal-cast-not-cleared",
+                    AnomalySeverity.Warning);
+            }
+
             Invariant.Check(false, $"Unit {state.Unit.Guid} had CurrentCast (spell={terminal.Spell.Id}) left in terminal state {terminal.State}.");
             _logger.LogWarning(
                 "spell-state invariant healed for unit {Guid}: CurrentCast (spell={SpellId}) was left in terminal state {State}; clearing",
                 state.Unit.Guid, terminal.Spell.Id, terminal.State);
             state.CurrentCast = null;
         }
+        else if (state.CurrentCast is { } active)
+        {
+            long maxAllowedMs = active.State == SpellCastState.Casting
+                ? Math.Max(active.Duration, 0) + CastStuckMarginMs
+                : Math.Max(active.CastTime, 0) + (active.PushbackCount * 1000L) + CastStuckMarginMs;
+            if ((active.Timer < 0 || active.ElapsedMs > maxAllowedMs) && !active.StuckReported)
+            {
+                active.StuckReported = true;
+                AnomalyLedger.Shared.Report(
+                    "spell",
+                    "cast-stuck",
+                    FormatSpellSubject(active.Spell.Id),
+                    $"caster={FormatUnitSubject(state.Unit)} state={active.State} timerMs={active.Timer} elapsedMs={active.ElapsedMs} maxAllowedMs={maxAllowedMs}",
+                    AnomalySeverity.Warning);
+            }
+            else if (active.State == SpellCastState.Casting && active.Spell.IsChanneled && !active.ChannelOrphanReported)
+            {
+                // Report-only. The channel object may be a unit, a DynamicObject (Rain of Fire), a bobber or a Far Sight eye,
+                // so its absence from the unit table proves nothing.
+                uint currentChannelSpell = state.Unit.GetUInt32(UpdateFields.UnitChannelSpell);
+                if (!active.Caster.IsAlive || currentChannelSpell != active.Spell.Id)
+                {
+                    active.ChannelOrphanReported = true;
+                    AnomalyLedger.Shared.Report(
+                        "spell",
+                        "channel-orphaned",
+                        FormatSpellSubject(active.Spell.Id),
+                        $"caster={FormatUnitSubject(state.Unit)} channelSpell={currentChannelSpell} alive={active.Caster.IsAlive}",
+                        AnomalySeverity.Warning);
+                }
+            }
+        }
 
         if (state.PendingChannelResetMs == 0
-            && state.CurrentCast is not { State: SpellCastState.Casting, Spell.IsChanneled: true }
-            && state.Unit.GetUInt32(UpdateFields.UnitChannelSpell) is var channelSpell && channelSpell != 0)
+            && state.CurrentCast is not { State: SpellCastState.Casting, Spell.IsChanneled: true })
         {
-            Invariant.Check(false, $"Unit {state.Unit.Guid} had UnitChannelSpell={channelSpell} set without an active channel or pending reset.");
-            _logger.LogWarning(
-                "spell-state invariant healed for unit {Guid}: UnitChannelSpell={SpellId} was set without an active channel or pending reset; clearing",
-                state.Unit.Guid, channelSpell);
-            CancelChannelingAnimation(state.Unit);
+            uint channelSpell = state.Unit.GetUInt32(UpdateFields.UnitChannelSpell);
+            ObjectGuid channelObj = new(state.Unit.GetUInt64(UpdateFields.UnitFieldChannelObject));
+            if (channelSpell != 0)
+            {
+                AnomalyLedger.Shared.Report(
+                    "spell",
+                    "channel-orphaned",
+                    FormatSpellSubject(channelSpell),
+                    $"caster={FormatUnitSubject(state.Unit)} channelObject={channelObj} reason=channel-spell-without-active-cast",
+                    AnomalySeverity.Warning);
+                Invariant.Check(false, $"Unit {state.Unit.Guid} had UnitChannelSpell={channelSpell} set without an active channel or pending reset.");
+                _logger.LogWarning(
+                    "spell-state invariant healed for unit {Guid}: UnitChannelSpell={SpellId} was set without an active channel or pending reset; clearing",
+                    state.Unit.Guid, channelSpell);
+                CancelChannelingAnimation(state.Unit);
+            }
+            else if (!channelObj.IsEmpty)
+            {
+                if (state.ChannelObjectOrphanReported)
+                {
+                    return;
+                }
+
+                state.ChannelObjectOrphanReported = true;
+                AnomalyLedger.Shared.Report(
+                    "spell",
+                    "channel-orphaned",
+                    FormatUnitSubject(state.Unit),
+                    $"channelObject={channelObj} reason=channel-object-without-active-cast",
+                    AnomalySeverity.Warning);
+            }
+            else
+            {
+                state.ChannelObjectOrphanReported = false;
+            }
         }
     }
 
@@ -652,6 +738,7 @@ public sealed partial class SpellSystem
         {
             cast.State = SpellCastState.Casting;
             cast.Timer = duration;
+            cast.ElapsedMs = 0;
             SealModScope(cast); // vmangos Spell.cpp:3834: a channel ends its mods when it starts, not when it ends
             cast.RememberCastPosition(); // vmangos Spell.cpp:4108-4110: the channel's movement check starts here
             if (caster is Player player)
@@ -762,6 +849,32 @@ public sealed partial class SpellSystem
 
     private void UpdateCast(SpellCast cast, uint diffMs)
     {
+        if (cast.Timer < 0)
+        {
+            if (!cast.StuckReported)
+            {
+                cast.StuckReported = true;
+                AnomalyLedger.Shared.Report(
+                    "spell",
+                    "cast-stuck",
+                    FormatSpellSubject(cast.Spell.Id),
+                    $"caster={FormatUnitSubject(cast.Caster)} state={cast.State} timerMs={cast.Timer} reason=negative-timer",
+                    AnomalySeverity.Warning);
+            }
+        }
+
+        if (cast.State == SpellCastState.Casting && cast.Spell.IsChanneled && !cast.ChannelOrphanReported
+            && (!cast.Caster.IsAlive || cast.Caster.GetUInt32(UpdateFields.UnitChannelSpell) != cast.Spell.Id))
+        {
+            cast.ChannelOrphanReported = true;
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "channel-orphaned",
+                FormatSpellSubject(cast.Spell.Id),
+                $"caster={FormatUnitSubject(cast.Caster)} channelSpell={cast.Caster.GetUInt32(UpdateFields.UnitChannelSpell)} alive={cast.Caster.IsAlive}",
+                AnomalySeverity.Warning);
+        }
+
         if (cast.CastItem is { } castItem && (cast.Caster is not Player owner
             || !owner.Inventory.OwnsItemAt(castItem, cast.ItemBag, cast.ItemSlot)))
         {
@@ -831,6 +944,7 @@ public sealed partial class SpellSystem
             }
         }
 
+        cast.ElapsedMs += diffMs;
         cast.Timer = diffMs >= cast.Timer ? 0 : cast.Timer - (int)diffMs;
         if (cast.Timer > 0)
         {
@@ -1657,6 +1771,16 @@ public sealed partial class SpellSystem
             return;
         }
 
+        if (itemCooldownMs is < -1 || itemCategoryCooldownMs is < -1)
+        {
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "cooldown-invalid",
+                FormatSpellSubject(spell.Id),
+                $"unit={FormatUnitSubject(state.Unit)} recoveryTime={spell.RecoveryTime} categoryRecoveryTime={spell.CategoryRecoveryTime} itemCooldownMs={itemCooldownMs} itemCategoryCooldownMs={itemCategoryCooldownMs}",
+                AnomalySeverity.Warning);
+        }
+
         // ranged (hunter lane): a ranged-slot spell also waits out the weapon speed (Player.cpp:22193-22197).
         // crafting lane: an item spell may carry its own category and times (Player.cpp:22139-22160): the explicit item-use values
         // when given, else the cast item's template; an ItemPrototype cooldown of -1 means the Spell.dbc recovery (Player.cpp:22139).
@@ -1671,6 +1795,17 @@ public sealed partial class SpellSystem
         if (recovery == 0 && categoryRecovery == 0)
         {
             return;
+        }
+
+        if (recovery > MaxReasonableCooldownMs || categoryRecovery > MaxReasonableCooldownMs)
+        {
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "cooldown-invalid",
+                FormatSpellSubject(spell.Id),
+                $"unit={FormatUnitSubject(state.Unit)} recoveryMs={recovery} categoryRecoveryMs={categoryRecovery}",
+                AnomalySeverity.Warning);
+            // Report-only: the cooldown is applied unchanged (see the Math.Max clamps below).
         }
 
         // vmangos Player::AddCooldown (Player.cpp:22200-22206): the cooldown spell mod applies to the spell's own time when it
@@ -1959,7 +2094,7 @@ public sealed partial class SpellSystem
             || (e.TargetA is SpellImplicitTarget.LocationCasterDest or SpellImplicitTarget.None
                 && e.Effect is SpellEffectName.Resurrect or SpellEffectName.ResurrectNew)));
 
-    internal static bool IsExplicitUnitTarget(SpellImplicitTarget target)
+    public static bool IsExplicitUnitTarget(SpellImplicitTarget target)
         => target is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitFriend or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitParty
             or SpellImplicitTarget.UnitRaid or SpellImplicitTarget.UnitFriendChainHeal;
 
@@ -2004,6 +2139,16 @@ public sealed partial class SpellSystem
 
     private void ReportUnsupported(string kind, uint value, uint spellId)
     {
+        if (_reportedUnsupportedAnomalies.Add((kind, value, spellId)))
+        {
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "effect-unhandled",
+                FormatSpellSubject(spellId),
+                $"kind={kind} value={value}",
+                AnomalySeverity.Warning);
+        }
+
         if (_reportedUnsupported.Add((kind, value)))
         {
             _logger.LogInformation("Spell {Spell}: {Kind} {Value} is not implemented yet", spellId, kind, value);

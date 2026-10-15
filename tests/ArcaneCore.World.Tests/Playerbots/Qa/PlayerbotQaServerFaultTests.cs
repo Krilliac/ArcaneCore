@@ -85,9 +85,9 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
     [Fact]
     public void TheFeed_SkipsEnvironmentSites_ButKeepsThemInTheLedger()
     {
-        // Literal site names, as production records them (PlayerbotLocalPlanner, WorldSession.PacketCapture, ProcessDumpService): a renamed or
+        // Literal site names, as production records them (PlayerbotPolicyTelemetry, WorldSession.PacketCapture, ProcessDumpService): a renamed or
         // misspelled entry in EnvironmentSites fails here instead of silently filing nothing.
-        string[] environment = ["playerbot.local-planner", "net.packet-capture", "dump.free-space"];
+        string[] environment = ["playerbot.policy-telemetry-io", "net.packet-capture", "dump.free-space"];
         Assert.Equal(environment.Order(), PlayerbotQaFaultFeed.EnvironmentSites.Order());
         var ledger = new FaultLedger();
         foreach (string site in environment)

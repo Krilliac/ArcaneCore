@@ -4,6 +4,7 @@ using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 
@@ -104,7 +105,16 @@ public sealed class ResurrectionService(WorldRuntime world, Func<TeleportService
         if (request.Resurrector.IsPlayer && service is not null)
         {
             (uint mapId, float x, float y, float z, float o) = Destination(player, request);
-            service.TeleportTo(player, mapId, x, y, z, o);
+            if (!service.TeleportTo(player, mapId, x, y, z, o))
+            {
+                // The resurrection goes on where the player stands, away from the resurrector it accepted.
+                ServerAnomalies.Report(
+                    player,
+                    ServerAnomalies.Death,
+                    "res-teleport-refused",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the teleport to the resurrector at map {mapId} {x:F1},{y:F1},{z:F1} was refused; resurrecting in place"),
+                    AnomalySeverity.Info);
+            }
         }
 
         // "We cannot resurrect player when we triggered any kind of teleport": it happens when the teleport has finished.
@@ -183,6 +193,20 @@ public sealed class ResurrectionService(WorldRuntime world, Func<TeleportService
             {
                 Resurrected?.Invoke(player);
             }
+
+            // A quest settlement holds the player: nothing is resurrected by design.
+            if (!player.IsQuestSettlementPending && player.Combat.DeathState is not (DeathState.Alive or DeathState.JustAlived))
+            {
+                ServerAnomalies.Report(
+                    player,
+                    ServerAnomalies.Death,
+                    "res-not-applied",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"resurrection accepted but the player is still {player.Combat.DeathState}"));
+            }
+        }
+        else
+        {
+            ServerAnomalies.Report(player, ServerAnomalies.Death, "res-not-applied", "resurrection accepted but the player is in no map");
         }
     }
 }

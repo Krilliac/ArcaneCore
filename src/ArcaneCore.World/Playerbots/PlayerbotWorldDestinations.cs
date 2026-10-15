@@ -32,6 +32,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly PlayerbotNavigationExecutor? _executor = executor;
     private readonly PlayerbotQuestTripFeasibility _trip = new();
+    private readonly PlayerbotNavigationAnomalies.TripWatch _tripWatch = new();
     private readonly List<DestinationEntry> _entries = [];
     private readonly HashSet<uint> _blockedSpawns = [];
     private readonly Dictionary<uint, uint> _farBlockedUntil = [];
@@ -364,6 +365,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 Backoff(now);
                 return false;
             }
+            _tripWatch.Note(player, _routeTarget, _routeSpawnGuid, now);
             if (PlayerbotNavigation.TryAdvance(_session, _route, _options, elapsedMs, now)) return true;
             _blockedSpawns.Add(_routeSpawnGuid);
             ClearRoute();
@@ -410,6 +412,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (!Eligible(entry.Entry, preferredCreatureEntry, player, services, state, returnQuestId, SkipQuest, loot,
                     Home, _content, GiverInHome(entry.Spawn), out uint questId)) continue;
             if (questId == 0 && preferredCreatureEntry != 0) questId = preferredQuestId;
+            // A spawn of another map (or with no place) is no destination: the entries are listed per map, so this is a content or cache fault.
+            if (PlayerbotNavigationAnomalies.DestinationFault(map.MapId, player.FactionTemplate, entry.Spawn, 0, null, wantsFriendly: false) is { } badSpawn)
+            {
+                PlayerbotNavigationAnomalies.ReportDestination(player, badSpawn, entry.Entry, entry.Spawn);
+                _blockedSpawns.Add(entry.Spawn.Guid);
+                continue;
+            }
             if (Seen(player, entry.Entry, returnQuestId, hunting))
             {
                 if (returnQuestId == 0 && preferredCreatureEntry == 0) SettleArrival(player, entry.Entry);
@@ -542,6 +551,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
             _tileWait.Reset();
             if (questId == _failQuest) _failCount = 0;
+            // The chosen giver or ender of a trip must not be an enemy's: a hostile faction template is a town the bot should not walk into.
+            if (!hunting && PlayerbotNavigationAnomalies.DestinationFault(map.MapId, player.FactionTemplate, entry.Spawn,
+                    _content?.FindTemplate(entry.Entry)?.Faction ?? 0,
+                    _session.Services.GetService<QuestNpcFeature>()?.FactionTemplates ?? _session.Services.GetService<FactionTemplateCatalog>(),
+                    wantsFriendly: true) is { } chosenFault)
+                PlayerbotNavigationAnomalies.ReportDestination(player, chosenFault, entry.Entry, entry.Spawn);
+            _tripWatch.Note(player, entry.Entry, entry.Spawn.Guid, now);
             _route = route;
             _routeTarget = entry.Entry;
             _routeSpawnGuid = entry.Spawn.Guid;
@@ -786,6 +802,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             "Playerbot {Bot} sets aside completed quest {Quest} at arrived ender {Entry} ({X:F1},{Y:F1},{Z:F1} map {Map}): ender in sight within 4 yd (dist={Distance:F1} yd, npcFlags=0x{NpcFlags:X}, inCombat={InCombat}) but turn-in did not start",
             player.Name, questId, entry, player.X, player.Y, player.Z, player.MapId,
             ender is not null ? distance : -1f, ender?.NpcFlags ?? 0, ender?.Combat.IsInCombat ?? false);
+        if (!PlayerbotNavigationAnomalies.Silenced(player))
+            PlayerbotAnomalies.Report(player, "destination", "arrived-unserved",
+                $"quest {questId}: arrived within 4 yd of ender {entry} (found: {ender is not null}) {ConfirmFailures} times and the turn-in never started");
     }
 
     private void ConfirmUnclimbable(Player player, Vector3 destination, uint questId, uint entry, uint now, bool friendlyTownEnder)
@@ -1150,7 +1169,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// <summary>Drops the route and, unless <paramref name="keepTrip"/> (the route completed: the arrival is still to be settled), the trip.</summary>
     private void ClearRoute(bool keepTrip = false)
     {
-        if (!keepTrip) { _travelEntry = 0; _travelQuest = 0; }
+        if (!keepTrip) { _travelEntry = 0; _travelQuest = 0; _tripWatch.Clear(); }
         ClearNavigation();
         _route = null;
         _routeTarget = default;
@@ -1191,7 +1210,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             return true;
         }
         _planLease = lease;
-        _navigationPlan = new PlayerbotAsyncNavigationPlan(map.MapId, request.Start, request.Dataset);
+        _navigationPlan = new PlayerbotAsyncNavigationPlan(map.MapId, request.Start, request.Dataset, player, destination);
         _awaitingRequest = request;
         _pendingIdentity = new(player, map, nav, _content, _contentVersion, _quests, Home, player.Level,
             preferredEntry, returnQuestId, questId, request.Start, graph, _options.MaxRouteYards, _options.MaxPathPoints);

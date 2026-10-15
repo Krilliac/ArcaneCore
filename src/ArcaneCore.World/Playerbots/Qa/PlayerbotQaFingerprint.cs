@@ -27,6 +27,9 @@ internal static partial class PlayerbotQaFingerprint
     [GeneratedRegex(@"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}|0[xX][0-9a-fA-F]+|\d+", RegexOptions.CultureInvariant)]
     private static partial Regex VolatilePattern();
 
+    [GeneratedRegex(@"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}|0[xX][0-9a-fA-F]+|(?<=\bguids?\s*[:=]?\s*)\d[0-9a-fA-F]*\b|(?<=\b[A-Za-z]+:)[0-9a-fA-F]{16}\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex GuidLikePattern();
+
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespacePattern();
 
@@ -151,6 +154,8 @@ internal static partial class PlayerbotQaFingerprint
             QaSignalKind.TickHang => $"tickhang|phase={Token(s.Stage)}|item={Token(s.Reason)}",
             // The goal and what it names, never the bot's place: every bot that skips the same entry meets the same unjoined ground.
             QaSignalKind.UnreachableGoal => string.Create(CultureInfo.InvariantCulture, $"unreachable|goal={s.Goal}|quest={s.Quest}|target={s.Target}"),
+            // A recurring bot-* outcome anomaly is keyed by its normalised subsystem (Goal) and code (Reason).
+            QaSignalKind.Anomaly => $"anomaly|{Token(s.Goal)}|{Token(s.Reason)}",
             _ => throw new ArgumentOutOfRangeException(nameof(s)),
         });
     }
@@ -183,5 +188,19 @@ internal static partial class PlayerbotQaFingerprint
     {
         string flat = WhitespacePattern().Replace(VolatilePattern().Replace(text, "#"), " ").Trim().ToLowerInvariant();
         return flat.Length <= 160 ? flat : flat[..160];
+    }
+
+    /// <summary>
+    /// A detail as a readable example for display (never a key): guids, 0x hex and a number after "guid" become "#", every other number and the
+    /// case are kept, white space is collapsed, and the text is cut at <paramref name="maxChars"/> on a word boundary with an ellipsis.
+    /// </summary>
+    internal static string Readable(string text, int maxChars)
+    {
+        string flat = WhitespacePattern().Replace(GuidLikePattern().Replace(text, "#"), " ").Trim();
+        if (flat.Length <= maxChars) return flat;
+        int cut = flat.LastIndexOf(' ', maxChars);
+        if (cut < maxChars / 2) cut = maxChars;
+        // ASCII "...": the 1.12 client's chat font has no glyph for U+2026.
+        return flat[..cut].TrimEnd(' ', ',', ';', ':') + "...";
     }
 }

@@ -101,6 +101,10 @@ internal static class PlayerbotQaIssueComposer
         {
             sb.Append("- On the server console: `.server faults show ").Append(LedgerId(f)).Append("` shows the live count, frames and message.\n");
         }
+        else if (f.Kind == QaSignalKind.Anomaly)
+        {
+            sb.Append("- On the server console: `.server anomalies show ").Append(Code(redactor.Redact(f.Goal + "/" + f.Reason))).Append("` shows the live count, distinct subjects and last detail.\n");
+        }
         else
         {
             sb.Append("- Start a few bots (`.playerbot start`), let them play, and watch `.playerbot qa`.\n");

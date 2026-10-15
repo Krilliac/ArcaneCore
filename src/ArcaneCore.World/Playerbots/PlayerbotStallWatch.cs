@@ -80,6 +80,12 @@ internal sealed class PlayerbotStallWatch
     internal int GiveUps { get; private set; }
 
     /// <summary>
+    /// Whether the latest give-up <see cref="Observe"/> asked for came while the stall it began was still unresolved: the goal given up
+    /// at the stall's start (or at the previous bound) did not free the bot (<see cref="PlayerbotBrain"/> reports it as such).
+    /// </summary>
+    internal bool LastGiveUpRepeated { get; private set; }
+
+    /// <summary>
     /// Forget the living watch (death, a new life: the recovery has its own bounds). A death loop stays reported
     /// (<see cref="RecordDeath"/>).
     /// </summary>
@@ -174,6 +180,7 @@ internal sealed class PlayerbotStallWatch
             $"stalled {idle / 1000}s: goal={goal} target={target} quest={quest} at {position.X:F1},{position.Y:F1},{position.Z:F1} map {player.MapId}");
         if (!fresh && unchecked(nowMs - _gaveUpMs) < stallMs) return false;
         _gaveUpMs = nowMs;
+        LastGiveUpRepeated = !fresh;
         GiveUps++;
         if (!fresh) return true;
         LastReport = _stallReport;

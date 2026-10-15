@@ -86,6 +86,10 @@ public sealed class SpellAura
 
     /// <summary>Ticks delivered so far.</summary>
     public int TickCount { get; internal set; }
+
+    internal long ElapsedWithoutTickMs { get; set; }
+
+    internal bool PeriodicStalledReported { get; set; }
 }
 
 /// <summary>
@@ -112,6 +116,7 @@ public sealed class SpellAuraHolder
         CasterLevel = casterLevel;
         CasterOwner = casterOwner;
         Charges = (int)spell.ProcCharges;
+        InitialDurationArg = duration;
 
         // vmangos SpellAuraHolder ctor: permanent for -1 durations and passive spells; durations
         // below 200 ms are raised to 300 ms ("some spells have 1 ms duration").
@@ -125,6 +130,14 @@ public sealed class SpellAuraHolder
         Duration = MaxDuration;
         IsRemovedOnShapeLost = CasterGuid == Target.Guid && spell.IsRemovedOnShapeLost;
     }
+
+    internal int InitialDurationArg { get; }
+
+    internal bool ExpiredReported { get; set; }
+
+    internal bool DurationInvalidReported { get; set; }
+
+    internal bool StackOverflowReported { get; set; }
 
     public SpellInfo Spell { get; }
 

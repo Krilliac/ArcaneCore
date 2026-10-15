@@ -90,6 +90,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private readonly Queue<long> _createTimes = new();
     private readonly Dictionary<Guid, long> _startedAt = [];
     private readonly Dictionary<Guid, long> _parkedAt = [];
+    private readonly HashSet<Guid> _reportedParkedUnexpected = [];
     private readonly PopulationBudgetWindows _windows = new();
     private readonly PopulationActionLog _actionLog = new();
     private WorldRuntime? _world;
@@ -113,6 +114,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     internal const byte PendingDeleteBand = byte.MaxValue;
     private const int MaxPlacementRefusals = 3;
     private const int PauseLiftsAfterPasses = 10;
+    internal const long BandDeficitThresholdMs = 60_000L;
+    internal const int BandDeficitMinPasses = 3;
+    private readonly Dictionary<int, (long SinceMs, int Passes, int LastHave, bool Reported)> _bandDeficits = [];
     private bool _stopping;
     private Task _pass = Task.CompletedTask;
     private PopulationStatus _status = PopulationStatus.Idle(false, "disabled", "the population manager is off");
@@ -693,6 +697,35 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             // A member that is gone no longer needs its start and park times.
             foreach (Guid gone in _startedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _startedAt.Remove(gone);
             foreach (Guid gone in _parkedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _parkedAt.Remove(gone);
+            _reportedParkedUnexpected.RemoveWhere(id => !members.ContainsKey(id));
+
+            if (!_stopping && !input.Managed.ResetInProgress)
+            {
+                foreach (PlayerbotPopulationMember member in members.Values)
+                {
+                    bool isRunning = input.States.TryGetValue(member.BotId, out ManagedPlayerbotState memberState) && memberState == ManagedPlayerbotState.Running;
+                    if (isRunning)
+                    {
+                        _reportedParkedUnexpected.Remove(member.BotId);
+                        continue;
+                    }
+
+                    // Report-only: _startedAt and _parkedAt (and so PopulationParking.RestartOrder) are left exactly as they are.
+                    if (!_startedAt.ContainsKey(member.BotId) || _parkedAt.ContainsKey(member.BotId)) continue;
+                    if (_reportedParkedUnexpected.Add(member.BotId))
+                    {
+                        string botLabel = known.TryGetValue(member.BotId, out ManagedPlayerbot? knownBot)
+                            ? $"bot {knownBot.AccountName} (id {member.BotId:D}, char {member.CharacterId})"
+                            : $"bot {member.BotId:D} (char {member.CharacterId})";
+                        AnomalyLedger.Shared.Report(
+                            PlayerbotAnomalies.Prefix + "population",
+                            "parked-unexpected",
+                            botLabel,
+                            $"population-owned bot transitioned to {memberState} outside population park pass (zone={member.ZoneId}, band={member.Band})",
+                            AnomalySeverity.Warning);
+                    }
+                }
+            }
 
             ownedRunning = input.Running.Count(f => members.ContainsKey(f.BotId));
             ownedParked = members.Keys.Count(id => !input.States.TryGetValue(id, out ManagedPlayerbotState s) || s != ManagedPlayerbotState.Running);
@@ -794,6 +827,11 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
         long now = input.ClockMs;
         while (_createTimes.Count > 0 && now - _createTimes.Peek() >= 60_000) _createTimes.Dequeue();
+        if (!pop.FreshLaunch && !input.ShedOnly && input.RushCount == 0 && pop.TargetOnline > 0)
+        {
+            ObserveBandDeficits(input.Bands, desired, have, now, pop, ctxNote: decision.Reason);
+        }
+
         PopulationBandStatus[] bands = [.. input.Bands.Select((b, i) => new PopulationBandStatus(b.MinLevel, b.MaxLevel, b.Weight, desired[i], have[i]))];
         _actionLog.Add(pass);
         if (_actionLog.Due(now, pop.ActionLogSeconds) is { } line)
@@ -806,6 +844,44 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _createTimes.Count, input.BoostAvailable ? "available" : "missing: " + input.BoostMissing,
             input.Atlas.CountFor(Team.Alliance), input.Atlas.CountFor(Team.Horde), bands,
             _lastError, Interlocked.Increment(ref _passes), operatorRunning, ownedTarget, pop.FreshLaunch));
+    }
+
+    private void ObserveBandDeficits(PopulationBand[] bands, int[] desired, int[] have, long nowMs, PlayerbotPopulationOptions pop, string? ctxNote)
+    {
+        long thresholdMs = Math.Max(BandDeficitThresholdMs, pop.IntervalSeconds * 3000L);
+        for (int i = 0; i < bands.Length && i < desired.Length && i < have.Length; i++)
+        {
+            int want = desired[i];
+            int current = have[i];
+            if (want <= 0 || current >= want)
+            {
+                _bandDeficits.Remove(i);
+                continue;
+            }
+
+            if (!_bandDeficits.TryGetValue(i, out var state) || current > state.LastHave)
+            {
+                _bandDeficits[i] = (nowMs, 1, current, false);
+                continue;
+            }
+
+            int passes = state.Passes + 1;
+            bool reported = state.Reported;
+            long elapsedMs = Math.Max(0L, nowMs - state.SinceMs);
+            if (!reported && passes >= BandDeficitMinPasses && elapsedMs >= thresholdMs)
+            {
+                reported = true;
+                PopulationBand band = bands[i];
+                AnomalyLedger.Shared.Report(
+                    PlayerbotAnomalies.Prefix + "population",
+                    "band-deficit",
+                    $"band {band.MinLevel}-{band.MaxLevel}",
+                    $"band {band.MinLevel}-{band.MaxLevel} below target for {elapsedMs}ms across {passes} passes (want={want}, have={current}, note={ctxNote ?? "none"})",
+                    AnomalySeverity.Info);
+            }
+
+            _bandDeficits[i] = (state.SinceMs, passes, current, reported);
+        }
     }
 
     /// <summary>What one pass works on: the captured facts, the stores, the membership read at its start, and the band counts it keeps current.</summary>
@@ -900,6 +976,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             {
                 failures++;
                 Fail($"start of {member.BotId} refused: {result.Code}");
+                ReportLoginFailed(ctx.Known, member.BotId, member.CharacterId, null, result, "restart");
             }
         }
 
@@ -916,6 +993,24 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
         ctx.Note = stoppedBecause;
         return (started, created);
+    }
+
+    private static void ReportLoginFailed(IReadOnlyDictionary<Guid, ManagedPlayerbot> known, Guid botId, int characterId, string? fallbackName,
+        PlayerbotOperationResult result, string stage)
+    {
+        if (result.Code is "playerbot-capacity" or "playerbot-stopping" or "playerbots-disabled" or "playerbots-reset")
+        {
+            return;
+        }
+
+        string name = fallbackName ?? (known.TryGetValue(botId, out ManagedPlayerbot? knownBot) ? knownBot.AccountName : botId.ToString("D"));
+        string subject = $"bot {name} (id {botId:D}, char {characterId})";
+        AnomalyLedger.Shared.Report(
+            PlayerbotAnomalies.Prefix + "population",
+            "login-failed",
+            subject,
+            $"population {stage} failed to bring bot online: code={result.Code}",
+            AnomalySeverity.Warning);
     }
 
     /// <summary>
@@ -1014,7 +1109,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             }
 
             PlayerbotOperationResult start = await managed.StartAsync(botId.ToString(), ct).ConfigureAwait(false);
-            if (!start.Success) { Fail($"start of new bot {made.Name} refused: {start.Code}"); return (created, null, true); }
+            if (!start.Success)
+            {
+                Fail($"start of new bot {made.Name} refused: {start.Code}");
+                ReportLoginFailed(ctx.Known, botId, record.CharacterId, made.Name, start, "create-start");
+                return (created, null, true);
+            }
+
             ctx.RunningNow.Add(botId);
             _startedAt[botId] = ctx.Input.ClockMs;
 

@@ -74,7 +74,7 @@ internal sealed class PlayerbotMount
             if (MountService.IsMounted(player)) { _casting = false; _failures = 0; return false; }
             if (IsCasting(spells, player)) return true;
             _casting = false;
-            Fail(now);
+            Fail(session, player, now, "mount cast ended without applying mount aura");
             return false;
         }
 
@@ -107,17 +107,18 @@ internal sealed class PlayerbotMount
 
         session.DrainManagedPackets(WorldOpcode.SmsgSpellStart, WorldOpcode.SmsgSpellGo, WorldOpcode.SmsgSpellFailure,
             WorldOpcode.SmsgSpellFailedOther, WorldOpcode.SmsgCastResult);
+        PlayerbotMountChoice attempted = _choice;
         bool sent;
-        if (_choice.Kind == PlayerbotMountKind.Spell)
+        if (attempted.Kind == PlayerbotMountKind.Spell)
         {
             var writer = new PacketWriter(24);
-            writer.WriteUInt32(_choice.SpellId);
+            writer.WriteUInt32(attempted.SpellId);
             SpellCastTargets.ForSelf().Write(writer);
             sent = session.TryManagedAction(WorldOpcode.CmsgCastSpell, writer.ToArray());
         }
         else
         {
-            sent = session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(_choice.Bag, _choice.Slot));
+            sent = session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(attempted.Bag, attempted.Slot));
             _scanned = false; // the bags may have changed
         }
 
@@ -131,7 +132,9 @@ internal sealed class PlayerbotMount
             return false;
         }
 
-        Fail(now);
+        Fail(session, player, now, attempted.Kind == PlayerbotMountKind.Spell
+            ? $"mount spell {attempted.SpellId} cast was refused"
+            : $"mount item {attempted.ItemEntry} (spell {attempted.SpellId}) use was refused");
         return false;
     }
 
@@ -151,13 +154,15 @@ internal sealed class PlayerbotMount
     internal static bool IsTransientRefusal(SpellCastResult result)
         => result is SpellCastResult.NotReady or SpellCastResult.SpellInProgress or SpellCastResult.ItemNotReady or SpellCastResult.Moving;
 
-    private void Fail(uint now)
+    private void Fail(WorldSession session, Player player, uint now, string detail)
     {
         _failures++;
         uint wait = BackoffBaseMs;
         for (int i = 1; i < _failures && wait < BackoffMaxMs; i++) wait *= 2;
         _backoffUntil = Math.Max(1u, unchecked(now + Math.Min(wait, BackoffMaxMs)));
         _scanned = false;
+        if (!session.IsInChaosProbe)
+            PlayerbotAnomalies.Report(player, "mount", "summon-failed", $"{detail} (failures={_failures})");
     }
 
     /// <summary>True while the bot's mount-up cast is running: walking stuck clocks do not run then (the bot stands still to cast).</summary>

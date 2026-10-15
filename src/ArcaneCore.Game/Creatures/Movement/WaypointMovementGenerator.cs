@@ -58,6 +58,9 @@ internal sealed class WaypointMovementGenerator(
 
     public int WaitMs => _waitMs;
 
+    /// <summary>Whether the path has any node to walk to.</summary>
+    public bool HasPath => path.Count > 0;
+
     /// <summary>The point id of the last node reached since the generator started, 0 when none.</summary>
     public uint LastReachedPoint => _lastReachedPoint;
 

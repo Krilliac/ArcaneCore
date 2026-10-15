@@ -235,7 +235,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         PlayerbotBattlegroundFacts facts = Facts(t, bot, player, feature);
         PlayerbotBattlegroundPhase before = t.Phase;
         (PlayerbotBattlegroundPhase next, PlayerbotBattlegroundAction action) = PlayerbotBattlegroundQueueMachine.Next(before, facts);
-        Do(t, bot, player, feature, action, facts);
+        Do(t, bot, player, feature, before, next, action, facts);
         if (next != before)
         {
             t.Phase = next;
@@ -322,10 +322,12 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         return count;
     }
 
-    private void Do(Tracked t, PlayerbotBattlegroundBot bot, Player player, BattlegroundFeature feature, PlayerbotBattlegroundAction action,
+    private void Do(Tracked t, PlayerbotBattlegroundBot bot, Player player, BattlegroundFeature feature,
+        PlayerbotBattlegroundPhase before, PlayerbotBattlegroundPhase next, PlayerbotBattlegroundAction action,
         PlayerbotBattlegroundFacts facts)
     {
         uint map = BattlegroundManager.MapOfType(t.Type);
+        var queue = (BattlegroundQueueType)(byte)t.Type;
         switch (action)
         {
             case PlayerbotBattlegroundAction.Hello:
@@ -347,14 +349,25 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             }
 
             case PlayerbotBattlegroundAction.PortEnter:
+            {
                 t.InstanceId = facts.InvitedInstance;
-                Port(bot.Session, map, enter: true);
+                bool sent = Port(bot.Session, map, enter: true);
+                BattlegroundPlayerState postState = feature.Manager.StateOf(player.Guid);
+                if (!bot.Session.IsInChaosProbe && (!sent || (!postState.InBattleground && postState.InvitedInstance(queue) == facts.InvitedInstance)))
+                {
+                    PlayerbotAnomalies.Report(player, "bg", "invite-not-accepted",
+                        $"battleground invite port to {t.Type} match {t.InstanceId} was not accepted");
+                }
                 Totals = (Totals.Queued, Totals.Entered + 1, Totals.Left, Totals.Declined, Totals.QueueTimeouts);
                 Note($"{t.Name} takes the invitation into {t.Type} match {t.InstanceId}");
                 break;
+            }
 
             case PlayerbotBattlegroundAction.PortLeave:
-                Port(bot.Session, map, enter: false);
+            {
+                bool hadOpponentOrStillQueued = HasOpposingQueueActivity(t, player, feature.Manager);
+                bool sent = Port(bot.Session, map, enter: false);
+                bool stillQueued = feature.Manager.StateOf(player.Guid).SlotOf(queue) >= 0;
                 if (facts.MatchHoldsCap && facts.InvitedInstance != 0)
                 {
                     Totals = (Totals.Queued, Totals.Entered, Totals.Left, Totals.Declined + 1, Totals.QueueTimeouts);
@@ -365,9 +378,15 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                     SetAside(t.BotId, t.Type);
                     Totals = (Totals.Queued, Totals.Entered, Totals.Left, Totals.Declined, Totals.QueueTimeouts + 1);
                     Note($"{t.Name} leaves the {t.Type} queue after {_options.Battlegrounds.MaxQueueWaitMinutes} minutes");
+                    if (!bot.Session.IsInChaosProbe && (hadOpponentOrStillQueued || !sent || stillQueued))
+                    {
+                        PlayerbotAnomalies.Report(player, "bg", "queue-stuck",
+                            $"battleground queue for {t.Type} (bracket {t.Bracket}) timed out after {_options.Battlegrounds.MaxQueueWaitMinutes}m");
+                    }
                 }
                 else Note($"{t.Name} leaves the {t.Type} queue: something else drives it now");
                 break;
+            }
 
             case PlayerbotBattlegroundAction.LeaveBattlefield:
                 Leave(t, bot, player);
@@ -378,6 +397,13 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             case PlayerbotBattlegroundAction.SetAside:
                 SetAside(t.BotId, t.Type);
                 Note(facts.TravelRefused ? $"{t.Name} could not walk to the {t.Type} battlemaster: set aside" : $"{t.Name} got no queue slot for {t.Type}: set aside");
+                if (!bot.Session.IsInChaosProbe)
+                {
+                    if (facts.TravelRefused)
+                        PlayerbotAnomalies.Report(player, "bg", "objective-unreachable", $"could not walk to {t.Type} battlemaster {t.Battlemaster}");
+                    else
+                        PlayerbotAnomalies.Report(player, "bg", "queue-stuck", $"battlemaster join for {t.Type} (bracket {t.Bracket}) produced no queue slot");
+                }
                 break;
 
             case PlayerbotBattlegroundAction.Release:
@@ -385,9 +411,47 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 {
                     SetAside(t.BotId, t.Type);
                     Note($"{t.Name} timed out walking to the {t.Type} battlemaster: set aside");
+                    if (!bot.Session.IsInChaosProbe)
+                        PlayerbotAnomalies.Report(player, "bg", "objective-unreachable", $"timed out walking to {t.Type} battlemaster {t.Battlemaster}");
+                }
+                else if (!bot.Session.IsInChaosProbe)
+                {
+                    if (before == PlayerbotBattlegroundPhase.Invited && next == PlayerbotBattlegroundPhase.Idle && !facts.Taken)
+                    {
+                        PlayerbotAnomalies.Report(player, "bg", "invite-not-accepted",
+                            $"battleground invite for {t.Type} expired or timed out before acceptance");
+                    }
+                    else if (before == PlayerbotBattlegroundPhase.Entering && next == PlayerbotBattlegroundPhase.Idle && !facts.Arrived)
+                    {
+                        PlayerbotAnomalies.Report(player, "bg", "invite-not-accepted",
+                            $"battleground port to {t.Type} match {t.InstanceId} did not arrive before timeout");
+                    }
                 }
                 break;
         }
+    }
+
+    private bool HasOpposingQueueActivity(Tracked t, Player player, BattlegroundManager manager)
+    {
+        Team enemy = BattlegroundConstants.OtherTeam(t.Team);
+        foreach (Tracked other in _tracked.Values)
+        {
+            if (other.BotId != t.BotId && other.Type == t.Type && other.Bracket == t.Bracket && other.Team == enemy
+                && other.Phase is PlayerbotBattlegroundPhase.Queued or PlayerbotBattlegroundPhase.Invited or PlayerbotBattlegroundPhase.Entering or PlayerbotBattlegroundPhase.InMatch)
+                return true;
+        }
+
+        if (_world is not null)
+        {
+            foreach (Player online in _world.OnlinePlayers)
+            {
+                if (online.Guid == player.Guid || online.Team != enemy) continue;
+                if (manager.QueuedGroupOf(online.Guid, t.Type) is { } group && group.Team == enemy)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private void Leave(Tracked t, PlayerbotBattlegroundBot bot, Player player)
@@ -397,12 +461,12 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     }
 
     /// <summary>CMSG_BATTLEFIELD_PORT: u32 map, u8 action (1 enter, 0 leave the queue or decline).</summary>
-    private static void Port(WorldSession session, uint map, bool enter)
+    private static bool Port(WorldSession session, uint map, bool enter)
     {
         var writer = new PacketWriter(5);
         writer.WriteUInt32(map);
         writer.WriteByte(enter ? (byte)1 : (byte)0);
-        Act(session, WorldOpcode.CmsgBattlefieldPort, writer.ToArray());
+        return Act(session, WorldOpcode.CmsgBattlefieldPort, writer.ToArray());
     }
 
     /// <summary>The coordinator lets the bot go: its AI drops what it did, and the brain resumes with its quests and memories.</summary>

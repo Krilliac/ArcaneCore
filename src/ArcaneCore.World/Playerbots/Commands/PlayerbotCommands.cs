@@ -33,6 +33,9 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         new ChatCommand("debug", AccountSecurity.GameMaster,
             "Syntax: .playerbot debug [$id|$name]\nShow internal brain, motion, route, stall, risk and trace diagnostics for a running bot.",
             DebugBot),
+        new ChatCommand("anomalies", AccountSecurity.GameMaster,
+            "Syntax: .playerbot anomalies $name\nShow the recent anomaly history recorded for a bot.",
+            Anomalies),
         new ChatCommand("gear", AccountSecurity.GameMaster,
             "Syntax: .playerbot gear $id|$name\nShow a running bot's equipped items, free bag slots, gold and skills.",
             Gear),
@@ -437,6 +440,14 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         return true;
     }
 
+    internal static bool Anomalies(CommandContext context, string text)
+        => PlayerbotAnomalyHistory.RunCommand(
+            text,
+            context.Session.Services.GetService<ManagedPlayerbotFeature>(),
+            PlayerbotAnomalyHistory.Shared,
+            DateTimeOffset.UtcNow,
+            context.Reply);
+
     private static string SlotName(byte slot) => slot switch
     {
         InventorySlots.Head => "Head",
@@ -470,7 +481,7 @@ public sealed class BotAliasCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("bot", AccountSecurity.GameMaster,
-            "Syntax: .bot <commands|status|list|debug|gear|summon|party>\nShorthand for .playerbot commands.",
+            "Syntax: .bot <commands|status|list|debug|anomalies|gear|summon|party>\nShorthand for .playerbot commands.",
             Children:
             [
                 new ChatCommand("commands", AccountSecurity.GameMaster,
@@ -493,6 +504,9 @@ public sealed class BotAliasCommands : ICommandGroup
                 new ChatCommand("debug", AccountSecurity.GameMaster,
                     "Syntax: .bot debug [$id|$name]\nShow internal brain, motion, route, stall, risk and trace diagnostics for a running bot.",
                     PlayerbotExtraCommands.DebugBot),
+                new ChatCommand("anomalies", AccountSecurity.GameMaster,
+                    "Syntax: .bot anomalies $name\nShow the recent anomaly history recorded for a bot.",
+                    PlayerbotExtraCommands.Anomalies),
                 new ChatCommand("gear", AccountSecurity.GameMaster,
                     "Syntax: .bot gear $id|$name\nShow a running bot's equipped items, free bag slots, gold and skills.",
                     PlayerbotExtraCommands.Gear),

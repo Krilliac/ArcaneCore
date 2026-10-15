@@ -54,6 +54,8 @@ public sealed partial class CreatureMapSystem
             }
         }
 
+        RecordEvadeAnomaly(creature); // report-only: the third engine evade inside the loop window is an anomaly
+
         // The default generator's reset position (the last reached waypoint, where a wanderer stands inside its disc), else the spawn
         // point: vmangos HomeMovementGenerator::_setTargetLocation, HomeMovementGenerator.cpp:52-56.
         CreatureHome home = creature.Motion.Default.GetResetPosition(creature) ?? creature.Home;

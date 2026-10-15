@@ -28,9 +28,8 @@ namespace ArcaneCore.World.Playerbots;
 /// A deterministic, world-thread autonomous player. The feature/host owns scheduling and
 /// persistence; this controller owns only bounded ordinary gameplay decisions for one session.
 /// </summary>
-internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
-    PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default, PlayerbotSharedSetAsides? shared = null,
-    PlayerbotClaims? claims = null, PlayerbotNavigationExecutor? navigationExecutor = null)
+internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
+    PlayerbotSharedSetAsides? shared = null, PlayerbotClaims? claims = null, PlayerbotNavigationExecutor? navigationExecutor = null)
 {
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -226,10 +225,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private (PlayerbotGoalKind Goal, uint Entry, uint Quest, uint AtMs) _errand;
     // The creatures attacking the bot at its last living update (guid and entry): the risk's danger memory of its killers.
     private readonly List<(ObjectGuid Guid, uint Entry)> _attackers = [];
-    private readonly CancellationTokenSource _planningStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
-    private Task<string?>? _planTask;
-    private string? _modelChoice;
-    private long _nextPlanMs;
     private bool _needsRest;
 
     /// <summary>The bot sat down to wait for health without food (<see cref="PlayerbotRisk.KeepWaiting"/>); it stands up when the wait ends.</summary>
@@ -264,9 +259,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (world.IsWorldThread) _contention.ReleaseClaim();
             else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); return true; });
         }
-        _planningStop.Cancel();
         _destinations.Dispose();
-        _planningStop.Dispose();
     }
 
     internal PlayerbotGoalKind Goal => _goal;
@@ -399,10 +392,72 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>The fleet's soft claims on untagged mobs (<see cref="PlayerbotClaims"/>; inspection and tests).</summary>
     internal PlayerbotClaims Claims => _contention.Claims;
 
+    /// <summary>A think (one <see cref="Update"/> call) longer than this overran its tick budget many times over (<see cref="CheckThinkOverran"/>).</summary>
+    internal const double ThinkOverranMs = 500;
+
+    /// <summary>A bot in the world that has not thought for this long (world ms) is starved or wedged (<see cref="CheckThinkClock"/>).</summary>
+    internal const uint ThinkStarvedMs = 180_000;
+
+    /// <summary>The overrun and starvation reports of one bot are at least this far apart (world ms).</summary>
+    internal const uint ThinkAnomalyQuietMs = 60_000;
+
+    private bool _thinkClockArmed;
+    private uint _lastThinkMs;
+    private bool _starvedReported;
+    private bool _overranReported;
+    private uint _overranReportMs;
+
+    /// <summary>
+    /// Note that the bot thought (an alive think, or a dead bot's recovery think) at <paramref name="now"/>: the starvation clock restarts
+    /// and a starvation report may be made again.
+    /// </summary>
+    private void NoteThink(uint now)
+    {
+        _thinkClockArmed = true;
+        _lastThinkMs = now;
+        _starvedReported = false;
+    }
+
+    /// <summary>
+    /// The bot is in the world and enabled at <paramref name="now"/>: report once when it has not thought for <see cref="ThinkStarvedMs"/>
+    /// since its last think (or since the first look, for a bot that never thought). Where the wait is not the bot's (loading screen,
+    /// disabled, taxi flight) the clock is restarted by the caller. A compare per call.
+    /// </summary>
+    internal void CheckThinkClock(Player player, uint now)
+    {
+        if (!_thinkClockArmed)
+        {
+            NoteThink(now);
+            return;
+        }
+
+        uint silent = unchecked(now - _lastThinkMs);
+        if (silent < ThinkStarvedMs || silent > int.MaxValue || _starvedReported || _session.IsInChaosProbe) return;
+        _starvedReported = true;
+        PlayerbotAnomalies.Report(player, "brain", "think-starved",
+            string.Create(CultureInfo.InvariantCulture,
+                $"no think for {silent / 1000} s of world time (goal {_goal}, last phase {LastThinkPhase}, think interval {_options.ThinkIntervalMs} ms)"));
+    }
+
+    /// <summary>One <see cref="Update"/> that took <paramref name="elapsedMs"/> of wall time: report when it overran (<see cref="ThinkOverranMs"/>), once per <see cref="ThinkAnomalyQuietMs"/>.</summary>
+    internal void CheckThinkOverran(Player player, double elapsedMs, uint now)
+    {
+        if (!(elapsedMs >= ThinkOverranMs)) return;
+        if (_overranReported && unchecked(now - _overranReportMs) < ThinkAnomalyQuietMs) return;
+        _overranReported = true;
+        _overranReportMs = now;
+        PlayerbotAnomalies.Report(player, "brain", "think-overran",
+            string.Create(CultureInfo.InvariantCulture,
+                $"one think took {elapsedMs:F0} ms (budget {PlayerbotThinkRotation.TickBudgetMs:F0} ms per tick for every bot; goal {_goal}, last phase {LastThinkPhase})"));
+    }
+
     internal void Update(uint elapsedMs)
     {
         if (!_options.Enabled || _stopped != 0 || _session.Player is not { } player)
+        {
+            _thinkClockArmed = false;
             return;
+        }
         _destinations.SkipQuest ??= _quests.IsRefused;
         _destinations.Untakeable ??= IsUntakeable;
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
@@ -417,10 +472,17 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         _quests.AllSpawnsVisited ??= _destinations.HasAllSpawnsVisited;
         _destinations.ValidatePlanning(player);
-        if (!player.IsInWorld) return;
+        if (!player.IsInWorld)
+        {
+            // A loading screen between maps is no think the brain missed.
+            _thinkClockArmed = false;
+            return;
+        }
         PlayerbotThinkProbe.Phase("brain");
         LastThinkPhase = "brain";
         _trace.ObserveState(this, _session.World.NowMs);
+        CheckThinkClock(player, _session.World.NowMs);
+        long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             UpdateCore(player, elapsedMs);
@@ -429,6 +491,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
             _trace.ObserveState(this, _session.World.NowMs);
+            CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
         }
     }
 
@@ -507,6 +570,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             {
                 uint recoveryInterval = _thinkElapsed;
                 _thinkElapsed = 0;
+                NoteThink(_session.World.NowMs);
                 PlayerbotThinkProbe.Phase("recovery hazard scan");
                 Risk.ScanHazards(player); // a ghost keeps watching the creatures round its body (the revive spot)
                 PlayerbotThinkProbe.Phase("recovery update");
@@ -521,6 +585,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // the stall watch does not judge it. The think after the landing continues its goal.
         if (PlayerbotTaxi.IsFlying(player))
         {
+            NoteThink(_session.World.NowMs); // the server flies the bot: nothing to think
             _stall.Reset();
             _target = null;
             _route = null;
@@ -579,6 +644,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
+        NoteThink(_session.World.NowMs);
 
         // A tram trip (or a bot found on the Deeprun Tram map) owns the bot until it stands on the continent again (PlayerbotTram): nothing
         // else moves it meanwhile, and the stall watch does not judge a bot waiting for its car. A fight on the way to the entrance ends the
@@ -656,7 +722,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         else if (player.IsAlive && _stall.Observe(player, _goal, TargetEntry, QuestId, _session.World.NowMs,
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
+        {
+            ReportStall(player);
             GiveUpStalledGoal(player);
+        }
 
         if (PlayerbotMotion.ConsumeLoop(player))
         {
@@ -920,15 +989,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             PlayerbotThinkProbe.Phase("class upkeep");
             _combatSpells.PullTarget = _target is { IsAlive: true } pull && ReferenceEquals(pull.Map, player.Map) ? pull : null;
             if (_combatSpells.UpdateOutOfCombat(player, interval)) return;
-            PlayerbotThinkProbe.Phase("local plan");
-            UpdateLocalPlan(player);
             PlayerbotThinkProbe.Phase("home");
             if (_home is { } home && TryReturnHome(player, home, interval)) return;
             PlayerbotThinkProbe.Phase("town");
             _town.BeginThink();
-            // A returned ID is only a proposal; each controller rechecks the live gameplay rules.
-            if (_modelChoice == "town" && _town.Update(player, interval))
-            { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
+            PlayerbotThinkProbe.Phase("policy");
+            if (TryPolicyGoal(player, interval)) return;
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
@@ -1007,7 +1074,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 }
                 if (_destinations.WaitingForTiles) return; // the route's tiles are being read: keep the goal, plan again next think
             }
-            if (_modelChoice == "explore") { _target = null; PlayerbotThinkProbe.Phase("explore"); Explore(player, interval); return; }
         }
 
         // A mob another player tagged while the bot walked to it is no longer the bot's to take: help its tagger or leave it alone, then
@@ -1342,6 +1408,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
         int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y);
         bool deadEndPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
+        if (deadEndPin)
+            PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
         StallReturnQuest = _goal == PlayerbotGoalKind.Quest && QuestId != 0 && QuestId == _quests.ReturnQuest ? QuestId : 0;
         StallOutsideHome = _home is { } home && !home.Contains(player);
         if (shareable && !StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
@@ -1405,6 +1475,19 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
         // on an island too; suppressing the shared set-aside must not suppress local escape.
         EscapeIsland(player, out _, deadEndPin);
+    }
+
+    /// <summary>
+    /// The stall watch asked for a goal to be given up (called just before <see cref="GiveUpStalledGoal"/>): the stall itself is the
+    /// <c>stall</c> report; a further give-up inside the same unresolved stall (the goal given up before did not free the bot) is
+    /// <c>stall-unresolved</c>.
+    /// </summary>
+    private void ReportStall(Player player)
+    {
+        string detail = _stall.Report ?? "stalled (no report text)";
+        bool repeated = _stall.LastGiveUpRepeated;
+        PlayerbotAnomalies.Report(player, "brain", repeated ? "stall-unresolved" : "stall",
+            repeated ? $"giving the goal up again did not free the bot: {detail}" : detail);
     }
 
     /// <summary>The rings of explore-atlas cells (160 yards each) around an unhomed bot that must hold a creature of its level before it is not stranded (about 480 yards).</summary>
@@ -1990,44 +2073,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .FirstOrDefault();
     }
 
-    private void UpdateLocalPlan(Player player)
-    {
-        if (planner is null || !_options.AllowLocalLlm || _planningStop.IsCancellationRequested) return;
-        if (_planTask?.IsCompleted == true)
-        {
-            _modelChoice = _planTask.IsCompletedSuccessfully ? _planTask.Result : null;
-            _planTask = null;
-        }
-        long now = (long)_session.World.Uptime.TotalMilliseconds;
-        if (_planTask is not null || now < _nextPlanMs) return;
-        _nextPlanMs = now + 5000;
-        var candidates = new List<PlayerbotPlanCandidate>();
-        if (_quests.HasCandidate(player)) candidates.Add(new("quest", PlayerbotGoalKind.Quest, _quests.TargetEntry, _quests.QuestId));
-        if (_town.HasCandidate(player)) candidates.Add(new("town", PlayerbotGoalKind.Vendor, _town.TargetEntry, 0));
-        if (FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is { } target) candidates.Add(new("grind", PlayerbotGoalKind.Grind, target.Entry, QuestId));
-        candidates.Add(new("explore", PlayerbotGoalKind.Explore, 0, 0));
-        var facts = new PlayerbotPlannerFacts(player.Level, player.Health, player.MaxHealth, player.Combat.IsInCombat,
-            player.MapId, (uint)(_session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0),
-            player.Inventory.GetItemCount(117));
-        CancellationToken token = _planningStop.Token;
-        _planTask = Task.Run(async () =>
-        {
-            try
-            {
-                return await planner.SelectAsync(facts, candidates, token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                return null;
-            }
-            catch (Exception ex)
-            {
-                FaultLedger.Shared.Record("playerbot.local-plan", ex);
-                return null;
-            }
-        }, token);
-    }
-
     private void MarkUnreachable(Creature creature)
     {
         uint now = _session.World.NowMs;
@@ -2282,6 +2327,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _killingBlowSource = "Unobserved";
         (bool loop, IReadOnlyList<uint> setAside) = _stall.RecordDeath(now, player.MapId,
             new System.Numerics.Vector3(player.X, player.Y, player.Z), _attackerEntries);
+        if (loop && _stall.NewDeathLoop)
+            PlayerbotAnomalies.Report(player, "recovery", "death-loop", _stall.Report ?? "the bot keeps dying in one place");
         int killerLevel = 0;
         foreach (uint entry in _attackerEntries)
             if (_attackerFacts.TryGetValue(entry, out QaAttackerFact? fact)) killerLevel = Math.Max(killerLevel, fact.Level);

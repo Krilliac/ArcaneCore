@@ -1,12 +1,16 @@
+using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -150,15 +154,45 @@ internal static class PlayerbotAreaTriggers
         {
             // The handler may teleport the bot away; a far teleport leaves the map, so stop reporting on this one.
             if (!ReferenceEquals(player.Map, map) || !player.IsInWorld) break;
-            if (!MayTake(maps, player, tracker, trigger)) continue;
+            AreaTriggerTeleport? teleport = maps.FindAreaTriggerTeleport(trigger);
+            if (!MayTake(maps, player, tracker, trigger))
+            {
+                if (teleport is not null && !session.IsInChaosProbe
+                    && (tracker.TeleportTarget is not null || (!player.IsAlive && player.Combat.Corpse is { } c && c.MapId != map.MapId)))
+                {
+                    PlayerbotAnomalies.Report(player, "nav", "areatrigger-failed",
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"area trigger {trigger} to map {teleport.TargetMap} ({teleport.TargetX:F1},{teleport.TargetY:F1},{teleport.TargetZ:F1}) blocked by policy (target={tracker.TeleportTarget?.ToString(CultureInfo.InvariantCulture) ?? "none"}, alive={player.IsAlive})"),
+                        AnomalySeverity.Warning);
+                }
+
+                continue;
+            }
+
+            Vector3 before = new(player.X, player.Y, player.Z);
             ManagedActionBudget? budget = session.ManagedBudget;
             session.ManagedBudget = null;
-            try { session.TryManagedAction(WorldOpcode.CmsgAreatrigger, BitConverter.GetBytes(trigger)); }
+            bool dispatched;
+            try { dispatched = session.TryManagedAction(WorldOpcode.CmsgAreatrigger, BitConverter.GetBytes(trigger)); }
             finally { session.ManagedBudget = budget; }
             sent.Add(trigger);
+            if (teleport is not null && !session.IsInChaosProbe && !Teleported(session, player, map, before))
+            {
+                PlayerbotAnomalies.Report(player, "nav", "areatrigger-failed",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"area trigger {trigger} to map {teleport.TargetMap} ({teleport.TargetX:F1},{teleport.TargetY:F1},{teleport.TargetZ:F1}) did not teleport bot (dispatched={dispatched}, level={player.Level}/{teleport.RequiredLevel}, alive={player.IsAlive})"),
+                    AnomalySeverity.Warning);
+            }
         }
 
         return sent;
+    }
+
+    private static bool Teleported(WorldSession session, Player player, Map map, Vector3 before)
+    {
+        if (!ReferenceEquals(player.Map, map) || !player.IsInWorld) return true;
+        if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return true;
+        return Vector3.DistanceSquared(new Vector3(player.X, player.Y, player.Z), before) > 0.25f;
     }
 
     /// <summary>Whether the bot reports <paramref name="trigger"/> (<see cref="PlayerbotMapPolicy.AllowsTrigger"/>).</summary>

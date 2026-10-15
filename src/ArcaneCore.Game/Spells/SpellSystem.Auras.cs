@@ -259,8 +259,97 @@ public sealed partial class SpellSystem
     /// IsSingleFromSpell / stacking rules — docs/areas/spells.md). A slot is searched in the
     /// positive (0-31) or negative (32-47) range; the update fields and SMSG_UPDATE_AURA_DURATION follow.
     /// </summary>
+    internal void ValidateAuraHolder(SpellAuraHolder holder, bool requirePositiveDuration = false)
+    {
+        bool invalidDuration = holder.InitialDurationArg < -1
+            || (holder.IsPermanent
+                ? holder.Duration != -1 || holder.MaxDuration != -1
+                : holder.MaxDuration <= 0
+                    || holder.Duration > holder.MaxDuration
+                    || (requirePositiveDuration ? holder.Duration <= 0 : holder.Duration < 0));
+        if (invalidDuration && !holder.DurationInvalidReported)
+        {
+            holder.DurationInvalidReported = true;
+            AnomalyLedger.Shared.Report(
+                "aura",
+                "duration-invalid",
+                FormatSpellSubject(holder.Spell.Id),
+                $"target={FormatUnitSubject(holder.Target)} durationMs={holder.Duration} maxDurationMs={holder.MaxDuration} initialDurationArg={holder.InitialDurationArg} permanent={holder.IsPermanent}",
+                AnomalySeverity.Warning);
+            if (holder.IsPermanent)
+            {
+                holder.MaxDuration = -1;
+                holder.Duration = -1;
+            }
+            else
+            {
+                if (holder.MaxDuration <= 0)
+                {
+                    holder.MaxDuration = 300;
+                }
+
+                if (holder.Duration > holder.MaxDuration || (requirePositiveDuration && holder.Duration <= 0))
+                {
+                    holder.Duration = holder.MaxDuration;
+                }
+                else if (holder.Duration < 0)
+                {
+                    holder.Duration = 0;
+                }
+            }
+        }
+
+        uint maxStacks = Math.Max(holder.Spell.StackAmount, 1u);
+        if ((holder.StackAmount == 0 || holder.StackAmount > maxStacks) && !holder.StackOverflowReported)
+        {
+            holder.StackOverflowReported = true;
+            AnomalyLedger.Shared.Report(
+                "aura",
+                "stack-overflow",
+                FormatSpellSubject(holder.Spell.Id),
+                $"target={FormatUnitSubject(holder.Target)} stackAmount={holder.StackAmount} maxStackAmount={holder.Spell.StackAmount}",
+                AnomalySeverity.Warning);
+            holder.StackAmount = (byte)Math.Clamp((uint)holder.StackAmount, 1u, maxStacks);
+        }
+
+        foreach (SpellAura? aura in holder.AuraSpan)
+        {
+            if (aura is not null)
+            {
+                ValidateAuraPeriodicState(holder, aura);
+            }
+        }
+    }
+
+    private static void ValidateAuraPeriodicState(SpellAuraHolder holder, SpellAura aura)
+    {
+        bool missingExpectedPeriod = PeriodicTiming.TakesActivationTimeMod(aura.Type)
+            && aura.Type != AuraType.ObsModMana
+            && !aura.IsPeriodic;
+        bool invalidTimerOrPeriod = aura.IsPeriodic
+            && ((int)aura.Period <= 0
+                || aura.PeriodicTimer > (int)aura.MaximumPeriodicTimer
+                || aura.PeriodicTimer < -(int)aura.MaximumPeriodicTimer);
+        if ((missingExpectedPeriod || invalidTimerOrPeriod) && !aura.PeriodicStalledReported)
+        {
+            aura.PeriodicStalledReported = true;
+            AnomalyLedger.Shared.Report(
+                "aura",
+                "periodic-stalled",
+                FormatSpellSubject(holder.Spell.Id),
+                $"target={FormatUnitSubject(holder.Target)} effectIndex={aura.EffectIndex} auraType={aura.Type} periodMs={aura.Period} periodicTimerMs={aura.PeriodicTimer}",
+                AnomalySeverity.Warning);
+            if (aura.IsPeriodic && (int)aura.Period > 0
+                && (aura.PeriodicTimer > (int)aura.MaximumPeriodicTimer || aura.PeriodicTimer < -(int)aura.MaximumPeriodicTimer))
+            {
+                aura.PeriodicTimer = (int)aura.Period;
+            }
+        }
+    }
+
     internal void AddAuraHolder(SpellAuraHolder holder)
     {
+        ValidateAuraHolder(holder, requirePositiveDuration: true);
         holder.ResolvePolarity(Store.Get);
         UnitSpellState state = GetOrCreateState(holder.Target);
         SpellAuraHolder? existing = state.Auras.FirstOrDefault(h => h.Spell.Id == holder.Spell.Id
@@ -411,10 +500,50 @@ public sealed partial class SpellSystem
 
     private void UpdateAuraHolder(UnitSpellState state, SpellAuraHolder holder, uint diffMs)
     {
-        if (holder is null || holder.IsRemoved)
+        if (holder is null)
         {
             return;
         }
+
+        if (holder.IsRemoved)
+        {
+            if (state.Auras.Contains(holder))
+            {
+                if (!holder.ExpiredReported)
+                {
+                    holder.ExpiredReported = true;
+                    AnomalyLedger.Shared.Report(
+                        "aura",
+                        "expired-not-removed",
+                        FormatSpellSubject(holder.Spell.Id),
+                        $"target={FormatUnitSubject(holder.Target)} durationMs={holder.Duration} isRemoved=true",
+                        AnomalySeverity.Warning);
+                }
+
+                state.Auras.Remove(holder);
+            }
+
+            return;
+        }
+
+        if (!holder.IsPermanent && holder.Duration <= 0)
+        {
+            if (!holder.ExpiredReported)
+            {
+                holder.ExpiredReported = true;
+                AnomalyLedger.Shared.Report(
+                    "aura",
+                    "expired-not-removed",
+                    FormatSpellSubject(holder.Spell.Id),
+                    $"target={FormatUnitSubject(holder.Target)} durationMs={holder.Duration} maxDurationMs={holder.MaxDuration}",
+                    AnomalySeverity.Warning);
+            }
+
+            RemoveHolder(state, holder, AuraRemoveMode.Expire);
+            return;
+        }
+
+        ValidateAuraHolder(holder, requirePositiveDuration: false);
 
         if (holder.AreaParent is { } parent && (parent.IsRemoved || !ReferenceEquals(parent.Target.Map, holder.Target.Map)))
         {
@@ -456,13 +585,39 @@ public sealed partial class SpellSystem
         IReadOnlyList<SpellAura?> auras = holder.Auras;
         for (int a = 0; a < auras.Count; a++)
         {
-            if (auras[a] is not { } aura || !aura.IsPeriodic)
+            if (auras[a] is not { } aura)
+            {
+                continue;
+            }
+
+            ValidateAuraPeriodicState(holder, aura);
+            if (!aura.IsPeriodic || (int)aura.Period <= 0)
             {
                 continue;
             }
 
             // vmangos Aura::Update: at most one tick per update (Auras:PeriodicCatchUp restores the burst).
             int due = PeriodicTiming.Advance(aura, diffMs, AuraOptions.PeriodicCatchUp);
+            if (due > 0)
+            {
+                aura.ElapsedWithoutTickMs = 0;
+            }
+            else
+            {
+                aura.ElapsedWithoutTickMs += diffMs;
+                if ((aura.PeriodicTimer <= 0 || aura.ElapsedWithoutTickMs > (long)aura.MaximumPeriodicTimer)
+                    && !aura.PeriodicStalledReported)
+                {
+                    aura.PeriodicStalledReported = true;
+                    AnomalyLedger.Shared.Report(
+                        "aura",
+                        "periodic-stalled",
+                        FormatSpellSubject(holder.Spell.Id),
+                        $"target={FormatUnitSubject(holder.Target)} effectIndex={aura.EffectIndex} auraType={aura.Type} periodMs={aura.Period} periodicTimerMs={aura.PeriodicTimer} elapsedWithoutTickMs={aura.ElapsedWithoutTickMs}",
+                        AnomalySeverity.Warning);
+                }
+            }
+
             for (int tick = 0; tick < due && !holder.IsRemoved; tick++)
             {
                 aura.TickCount++;
@@ -481,6 +636,17 @@ public sealed partial class SpellSystem
         if (!holder.IsRemoved && !holder.IsPermanent && holder.Duration == 0)
         {
             RemoveHolder(state, holder, AuraRemoveMode.Expire);
+            if ((!holder.IsRemoved || state.Auras.Contains(holder)) && !holder.ExpiredReported)
+            {
+                holder.ExpiredReported = true;
+                AnomalyLedger.Shared.Report(
+                    "aura",
+                    "expired-not-removed",
+                    FormatSpellSubject(holder.Spell.Id),
+                    $"target={FormatUnitSubject(holder.Target)} durationMs={holder.Duration} reason=post-remove-still-present",
+                    AnomalySeverity.Warning);
+                state.Auras.Remove(holder);
+            }
         }
     }
 
@@ -506,6 +672,7 @@ public sealed partial class SpellSystem
         existing.Duration = fresh.Duration;
         existing.MaxDuration = fresh.MaxDuration;
         existing.ChannelTarget = fresh.ChannelTarget;
+        ValidateAuraHolder(existing, requirePositiveDuration: true);
         bool amountsChanged = false;
         for (int i = 0; i < SpellConstants.MaxEffects; i++)
         {
@@ -520,6 +687,7 @@ public sealed partial class SpellSystem
             aura.Amplitude = source.Amplitude;
             aura.PeriodicTimer = PeriodicTiming.InitialTimer(existing.Spell, aura);
             aura.TickCount = 0;
+            aura.ElapsedWithoutTickMs = 0;
             if (source.Amount != aura.Amount)
             {
                 AuraHandler? handler = AuraHandlers.GetValueOrDefault(aura.Type);

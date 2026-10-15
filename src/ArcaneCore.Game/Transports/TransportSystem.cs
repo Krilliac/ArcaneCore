@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Pets;
@@ -31,6 +32,9 @@ namespace ArcaneCore.Game.Transports;
 /// </summary>
 public sealed class TransportSystem
 {
+    /// <summary>Maximum allowed passenger local offset coordinate magnitude (vmangos Player::LoadFromDB 250yd bound).</summary>
+    public const float MaxPassengerOffset = 250.0f;
+
     private static readonly ConditionalWeakTable<WorldRuntime, TransportSystem> s_registered = new();
 
     private readonly WorldRuntime _world;
@@ -39,7 +43,14 @@ public sealed class TransportSystem
     private readonly List<ShipTransport> _ships = [];
     private readonly Dictionary<Map, List<ShipTransport>> _byMap = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<ObjectGuid> _justBoarded = [];
+    private readonly HashSet<uint> _missingTransportReportedEntries = [];
     private bool _installed;
+
+    public static bool IsOffsetWithinBounds(float x, float y, float z)
+        => float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z)
+            && MathF.Abs(x) <= MaxPassengerOffset
+            && MathF.Abs(y) <= MaxPassengerOffset
+            && MathF.Abs(z) <= MaxPassengerOffset;
 
     public TransportSystem(WorldRuntime world, IEnumerable<TransportTemplate> templates, ILogger? logger = null)
     {
@@ -128,9 +139,31 @@ public sealed class TransportSystem
             {
                 _world.GetMap(template.KeyFrames[0].Node.MapId);
             }
+
+            if (!template.InInstance && (!template.Spawned || FindByEntry(template.Entry) is null))
+            {
+                ReportMissingOnMap(
+                    template.Entry,
+                    $"Continent transport entry {template.Entry} ({template.GameObject.Name}) failed to spawn during Install (KeyFrames={template.KeyFrames.Count}, Spawned={template.Spawned}).");
+            }
         }
 
         _logger.LogInformation("Transports: {Routes} routes, {Ships} ships sailing", _templates.Length, _ships.Count);
+    }
+
+    private void ReportMissingOnMap(uint entry, string detail)
+    {
+        if (!_missingTransportReportedEntries.Add(entry))
+        {
+            return;
+        }
+
+        AnomalyLedger.Shared.Report(
+            "transport",
+            "missing-on-map",
+            $"transport entry {entry}",
+            detail,
+            AnomalySeverity.Warning);
     }
 
     /// <summary>The ships on <paramref name="map"/> now.</summary>
@@ -183,6 +216,29 @@ public sealed class TransportSystem
 
     internal void UpdateMap(Map map)
     {
+        if (_installed)
+        {
+            foreach (TransportTemplate template in _templates)
+            {
+                if (!template.InInstance && template.MapsUsed.Contains(map.MapId))
+                {
+                    ShipTransport? activeShip = FindByEntry(template.Entry);
+                    if (activeShip is null || activeShip.CurrentMap is null)
+                    {
+                        ReportMissingOnMap(
+                            template.Entry,
+                            $"Configured continent transport entry {template.Entry} ({template.GameObject.Name}) for map {map.MapId} is missing or detached from any active map.");
+                    }
+                    else if (!template.MapsUsed.Contains(activeShip.CurrentMap.MapId))
+                    {
+                        ReportMissingOnMap(
+                            template.Entry,
+                            $"Transport entry {template.Entry} ({template.GameObject.Name}) is on unexpected map {activeShip.CurrentMap.MapId} (route maps: {string.Join(",", template.MapsUsed)}).");
+                    }
+                }
+            }
+        }
+
         if (!_byMap.TryGetValue(map, out List<ShipTransport>? ships) || ships.Count == 0)
         {
             return;
@@ -207,6 +263,12 @@ public sealed class TransportSystem
                         ship.Guid,
                         map.MapId);
                 }
+            }
+            else
+            {
+                ReportMissingOnMap(
+                    ship.Entry,
+                    $"Transport entry {ship.Entry} listed on map {map.MapId} has mismatched CurrentMap ({ship.CurrentMap?.MapId.ToString() ?? "null"}).");
             }
         }
     }
@@ -414,6 +476,15 @@ public sealed class TransportSystem
     {
         if (player.Map is not { } map)
         {
+            if (!player.IsLoggingOut && !player.Locomotion.SuppressAnomalies)
+            {
+                AnomalyLedger.Shared.Report(
+                    "transport",
+                    "passenger-left-behind",
+                    $"player {player.Name} (guid {player.Guid.Low})",
+                    $"Passenger had null Map when transport entry {ship.Entry} transitioned to map {newMapId}; removed from transport.",
+                    AnomalySeverity.Warning);
+            }
             ship.RemovePassenger(player); // not in the world (in transit, logging in)
             return;
         }
@@ -442,6 +513,15 @@ public sealed class TransportSystem
         if (TeleportPassenger is not { } teleport || !teleport(player, newMapId, x, y, z, o))
         {
             _logger.LogWarning("{Player} could not travel with transport {Entry} to map {MapId}; left at the dock", player.Name, ship.Entry, newMapId);
+            if (!player.IsLoggingOut && !player.Locomotion.SuppressAnomalies)
+            {
+                AnomalyLedger.Shared.Report(
+                    "transport",
+                    "passenger-left-behind",
+                    $"player {player.Name} (guid {player.Guid.Low})",
+                    $"Passenger could not be carried with transport entry {ship.Entry} from map {player.MapId} to map {newMapId} at ({x:F2}, {y:F2}, {z:F2}); left behind at dock.",
+                    AnomalySeverity.Warning);
+            }
             ship.RemovePassenger(player);
             player.RemoveMovementFlags(MovementFlags.OnTransport);
         }
@@ -466,9 +546,22 @@ public sealed class TransportSystem
                 continue;
             }
 
-            if (template.MapsUsed.Contains(map.MapId) && CreateTransport(template, map) is not null)
+            if (template.MapsUsed.Contains(map.MapId))
             {
-                template.Spawned = true;
+                if (CreateTransport(template, map) is not null)
+                {
+                    template.Spawned = true;
+                }
+                else
+                {
+                    bool instanceable = map.Template?.Instanceable ?? false;
+                    if (instanceable || map.InstanceId == 0)
+                    {
+                        ReportMissingOnMap(
+                            template.Entry,
+                            $"Transport entry {template.Entry} ({template.GameObject.Name}) failed to spawn on map {map.MapId} (instanceId={map.InstanceId}, routeInInstance={template.InInstance}, mapInstanceable={instanceable}).");
+                    }
+                }
             }
         }
     }
@@ -553,7 +646,7 @@ public sealed class TransportSystem
     {
         ShipTransport? ship = _ships.FirstOrDefault(s => s.Guid.Low == seat.Guid && s.CurrentMap is not null);
         float x = seat.X, y = seat.Y, z = seat.Z, o = seat.Orientation;
-        bool offsetValid = MathF.Abs(seat.X) <= 250f && MathF.Abs(seat.Y) <= 250f && MathF.Abs(seat.Z) <= 250f;
+        bool offsetValid = IsOffsetWithinBounds(seat.X, seat.Y, seat.Z);
         if (ship is not null && offsetValid)
         {
             ship.CalculatePassengerPosition(ref x, ref y, ref z, ref o);
@@ -564,6 +657,21 @@ public sealed class TransportSystem
         {
             _logger.LogWarning("{Player} was saved on transport {Guid} which {Reason}; sending it to its bind point", player.Name, seat.Guid,
                 ship is null ? "does not sail" : "it is not on");
+            if (ship is null)
+            {
+                ReportMissingOnMap(
+                    seat.Guid,
+                    $"Player {player.Name} (guid {player.Guid.Low}) logged in with saved transport seat on transport entry {seat.Guid} on map {map.MapId}, but that transport is not active in the world.");
+            }
+            else if (!player.Locomotion.SuppressAnomalies)
+            {
+                AnomalyLedger.Shared.Report(
+                    "transport",
+                    "passenger-left-behind",
+                    $"player {player.Name} (guid {player.Guid.Low})",
+                    $"Player logged in with out-of-bounds saved offset ({seat.X:F2}, {seat.Y:F2}, {seat.Z:F2}) on transport entry {ship.Entry} on map {map.MapId}; relocating to homebind.",
+                    AnomalySeverity.Warning);
+            }
             map.RunAfterUpdate(() => TeleportToHomebind?.Invoke(player));
             return;
         }
@@ -615,6 +723,15 @@ public sealed class TransportSystem
             }
         }
 
+        if (!player.IsLoggingOut && !player.Locomotion.SuppressAnomalies)
+        {
+            AnomalyLedger.Shared.Report(
+                "transport",
+                "passenger-left-behind",
+                $"player {player.Name} (guid {player.Guid.Low})",
+                $"Deferred login seat restore could not carry player to transport entry {ship.Entry} on map {ship.CurrentMap?.MapId.ToString() ?? "null"}; relocating to homebind.",
+                AnomalySeverity.Warning);
+        }
         player.RemoveMovementFlags(MovementFlags.OnTransport);
         player.ClearTransportData();
         TeleportToHomebind?.Invoke(player);

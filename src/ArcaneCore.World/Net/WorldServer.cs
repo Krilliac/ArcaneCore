@@ -33,13 +33,27 @@ public sealed class WorldServer(
     /// <summary>The guard of the running listener (null before it starts); exposed for diagnostics and tests.</summary>
     public NetGuard? Guard { get; private set; }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    private TcpListener? _listener;
+
+    /// <summary>
+    /// Bind before returning: BackgroundService runs <see cref="ExecuteAsync"/> on the thread pool, so a listener bound there could be
+    /// unbound when StartAsync returns, and a client connecting at once is refused (at once on Linux). A bind failure surfaces here too.
+    /// </summary>
+    public override Task StartAsync(CancellationToken cancellationToken)
     {
         WorldOptions config = options.Value;
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
         listener.Start();
+        _listener = listener;
         logger.LogInformation("World daemon listening on {Address}:{Port} ({Handlers} opcode handlers)",
             config.BindAddress, config.Port, opcodes.Count);
+        return base.StartAsync(cancellationToken);
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        WorldOptions config = options.Value;
+        TcpListener listener = _listener ?? throw new InvalidOperationException("the world listener was not started (StartAsync binds it)");
         using var sessionStop = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var sessions = new HashSet<Task>();
 
@@ -99,6 +113,9 @@ public sealed class WorldServer(
         }
         finally
         {
+            // ExecuteAsync stops it; this covers a stop that came before ExecuteAsync ever ran. Stop is idempotent.
+            _listener?.Stop();
+
             // Session handlers and async scope disposal may ignore cancellation. Keep owning
             // them before WorldHost drains storage, even if the host's shutdown budget expires.
             if (ExecuteTask is { } execution)

@@ -428,6 +428,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         if (!ghost && NoProgress(now))
         {
             LastStep = PlayerbotRecoveryStep.Fault;
+            ReportStalled(player, now, "a living bot whose death was never released");
             throw new InvalidOperationException(Stalled);
         }
 
@@ -510,6 +511,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
             case PlayerbotRecoveryStep.Fault:
                 // A body that was never released and made no progress: never the spirit-healer fallback, which is for ghosts.
+                ReportStalled(player, now, "a body that was never released");
                 throw new InvalidOperationException(Stalled);
 
             case PlayerbotRecoveryStep.WaitForHostiles:
@@ -784,6 +786,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             return false;
         (float fromX, float fromY, float fromZ) = (player.X, player.Y, player.Z);
         RelocateGhost(player, graveyard.X, graveyard.Y, graveyard.Z, graveyard.Orientation, now);
+        NoteRelocation(player, now, string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"relocated to graveyard {graveyard.Id} from {fromX:F1},{fromY:F1},{fromZ:F1}: the spirit-healer and corpse walks both stalled"));
         _graveyardRelocated = true;
         LoggerOf().LogInformation(
             "Playerbot {Bot} relocates to graveyard {Graveyard} at ({GX:F1}, {GY:F1}, {GZ:F1}) map {Map} after spirit-healer and corpse walks both stalled at ({X:F1}, {Y:F1}, {Z:F1})",
@@ -802,12 +806,43 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             return false;
         (float fromX, float fromY, float fromZ) = (player.X, player.Y, player.Z);
         RelocateGhost(player, healer.X, healer.Y, healer.Z, player.Orientation, now);
+        NoteRelocation(player, now, string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"relocated onto spirit healer {healer.Entry} from {fromX:F1},{fromY:F1},{fromZ:F1}: the walk to the healer stalled"));
         _healerRelocated = true;
         _graveyardRelocated = true;
         LoggerOf().LogInformation(
             "Playerbot {Bot} relocates to spirit healer {Healer} at ({HX:F1}, {HY:F1}, {HZ:F1}) map {Map} after spirit-healer walk stalled at ({X:F1}, {Y:F1}, {Z:F1})",
             player.Name, healer.Entry, healer.X, healer.Y, healer.Z, player.MapId, fromX, fromY, fromZ);
         return true;
+    }
+
+    /// <summary>The recovery gave up on its walks and is about to throw <see cref="Stalled"/>: the stall the recovery's own bounds found.</summary>
+    private void ReportStalled(Player player, long now, string what)
+        => PlayerbotAnomalies.Report(player, "recovery", "stalled",
+            string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"{what}: no progress for {(now - _progressMs) / 1000} s over {_thinksSinceProgress} thinks (step {LastStep}); the recovery faults"));
+
+    /// <summary>Relocations within this window (world ms) that make a recovery loop.</summary>
+    internal const long RelocationLoopWindowMs = 30 * 60_000;
+
+    /// <summary>Relocations inside <see cref="RelocationLoopWindowMs"/> that make a recovery loop.</summary>
+    internal const int RelocationsForLoop = 3;
+
+    private readonly List<long> _relocations = [];
+
+    /// <summary>
+    /// A ghost was relocated by the recovery (world uptime <paramref name="now"/>): an Info report that a teleport rescued it, and a Warning
+    /// when it is the <see cref="RelocationsForLoop"/>th inside <see cref="RelocationLoopWindowMs"/> (the same recovery over and over; the
+    /// history survives <see cref="Reset"/>, which every new death calls).
+    /// </summary>
+    internal void NoteRelocation(Player player, long now, string what)
+    {
+        PlayerbotAnomalies.Report(player, "recovery", "teleport-used", what, AnomalySeverity.Info);
+        _relocations.RemoveAll(at => now - at > RelocationLoopWindowMs);
+        _relocations.Add(now);
+        if (_relocations.Count >= RelocationsForLoop)
+            PlayerbotAnomalies.Report(player, "recovery", "loop",
+                $"the recovery relocated this bot {_relocations.Count} times in {RelocationLoopWindowMs / 60_000} minutes; the last: {what}");
     }
 
     private void RelocateGhost(Player player, float x, float y, float z, float orientation, long now)
@@ -823,6 +858,12 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
         else
         {
+            // With a teleport service present, falling back to a raw relocation means the teleport was refused (it may keep its state
+            // pending); without one (a bare test world) there was nothing to refuse.
+            if (session.Services.GetService<TeleportFeature>() is not null)
+                PlayerbotAnomalies.Report(player, "recovery", "teleport-refused",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"the teleport to {x:F1},{y:F1},{z:F1} map {player.MapId} was refused; the ghost was relocated directly"));
             player.Relocate(x, y, z, facing, session.World.NowMs);
             player.NeedsVisibilityUpdate = true;
         }
@@ -850,6 +891,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             ?? "no reason found (the resurrection itself was refused)";
         if (reason == _refusal) return;
         _refusal = reason;
+        PlayerbotAnomalies.Report(player, "recovery", "healer-refused", $"spirit healer {healer.Entry} refused the activation: {reason}");
         LoggerOf().LogInformation(
             "Playerbot {Bot} could not activate the spirit healer {Healer} at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Reason}",
             player.Name, healer.Entry, healer.X, healer.Y, healer.Z, player.MapId, reason);
@@ -861,6 +903,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         Vector3? goal = healer is not null ? new Vector3(healer.X, healer.Y, healer.Z)
             : graveyard is not null ? new Vector3(graveyard.X, graveyard.Y, graveyard.Z) : null;
         string why = NoProgress(now) ? $"no progress for {(now - _progressMs) / 1000} s" : $"its walk stopped closing for {(now - _closingMs) / 1000} s";
+        PlayerbotAnomalies.Report(player, "recovery", "spirit-healer-failed",
+            $"the spirit-healer fallback gave up: {why}; target {(healer is not null ? "healer " + healer.Entry : graveyard is not null ? "graveyard " + graveyard.Id : "none")}; the recovery faults");
         LoggerOf().LogInformation(
             "Playerbot {Bot} gives up the spirit healer at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Why}; goal {Goal}, {Distance} yd away, route {Route}{Refused}{Refusal}",
             player.Name, player.X, player.Y, player.Z, player.MapId, why,

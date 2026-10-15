@@ -130,18 +130,6 @@ public sealed class PlayerbotOptions
     /// <summary>How far back faults count towards <see cref="MaxFaults"/>, in seconds of world time (1..604800).</summary>
     public int FaultWindowSeconds { get; set; } = 3600;
 
-    /// <summary>Let a local language model choose among the bot's candidate goals (off by default; the rules choose otherwise).</summary>
-    public bool AllowLocalLlm { get; set; }
-
-    /// <summary>The local model name sent to the loopback inference endpoint (at most 128 characters).</summary>
-    public string LocalLlmModel { get; set; } = "R4C3R/qwen3-0.6b-heretic:q4_k_m";
-
-    /// <summary>The local model's context size in tokens (512..2048).</summary>
-    public int LocalLlmContextSize { get; set; } = 1024;
-
-    /// <summary>Milliseconds a local model choice may take before the rules decide (100..10000).</summary>
-    public int LocalLlmTimeoutMs { get; set; } = 5000;
-
     /// <summary>The scenario harness on a live world (<c>World:Playerbots:Scenarios</c>; off by default).</summary>
     public PlayerbotScenarioOptions Scenarios { get; set; } = new();
 
@@ -192,8 +180,8 @@ public sealed class PlayerbotOptions
     /// <summary>Adversarial server-breaker chaos bots that fuzz handlers, state machines and invariants (<c>World:Playerbots:Chaos</c>; live; off by default).</summary>
     public Chaos.PlayerbotChaosOptions Chaos { get; set; } = new();
 
-    /// <summary>Zero-allocation batched ONNX / SIMD policy inference engine (<c>World:Playerbots:Inference</c>; off by default).</summary>
-    public AI.Inference.PlayerbotInferenceOptions Inference { get; set; } = new();
+    /// <summary>The goal policy engine and its decision telemetry (<c>World:Playerbots:Policy</c>; off by default; docs/areas/playbots.md, Goal policy).</summary>
+    public Policy.PlayerbotPolicyOptions Policy { get; set; } = new();
 
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
@@ -240,9 +228,6 @@ public sealed class PlayerbotOptions
             throw new InvalidOperationException($"{SectionName}: AllowedMaps must be non-empty and contain no duplicates.");
         if (FaultBackoffSeconds is < 1 or > 3600 || MaxFaults is < 1 or > 100 || FaultWindowSeconds is < 1 or > 604_800)
             throw new InvalidOperationException($"{SectionName}: FaultBackoffSeconds must be 1..3600, MaxFaults 1..100 and FaultWindowSeconds 1..604800.");
-        if (string.IsNullOrWhiteSpace(LocalLlmModel) || LocalLlmModel.Length > 128 || LocalLlmModel.Any(char.IsControl)
-            || LocalLlmContextSize is < 512 or > 2048 || LocalLlmTimeoutMs is < 100 or > 10_000)
-            throw new InvalidOperationException($"{SectionName}: invalid bounded local model settings.");
         if (Scenarios is null || Scenarios.MaxDurationSeconds is < 5 or > 600 || Scenarios.StepTimeoutSeconds is < 1 or > 300)
             throw new InvalidOperationException($"{SectionName}:Scenarios: MaxDurationSeconds must be 5..600 and StepTimeoutSeconds 1..300.");
         if (Party is null) throw new InvalidOperationException($"{SectionName}:Party is missing.");
@@ -275,8 +260,8 @@ public sealed class PlayerbotOptions
         Battlegrounds.Validate();
         if (Chaos is null) throw new InvalidOperationException($"{SectionName}:Chaos is missing.");
         Chaos.Validate();
-        if (Inference is null) throw new InvalidOperationException($"{SectionName}:Inference is missing.");
-        Inference.Validate();
+        if (Policy is null) throw new InvalidOperationException($"{SectionName}:Policy is missing.");
+        Policy.Validate();
     }
 }
 

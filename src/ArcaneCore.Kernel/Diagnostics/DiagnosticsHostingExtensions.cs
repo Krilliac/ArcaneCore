@@ -44,6 +44,7 @@ public static class DiagnosticsHostingExtensions
         CrashHandler.Install(options, StandardErrorCrashSink.Instance);
 
         builder.Services.AddSingleton(FaultLedger.Shared);
+        builder.Services.AddSingleton(AnomalyLedger.Shared);
         builder.Services.Configure<DiagnosticsOptions>(section);
         builder.Services.AddHostedService<DiagnosticsHostedService>();
         return builder;
@@ -67,6 +68,7 @@ internal sealed class DiagnosticsHostedService(
         ILogger crashLogger = loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Crash");
         Invariant.Configure(value, loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Invariant"));
         FaultLedger.Shared.Configure(value);
+        AnomalyLedger.Shared.Configure(loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Anomaly"), value.FaultLogLimit);
         CrashHandler handler = CrashHandler.Install(value, new LoggerCrashSink(crashLogger), [.. providers]);
 
         crashLogger.LogInformation(

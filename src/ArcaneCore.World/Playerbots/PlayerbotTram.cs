@@ -3,13 +3,17 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.Transports;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
@@ -206,12 +210,23 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
     public TramNetwork Network { get; } = network;
     public TramPlatform From { get; } = from;
     public TramPlatform To { get; set; } = to;
+    public TramPlatform IntendedTo { get; set; } = to;
     public Vector3 Goal { get; } = goal;
     public uint? PreviousTeleportTarget { get; } = previousTeleportTarget;
     public TramStage Stage { get; set; } = TramStage.ToEntrance;
+    public uint StartedMs { get; } = nowMs;
     public uint StageMs { get; set; } = nowMs;
     public uint PlatformSinceMs { get; set; }
+    public uint LastDriveMs { get; set; } = nowMs;
+    public uint LastPumpMs { get; set; } = nowMs;
     public string? Failure { get; set; }
+    public string? FailureCategory { get; set; }
+    public bool FailureReported { get; set; }
+    public bool SlowReported { get; set; }
+    public bool LeftBehindReported { get; set; }
+    public bool PassedDestinationReported { get; set; }
+    public uint BoardMissedChosenMs { get; set; }
+    public float ClosestToDestination { get; set; } = float.PositiveInfinity;
     public PlayerbotRoute? Route { get; set; }
 
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) when the platform spot beside a car is planned.</summary>
@@ -254,6 +269,8 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
 /// </summary>
 internal static class PlayerbotTram
 {
+    internal const string AnomalyArea = "tram";
+
     /// <summary>
     /// Half the car's width and length: the collision bounds of Subwaycar.m2 (GameObjectDisplayInfo 3831; vmaps
     /// <c>temp_gameobject_models</c>: x ±9.18, y ±6.62, z -16.85 .. 0.53 around the object's position).
@@ -287,6 +304,21 @@ internal static class PlayerbotTram
 
     /// <summary>After a path query found nothing, the next one waits this long.</summary>
     internal const uint PlanRetryMs = 2_000;
+
+    /// <summary>A riding bot whose world position lags this far behind its seat on the car missed its transport heartbeats.</summary>
+    internal const float LeftBehindYards = 150f;
+
+    /// <summary>How close a car comes to the destination platform's landing when it reaches that end of the tunnel.</summary>
+    internal const float DestinationPlatformRadiusYards = 100f;
+
+    /// <summary>How far a car must move back away from the destination platform's landing before we report it passed the destination.</summary>
+    internal const float PassedDestinationRetreatYards = 15f;
+
+    /// <summary>Tolerance around the intended exit teleport landing on the continent.</summary>
+    internal const float WrongStationYards = 80f;
+
+    /// <summary>Time on the tram map beyond 1.5 car cycles (180 s) is reported as a slow trip.</summary>
+    internal const uint SlowTramMapMs = 180_000;
 
     private static readonly ConditionalWeakTable<Player, TramTrip> Trips = [];
     private static readonly ConditionalWeakTable<Player, StrongBox<uint>> FailedAt = [];
@@ -367,7 +399,122 @@ internal static class PlayerbotTram
     {
         if (!Trips.TryGetValue(player, out TramTrip? trip)) return;
         Trips.Remove(player);
+        if (!player.IsAlive && (player.Movement.Flags & MovementFlags.OnTransport) != 0 && player.Session is WorldSession session)
+            ClearTransport(session, player);
         if (trip.Stage is not (TramStage.Done or TramStage.Failed)) PlayerbotAreaTriggers.AllowTeleportsTo(player, trip.PreviousTeleportTarget);
+    }
+
+    private static void ClearTransport(WorldSession session, Player player)
+    {
+        MovementInfo movement = player.Movement;
+        movement.Flags &= ~MovementFlags.OnTransport;
+        movement.TransportGuid = 0;
+        movement.TransportX = movement.TransportY = movement.TransportZ = movement.TransportOrientation = 0;
+        player.ApplyMovement(movement, session.World.NowMs);
+        if (!player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root))
+            MovementHandlers.RelayStoredMovement(player, WorldOpcode.MsgMoveHeartbeat);
+    }
+
+    /// <summary>
+    /// Per-tick tram pump (called from <see cref="PlayerbotMotion.Pump"/> every world tick). When a large bot population spaces brain
+    /// thinks 12–23 seconds apart, a ~12-second Deeprun Tram stop would otherwise pass unseen between thinks, and a riding bot would only
+    /// send <c>MSG_MOVE_HEARTBEAT</c> every think instead of every 500 ms. Sampling every <see cref="SampleMs"/> (250 ms) after the last
+    /// <see cref="Drive"/> transitions a completed platform walk to <see cref="TramStage.Waiting"/>, boards a standing car while its stop
+    /// window is open, sends 500 ms riding heartbeats, and steps off at the destination platform.
+    /// </summary>
+    internal static void Pump(WorldSession session, Player player, uint now)
+    {
+        if (!player.IsAlive || !player.IsInWorld || player.Map is not { } map || map.MapId != TramNetwork.TramMapId) return;
+        if (!Trips.TryGetValue(player, out TramTrip? trip) || trip.Stage is TramStage.Done or TramStage.Failed) return;
+        if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return;
+        if (unchecked(now - trip.LastDriveMs) < SampleMs || unchecked(now - trip.LastPumpMs) < SampleMs) return;
+        trip.LastPumpMs = now;
+
+        switch (trip.Stage)
+        {
+            case TramStage.ToPlatform:
+            {
+                if (trip.Car is not { IsInWorld: true } || !ReferenceEquals(trip.Car.Map, map)) return;
+                if (trip.Route is { Complete: false }) return;
+                if (!PlayerbotMovementControl.Stop(session, player)) return;
+                Enter(trip, TramStage.Waiting, now);
+                goto case TramStage.Waiting;
+            }
+            case TramStage.Waiting:
+            {
+                if (trip.Car is not { IsInWorld: true } car || !ReferenceEquals(car.Map, map)
+                    || map.FindUpdater<GameObjectMapSystem>() is not { } system)
+                {
+                    return;
+                }
+
+                uint cycle = system.ElevatorCycle(car);
+                if (cycle == 0) return;
+                TramPlatform here = trip.Network.Other(trip.To);
+                if (Standing(system, car, 0) is not { } at || !AtEnd(at, here, trip.To)) return;
+                Vector3 bot = new(player.X, player.Y, player.Z);
+                if (Vector2.Distance(TramNetwork.Flat(bot), TramNetwork.Flat(at)) > BesideYards + CarHalfLength) return;
+                if (StandingFor(system, car, at, cycle) < InsideMarginMs) return;
+                if (!PlayerbotMovementControl.Stop(session, player)) return;
+
+                float x = bot.X, y = bot.Y, z = bot.Z, o = 0;
+                ShipTransport.CalculatePassengerOffset(ref x, ref y, ref z, ref o, at.X, at.Y, at.Z, car.Orientation);
+                x = Math.Clamp(x, -(CarHalfLength - InsideMarginYards), CarHalfLength - InsideMarginYards);
+                y = Math.Clamp(y, -(CarHalfWidth - InsideMarginYards), CarHalfWidth - InsideMarginYards);
+                var offset = new Vector3(x, y, z);
+                if (!SendAboard(session, player, car, at, offset)) return;
+                trip.Offset = offset;
+                trip.LastBeatMs = now;
+                trip.LeftPlatform = false;
+                trip.ClosestToDestination = float.PositiveInfinity;
+                Enter(trip, TramStage.Aboard, now);
+                return;
+            }
+            case TramStage.Aboard:
+            {
+                if (trip.Car is not { IsInWorld: true } car || !ReferenceEquals(car.Map, map)
+                    || map.FindUpdater<GameObjectMapSystem>() is not { } system || system.ElevatorPosition(car) is not { } carAt)
+                {
+                    return;
+                }
+
+                if ((player.Movement.Flags & MovementFlags.OnTransport) == 0 || player.Movement.TransportGuid != car.Guid.Value)
+                    return;
+
+                TramPlatform here = trip.Network.Other(trip.To);
+                Vector3 at = new(carAt.X, carAt.Y, carAt.Z);
+                if (!trip.LeftPlatform && Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(here.Landing))
+                        > Vector2.Distance(TramNetwork.Flat(trip.Dock.Position), TramNetwork.Flat(here.Landing)) + 5f)
+                {
+                    trip.LeftPlatform = true;
+                }
+
+                if (trip.LeftPlatform)
+                {
+                    float distToDest = Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(trip.To.Landing));
+                    if (distToDest < trip.ClosestToDestination) trip.ClosestToDestination = distToDest;
+                }
+
+                if (Standing(system, car, 0) is { } stop && AtEnd(stop, trip.To, here) && trip.LeftPlatform)
+                {
+                    Vector3? off = Sides(map, car, stop, trip.To.Landing.Z)
+                        .OrderBy(s => Vector2.DistanceSquared(TramNetwork.Flat(s), TramNetwork.Flat(trip.To.ExitCentre)))
+                        .Select(s => (Vector3?)s).FirstOrDefault();
+                    if (off is { } ground && PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation))
+                    {
+                        Enter(trip, TramStage.ToExit, now);
+                        return;
+                    }
+                }
+
+                if (unchecked(now - trip.LastBeatMs) >= HeartbeatMs)
+                {
+                    if (SendAboard(session, player, car, at, trip.Offset)) trip.LastBeatMs = now;
+                }
+
+                return;
+            }
+        }
     }
 
     /// <summary>
@@ -380,7 +527,21 @@ internal static class PlayerbotTram
         TramStep step = DriveStage(session, player, options, elapsedMs, out failure);
         // Every failure carries its reason: a trip that failed on the continent noted it on the trip only, and the log said just "the
         // trip failed" (live-w22-r1).
-        if (step == TramStep.Failed && failure is null) failure = TripOf(player)?.Failure;
+        TramTrip? trip = TripOf(player);
+        if (step == TramStep.Failed && failure is null) failure = trip?.Failure;
+        if (step == TramStep.Failed && (trip is null || !trip.FailureReported))
+        {
+            if (trip is not null) trip.FailureReported = true;
+            if (CanReport(session, player))
+            {
+                string category = trip?.FailureCategory ?? "failed";
+                string why = failure ?? "unknown";
+                PlayerbotAnomalies.Report(player, AnomalyArea, "trip-failed",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"reason={category} map={player.Map?.MapId ?? 0} pos=({player.X:F1},{player.Y:F1},{player.Z:F1}) detail={why}"));
+            }
+        }
+
         return step;
     }
 
@@ -402,9 +563,25 @@ internal static class PlayerbotTram
                 if (FailedAt.TryGetValue(player, out StrongBox<uint>? lately) && unchecked(now - lately.Value) < RetryAfterFailureMs)
                     return TramStep.Idle;
                 FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
-                failure = homebind is not null && homebind.TeleportToHomebind(player)
+                bool canReport = CanReport(session, player);
+                bool sent = homebind is not null && homebind.TeleportToHomebind(player);
+                if (sent && canReport)
+                {
+                    PlayerbotAnomalies.Report(player, AnomalyArea, "teleport-out",
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"reason=no-platforms-homebind map={map.MapId} pos=({player.X:F1},{player.Y:F1},{player.Z:F1})"));
+                }
+
+                failure = sent
                     ? "tram: on the Deeprun Tram map, but the world data describes no platforms; sent to its bind point"
                     : "tram: on the Deeprun Tram map, but the world data describes no platforms, and the bind-point teleport was refused";
+                if (canReport)
+                {
+                    PlayerbotAnomalies.Report(player, AnomalyArea, "trip-failed",
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"reason=no-platforms map={map.MapId} pos=({player.X:F1},{player.Y:F1},{player.Z:F1}) detail={failure}"));
+                }
+
                 return TramStep.Failed;
             }
 
@@ -412,10 +589,12 @@ internal static class PlayerbotTram
             trip = new TramTrip(network, here, here, here.Arrival, now, PlayerbotAreaTriggers.TeleportTargetOf(player))
             {
                 Stage = TramStage.ToExit,
+                PlatformSinceMs = now,
             };
             Trips.AddOrUpdate(player, trip);
         }
 
+        trip.LastDriveMs = now;
         if (!player.IsAlive)
         {
             Cancel(player);
@@ -423,6 +602,21 @@ internal static class PlayerbotTram
         }
 
         if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return TramStep.Traveling;
+        if (map.MapId == TramNetwork.TramMapId && !trip.SlowReported)
+        {
+            uint mapStartMs = trip.PlatformSinceMs != 0 ? trip.PlatformSinceMs : trip.StartedMs;
+            if (unchecked(now - mapStartMs) > SlowTramMapMs)
+            {
+                trip.SlowReported = true;
+                if (CanReport(session, player))
+                {
+                    PlayerbotAnomalies.Report(player, AnomalyArea, "trip-slow",
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"stage={trip.Stage} elapsedMs={unchecked(now - mapStartMs)} from={trip.From.Name} to={trip.IntendedTo.Name} pos=({player.X:F1},{player.Y:F1},{player.Z:F1})"));
+                }
+            }
+        }
+
         switch (trip.Stage)
         {
             case TramStage.ToEntrance:
@@ -452,17 +646,18 @@ internal static class PlayerbotTram
             // The landing of the entrance taken: its platform is where the bot boards, the other one where it gets off.
             TramPlatform here = trip.Network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z));
             trip.To = trip.Network.Other(here);
+            trip.IntendedTo = trip.To;
             Enter(trip, TramStage.ToPlatform, now);
             trip.PlatformSinceMs = now;
             return TramStep.Traveling;
         }
 
         if (map.MapId != trip.From.ContinentMap)
-            return Fail(session, player, trip, now, $"tram: left for map {map.MapId} on the way to the {trip.From.Name} entrance");
+            return Fail(session, player, trip, now, $"tram: left for map {map.MapId} on the way to the {trip.From.Name} entrance", "left-map");
         if (!Walk(session, player, trip, trip.From.Approach, options, elapsedMs, now, toward: true))
         {
             return Fail(session, player, trip, now, string.Create(CultureInfo.InvariantCulture,
-                $"tram: no way to the {trip.From.Name} entrance from {player.X:F1},{player.Y:F1},{player.Z:F1}"));
+                $"tram: no way to the {trip.From.Name} entrance from {player.X:F1},{player.Y:F1},{player.Z:F1}"), "no-way-to-entrance");
         }
 
         return TramStep.Traveling;
@@ -470,30 +665,47 @@ internal static class PlayerbotTram
 
     private static TramStep AtPlatform(WorldSession session, Player player, Map map, TramTrip trip, PlayerbotOptions options, uint elapsedMs, uint now)
     {
-        if (map.MapId != TramNetwork.TramMapId) return Fail(session, player, trip, now, "tram: left the tram map before boarding");
+        if (map.MapId != TramNetwork.TramMapId) return Fail(session, player, trip, now, "tram: left the tram map before boarding", "left-map");
         TramPlatform here = trip.Network.Other(trip.To);
         uint cycle = 0;
         if (map.FindUpdater<GameObjectMapSystem>() is { } objects)
             foreach (GameObject running in objects.MapWideElevators) cycle = Math.Max(cycle, objects.ElevatorCycle(running));
-        if (cycle == 0) return LeaveAfterFailure(trip, here, now, "tram: no tram car runs (no map-wide car with an animation on the tram map)");
+        if (cycle == 0)
+        {
+            return LeaveAfterFailure(trip, here, now, "tram: no tram car runs (no map-wide car with an animation on the tram map)", "no-car");
+        }
+
         if (unchecked(now - trip.PlatformSinceMs) > (2 * cycle) + 30_000)
         {
             return LeaveAfterFailure(trip, here, now, string.Create(CultureInfo.InvariantCulture,
-                $"tram: no car stopped at the {here.Name} platform within {((2 * cycle) + 30_000) / 1000}s"));
+                $"tram: no car stopped at the {here.Name} platform within {((2 * cycle) + 30_000) / 1000}s"), "no-car-stopped");
         }
 
         GameObjectMapSystem system = map.FindUpdater<GameObjectMapSystem>()!;
         Vector3 bot = new(player.X, player.Y, player.Z);
+        if (trip.Car is { IsInWorld: true } missedCar && ReferenceEquals(missedCar.Map, map)
+            && unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000
+            && trip.BoardMissedChosenMs != trip.DockChosenMs)
+        {
+            trip.BoardMissedChosenMs = trip.DockChosenMs;
+            if (CanReport(session, player))
+            {
+                PlayerbotAnomalies.Report(player, AnomalyArea, "board-missed",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"stage={trip.Stage} platform={here.Name} car={missedCar.Guid.Entry} arriveMs={trip.Dock.ArriveMs} departMs={trip.Dock.DepartMs} elapsedMs={unchecked(now - trip.DockChosenMs)} pos=({bot.X:F1},{bot.Y:F1},{bot.Z:F1})"));
+            }
+        }
+
         if (trip.Car is null || !trip.Car.IsInWorld || !ReferenceEquals(trip.Car.Map, map)
             || unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000)
         {
             // Pick (again): the car that stops here soonest at a time the bot can be beside it.
             PlayerbotThinkProbe.Phase("tram choose car");
-            if (!ChooseCar(player, map, system, trip, here, options, now, out string? why, out bool waitingForTiles))
+            if (!ChooseCar(player, map, system, trip, here, options, now, out string? why, out string? category, out bool waitingForTiles))
             {
                 // A tile beside the car is still being read: no verdict on the way, so the trip goes on and the car is chosen again.
                 if (waitingForTiles) return TramStep.Traveling;
-                return LeaveAfterFailure(trip, here, now, why ?? $"tram: no car stops at the {here.Name} platform");
+                return LeaveAfterFailure(trip, here, now, why ?? $"tram: no car stops at the {here.Name} platform", category ?? "no-car-stopped");
             }
 
             PlayerbotThinkProbe.Phase("tram platform");
@@ -530,6 +742,7 @@ internal static class PlayerbotTram
         trip.Offset = offset;
         trip.LastBeatMs = now;
         trip.LeftPlatform = false;
+        trip.ClosestToDestination = float.PositiveInfinity;
         Enter(trip, TramStage.Aboard, now);
         return TramStep.Traveling;
     }
@@ -541,9 +754,10 @@ internal static class PlayerbotTram
     private const uint InsideMarginMs = 1_000;
 
     private static bool ChooseCar(Player player, Map map, GameObjectMapSystem system, TramTrip trip, TramPlatform here, PlayerbotOptions options,
-        uint now, out string? failure, out bool waitingForTiles)
+        uint now, out string? failure, out string? category, out bool waitingForTiles)
     {
         failure = null;
+        category = null;
         waitingForTiles = false;
         trip.Car = null;
         trip.Route = null;
@@ -564,7 +778,9 @@ internal static class PlayerbotTram
 
         if (candidates.Count == 0)
         {
-            failure = system.MapWideElevators.Count == 0 ? "tram: no tram car on the tram map"
+            bool anyCar = system.MapWideElevators.Count > 0;
+            category = anyCar ? "no-car-stopped" : "no-car";
+            failure = !anyCar ? "tram: no tram car on the tram map"
                 : $"tram: no car stops at the {here.Name} platform";
             return false;
         }
@@ -587,6 +803,7 @@ internal static class PlayerbotTram
 
         // A spot whose tiles are still being read is no refusal: the choice is made again next think (TileWait.MaxMs, then it is one).
         if (waitingForTiles) return false;
+        category = "no-way-to-platform";
         failure = string.Create(CultureInfo.InvariantCulture,
             $"tram: no way from {bot.X:F1},{bot.Y:F1},{bot.Z:F1} to the side of a car at the {here.Name} platform");
         return false;
@@ -637,7 +854,31 @@ internal static class PlayerbotTram
         if (map.MapId != TramNetwork.TramMapId || trip.Car is not { IsInWorld: true } car || !ReferenceEquals(car.Map, map)
             || map.FindUpdater<GameObjectMapSystem>() is not { } system || system.ElevatorPosition(car) is not { } carAt)
         {
-            return Fail(session, player, trip, now, "tram: the car the bot rode is gone");
+            if (map.MapId == TramNetwork.TramMapId && CanReport(session, player))
+            {
+                PlayerbotAnomalies.Report(player, AnomalyArea, "detached-mid-ride",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"reason=car-gone to={trip.To.Name} pos=({player.X:F1},{player.Y:F1},{player.Z:F1})"));
+            }
+
+            return Fail(session, player, trip, now, "tram: the car the bot rode is gone", "car-gone");
+        }
+
+        if ((player.Movement.Flags & MovementFlags.OnTransport) == 0 || player.Movement.TransportGuid != car.Guid.Value)
+        {
+            Vector3 botAt = new(player.X, player.Y, player.Z);
+            if (CanReport(session, player))
+            {
+                string whyDetached = (player.Movement.Flags & MovementFlags.OnTransport) == 0 ? "transport-flag-cleared" : "transport-guid-mismatch";
+                PlayerbotAnomalies.Report(player, AnomalyArea, "detached-mid-ride",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"reason={whyDetached} car={car.Guid.Entry} to={trip.To.Name} pos=({botAt.X:F1},{botAt.Y:F1},{botAt.Z:F1})"));
+            }
+
+            if ((player.Movement.Flags & MovementFlags.OnTransport) != 0)
+                PlayerbotMotion.SendStepOff(session, player, botAt, player.Orientation);
+            TramPlatform nearestOnDetach = trip.Network.NearestOnTramMap(botAt);
+            return LeaveAfterFailure(trip, nearestOnDetach, now, "tram: detached from the tram car mid-ride", "detached-mid-ride");
         }
 
         TramPlatform here = trip.Network.Other(trip.To);
@@ -646,6 +887,44 @@ internal static class PlayerbotTram
         if (!trip.LeftPlatform && Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(here.Landing))
                 > Vector2.Distance(TramNetwork.Flat(trip.Dock.Position), TramNetwork.Flat(here.Landing)) + 5f)
             trip.LeftPlatform = true;
+
+        if (!trip.LeftBehindReported)
+        {
+            Vector3 expectedSeat = Seat(car, at, trip.Offset);
+            float seatDrift = Vector2.Distance(TramNetwork.Flat(new Vector3(player.X, player.Y, player.Z)), TramNetwork.Flat(expectedSeat));
+            if (seatDrift > LeftBehindYards)
+            {
+                trip.LeftBehindReported = true;
+                if (CanReport(session, player))
+                {
+                    PlayerbotAnomalies.Report(player, AnomalyArea, "left-behind",
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"car={car.Guid.Entry} driftYards={seatDrift:F1} sinceBeatMs={unchecked(now - trip.LastBeatMs)} bot=({player.X:F1},{player.Y:F1},{player.Z:F1}) seat=({expectedSeat.X:F1},{expectedSeat.Y:F1},{expectedSeat.Z:F1})"));
+                }
+            }
+        }
+
+        if (trip.LeftPlatform)
+        {
+            float distToDest = Vector2.Distance(TramNetwork.Flat(at), TramNetwork.Flat(trip.To.Landing));
+            if (distToDest < trip.ClosestToDestination)
+            {
+                trip.ClosestToDestination = distToDest;
+            }
+            else if (!trip.PassedDestinationReported
+                && trip.ClosestToDestination <= DestinationPlatformRadiusYards
+                && distToDest > trip.ClosestToDestination + PassedDestinationRetreatYards)
+            {
+                trip.PassedDestinationReported = true;
+                if (CanReport(session, player))
+                {
+                    PlayerbotAnomalies.Report(player, AnomalyArea, "passed-destination",
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"to={trip.To.Name} closestYards={trip.ClosestToDestination:F1} currentYards={distToDest:F1} elapsedMs={unchecked(now - trip.StageMs)}"));
+                }
+            }
+        }
+
         if (Standing(system, car, 0) is { } stop && AtEnd(stop, trip.To, here) && trip.LeftPlatform)
         {
             // At the other platform: step off on the side nearest its exit.
@@ -653,7 +932,7 @@ internal static class PlayerbotTram
                 .OrderBy(s => Vector2.DistanceSquared(TramNetwork.Flat(s), TramNetwork.Flat(trip.To.ExitCentre)))
                 .Select(s => (Vector3?)s).FirstOrDefault();
             if (off is not { } ground)
-                return LeaveAfterFailure(trip, trip.To, now, $"tram: no platform floor beside the car at the {trip.To.Name} platform");
+                return LeaveAfterFailure(trip, trip.To, now, $"tram: no platform floor beside the car at the {trip.To.Name} platform", "no-destination-floor");
             if (!PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation)) return TramStep.Traveling;
             Enter(trip, TramStage.ToExit, now);
             return TramStep.Traveling;
@@ -661,11 +940,22 @@ internal static class PlayerbotTram
 
         if (unchecked(now - trip.StageMs) > cycle + 30_000)
         {
+            if (!trip.PassedDestinationReported)
+            {
+                trip.PassedDestinationReported = true;
+                if (CanReport(session, player))
+                {
+                    PlayerbotAnomalies.Report(player, AnomalyArea, "passed-destination",
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"to={trip.To.Name} closestYards={trip.ClosestToDestination:F1} elapsedMs={unchecked(now - trip.StageMs)} reason=cycle-timeout"));
+                }
+            }
+
             // The car never stood at the other platform (it should within one cycle): off where it stands, out by the nearest exit.
             TramPlatform nearest = trip.Network.NearestOnTramMap(at);
             Vector3? off = Sides(map, car, at, nearest.Landing.Z).Select(s => (Vector3?)s).FirstOrDefault();
             if (off is { } ground) PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation);
-            return LeaveAfterFailure(trip, nearest, now, $"tram: the car did not stop at the {trip.To.Name} platform within {(cycle + 30_000) / 1000}s");
+            return LeaveAfterFailure(trip, nearest, now, $"tram: the car did not stop at the {trip.To.Name} platform within {(cycle + 30_000) / 1000}s", "passed-destination");
         }
 
         if (unchecked(now - trip.LastBeatMs) >= HeartbeatMs)
@@ -692,19 +982,42 @@ internal static class PlayerbotTram
                 return TramStep.Failed;
             }
 
+            Vector3 continentPos = new(player.X, player.Y, player.Z);
+            float distToArrival = Vector2.Distance(TramNetwork.Flat(continentPos), TramNetwork.Flat(trip.IntendedTo.Arrival));
+            if (map.MapId != trip.IntendedTo.ContinentMap || distToArrival > WrongStationYards)
+            {
+                string wrongWhy = string.Create(CultureInfo.InvariantCulture,
+                    $"tram: exited onto map {map.MapId} at {continentPos.X:F1},{continentPos.Y:F1},{continentPos.Z:F1} ({distToArrival:F1} yd from {trip.IntendedTo.Name} arrival)");
+                if (CanReport(session, player))
+                {
+                    PlayerbotAnomalies.Report(player, AnomalyArea, "arrived-wrong-station",
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"intended={trip.IntendedTo.Name} map={map.MapId} distYards={distToArrival:F1} pos=({continentPos.X:F1},{continentPos.Y:F1},{continentPos.Z:F1}) expected=({trip.IntendedTo.Arrival.X:F1},{trip.IntendedTo.Arrival.Y:F1},{trip.IntendedTo.Arrival.Z:F1})"));
+                }
+
+                trip.Failure = wrongWhy;
+                trip.FailureCategory = "wrong-station";
+                trip.Stage = TramStage.Failed;
+                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
+                failure = wrongWhy;
+                return TramStep.Failed;
+            }
+
             trip.Stage = TramStage.Done;
             return TramStep.Arrived;
         }
 
         TramPlatform exit = trip.To;
-        if ((player.Movement.Flags & Protocol.MovementFlags.OnTransport) != 0)
+        if ((player.Movement.Flags & MovementFlags.OnTransport) != 0)
             PlayerbotMotion.SendStepOff(session, player, new Vector3(player.X, player.Y, player.Z), player.Orientation);
         if (Walk(session, player, trip, exit.ExitCentre, options, elapsedMs, now, toward: true)) return TramStep.Traveling;
 
         // The exit cannot be walked into from here: the server sends the bot where the exit would (the trigger's own teleport).
         PlayerbotMovementControl.Stop(session, player);
+        trip.FailureCategory ??= "no-way-to-exit";
         trip.Failure ??= string.Create(CultureInfo.InvariantCulture,
             $"tram: no way to the {exit.Name} exit from {player.X:F1},{player.Y:F1},{player.Z:F1}");
+        bool canReportTeleport = CanReport(session, player);
         TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
         if (teleports is null || !teleports.TeleportTo(player, exit.ExitTeleport.TargetMap, exit.ExitTeleport.TargetX, exit.ExitTeleport.TargetY,
                 exit.ExitTeleport.TargetZ, exit.ExitTeleport.TargetOrientation))
@@ -714,6 +1027,13 @@ internal static class PlayerbotTram
             FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
             failure = trip.Failure + "; the exit teleport was refused";
             return TramStep.Failed;
+        }
+
+        if (canReportTeleport)
+        {
+            PlayerbotAnomalies.Report(player, AnomalyArea, "teleport-out",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"reason=exit-unreachable exit={exit.Name} pos=({player.X:F1},{player.Y:F1},{player.Z:F1}) targetMap={exit.ExitTeleport.TargetMap}"));
         }
 
         return TramStep.Traveling;
@@ -758,22 +1078,24 @@ internal static class PlayerbotTram
         return true;
     }
 
-    private static TramStep Fail(WorldSession session, Player player, TramTrip trip, uint now, string why)
+    private static TramStep Fail(WorldSession session, Player player, TramTrip trip, uint now, string why, string category)
     {
         PlayerbotMovementControl.Stop(session, player);
         if (player.Map?.MapId == TramNetwork.TramMapId)
-            return LeaveAfterFailure(trip, trip.Network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z)), now, why);
+            return LeaveAfterFailure(trip, trip.Network.NearestOnTramMap(new Vector3(player.X, player.Y, player.Z)), now, why, category);
         PlayerbotAreaTriggers.AllowTeleportsTo(player, trip.PreviousTeleportTarget);
         trip.Failure = why;
+        trip.FailureCategory ??= category;
         trip.Stage = TramStage.Failed;
         FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
         return TramStep.Failed;
     }
 
     /// <summary>On the tram map: note the failure and leave by the exit of <paramref name="platform"/>; reported once the bot is out.</summary>
-    private static TramStep LeaveAfterFailure(TramTrip trip, TramPlatform platform, uint now, string why)
+    private static TramStep LeaveAfterFailure(TramTrip trip, TramPlatform platform, uint now, string why, string category)
     {
         trip.Failure ??= why;
+        trip.FailureCategory ??= category;
         trip.To = platform;
         trip.Route = null;
         trip.Best = float.PositiveInfinity;
@@ -781,6 +1103,9 @@ internal static class PlayerbotTram
         Enter(trip, TramStage.ToExit, now);
         return TramStep.Traveling;
     }
+
+    private static bool CanReport(WorldSession session, Player player)
+        => !session.IsInChaosProbe && player.IsAlive && player.IsInWorld && !player.IsLoggingOut;
 
     private static void Enter(TramTrip trip, TramStage stage, uint now)
     {

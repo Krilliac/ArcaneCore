@@ -154,6 +154,18 @@ public sealed class WorldProtectionTests
     }
 
     [Fact]
+    public async Task StartAsync_ReturnsOnlyOnceTheListenerIsBound()
+    {
+        // A client may connect as soon as StartAsync returns. BackgroundService runs ExecuteAsync on the thread pool, so a listener bound
+        // there could still be unbound: Linux refuses that connect at once (Windows retries the refused SYN for about a second, hiding it).
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            await using WorldServerHarness harness = await WorldServerHarness.StartAsync(new NetProtectionOptions());
+            Assert.Contains(System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners(), e => e.Port == harness.Port);
+        }
+    }
+
+    [Fact]
     public async Task Listener_RefusesConnectionsBeyondThePerAddressRate_BeforeAnySessionExists()
     {
         await using WorldServerHarness harness = await WorldServerHarness.StartAsync(new NetProtectionOptions

@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 232 |
-| `Administrator` | 6 | 342 |
+| `GameMaster` | 3 | 235 |
+| `Administrator` | 6 | 345 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -190,6 +190,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.server idlerestart` ... | 6 | Administrator | stored level through the map | Syntax: .server idlerestart [cancel \| #delay [#exitcode]] — restart when no sessions remain. |
 | `.server idlerestart cancel` | 6 | Administrator | stored level through the map | Syntax: .server idlerestart cancel — abort the pending countdown. |
 | `.server faults` | 3 | GameMaster | stored level through the map | Syntax: .server faults [top #count \| show $id \| summary \| reset] List the exceptions the server caught, most frequent first; show one in full; summarize by subsystem and invariants; reset (administrator) clears the list. |
+| `.server anomalies` | 3 | GameMaster | stored level through the map | Syntax: .server anomalies [$subsystem \| show $key \| reset] Summarize outcome anomalies by subsystem and top keys; list keys for one subsystem; show one key in full; reset (administrator) clears the ledger. |
 | `.server set` ... | 6 | Administrator | declared retail level | Syntax: .server set $subcommand |
 | `.server set motd` | 6 | Administrator | declared retail level | Syntax: .server set motd $MOTD Set the server message of the day. |
 | `.server wiring` | 6 | Administrator | declared retail level | Syntax: .server wiring List what the running server declares but does not wire: client opcodes that arrived with no handler (counted since start), options that a class asks for but nothing configures, config checks that check-config never runs, handlers registered for server-only opcodes. |
@@ -197,11 +198,12 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.tele add` | 5 | Administrator | declared retail level | Syntax: .tele add $name — save your current location. |
 | `.tele del` | 5 | Administrator | declared retail level | Syntax: .tele del $name — delete an exact named location. |
 | `.tele name` | 2 | GameMaster | declared retail level | Syntax: .tele name [#playername] #location Teleport the named player, or the selected one, to a location from the game_tele table. |
-| `.bot` ... | 3 | GameMaster | stored level through the map | Syntax: .bot &lt;commands\|status\|list\|debug\|gear\|summon\|party&gt; Shorthand for .playerbot commands. |
+| `.bot` ... | 3 | GameMaster | stored level through the map | Syntax: .bot &lt;commands\|status\|list\|debug\|anomalies\|gear\|summon\|party&gt; Shorthand for .playerbot commands. |
 | `.bot commands` | 3 | GameMaster | stored level through the map | Syntax: .bot commands List available playerbot chat/whisper commands and .bot subcommands. |
 | `.bot status` | 3 | GameMaster | stored level through the map | Syntax: .bot status [$id\|$name] Show bot lifecycle status. |
 | `.bot list` | 3 | GameMaster | stored level through the map | Syntax: .bot list List managed bots. |
 | `.bot debug` | 3 | GameMaster | stored level through the map | Syntax: .bot debug [$id\|$name] Show internal brain, motion, route, stall, risk and trace diagnostics for a running bot. |
+| `.bot anomalies` | 3 | GameMaster | stored level through the map | Syntax: .bot anomalies $name Show the recent anomaly history recorded for a bot. |
 | `.bot gear` | 3 | GameMaster | stored level through the map | Syntax: .bot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
 | `.bot summon` | 3 | GameMaster | stored level through the map | Syntax: .bot summon $id\|$name Teleport a party bot (or fleet selection for GMs) to you. |
 | `.bot party` ... | 3 | GameMaster | stored level through the map | Syntax: .bot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
@@ -370,6 +372,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot chaos clear` | 6 | Administrator | stored level through the map | Syntax: .playerbot chaos clear [all] Reset chaos probe counters and recent fault history ('all' also clears explicit bot assignments). |
 | `.playerbot commands` | 3 | GameMaster | stored level through the map | Syntax: .playerbot commands List available playerbot chat/whisper commands and .bot subcommands. |
 | `.playerbot debug` | 3 | GameMaster | stored level through the map | Syntax: .playerbot debug [$id\|$name] Show internal brain, motion, route, stall, risk and trace diagnostics for a running bot. |
+| `.playerbot anomalies` | 3 | GameMaster | stored level through the map | Syntax: .playerbot anomalies $name Show the recent anomaly history recorded for a bot. |
 | `.playerbot gear` | 3 | GameMaster | stored level through the map | Syntax: .playerbot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
 | `.playerbot party` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
 | `.playerbot party fill` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party fill Invite up to 4 online autonomous bots near your level into your party and summon them to you. |

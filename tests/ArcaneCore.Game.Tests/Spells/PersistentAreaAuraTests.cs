@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Paladin;
 using ArcaneCore.Game.Spells.PersistentAreaAuras;
+using ArcaneCore.Kernel.Diagnostics;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -268,6 +269,21 @@ public sealed class PersistentAreaAuraTests : IDisposable
         Assert.NotNull(Holder(_friend, Heal));
         Assert.NotNull(Holder(_paladin, Heal));
         Assert.Null(Holder(_enemy, Heal));
+    }
+
+    [Fact]
+    public void AChannelledGroundAura_StaysCasting_AndTheSweepReportsNothing()
+    {
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key is "spell/channel-orphaned" or "spell/cast-stuck");
+
+        Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_paladin, Channel, SpellCastTargets.ForSelf(), triggered: false));
+        Assert.Single(_kit.System.DynamicObjects);
+        _kit.Advance(100);
+        _kit.Advance(100);
+
+        Assert.Equal(SpellCastState.Casting, _kit.System.GetState(_paladin.Guid)?.CurrentCast?.State);
+        Assert.False(capture.Any("spell/channel-orphaned"), capture.Describe());
+        Assert.False(capture.Any("spell/cast-stuck"), capture.Describe());
     }
 
     [Fact]
