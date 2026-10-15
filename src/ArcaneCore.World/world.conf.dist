@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       475 keys
+#   WORLD                       477 keys
 #
 ###############################################################################
 
@@ -10663,18 +10663,6 @@ World.Instances.UnloadDelayMs = 1800000
 #----------------------------------------------------------------------------
 
 #
-#    World.Playerbots.AllowLocalLlm
-#        Description: Let a local language model choose among the bot's candidate goals (off by
-#                     default; the rules choose otherwise).
-#        Type: bool
-#        Default: false
-#        Allowed: true | false
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.AllowLocalLlm = false
-
-#
 #    World.Playerbots.AllowedMaps
 #        Description: The maps bots may act and travel on (non-empty, no duplicates; a configured
 #                     list replaces the default continents 0 and 1).
@@ -11936,100 +11924,6 @@ World.Playerbots.Home.ReturnMode = Auto
 World.Playerbots.Home.TeleportDistanceYards = 1500
 
 #
-#    World.Playerbots.Inference.EnableTensorRt
-#        Description: Enable the TensorRT execution provider when loading an ONNX model (falls back
-#                     to CPU when unavailable; off by default).
-#        Type: bool
-#        Default: false
-#        Allowed: true | false
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.EnableTensorRt = false
-
-#
-#    World.Playerbots.Inference.Enabled
-#        Description: Run the zero-allocation batched playerbot inference pass each world tick (off
-#                     by default).
-#        Type: bool
-#        Default: false
-#        Allowed: true | false
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.Enabled = false
-
-#
-#    World.Playerbots.Inference.GpuDeviceId
-#        Description: GPU device index for ONNX Runtime TensorRT execution provider (0..15).
-#        Type: int
-#        Default: 0
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.GpuDeviceId = 0
-
-#
-#    World.Playerbots.Inference.ModelPath
-#        Description: Optional path to an ONNX policy model (obs_input [128,64] -&gt; action_output
-#                     [128,16]); empty uses the built-in SIMD policy kernel.
-#        Type: string
-#        Default: ""
-#        Allowed: text
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.ModelPath = ""
-
-#
-#    World.Playerbots.Inference.TensorRtCachePath
-#        Description: Directory where TensorRT engine caches are stored (non-empty, at most 260
-#                     characters).
-#        Type: string
-#        Default: "./cache/trt_11_engines"
-#        Allowed: text
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.TensorRtCachePath = "./cache/trt_11_engines"
-
-#
-#    World.Playerbots.LocalLlmContextSize
-#        Description: The local model's context size in tokens (512..2048).
-#        Type: int
-#        Default: 1024
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.LocalLlmContextSize = 1024
-
-#
-#    World.Playerbots.LocalLlmModel
-#        Description: The local model name sent to the loopback inference endpoint (at most 128
-#                     characters).
-#        Type: string
-#        Default: "R4C3R/qwen3-0.6b-heretic:q4_k_m"
-#        Allowed: text
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.LocalLlmModel = "R4C3R/qwen3-0.6b-heretic:q4_k_m"
-
-#
-#    World.Playerbots.LocalLlmTimeoutMs
-#        Description: Milliseconds a local model choice may take before the rules decide
-#                     (100..10000).
-#        Type: int
-#        Default: 5000
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.LocalLlmTimeoutMs = 5000
-
-#
 #    World.Playerbots.MaxActionsPerTick
 #        Description: The most managed client actions all bots may send in one world tick (1..64).
 #                     The tick's think time is bounded separately, by the 8 ms
@@ -12291,6 +12185,139 @@ World.Playerbots.Party.MasterTimeoutSeconds = 60
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Party.TeleportToLeader = true
+
+#
+#    World.Playerbots.Policy.Enabled
+#        Description: Score each bot's goals off the world thread and let the scores re-rank the
+#                     ladder's choice (off by default).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Enabled = false
+
+#
+#    World.Playerbots.Policy.ExplorationRate
+#        Description: The chance (0..0.2) that a snapshot's choice is instead one of the ladder's
+#                     eligible runner-up goals, picked at random, for gathering telemetry the ladder
+#                     alone never produces. 0 (the default) never explores.
+#        Type: double
+#        Default: 0
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.ExplorationRate = 0
+
+#
+#    World.Playerbots.Policy.IntervalMs
+#        Description: World milliseconds between two snapshots of one bot's state for scoring
+#                     (500..60000).
+#        Type: int
+#        Default: 3000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.IntervalMs = 3000
+
+#
+#    World.Playerbots.Policy.ModelPath
+#        Description: A goal model weights file (JSON, arcanecore.playerbot-policy v1; relative to
+#                     the profile folder, or absolute). Empty scores with the rule ladder. A file
+#                     that does not load is reported once (anomaly bot-policy/model-load-failed) and
+#                     the ladder scores instead.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.ModelPath = ""
+
+#
+#    World.Playerbots.Policy.StaleAfterMs
+#        Description: Scores taken from a snapshot older than this (world milliseconds) are not
+#                     used: that think, the ladder decides (500..120000).
+#        Type: int
+#        Default: 4500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.StaleAfterMs = 4500
+
+#
+#    World.Playerbots.Policy.Telemetry.Directory
+#        Description: The folder of the telemetry files: relative to the profile folder, or
+#                     absolute.
+#        Type: string
+#        Default: "telemetry/playerbot-policy"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.Directory = "telemetry/playerbot-policy"
+
+#
+#    World.Playerbots.Policy.Telemetry.Enabled
+#        Description: Log each decision's state, choice and outcome (off by default).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.Enabled = false
+
+#
+#    World.Playerbots.Policy.Telemetry.MaxFileBytes
+#        Description: The largest one telemetry file grows before the next one starts, in bytes (64
+#                     KiB..1 GiB).
+#        Type: long
+#        Default: 16777216
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.MaxFileBytes = 16777216
+
+#
+#    World.Playerbots.Policy.Telemetry.MaxFiles
+#        Description: The most telemetry files kept; the oldest goes first (1..1000). The folder
+#                     holds at most MaxFiles x MaxFileBytes.
+#        Type: int
+#        Default: 16
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.MaxFiles = 16
+
+#
+#    World.Playerbots.Policy.Telemetry.OutcomeMinutes
+#        Description: Minutes of world time a decision's outcome is measured over (1..60).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.OutcomeMinutes = 5
+
+#
+#    World.Playerbots.Policy.TickBudgetMs
+#        Description: Wall-clock milliseconds one map's batch may score for in one tick; the rows
+#                     past it are left to the ladder and counted (0.1..50).
+#        Type: double
+#        Default: 2
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.TickBudgetMs = 2
 
 #
 #    World.Playerbots.Population.ActionLogSeconds

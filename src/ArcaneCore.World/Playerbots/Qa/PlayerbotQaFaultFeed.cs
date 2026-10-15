@@ -20,14 +20,14 @@ internal sealed class PlayerbotQaFaultFeed(FaultLedger ledger)
     internal const string BotSite = "playerbot";
 
     /// <summary>
-    /// Ledger sites that record the host's environment, not a server defect: the local LLM being down or answering badly (HTTP/IO/JSON errors),
-    /// a full or unavailable disk under a packet capture or a dump (IO/access errors). Each site's catch is narrowed to those exception types.
+    /// Ledger sites that record the host's environment, not a server defect: a full or unavailable disk or folder under the policy telemetry,
+    /// or under a packet capture or a dump (IO/access errors). Each site's catch is narrowed to those exception types.
     /// They stay in the ledger (<c>.server faults</c>) but are not filed as public QA issues, which would turn an operator's machine state into
     /// bug reports. A site whose catch can also see code defects (null dereference, missing key) must not be listed here.
     /// </summary>
     internal static readonly HashSet<string> EnvironmentSites = new(StringComparer.Ordinal)
     {
-        "playerbot.local-planner", "net.packet-capture", "dump.free-space",
+        "playerbot.policy-telemetry-io", "net.packet-capture", "dump.free-space",
     };
 
     private readonly object _gate = new();
