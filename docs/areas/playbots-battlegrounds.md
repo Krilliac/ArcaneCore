@@ -25,6 +25,8 @@ server's own rules (below).
 | `PlayerbotBattlegroundRoles.cs` | Who attacks, escorts and defends in a match. Unit tested. |
 | `PlayerbotBattlegroundCoordinator.cs` | The world feature: scans free bots, runs every followed bot's queue machine from the server's own state, sends the client packets, rebuilds the demand and the roles, the GM report. |
 | `PlayerbotBattlegroundAI.cs` | One per followed bot: the walk to the battlemaster, and the match (fighting enemy players, the objective, the corpse run). |
+| `PlayerbotArathiBasinTactics.cs` | The Arathi Basin team plan, free of world state: every living bot's order (assault, defend, retreat) and the buff choice. Unit tested. |
+| `PlayerbotBattlegroundAI.ArathiBasin.cs` | One bot's Arathi Basin think: the plan read from the match, its order carried out, the buffs stepped on. |
 
 Changes outside the folder: `ManagedPlayerbotFeature` calls the coordinator every tick after the group coordinator and lets it drive a
 bot before the group AI, the party AI and the brain (`BattlegroundDriven`); a bot the coordinator holds is not free for bot groups and a
@@ -102,9 +104,11 @@ taken on where it stands. A bot taken by a controller is forgotten where it stan
   enemy it already fights, the nearest enemy within 30 yards. The fight is the brain's and the group AI's: the class rotation
   (`PlayerbotCombatSpells`), the position (`PlayerbotBrain.DecidePosition`), facing the victim, the melee swing. A flag carrier does not
   stop to fight.
-* **Death.** The bot releases and runs back to its body (`PlayerbotRecovery`, as the brain and the group AI do); the server casts
-  Waiting to Resurrect on release and puts the ghost at the match's graveyard. There is no spirit-guide resurrection wave in this
-  server (docs/areas/battlegrounds.md, Resurrection): the corpse run is the way back, and it waits while the match is not in progress.
+* **Death.** The bot releases (`PlayerbotRecovery`); the server casts Waiting to Resurrect on release and puts the ghost at the match's
+  graveyard (in Arathi Basin the nearest node its team occupies, else its start: vmangos `BattleGroundAB::GetClosestGraveYard`). A
+  battleground ghost waits within 15 yards of the graveyard's spirit guide for its resurrection wave instead of running to its body (the
+  recovery's `AwaitAreaResurrection`; `PlayerbotArathiBasinPlayWorldTests.Ab_DeadBot_WaitsAtTheSpiritGuide_InsteadOfRunningToItsCorpse`).
+  Nothing happens while the match is not in progress.
 * **Roles** (`PlayerbotBattlegroundRoles`, per match and team over the coordinator's bots, healers escort first): Warsong Gulch 40%
   attackers, 30% escorts, 30% defenders; Arathi Basin 70% attackers, 30% defenders. These shares are this server's design.
 
@@ -115,13 +119,32 @@ flag from its stand when the stand is up (CMSG_GAMEOBJ_USE within 4 yards), or f
 otherwise waits at the enemy stand. An escort follows its own carrier at 3-5 yards (vmangos `SelectFollowTarget`) and attacks when
 there is none. A defender holds within 8 yards of its own flag room.
 
-**Arathi Basin.** A node may be clicked by a team when it is neutral or its status belongs to the other team (vmangos
-`EventPlayerClickedOnFlag`: `status == 0 || teamIndex == status % 2`). An attacker walks to the nearest such node's banner, stops within
-4 yards and casts 21651 at the banner (CMSG_CAST_SPELL with TARGET_FLAG_OBJECT; Spell.dbc: OPEN_LOCK lock type 17, 10 second cast,
-0-5 yards; lock 1479 is LOCK_KEY_SKILL of that type), standing still while it casts; a node a teammate is already casting at is left to
-it (vmangos `AtFlag`). The server's open-lock effect turns the opening of a banner button with `noDamageImmune` into the click, and
-the opening of a neutral goober banner into its trigger spell cast at the bot, which clicks (docs/areas/battlegrounds.md). A defender guards one of its team's nodes (spread by guid) and casts at it when the enemy contests it;
-with nothing to take, an attacker guards its nearest own node.
+**Arathi Basin** (`PlayerbotArathiBasinTactics`, after the shape of mangosbot's `BGTactics::selectObjective` for `BATTLEGROUND_AB`,
+cmangos/playerbots `BattleGroundTactics.cpp`). A node may be clicked by a team when it is neutral or its status belongs to the other team
+(vmangos `EventPlayerClickedOnFlag`: `status == 0 || teamIndex == status % 2`): it is *attackable*; a node contested or occupied by the
+team is *held*. Every node is always one or the other, so a bot always has a node to go to. Every think each bot computes the plan of its
+whole team (the coordinator's bots of that team and match; real players count as friends, never get orders), ties by guid, and takes its
+own order:
+
+1. **Retreat.** A bot under 25% health with more enemies than friends within 20 yards falls back to the nearest node its team occupies
+   (where its graveyard is), else its start.
+2. **Defenders**, limited: 30% of the living bots from three bots up (more while enemies stand at held nodes), only while something is
+   held and never all of them while something is attackable; defender-role bots first. A held node nobody defends is covered before a
+   second defender goes anywhere, the node with enemies within 40 yards first, then the nearest. A defender stands within 8 yards of its
+   banner and fights the enemy nearest the node within 40 yards (beyond the 30 yards a bot engages on its own); when the enemy assaults
+   it, the defender casts at it (retakes it).
+3. **Attackers**, the rest, spread over the attackable nodes by distance and team size: each node takes at most `ceil(attackers / nodes)`
+   plus one per enemy at it, the cheapest (bot, node) pair first, where a node the enemy contests counts 60 yards nearer (its capture
+   timer runs: an own node assaulted is retaken before it falls) and a neutral one 25 yards nearer. An attacker clears an enemy at its
+   node (within 45 yards of it) before the cast a hit would cancel, walks to the banner, stops within 4 yards and casts 21651 at it
+   (CMSG_CAST_SPELL with TARGET_FLAG_OBJECT; Spell.dbc: OPEN_LOCK lock type 17, 10 second cast, 0-5 yards, interrupt flags 0x1F, so a hit
+   cancels it and the bot fights back), standing still while it casts; a node a teammate is already casting at is covered, not cast at
+   again (vmangos `AtFlag`).
+4. **Buffs.** Out of combat, a bot steps on a battleground buff within 35 yards (the buffs stand 20-30 yards from their banners): speed and
+   berserking always, restoration under 80% health or mana. They are traps the server fires within 3 yards (`MatchRuntime.UpdateBuffTraps`).
+
+The server's open-lock effect turns the opening of a banner button with `noDamageImmune` into the click, and the opening of a neutral
+goober banner into its trigger spell cast at the bot, which clicks (docs/areas/battlegrounds.md).
 
 ## Configuration (`World:Playerbots:Battlegrounds`, live)
 
@@ -188,7 +211,6 @@ without it the 21651 cast went through and nothing was claimed, which is how the
   catalog (`Skills:*DbcPath`, docs/areas/skills.md); without one the cast completes and nothing opens, for bots and players alike.
 * **Navigation needs the battleground maps' mmaps** (489, 529; 30 for Alterac Valley would be needed if it were in scope). Without a
   navigation mesh the bot's routes fall back to the terrain stepper, which refuses steep and unknown ground: the bots stand at the start.
-* **No spirit-guide wave** (above): a dead bot runs back to its body.
 * **The battlemaster walk is on one map**, a straight-line `MaxTravelYards` check: no flight paths, boats or portals to a battlemaster.
 * No premade groups: every bot queues alone (CMSG_BATTLEMASTER_JOIN with the group flag off).
 * **A real player's party bot in a group queue.** A real player who queues as a group (CMSG_BATTLEMASTER_JOIN with the group flag) queues

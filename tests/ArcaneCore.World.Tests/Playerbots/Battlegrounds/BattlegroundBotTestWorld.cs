@@ -83,6 +83,21 @@ internal static class BattlegroundBotTestContent
     public const uint AbNeutralBanner = 993301;
     public const uint AbAllianceContestedBanner = 993302;
     public const uint AbAllianceBanner = 993303;
+    public const uint AbHordeContestedBanner = 993304;
+    public const uint AbHordeBanner = 993305;
+
+    /// <summary>The battleground buffs' trap spells (Spell.dbc 5875: 23451 Speed, 23493 Restoration, 23505 Berserking; vmangos g_buffEntries' traps).</summary>
+    public const uint SpeedBuffSpell = 23451;
+    public const uint RestorationBuffSpell = 23493;
+    public const uint BerserkingBuffSpell = 23505;
+
+    /// <summary>The trap spell of a buff object entry (<see cref="BattlegroundConstants.BuffEntries"/>).</summary>
+    public static uint BuffSpellOf(uint entry) => entry switch
+    {
+        BattlegroundConstants.SpeedBuffEntry => SpeedBuffSpell,
+        BattlegroundConstants.RegenBuffEntry => RestorationBuffSpell,
+        _ => BerserkingBuffSpell,
+    };
 
     /// <summary>Lock.dbc 5875 row 1479 (read 2026-10-10): case 1 is LOCK_KEY_SKILL (2) of lock type 17 (LOCKTYPE_SLOW_OPEN), no skill needed.</summary>
     public static readonly LockEntry BannerLock = new(1479, [0, 2, 0, 0, 0, 0, 0, 0], [0, 17, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]);
@@ -155,6 +170,9 @@ internal static class BattlegroundBotTestContent
             Aura(BattlegroundConstants.SpellDeserter, "Deserter", durationIndex: 4),
             BannerSpell(),
             StablesTriggerSpell(),
+            Aura(SpeedBuffSpell, "Speed", durationIndex: 4),
+            Aura(RestorationBuffSpell, "Restoration", durationIndex: 4),
+            Aura(BerserkingBuffSpell, "Berserking", durationIndex: 4),
         ],
         [new SpellCastTimeRow { Id = 1 }, new SpellCastTimeRow { Id = 7, CastTime = 10_000, MinCastTime = 10_000 }],
         [new SpellDurationRow { Id = 21, Duration = -1, MaxDuration = -1 }, new SpellDurationRow { Id = 4, Duration = 900_000, MaxDuration = 900_000 }],
@@ -237,6 +255,8 @@ internal static class BattlegroundBotTestContent
                 new BattlegroundEventIndex(AbNeutralBanner, ArathiBasin.NodeStables, ArathiBasin.StatusNeutral),
                 new BattlegroundEventIndex(AbAllianceContestedBanner, ArathiBasin.NodeStables, ArathiBasin.StatusAllianceContested),
                 new BattlegroundEventIndex(AbAllianceBanner, ArathiBasin.NodeStables, ArathiBasin.StatusAllianceOccupied),
+                new BattlegroundEventIndex(AbHordeContestedBanner, ArathiBasin.NodeStables, ArathiBasin.StatusHordeContested),
+                new BattlegroundEventIndex(AbHordeBanner, ArathiBasin.NodeStables, ArathiBasin.StatusHordeOccupied),
             ],
             [
                 new BattlemasterRecord(AllianceAvMaster, 1), new BattlemasterRecord(HordeAvMaster, 1),
@@ -277,11 +297,15 @@ internal static class BattlegroundBotTestContent
                     NeutralBannerShape.UnroutedGoober => GooberBanner(WarsongGulch.SpellWarsongFlag),
                     _ => Banner(180087, "Stable Banner"),
                 }, Banner(180085, "Contested Banner"), Banner(180058, "Alliance Banner"),
+                Banner(180061, "Contested Banner"), Banner(180060, "Horde Banner"),
+                BuffTrap(BattlegroundConstants.SpeedBuffEntry, "Speed Buff"), BuffTrap(BattlegroundConstants.RegenBuffEntry, "Restoration Buff"),
+                BuffTrap(BattlegroundConstants.BerserkBuffEntry, "Berserk Buff"),
             ],
             [
                 new GameObjectSpawn { Guid = WsgAllianceStandSpawn, Entry = WarsongGulch.AllianceFlagBaseEntry, MapId = 489, X = AllianceFlag.X, Y = AllianceFlag.Y, Z = AllianceFlag.Z },
                 new GameObjectSpawn { Guid = WsgHordeStandSpawn, Entry = WarsongGulch.HordeFlagBaseEntry, MapId = 489, X = HordeFlag.X, Y = HordeFlag.Y, Z = HordeFlag.Z },
                 BannerSpawn(AbNeutralBanner, 180087), BannerSpawn(AbAllianceContestedBanner, 180085), BannerSpawn(AbAllianceBanner, 180058),
+                BannerSpawn(AbHordeContestedBanner, 180061), BannerSpawn(AbHordeBanner, 180060),
             ],
             [BannerLock], [], []));
 
@@ -312,6 +336,18 @@ internal static class BattlegroundBotTestContent
         }
 
         private static GameObjectTemplate GooberBanner(uint spell = StablesTrigger) => BattlegroundBotTestContent.GooberBanner(spell);
+
+        /// <summary>
+        /// A battleground buff as the match spawns it: a trap (type 6) with no radius (data2) and the 3 second battleground cooldown (data5),
+        /// whose spell (data3) is cast at whoever steps within 3 yards (MatchRuntime.UpdateBuffTraps; vmangos GameObject.cpp:476-551).
+        /// </summary>
+        private static GameObjectTemplate BuffTrap(uint entry, string name)
+        {
+            uint[] data = new uint[GameObjectTemplate.DataCount];
+            data[3] = BuffSpellOf(entry);
+            data[5] = BattlegroundConstants.BattlegroundTrapCooldownSeconds;
+            return new GameObjectTemplate { Entry = entry, Type = (uint)GameObjectType.Trap, DisplayId = 5931, Name = name, Data = data };
+        }
 
         private static GameObjectSpawn BannerSpawn(uint guid, uint entry)
             => new() { Guid = guid, Entry = entry, MapId = 529, X = Stables.X, Y = Stables.Y, Z = Stables.Z };
