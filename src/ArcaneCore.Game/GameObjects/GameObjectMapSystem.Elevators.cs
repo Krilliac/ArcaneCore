@@ -30,10 +30,23 @@ public sealed partial class GameObjectMapSystem
     public const uint MinElevatorStopMs = 1000;
 
     private const float StationaryNodeToleranceYards = 0.05f;
+
+    /// <summary>Stops within this distance (yards) of each other are one floor (see <see cref="ShortestFloorStop"/>).</summary>
+    private const float ElevatorFloorToleranceYards = 2f;
     private TransportAnimationCatalog _elevatorAnimations = TransportAnimationCatalog.Empty;
     private readonly List<GameObject> _mapWideElevators = [];
     private readonly HashSet<ulong> _reportedNoAnimationSpawns = [];
     private readonly HashSet<ulong> _reportedShortStopSpawns = [];
+
+    /// <summary>
+    /// <see cref="ShortestFloorStop"/> of each entry's animation, computed once: it depends only on the entry's keyframes, and
+    /// <see cref="ValidateElevatorSpawn"/> runs every tick per car and inside the playerbot planners' 250 ms sampling loops.
+    /// Cleared with the animations.
+    /// </summary>
+    private readonly Dictionary<uint, (uint ShortestMs, int FloorCount)> _elevatorFloorStops = [];
+
+    /// <summary>How many times <see cref="ShortestFloorStop"/> ran for a validation (tests: the analysis is memoized per entry).</summary>
+    internal int ElevatorFloorStopAnalyses { get; private set; }
     private readonly HashSet<ulong> _reportedNonFinitePositionSpawns = [];
 
     /// <summary>
@@ -48,6 +61,7 @@ public sealed partial class GameObjectMapSystem
             _elevatorAnimations = value ?? TransportAnimationCatalog.Empty;
             _reportedNoAnimationSpawns.Clear();
             _reportedShortStopSpawns.Clear();
+            _elevatorFloorStops.Clear();
             InstallMapWideElevators();
         }
     }
@@ -288,43 +302,31 @@ public sealed partial class GameObjectMapSystem
             return;
         }
 
+        if (_reportedShortStopSpawns.Contains(key))
+        {
+            return;
+        }
+
         IReadOnlyList<TransportAnimationNode> nodes = _elevatorAnimations.Nodes(entry);
         if (nodes.Count < 2)
         {
             return;
         }
 
-        uint shortestStopMs = uint.MaxValue;
-        int stopCount = 0;
-        for (int i = 0; i < nodes.Count - 1; i++)
+        if (!_elevatorFloorStops.TryGetValue(entry, out (uint ShortestMs, int FloorCount) floorStops))
         {
-            TransportAnimationNode a = nodes[i];
-            TransportAnimationNode b = nodes[i + 1];
-            if (b.TimeSeg <= a.TimeSeg)
-            {
-                continue;
-            }
-
-            if (MathF.Abs(b.X - a.X) <= StationaryNodeToleranceYards
-                && MathF.Abs(b.Y - a.Y) <= StationaryNodeToleranceYards
-                && MathF.Abs(b.Z - a.Z) <= StationaryNodeToleranceYards)
-            {
-                uint duration = b.TimeSeg - a.TimeSeg;
-                if (duration < shortestStopMs)
-                {
-                    shortestStopMs = duration;
-                }
-
-                stopCount++;
-            }
+            floorStops = ShortestFloorStop(nodes);
+            _elevatorFloorStops[entry] = floorStops;
+            ElevatorFloorStopAnalyses++;
         }
 
-        bool tooShort = (stopCount > 0 && shortestStopMs < MinElevatorStopMs)
+        (uint shortestStopMs, int floorCount) = floorStops;
+        bool tooShort = (floorCount > 0 && shortestStopMs < MinElevatorStopMs)
             || totalTime < (2 * MinElevatorStopMs)
-            || (stopCount == 0 && nodes.Count >= 4);
+            || (floorCount == 0 && nodes.Count >= 4);
         if (tooShort && _reportedShortStopSpawns.Add(key))
         {
-            uint reportedMs = stopCount > 0 ? shortestStopMs : 0;
+            uint reportedMs = floorCount > 0 ? shortestStopMs : 0;
             AnomalyLedger.Shared.Report(
                 "elevator-car",
                 "stop-too-short",
@@ -333,5 +335,106 @@ public sealed partial class GameObjectMapSystem
                 AnomalySeverity.Warning);
         }
     }
-}
 
+    /// <summary>
+    /// The floors of an elevator animation and the shortest of their dwells: (that dwell in ms, the number of floors); (0, 0) without a stop.
+    /// <para>
+    /// A <em>stop</em> is a maximal run of consecutive keyframes that all stay within <see cref="StationaryNodeToleranceYards"/> of the run's
+    /// first keyframe; its duration is the run's span. The cycle wraps (cmangos-classic ElevatorTransport::Update, Entities/Transports.cpp:
+    /// <c>m_pathProgress = (now - m_movementStarted) % m_animationInfo->TotalTime</c>, with TotalTime the largest TimeSeg,
+    /// TransportMgr.cpp AddPathNodeToTransport; vmangos ElevatorTransport::Update is the same), so a stop that ends the cycle and the stop
+    /// that starts it at the same place are one dwell: the Deeprun Tram rests at its platform from 129,333 ms to the 143,333 ms end and on
+    /// from 0 to 867 ms, one 14,867 ms stop, not an 867 ms one.
+    /// </para>
+    /// <para>
+    /// A <em>floor</em> is a place the car stops at: stops within <see cref="ElevatorFloorToleranceYards"/> of each other are one floor, and the
+    /// floor's dwell is its longest stop. TransportAnimation.dbc lifts settle at a floor with a few short sub-yard bounces (the Blackrock
+    /// Spire lift 149045 rests 3,267 ms at its top, then holds 133 ms and 533 ms within 1.4 yd of it before leaving); those bounces are not
+    /// floors a rider boards at. The tolerance is well under the closest floors in the 5875 data (4.7 yd apart, entry 20650).
+    /// </para>
+    /// </summary>
+    internal static (uint ShortestMs, int FloorCount) ShortestFloorStop(IReadOnlyList<TransportAnimationNode> nodes)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+        var stops = new List<(TransportAnimationNode At, uint Duration)>();
+        bool startsAtCycleStart = false;
+        bool endsAtCycleEnd = false;
+        for (int i = 0; i < nodes.Count - 1;)
+        {
+            int last = i;
+            while (last + 1 < nodes.Count && IsStationary(nodes[i], nodes[last + 1]))
+            {
+                last++;
+            }
+
+            if (last == i)
+            {
+                i++;
+                continue;
+            }
+
+            if (i == 0)
+            {
+                startsAtCycleStart = true;
+            }
+
+            if (last == nodes.Count - 1)
+            {
+                endsAtCycleEnd = true;
+            }
+
+            stops.Add((nodes[i], nodes[last].TimeSeg - nodes[i].TimeSeg));
+            i = last;
+        }
+
+        if (stops.Count >= 2 && startsAtCycleStart && endsAtCycleEnd && nodes[0].TimeSeg == 0 && IsStationary(stops[0].At, stops[^1].At))
+        {
+            stops[^1] = (stops[^1].At, stops[^1].Duration + stops[0].Duration);
+            stops.RemoveAt(0);
+        }
+
+        var floors = new List<(TransportAnimationNode At, uint Dwell)>(stops.Count);
+        foreach ((TransportAnimationNode at, uint duration) in stops)
+        {
+            int floor = -1;
+            for (int f = 0; f < floors.Count; f++)
+            {
+                if (Distance(floors[f].At, at) <= ElevatorFloorToleranceYards)
+                {
+                    floor = f;
+                    break;
+                }
+            }
+
+            if (floor < 0)
+            {
+                floors.Add((at, duration));
+            }
+            else if (duration > floors[floor].Dwell)
+            {
+                floors[floor] = (floors[floor].At, duration);
+            }
+        }
+
+        if (floors.Count == 0)
+        {
+            return (0, 0);
+        }
+
+        uint shortest = uint.MaxValue;
+        foreach ((TransportAnimationNode _, uint dwell) in floors)
+        {
+            shortest = Math.Min(shortest, dwell);
+        }
+
+        return (shortest, floors.Count);
+
+        static bool IsStationary(TransportAnimationNode a, TransportAnimationNode b)
+            => MathF.Abs(b.X - a.X) <= StationaryNodeToleranceYards
+                && MathF.Abs(b.Y - a.Y) <= StationaryNodeToleranceYards
+                && MathF.Abs(b.Z - a.Z) <= StationaryNodeToleranceYards;
+
+        static float Distance(TransportAnimationNode a, TransportAnimationNode b)
+            => MathF.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y)) + ((a.Z - b.Z) * (a.Z - b.Z)));
+    }
+}
