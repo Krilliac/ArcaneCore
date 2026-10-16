@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Operator probe: names the exceptions a running daemon throws, over EventPipe, without pausing it (Program.cs).
+       Not in ArcaneCore.slnx: it is built on demand with dotnet run, so the server build never restores TraceEvent.
+       TraceEvent is fetched with PackageDownload (that package alone) and referenced by path: its PackageReference would pull a
+       netstandard1.x shim graph (System.Reflection.TypeExtensions and friends) the net11.0 runtime already provides. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
+    <PackageDownload Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="[3.1.21]" />
+    <Reference Include="Microsoft.Diagnostics.Tracing.TraceEvent">
+      <HintPath>$(NuGetPackageRoot)microsoft.diagnostics.tracing.traceevent/3.1.21/lib/netstandard2.0/Microsoft.Diagnostics.Tracing.TraceEvent.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

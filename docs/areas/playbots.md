@@ -1419,7 +1419,7 @@ itself and plain game mechanics, never invented lore.
 
 | Key | Meaning |
 |---|---|
-| `Kind` | `Anthropic` (Messages API: `POST {BaseUrl}/v1/messages`, headers `x-api-key` and `anthropic-version: 2023-06-01`), `OpenAICompatible` (`POST {BaseUrl}/chat/completions`, `Authorization: Bearer` when a key is set: OpenAI, OpenRouter, Ollama, LM Studio), or `Builtin`. |
+| `Kind` | `Anthropic` (Messages API: `POST {BaseUrl}/v1/messages`, headers `x-api-key` and `anthropic-version: 2023-06-01`), `OpenAICompatible` (`POST {BaseUrl}/chat/completions`, `Authorization: Bearer` when a key is set: OpenAI, OpenRouter, Ollama, LM Studio), `InProcess` (a GGUF model run inside the world process, below), or `Builtin`. |
 | `BaseUrl` | Anthropic: the origin (empty = `https://api.anthropic.com`). OpenAICompatible: the API base with its version (`https://api.openai.com/v1`, `https://openrouter.ai/api/v1`, `http://localhost:11434/v1`). A key is never sent over plain `http` to a host other than this machine (the configuration is refused). |
 | `Model` | Empty = `claude-haiku-4-5` for Anthropic; required for OpenAICompatible. |
 | `ApiKeyEnvironmentVariable` | The variable that holds the key. Unset: `ANTHROPIC_API_KEY` for Anthropic, none otherwise. `""`: a keyless local server. Keys are read only from the environment, at each request: never from configuration, never logged or shown. |
@@ -1463,6 +1463,114 @@ per-player cooldown keeps one player from spending the budget, the bounded queue
 templates answer once the money or the providers run out. Tests never touch the network: `IBotChatClient` is faked, and the four
 live checks in `PlayerbotChatLiveTests` (one tiny request each to Anthropic, OpenAI, OpenRouter and a local server) run only
 with `ARCANECORE_TEST_LIVE_LLM=1` and that provider's key or `ARCANECORE_TEST_LOCAL_LLM_URL` set.
+
+#### In-process model
+
+`Playerbots/Chat/Inference/`. A provider entry `{ "Kind": "InProcess" }` answers with a small chat model that the world process
+itself runs on the CPU, in managed C# only: no network, no key, no other process or service, no native library. It costs nothing
+(its price is zero, so it never touches `MaxDailySpendUsd`) and it is still a model provider, so the safety screening, disclosure,
+opt-out and the per-player cooldown apply exactly as for the remote ones. **No model ships in the repository and the built-in
+templates stay the default**: without an `InProcess` entry nothing here is loaded, and with one the templates still answer every
+line the model cannot.
+
+- **Engine.** `GgufFile` maps the GGUF file read-only (v2/v3: header, metadata, tensor table, alignment). The weights are never
+  copied: each matrix row is dequantized on the fly into a per-thread buffer (`GgmlQuant`: F32, F16, Q4_0, Q5_0, Q8_0, Q4_K, Q6_K)
+  and dotted with `TensorPrimitives` (SIMD). `BpeTokenizer` reads the gpt2 byte-level BPE vocabulary, merges and pre-tokenizer
+  (`qwen2`, `llama-bpe`, `smollm`, `gpt2`) from the metadata. `ChatModel`/`ChatInferenceContext` run the `llama` and `qwen2`
+  decoders (RMSNorm, RoPE, grouped-query attention with a key/value cache, SwiGLU, tied or separate output, qwen2's q/k/v biases).
+  A file of another architecture, tokenizer or quantization, or with RoPE scaling, is refused at load with the reason.
+- **Threads and budget.** Replies run on the engine's own BelowNormal-priority threads (the scheduler thread, plus one per slot
+  when several slots run in a step), each slot with `Threads` (2) BelowNormal helpers for the matrix products: never the thread
+  pool, never the world thread. `MaxConcurrent` (1) replies run at once and
+  `MaxQueued` (2) may wait; past that the request is "busy" and the templates answer. A reply that is not done within `BudgetMs`
+  (6000, checked between passes, prompt included) is dropped; `CircuitBreakerOverruns` (3) overruns in a row rest the model for
+  `CircuitBreakerSeconds` (300; anomaly `bot-chat/inprocess-circuit-open`). `BudgetMs` must be below `TimeoutSeconds` x 1000.
+- **Prompt.** ChatML (`<|im_start|>role ... <|im_end|>`, special tokens inserted by id, never parsed from a player's text): a short
+  fixed rule block with the grounding rules (one short 1.12-era chat line; only the facts given; no invented quests, bosses, items,
+  places, players or events; no emojis, quotes, lists or real-world talk; the honest bot answer when asked), then the bot's facts
+  (the same `DynamicSystem` the remote providers get) and a one-line reminder, then the remembered exchanges and the line. The
+  rule block is identical for every bot, so the key/value cache keeps it between replies and only the bot's facts and the
+  conversation are computed per reply. The model writes the line itself (no JSON), so plain-language orders are not read from an
+  in-process reply; the templates' command patterns still work. Sampling is the sampler chain ported from Sonder-Inference
+  (`Inference/Sampling/`, Apache-2.0, THIRD_PARTY_NOTICES.md): penalties over the last `RepetitionWindow` (64) tokens with
+  `RepetitionPenalty` (1.15), then `TopK` (40), `TopP` (0.9), `MinP` (0.05), `Temperature` (0.7) and a seeded draw (greedy at
+  temperature 0); `Seed` set makes it deterministic. Before every token the one-chat-line constraint masks anything that would
+  start markup or a role token (any `|`, `<think`), or a second line once the line has text; leading blank lines are trimmed. The
+  reply stops at end-of-turn, at `MaxNewTokens` (48) or at any of `StopSequences` (none by default; the match is not said).
+- **Scheduler.** One BelowNormal engine thread runs the iteration-level scheduler ported from Sonder-Inference
+  (`Inference/Scheduling/`) over the `MaxConcurrent` slots: each step every resident reply gets either a prompt chunk of
+  `PrefillChunkTokens` (64) or one decode token (decode first), and the slots run in parallel. Requests are classed: a player who
+  named or whispered the bot (`interactive_player`) before another bot (`bot_to_bot`) before guild chatter, announcements and
+  lines put to a whole channel (`ambient`). When no slot is free, a waiting request of a higher class preempts a running one of a
+  lower class (that reply is recomputed later from its prompt and what it wrote); an ambient request still waiting after
+  `AmbientQueueMs` (4000) is dropped. A request is cancelled when the chat's deadline passes, when its bot stops (logout,
+  removal: `PlayerbotChat.Abandon`) or, for an ambient line, when a player starts talking to that bot; an abandoned reply is not
+  said and counts against no provider. With an in-process provider the chat runs `2 + MaxConcurrent + MaxQueued` workers (at most
+  16) so the scheduler sees the competing requests.
+- **Prefix cache.** Each slot keeps the tokens it last held; across slots, whole 16-token blocks of prompt keys and values are kept
+  in a pool of `PrefixCacheTokens` (1024; the ported KV block manager: chained block hashes, LRU eviction of unreferenced blocks)
+  and copied into whichever slot a reply lands on. The system rules every prompt starts with are computed once at load.
+- **Screen.** A reply is dropped (and the templates answer) when it is empty, longer than `MaxReplyCharacters` (160), holds markup,
+  quotes, a link, an emoji or a non-Latin character, a leaked role token (`im_start`, `assistant:`) or a model name; a reply cut by
+  the token limit keeps its last whole sentence. The ordinary output screening then applies as for any model.
+- **Failure.** A missing or unreadable file is reported once (anomaly `bot-chat/model-load-failed`) and logged; every request then
+  fails as `rejected` and the templates answer. A request is never an exception to the bot.
+- **Status.** At start: `Bot chat provider #N: InProcess <model> <arch> <params> <quant>, <threads> threads, budget <ms> ms` and a
+  line with the layers, vocabulary, context, mapped megabytes and cache size. `.playerbot chat status` adds `Bot chat in-process:`
+  with the load state, replies, tokens, tokens per second (generation and prompt), reused prompt tokens, fallbacks, overruns, the
+  circuit, busy, filtered, unloaded, cancelled, errors and dropped, then the scheduler (`sched active= queued= preempt=` priority/KV
+  `dropped=`, per class `ttft=` / `itl=` / `queue=` p50/p95 in ms over the last 256 replies) and the prefix cache (`warm=` tokens
+  prefilled at load, `restored=` tokens copied in, `stored=`, `blocks=` used/total, `evicted=`). At start a further line names the
+  classes, slots, prefill chunk, prefix-cache size, the shared prefix's tokens and prefill time, and the sampling. Meters
+  `arcanecore.playerbot.chat.inprocess.replies`, `.tokens`, `.overruns` and `.fallbacks` (by `reason`, now also `dropped`), and by
+  `workload`: histograms `.ttft`, `.itl` (a reply's mean), `.queue` (ms), counters `.preemptions`, `.dropped`, and `.prefix_tokens`.
+
+`World:Playerbots:Chat:InProcess` (read when the model loads, at start: changing it takes a restart):
+
+| Key | Meaning |
+|---|---|
+| `ModelPath` | The GGUF file, relative to the content root or absolute (required with an `InProcess` provider). |
+| `Threads` | 1..16 (2): threads one reply computes on. |
+| `MaxConcurrent` | 1..4 (1): replies computed at once; each has its own threads and cache. |
+| `MaxQueued` | 0..64 (2): replies waiting for a slot. |
+| `BudgetMs` | 250..60000 (6000): the hard wall-clock budget of one reply. |
+| `MaxNewTokens` | 8..256 (48). |
+| `ContextTokens` | 256..32768 (1024, capped at the model's): prompt plus reply. |
+| `Temperature`, `TopK`, `TopP`, `MinP`, `RepetitionPenalty`, `RepetitionWindow`, `Seed` | Sampling (0.7, 40, 0.9, 0.05, 1.15, 64, unset); `MinP` 0..1, `RepetitionWindow` 0..1024. |
+| `StopSequences` | At most 8 strings of 1..32 characters that end a reply (none). |
+| `AmbientQueueMs` | 250..60000 (4000): how long ambient chatter may wait for a slot before it is dropped. |
+| `PrefixCacheTokens` | 0..16384 (1024; 0 = off): prompt tokens kept in the shared prefix cache. |
+| `PrefillChunkTokens` | 32..512 (64): prompt tokens one reply computes per scheduler step. |
+| `MaxReplyCharacters` | 40..255 (160). |
+| `CircuitBreakerOverruns`, `CircuitBreakerSeconds` | 1..100 (3), 10..3600 (300). |
+
+```json
+"Chat": {
+  "Providers": [
+    { "Kind": "InProcess", "Model": "smollm2-360m", "MaxRepliesPerHour": 600 }
+  ],
+  "InProcess": { "ModelPath": "models/chat/SmolLM2-360M-Instruct-Q8_0.gguf", "Threads": 2, "BudgetMs": 6000 }
+}
+```
+
+**Which model.** The owner provides the file; nothing is downloaded by the server. Small instruct models that fit the engine:
+
+| Model | File | License | Memory | Notes |
+|---|---|---|---|---|
+| SmolLM2-360M-Instruct | Q8_0 (~0.39 GB) | Apache-2.0 | ~0.4-0.45 GB | llama, `smollm` pre-tokenizer, tied output; 960 wide, so its K-quant files fall back to other types: use Q8_0. |
+| Qwen2.5-0.5B-Instruct | Q8_0 (~0.53 GB) or Q4_K_M (~0.40 GB) | Apache-2.0 | ~0.45-0.6 GB | qwen2, biases, tied output; its Q4_K_M mixes Q4_K, Q5_0, Q6_K and Q8_0 tensors, all read. |
+
+Memory is the mapped file (paged in as it is read) plus, per slot, the key/value cache (SmolLM2-360M: about 80 MB at 1024 tokens;
+Qwen2.5-0.5B: about 25 MB) and a few megabytes of buffers; the tokenizer tables add 10-30 MB. CPU: a reply costs roughly 2 x the
+parameter count in floating-point operations per token, so a 360M model is about 0.7 GFLOP per prompt token and per reply token.
+The cached rule block is computed once; each reply computes its facts and conversation (typically 80-150 tokens) and up to 48
+reply tokens, on `Threads` BelowNormal threads. Expect a few seconds per reply on a desktop core pair; measure on the live
+machine before enabling it:
+
+`tools/ArcaneCore.ChatModelProbe` (in the solution) loads a file through the same engine and prints the model's shape and tensor
+types, the tokenizer round trip of a sample line, the prompt and generation tokens per second (cold, then with the rule block
+cached) and the greedy reply to a sample bot prompt with what the screen keeps of it. Run its built executable with the model path
+(and optionally the thread count and context size). Pick `BudgetMs` from what it reports, under the live load.
 
 #### Safety and provider policies
 
@@ -1590,11 +1698,43 @@ built-in lines read like 2005 chat (LFG/LFM, WTB/WTS, inc, oom, ty, gz) and need
 - **World channel reactions** (`WorldReactions`): a real player's LFM line for a dungeon that fits a free bot (and the role it asks
   for) gets a whisper ("inv", "lvl 24 priest here, inv?"); a WTB line naming goods a bot carries spare gets an offer priced at twice
   the vendor value. At most `ReactionsPerLine` bots per line, `WorldReactionsPerMinute` lines a minute, one player per
-  `ReactionPlayerCooldownMinutes`; heard lines wait in a queue of `MaxHeardQueue`.
-- **Own posts** (`WorldPosts`): up to `WorldPostsPerHour` LFG lines in LookingForGroup (a free bot, the dungeon of its level) or
-  WTS lines in Trade - City (a bot in a capital with spare goods).
+  `ReactionPlayerCooldownMinutes`; heard lines wait in a queue of `MaxHeardQueue`. The bots' own LFG and WTS posts are the bot voice's (below).
 - **Social acts from chat**: asked to invite, trade, share a quest (the master only) or look for a group, a bot does it with its own
   client packets (`CMSG_GROUP_INVITE`, `CMSG_INITIATE_TRADE`, quest sharing, an LFG post), checked again on the world thread.
+
+### Bot voice
+
+Bots say what they want and need (`World:Playerbots:Chat:Voice`, all on by default; `PlayerbotNeedsVoice`, run on the social pass).
+Every line is read from the bot's real state, written by the built-in lines (`PlayerbotVoiceTemplates`, 1.12 chat slang, many
+variants each) or the configured model, screened by the chat safety filter and said through the bot's own session within the speech
+limits above. A phrasing is used only when every value in it is real; nothing is invented. Work per pass is bounded: the pass-wide topics
+read the group coordinator and the running battlegrounds, then at most `BotsPerPass` bots are looked at (those grouped with a real
+player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
+
+- **LFG / LFM** (`LookingForGroup`): for each group goal bots wait on (by goal and team), the one waiting longest posts in
+  LookingForGroup (outside a capital `GeneralSharePercent` of the time in General) "LFG SFK, 24 mage" alone or "LF2M SFK, need tank and
+  heals" with the roles still missing, once per `LookingForGroupRepeatSeconds`. A real player's whisper to the poster asking for an
+  invite ("inv", "can i join", "i can heal") within `PostLifeSeconds` puts the player into that group's matching
+  (`PlayerbotGroupCoordinator.Volunteer`): the group forms with the player when enough bots wait, and the leader invites through the
+  normal group path. Too low, already grouped or no longer looking is answered so.
+- **Quest help** (`QuestHelp`): a bot waiting for partners on an elite quest asks General "anyone for <quest>?" once per
+  `QuestHelpRepeatSeconds`.
+- **Trade** (`Trade`): once per `TradeRepeatSeconds`, in Trade in a capital (General `GeneralSharePercent` of the time, and only then
+  outside one): WTS for the best real surplus in the bags (a green or better weapon, armour or recipe that is not bound, bind on
+  pickup, a quest item or an upgrade; a stack of five or more trade goods the bot's recipes do not need; worth `MinSellCopper` or more)
+  at `PriceMultiplier` times the vendor price; else WTB for a reagent its wanted recipes lack; else "WTB water" for a mana user with
+  nothing to drink. A whisper asking about the item gets the price and where the bot is, or "sold it". The sale itself is not made:
+  a bot only trades with its group or master.
+- **Party needs** (`GroupCalls`, a bot in a group with a real player): "oom" (under 10% mana), "need heals" (under 30% health with a
+  healer there), a tank's "inc 3" on a pull, "<mob> on me" to the tank, "rez pls" once per death with a resurrecting class alive,
+  "ty <name>" after a resurrection or a long buff, "brb drinking/vendor/training" when its brain stops it, "ding" after a level up,
+  "share <quest> pls" in a bot group on a quest it lacks, "first time in <zone>" for a zone none of whose areas it had explored. A real
+  player's "ding" in party or guild chat gets one bot's "gz".
+- **Run plan** (`RunCalls`): the bot leading a dungeon or raid run says "everyone in?", "pulling <boss>", "<boss> down", "wait for
+  mana", "wipe, run back" and "gg" as the run moves on.
+- **Battleground callouts** (`BattlegroundCalls`): from the match's real state, one bot of the team says each event in battleground
+  chat (the same callout not again within `BattlegroundCallSeconds`): Warsong Gulch "flag taken", "EFC mid", "flag returned"; Arathi
+  Basin "inc BS", "lost farm", "LM capped", "capping ST"; Alterac Valley "IB tower under attack", "TP burned", "SH GY assaulted".
 
 ## Scenario harness
 

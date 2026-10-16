@@ -269,7 +269,6 @@ public sealed class PlayerbotConversationTests
         var options = new PlayerbotConversationOptions();
         Assert.True(options.Enabled);
         Assert.True(options.WorldReactions);
-        Assert.True(options.WorldPosts);
         options.Validate();
         Assert.Throws<InvalidOperationException>(() => new PlayerbotConversationOptions { MaxLines = 7 }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotConversationOptions { ReactionsPerLine = 0 }.Validate());

@@ -253,8 +253,26 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Chat:Conversation:ReactionsPerLine", o => o.Chat.Conversation.ReactionsPerLine, (o, v) => o.Chat.Conversation.ReactionsPerLine = v, v => v is >= 1 and <= 5 ? null : "must be 1..5"),
         LivePlayerbotsValue("Chat:Conversation:ReactionPlayerCooldownMinutes", o => o.Chat.Conversation.ReactionPlayerCooldownMinutes, (o, v) => o.Chat.Conversation.ReactionPlayerCooldownMinutes = v, v => v is >= 1 and <= 1440 ? null : "must be 1..1440"),
         LivePlayerbotsValue("Chat:Conversation:MaxHeardQueue", o => o.Chat.Conversation.MaxHeardQueue, (o, v) => o.Chat.Conversation.MaxHeardQueue = v, v => v is >= 8 and <= 1024 ? null : "must be 8..1024"),
-        LivePlayerbots("Chat:Conversation:WorldPosts", o => o.Chat.Conversation.WorldPosts, (o, v) => o.Chat.Conversation.WorldPosts = v),
-        LivePlayerbotsValue("Chat:Conversation:WorldPostsPerHour", o => o.Chat.Conversation.WorldPostsPerHour, (o, v) => o.Chat.Conversation.WorldPostsPerHour = v, v => v is >= 0 and <= 120 ? null : "must be 0..120"),
+        // Not vmangos keys: the bot voice (docs/areas/playbots.md, Bot voice). PlayerbotNeedsVoice reads the shared
+        // PlayerbotOptions.Chat.Voice at every social pass and every heard whisper.
+        LivePlayerbots("Chat:Voice:Enabled", o => o.Chat.Voice.Enabled, (o, v) => o.Chat.Voice.Enabled = v),
+        LivePlayerbotsValue("Chat:Voice:BotsPerPass", o => o.Chat.Voice.BotsPerPass, (o, v) => o.Chat.Voice.BotsPerPass = v, v => v is >= 1 and <= 1000 ? null : "must be 1..1000"),
+        LivePlayerbotsValue("Chat:Voice:LinesPerPass", o => o.Chat.Voice.LinesPerPass, (o, v) => o.Chat.Voice.LinesPerPass = v, v => v is >= 1 and <= 100 ? null : "must be 1..100"),
+        LivePlayerbots("Chat:Voice:LookingForGroup", o => o.Chat.Voice.LookingForGroup, (o, v) => o.Chat.Voice.LookingForGroup = v),
+        LivePlayerbotsValue("Chat:Voice:LookingForGroupRepeatSeconds", o => o.Chat.Voice.LookingForGroupRepeatSeconds, (o, v) => o.Chat.Voice.LookingForGroupRepeatSeconds = v, v => v is >= 30 and <= 3600 ? null : "must be 30..3600"),
+        LivePlayerbots("Chat:Voice:Trade", o => o.Chat.Voice.Trade, (o, v) => o.Chat.Voice.Trade = v),
+        LivePlayerbotsValue("Chat:Voice:TradeRepeatSeconds", o => o.Chat.Voice.TradeRepeatSeconds, (o, v) => o.Chat.Voice.TradeRepeatSeconds = v, v => v is >= 60 and <= 86400 ? null : "must be 60..86400"),
+        LivePlayerbotsValue("Chat:Voice:PriceMultiplier", o => o.Chat.Voice.PriceMultiplier, (o, v) => o.Chat.Voice.PriceMultiplier = v, v => v is >= 1 and <= 50 ? null : "must be 1..50"),
+        LivePlayerbotsValue("Chat:Voice:MinSellCopper", o => o.Chat.Voice.MinSellCopper, (o, v) => o.Chat.Voice.MinSellCopper = v, v => v is >= 0 and <= 1000000 ? null : "must be 0..1000000"),
+        LivePlayerbotsValue("Chat:Voice:GeneralSharePercent", o => o.Chat.Voice.GeneralSharePercent, (o, v) => o.Chat.Voice.GeneralSharePercent = v, v => v is >= 0 and <= 100 ? null : "must be 0..100"),
+        LivePlayerbots("Chat:Voice:GroupCalls", o => o.Chat.Voice.GroupCalls, (o, v) => o.Chat.Voice.GroupCalls = v),
+        LivePlayerbots("Chat:Voice:RunCalls", o => o.Chat.Voice.RunCalls, (o, v) => o.Chat.Voice.RunCalls = v),
+        LivePlayerbots("Chat:Voice:BattlegroundCalls", o => o.Chat.Voice.BattlegroundCalls, (o, v) => o.Chat.Voice.BattlegroundCalls = v),
+        LivePlayerbotsValue("Chat:Voice:BattlegroundCallSeconds", o => o.Chat.Voice.BattlegroundCallSeconds, (o, v) => o.Chat.Voice.BattlegroundCallSeconds = v, v => v is >= 5 and <= 600 ? null : "must be 5..600"),
+        LivePlayerbots("Chat:Voice:QuestHelp", o => o.Chat.Voice.QuestHelp, (o, v) => o.Chat.Voice.QuestHelp = v),
+        LivePlayerbotsValue("Chat:Voice:QuestHelpRepeatSeconds", o => o.Chat.Voice.QuestHelpRepeatSeconds, (o, v) => o.Chat.Voice.QuestHelpRepeatSeconds = v, v => v is >= 60 and <= 86400 ? null : "must be 60..86400"),
+        LivePlayerbots("Chat:Voice:AnswerPosts", o => o.Chat.Voice.AnswerPosts, (o, v) => o.Chat.Voice.AnswerPosts = v),
+        LivePlayerbotsValue("Chat:Voice:PostLifeSeconds", o => o.Chat.Voice.PostLifeSeconds, (o, v) => o.Chat.Voice.PostLifeSeconds = v, v => v is >= 60 and <= 3600 ? null : "must be 60..3600"),
         // Not vmangos keys: bots grouping up for group content (docs/areas/playbots-groups.md). PlayerbotGroupCoordinator reads the
         // shared PlayerbotOptions.Groups at every decision.
         LivePlayerbots("Groups:Enabled", o => o.Groups.Enabled, (o, v) => o.Groups.Enabled = v),

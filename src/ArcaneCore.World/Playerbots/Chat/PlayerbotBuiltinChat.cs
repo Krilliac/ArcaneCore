@@ -329,6 +329,7 @@ internal static partial class PlayerbotBuiltinChat
             // The chat templates, then the social ones (guild and greeting lines, BotSocial.PlayerbotSocialTemplates).
             if (PlayerbotChatTemplates.Lines.TryGetValue(variant, out string[]? lines)) AddFilled(candidates, lines, ask);
             if (BotSocial.PlayerbotSocialTemplates.Lines.TryGetValue(variant, out string[]? social)) AddFilled(candidates, social, ask);
+            if (PlayerbotVoiceTemplates.Lines.TryGetValue(variant, out string[]? voice)) AddFilled(candidates, voice, ask);
         }
 
         if (candidates.Count == 0) return null;
@@ -366,7 +367,9 @@ internal static partial class PlayerbotBuiltinChat
         string result = Placeholder().Replace(template, match =>
         {
             string name = match.Groups[1].Value;
-            string? value = topic?.GetValueOrDefault(name) is { Length: > 0 } given ? given : Value(name, ask, p, f);
+            string? value = topic?.GetValueOrDefault(name) is { Length: > 0 } given ? given
+                : topic is not null && TopicOnly.Contains(name) ? null
+                : Value(name, ask, p, f);
             if (string.IsNullOrWhiteSpace(value))
             {
                 failed = true;
@@ -377,6 +380,16 @@ internal static partial class PlayerbotBuiltinChat
         });
         return failed ? null : result;
     }
+
+    /// <summary>
+    /// Names an announcement (an ask with a <see cref="BotChatTopic"/>: guild remarks, the bot voice, conversations) fills only from its
+    /// topic's values, never from the bot's own facts: a phrasing naming one the topic has no value for is not used.
+    /// </summary>
+    private static readonly HashSet<string> TopicOnly = new(StringComparer.Ordinal)
+    {
+        "guild", "who", "newlevel", "boss", "battleground", "instance", "item", "place", "dungeon", "price", "count", "roles", "task",
+        "where", "node", "newzone", "minlevel", "loot", "wanted",
+    };
 
     private static string? Value(string name, BotChatAsk ask, BotChatPersona p, BotChatFacts? f)
     {

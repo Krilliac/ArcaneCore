@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using ArcaneCore.Game;
-using ArcaneCore.Game.Channels;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -23,31 +22,25 @@ internal enum WorldLineKind : byte
 }
 
 /// <summary>
-/// World channel life (<see cref="PlayerbotConversationOptions.WorldReactions"/>, <see cref="PlayerbotConversationOptions.WorldPosts"/>):
-/// <list type="bullet">
-/// <item>a real player's LFM line for a dungeon that fits a free bot (no group, not driven by a master or the group coordinator, the asked
-/// role when one is named) gets a whisper back ("inv", "lvl 24 priest here, inv?"); a WTB line naming goods a bot carries spare gets an
-/// offer with a price from the goods' vendor value;</item>
-/// <item>now and then a free bot posts its own LFG line in LookingForGroup for the dungeon that suits its level, or a WTS line in
-/// Trade - City for its spare goods while it stands in a capital.</item>
-/// </list>
-/// Heard lines are queued (at most <see cref="PlayerbotConversationOptions.MaxHeardQueue"/>, the first bot hearing each) and read on the
-/// social pass; at most <see cref="PlayerbotConversationOptions.ReactionsPerLine"/> bots answer one line, at most
+/// World channel answers (<see cref="PlayerbotConversationOptions.WorldReactions"/>): a real player's LFM line for a dungeon that fits a
+/// free bot (no group, not driven by a master or the group coordinator, the asked role when one is named) gets a whispered "inv" or
+/// "lvl 24 priest here, inv?"; a WTB line naming goods a bot carries spare gets a whispered offer priced from the goods' vendor value.
+/// The bots' own LFG / WTS posts are the bot voice's (<see cref="PlayerbotNeedsVoice"/>). Heard lines are queued (at most
+/// <see cref="PlayerbotConversationOptions.MaxHeardQueue"/>, the first bot hearing each) and read on the social pass; at most
+/// <see cref="PlayerbotConversationOptions.ReactionsPerLine"/> bots answer one line, at most
 /// <see cref="PlayerbotConversationOptions.WorldReactionsPerMinute"/> lines are answered a minute, and one player is answered again only
 /// after <see cref="PlayerbotConversationOptions.ReactionPlayerCooldownMinutes"/>. Every line goes through
-/// <see cref="PlayerbotChat.TrySpeak"/> and the central limiter; an own post needs a real listener in the channel.
+/// <see cref="PlayerbotChat.TrySpeak"/> and the central limiter.
 /// </summary>
 internal sealed partial class PlayerbotWorldChatter
 {
     private const long MinuteMs = 60_000;
-    private const long HourMs = 3_600_000;
 
-    /// <summary>The lowest level that posts or answers LFG lines.</summary>
+    /// <summary>The lowest level that answers LFM lines.</summary>
     internal const int LfgLevel = 13;
 
     private readonly Queue<BotHeardLine> _heard = new();
     private readonly Queue<long> _reactions = new();
-    private readonly Queue<long> _posts = new();
     private readonly Dictionary<ulong, long> _answered = [];
     private PlayerbotChat? _chat;
     private int _maxHeard = 64;
@@ -55,10 +48,8 @@ internal sealed partial class PlayerbotWorldChatter
     /// <summary>Lines answered so far.</summary>
     internal int Reactions { get; private set; }
 
-    /// <summary>Own LFG/WTS lines posted so far.</summary>
-    internal int Posts { get; private set; }
 
-    /// <summary>The social pass: read the queued lines, then perhaps post.</summary>
+    /// <summary>The social pass: answer the queued lines.</summary>
     internal void Run(PlayerbotSocialPass pass)
     {
         ArgumentNullException.ThrowIfNull(pass);
@@ -81,7 +72,6 @@ internal sealed partial class PlayerbotWorldChatter
         int budget = _heard.Count;
         while (budget-- > 0 && _heard.TryDequeue(out BotHeardLine? line))
             if (options.WorldReactions) React(pass, chat, options, line);
-        if (options.WorldPosts && RollPost(pass, options)) Post(pass, chat, options);
         if (_answered.Count > 512)
             foreach (KeyValuePair<ulong, long> stale in _answered.Where(p => p.Value <= pass.NowMs).ToArray()) _answered.Remove(stale.Key);
     }
@@ -216,62 +206,6 @@ internal sealed partial class PlayerbotWorldChatter
         if (PlayerbotBuiltinChat.Pick(key, ask, null, pass.Random) is not { } text) return null;
         return BotSpeech.WhisperTo(line.SenderName, line.SenderGuid, text, key) with { IsReply = true };
     }
-
-    // --- posting ---------------------------------------------------------------------------------------------------------
-
-    private bool RollPost(PlayerbotSocialPass pass, PlayerbotConversationOptions options)
-    {
-        if (options.WorldPostsPerHour <= 0) return false;
-        while (_posts.Count > 0 && pass.NowMs - _posts.Peek() >= HourMs) _posts.Dequeue();
-        if (_posts.Count >= options.WorldPostsPerHour) return false;
-        return pass.Random.NextDouble() < options.WorldPostsPerHour * (double)Math.Max(pass.ElapsedMs, 1) / HourMs;
-    }
-
-    private void Post(PlayerbotSocialPass pass, PlayerbotChat chat, PlayerbotConversationOptions options)
-    {
-        IReadOnlyList<PlayerbotSocialBot> bots = pass.Bots;
-        if (bots.Count == 0) return;
-        int offset = pass.Random.Next(bots.Count);
-        for (int i = 0; i < Math.Min(options.CandidatesPerPass, bots.Count); i++)
-        {
-            PlayerbotSocialBot bot = bots[(offset + i) % bots.Count];
-            Player player = bot.Player;
-            if (!player.IsAlive || player.Combat.IsInCombat || bot.PartyDriven || bot.GroupDriven) continue;
-            if (PostFor(pass, bot) is not { } speech) continue;
-            if (chat.TrySpeak(bot.Id, player.Guid, speech) != BotSpeechAdmission.Queued) continue;
-            Posts++;
-            _posts.Enqueue(pass.NowMs);
-            return;
-        }
-    }
-
-    /// <summary>A WTS line in Trade - City (in a capital, with spare goods), else an LFG line in LookingForGroup (no group, a dungeon suits it).</summary>
-    private static BotSpeech? PostFor(PlayerbotSocialPass pass, PlayerbotSocialBot bot)
-    {
-        Player player = bot.Player;
-        if (InChannel(pass, player, PlayerbotChannelMembership.TradeCity))
-        {
-            PlayerbotPersonaFacts.Bags bags = PlayerbotPersonaFacts.ReadBags(player, spells: null);
-            if (bags.Surplus.Count > 0 && Line(pass, bot, "post.wts") is { } wts)
-                return BotSpeech.InChannel(PlayerbotChannelMembership.TradeCity, wts, "post.wts");
-        }
-
-        if (player.Level >= LfgLevel && pass.Social.Groups.GetGroup(player.Guid) is null && PlayerbotDungeons.SuitedFor(player.Level) is not null
-            && InChannel(pass, player, PlayerbotChannelMembership.LookingForGroup) && Line(pass, bot, "post.lfg") is { } lfg)
-            return BotSpeech.InChannel(PlayerbotChannelMembership.LookingForGroup, lfg, "post.lfg");
-        return null;
-    }
-
-    private static string? Line(PlayerbotSocialPass pass, PlayerbotSocialBot bot, string key)
-    {
-        BotChatPersona persona = bot.Party.PersonaFor(bot.Player);
-        var ask = new BotChatAsk(bot.Id, bot.Player.Guid, persona, ObjectGuid.Empty, string.Empty, ChatType.Channel, string.Empty, FromMaster: false,
-            InviteAllowed: false, Addressed: false);
-        return PlayerbotBuiltinChat.Pick(key, ask, null, pass.Random);
-    }
-
-    private static bool InChannel(PlayerbotSocialPass pass, Player player, string name)
-        => pass.Social.Channels.Find(player.Team, name) is Channel channel && channel.IsOn(player.Guid);
 
     [GeneratedRegex(@"\b(lf\d?m|lfm|looking for (more|\d))\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Lfm();

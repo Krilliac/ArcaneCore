@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Loads a GGUF chat model through the world server's own in-process engine (src/ArcaneCore.World/Playerbots/Chat/Inference)
+       and prints the tokenizer round trip, the prompt and generation speed, and the greedy reply to a sample bot prompt.
+       Run: build it, then ArcaneCore.ChatModelProbe.exe <model.gguf> [threads=2] [context=1024] from its bin folder
+       (docs/areas/playbots.md, In-process model). No network, no other process. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+  </ItemGroup>
+
+</Project>

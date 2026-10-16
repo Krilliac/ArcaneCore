@@ -67,6 +67,28 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         public long WorkerOwnerEpoch;
         public long RpcHeartbeats;
         public DateTimeOffset? ConnectedAtUtc;
+        public int FailedConnects;
+        public DateTimeOffset NextConnectAttemptUtc;
+    }
+
+    /// <summary>Longest wait between connect attempts to a node that is not answering.</summary>
+    internal static readonly TimeSpan MaxConnectBackoff = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// How long to wait before the next connect attempt after <paramref name="failedConnects"/> failures in a row: 5 s, doubling, capped at
+    /// <see cref="MaxConnectBackoff"/>. A World with no cluster nodes running would otherwise retry every node every pass, and each attempt
+    /// ends in a cancelled connect (several first-chance exceptions apiece).
+    /// </summary>
+    internal static TimeSpan ConnectBackoff(int failedConnects)
+    {
+        if (failedConnects <= 0)
+        {
+            return TimeSpan.Zero;
+        }
+
+        int shift = Math.Min(failedConnects - 1, 10);
+        TimeSpan delay = TimeSpan.FromSeconds(5 * (1L << shift));
+        return delay < MaxConnectBackoff ? delay : MaxConnectBackoff;
     }
 
     private readonly List<MonitoredNode> _nodes = [];
@@ -263,7 +285,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
                         return;
                     }
 
-                    if (!node.IsConnected || node.Client is null)
+                    if ((!node.IsConnected || node.Client is null) && DateTimeOffset.UtcNow >= node.NextConnectAttemptUtc)
                     {
                         await TryConnectNodeAsync(worldManifest, node, ct).ConfigureAwait(false);
                     }
@@ -379,6 +401,8 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
             node.Client = client;
             node.IsConnected = true;
             node.ConnectedAtUtc = DateTimeOffset.UtcNow;
+            node.FailedConnects = 0;
+            node.NextConnectAttemptUtc = DateTimeOffset.MinValue;
             Interlocked.Exchange(ref node.WorkerOwnerEpoch, attach.WorkerOwnerEpoch);
 
             RegisterNodeInPlacementTable(node, isReady: true);
@@ -399,6 +423,19 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
             }
 
             await client.DisposeAsync().ConfigureAwait(false);
+
+            node.FailedConnects++;
+            node.NextConnectAttemptUtc = DateTimeOffset.UtcNow + ConnectBackoff(node.FailedConnects);
+            if (node.FailedConnects == 1)
+            {
+                logger.LogInformation(
+                    "Cluster node {NodeId} (role={Role}) is not answering at {EndPoint} ({Reason}); retrying with backoff up to {MaxBackoff}",
+                    node.NodeId,
+                    node.RoleLabel,
+                    node.EndPoint,
+                    ex.GetType().Name,
+                    MaxConnectBackoff);
+            }
         }
     }
 
@@ -406,6 +443,8 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
     {
         bool wasConnected = node.IsConnected;
         node.IsConnected = false;
+        node.FailedConnects = 0;
+        node.NextConnectAttemptUtc = DateTimeOffset.MinValue;
         if (node.Client is not null)
         {
             await node.Client.DisposeAsync().ConfigureAwait(false);

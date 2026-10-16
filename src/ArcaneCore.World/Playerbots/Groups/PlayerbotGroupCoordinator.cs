@@ -695,6 +695,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             }
 
             PlayerbotGroupPlan? plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups);
+            if (plan is null && candidates.Count >= 1) plan = MatchWithVolunteer(candidates, size, goal, groupManager); // asked for it (Volunteers.cs)
             if (plan is null && _options.Groups.InvitePlayers && candidates.Count >= 1)
                 plan = MatchWithPlayer(candidates, size, goal, groupManager);
             if (plan is null) continue;

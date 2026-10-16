@@ -243,7 +243,27 @@ public sealed record BotChatTurn(bool FromPlayer, string Text);
 /// A model request: the system prompt in two parts (the static rules, identical for every bot and request, sent first so a provider
 /// can cache it, then the bot's own facts), and the conversation ending with the player's line.
 /// </summary>
-public sealed record BotChatPrompt(string StaticSystem, string DynamicSystem, IReadOnlyList<BotChatTurn> Messages);
+public sealed record BotChatPrompt(string StaticSystem, string DynamicSystem, IReadOnlyList<BotChatTurn> Messages)
+{
+    /// <summary>
+    /// How urgent the answer is (the in-process model's scheduler serves a player before bot-to-bot talk before ambient chatter, and
+    /// drops stale ambient lines). Never sent to a provider.
+    /// </summary>
+    public BotChatWorkload Workload { get; init; } = BotChatWorkload.Interactive;
+}
+
+/// <summary>Who is waiting on a model request, most urgent first.</summary>
+public enum BotChatWorkload
+{
+    /// <summary>A real player addressed the bot.</summary>
+    Interactive,
+
+    /// <summary>Another bot spoke to it.</summary>
+    BotToBot,
+
+    /// <summary>Nobody in particular: guild chatter, announcements, a question put to a whole channel.</summary>
+    Ambient,
+}
 
 /// <summary>How a model request ended.</summary>
 public enum BotChatOutcome

@@ -160,7 +160,8 @@ public sealed class PlayerbotBuiltinChatTests
         var topic = new BotChatTopic("t", string.Empty, new Dictionary<string, string>
         {
             ["askedquest"] = "The Fargodeep Mine", ["who"] = "Nathan", ["boss"] = "Edwin VanCleef", ["count"] = "5", ["loot"] = "Cruel Barb",
-            ["newlevel"] = "12", ["price"] = "1 silver", ["wanted"] = "water",
+            ["newlevel"] = "12", ["price"] = "1 silver", ["wanted"] = "water", ["item"] = "Cruel Barb", ["instance"] = "The Deadmines",
+            ["dungeon"] = "The Deadmines", ["guild"] = "Lazy Raiders", ["place"] = "Goldshire",
         }, string.Empty);
         BotChatAsk full = ChatSamples.Ask("x", ChatSamples.Persona(master: "Leader", inGroup: true) with { Facts = ChatSamples.FullFacts() }) with { Topic = topic };
         foreach ((string key, string[] lines) in PlayerbotChatTemplates.Lines)

@@ -72,16 +72,6 @@ public sealed class PlayerbotConversationOptions
     /// <summary>Heard world channel lines waiting for the next social pass at most (8..1024); more are dropped.</summary>
     public int MaxHeardQueue { get; set; } = 64;
 
-    /// <summary>
-    /// Let bots post their own LFG and WTS lines in the LookingForGroup and Trade channels now and then, when a real player is in the
-    /// channel (on by default): an LFG line for the dungeon of the bot's level when it is free, a WTS line for spare goods in its bags. The
-    /// channel's budget (<see cref="PlayerbotSpeechOptions.ChannelLinesPerMinute"/>) keeps it rare.
-    /// </summary>
-    public bool WorldPosts { get; set; } = true;
-
-    /// <summary>The most own LFG and WTS lines all bots together post in an hour (0..120).</summary>
-    public int WorldPostsPerHour { get; set; } = 6;
-
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Chat:Conversation";
@@ -99,7 +89,6 @@ public sealed class PlayerbotConversationOptions
         Check(ReactionsPerLine, 1, 5, nameof(ReactionsPerLine));
         Check(ReactionPlayerCooldownMinutes, 1, 1440, nameof(ReactionPlayerCooldownMinutes));
         Check(MaxHeardQueue, 8, 1024, nameof(MaxHeardQueue));
-        Check(WorldPostsPerHour, 0, 120, nameof(WorldPostsPerHour));
 
         static void Check(int value, int min, int max, string name)
         {

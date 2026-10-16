@@ -636,12 +636,13 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions).GetProperties()
             .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyOptions)
                 && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotSpeechOptions)
-                && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotConversationOptions)))
+                && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotConversationOptions)
+                && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotVoiceOptions)))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:{property.Name}");
         }
 
-        // Bot speech and bot conversations are live key by key (docs/areas/playbots.md, Bot speech and Conversations).
+        // Bot speech, conversations and the bot voice are live key by key (docs/areas/playbots.md, Bot speech, Conversations, Bot voice).
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotSpeechOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Speech:{property.Name}");
@@ -650,6 +651,11 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotConversationOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Conversation:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotVoiceOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Voice:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties()
             .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions)))
