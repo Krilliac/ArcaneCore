@@ -156,6 +156,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotQuestGoals _quests = new(session, options);
     private readonly PlayerbotTownGoals _town = new(session, options);
     private readonly PlayerbotEconomy _economy = new(session, options);
+    private readonly PlayerbotBank _bank = new(session, options);
+
+    /// <summary>The bot's bank errand at its capital home (<see cref="PlayerbotBank"/>; tests, inspection).</summary>
+    internal PlayerbotBank Bank => _bank;
     private readonly PlayerbotBudget _budget = new(session, options);
     private readonly PlayerbotRidingTrips _riding = new(session, options);
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
@@ -530,7 +534,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _destinations.GoalOf ??= () => _planningGoal ?? _goal;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _town.Budget = _trainers.Budget = _riding.Budget = _budget; _economy.SpendBudget = _budget;
-        _riding.Suspensions = _suspensions;
+        _riding.Suspensions = _bank.Suspensions = _suspensions;
         _quests.Contention ??= _contention;
         _quests.OnContentionExhausted ??= RaiseContentionExhausted;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
@@ -1120,6 +1124,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             PlayerbotThinkProbe.Phase("economy");
             if (_economy.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
+            PlayerbotThinkProbe.Phase("bank");
+            // Staying at its capital home (town progression): deposit what it does not need, buy a bank slot when the bank is nearly full.
+            // A Vendor errand: a stall sets the banker's entry aside like a vendor's.
+            if (_home is { Stay: Population.TownStay.Capital } capitalHome
+                && _bank.Update(player, capitalHome, item => _town.IsProtected(player, item), interval))
+            { RetireIdleCombatRoute(); _goal = PlayerbotGoalKind.Vendor; TargetEntry = _bank.TargetEntry; return; }
             PlayerbotThinkProbe.Phase("opportunities");
             if (TakeOpportunity(player, interval, out bool opportunityPull)) { if (opportunityPull) goto afterGoalLadder; return; }
             bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0
