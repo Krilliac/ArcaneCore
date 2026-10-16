@@ -548,6 +548,29 @@ public sealed class GameObjectTests
     }
 
     [Fact]
+    public void QuestChest_FollowsReloadedLootTables_ForTheQuestItemsItCanDrop()
+    {
+        Rig rig = CreateRig([GoSpawn(1, QuestChestEntry, 3, 0)]);
+        (Player needy, _) = rig.Join(1);
+        rig.Quests.Needs.Add((needy.Guid, QuestItem));
+        rig.Quests.Needs.Add((needy.Guid, ItemTestData.ToughJerky));
+        GameObject chest = rig.Single(QuestChestEntry);
+        const GameObjectDynFlags sparkle = GameObjectDynFlags.Activate | GameObjectDynFlags.Sparkle;
+        Assert.Equal(sparkle, rig.System.QuestFlagsFor(chest, needy));
+
+        // .reload gameobject_loot_template: the chest now drops a different quest item, then no quest item at all.
+        rig.Loot.ReplaceContent(new LootContent([(LootTableKind.GameObject, Row(QuestChestLoot, ItemTestData.ToughJerky, -100))], []));
+        rig.Quests.Needs.Remove((needy.Guid, ItemTestData.ToughJerky));
+        Assert.Equal(GameObjectDynFlags.None, rig.System.QuestFlagsFor(chest, needy)); // QuestItem is no longer in its loot
+
+        rig.Quests.Needs.Add((needy.Guid, ItemTestData.ToughJerky));
+        Assert.Equal(sparkle, rig.System.QuestFlagsFor(chest, needy));
+
+        rig.Loot.ReplaceContent(new LootContent([(LootTableKind.GameObject, Row(QuestChestLoot, ItemTestData.ToughJerky, 100))], []));
+        Assert.Equal(GameObjectDynFlags.None, rig.System.QuestFlagsFor(chest, needy)); // an ordinary drop is not quest loot
+    }
+
+    [Fact]
     public void QuestChest_NeedAddedAfterTheViewersCreateBlockButBeforeTheFirstRefresh_StillReachesTheViewer()
     {
         Rig rig = CreateRig([GoSpawn(1, QuestChestEntry, 3, 0)]);
