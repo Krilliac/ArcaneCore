@@ -76,6 +76,7 @@ public static class WorldServiceCollectionExtensions
         services.TryAddSingleton<IAccountSessionClaimStore, InMemoryAccountSessionClaimStore>();
         services.AddSingleton(sp => new SessionRegistry(sp.GetRequiredService<IAccountSessionClaimStore>()));
         services.AddSingleton<ISessionClaims>(sp => sp.GetRequiredService<SessionRegistry>());
+        services.TryAddSingleton<WorldWriterGuard>(); // the characters database's single-writer file lock (WorldStartup takes it before the schema initializers)
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         services.AddSingleton<CharacterPersistenceBarrier>();

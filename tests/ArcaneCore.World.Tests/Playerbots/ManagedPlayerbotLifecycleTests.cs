@@ -863,9 +863,10 @@ public sealed class ManagedPlayerbotLifecycleTests
     internal static WorldTestHost Start(InMemoryAccountStore accounts, InMemoryCharacterStore characters,
         MemoryManagedPlayerbotStore owners, MemoryProvisionStore? provisions = null,
         bool enabled = true, bool restoreOnStartup = false, CapturingLogger? logger = null, Action<PlayerbotOptions>? configure = null,
-        bool manualClock = false, IManagedPlayerbotSetAsideStore? setAsideStore = null)
+        bool manualClock = false, IManagedPlayerbotSetAsideStore? setAsideStore = null, Action<IServiceCollection>? extraServices = null)
         => WorldTestHost.Start(configureServices: services =>
         {
+            extraServices?.Invoke(services);
             if (manualClock) services.AddSingleton<IWorldFeature, ManualClock>();
             if (logger is not null) services.AddSingleton<ILogger<ManagedPlayerbotFeature>>(logger);
             var options = new PlayerbotOptions
@@ -961,8 +962,12 @@ public sealed class ManagedPlayerbotLifecycleTests
 
         public void ReleaseHeldLoadAll() => _loadRelease.TrySetResult();
 
+        /// <summary>Every <see cref="LoadAllAsync"/> throws while this is true.</summary>
+        public bool FailLoadAll { get; set; }
+
         public async Task<IReadOnlyList<ManagedPlayerbot>> LoadAllAsync(CancellationToken cancellationToken = default)
         {
+            if (FailLoadAll) throw new InvalidOperationException("fixture-load-failure");
             if (Interlocked.Exchange(ref _loadHeld, null) is { } held)
             {
                 held.TrySetResult();
@@ -999,6 +1004,18 @@ public sealed class ManagedPlayerbotLifecycleTests
         }
 
         private Guid? _failBot;
+        private Guid? _refuseBot;
+        private bool _refuseSparesFaulted;
+
+        /// <summary>
+        /// Every update of <paramref name="botId"/> is refused as stale (returns false, the row untouched) until this is called with null: another writer owns the row.
+        /// With <paramref name="sparingFaultedWrites"/> a write of the Faulted state still goes through, as the incident's fault writes did while the revision-checked updates conflicted.
+        /// </summary>
+        public void RefuseUpdatesOf(Guid? botId, bool sparingFaultedWrites = false)
+        {
+            _refuseSparesFaulted = sparingFaultedWrites;
+            _refuseBot = botId;
+        }
 
         /// <summary>Every update of <paramref name="botId"/> throws until this is called with null.</summary>
         public void FailUpdatesOf(Guid? botId) => _failBot = botId;
@@ -1056,6 +1073,7 @@ public sealed class ManagedPlayerbotLifecycleTests
         private bool Update(ManagedPlayerbot bot, long expectedRevision)
         {
             if (_failAll || _failBot == bot.BotId) throw new InvalidOperationException("fixture-update-failure");
+            if (_refuseBot == bot.BotId && !(_refuseSparesFaulted && bot.State == ManagedPlayerbotState.Faulted)) return false;
             if (FailNextUpdate) { FailNextUpdate = false; throw new InvalidOperationException("fixture-update-failure"); }
             while (_items.TryGetValue(bot.BotId, out ManagedPlayerbot? current))
             {
