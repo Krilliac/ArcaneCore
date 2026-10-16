@@ -352,6 +352,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     /// <summary>World thread: capture the facts and start the pass task.</summary>
     private Task StartPass(int rushCount = 0, bool shedOnly = false)
     {
+        // The host is stopping its bots: a pass would only see them stop and try to start or create more.
+        if (Managed is { IsStopping: true }) return _pass = Task.CompletedTask;
         Interlocked.Increment(ref _passesStarted);
         PassInput? input;
         try { input = Capture(rushCount, shedOnly); }
@@ -712,7 +714,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             foreach (Guid gone in _parkedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _parkedAt.Remove(gone);
             _reportedParkedUnexpected.RemoveWhere(id => !members.ContainsKey(id));
 
-            if (!_stopping && !input.Managed.ResetInProgress)
+            if (!_stopping && !input.Managed.ResetInProgress && !input.Managed.IsStopping)
             {
                 foreach (PlayerbotPopulationMember member in members.Values)
                 {
@@ -932,6 +934,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
     private void Fail(string error)
     {
+        // The managed feature stops first at shutdown and refuses every start and creation with playerbots-disabled: that is the shutdown, not a failure.
+        if (Managed is { IsStopping: true }) return;
         _lastError = error;
         logger.LogWarning("Playerbot population: {Error}", error);
     }
@@ -939,6 +943,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private async Task<(int Started, int Created)> AddAsync(PassContext ctx, int count, CancellationToken ct)
     {
         ManagedPlayerbotFeature managed = ctx.Input.Managed;
+        if (managed.IsStopping) return (0, 0);
         int remaining = count, started = 0, created = 0;
         string? stoppedBecause = null;
 
@@ -1584,6 +1589,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     {
         ManagedPlayerbotFeature managed = ctx.Input.Managed;
         PlayerbotPopulationOptions pop = ctx.Input.Pop;
+        if (managed.IsStopping) return 0;
         if (ctx.Input.ClockMs - _lastHomeSweepMs < pop.IntervalSeconds * 1000L) return 0;
         _lastHomeSweepMs = ctx.Input.ClockMs;
         int sweep = ++_sweeps;

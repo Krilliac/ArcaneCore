@@ -230,6 +230,29 @@ public sealed class PlayerbotGroupAnomalyTests
     }
 
     [Fact]
+    public async Task ALeaderStoppedByTheShutdown_AndAMemberStillGrouped_AreNotReported_ButTheGroupStillEnds()
+    {
+        var (world, group, leaderBot, otherBot) = await FormAsync("Gshd");
+        await using GroupTestWorld _ = world;
+        Player leader = world.Player(leaderBot.Id);
+        Player other = world.Player(otherBot.Id);
+        using AnomalyCapture leaderCap = PlayerbotAnomalies.CaptureFor(leader);
+        using AnomalyCapture otherCap = PlayerbotAnomalies.CaptureFor(other);
+
+        await world.OnWorldAsync(() =>
+        {
+            world.Coordinator.BeginShutdown();
+            Deafen(world.Session(otherBot.Id)); // its leave is never dispatched: outside a shutdown this is the still-grouped finding
+            world.Coordinator.Forget(otherBot.Id);
+            world.Coordinator.Forget(leaderBot.Id);
+            return true;
+        });
+        Assert.False(leaderCap.Any(Key(PlayerbotGroupAnomalies.LeaderGone)), leaderCap.Describe());
+        Assert.False(otherCap.Any(Key(PlayerbotGroupAnomalies.MemberStillGrouped)), otherCap.Describe());
+        Assert.DoesNotContain(group, world.Coordinator.Groups);
+    }
+
+    [Fact]
     public async Task AMemberThatIsLost_IsNotAGroupLeaderGone()
     {
         var (world, _, leaderBot, otherBot) = await FormAsync("Gmem");
