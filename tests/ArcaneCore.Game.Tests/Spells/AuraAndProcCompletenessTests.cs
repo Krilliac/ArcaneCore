@@ -377,6 +377,11 @@ public sealed class AuraAndProcCompletenessTests
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, 30050, SpellCastTargets.ForSelf(), triggered: true));
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, 30051, SpellCastTargets.ForSelf(), triggered: true));
+        // The attack table roll pinned (as MeleeCritVersusTests does): past the 5% miss range, inside the crit range. Left to the shared
+        // random source, a run that rolled a miss (5% at equal level) failed.
+        var random = new ArcaneCore.Game.Tests.ScriptedRandom();
+        random.Ints.Enqueue(5000);
+        combat.Random = random;
 
         MeleeDamageInfo hit = combat.CalculateMeleeDamage(attacker, victim, WeaponAttackType.BaseAttack);
         Assert.Equal(MeleeHitOutcome.Crit, hit.Outcome);
