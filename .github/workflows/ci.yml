@@ -33,7 +33,7 @@ jobs:
     # SQLite in-process, MariaDB and PostgreSQL as service containers.
     services:
       mariadb:
-        image: mariadb:10.11
+        image: mariadb:10.11@sha256:7db29378d4fdab73f8123bbc2b48905c90d1a4b00cf848b028f1e81e623257f2
         env:
           MARIADB_ROOT_PASSWORD: arcane
         ports: ["3306:3306"]
@@ -41,7 +41,7 @@ jobs:
           --health-cmd="healthcheck.sh --connect --innodb_initialized"
           --health-interval=5s --health-timeout=5s --health-retries=30
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
         env:
           POSTGRES_USER: arcane
           POSTGRES_PASSWORD: arcane
@@ -55,18 +55,18 @@ jobs:
       ARCANECORE_TEST_POSTGRES: "Host=127.0.0.1;Port=5432;Username=arcane;Password=arcane;"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "11.0.x"
           dotnet-quality: "preview"
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props', '**/packages.lock.json', '**/global.json') }}

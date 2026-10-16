@@ -10,7 +10,8 @@ on:
   branch_protection_rule:
   workflow_dispatch:
 
-permissions: read-all
+# No workflow-wide token: the one job below declares exactly what it needs.
+permissions: {}
 
 jobs:
   analysis:
