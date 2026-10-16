@@ -85,11 +85,15 @@ public sealed class ServerAnomalyCommandsTests
 
         var lines = new List<string>();
         Assert.True(ServerFaultCommands.RunAnomalies("show bot-elevator/board-missed", AccountSecurity.GameMaster, ledger, T0, lines.Add));
-        Assert.Equal(4, lines.Count);
+        // The four original lines keep their positions; the rate, the top subjects and the recent distinct details follow them.
+        Assert.Equal(7, lines.Count);
         Assert.Contains("Anomaly bot-elevator/board-missed (subsystem bot-elevator, code board-missed, severity Error)", lines[0], StringComparison.Ordinal);
         Assert.Contains("Count 2 (2 distinct subjects);", lines[1], StringComparison.Ordinal);
         Assert.Equal("Subject: bot Cairne (guid 1B)", lines[2]);
         Assert.Equal("Detail: waited 62s at lift", lines[3]);
+        Assert.Equal("Rate: rate 8.0/h last 15 min, 2.0/h last 1 h; gap p50 15 s p99 15 s", lines[4]);
+        Assert.Equal("Top subjects: bot Cairne (guid 1B) x1; bot Thrall (guid 1A) x1", lines[5]);
+        Assert.Equal("Recent distinct details: waited 62s at lift | waited 60s at lift", lines[6]);
 
         var missing = new List<string>();
         Assert.True(ServerFaultCommands.RunAnomalies("show bot-elevator/no-such-code", AccountSecurity.GameMaster, ledger, T0, missing.Add));
@@ -132,6 +136,40 @@ public sealed class ServerAnomalyCommandsTests
 
         string combined = ServerFaultCommands.InfoLine(faults, anomalies, T0);
         Assert.Equal("faults: 0 (0 distinct, last never); anomalies: 2 (1 distinct)", combined);
+    }
+
+    [Fact]
+    public void Overview_AndSubsystemListings_ShowTheRatePerKey_AndTheLedgerLine()
+    {
+        var clock = new FixedClock(T0.AddMinutes(-30));
+        var ledger = new AnomalyLedger(new AnomalyLedgerLimits(), clock);
+        for (int i = 0; i < 6; i++)
+        {
+            ledger.Report("bot-nav", "stuck", "bot " + i, "d");
+            clock.Advance(TimeSpan.FromMinutes(1));
+        }
+
+        var overview = new List<string>();
+        Assert.True(ServerFaultCommands.RunAnomalies(string.Empty, AccountSecurity.GameMaster, ledger, T0, overview.Add));
+        Assert.Contains(overview, l => l.Contains("bot-nav/stuck x6 (6 subjects, Warning), last 25m ago, 24.0/h 15 min, 6.0/h 1 h", StringComparison.Ordinal));
+        string ledgerLine = overview[^1];
+        Assert.StartsWith("Ledger: first 2026-10-15 11:30:00 UTC (30m ago), rate ", ledgerLine, StringComparison.Ordinal);
+
+        var subsystem = new List<string>();
+        Assert.True(ServerFaultCommands.RunAnomalies("bot-nav", AccountSecurity.GameMaster, ledger, T0, subsystem.Add));
+        Assert.Contains(subsystem, l => l.Contains("bot-nav/stuck x6 (6 subjects, Warning), last 25m ago, 24.0/h 15 min, 6.0/h 1 h", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RatesLine_AndEmptyTimingLine()
+    {
+        var clock = new FixedClock(T0);
+        var anomalies = new AnomalyLedger(new AnomalyLedgerLimits(), clock);
+        var faults = new FaultLedger(new FaultLedgerLimits(), clock);
+        for (int i = 0; i < 3; i++) anomalies.Report("a", "b", "s", "d");
+
+        Assert.Equal("rates per hour (last 15 min / last 1 h): faults 0.0/0.0, anomalies 12.0/3.0", ServerFaultCommands.RatesLine(faults, anomalies));
+        Assert.Equal("no events", ServerFaultCommands.TimingLine(faults.Timing(), T0));
     }
 
     private sealed class FixedClock(DateTimeOffset initial) : TimeProvider

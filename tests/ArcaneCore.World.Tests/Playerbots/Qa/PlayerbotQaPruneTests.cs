@@ -232,7 +232,7 @@ public sealed class PlayerbotQaPruneTests : IDisposable
         Assert.Equal(3, top.Length);
         Assert.Contains("top 1 of 1 findings", top[0], StringComparison.Ordinal);
         Assert.StartsWith("#1 " + PlayerbotQaFingerprint.ShortId(current), top[1], StringComparison.Ordinal);
-        Assert.Contains(" <1m ago ", top[1], StringComparison.Ordinal);
+        Assert.Contains(" <1m ago, first ", top[1], StringComparison.Ordinal);
         Assert.Equal("1 stale findings (not seen since this server started) hidden; .playerbot qa top all lists them. .playerbot qa prune [#hours] [closed] [dry] forgets old ones; a finding with a GitHub issue is always kept.", top[2]);
         Assert.DoesNotContain(top, l => l.Contains(PlayerbotQaFingerprint.ShortId(stale), StringComparison.Ordinal));
 
@@ -240,7 +240,7 @@ public sealed class PlayerbotQaPruneTests : IDisposable
         Assert.Contains("top 2 of 2 findings", all[0], StringComparison.Ordinal);
         Assert.StartsWith("#1 " + PlayerbotQaFingerprint.ShortId(current), all[1], StringComparison.Ordinal);
         Assert.StartsWith("#2 " + PlayerbotQaFingerprint.ShortId(stale), all[2], StringComparison.Ordinal);
-        Assert.Contains(" 1d ago (stale) ", all[2], StringComparison.Ordinal);
+        Assert.Contains(" 1d ago (stale), first ", all[2], StringComparison.Ordinal);
         Assert.Equal(all, allN);
         Assert.Contains(root, l => l.Contains("stale findings", StringComparison.Ordinal)); // the bare command hides them the same way
     }
@@ -299,8 +299,8 @@ public sealed class PlayerbotQaPruneTests : IDisposable
         Assert.Contains("## Stale (not seen since " + start.ToString("u"), md, StringComparison.Ordinal);
         Assert.True(md.IndexOf("current thing", StringComparison.Ordinal) < md.IndexOf("## Stale", StringComparison.Ordinal));
         Assert.True(md.IndexOf("## Stale", StringComparison.Ordinal) < md.IndexOf("stale thing", StringComparison.Ordinal));
-        Assert.Contains("| 1 | `c0000000` | 10.0 | 3 | 1h ago |", md, StringComparison.Ordinal);
-        Assert.Contains("| `50000000` | 90.0 | 50 | 1d ago |", md, StringComparison.Ordinal);
+        Assert.Contains("| 1 | `c0000000` | 10.0 | 3 | 1.5 | 2026-10-10 12:00:00Z | 1h ago | 2 | Unknown | stall | current thing | Pending |", md, StringComparison.Ordinal);
+        Assert.Contains("| `50000000` | 90.0 | 50 | 25.0 | 2026-10-10 12:00:00Z | 1d ago | 2 | stall | stale thing | Pending |", md, StringComparison.Ordinal);
         Assert.DoesNotContain("## 2.", md, StringComparison.Ordinal); // a stale finding has no detail block, only a row
     }
 

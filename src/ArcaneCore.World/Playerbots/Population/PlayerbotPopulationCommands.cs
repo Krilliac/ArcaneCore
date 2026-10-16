@@ -22,7 +22,7 @@ public sealed class PlayerbotPopulationCommands : ICommandExtension
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
         new ChatCommand("population", AccountSecurity.Administrator,
-            "Syntax: .playerbot population [status|enable|disable|target #count|rush #count [#perSecond]|rush stop]\nKeep a number of bots online, spread over the level bands, as long as the world's tick time allows.",
+            "Syntax: .playerbot population [status|enable|disable|adopt|target #count|rush #count [#perSecond]|rush stop]\nKeep a number of bots online, spread over the level bands, as long as the world's tick time allows.",
             Status,
             Children:
             [
@@ -39,6 +39,9 @@ public sealed class PlayerbotPopulationCommands : ICommandExtension
                     "Syntax: .playerbot population target #count\nSet the number of bots to keep online (0.." + PlayerbotOptions.MaxBotsCeiling
                     + ") until the next .reload config or restart (World:Playerbots:Population:TargetOnline). The effective target is also capped by MaxBots.",
                     Target),
+                new ChatCommand("adopt", AccountSecurity.Administrator,
+                    "Syntax: .playerbot population adopt\nTake over the homes an operator set (.playerbot send ... SentinelHill, .playerbot home) for the bots of the population: over the next sweeps each gets the home of its level again (a level 1 bot its start area, a graduate its capital and level-band town). Homes of bots an operator created, and homes an operator cleared, are left alone. World:Playerbots:Population:AdoptOperatorHomes does the same for good.",
+                    Adopt),
                 new ChatCommand("rush", AccountSecurity.Administrator,
                     "Syntax: .playerbot population rush $count [$perSecond]\n.playerbot population rush stop\nCreate and start $count new population bots at $perSecond per second (default 5; at most " + MaxRushRate
                     + "), bypassing the add-budget windows. A brake pauses it while the tick p95 stays over World:Playerbots:Population:RushBrakeP95Ms. The existing bot, account and character limits apply. Progress is in .playerbot population status.",
@@ -102,6 +105,21 @@ public sealed class PlayerbotPopulationCommands : ICommandExtension
 
         context.Reply(string.Create(CultureInfo.InvariantCulture,
             $"Playerbot population rush started: {count} new bots at {perSecond} per second{(feature.Options.FreshLaunch ? " (fresh launch: level 1 at their race start)" : string.Empty)}. Watch .playerbot population status; stop it with .playerbot population rush stop. World:Playerbots:MaxBots and MaxRegisteredBots still apply, and the ordinary population parks bots above its TargetOnline."));
+        return true;
+    }
+
+    private static bool Adopt(CommandContext context, string text)
+    {
+        if (text.Trim().Length != 0) return false;
+        if (context.Session.Services.GetService<PlayerbotPopulationFeature>() is not { } feature)
+        {
+            context.Reply("The playerbot population manager is unavailable.");
+            return true;
+        }
+
+        feature.RequestAdopt();
+        context.Reply("Playerbot population: the operator homes of its bots are taken over at the next home sweeps (at most "
+            + PlayerbotPopulationFeature.MaxHomeChangesPerSweep + " per sweep, one sweep per World:Playerbots:Population:IntervalSeconds) and replaced by the home of each bot's level. Needs FreshLaunch and FreshStartHome.");
         return true;
     }
 

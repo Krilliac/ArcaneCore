@@ -33,6 +33,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     /// <summary>Picks after which a retained busy failure is retried even though other snapshots are still waiting, so a saturated queue cannot starve it.</summary>
     private const int RetainedEvery = 16;
 
+    /// <summary>The latency histogram of one successful character write (store call), microseconds.</summary>
+    internal const string SaveLatencyName = LatencyNames.CharacterSave;
+
     /// <summary>Pause before the next write after consecutive "database is locked" failures: 1 s, 2 s, then 5 s.</summary>
     private static readonly long[] BusyBackoffTicks = [Stopwatch.Frequency, 2 * Stopwatch.Frequency, 5 * Stopwatch.Frequency];
 
@@ -86,6 +89,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
     /// <summary>Threshold above which a single character snapshot write reports a <c>persist/save-slow</c> anomaly (zero disables).</summary>
     public TimeSpan SlowSaveThreshold { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>Where the write times go (the shared registry unless a test supplies its own).</summary>
+    internal LatencyRegistry Latency { get; init; } = LatencyRegistry.Shared;
 
     /// <summary>Consecutive "database is locked" failures after which a busy database counts as a storm worth telling the staff about (the whole backoff ladder was used).</summary>
     private const int BusyStormStreak = 3;
@@ -652,6 +658,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 }
 
                 TimeSpan writeElapsed = Stopwatch.GetElapsedTime(writeStart);
+                Latency.Record(SaveLatencyName, writeElapsed.Ticks / (TimeSpan.TicksPerMillisecond / 1000));
                 if (SlowSaveThreshold > TimeSpan.Zero && writeElapsed >= SlowSaveThreshold)
                 {
                     AnomalyLedger.Shared.Report(

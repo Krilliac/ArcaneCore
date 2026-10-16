@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Maps;
 
@@ -26,6 +27,16 @@ public sealed record TickStatsSnapshot(
     public long FrameP50Micros { get; init; }
     public long FrameP90Micros { get; init; }
     public long FrameP99Micros { get; init; }
+
+    /// <summary>
+    /// Full latency distribution (p50..p99.9, mean, standard deviation, min, max) of the tick body and of the frame interval, microseconds, over the last minute, the last 15 minutes and
+    /// since start. Unlike the ring-based fields above these cover the whole window however many ticks it holds.
+    /// </summary>
+    public LatencyWindows BodyLatency { get; init; }
+    public LatencyWindows FrameLatency { get; init; }
+
+    /// <summary>The last minute of each tick phase (commands, world_tick, features, maps, autosave; autosave only counts ticks that saved), in that order; empty phases have no samples.</summary>
+    public IReadOnlyList<(string Name, LatencySnapshot Last1Min)> PhaseLatency { get; init; } = [];
 
     /// <summary>95th percentile tick duration (nearest rank; 0 when <see cref="TickStatsSnapshot.Samples"/> is 0).</summary>
     public long P95Micros { get; init; }
@@ -186,6 +197,13 @@ public sealed class TickStats
     private readonly long[] _commandsBytes;
     private readonly long[] _mapsBytes;
     private readonly long[] _featuresBytes;
+    private readonly LatencyHistogram _bodyLatency = new();
+    private readonly LatencyHistogram _frameLatency = new();
+    private readonly LatencyHistogram _commandsLatency = new();
+    private readonly LatencyHistogram _worldTickLatency = new();
+    private readonly LatencyHistogram _featuresLatency = new();
+    private readonly LatencyHistogram _mapsLatency = new();
+    private readonly LatencyHistogram _autosaveLatency = new();
     private readonly Dictionary<string, double> _featureMeans = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double> _featureBytes = new(StringComparer.Ordinal);
     private const double FeatureSmoothing = 0.02;
@@ -257,6 +275,21 @@ public sealed class TickStats
             _mapsBytes[slot] = phases.MapsBytes;
             _featuresBytes[slot] = phases.FeaturesBytes;
             _total++;
+            _bodyLatency.Record(durationMicros);
+            if (frameIntervalMicros > 0)
+            {
+                _frameLatency.Record(frameIntervalMicros);
+            }
+
+            _commandsLatency.Record(phases.CommandsMicros);
+            _worldTickLatency.Record(phases.WorldTickMicros);
+            _featuresLatency.Record(Math.Max(0, phases.FeaturesMicros - phases.WorldTickMicros));
+            _mapsLatency.Record(phases.MapsMicros);
+            if (phases.AutosaveMicros > 0 || phases.AutosaveSnapshots > 0)
+            {
+                _autosaveLatency.Record(phases.AutosaveMicros);
+            }
+
             if (durationMicros > intervalMicros)
             {
                 _overruns++;
@@ -269,6 +302,21 @@ public sealed class TickStats
             _lastTimestamp = stamp;
         }
     }
+
+    /// <summary>The tick-body duration histogram (microseconds; lock-free, any thread).</summary>
+    public LatencyHistogram BodyLatency => _bodyLatency;
+
+    /// <summary>The frame-interval histogram (microseconds between two tick starts).</summary>
+    public LatencyHistogram FrameLatency => _frameLatency;
+
+    /// <summary>The per-phase histograms (microseconds) in the order commands, world_tick, features, maps, autosave: the watchdog publishes gauges and log detail from them.</summary>
+    public IReadOnlyList<KeyValuePair<string, LatencyHistogram>> PhaseLatencies => [
+        new("commands", _commandsLatency),
+        new("world_tick", _worldTickLatency),
+        new("features", _featuresLatency),
+        new("maps", _mapsLatency),
+        new("autosave", _autosaveLatency),
+    ];
 
     /// <summary>One world feature's share of a tick (world thread; smoothed, so a snapshot shows its typical cost).</summary>
     public void RecordFeature(string name, long micros, long allocatedBytes = 0)
@@ -463,6 +511,9 @@ public sealed class TickStats
         {
             return new TickStatsSnapshot(total, 0, overruns, 0, 0, 0, 0, 0, 0, 0, 0, stamp)
             {
+                BodyLatency = _bodyLatency.Windows(),
+                FrameLatency = _frameLatency.Windows(),
+                PhaseLatency = PhaseSnapshots(),
                 FrameOverruns = frameOverruns,
                 FeatureMeans = featureMeans,
                 FeatureAllocations = featureAllocations,
@@ -493,6 +544,9 @@ public sealed class TickStats
             FrameP90Micros = frames.Length > 0 ? NearestRank(frames, 90) : 0,
             FrameP99Micros = frames.Length > 0 ? NearestRank(frames, 99) : 0,
             P95Micros = NearestRank(durations, 95),
+            BodyLatency = _bodyLatency.Windows(),
+            FrameLatency = _frameLatency.Windows(),
+            PhaseLatency = PhaseSnapshots(),
             Commands = commands,
             Maps = maps,
             Features = features,
@@ -502,6 +556,19 @@ public sealed class TickStats
             MapsMeanBytes = mapsBytes,
             FeaturesMeanBytes = featuresBytes,
         };
+    }
+
+    private (string Name, LatencySnapshot Last1Min)[] PhaseSnapshots()
+    {
+        TimeSpan minute = TimeSpan.FromMinutes(1);
+        return
+        [
+            ("commands", _commandsLatency.Snapshot(minute)),
+            ("world_tick", _worldTickLatency.Snapshot(minute)),
+            ("features", _featuresLatency.Snapshot(minute)),
+            ("maps", _mapsLatency.Snapshot(minute)),
+            ("autosave", _autosaveLatency.Snapshot(minute)),
+        ];
     }
 
     private static double Mean(long[] values, int count)
