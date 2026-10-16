@@ -1,7 +1,11 @@
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Groups;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.RunFixtures;
 
@@ -243,5 +247,29 @@ public sealed class PlayerbotRunCatalogueTests
         // Molten Core: 2886 also leads in but stands on map 230 (Blackrock Depths); the two continent windows land at the same spot and the
         // lower id wins.
         Assert.Equal(3528u, Plan(catalogue, MoltenCore).EntranceTrigger);
+    }
+
+    [Fact]
+    public void CreatureContentNotYetInstalled_IsNotACatalogueInput_ElseEveryWingIsLeftOutAsNoSpawnedBoss()
+    {
+        // The live startup bug: the coordinator built the catalogue before CreatureWorldFeature's posted Install ran, from the
+        // CreatureContent.Empty placeholder, and logged every wing (Deadmines, Scarlet Monastery 0-3, ...) as no-spawned-boss.
+        PlayerbotRunCatalogue fromPlaceholder = Build(creatures: CreatureContent.Empty);
+        Assert.Empty(fromPlaceholder.Plans);
+        Assert.Contains(fromPlaceholder.Exclusions, e => e.MapId == Deadmines && e.Reason == PlayerbotRunCatalogue.NoSpawnedBoss);
+
+        using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+        var feature = new CreatureWorldFeature(services, NullLogger<CreatureWorldFeature>.Instance);
+        Assert.False(feature.ContentInstalled);
+        Assert.Null(PlayerbotGroupCoordinator.CatalogueCreatures(feature));
+        Assert.Null(PlayerbotGroupCoordinator.CatalogueCreatures(null));
+
+        // Once installed the real content is the input (no spawns here: Install needs an attached world to start map systems).
+        var installed = new CreatureContent([], [], [], [], []);
+        feature.Install(installed);
+        Assert.Same(installed, PlayerbotGroupCoordinator.CatalogueCreatures(feature));
+
+        // And the real content makes Deadmines runnable.
+        Assert.NotNull(Build().Find(Deadmines, 0));
     }
 }
