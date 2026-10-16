@@ -24,6 +24,7 @@
     <Project Path="tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj" />
     <Project Path="tools/ArcaneCore.MockClient/ArcaneCore.MockClient.csproj" />
     <Project Path="tools/ArcaneCore.Sniff/ArcaneCore.Sniff.csproj" />
+    <Project Path="tools/perf/ArcaneCore.Benchmarks/ArcaneCore.Benchmarks.csproj" />
     <Project Path="tools/spell-import/ArcaneCore.SpellImport.csproj" />
   </Folder>
 </Solution>

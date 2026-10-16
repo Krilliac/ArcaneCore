@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- BenchmarkDotNet micro-benchmarks for the hot-path memo and lookup tables (docs/integration/memo-tabulation-20261015.md).
+       Run: dotnet run -c Release with project tools/perf/ArcaneCore.Benchmarks, then the BenchmarkDotNet filter argument (all: '*').
+       Real-data benchmarks read ARCANECORE_TEST_WORLD_DB (an imported SQLite world.db) and ARCANECORE_TEST_DBC_DIR (build-5875 DBCs). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- BenchmarkDotNet's generated members and public benchmark classes trip the repo's analyzers. -->
+    <NoWarn>$(NoWarn);CA1001;CA1515;CA1822;CA2007;IDE0058</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+    <ProjectReference Include="..\..\..\src\ArcaneCore.Game\ArcaneCore.Game.csproj" />
+    <ProjectReference Include="..\..\..\src\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
+    <ProjectReference Include="..\..\..\src\ArcaneCore.Data\ArcaneCore.Data.csproj" />
+  </ItemGroup>
+
+</Project>

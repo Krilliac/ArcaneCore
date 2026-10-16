@@ -40,7 +40,14 @@ public sealed class WorldRuntime : IDisposable
     private readonly long[] _topMicros = new long[TickStats.TopFeatureCount];
     private int _topCount;
     private int _commandsRun;
-    private readonly Dictionary<Type, string> _worldTickNames = [];
+
+    /// <summary>
+    /// The handlers of <see cref="Updated"/> and <see cref="WorldTick"/> with their tick-statistics names, kept for the multicast delegate they
+    /// were split from (<see cref="HandlersOf"/>): the invocation list, its cast and the name lookups were per tick. A delegate is immutable,
+    /// so a subscription change makes a new one and the next tick splits it again. World thread.
+    /// </summary>
+    private HandlerTable _updatedHandlers = HandlerTable.None;
+    private HandlerTable _worldTickHandlers = HandlerTable.None;
 
     // Manual clock (test seam, see UseManualClock): game time advances only through AdvanceClockAsync.
     private bool _manualClock;
@@ -788,9 +795,8 @@ public sealed class WorldRuntime : IDisposable
             return;
         }
 
-        foreach (Action<uint> handler in handlers.GetInvocationList().Cast<Action<uint>>())
+        foreach ((Action<uint> handler, string name) in HandlersOf(ref _updatedHandlers, handlers, TickWorkNames.Of))
         {
-            string name = TickWorkNames.Of(handler);
             long start = Stopwatch.GetTimestamp();
             long startBytes = GC.GetAllocatedBytesForCurrentThread();
             SetPosition(TickPhase.Features, handler, start);
@@ -830,7 +836,7 @@ public sealed class WorldRuntime : IDisposable
             return;
         }
 
-        foreach (Action<uint> handler in handlers.GetInvocationList().Cast<Action<uint>>())
+        foreach ((Action<uint> handler, string name) in HandlersOf(ref _worldTickHandlers, handlers, WorldTickName))
         {
             long start = Stopwatch.GetTimestamp();
             long startBytes = GC.GetAllocatedBytesForCurrentThread();
@@ -844,25 +850,33 @@ public sealed class WorldRuntime : IDisposable
                 _logger.LogFault("worldtick", ex, "{Event} handler {Handler} failed for {Subject}", nameof(WorldTick), TickWorkNames.Of(handler), diffMs);
             }
 
-            Type? type = handler.Method.DeclaringType;
-            string name;
-            if (type is null)
-            {
-                name = "WorldTick:" + handler.Method.Name;
-            }
-            else if (!_worldTickNames.TryGetValue(type, out string? cached))
-            {
-                name = _worldTickNames[type] = "WorldTick:" + TickWorkNames.Of(handler);
-            }
-            else
-            {
-                name = cached;
-            }
-
             long micros = Micros(Stopwatch.GetTimestamp() - start);
             Stats.RecordFeature(name, micros, GC.GetAllocatedBytesForCurrentThread() - startBytes);
             NoteSlowest(name, micros);
         }
+    }
+
+    /// <summary>The tick-statistics name of a <see cref="WorldTick"/> handler: "WorldTick:" and its class (the method name for a static one).</summary>
+    internal static string WorldTickName(Action<uint> handler)
+        => handler.Method.DeclaringType is null ? "WorldTick:" + handler.Method.Name : "WorldTick:" + TickWorkNames.Of(handler);
+
+    /// <summary>
+    /// The handlers of <paramref name="handlers"/> in invocation order with their names, split once per delegate instance and kept in
+    /// <paramref name="table"/> until the event's delegate changes.
+    /// </summary>
+    private static (Action<uint> Handler, string Name)[] HandlersOf(ref HandlerTable table, Action<uint> handlers, Func<Action<uint>, string> name)
+    {
+        if (!ReferenceEquals(table.Source, handlers))
+        {
+            table = new HandlerTable(handlers, [.. handlers.GetInvocationList().Cast<Action<uint>>().Select(h => (h, name(h)))]);
+        }
+
+        return table.Handlers;
+    }
+
+    private sealed record HandlerTable(Action<uint>? Source, (Action<uint> Handler, string Name)[] Handlers)
+    {
+        public static readonly HandlerTable None = new(null, []);
     }
 
     private void Raise<T>(Action<T>? handlers, T subject, string name)
