@@ -1057,8 +1057,12 @@ public sealed class ManagedPlayerbotLifecycleTests
                 && current.CharacterId == characterId
                 && _items.TryRemove(new KeyValuePair<Guid, ManagedPlayerbot>(botId, current)));
 
+        /// <summary>Runs first in every update with the caller's token (a test parks a start inside its try block here and cancels it).</summary>
+        public Func<ManagedPlayerbot, CancellationToken, Task>? BeforeUpdate { get; set; }
+
         public async Task<bool> UpdateAsync(ManagedPlayerbot bot, long expectedRevision, CancellationToken cancellationToken = default)
         {
+            if (BeforeUpdate is { } before) await before(bot, cancellationToken).ConfigureAwait(false);
             TaskCompletionSource<Guid>? next = Interlocked.Exchange(ref _nextUpdateHeld, null);
             if (next is not null || _holdBot == bot.BotId && _held is not null)
             {

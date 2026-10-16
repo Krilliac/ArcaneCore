@@ -1010,6 +1010,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 return new(false, "managed-revision-conflict", bot?.BotId);
             }
 
+            if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+            {
+                // The caller gave up (the World is stopping while it restores its bots): not the bot's fault. Recording a fault would persist
+                // State=Faulted (and, from an operator start, DesiredEnabled=false), so every bot still starting at a shutdown would stay out
+                // after the restart. Leave the record as it is; the finally kicks the half-started session and the next start restores it.
+                logger.LogInformation("Managed playerbot {Bot} start interrupted by a stop request; its record is kept for the next start", bot?.BotId.ToString() ?? idOrName);
+                throw;
+            }
+
             if (ex is not OperationCanceledException)
                 FaultLedger.Shared.Record("playerbot.feature", ex);
             logger.LogWarning(ex, "Managed playerbot start failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
