@@ -41,6 +41,15 @@ public sealed class SmartScript
     /// <summary>Maximum recursive action/link/timed-event depth allowed before <see cref="Invariant.Check(bool, string, string, string, int)"/> refuses deeper recursion.</summary>
     public const int MaxActionDepth = 8;
 
+    /// <summary>BROADCAST_TEXT_FLEE_FOR_ASSIST (AzerothCore Language.h): "%s attempts to run away in fear!", said by FLEE_FOR_ASSIST with its emote param.</summary>
+    public const int FleeForAssistText = 1150;
+
+    /// <summary>The re-check delay of a RANGE event whose victim is out of range, and of a flee put off by a cast (SmartScript.cpp:4374-4384, UpdateTimer).</summary>
+    private const uint RangeRecheckMs = 1200;
+
+    /// <summary>A unit that cannot act on its own will (AzerothCore UNIT_STATE_LOST_CONTROL; here the stun, confuse and flee flags).</summary>
+    private const UnitFlags LostControl = UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing;
+
     /// <summary>The re-check delay of an event whose condition failed (SmartScript.cpp:4316-4318, RecalcTimer(e, 5000, 5000)).</summary>
     private const uint FailedConditionRecheckMs = 5000;
 
@@ -99,7 +108,8 @@ public sealed class SmartScript
         if (!Enum.IsDefined((SmartTarget)row.TargetType)) return $"target {row.TargetType} (row {row.Id})";
         // SUMMON_CREATURE and MOVE_TO_POS act through the creature the script belongs to; an owner without one cannot run them.
         if (Me is null && row.ActionType is (byte)SmartAction.SummonCreature or (byte)SmartAction.MoveToPos or (byte)SmartAction.Evade
-            or (byte)SmartAction.AutoAttack or (byte)SmartAction.AllowCombatMovement or (byte)SmartAction.Die or (byte)SmartAction.CallForHelp)
+            or (byte)SmartAction.AutoAttack or (byte)SmartAction.AllowCombatMovement or (byte)SmartAction.Die or (byte)SmartAction.CallForHelp
+            or (byte)SmartAction.FleeForAssist or (byte)SmartAction.AttackStart)
             return $"action {row.ActionType} needs a creature owner (row {row.Id})";
         return null;
     }
@@ -119,10 +129,10 @@ public sealed class SmartScript
         e.Active = e.TimerMs == 0;
     }
 
-    /// <summary>AzerothCore InitTimer: the update events start on their initial timer, every other event starts active.</summary>
+    /// <summary>AzerothCore InitTimer (SmartScript.cpp:5103-5131): the update events and RANGE start on their initial timer, every other event starts active.</summary>
     private void InitTimer(SmartHolder e)
     {
-        if (e.Event is SmartEvent.Update or SmartEvent.UpdateInCombat or SmartEvent.UpdateOutOfCombat)
+        if (e.Event is SmartEvent.Update or SmartEvent.UpdateInCombat or SmartEvent.UpdateOutOfCombat or SmartEvent.Range)
             RecalcTimer(e, e.Row.EventParam1, e.Row.EventParam2);
         else e.Active = true;
     }
@@ -198,8 +208,16 @@ public sealed class SmartScript
             return;
         }
 
+        // SmartScript.cpp UpdateTimer: a flee for assistance waits 1200 ms while its creature casts.
+        if (e.Action == SmartAction.FleeForAssist && Me is { } fleer && (System?.AiServices.Spells?.IsCasting(fleer) ?? false))
+        {
+            e.TimerMs = RangeRecheckMs;
+            return;
+        }
+
         e.Active = true;
-        if (e.Event is SmartEvent.Update or SmartEvent.UpdateInCombat or SmartEvent.UpdateOutOfCombat or SmartEvent.HealthPct)
+        if (e.Event is SmartEvent.Update or SmartEvent.UpdateInCombat or SmartEvent.UpdateOutOfCombat or SmartEvent.HealthPct
+            or SmartEvent.ManaPct or SmartEvent.Range or SmartEvent.FriendlyHealth)
         {
             ProcessEvent(e, null);
 
@@ -283,6 +301,44 @@ public sealed class SmartScript
                     ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
                     break;
                 }
+                case SmartEvent.ManaPct:
+                {
+                    // SmartScript.cpp:4354-4363: `me` in combat with mana; the percent truncated, as uint32(GetPowerPct).
+                    if (Me is null || !Me.Combat.IsInCombat) return;
+                    uint maxMana = Me.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
+                    if (maxMana == 0) return;
+                    uint pct = (uint)(Me.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Mana) * 100UL / maxMana);
+                    if (pct > r.EventParam2 || pct < r.EventParam1) return;
+                    ProcessTimedAction(e, r.EventParam3, r.EventParam4, invoker);
+                    break;
+                }
+                case SmartEvent.Range:
+                    // SmartScript.cpp:4374-4384: the victim within rangeMin..rangeMax (params 5-6) is the invoker; else re-check in 1200 ms.
+                    if (Me is null || !Me.Combat.IsInCombat || Me.Combat.Victim is not { } victim) return;
+                    if (IsInRange(Me, victim, r.EventParam5, r.EventParam6)) ProcessTimedAction(e, r.EventParam3, r.EventParam4, victim);
+                    else RecalcTimer(e, RangeRecheckMs, RangeRecheckMs);
+                    break;
+                case SmartEvent.FriendlyHealth:
+                {
+                    // SmartScript.cpp:4404-4418: the friend missing more than param1 health within param2 yards; none re-checks in 1000..3000.
+                    if (Me is not { AI: CreatureSmartAI smartAi } || !Me.Combat.IsInCombat) return;
+                    Creature? friend = smartAi.LowestHpFriendly(r.EventParam2, r.EventParam1);
+                    if (friend is null || !friend.Combat.IsInCombat)
+                    {
+                        RecalcTimer(e, 1000, 3000);
+                        return;
+                    }
+
+                    ProcessTimedAction(e, r.EventParam3, r.EventParam4, friend);
+                    break;
+                }
+                case SmartEvent.Respawn:
+                    // SmartScript.cpp:4632-4642: type 1 needs map param2, type 2 needs zone param3; any other type always runs.
+                    if (_owner.Base is not { } respawned) return;
+                    if (r.EventParam1 == 1 && respawned.Map?.MapId != r.EventParam2) return;
+                    if (r.EventParam1 == 2 && (Me is null || System is null || System.ZoneAndAreaOf(Me).ZoneId != r.EventParam3)) return;
+                    ProcessAction(e, invoker);
+                    break;
                 case SmartEvent.SpellHit:
                     if (spell is null) return;
                     if ((r.EventParam1 == 0 || spell.Id == r.EventParam1)
@@ -448,6 +504,39 @@ public sealed class SmartScript
                     // SMART_ACTION_CALL_FOR_HELP: idle same-faction creatures within param1 yards join `me`'s fight.
                     if (system is not null && me is not null) system.CallForHelp(me, r.ActionParam1);
                     break;
+                case SmartAction.SetReactState:
+                    // SMART_ACTION_SET_REACT_STATE (SmartScript.cpp:575-584): every creature target.
+                    foreach (Creature c in targets.OfType<Creature>()) c.ReactState = (CreatureReactState)r.ActionParam1;
+                    break;
+                case SmartAction.RandomEmote:
+                {
+                    // SMART_ACTION_RANDOM_EMOTE (SmartScript.cpp:586-602): one of the non-zero emotes per unit target (creatures only here).
+                    uint[] emotes = [.. new[] { r.ActionParam1, r.ActionParam2, r.ActionParam3, r.ActionParam4, r.ActionParam5, r.ActionParam6 }.Where(p => p != 0)];
+                    if (system is null || emotes.Length == 0) break;
+                    foreach (Creature c in targets.OfType<Creature>()) system.PlayEmote(c, emotes[Rand(0, (uint)emotes.Length - 1)]);
+                    break;
+                }
+                case SmartAction.SetUnitFlag:
+                    // SMART_ACTION_SET_UNIT_FLAG (SmartScript.cpp:962-982): UNIT_FIELD_FLAGS of every unit target (type 1 is refused at load).
+                    foreach (Unit u in targets.OfType<Unit>()) u.UnitFlags |= (UnitFlags)r.ActionParam1;
+                    break;
+                case SmartAction.RemoveUnitFlag:
+                    // SMART_ACTION_REMOVE_UNIT_FLAG (SmartScript.cpp:984-1004).
+                    foreach (Unit u in targets.OfType<Unit>()) u.UnitFlags &= ~(UnitFlags)r.ActionParam1;
+                    break;
+                case SmartAction.FleeForAssist:
+                    // SMART_ACTION_FLEE_FOR_ASSIST (SmartScript.cpp:1060-1074): not without control; then the emote when param1 asks for it.
+                    if (system is null || me is null || (me.UnitFlags & LostControl) != 0) break;
+                    system.FleeForAssistance(me);
+                    if (r.ActionParam1 != 0) system.SayText(me, FleeForAssistText);
+                    break;
+                case SmartAction.AttackStart:
+                {
+                    // SMART_ACTION_ATTACK_START (SmartScript.cpp:1568-1579): `me` attacks one target picked at random.
+                    if (me?.AI is not { } attacker || targets.Count == 0) break;
+                    if (targets[(int)Rand(0, (uint)targets.Count - 1)] is Unit victim) attacker.AttackStart(victim);
+                    break;
+                }
                 case SmartAction.PlayEmote:
                     // SmartScript.cpp SMART_ACTION_PLAY_EMOTE: every unit target plays the emote. Players have no emote seam here, so only creatures do.
                     if (system is null) break;
@@ -668,6 +757,19 @@ public sealed class SmartScript
     }
 
     // ---- targets ----
+
+    /// <summary>
+    /// AzerothCore WorldObject::IsInRange (Object.cpp:1469-1492), 3D: both bounding radii are added to each bound, a min of 0 is not checked, and the
+    /// max is exclusive.
+    /// </summary>
+    private static bool IsInRange(WorldObject a, WorldObject b, float min, float max)
+    {
+        float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
+        float distSq = (dx * dx) + (dy * dy) + (dz * dz);
+        float size = a.BoundingRadius + b.BoundingRadius;
+        if (min > 0 && distSq < (min + size) * (min + size)) return false;
+        return distSq < (max + size) * (max + size);
+    }
 
     private static float Distance(WorldObject a, WorldObject b)
     {
