@@ -231,19 +231,33 @@ public sealed class ServerInfoDiagnosticsTests
     /// `.server info` runs on the world thread. Its working set came from Process.WorkingSet64, which on Windows snapshots every
     /// process on the machine (8 ms a call on an idle desktop); under the live stress test (2026-10-08) each `.server info` of the
     /// operator and the observer was logged as a slow CMSG_MESSAGECHAT, 20 to 112 ms. The capture now costs well under a
-    /// millisecond (the bound leaves room for a loaded test machine).
+    /// millisecond.
+    /// <para>
+    /// The guarded property is the capture's intrinsic cost (a machine-wide process snapshot costs 8 ms or more every call), not how
+    /// fast one call happened to run: a single call, or a mean, also contains whatever the scheduler took from the thread while another
+    /// build or test lane loaded the box (a 3.69 ms mean was seen). Preemption only ever adds time to a call, so the least of many
+    /// separately timed calls is the capture's own cost; a capture that is intrinsically slow cannot have a fast call among them.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task CapturingTheDiagnostics_DoesNotHoldTheWorldThread()
     {
         await using WorldTestHost host = WorldTestHost.Start();
-        double meanMs = await host.OnWorldAsync(() =>
+        (double fastestMs, long workingSet) = await host.OnWorldAsync(() =>
         {
-            ServerInfoDiagnostics.Capture(host.World, host.WorldServices); // warm
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            for (int i = 0; i < 20; i++) Assert.True(ServerInfoDiagnostics.Capture(host.World, host.WorldServices).WorkingSetBytes > 0);
-            return watch.Elapsed.TotalMilliseconds / 20;
+            long workingSetBytes = ServerInfoDiagnostics.Capture(host.World, host.WorldServices).WorkingSetBytes; // warm
+            double fastest = double.MaxValue;
+            for (int i = 0; i < 50; i++)
+            {
+                long start = System.Diagnostics.Stopwatch.GetTimestamp();
+                ServerInfoDiagnosticsValues values = ServerInfoDiagnostics.Capture(host.World, host.WorldServices);
+                fastest = Math.Min(fastest, System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+                workingSetBytes = values.WorkingSetBytes;
+            }
+
+            return (fastest, workingSetBytes);
         });
-        Assert.True(meanMs < 3, $"one capture took {meanMs:F2} ms on the world thread");
+        Assert.True(workingSet > 0);
+        Assert.True(fastestMs < 3, $"the fastest of 50 captures took {fastestMs:F2} ms on the world thread");
     }
 }

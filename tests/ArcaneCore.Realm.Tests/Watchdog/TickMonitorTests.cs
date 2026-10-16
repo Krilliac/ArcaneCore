@@ -496,14 +496,9 @@ public sealed class TickMonitorTests
     {
         TickMonitor monitor = Create(o => o.SummaryIntervalSeconds = 0);
         Tick(monitor, 10, 50);
-        monitor.Check(_clock.NowMicros);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
-        {
-            monitor.Check(_clock.NowMicros);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        // AllocatedBy warms up, then takes the least of three runs: a one-off runtime allocation on this thread (tiered JIT / OSR
+        // type loading, a few KB once) lands in one run only, a per-call allocation in Check shows in every run.
+        Assert.Equal(0, WatchdogTestSupport.AllocatedBy(() => monitor.Check(_clock.NowMicros), 1000));
     }
 
     private sealed class FakeTickHangActuator : ITickHangActuator
