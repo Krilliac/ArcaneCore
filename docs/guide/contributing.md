@@ -53,7 +53,7 @@ Besides the build and tests, these run on their own and report on the PR:
 | Workflow | What it reports |
 |---|---|
 | `codeql.yml` | CodeQL code scanning (C#, Python, the workflows; `security-extended` queries). New alerts are annotated on the changed lines; the alert list is in the Security tab. Also weekly on `main`. |
-| `devskim.yml` | Microsoft DevSkim security lint over the whole tree (weak crypto, hard-coded secrets, unsafe APIs), uploaded to code scanning. Also weekly on `main`. |
+| `devskim.yml` | Microsoft DevSkim security lint over the whole tree (weak crypto, hard-coded secrets, unsafe APIs), uploaded to code scanning. Reviewed false positives are filtered out before the upload, each scoped to its rule and files and explained in the workflow; a new finding still shows. Also weekly on `main`. |
 | `codacy.yml` | Codacy's security tools over the whole tree, uploaded to code scanning; uses the `CODACY_PROJECT_TOKEN` secret when it is set, else the tools' default configurations. Also weekly on `main`. |
 | `dotnet.yml` | A Release build of the solution on the CI SDK, without the tests (those run in CI's matrix). |
 | `test-report.yml` | A **Test results** check and PR comment built from CI's `.trx` files: totals, each failure with its message, and the change against the base commit. |

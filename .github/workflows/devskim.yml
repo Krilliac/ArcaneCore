@@ -1,6 +1,6 @@
 name: DevSkim
 
-# Microsoft DevSkim: pattern-based security lint (weak crypto, hard-coded secrets, unsafe APIs, TODO-security markers) over the whole
+# Microsoft DevSkim: pattern-based security lint (weak crypto, hard-coded secrets, unsafe APIs, suspicious comments) over the whole
 # tree. Results go to code scanning (Security tab) as a SARIF upload, next to CodeQL's.
 on:
   push:
@@ -33,8 +33,88 @@ jobs:
         with:
           persist-credentials: false
 
+      # tests/ThirdParty is vendored upstream code (DotRecast, wow_messages), not ours to change.
       - name: Run DevSkim scanner
         uses: microsoft/DevSkim-Action@4b5047945a44163b94642a1cecc0d93a3f428cc6 # v1.0.16
+        with:
+          ignore-globs: "**/.git/**,**/bin/**,**/obj/**,**/tests/ThirdParty/**"
+
+      # Reviewed false positives (2026-10-16 full scan), each scoped to the rule and the files where it was reviewed, so the rule still
+      # fires anywhere new:
+      # - DS148264 System.Random: gameplay randomness (loot, AI, procs, bots) and tests. Still active in Cryptography, Realm, Net, Warden.
+      # - DS126858 SHA-1/MD5: required by the 1.12.1 protocol (SRP6, PIN, client integrity, Warden, patch and addon MD5s), RFC 6238
+      #   TOTP, the mock client's side of SRP6 and the addon MD5s, or not a security use (MariaDB GET_LOCK name, schema probes, a comment).
+      # - DS176209 TODO/FIXME: quotations of the reference sources' own comments (vmangos, mangos-classic), cited, not open work.
+      # - This file itself: the patterns below name the files they cover (Sha1.cs).
+      # - DS173237/DS117838 "secrets": schema-snapshot and takeover-accounting hashes, and protocol hex vectors in tests.
+      # - DS173239: the fake GitHub tokens the QA redactor tests redact.
+      # - DS197836: cache keys built from a file's length and time, not a security hash.
+      # - DS137138 http://: the local Prometheus listener prefixes, the compose stack's internal URLs, and test URLs.
+      # - DS154189: printf in the offline vmap oracle tool, which only reads trusted extracted data.
+      # - DS162092 localhost/127.0.0.1: loopback defaults and test endpoints, which are the safe default.
+      # - DS172412: the word "unsafe" in bot placement and recovery names; the project has no unsafe code.
+      # - DS450000: "net11" read as an old .NET Framework target; it is .NET 11.
+      - name: Remove reviewed false positives
+        uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
+        with:
+          input: devskim-results.sarif
+          output: devskim-results.sarif
+          patterns: |
+            -**/tests/**:DS148264
+            -**/src/ArcaneCore.Game/**:DS148264
+            -**/src/ArcaneCore.World/Playerbots/**:DS148264
+            -**/src/ArcaneCore.World/Skills/**:DS148264
+            -**/tests/**:DS126858
+            -**/src/ArcaneCore.Cryptography/ClientIntegrity.cs:DS126858
+            -**/src/ArcaneCore.Cryptography/PinHash.cs:DS126858
+            -**/src/ArcaneCore.Cryptography/Sha1.cs:DS126858
+            -**/src/ArcaneCore.Cryptography/Srp6Math.cs:DS126858
+            -**/src/ArcaneCore.Cryptography/Srp6Server.cs:DS126858
+            -**/src/ArcaneCore.Cryptography/Totp.cs:DS126858
+            -**/src/ArcaneCore.Cryptography/WowSrp6.cs:DS126858
+            -**/src/ArcaneCore.Data/Schema/SchemaLock.cs:DS126858
+            -**/src/ArcaneCore.Data/Schema/Upgrade/ServerProbe.cs:DS126858
+            -**/src/ArcaneCore.Protocol/WorldOpcode.g.cs:DS126858
+            -**/src/ArcaneCore.Realm/Net/LogonSession.cs:DS126858
+            -**/src/ArcaneCore.Realm/Net/PatchCatalog.cs:DS126858
+            -**/src/ArcaneCore.World/ArcaneCore.World.csproj:DS126858
+            -**/src/ArcaneCore.World/Handlers/CharacterHandlers.cs:DS126858
+            -**/src/ArcaneCore.World/Handlers/LoginSequence.cs:DS126858
+            -**/src/ArcaneCore.World/Net/WorldSession.cs:DS126858
+            -**/src/ArcaneCore.World/Packets/LoginPackets.cs:DS126858
+            -**/src/ArcaneCore.World/Warden/WardenCheck.cs:DS126858
+            -**/src/ArcaneCore.World/Warden/WardenCodec.cs:DS126858
+            -**/src/ArcaneCore.World/Warden/WardenCrypto.cs:DS126858
+            -**/src/ArcaneCore.World/Warden/WardenModuleProfile.cs:DS126858
+            -**/tools/ArcaneCore.MockClient/Protocol/ClientSrp6.cs:DS126858
+            -**/tools/ArcaneCore.MockClient/Scenarios/ScenarioConnection.cs:DS126858
+            -**/.github/workflows/devskim.yml
+            -**/src/ArcaneCore.Game/Battlegrounds/ArathiBasin.cs:DS176209
+            -**/src/ArcaneCore.Game/Stats/SpellCritTable.cs:DS176209
+            -**/src/ArcaneCore.Game/Locomotion/LocomotionOptions.cs:DS176209
+            -**/src/ArcaneCore.Game/Locomotion/Hazards/MapEnvironment.cs:DS176209
+            -**/src/ArcaneCore.Kernel/Configuration/Conf/conf-catalog.json:DS176209
+            -**/sql/updates/**/schema-snapshot.json:DS173237
+            -**/sql/updates/**/schema-snapshot.json:DS117838
+            -**/docs/integration/takeover-accounting-*.json:DS173237
+            -**/tests/ArcaneCore.Data.Tests/CandidateBaseline.cs:DS173237
+            -**/tests/ArcaneCore.Game.Tests/SpellRules/SpellRulePacketTests.cs:DS173237
+            -**/tests/ArcaneCore.MockClient.Tests/ProtocolTests.cs:DS173237
+            -**/tests/ArcaneCore.MockClient.Tests/QuestGreetingWireTests.cs:DS173237
+            -**/tests/ArcaneCore.MockClient.Tests/VanillaRoundTripVectorsTests.cs:DS173237
+            -**/tests/ArcaneCore.World.Tests/Playerbots/Qa/PlayerbotQaRedactorTests.cs:DS173239
+            -**/tests/ArcaneCore.World.Tests/Playerbots/Qa/QaTestSupport.cs:DS173239
+            -**/src/ArcaneCore.Realm/Net/PatchCatalog.cs:DS197836
+            -**/tests/ArcaneCore.Data.Tests/Upgrade/UpgradeTestSupport.cs:DS197836
+            -**/tests/**:DS137138
+            -**/docker-compose.yml:DS137138
+            -**/apps/docker/grafana/**:DS137138
+            -**/src/ArcaneCore.Kernel/Configuration/Conf/conf-catalog.json:DS137138
+            -**/src/ArcaneCore.Kernel/Ops/Metrics/MetricsOptionsValidation.cs:DS137138
+            -**/tools/terrain/vmap-oracle/**:DS154189
+            -**:DS162092
+            -**/Playerbots/**:DS172412
+            -**:DS450000
 
       - name: Upload DevSkim scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
