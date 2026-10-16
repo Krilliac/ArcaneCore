@@ -178,7 +178,7 @@ public sealed class PlayerbotBrainAnomalyTests
 
     /// <summary>
     /// The trapped-ghost scenario of PlayerbotRecoveryTests: the recovery relocates the ghost to the graveyard and onto the healer
-    /// (teleports used, Info), then the spirit-healer fallback fails when the healer is gone (reported before the throw).
+    /// (teleports used, Info), then the spirit-healer fallback fails when the healer is gone (reported once; nothing is thrown).
     /// </summary>
     [Fact]
     public async Task ATrappedGhost_ReportsItsRelocations_AndTheFailureOfTheSpiritHealerFallback()
@@ -248,11 +248,11 @@ public sealed class PlayerbotBrainAnomalyTests
             Assert.True(onHealer);
             Assert.Equal(2, cap.Count(RecoveryKey("teleport-used")));
             await host.OnWorldAsync(() => { player.VisibleObjects.Remove(healer!.Guid); return true; });
-            bool faulted = false;
-            for (int think = 0; think < 100 && !faulted; think++)
+            bool threw = false;
+            for (int think = 0; think < 100 && !threw; think++)
             {
                 await host.World.AdvanceClockAsync(2_500);
-                faulted = await host.OnWorldAsync(() =>
+                threw = await host.OnWorldAsync(() =>
                 {
                     session.ManagedBudget = new ManagedActionBudget(4);
                     try { recovery!.Update(player, 500); return false; }
@@ -260,8 +260,9 @@ public sealed class PlayerbotBrainAnomalyTests
                 });
             }
 
-            Assert.True(faulted);
-            Assert.True(cap.Any(RecoveryKey("spirit-healer-failed")), cap.Describe());
+            // Reported once, never thrown (a thrown fault quarantined the bot and then disabled it).
+            Assert.False(threw);
+            Assert.Equal(1, cap.Count(RecoveryKey("spirit-healer-failed")));
         }
         finally { session.Kick(); await session.ManagedClosed; }
     }
