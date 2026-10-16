@@ -37,9 +37,9 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>The start countdown is two minutes of game time; a wait for the gates gets three.</summary>
-    private static readonly TimeSpan StartWait = TimeSpan.FromMinutes(3);
+    internal static readonly TimeSpan StartWait = TimeSpan.FromMinutes(3);
 
-    private static async Task RunAsync(ScenarioTestWorld world, string name, Func<ScenarioContext, Task> body)
+    internal static async Task RunAsync(ScenarioTestWorld world, string name, Func<ScenarioContext, Task> body)
     {
         ScenarioReport report = await world.RunAsync(new Scenario(name, body), new ScenarioRunOptions
         {
@@ -49,15 +49,15 @@ public sealed class PlayerbotBattlegroundWorldTests
         Assert.True(report.Passed, report + Environment.NewLine + world.Trace());
     }
 
-    private static BattlegroundManager Manager(ScenarioContext context) => context.Services.GetRequiredService<BattlegroundFeature>().Manager;
+    internal static BattlegroundManager Manager(ScenarioContext context) => context.Services.GetRequiredService<BattlegroundFeature>().Manager;
 
-    private static PlayerbotBattlegroundCoordinator Coordinator(ScenarioContext context) => context.Services.GetRequiredService<PlayerbotBattlegroundCoordinator>();
+    internal static PlayerbotBattlegroundCoordinator Coordinator(ScenarioContext context) => context.Services.GetRequiredService<PlayerbotBattlegroundCoordinator>();
 
     /// <summary>
     /// <see cref="ScenarioContext.WaitUntilAsync"/>, and on a timeout the facts of <paramref name="bots"/> (map, place, binding, the coordinator's
     /// view) in the failure: the scenario's own trace is taken after the run stopped every bot.
     /// </summary>
-    private static async Task WaitExplainedAsync(ScenarioContext context, string what, Func<bool> condition, TimeSpan timeout, params ScenarioBot[] bots)
+    internal static async Task WaitExplainedAsync(ScenarioContext context, string what, Func<bool> condition, TimeSpan timeout, params ScenarioBot[] bots)
     {
         try
         {
@@ -73,7 +73,7 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>An autonomous bot: logged in (scripted, so the run records its packets), then handed to its brain and the coordinators.</summary>
-    private static async Task<ScenarioBot> AutonomousAsync(ScenarioContext context, string name, byte race)
+    internal static async Task<ScenarioBot> AutonomousAsync(ScenarioContext context, string name, byte race)
     {
         ScenarioBot bot = await context.LoginAsync(name, race, characterClass: 1);
         await context.AutonomousAsync(bot);
@@ -81,7 +81,7 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>A scripted Horde opponent queues at its battlemaster for <paramref name="type"/> (it never fights; the coordinator never drives it).</summary>
-    private static async Task<ScenarioBot> ScriptedHordeQueuesAsync(ScenarioContext context, string name, BattlegroundType type, uint master)
+    internal static async Task<ScenarioBot> ScriptedHordeQueuesAsync(ScenarioContext context, string name, BattlegroundType type, uint master)
     {
         ScenarioBot horde = await context.LoginAsync(name, race: 2, characterClass: 1);
         await context.StepAsync($"{name} queues for {type}", async () =>
@@ -99,7 +99,7 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>The scripted bot takes its invitation and ports in, then is parked where it is out of everyone's way.</summary>
-    private static Task PortScriptedAsync(ScenarioContext context, ScenarioBot bot, uint map, (float X, float Y, float Z)? park)
+    internal static Task PortScriptedAsync(ScenarioContext context, ScenarioBot bot, uint map, (float X, float Y, float Z)? park)
         => context.StepAsync($"{bot.Name} ports in", async () =>
         {
             await context.WaitUntilAsync($"{bot.Name} is invited", () => Manager(context).StateOf(bot.Guid).InvitedInstance((BattlegroundQueueType)(byte)BattlegroundManager.TypeOfMap(map)) != 0, StartWait);

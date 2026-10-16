@@ -6,6 +6,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -80,6 +81,24 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     private readonly Dictionary<BattlegroundType, bool> _content = [];
     private (object? Objects, object? Triggers, object? Spells, object? Events) _contentOf;
 
+    /// <summary>The world ticks this coordinator has seen (the Warsong Gulch plans are made once per match, team and tick).</summary>
+    private ulong _tick;
+
+    /// <summary>The Warsong Gulch plan of each match and team, made at most once per tick (<see cref="WarsongOrder"/>).</summary>
+    private readonly Dictionary<(uint Instance, Team Team), (ulong Tick, Dictionary<ObjectGuid, PlayerbotWsgOrder> Orders)> _wsgPlans = [];
+
+    /// <summary>The Warsong Gulch flag stand spawns (Alliance, Horde) of the loaded object content (the stands are despawned while their flag is away).</summary>
+    private (object? Of, Vector3? Alliance, Vector3? Horde) _wsgStands;
+
+    /// <summary>
+    /// The battlemasters whose route was refused from a zone, until when (world ms): a refused route is not walked again from that zone
+    /// for <see cref="RefusedMasterMs"/> (live: Gitrol, Silverpine Forest, sent 62 times to the Undercity battlemaster the mesh does not join).
+    /// </summary>
+    private readonly Dictionary<(ObjectGuid Master, uint Zone), uint> _refusedMasters = [];
+
+    /// <summary>How long a battlemaster whose route was refused is left alone from the bot's zone.</summary>
+    internal const uint RefusedMasterMs = 3_600_000;
+
     /// <summary>What happened so far: queued, entered, left after a match, invitations declined at the cap, queues given up (status and tests).</summary>
     internal (int Queued, int Entered, int Left, int Declined, int QueueTimeouts) Totals { get; private set; }
 
@@ -132,6 +151,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     internal void Update(IReadOnlyList<PlayerbotBattlegroundBot> bots, uint elapsedMs)
     {
         _bots.Clear();
+        _tick++;
         foreach (PlayerbotBattlegroundBot bot in bots) _bots[bot.BotId] = bot;
         if (Feature() is not { } feature) return;
         _gone.Clear();
@@ -175,7 +195,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 ai.Travel(player, t.MasterAt, elapsedMs);
                 break;
             case PlayerbotBattlegroundPhase.InMatch when Feature()?.BattlegroundOf(player.Guid) is { } match && match.PlayerTeam(player.Guid) is { } team:
-                ai.Play(player, match, team, t.Role, elapsedMs);
+                ai.Play(player, match, team, t.Role, elapsedMs, match is WarsongGulch wsg ? WarsongOrder(wsg, team, player) : null);
                 break;
             default:
                 // Joining at the battlemaster, porting in, leaving: the acknowledgements, and stand still.
@@ -396,6 +416,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
             case PlayerbotBattlegroundAction.SetAside:
                 SetAside(t.BotId, t.Type);
+                if (facts.TravelRefused) RefuseMaster(t.Battlemaster, player);
                 Note(facts.TravelRefused ? $"{t.Name} could not walk to the {t.Type} battlemaster: set aside" : $"{t.Name} got no queue slot for {t.Type}: set aside");
                 if (!bot.Session.IsInChaosProbe)
                 {
@@ -410,6 +431,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 if (t.Phase == PlayerbotBattlegroundPhase.Travel && facts.InPhaseMs > PlayerbotBattlegroundQueueMachine.TravelTimeoutMs)
                 {
                     SetAside(t.BotId, t.Type);
+                    RefuseMaster(t.Battlemaster, player);
                     Note($"{t.Name} timed out walking to the {t.Type} battlemaster: set aside");
                     if (!bot.Session.IsInChaosProbe)
                         PlayerbotAnomalies.Report(player, "bg", "objective-unreachable", $"timed out walking to {t.Type} battlemaster {t.Battlemaster}");
@@ -478,6 +500,13 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     private void SetAside(Guid botId, BattlegroundType type) => _setAside[(botId, type)] = unchecked(Now + SetAsideMs);
 
+    /// <summary>The walk from the bot's zone to <paramref name="master"/> failed: no bot walks there from that zone for <see cref="RefusedMasterMs"/>.</summary>
+    private void RefuseMaster(ObjectGuid master, Player player) => _refusedMasters[(master, player.ZoneId)] = unchecked(Now + RefusedMasterMs);
+
+    /// <summary>Whether the walk from <paramref name="zone"/> to <paramref name="master"/> failed lately.</summary>
+    internal bool IsMasterRefused(ObjectGuid master, uint zone)
+        => _refusedMasters.TryGetValue((master, zone), out uint until) && unchecked((int)(until - Now)) > 0;
+
     private bool IsSetAside(Guid botId, BattlegroundType type)
         => _setAside.TryGetValue((botId, type), out uint until) && unchecked((int)(until - Now)) > 0;
 
@@ -488,6 +517,10 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         uint now = Now;
         foreach (((Guid, BattlegroundType) key, uint until) in _setAside.ToArray())
             if (unchecked((int)(until - now)) <= 0) _setAside.Remove(key);
+        foreach (((ObjectGuid, uint) key, uint until) in _refusedMasters.ToArray())
+            if (unchecked((int)(until - now)) <= 0) _refusedMasters.Remove(key);
+        foreach (KeyValuePair<(uint, Team), (ulong Tick, Dictionary<ObjectGuid, PlayerbotWsgOrder> Orders)> plan in _wsgPlans.ToArray())
+            if (_tick - plan.Value.Tick > 1) _wsgPlans.Remove(plan.Key);
 
         BattlegroundManager manager = feature.Manager;
         BuildDemand(manager);
@@ -648,10 +681,121 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         return PlayerbotRoles.Assign(player.Class, id => feature.System.Store.Get(id) is { } signature && names.Contains(signature.Name));
     }
 
+    // --- Warsong Gulch plans ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The Warsong Gulch order of <paramref name="player"/> this tick (<see cref="PlayerbotWarsongTactics.Plan"/>). The plan of the bot's match
+    /// and team is made once per tick and shared by its bots: one pass over the match's participants and the team's followed bots, never a
+    /// scan per bot think.
+    /// </summary>
+    internal PlayerbotWsgOrder? WarsongOrder(WarsongGulch wsg, Team team, Player player)
+    {
+        (uint, Team) key = (wsg.InstanceId, team);
+        if (!_wsgPlans.TryGetValue(key, out (ulong Tick, Dictionary<ObjectGuid, PlayerbotWsgOrder> Orders) plan) || plan.Tick != _tick)
+        {
+            plan = (_tick, BuildWarsongPicture(wsg, team, player) is { } picture ? PlayerbotWarsongTactics.Plan(picture) : []);
+            _wsgPlans[key] = plan;
+        }
+
+        return plan.Orders.TryGetValue(player.Guid, out PlayerbotWsgOrder order) ? order : null;
+    }
+
+    /// <summary>What the plan reads about <paramref name="team"/>'s side of <paramref name="wsg"/>, from the bot's map (null: no flag room or stands known).</summary>
+    private PlayerbotWsgPicture? BuildWarsongPicture(WarsongGulch wsg, Team team, Player anyBot)
+    {
+        if (_world is null || anyBot.Map is not { } map) return null;
+        Team enemy = BattlegroundConstants.OtherTeam(team);
+        WorldMaps maps = WorldMaps.Of(_world);
+        uint ownTrigger = team == Team.Alliance ? WarsongGulch.AreaTriggerAllianceFlagSpawn : WarsongGulch.AreaTriggerHordeFlagSpawn;
+        if (maps.FindAreaTrigger(ownTrigger) is not { } room || WarsongStands() is not ({ } allianceStand, { } hordeStand)) return null;
+        Vector3 ownRoom = new(room.X, room.Y, room.Z);
+        Vector3 enemyStand = enemy == Team.Alliance ? allianceStand : hordeStand;
+        Vector3 ownStand = team == Team.Alliance ? allianceStand : hordeStand;
+        Vector3 middle = (ownStand + enemyStand) / 2f;
+        float ground = map.Collision.GetHeight(middle.X, middle.Y, MathF.Max(ownStand.Z, enemyStand.Z) + 5f);
+        if (ground > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(ground)) middle.Z = ground;
+
+        var bots = new List<PlayerbotWsgMember>();
+        foreach (Tracked t in _tracked.Values)
+        {
+            if (t.Phase != PlayerbotBattlegroundPhase.InMatch || t.InstanceId != wsg.InstanceId || t.Team != team
+                || !_bots.TryGetValue(t.BotId, out PlayerbotBattlegroundBot bot) || bot.Session.Player is not { IsInWorld: true } p
+                || !ReferenceEquals(p.Map, map) || wsg.PlayerTeam(p.Guid) != team) continue;
+            bots.Add(new PlayerbotWsgMember(p.Guid, new Vector3(p.X, p.Y, p.Z), p.IsAlive && (p.Flags & PlayerFlags.Ghost) == 0, t.Healer));
+        }
+
+        var enemies = new List<PlayerbotWsgEnemy>();
+        foreach ((ObjectGuid guid, Team side) in wsg.Participants())
+            if (side == enemy && _world.FindOnlinePlayer(guid) is { IsInWorld: true, IsAlive: true } e && (e.Flags & PlayerFlags.Ghost) == 0 && ReferenceEquals(e.Map, map))
+                enemies.Add(new PlayerbotWsgEnemy(guid, new Vector3(e.X, e.Y, e.Z)));
+
+        Vector3? At(ObjectGuid guid) => guid.IsEmpty ? null : map.FindObject(guid) is WorldObject o && ReferenceEquals(o.Map, map) ? new Vector3(o.X, o.Y, o.Z) : null;
+        uint enemyStandEntry = enemy == Team.Alliance ? WarsongGulch.AllianceFlagBaseEntry : WarsongGulch.HordeFlagBaseEntry;
+        bool enemyReady = wsg.FlagState(enemy) == WsgFlagState.OnBase
+            && wsg.IsActiveEvent(enemy == Team.Alliance ? WarsongGulch.EventFlagAlliance : WarsongGulch.EventFlagHorde, 0);
+        ObjectGuid standObject = default;
+        if (enemyReady && map.FindUpdater<GameObjectMapSystem>() is { } objects)
+        {
+            // Once per match, team and tick (the stand object is respawned with the flag, so its guid is looked up again).
+            float best = float.MaxValue;
+            foreach (GameObject go in objects.GameObjects)
+            {
+                if (go.Entry != enemyStandEntry || !go.IsSpawned) continue;
+                float distance = Vector3.Distance(new Vector3(go.X, go.Y, go.Z), enemyStand);
+                if (distance < best)
+                {
+                    best = distance;
+                    standObject = go.Guid;
+                }
+            }
+        }
+
+        ObjectGuid enemyCarrier = wsg.FlagState(team) == WsgFlagState.OnPlayer ? wsg.FlagPicker(team) : default;
+        ObjectGuid ownCarrier = wsg.FlagState(enemy) == WsgFlagState.OnPlayer ? wsg.FlagPicker(enemy) : default;
+        return new PlayerbotWsgPicture
+        {
+            Team = team,
+            Bots = bots,
+            Enemies = enemies,
+            OwnFlag = wsg.FlagState(team),
+            OwnFlagDropped = wsg.FlagState(team) == WsgFlagState.OnGround ? At(wsg.DroppedFlagGuid(team)) : null,
+            EnemyFlag = wsg.FlagState(enemy),
+            EnemyFlagReady = enemyReady,
+            EnemyStandObject = standObject,
+            EnemyFlagDropped = wsg.FlagState(enemy) == WsgFlagState.OnGround ? At(wsg.DroppedFlagGuid(enemy)) : null,
+            EnemyCarrier = enemyCarrier,
+            EnemyCarrierAt = enemyCarrier.IsEmpty ? null : _world.FindOnlinePlayer(enemyCarrier) is { IsInWorld: true } ec && ReferenceEquals(ec.Map, map) ? new Vector3(ec.X, ec.Y, ec.Z) : null,
+            OwnCarrier = ownCarrier,
+            OwnCarrierAt = ownCarrier.IsEmpty ? null : _world.FindOnlinePlayer(ownCarrier) is { IsInWorld: true } oc && ReferenceEquals(oc.Map, map) ? new Vector3(oc.X, oc.Y, oc.Z) : null,
+            OwnRoom = ownRoom,
+            EnemyStand = enemyStand,
+            Midfield = middle,
+        };
+    }
+
+    /// <summary>Where the two Warsong Gulch flag stands are spawned (cached per object content).</summary>
+    private (Vector3? Alliance, Vector3? Horde) WarsongStands()
+    {
+        if (services.GetService<GameObjectLootFeature>()?.Content is not { } objects) return (null, null);
+        if (!ReferenceEquals(_wsgStands.Of, objects))
+        {
+            Vector3? alliance = null, horde = null;
+            foreach (GameObjectSpawn spawn in objects.GetSpawns(BattlegroundManager.MapOfType(BattlegroundType.WarsongGulch)))
+            {
+                if (spawn.Entry == WarsongGulch.AllianceFlagBaseEntry) alliance ??= new Vector3(spawn.X, spawn.Y, spawn.Z);
+                else if (spawn.Entry == WarsongGulch.HordeFlagBaseEntry) horde ??= new Vector3(spawn.X, spawn.Y, spawn.Z);
+            }
+
+            _wsgStands = (objects, alliance, horde);
+        }
+
+        return (_wsgStands.Alliance, _wsgStands.Horde);
+    }
+
     // --- content ----------------------------------------------------------------------------------------------------
 
     /// <summary>A battlemaster spawn: its guid, where it stands, its name and its faction template.</summary>
-    private sealed record Battlemaster(ObjectGuid Guid, BattlegroundType Type, Vector3 At, string Name, uint Faction);
+    private sealed record Battlemaster(ObjectGuid Guid, uint SpawnGuid, BattlegroundType Type, Vector3 At, string Name, uint Faction);
 
     /// <summary>
     /// The nearest battlemaster of <paramref name="type"/> on the bot's map within <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/> that
@@ -660,13 +804,18 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// </summary>
     private Battlemaster? FindMaster(Player player, BattlegroundType type)
     {
-        if (player.Map is null || services.GetService<QuestNpcFeature>() is not { } npcs) return null;
+        if (player.Map is not { } map || services.GetService<QuestNpcFeature>() is not { } npcs) return null;
         float reach = Math.Clamp(_options.Battlegrounds.MaxTravelYards, 100, 20_000);
         Battlemaster? best = null;
         float nearest = reach;
+        // A spawn a game event holds back is not in the world while its event is off (the Warsong Emissary, 15105, of game event 19 "Call
+        // to Arms: Warsong Gulch"; vmangos GameEventMgr GameEventSpawn/GameEventUnspawn): walking to it finds nobody.
+        ArcaneCore.Game.WorldState.Events.ISpawnGate? gate = map.FindUpdater<CreatureMapSystem>()?.SpawnGate;
         foreach (Battlemaster master in MastersOn(player.MapId))
         {
             if (master.Type != type) continue;
+            if (gate is not null && !gate.AllowsCreature(master.SpawnGuid)) continue;
+            if (IsMasterRefused(master.Guid, player.ZoneId)) continue;
             float distance = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), master.At);
             if (distance > nearest
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
@@ -695,7 +844,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         {
             if (!feature.Battlemasters.TryGetValue(spawn.Entry, out BattlegroundType type) || content.FindTemplate(spawn.Entry) is not { } template) continue;
             if (!float.IsFinite(spawn.X) || !float.IsFinite(spawn.Y) || !float.IsFinite(spawn.Z)) continue;
-            list.Add(new Battlemaster(ObjectGuid.WithEntry(HighGuid.Unit, spawn.Entry, spawn.Guid), type, new Vector3(spawn.X, spawn.Y, spawn.Z),
+            list.Add(new Battlemaster(ObjectGuid.WithEntry(HighGuid.Unit, spawn.Entry, spawn.Guid), spawn.Guid, type, new Vector3(spawn.X, spawn.Y, spawn.Z),
                 template.Name, template.Faction));
         }
 
