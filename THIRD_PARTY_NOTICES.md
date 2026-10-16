@@ -70,3 +70,12 @@ SOFTWARE.
 - Scope: referenced by `ArcaneCore.World.Tests` (the opt-in wire oracle and capture tests), `ArcaneCore.MockClient.Tests` (round-trip vectors), and `tools/ArcaneCore.Sniff` (offline decode). No production project under `src/` references it.
 
 The upstream source repository contains no standalone license file at this commit; its project metadata names both license options and `Copyright (c) Gtker 2024`. `tests/ThirdParty/WowWorldMessages/LICENSE-MIT.txt` holds the MIT text for the chosen option with that copyright.
+
+## Sonder-Inference scheduler, KV cache and session lifecycle (bot chat inference)
+
+- Repository: Krilliac/Sonder-Inference (https://github.com/Krilliac/Sonder-Inference), read-only clone at `D:/ArcaneCore-lanes/_refs/sonder-inference`
+- Commit: `1c4c152acc0be1f4f811c60e8c20b17cfb794b0b`
+- License: Apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0). Upstream NOTICE: "Sonder-Inference, Copyright 2026 Nate Witkowski. This product is licensed under the Apache License, Version 2.0." No upstream third-party component (llama.cpp, cpp-httplib, doctest) was ported.
+- Source files ported to C#: `src/scheduler/include/sonder/inference/scheduler/*.hpp` and `src/scheduler/src/*.cpp` (types, clock, kv_capacity, config, stats, scheduler, simulator); `src/cache/include/sonder/inference/cache/*.hpp`, `src/cache/types.cpp`, `src/cache/eviction_policy.cpp`, `src/cache/kv_cache_manager.cpp`; `src/engine/kv_capacity_adapter.hpp`; lifecycle ideas from `src/sessions/session.cpp` and `src/engine/request_runtime.hpp`.
+- Derived ArcaneCore files: `src/ArcaneCore.World/Playerbots/Chat/Inference/Scheduling/` (including `Cache/` and `Sessions/`); each file carries a "Ported from" header naming its source path and commit. Unit tests ported from `src/scheduler/tests/*.cpp` and `src/cache/tests/*.cpp` live in `tests/ArcaneCore.World.Tests/Playerbots/Chat/Inference/Scheduling/`.
+- Changes: idiomatic C# rewrite; the seven upstream workload classes are replaced by ArcaneCore's `InteractivePlayer`, `BotToBot` and `Ambient`; droppable (Ambient) requests that wait past a queue deadline are dropped; the upstream `Status` type becomes `KvCacheStatus`. The port runs in-process and calls no Sonder or Ollama service.
