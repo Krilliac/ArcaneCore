@@ -119,7 +119,10 @@ public sealed partial class PlayerbotGroupCoordinator
     /// </summary>
     internal PlayerbotRunCatalogue Catalogue()
     {
-        if (_world is null || services.GetService<CreatureWorldFeature>()?.Content is not { } creatures) return PlayerbotRunCatalogue.Empty;
+        // Until CreatureWorldFeature installs its content (a call it posts to the world thread at attach) Content is CreatureContent.Empty:
+        // a catalogue built from it finds no spawn for any boss and leaves every wing out as no-spawned-boss (logged for all 48 wings at
+        // each startup). Build nothing, cache nothing and log nothing until the real spawns are in place.
+        if (_world is null || CatalogueCreatures(services.GetService<CreatureWorldFeature>()) is not { } creatures) return PlayerbotRunCatalogue.Empty;
         WorldMaps maps = WorldMaps.Of(_world);
         IReadOnlyCollection<AreaTriggerTemplate> triggers = maps.AreaTriggers;
         if (ReferenceEquals(_catalogueRegistry, maps.Registry) && ReferenceEquals(_catalogueTriggers, triggers)
@@ -140,6 +143,13 @@ public sealed partial class PlayerbotGroupCoordinator
             logger.LogInformation("Playerbot runs: {Map} ({MapId}) wing {Segment} is not run: {Reason}", exclusion.MapName, exclusion.MapId, exclusion.Segment, exclusion.Reason);
         return _catalogue;
     }
+
+    /// <summary>
+    /// The creature content the catalogue may be built from: the feature's content once it is installed, else null (not yet loaded; the
+    /// empty placeholder must not be read as "no boss has a spawn").
+    /// </summary>
+    internal static CreatureContent? CatalogueCreatures(CreatureWorldFeature? feature)
+        => feature is { ContentInstalled: true } ? feature.Content : null;
 
     // --- starting a run ------------------------------------------------------------------------------------------------
 

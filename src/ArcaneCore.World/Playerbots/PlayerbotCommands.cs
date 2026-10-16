@@ -64,13 +64,15 @@ public sealed class PlayerbotCommands : ICommandGroup
     private static bool ChatStatus(CommandContext context, string text)
     {
         if (text.Trim().Length != 0) return false;
-        if (context.Session.Services.GetService<ManagedPlayerbotFeature>()?.Chat is not { } chat)
+        ManagedPlayerbotFeature? feature = context.Session.Services.GetService<ManagedPlayerbotFeature>();
+        if (feature?.Chat is not { } chat)
         {
             context.Reply("Playerbot chat is unavailable.");
             return true;
         }
 
         foreach (string line in ChatStatusLines(chat.Status())) context.Reply(line);
+        if (feature.ChatInProcess?.StatusLine() is { } local) context.Reply(local);
         return true;
     }
 
