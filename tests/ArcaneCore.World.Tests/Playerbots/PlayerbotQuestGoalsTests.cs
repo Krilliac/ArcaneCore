@@ -109,14 +109,16 @@ public sealed class PlayerbotQuestGoalsTests
             var suspensions = new PlayerbotSuspensions();
             goals.Suspensions = suspensions;
             quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            uint markedAt = quest.Host.World.NowMs;
             Assert.True(goals.AbandonDistantCompletedQuest(player));
             Assert.Equal(QuestStatus.None, state.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
             Assert.Equal(QuestConstants.MaxQuestLogSize, state.Quests.FindSlot(QuestInteractionFixture.QuestId));
             Assert.False(goals.HasCandidate(player));
-            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
-            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId,
-                quest.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1));
+            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, markedAt));
+            // The unreachable-ender mark lasts a minute first (PlayerbotDeferLedger), then ends: a repeat is what makes it longer.
+            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, markedAt + 59_000));
             Assert.True(goals.IsRefused(QuestInteractionFixture.QuestId));
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, markedAt + 61_000)); // past its end the mark is over
             return true;
         });
     }
@@ -454,7 +456,7 @@ public sealed class PlayerbotQuestGoalsTests
     }
 
     [Fact]
-    public async Task UnhomedBot_CrossContinentAbandon_IsDurableEvenWhenTheDistanceLimitIsDisabled()
+    public async Task UnhomedBot_CrossContinentAbandon_IsMarkedUnreachableEvenWhenTheDistanceLimitIsDisabled()
     {
         await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { EnderOnOtherMap = true });
         await quest.Host.World.InvokeAsync(() =>
@@ -470,9 +472,11 @@ public sealed class PlayerbotQuestGoalsTests
             var suspensions = new PlayerbotSuspensions();
             goals.Suspensions = suspensions;
             quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            uint markedAt = quest.Host.World.NowMs;
             Assert.True(goals.AbandonDistantCompletedQuest(player));
-            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId,
-                quest.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1));
+            // The unreachable-ender mark lasts a minute first (PlayerbotDeferLedger), then ends: a repeat is what makes it longer.
+            Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, markedAt + 59_000));
+            Assert.False(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, markedAt + 61_000));
             return true;
         });
     }
@@ -810,6 +814,107 @@ public sealed class PlayerbotQuestGoalsTests
         });
     }
 
+
+    [Fact]
+    public async Task ATurnedInQuest_StartsCleanWhateverItsEarlierMarksWere()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync();
+        const uint Q = QuestInteractionFixture.QuestId;
+        var suspensions = new PlayerbotSuspensions();
+        PlayerbotQuestGoals? goals = null;
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            var body = new PacketWriter(12);
+            body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            body.WriteUInt32(Q);
+            quest.Session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            // An earlier abandon and a refusal left strikes behind (both marks ended already).
+            uint now = quest.Host.World.NowMs;
+            suspensions.Ledger.Defer(new DeferKey(DeferKind.UnreachableQuest, Q), now, untilMs: now);
+            suspensions.Ledger.Defer(new DeferKey(DeferKind.UnreachableQuest, Q), now, untilMs: now);
+            Assert.Equal(2, suspensions.Ledger.Strikes(new DeferKey(DeferKind.UnreachableQuest, Q)));
+            goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true }) { Suspensions = suspensions };
+            for (int i = 0; i < 8 && quest.Feature.PendingSettlementCount == 0
+                && !quest.Feature.Services.StateOf(player)!.Quests.Get(Q)!.Rewarded; i++)
+            {
+                quest.Session.ManagedBudget = new ManagedActionBudget(1);
+                goals.Update(player, 500);
+            }
+
+            return true;
+        });
+        await quest.Feature.WaitForSettlementAsync((int)quest.Session.Player!.Guid.Low);
+        await quest.Host.World.InvokeAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            for (int i = 0; i < 6 && suspensions.Ledger.Strikes(new DeferKey(DeferKind.UnreachableQuest, Q)) != 0; i++)
+            {
+                quest.Session.ManagedBudget = new ManagedActionBudget(1);
+                goals!.Update(player, 500);
+            }
+
+            Assert.True(quest.Feature.Services.StateOf(player)!.Quests.Get(Q)!.Rewarded);
+            Assert.Equal(0, suspensions.Ledger.Strikes(new DeferKey(DeferKind.UnreachableQuest, Q)));
+            Assert.Equal(0, suspensions.Ledger.Strikes(new DeferKey(DeferKind.Quest, Q)));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ANeverSatisfiableTurnIn_IsNotWalkedBackToWithinItsGrowingBound()
+    {
+        // A quest with no objectives and a turn-in the ender keeps refusing ("requirements not met"): the refusal marks it
+        // unreachable (PlayerbotQuestGoals.RefuseTurnIn). Each repeat sets it aside for longer, 60 s then 10 min, 1 h, ... so the
+        // bot is not back at the ender every ten minutes for ever.
+        await using QuestHost quest = await QuestHost.StartAsync(new QuestInteractionFixture { NoObjectives = true }, manualClock: true);
+        var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+        var suspensions = new PlayerbotSuspensions();
+        goals.Suspensions = suspensions;
+        const uint Q = QuestInteractionFixture.QuestId;
+        async Task<uint> RefuseAsync()
+        {
+            uint at = 0;
+            await quest.Host.World.InvokeAsync(() =>
+            {
+                Player player = quest.Session.Player!;
+                at = quest.Host.World.NowMs;
+                var body = new PacketWriter(12);
+                body.WriteUInt64(QuestInteractionFixture.Guid.Value);
+                body.WriteUInt32(Q);
+                if (quest.Feature.Services.StateOf(player)!.Quests.Get(Q) is null)
+                {
+                    quest.Session.ManagedBudget = new ManagedActionBudget(1);
+                    quest.Session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, body.ToArray());
+                }
+
+                goals.RecordTurnInRefusal(player, Q, QuestInteractionFixture.Entry, "requirements not met", "DontHaveReq", at);
+                return true;
+            });
+            return at;
+        }
+
+        uint[] steps = [60_000, 600_000, 3_600_000];
+        for (int refusal = 0; refusal < steps.Length; refusal++)
+        {
+            uint at = await RefuseAsync();
+            uint bound = steps[refusal];
+            await quest.Host.World.InvokeAsync(() =>
+            {
+                var key = new DeferKey(DeferKind.UnreachableQuest, Q);
+                Assert.Equal(refusal + 1, suspensions.Ledger.Strikes(key));
+                Assert.True(suspensions.IsQuestUnreachable(Q, at + bound - 1)); // set aside for exactly the step ...
+                Assert.False(suspensions.IsQuestUnreachable(Q, at + bound)); // ... and no longer
+                Assert.True(goals.IsRefused(Q));
+                Assert.Equal(0u, goals.CompletedReturnQuest(quest.Session.Player!)); // not walked back to
+                return true;
+            });
+            // The ordinary ten minute set-aside ends first; the next refusal is the bot walking back after it.
+            await quest.Host.World.AdvanceClockAsync(PlayerbotSuspensions.SuspendMs + 1_000);
+        }
+    }
 
     /// <summary>A world with the synthetic quest giver beside a managed player and a SQLite character database.</summary>
     private sealed class QuestHost : IAsyncDisposable

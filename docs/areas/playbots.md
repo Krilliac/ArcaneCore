@@ -134,10 +134,14 @@ statically infeasible only if it has a creature giver on map 0 or 1 and, for eve
 G, or L is above 0 and every giver-to-ender distance on G exceeds L; a quest with no creature giver on map 0 or 1 is never
 infeasible. The quest is abandoned only when it is not reachable now and statically infeasible, so a bot on the ender's
 continent, or one that merely wandered far from a local hand-in while finishing objectives, keeps it. Successful
-abandonment uses `CMSG_QUESTLOG_REMOVE_QUEST` and frees the slot. An unhomed bot durably refuses an abandoned quest; a
-homed bot and a server-refused packet record no durable refusal. Durable refusals outlive later
-config changes: raising `MaxDeliveryYards` does not lift refusals already recorded; they age out through the 64-entry
-per-bot FIFO. A refused abandon packet is retried only after the normal refusal interval. A quest whose enders are all on
+abandonment uses `CMSG_QUESTLOG_REMOVE_QUEST` and frees the slot. An unhomed bot marks an abandoned quest *unreachable* for a while; a
+homed bot and a server-refused packet record no mark. The mark is the bot's unreachable-quest deferral
+(`DeferKind.UnreachableQuest`, below): it lasts 60 seconds, then 10 minutes, 1 hour, 6 hours and 24 hours with each repeat (the last holds, so a
+quest the bot keeps abandoning is not taken again every few minutes for ever; a turn-in that can never be satisfied escalates the same way), and ends
+sooner when the bot gains a level or the quest store, creature definitions or navigation dataset is replaced (the fleet-wide causes release
+after a stable 0 to 60 s stagger per bot, not all at once). It is saved with a finite expiry and its strikes in the row's `RepeatCount`; a row
+an older build wrote with no expiry (`long.MaxValue`) is restored with a staggered one to five minutes and two strikes. At most 64 are kept
+(when full, a new mark replaces the ended one with the fewest strikes, else the one that ends soonest; see the defer ledger below). A refused abandon packet is retried only after the normal refusal interval. A quest whose enders are all on
 the other continent from its giver is still abandoned when the distance limit is disabled; unknown or scripted enders
 remain eligible. Homed bots keep their home-area and short-return rules. Giver-to-ender facts (per-map giver presence and
 ender spawns with their nearest-giver distance) are shared and cached by quest store, creature content, definition
@@ -213,10 +217,20 @@ which is exact and needs no path search.
   polygons is a plaza, not a fragment. When the ground beside the fragment is a cliff or too far, as at both live pins, the stall path takes over:
   the brain's island escape (`EscapeIsland`) treats a fragment bot as an island bot and teleports it home or to its bind point.
 - **Dead-end pin memory and Hearthstone escalation** (`PlayerbotStallWatch.RecordPinStall` / `IsDeadEndPin`, `PlayerbotSuspensions.SuspendEntryEscalating`):
-  each stall give-up records the bot's 10-yard coordinate cell (`PinCell(mapId, floor(x/10), floor(y/10))`, bounded to 64 cells per bot). Once a cell
-  accumulates `PinStallsToEscalate` (2) stalls, `PlayerbotNavigation` refuses destinations and partial-route endpoints inside that cell (`IsDeadEndPin`),
+  each stall give-up records the bot's 10-yard coordinate cell (a `DeferKind.PinCell` key packing map, floor(x/10), floor(y/10); bounded to 64 cells per bot). Once a cell
+  accumulates `PinStallsToEscalate` (2) stalls, `PlayerbotNavigation` refuses destinations and partial-route endpoints inside that cell (`IsDeadEndPin`)
+  for the cell's backoff since its last stall (10, 30, then 60 minutes from the second stall, read against the world clock at each ask; the first stall is recorded but is no pin yet; a cell whose backoff ended an hour ago starts again; from the third stall a replaced navigation dataset frees it),
   `GiveUpStalledGoal` escalates the stalled target entry's suspension (`SuspendEntryEscalating`, doubling up to `MaxSuspendMs` = 80 minutes) and marks
-  repeated quest stalls unreachable for the session, and `EscapeIsland` treats the pinned bot as an island escape, teleporting it home or to its bind point.
+  repeated quest stalls unreachable (the escalating mark above), and `EscapeIsland` treats the pinned bot as an island escape, teleporting it home or to its bind point.
+- **The defer ledger** (`PlayerbotDeferLedger`, one per bot, `PlayerbotSuspensions.Ledger`): the one place a bot records what it put off.
+  A key is a `DeferKind` and an id; `Defer` gives it a deadline (the kind's step by strike: entry, quest and training keep their 10 minute steps, the entry doubling up to 80 minutes; an unreachable quest 60 s, 10 min, 1 h, 6 h, 24 h;
+  a pin cell 10, 30, 60 min from its second stall) and optional wake causes
+  (`DeferWake`: a level gained, a replaced navigation dataset, creature definitions or quest store). `PlayerbotBrain.ObserveDeferWakes` compares the bot
+  with its last think once per alive think (a handful of field reads through feature references cached per brain, so a swap between a deferral beginning and the next think still wakes it), and wakes the waiters; a wake or a lapse keeps the strikes (so the next deferral is longer), `Succeeded` forgets them, an hour of quiet decays them (except an unreachable quest's, which only a turn-in clears: `PlayerbotQuestGoals` calls `QuestSucceeded` when the reward is confirmed, forgetting the quest's unreachable and quest strikes, so a quest that once succeeded starts clean).
+  Caps: 64 per kind (1 for training; 257 in all, under the store's 512 rows per bot). Recording never refuses, so when a kind is full a new key always costs one existing entry its strikes: the ended entry with the fewest effective (decayed) strikes goes first, the oldest of those; a live deferral is cut short only when no entry has ended (then the one soonest to end). Time: the ledger runs on the world's 64-bit `Uptime` in milliseconds (the facades convert the 32-bit `NowMs` against it), so an ended deferral never reads live again at 2^31 or 2^32 ms of uptime, whatever the bot did or did not do in between.
+  Entry, quest, training and unreachable-quest deferrals persist (`PlayerbotSetAside` kinds 0, 1, 2, 5; an entry's and an unreachable
+  quest's strikes in `RepeatCount`); an unreachable quest whose set-aside ended is saved too (expiry = the save time) so a restart keeps its strikes until a turn-in; the rest live in memory. A restart restores an escalated entry for its full remaining time (up to the kind's longest) and continues its
+  escalation. `PlayerbotSuspensions` is the facade the goals call.
 
 Neeka Bloodscar, #194's ender, stands at the top of the Kargath tower, whose upper flight of stairs the mesh flags steep: the walkable mesh
 ends 13 yards below her. A destination indoors (inside a model's group, `MapCollision.IsOutdoors`) is reached over steep polygons when the
@@ -648,7 +662,7 @@ counted (`applied`, `agreed`, `floor`, `explored`, `missing`, `stale`, `non-fini
 `PlayerbotModelPolicy` is the built-in model: optional per-feature standardisation (`mean`, `scale`), then 1..3 dense layers (ReLU between,
 linear last; one layer is a linear model), evaluated with `TensorPrimitives` SIMD dot products on the CPU. A bot costs at most a few thousand
 multiply-adds (12 features x 64 hidden + 64 x 8 goals is about 1.3k), so there is no GPU path: moving a batch to a GPU would cost more than
-scoring it, and deployed servers have none.
+scoring it, and deployed servers have none. Feature 5 (`set_asides`) counts the bot's set-asides that still have time left; since the defer ledger it no longer counts an unreachable quest whose set-aside ended but whose strikes are kept, so a model trained earlier sees that input shifted (lower) for such bots.
 
 **Weights file** (`ModelPath`, JSON, at most 4 MiB, relative to the profile folder): `{"format":"arcanecore.playerbot-policy","version":1,
 "features":[...],"goals":[...],"mean":[...],"scale":[...],"layers":[{"inputs":I,"outputs":O,"activation":"relu"|"linear","weights":[O*I],

@@ -1186,7 +1186,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
     }
 
-    private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
+    /// <summary>A brain for the bot. <paramref name="restoreLoaded"/>: put back the set-asides read at startup (a start); a brain that replaces a running one gets the running one's state instead (<see cref="ReplaceBrain"/>), which the startup rows are older than.</summary>
+    private PlayerbotBrain NewBrain(WorldSession session, Guid botId, bool restoreLoaded = true)
     {
         var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
@@ -1197,7 +1198,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
 
         if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
-        if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
+        if (restoreLoaded && _loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
         return brain;
     }
@@ -2196,7 +2197,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             PlayerbotSetAside[] current = active.Brain.Suspensions.Export(active.Record.BotId, active.Record.CharacterId,
                 active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
             active.Brain.Stop();
-            active.Brain = NewBrain(active.Session, active.Record.BotId);
+            active.Brain = NewBrain(active.Session, active.Record.BotId, restoreLoaded: false);
             active.Brain.Suspensions.Restore(current, active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
             Volatile.Write(ref active.SavedSetAsideVersion, -1);
         }

@@ -202,7 +202,8 @@ internal static class PlayerbotNavigation
     }
 
     internal static bool IsDeadEndPin(Player player, Vector3 point)
-        => StallWatches.TryGetValue(player, out PlayerbotStallWatch? watch) && watch.IsDeadEndPin(player.MapId, point.X, point.Y);
+        => StallWatches.TryGetValue(player, out PlayerbotStallWatch? watch) && watch.World is { } world
+            && watch.IsDeadEndPin(player.MapId, point.X, point.Y, world.NowMs);
 
     /// <summary>The detour offsets tried past a hazard on the way, on either side (yards beyond its radius).</summary>
     private static readonly float[] HazardDetourYards = [5f, 15f];

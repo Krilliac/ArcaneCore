@@ -354,11 +354,14 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
     public bool EnderOnOtherMap { get; init; }
     public bool DistantEnder { get; init; }
 
+    /// <summary>A quest with no objectives at all (complete the moment it is taken), for turn-ins that can never be satisfied.</summary>
+    public bool NoObjectives { get; init; }
+
     public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new QuestContent(
         [new QuestTemplate { Entry = QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, LimitTime = 30, SrcItemId = SourceItem, SrcItemCount = (byte)(SourceItem == 0 ? 0 : 1),
             Title = "Synthetic quest", Details = "Accept a bounded journal task.", RequestItemsText = "Finish the synthetic task.",
             SpecialFlags = (byte)(RepeatableItem == 0 ? 0 : 1), ReqItemId1 = RepeatableItem, ReqItemCount1 = RepeatableItemCount,
-            ReqCreatureOrGOId1 = RepeatableItem == 0 ? 90 : 0, ReqCreatureOrGOCount1 = RepeatableItem == 0 ? 1u : 0u },
+            ReqCreatureOrGOId1 = RepeatableItem == 0 && !NoObjectives ? 90 : 0, ReqCreatureOrGOCount1 = RepeatableItem == 0 && !NoObjectives ? 1u : 0u },
         new QuestTemplate { Entry = UnrelatedId, Method = 2, Title = "Unrelated quest" }],
         [new CreatureQuestRelation { Id = Entry, Quest = QuestId }],
         [new CreatureQuestRelation { Id = EnderOnOtherMap || DistantEnder ? RemoteEnder : Entry, Quest = QuestId }]));

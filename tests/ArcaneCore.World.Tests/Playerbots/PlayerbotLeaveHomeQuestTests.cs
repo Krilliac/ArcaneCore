@@ -130,7 +130,7 @@ public sealed class PlayerbotLeaveHomeQuestTests
         await RunAsync((session, player, options, _) =>
         {
             Complete(player, session, Breadcrumb);
-            var suspensions = new PlayerbotSuspensions();
+            var suspensions = new PlayerbotSuspensions(world: session.World); // placed against the world clock: the expired times below sit before its start
             var goals = new PlayerbotQuestGoals(session, options) { Home = Home(player, graduated: true, options), Suspensions = suspensions };
 
             // A graduated home keeps it, however far the turn-in is.
@@ -169,7 +169,7 @@ public sealed class PlayerbotLeaveHomeQuestTests
                 Assert.Equal(0, suspensions.QuestSetAsideCount(Breadcrumb)); // the wait for a level is not a set-aside
             }
 
-            Assert.False(suspensions.IsQuestUnreachable(Breadcrumb)); // the quest is kept until the bot may ride
+            Assert.Equal(0, suspensions.Ledger.Strikes(new DeferKey(DeferKind.UnreachableQuest, Breadcrumb))); // the quest is kept until the bot may ride
         });
     }
 
