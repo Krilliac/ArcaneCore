@@ -1131,6 +1131,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 policy.Telemetry = new Policy.PlayerbotPolicyTelemetry(_options.Policy.Telemetry,
                     Path.Combine(contentRoot, _options.Policy.Telemetry.Directory), _setAsideTime, logger);
+                if (services.GetService<ArcaneCore.Kernel.Ops.Watchdog.TickMonitor>() is { Enabled: true } monitor)
+                    policy.Telemetry.TickHealth = () => monitor.BudgetMicros < long.MaxValue ? new Policy.PlayerbotTickHealth(monitor.Overruns, monitor.BudgetMicros) : null;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
             {

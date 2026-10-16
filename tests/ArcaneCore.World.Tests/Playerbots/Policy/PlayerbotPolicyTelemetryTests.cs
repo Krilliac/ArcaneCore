@@ -186,6 +186,77 @@ public sealed class PlayerbotPolicyTelemetryTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
+    [Fact]
+    public async Task HealthRecords_AreWrittenAtTheInterval_AndCountTheOverrunsOfTheirWindow()
+    {
+        string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            var time = new ManualTime(new DateTimeOffset(2026, 10, 16, 12, 0, 0, TimeSpan.Zero));
+            long overruns = 5; // already counted before telemetry looked: not this interval's
+            await using (var telemetry = new PlayerbotPolicyTelemetry(new PlayerbotPolicyTelemetryOptions { Enabled = true }, directory, time))
+            {
+                telemetry.TickHealth = () => new PlayerbotTickHealth(overruns, 76_000);
+                telemetry.Sweep(1_000); // the baseline only
+                overruns += 3;
+                time.Advance(TimeSpan.FromSeconds(10));
+                telemetry.Sweep(5_000); // the interval is not over in world time
+                telemetry.Sweep(11_000);
+                time.Advance(TimeSpan.FromSeconds(10));
+                telemetry.Sweep(21_000); // a quiet interval
+                await telemetry.FlushAsync();
+                Assert.Equal(2, telemetry.Counts.Written);
+            }
+
+            JsonElement[] records = [.. Directory.GetFiles(directory).SelectMany(File.ReadAllLines).Select(line => JsonDocument.Parse(line).RootElement)];
+            Assert.Equal(2, records.Length);
+            Assert.Equal(["v", "k", "t", "ms", "over", "budget"], records[0].EnumerateObject().Select(p => p.Name));
+            Assert.Equal("health", records[0].GetProperty("k").GetString());
+            Assert.Equal(1, records[0].GetProperty("v").GetInt32());
+            Assert.Equal(time.GetUtcNow().ToUnixTimeMilliseconds() - 10_000, records[0].GetProperty("t").GetInt64());
+            Assert.Equal(10_000, records[0].GetProperty("ms").GetInt64());
+            Assert.Equal(3, records[0].GetProperty("over").GetInt64());
+            Assert.Equal(76, records[0].GetProperty("budget").GetInt64());
+            Assert.Equal(0, records[1].GetProperty("over").GetInt64());
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public async Task Health_CostsNothing_WithoutATickSource_OrBeforeTheMonitorRuns()
+    {
+        string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            await using (var telemetry = new PlayerbotPolicyTelemetry(new PlayerbotPolicyTelemetryOptions { Enabled = true }, directory))
+            {
+                for (uint now = 0; now < 100_000; now += 1_000) telemetry.Sweep(now);
+                int calls = 0;
+                telemetry.TickHealth = () => { calls++; return null; }; // the monitor is not running yet
+                for (uint now = 100_000; now < 200_000; now += 1_000) telemetry.Sweep(now);
+                await telemetry.FlushAsync();
+                Assert.Equal(0, telemetry.Counts.Queued);
+                Assert.InRange(calls, 1, 10); // asked once per interval, never per tick
+            }
+            Assert.Empty(Directory.GetFiles(directory).SelectMany(File.ReadAllLines));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public void WithTelemetryOff_TheEngineHasNoTelemetry_SoNoHealthIsSampled()
+    {
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true });
+        Assert.Null(engine.Telemetry);
+    }
+
+    private sealed class ManualTime(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
     private static PlayerbotPolicyRecord Record(long unixMs)
     {
         float[] features = new float[PlayerbotPolicySchema.FeatureCount];

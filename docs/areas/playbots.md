@@ -662,7 +662,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 | Key | Meaning |
 |---|---|
 | `v` | Record version (1). |
-| `k` | `goal` (this table); `fight` and `skip` are the combat records below. |
+| `k` | `goal` (this table); `fight` and `skip` are the combat records below; `health` is the tick-health record below. |
 | `t` | Unix ms of the decision. |
 | `bot` | The bot's player guid (hex). |
 | `map`, `zone` | Where it decided. |
@@ -682,6 +682,15 @@ made and lines are refused and counted until it can be deleted; one warning when
 is dropped, never written with a partial outcome; deaths are seen only on thinks the brain drives (not while a group or battleground
 driver has the bot). A full disk or missing folder stops the telemetry (fault site `playerbot.policy-telemetry-io`), never the
 server.
+
+**Tick health** (`k` `health`, written with the goal records whenever telemetry is on and the tick monitor runs). Every 10 s of world time the
+world thread reads the watchdog tick monitor's cumulative count of frames over its budget (`Ops:Watchdog:TickMonitor`, the same count as the
+overrun warning) and queues one record; the writer task formats it like the others. The first interval after start only takes the baseline.
+Keys: `v`, `k`, `t` (unix ms at the interval's end, the clock `t` of the goal records uses), `ms` (the interval's length, so it began at
+`t - ms`), `over` (frames over the budget within it), `budget` (the budget in ms). It exists so a trainer can drop decisions made while the
+world lagged (a concurrent build pushes bot think gaps to seconds): a decision whose `[t, t + w]` overlaps a health interval with
+`over > 0` describes a lagging world. No percentile is written: the tick monitor keeps only its count cheaply. A file with no `health`
+record comes from a build without it, or from a host with the tick monitor disabled.
 
 **Combat decisions** (telemetry only, written with the goal records when telemetry is on; a later phase may score them, gated in
 [docs/design/playerbot-policy-phases.md](../design/playerbot-policy-phases.md)). Nothing here changes a decision: the risk model tells
