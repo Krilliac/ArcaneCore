@@ -314,6 +314,33 @@ public sealed partial class QuestNpcServices
         }
     }
 
+    /// <summary>
+    /// The first row of <paramref name="itemId"/> in <see cref="VisibleVendorItems"/>, without walking the rows before it: a row among
+    /// the first <see cref="MaxVendorItems"/> of the list has fewer visible rows before it than the cap, so only its own visibility
+    /// decides. Past that the cap depends on the visible rows before, and the full view is walked. Price checks ask this for every row
+    /// of a vendor (a bot's town scan weighs each row of each vendor in sight), so the walk made them quadratic in the row count.
+    /// </summary>
+    private VendorItem? VisibleVendorRow(Player player, NpcInfo npc, uint itemId)
+    {
+        if (Deps.Items is not { } items)
+        {
+            return null;
+        }
+
+        IReadOnlyList<VendorItem> rows = Npcs.VendorItems(npc.Entry);
+        int direct = Math.Min(rows.Count, MaxVendorItems);
+        for (int i = 0; i < direct; i++)
+        {
+            VendorItem row = rows[i];
+            if (row.Item == itemId && items.GetItem(row.Item) is { } proto && IsVendorItemVisible(player, npc, row, proto))
+            {
+                return row;
+            }
+        }
+
+        return rows.Count <= MaxVendorItems ? null : VisibleVendorItems(player, npc).FirstOrDefault(item => item.Row.Item == itemId).Row;
+    }
+
     /// <summary>vmangos Player::IsVendorItemVisible (build &gt; 1.6.1: item reputation faction does not hide).</summary>
     private bool IsVendorItemVisible(Player player, NpcInfo npc, VendorItem vendorItem, ItemInfo proto)
     {
