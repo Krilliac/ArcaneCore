@@ -277,7 +277,8 @@ class TrainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             write(d, "policy-00000001.jsonl", clean + rng_records)
             out = os.path.join(d, "model.json")
-            code, err = quiet(train.main, [d, "-o", out, "--min-rows", "10", "--holdout", "0.2"])
+            # Two goals only: this tests the filter, not the per-goal bound (test_train_schema.ThinGoalTests).
+            code, err = quiet(train.main, [d, "-o", out, "--min-rows", "10", "--holdout", "0.2", "--min-goal-rows", "0"])
             self.assertEqual(0, code)
             self.assertIn("dropped 0 decisions", err)
             self.assertTrue(os.path.exists(out))

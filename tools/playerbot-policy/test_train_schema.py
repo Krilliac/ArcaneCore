@@ -100,5 +100,44 @@ class RemapTests(unittest.TestCase):
         self.assertEqual(1, len(rows))
 
 
+class ThinGoalTests(unittest.TestCase):
+    """A goal with no rows got the overall mean as its score, which beat the trained goals in most states: on the live telemetry of
+    2026-10-16 the untrained QuestTravel was the model's best open goal in 6754 of the 7605 decisions where it was open."""
+
+    def run_main(self, records: list[dict], *extra: str) -> tuple[int, bool]:
+        with tempfile.TemporaryDirectory() as directory:
+            with open(os.path.join(directory, "policy-00000001.jsonl"), "w", encoding="utf-8") as handle:
+                for i, record in enumerate(records):
+                    record = dict(record, t=T0 + i * 1000, f=[(i % 7) / 7.0] + [0.5] * (len(train.FEATURES) - 1))
+                    handle.write(json.dumps(record) + "\n")
+            out = os.path.join(directory, "model.json")
+            with contextlib.redirect_stderr(io.StringIO()):
+                code = train.main([directory, "-o", out, "--min-rows", "10", "--no-health-filter", *extra])
+            return code, os.path.exists(out)
+
+    def every_goal(self, per_goal: int, skip: str | None = None) -> list[dict]:
+        return [goal_record(2, goal, 1 << train.GOALS.index(goal)) for goal in train.GOALS if goal != skip for _ in range(per_goal)]
+
+    def test_a_goal_without_rows_writes_no_model(self):
+        code, written = self.run_main(self.every_goal(60, skip="QuestTravel"))
+        self.assertNotEqual(0, code)
+        self.assertFalse(written)
+
+    def test_a_goal_with_too_few_rows_writes_no_model(self):
+        code, written = self.run_main(self.every_goal(60, skip="Mount") + [goal_record(2, "Mount", 1 << 4)] * 3)
+        self.assertNotEqual(0, code)
+        self.assertFalse(written)
+
+    def test_every_goal_with_rows_writes_a_model(self):
+        code, written = self.run_main(self.every_goal(60))
+        self.assertEqual(0, code)
+        self.assertTrue(written)
+
+    def test_the_bound_can_be_lowered_on_purpose(self):
+        code, written = self.run_main(self.every_goal(60, skip="QuestTravel"), "--min-goal-rows", "0")
+        self.assertEqual(0, code)
+        self.assertTrue(written)
+
+
 if __name__ == "__main__":
     unittest.main()

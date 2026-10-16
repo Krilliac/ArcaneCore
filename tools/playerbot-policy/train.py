@@ -180,7 +180,9 @@ def fit_linear(x, goal, y, ridge: float):
     for k in range(g):
         mask = goal == k
         if mask.sum() < 2:
-            bias[k] = overall  # no evidence for this goal: the mean, so it neither wins nor loses by accident
+            # No evidence for this goal (only with --min-goal-rows below 2): the mean. That is no neutral score: it beats every trained
+            # goal predicted below the mean, so such a model promotes the goal it knows nothing about (main refuses this by default).
+            bias[k] = overall
             continue
         xk = np.hstack([x[mask], np.ones((mask.sum(), 1))])
         penalty = ridge * np.eye(f + 1)
@@ -268,6 +270,8 @@ def main(argv=None) -> int:
     parser.add_argument("--anomaly-weight", type=float, default=0.02)
     parser.add_argument("--holdout", type=float, default=0.2)
     parser.add_argument("--min-rows", type=int, default=1000, help="refuse to write a model trained on fewer rows")
+    parser.add_argument("--min-goal-rows", type=int, default=50,
+                        help="refuse to write a model with a goal trained on fewer rows (0 allows it: such a goal's score is a guess)")
     parser.add_argument("--seed", type=int, default=7)
     health_filter.add_arguments(parser)
     args = parser.parse_args(argv)
@@ -281,6 +285,13 @@ def main(argv=None) -> int:
     if len(y) < args.min_rows:
         print(f"only {len(y)} usable rows (< --min-rows {args.min_rows}): no model written", file=sys.stderr)
         return 2
+    # Every goal is scored for every state where it is open, so a goal the data never shows gets a score from nothing, and an untrained
+    # score wins as often as not (the live telemetry of 2026-10-16: the untrained QuestTravel was best in 6754 of 7605 states where open).
+    thin = {name: count for name, count in counts.items() if count < args.min_goal_rows}
+    if thin:
+        print(f"goals with fewer than --min-goal-rows {args.min_goal_rows} rows: {thin}: no model written "
+              "(collect until every goal has rows; docs/design/playerbot-policy-phases.md, Phase 3 gate 4)", file=sys.stderr)
+        return 4
 
     mean = x.mean(axis=0)
     scale = 1.0 / np.where(x.std(axis=0) > 1e-6, x.std(axis=0), 1.0)

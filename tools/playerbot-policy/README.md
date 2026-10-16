@@ -31,8 +31,9 @@ rewards or examples produced by Claude or any other LLM (Anthropic's terms prohi
    The label is progress per minute over the record's window: `lp` (levels gained, with fractions) plus 0.25 per quest handed in,
    less 0.05 per stall, 0.10 per death and 0.02 per anomaly (`--quest-weight` and the others change these). `linear` (the default)
    is a ridge regression per goal; `mlp` is one shared ReLU layer with an output per goal. Both standardise the features into the
-   file's `mean` and `scale`. It prints train and holdout error, refuses to write from fewer than `--min-rows` (1000) usable rows,
-   and refuses a fit with a non-finite weight.
+   file's `mean` and `scale`. It prints train and holdout error, refuses to write from fewer than `--min-rows` (1000) usable rows
+   or with any goal under `--min-goal-rows` (50) rows (a goal with no rows would score a guess for every state, and an untrained
+   QuestTravel won 89% of the states it was open in on real telemetry; `0` lifts the check), and refuses a fit with a non-finite weight.
 
    **Tick-overrun filter.** A decision made while the world tick was overrunning (a concurrent engine build, a stall) describes a
    lagging world, not what the policy chose, so both `train.py` and `ab_report.py` drop it. The server writes a `"k":"health"`
