@@ -302,6 +302,24 @@ public static class WorldConfigKeys
             PlayerbotTaxiOptions.CheckMaxWalk),
         LivePlayerbotsValue("Taxi:BackoffMinutes", o => o.Taxi.BackoffMinutes, (o, v) => o.Taxi.BackoffMinutes = v, PlayerbotTaxiOptions.CheckBackoff),
 
+        // Not vmangos keys: multi-leg travel by boat, zeppelin, hearthstone and mage portal (docs/areas/playbots.md, Travel). The travel
+        // planner and its legs read the shared PlayerbotOptions.Travel at each decision.
+        LivePlayerbots("Travel:Enabled", o => o.Travel.Enabled, (o, v) => o.Travel.Enabled = v),
+        LivePlayerbots("Travel:Boats", o => o.Travel.Boats, (o, v) => o.Travel.Boats = v),
+        LivePlayerbots("Travel:Zeppelins", o => o.Travel.Zeppelins, (o, v) => o.Travel.Zeppelins = v),
+        LivePlayerbots("Travel:Hearthstone", o => o.Travel.Hearthstone, (o, v) => o.Travel.Hearthstone = v),
+        LivePlayerbots("Travel:MageService", o => o.Travel.MageService, (o, v) => o.Travel.MageService = v),
+        LivePlayerbotsValue("Travel:MageServiceRadiusYards", o => o.Travel.MageServiceRadiusYards, (o, v) => o.Travel.MageServiceRadiusYards = v,
+            PlayerbotTravelOptions.CheckRadius),
+        LivePlayerbotsValue("Travel:MageServiceFeeCopper", o => o.Travel.MageServiceFeeCopper, (o, v) => o.Travel.MageServiceFeeCopper = v,
+            PlayerbotTravelOptions.CheckFee),
+        LivePlayerbotsValue("Travel:MaxTravelSpendCopper", o => o.Travel.MaxTravelSpendCopper, (o, v) => o.Travel.MaxTravelSpendCopper = v,
+            PlayerbotTravelOptions.CheckSpend),
+        LivePlayerbotsValue("Travel:TransitBackoffSeconds", o => o.Travel.TransitBackoffSeconds, (o, v) => o.Travel.TransitBackoffSeconds = v,
+            PlayerbotTravelOptions.CheckBackoff),
+        LivePlayerbotsValue("Travel:TransitBackoffMaxSeconds", o => o.Travel.TransitBackoffMaxSeconds, (o, v) => o.Travel.TransitBackoffMaxSeconds = v,
+            PlayerbotTravelOptions.CheckBackoffMax),
+
         // Not vmangos keys: the population manager (docs/areas/playbots-population.md). PlayerbotPopulationFeature reads the shared
         // PlayerbotOptions.Population at every pass; the lists are compared and replaced as one value.
         LivePlayerbots("Population:Enabled", o => o.Population.Enabled, (o, v) => o.Population.Enabled = v),

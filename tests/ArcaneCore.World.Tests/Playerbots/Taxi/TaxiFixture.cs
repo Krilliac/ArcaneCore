@@ -19,6 +19,15 @@ internal sealed class TaxiFixture : ICreatureDataStore, INpcContentStore, IQuest
     /// <summary>Adds a quest whose giver and ender stands 12 yards past node 2 (registered as the world's quest content).</summary>
     public bool WithQuest { get; init; }
 
+    /// <summary>
+    /// Adds a second departure beside the first: node 4, 40 yards east of node 1 with its own flight master (spawn 81003) and a path 4 to 2
+    /// (80 copper), so a bot at the start can fly from either when the other is backed off.
+    /// </summary>
+    public bool AlternateDeparture { get; init; }
+
+    public const uint AlternateMasterSpawn = 81003;
+    public static readonly ObjectGuid AlternateMasterGuid = ObjectGuid.WithEntry(HighGuid.Unit, MasterEntry, AlternateMasterSpawn);
+
     public const uint QuestId = 8120;
     public const uint GiverEntry = 8102;
     public static readonly float GiverX = StartX + 262f;
@@ -37,22 +46,32 @@ internal sealed class TaxiFixture : ICreatureDataStore, INpcContentStore, IQuest
         new TaxiPathNodeRecord(4, 11, 0, 0, StartX + 250f, StartY, Z, 0, 0),
         new TaxiPathNodeRecord(5, 11, 1, 0, StartX + 250f, StartY + 125f, Z + 8f, 0, 0),
         new TaxiPathNodeRecord(6, 11, 2, 0, StartX + 250f, StartY + 250f, Z, 0, 0),
+        new TaxiPathNodeRecord(7, 12, 0, 0, StartX + 40f, StartY, Z, 0, 0),
+        new TaxiPathNodeRecord(8, 12, 1, 0, StartX + 145f, StartY, Z + 8f, 0, 0),
+        new TaxiPathNodeRecord(9, 12, 2, 0, StartX + 250f, StartY, Z, 0, 0),
     ]);
 
-    Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(NpcContent.Empty with
+    Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken)
     {
-        TaxiNodes =
-        [
-            new TaxiNode { Id = 1, MapId = 0, X = StartX - 1f, Y = StartY, Z = Z, MountAlliance = Gryphon, MountHorde = Gryphon },
-            new TaxiNode { Id = 2, MapId = 0, X = StartX + 250f, Y = StartY, Z = Z, MountAlliance = Gryphon, MountHorde = Gryphon },
-            new TaxiNode { Id = 3, MapId = 0, X = StartX + 250f, Y = StartY + 250f, Z = Z, MountAlliance = Gryphon, MountHorde = Gryphon },
-        ],
-        TaxiPaths =
-        [
-            new TaxiPath { Id = 10, FromNode = 1, ToNode = 2, Price = 100 },
-            new TaxiPath { Id = 11, FromNode = 2, ToNode = 3, Price = 50 },
-        ],
-    });
+        var nodes = new List<TaxiNode>
+        {
+            new() { Id = 1, MapId = 0, X = StartX - 1f, Y = StartY, Z = Z, MountAlliance = Gryphon, MountHorde = Gryphon },
+            new() { Id = 2, MapId = 0, X = StartX + 250f, Y = StartY, Z = Z, MountAlliance = Gryphon, MountHorde = Gryphon },
+            new() { Id = 3, MapId = 0, X = StartX + 250f, Y = StartY + 250f, Z = Z, MountAlliance = Gryphon, MountHorde = Gryphon },
+        };
+        var paths = new List<TaxiPath>
+        {
+            new() { Id = 10, FromNode = 1, ToNode = 2, Price = 100 },
+            new() { Id = 11, FromNode = 2, ToNode = 3, Price = 50 },
+        };
+        if (AlternateDeparture)
+        {
+            nodes.Add(new TaxiNode { Id = 4, MapId = 0, X = StartX + 40f, Y = StartY, Z = Z, MountAlliance = Gryphon, MountHorde = Gryphon });
+            paths.Add(new TaxiPath { Id = 12, FromNode = 4, ToNode = 2, Price = 80 });
+        }
+
+        return Task.FromResult(NpcContent.Empty with { TaxiNodes = [.. nodes], TaxiPaths = [.. paths] });
+    }
 
     Task<QuestContent> IQuestContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new QuestContent(
         [new QuestTemplate { Entry = QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, Title = "Taxi quest" }],
@@ -70,6 +89,7 @@ internal sealed class TaxiFixture : ICreatureDataStore, INpcContentStore, IQuest
         {
             new() { Guid = 81001, Entry = MasterEntry, MapId = 0, X = StartX + 2f, Y = StartY, Z = Z },
         };
+        if (AlternateDeparture) spawns.Add(new CreatureSpawn { Guid = AlternateMasterSpawn, Entry = MasterEntry, MapId = 0, X = StartX + 42f, Y = StartY, Z = Z });
         if (WithQuest)
         {
             templates.Add(new CreatureTemplate { Entry = GiverEntry, Name = "Test quest giver", Faction = 900011, NpcFlags = 2, DisplayIds = [49] });

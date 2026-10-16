@@ -24,8 +24,10 @@ public sealed class PlayerbotTaxiOptions
     public float MaxWalkToMasterYards { get; set; } = 300f;
 
     /// <summary>
-    /// Minutes a bot does not try to fly after a flight attempt failed (the server refused the flight, the flight master could not be
-    /// reached, or none stood where the node is): it walks meanwhile (1..1440; default 10).
+    /// The longest, in minutes, a flight node is backed off after trips from it failed (the server refused the flight, the flight master
+    /// could not be reached, or none stood where the node is): the per-node cap on the schedule of <c>World:Playerbots:Travel</c>
+    /// (<c>TransitBackoffSeconds</c> doubling to <c>TransitBackoffMaxSeconds</c>). Only the failing node waits; the bot walks, or flies from
+    /// another known node, meanwhile (1..1440; default 10).
     /// </summary>
     public int BackoffMinutes { get; set; } = 10;
 
