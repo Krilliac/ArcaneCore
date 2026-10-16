@@ -354,6 +354,9 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
     public bool EnderOnOtherMap { get; init; }
     public bool DistantEnder { get; init; }
 
+    /// <summary>The remote ender's spawns, when set (overrides <see cref="EnderOnOtherMap"/> and <see cref="DistantEnder"/>).</summary>
+    public CreatureSpawn[]? EnderSpawns { get; init; }
+
     /// <summary>A quest with no objectives at all (complete the moment it is taken), for turn-ins that can never be satisfied.</summary>
     public bool NoObjectives { get; init; }
 
@@ -364,13 +367,13 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
             ReqCreatureOrGOId1 = RepeatableItem == 0 && !NoObjectives ? 90 : 0, ReqCreatureOrGOCount1 = RepeatableItem == 0 && !NoObjectives ? 1u : 0u },
         new QuestTemplate { Entry = UnrelatedId, Method = 2, Title = "Unrelated quest" }],
         [new CreatureQuestRelation { Id = Entry, Quest = QuestId }],
-        [new CreatureQuestRelation { Id = EnderOnOtherMap || DistantEnder ? RemoteEnder : Entry, Quest = QuestId }]));
+        [new CreatureQuestRelation { Id = EnderOnOtherMap || DistantEnder || EnderSpawns is not null ? RemoteEnder : Entry, Quest = QuestId }]));
 
     Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
         [new CreatureTemplate { Entry = Entry, Name = "Synthetic questgiver", Faction = 900011, NpcFlags = 2, DisplayIds = [49] },
          new CreatureTemplate { Entry = RemoteEnder, Name = "Remote ender", Faction = 900011, NpcFlags = 2, DisplayIds = [49] }],
         [new CreatureSpawn { Guid = 900020, Entry = Entry, MapId = 0, X = -8948.95f, Y = -132.49f, Z = 83.53f },
-         .. (EnderOnOtherMap || DistantEnder
+         .. (EnderSpawns is { } enders ? enders : EnderOnOtherMap || DistantEnder
              ? new[] { new CreatureSpawn { Guid = 900021, Entry = RemoteEnder, MapId = EnderOnOtherMap ? 1u : 0u,
                  X = DistantEnder ? -6948.95f : -8948.95f, Y = -132.49f, Z = 83.53f } }
              : Array.Empty<CreatureSpawn>())], [], [], []));
