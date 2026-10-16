@@ -18,6 +18,7 @@ using ArcaneCore.Data.World.Transports;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
 
@@ -47,9 +48,10 @@ public static partial class ContentImporterCli
     /// the dump's <c>instance_template</c> or <c>map_template</c>) and <c>area_template</c> (every area); one without the other is refused.
     /// Afterwards it checks the references the world logs at start (teleports and taverns without a trigger, battleground start locations
     /// without a safe location, transports without a type-15 object, portals to a map with no map_template row, graveyard links to a zone
-    /// with no area_template row, and, with <c>TaxiPathNode.dbc</c>, every ship whose route the world could not build). Two groups are filled
-    /// only when the world has none of their rows: the seven game-event tables, and <c>creature_spawn_entry</c> (for the world's own spawns
-    /// only; see <see cref="FillSpawnEntriesAsync"/>). The world's schema
+    /// with no area_template row, and, with <c>TaxiPathNode.dbc</c>, every ship whose route the world could not build). Three groups are filled
+    /// only when the world has none of their rows: the seven game-event tables, <c>creature_spawn_entry</c> (for the world's own spawns
+    /// only; see <see cref="FillSpawnEntriesAsync"/>), and the ordinary entry paths of <c>creature_movement_template</c>
+    /// (<see cref="FillEntryPathsAsync"/>). The world's schema
     /// must already be this importer's: a database behind it is refused unless <c>--migrate</c> is given, so a refresh never migrates a live
     /// world as a side effect.
     /// </summary>
@@ -378,6 +380,13 @@ public static partial class ContentImporterCli
         IReadOnlyCollection<CreatureSpawnEntryRow> spawnEntries = relays.SpawnEntrySnapshot();
         Count(CreatureSpawnEntryTable, spawnEntries.Count, spawnEntries.Count > 0);
 
+        // creature_movement_template's ordinary entry paths (cmangos Entry/PathId; the path a MovementType-2 spawn without creature_movement
+        // rows walks, and the paths SCRIPT_COMMAND_MOVEMENT names). A world built before the table existed (world schema 23) got it empty from
+        // the schema upgrade, and the ScriptDev2 refresh above writes only its namespaced copies, so those spawns stood or wandered and every
+        // relay waypoint step was skipped. Filled only when the world has no ordinary entry path at all (FillEntryPathsAsync).
+        CreatureMovementTemplateRow[] entryPaths = [.. relays.PathSnapshot().Where(p => (p.PathId & ScriptDevPathBits) == 0)];
+        Count(EntryPathsTable, entryPaths.Length, entryPaths.Length > 0);
+
         // gameobject_spawn_entry and the spawn group tables (world 44): filled the same way, each part only when the world has none of its
         // rows, and only for the world's own spawns (SpawnGroupDumpImporter.FillAsync). Without them classic-db's 3614 game objects and 568
         // creatures with id 0 never appear, and every member of a one-of-N group stands in the world at once.
@@ -492,6 +501,20 @@ public static partial class ContentImporterCli
                         {
                             counts.Remove(CreatureSpawnEntryTable);
                             o.WriteLine($"  {CreatureSpawnEntryTable}: the world has rows already; left as it is");
+                        }
+                    }
+
+                    if (entryPaths.Length > 0)
+                    {
+                        int? written = await FillEntryPathsAsync(db, entryPaths, token).ConfigureAwait(false);
+                        if (written is { } rows)
+                        {
+                            counts[EntryPathsTable] = rows;
+                        }
+                        else
+                        {
+                            counts.Remove(EntryPathsTable);
+                            o.WriteLine($"  {EntryPathsTable}: the world has entry paths already; left as they are");
                         }
                     }
 
@@ -636,6 +659,34 @@ public static partial class ContentImporterCli
             .SelectMany(g => g)
             .OrderBy(r => r.SpawnGuid).ThenBy(r => r.Entry)
             .Select(r => new CreatureSpawnEntryRow { SpawnGuid = r.SpawnGuid, Entry = r.Entry })];
+        await ImportBatch.InsertAsync(db, rows, ct).ConfigureAwait(false);
+        return rows.Length;
+    }
+
+    private const string EntryPathsTable = "creature_movement_template (entry paths)";
+
+    private const uint ScriptDevPathBits = CreatureContent.ScriptWaypointPathBit | CreatureContent.WaypointPathBit;
+
+    /// <summary>
+    /// Fill the ordinary entry paths of <c>creature_movement_template</c> (path ids outside the ScriptDev2 / <c>waypoint_path</c> namespaces)
+    /// from the dump, when the world has none of them. Returns the rows written, or null when the world already has an entry path (nothing is
+    /// touched: a GM or another importer chose them).
+    /// </summary>
+    internal static async Task<int?> FillEntryPathsAsync(WorldDbContext db, IReadOnlyCollection<CreatureMovementTemplateRow> dumpRows, CancellationToken ct)
+    {
+        if (await db.Set<CreatureMovementTemplateRow>().AnyAsync(p => (p.PathId & ScriptDevPathBits) == 0, ct).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        CreatureMovementTemplateRow[] rows = [.. dumpRows
+            .Where(p => (p.PathId & ScriptDevPathBits) == 0)
+            .OrderBy(p => p.Entry).ThenBy(p => p.PathId).ThenBy(p => p.Point)
+            .Select(p => new CreatureMovementTemplateRow
+            {
+                Entry = p.Entry, PathId = p.PathId, Point = p.Point, X = p.X, Y = p.Y, Z = p.Z, Orientation = p.Orientation,
+                WaitTimeMs = p.WaitTimeMs, ScriptId = p.ScriptId,
+            })];
         await ImportBatch.InsertAsync(db, rows, ct).ConfigureAwait(false);
         return rows.Length;
     }
