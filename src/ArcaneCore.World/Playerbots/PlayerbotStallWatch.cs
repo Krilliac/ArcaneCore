@@ -209,11 +209,8 @@ internal sealed class PlayerbotStallWatch
         init => _ledger = value;
     }
 
-    /// <summary>The ledger's time for the world time <paramref name="nowMs"/> (<see cref="PlayerbotWorldClock.Ms"/>; as it is when the watch has no world).</summary>
-    private long LedgerTime(uint nowMs)
-        => World is { } world ? (_clock ??= new PlayerbotWorldClock(world)).Ms(nowMs) : nowMs;
-
-    private PlayerbotWorldClock? _clock;
+    /// <summary>The ledger's time for the world time <paramref name="nowMs"/> (<see cref="PlayerbotWorldClock.Ms(ArcaneCore.Game.Maps.WorldRuntime, uint)"/>; as it is when the watch has no world).</summary>
+    private long LedgerTime(uint nowMs) => World is { } world ? PlayerbotWorldClock.Ms(world, nowMs) : nowMs;
 
     /// <summary>The pin cell of <c>(x, y)</c> on <paramref name="mapId"/>: map in bits 48-63, cell X in 24-47, cell Y in 0-23.</summary>
     internal static DeferKey PinKey(uint mapId, float x, float y)
@@ -304,9 +301,7 @@ internal sealed class PlayerbotSuspensions(PlayerbotDeferLedger? ledger = null, 
     internal PlayerbotDeferLedger Ledger { get; } = ledger ?? new PlayerbotDeferLedger();
 
     /// <summary>The ledger's time for the world time <paramref name="nowMs"/>: against the world's 64-bit uptime, so the 32-bit clock's wrap never reaches the ledger (without a world, as given).</summary>
-    private long T(uint nowMs) => _clock is null ? nowMs : _clock.Ms(nowMs);
-
-    private readonly PlayerbotWorldClock? _clock = world is null ? null : new PlayerbotWorldClock(world);
+    private long T(uint nowMs) => world is null ? nowMs : PlayerbotWorldClock.Ms(world, nowMs);
 
     /// <summary>How many times this bot has set the quest aside (kept in memory; a restart starts the count again).</summary>
     internal int QuestSetAsideCount(uint quest) => _questSetAsides.GetValueOrDefault(quest);
@@ -439,6 +434,7 @@ internal sealed class PlayerbotSuspensions(PlayerbotDeferLedger? ledger = null, 
     /// </summary>
     internal void Restore(IEnumerable<PlayerbotSetAside> rows, uint nowMs, long unixNowMs)
     {
+        long now = T(nowMs);
         foreach (PlayerbotSetAside row in rows)
         {
             DeferKind kind;
@@ -454,7 +450,7 @@ internal sealed class PlayerbotSuspensions(PlayerbotDeferLedger? ledger = null, 
             DeferKey key = new(kind, row.TargetId);
             if (kind == DeferKind.UnreachableQuest && row.ExpiresUnixMs == long.MaxValue)
             {
-                Ledger.RestoreEntry(key, T(nowMs), 60_000u + LegacyStagger(row.BotId, row.TargetId), 2);
+                Ledger.RestoreEntry(key, now, 60_000u + LegacyStagger(row.BotId, row.TargetId), 2);
                 Ledger.MarkChanged();
                 continue;
             }
@@ -463,13 +459,13 @@ internal sealed class PlayerbotSuspensions(PlayerbotDeferLedger? ledger = null, 
             if (remaining <= 0)
             {
                 // An unreachable quest keeps its strikes after its set-aside ended: only a turn-in clears them.
-                if (kind == DeferKind.UnreachableQuest && row.RepeatCount > 0) Ledger.RestoreEntry(key, T(nowMs), 0, row.RepeatCount);
+                if (kind == DeferKind.UnreachableQuest && row.RepeatCount > 0) Ledger.RestoreEntry(key, now, 0, row.RepeatCount);
                 continue;
             }
 
             uint ms = (uint)Math.Min(remaining, PlayerbotDeferLedger.PolicyOf(kind).MaxMs);
             int strikes = kind is DeferKind.Entry or DeferKind.UnreachableQuest ? Math.Max(1, row.RepeatCount) : 1;
-            Ledger.RestoreEntry(key, T(nowMs), ms, strikes);
+            Ledger.RestoreEntry(key, now, ms, strikes);
         }
     }
 

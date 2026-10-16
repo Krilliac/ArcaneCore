@@ -98,7 +98,7 @@ public sealed partial class PlayerbotQuestReturnTests
             await fixture.Host.World.InvokeAsync(() =>
             {
                 long now = PlayerbotWorldClock.UptimeMs(fixture.Host.World);
-            brain.Suspensions.Ledger.Defer(UnreachableKey(777), now, untilMs: now + 3_600_000);
+                brain.Suspensions.Ledger.Defer(UnreachableKey(777), now, untilMs: now + 3_600_000);
                 WorldCollision.Of(fixture.Host.World).Install(lineOfSight: new FlatFloor(fixture.Session.Player!.Z), pathfinder: new ScriptedRoute(climb: 1f));
                 return true;
             });
@@ -163,6 +163,34 @@ public sealed partial class PlayerbotQuestReturnTests
             suspensions.SuspendEntry(5, world.NowMs); // set aside again, at the wrapped clock
             Assert.True(suspensions.IsEntrySuspended(5, world.NowMs + 599_999));
             Assert.False(suspensions.IsEntrySuspended(5, world.NowMs + 600_000));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AfterFortyDaysWithoutAnyLedgerOrClockCall_APinSetNowTakesEffect_AndOldStrikesHaveDecayed()
+    {
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: true, manualClock: true);
+        await fixture.Host.World.InvokeAsync(() =>
+        {
+            var world = fixture.Host.World;
+            var suspensions = new PlayerbotSuspensions(world: world);
+            var watch = new PlayerbotStallWatch { World = world };
+            suspensions.SuspendEntry(5, world.NowMs);
+            Assert.Equal(1, watch.RecordPinStall(0, 35, 5, world.NowMs)); // day 0: the first stall of the cell
+            const uint Hour = 3_600_000;
+            for (int step = 0; step < 960; step++) world.RunTick(Hour); // 40 days, nothing asks the ledger or the clock
+            Assert.True(world.Uptime.TotalDays >= 40);
+
+            Assert.False(suspensions.IsEntrySuspended(5, world.NowMs));
+            Assert.Equal(1, watch.RecordPinStall(0, 35, 5, world.NowMs)); // the day-0 strike decayed: this is a first stall again
+            Assert.Equal(2, watch.RecordPinStall(0, 35, 5, world.NowMs));
+            Assert.True(watch.IsDeadEndPin(0, 35, 5, world.NowMs)); // a pin set now holds now
+            Assert.True(watch.IsDeadEndPin(0, 35, 5, world.NowMs + 599_999));
+            Assert.False(watch.IsDeadEndPin(0, 35, 5, world.NowMs + 600_000));
+            suspensions.SuspendEntry(5, world.NowMs);
+            Assert.True(suspensions.IsEntrySuspended(5, world.NowMs));
+            Assert.Equal(1, suspensions.EntryStrikeCount(5));
             return true;
         });
     }
