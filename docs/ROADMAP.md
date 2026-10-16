@@ -266,7 +266,7 @@ blanket absence labels without claiming complete vanilla fidelity.
 ### Gaps by area
 - **Pets:** untraining price, taught-ability state and loyalty need persistence, which needs a characters schema bump *after* v60 (held by Claude's #326). Still open: stable gaps, happiness emote, DuelReset pet cooldowns, possess limits (#434).
 - **Handlers:** helm/cloak show flags aren't persisted (needs schema). Whois lacks account email. Spirit guide gossip timer is sent as 0. Far Sight needs real camera state in `Pets/Control/UnitControl.cs` (#436 only resets/restores). More unhandled opcodes remain in `docs/reference/opcodes.md`.
-- **Zone scripts:** about 75 cmangos zone scripts are unported; batches 1–3 cover ~13. Continue in batches of 5–8 per PR.
+- **Zone scripts:** about 68 cmangos zone scripts are unported; batches 1–4 cover ~20 (batch 4: Calvin Montague, Taskmaster Fizzule, Aquementas, Deathstalker Faerleia, `go_rune_of_the_defiler`, `go_mausoleum_door`, `go_mausoleum_trigger`; skipped candidates and reasons in `docs/integration/zone-scripts-batch4-20261016.md`). Continue in batches of 5–8 per PR.
 - **SmartAI:** CALL_FOR_HELP, other rejected actions/targets from `docs/integration/smartai-slice2-20261010.md`, AIName for GOs.
 - **Area triggers:** all 10 ported; leftovers are DB-side data (Captured Arkonarin, Felwood kitten q4506, Hendel `creature_movement_template` 4967).
 - **Other (from 2026-10-10, still open):** Warden API-hook/EndScene/login checks and live client test; AH bot gaps (`docs/areas/auction-house-bot.md`); Docker untested; addon chat hook; multi-version S1/S2 (waiting on Nate's decisions 4 and 6 on #61).
