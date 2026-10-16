@@ -887,19 +887,22 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   the Home options'. A homed bot whose home lies across the sea (another map, or Teldrassil's water) begins a journey there
   (`IPlayerbotTravel.TryBegin`) instead of the home teleport, except in `ReturnMode` Walk; when none can begin, the return rules decide as
   before (the config-gated teleport) and the next journey home waits the transit backoff, doubling while it keeps failing.
-- **Quest goals.** `PlayerbotWorldDestinations` begins a journey (`IPlayerbotTravel.TryBegin`) for a quest goal that is across the sea:
-  a completed quest's ender or a hunted creature with no spawn on the bot's map (the first spawn, by map then spawn, on a map bots may enter
-  that is no dungeon or battleground; a homed bot's hunt stays inside its home), or a destination across Teldrassil's water on map 1. The
-  brain drives it from the next think, and the destination plans again where it ends. Each goal (its creature entry and quest) waits as the
-  home return does: a journey for it that failed or could not begin waits the transit backoff before the next, doubling while it keeps
-  failing, and one that arrived clears the wait; other goals do not wait for it. When none begins the walk rules decide as before. Tests:
-  `QuestGoalJourneyTests`.
+- **Quest goals.** `PlayerbotWorldDestinations` begins a journey (`IPlayerbotTravel.TryBegin`) for a quest goal across the sea: a hunted
+  creature with no spawn on the bot's map (its first spawn, by map then spawn, on a map bots may enter that is no dungeon or battleground;
+  a homed bot's hunt stays inside its home), or a destination across Teldrassil's water on map 1 (a giver, a completed quest's ender, a
+  hunted creature). A spawn across the water is passed over without a path query, and the nearest one gets the journey only when no entry
+  on the bot's side was walked to; the tram's gate holds (`TransitAllowed`: no boat for an unhomed bot below `TramMinLevel`). The brain
+  drives the journey from the next think, and the destination plans again where it ends. Each goal (its creature entry and quest) waits as
+  the home return does: a journey for it that failed or could not begin waits the transit backoff before the next, doubling while it keeps
+  failing, and one that arrived clears the wait; other goals do not wait for it (64 goals held at most). A completed quest's ender on
+  another map begins none: the quest goals return only to an ender on the bot's map and abandon a cross-continent delivery ("Intercontinent
+  quest handoffs"). Tests: `QuestGoalJourneyTests`.
 
 Known limits. The deck point (6 yards above the ship's origin, inside an 8 by 3 yard rectangle) and the zeppelin tower climb are
 UNVERIFIED against the hull models and real terrain (the server has no transport collision); the ship tests run on a flat synthetic world.
 The region-graph walk check only separates places the graph can place (ports at sea are not), so a walk across water can be planned and
 then fail and replan. Quest pickup still skips a quest whose enders all stand on another continent ("Intercontinent quest
-handoffs"), so a quest goal's journey serves a quest the bot already holds. Portal fees need trading on
+handoffs") and a completed quest's ender on another map is no journey (see Quest goals above). Portal fees need trading on
 (`EconomyFeature`); party-only portals need the requester ungrouped.
 
 ### Home area
