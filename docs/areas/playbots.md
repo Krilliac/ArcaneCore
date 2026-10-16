@@ -1145,6 +1145,23 @@ where the master goes.
   on it with one CMSG_ADD_FRIEND, so it shows no consent. `.playerbot invite <bot>` (GameMaster; the
   vmangos `.partybot add` analogue) invites a running autonomous bot into the GM's group through the ordinary invite and makes it
   accept whatever its policy says; the invite keeps every ordinary rule (faction, full group, leader or assistant).
+- **Filling a party or raid.** `.bot party fill` (GameMaster) invites online autonomous bots of the caller's team that are alive,
+  in the world, in no group and not scripted, within 5 levels of the caller while there are enough of them (otherwise the nearest
+  levels), and summons them (a bot already being teleported is left to arrive): a party (or no group) is filled to five; once the
+  group is a raid each use adds up to five more (one subgroup's worth), up to 40. Before 2026-10-16 it answered "Your party is
+  already full." in a raid of five. `.bot raid #count` (`.playerbot raid`, GameMaster) gathers `#count` such bots into the caller's
+  raid at once: with no group it forms one and makes it a raid; a party is converted (CMSG_GROUP_RAID_CONVERT rules: only its
+  leader, otherwise the reply names the leader); in a raid the caller must be the leader or an assistant. The count is clamped to
+  the free raid slots (40 less the members) and the reply says so. Both commands pick the same way
+  (`Playerbots/Commands/PlayerbotGroupFill.cs`): tanks first (a warrior before a paladin or druid), then healers (a priest or
+  shaman before a paladin or druid), then the nearest levels; a fill of up to five takes one of each, a larger one the raid run
+  make-up (`World:Playerbots:Groups:DungeonRuns:Raids` `TanksPerTen` and `HealerPercent`: 10, 20 and 39 bots take 1, 2 and 4
+  tanks and 3, 5 and 10 healers at the defaults). The reply gives the counts, the raid size and up to 10 names (`and N more`).
+- **Raids.** Nothing in the party AI depends on the subgroup: the master, following, the assist targets (any member's attacker
+  within 50 yards), the wipe check, resurrection, auto-revive and loot rolls (SMSG_LOOT_START_ROLL goes to every raid member at
+  the group reward distance) work the same in subgroups 2-8 as in subgroup 1, and a bot invited into a raid by hand accepts by
+  its invite policy as into a party. A bot's chat reply to a group line goes out on raid chat in a raid, since party chat reaches
+  only the speaker's own subgroup.
 - **Master.** The group's leader when it is a real player online (a socket client, never a managed bot), otherwise the first
   real player online in member order (vmangos `GetPartyLeader`). While the bot has one, `ManagedPlayerbotFeature` ticks its
   party AI instead of `PlayerbotBrain` (a scripted controller still wins). Out of the group the brain drives it again, a fresh

@@ -485,8 +485,9 @@ internal sealed class PlayerbotPartyAI
                         Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Whisper(language, reply.SenderName, text), budgeted: false);
                     break;
                 case ChatType.Party:
-                    if (Services.Social?.Groups.GetGroup(player.Guid) is not null)
-                        Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(ChatType.Party, language, text), budgeted: false);
+                    // In a raid, party chat reaches only the bot's own subgroup: the reply goes on raid chat, so a master in another subgroup hears it.
+                    if (Services.Social?.Groups.GetGroup(player.Guid) is { } replyGroup)
+                        Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(PlayerbotChatCommands.GroupChannel(replyGroup.IsRaid), language, text), budgeted: false);
                     break;
                 case ChatType.Say:
                     Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(ChatType.Say, language, text), budgeted: false);
