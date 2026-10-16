@@ -13,7 +13,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|home|chat|groups|battlegrounds|scenario|summon|send|follow|stay|dismiss|near|revive|fleet|population|qa|chaos>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|home|chat|groups|battlegrounds|travel|scenario|summon|send|follow|stay|dismiss|near|revive|fleet|population|qa|chaos>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
@@ -50,6 +50,8 @@ public sealed class PlayerbotCommands : ICommandGroup
                     "Syntax: .playerbot groups\nList the bot-led groups (goal, members and roles, state) and the bots waiting for partners.", GroupsCommand),
                 new ChatCommand("battlegrounds", AccountSecurity.GameMaster,
                     "Syntax: .playerbot battlegrounds\nList the bots with battleground business (type, phase, role, activity), the totals and the refused types.", BattlegroundsCommand),
+                new ChatCommand("travel", AccountSecurity.Administrator,
+                    "Syntax: .playerbot travel $id|$name #map #x #y #z\nSend a running bot on a journey to the place by its own means (walking, flight paths, the Deeprun Tram and lifts, boats, zeppelins, its hearthstone, mage teleports and portals) and print the planned legs.", TravelCommand),
                 Scenarios.PlayerbotScenarioCommands.Command,
             ])
     ];
@@ -243,6 +245,66 @@ public sealed class PlayerbotCommands : ICommandGroup
 
         PlayerbotOperationResult result = service.InviteToGroup(context.Player, id);
         context.Reply($"Playerbot {(result.Success ? "ok" : "failed")}: {result.Code} ({result.Name ?? id}).");
+        return true;
+    }
+
+    /// <summary>
+    /// <c>.playerbot travel $id|$name #map #x #y #z</c>: plan a journey for a running managed bot through <see cref="IPlayerbotTravel.TryBegin"/>
+    /// (docs/areas/playbots.md, Travel) and print its legs, one line each; the brain drives it from the bot's next think. A bot the brain does
+    /// not drive now (<see cref="ManagedPlayerbotFeature.HeldFromBrain"/>: a controller, a battleground, a bot-led group, its party) is
+    /// refused with that reason; other refusals print the planner's reason. World thread, where commands run.
+    /// </summary>
+    private static bool TravelCommand(CommandContext context, string text)
+    {
+        CommandArgs args = new(text);
+        string? id = args.ExtractArg();
+        if (id is null || !args.ExtractUInt32(out uint mapId) || !args.ExtractFloat(out float x) || !args.ExtractFloat(out float y)
+            || !args.ExtractFloat(out float z) || !args.IsEmpty)
+            return false;
+        IServiceProvider services = context.Session.Services;
+        if (services.GetService<ManagedPlayerbotFeature>() is not { } feature || services.GetService<IPlayerbotTravel>() is not { } travel)
+        {
+            context.Reply("Playerbot service is unavailable.");
+            return true;
+        }
+
+        if (!TryFind(feature, id, out PlayerbotStatus? status) || status is null)
+        {
+            context.Reply("Playerbot not found.");
+            return true;
+        }
+
+        if (feature.FindSession(status.BotId) is not { IsManaged: true } session || session.Player is not { IsInWorld: true, Map: not null } bot)
+        {
+            context.Reply($"Playerbot travel failed: {status.Name} is not running.");
+            return true;
+        }
+
+        // Only the brain drives a journey: a bot another driver holds would have it cancelled at its next tick, so it is refused here.
+        if (feature.HeldFromBrain(status.BotId) is { } held)
+        {
+            context.Reply($"Playerbot travel refused: {status.Name}: {held}.");
+            return true;
+        }
+
+        var goal = new System.Numerics.Vector3(x, y, z);
+        if (!travel.TryBegin(session, bot, mapId, goal, out string? why))
+        {
+            context.Reply($"Playerbot travel refused: {status.Name}: {why}");
+            return true;
+        }
+
+        CultureInfo c = CultureInfo.InvariantCulture;
+        if (PlayerbotTravel.JourneyOf(bot) is not { State: JourneyState.Active } journey || journey.Goal.DistanceTo(new TravelPlace(mapId, goal)) > PlayerbotTravelPlanner.ArrivedYards)
+        {
+            context.Reply($"Playerbot travel: {status.Name} already stands at {PlayerbotTravel.Describe(new TravelPlace(mapId, goal))}.");
+            return true;
+        }
+
+        TravelRoute route = journey.Planned;
+        context.Reply(string.Create(c,
+            $"Playerbot travel: {status.Name} to {PlayerbotTravel.Describe(journey.Goal)}: {route.Legs.Count} leg(s), about {route.Seconds:F0} s, {route.Copper} copper."));
+        for (int i = 0; i < route.Legs.Count; i++) context.Reply(string.Create(c, $"{i + 1}. {PlayerbotTravel.Describe(route.Legs[i])}"));
         return true;
     }
 

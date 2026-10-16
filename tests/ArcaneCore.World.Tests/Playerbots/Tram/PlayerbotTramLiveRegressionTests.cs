@@ -71,10 +71,10 @@ public sealed class PlayerbotTramLiveRegressionTests(ITestOutputHelper output)
             {
                 (TramStage? stage, float x, float y, float z, uint map, string? report) = await host.OnWorldAsync(() =>
                 {
-                    int before = brain.StallCount;
+                    int before = brain.TransitFailureCount;
                     brain.Update(100);
                     return (PlayerbotTram.TripOf(player)?.Stage, player.X, player.Y, player.Z, player.MapId,
-                        brain.StallCount != before ? brain.StallReport : null);
+                        brain.TransitFailureCount != before ? brain.LastTransitFailure : null);
                 });
                 stall ??= report;
                 if (stage != last || host.World.NowMs - lastLog >= 30_000)

@@ -36,7 +36,7 @@ internal enum TaxiStep : byte
     /// <summary>The flight ended (reported once); the goal that began the trip continues from where the bot landed.</summary>
     Arrived,
 
-    /// <summary>The trip failed (reported once); the bot does not try to fly for <see cref="PlayerbotTaxiOptions.BackoffMinutes"/>. The goal walks.</summary>
+    /// <summary>The trip failed (reported once); the departure node is backed off (<see cref="PlayerbotTransitBackoff"/>). The goal walks.</summary>
     Failed,
 }
 
@@ -62,6 +62,12 @@ internal sealed class TaxiTrip(uint mapId, uint[] nodes, uint fare, uint masterE
     /// <summary>Where the trip ends; the goal that asked for it resumes from the landing.</summary>
     public Vector3 Goal { get; } = goal;
 
+    /// <summary>
+    /// A learning detour (<see cref="PlayerbotTaxi.Discover"/>): the bot walks to the flight master of the one node in <see cref="Nodes"/> it does
+    /// not know yet, asks it (CMSG_TAXIQUERYAVAILABLENODES) and is done; it never flies. Not a way to anywhere: a goal's taxi planning ignores it.
+    /// </summary>
+    public bool LearnOnly { get; init; }
+
     public TaxiStage Stage { get; set; } = TaxiStage.ToMaster;
     public string? Failure { get; set; }
     public PlayerbotRoute? Route { get; set; }
@@ -72,6 +78,12 @@ internal sealed class TaxiTrip(uint mapId, uint[] nodes, uint fare, uint masterE
     public uint BestMs { get; set; } = nowMs;
     public uint NextPlanMs { get; set; } = nowMs;
     public int Attempts { get; set; }
+
+    /// <summary>Planning calls in a row that the navigation refused (not pending, not a route): <see cref="PlayerbotTaxi.MaxRefusedPlans"/> fail the walk.</summary>
+    public int RefusedPlans { get; set; }
+
+    /// <summary>Times the bot could not be brought to a stop before the flight request: <see cref="PlayerbotTaxi.MaxStopAttempts"/> fail the trip.</summary>
+    public int StopAttempts { get; set; }
 
     /// <summary>When the flight began (world ms), and how long it may take before it is overdue.</summary>
     public uint FlightStartMs { get; set; }
@@ -238,6 +250,88 @@ internal sealed class TaxiIndex
     }
 }
 
+/// <summary>The kinds of transit point <see cref="PlayerbotTransitBackoff"/> keeps apart.</summary>
+internal enum TransitKind : byte
+{
+    /// <summary>A flight path node (the key is the taxi node id).</summary>
+    Taxi,
+
+    /// <summary>A Deeprun Tram platform (the key is its entrance trigger id).</summary>
+    Tram,
+
+    /// <summary>A lift (the key is <see cref="ElevatorLift.Key"/>).</summary>
+    Lift,
+}
+
+/// <summary>
+/// Per-bot, per-point backoff of the transit means (a flight master's node, a tram platform, a lift): a failure involving one point waits
+/// out <see cref="PlayerbotTravelOptions.BackoffMs"/> of the point's failures in a row (first wait doubling to the cap) and no other point
+/// is affected; a success at the point (<see cref="Clear"/>) forgets its failures. A wait ends by time only: the failure count stays, so the
+/// next failure waits longer. Bounded (<see cref="MaxPoints"/> points per bot, the table starts over when full). World thread; the table
+/// hangs off the <see cref="Player"/> and goes with it.
+/// </summary>
+internal static class PlayerbotTransitBackoff
+{
+    /// <summary>The most points one bot remembers.</summary>
+    internal const int MaxPoints = 64;
+
+    private sealed class Entry
+    {
+        public int Failures;
+        public uint UntilMs;
+    }
+
+    private static readonly ConditionalWeakTable<Player, Dictionary<(TransitKind Kind, uint Point), Entry>> Tables = [];
+
+    /// <summary>
+    /// Record a failure of <paramref name="point"/> at <paramref name="nowMs"/>: the wait is the schedule of its failures in a row, at most
+    /// <paramref name="capMs"/>. Returns the wait (ms).
+    /// </summary>
+    internal static uint Fail(Player player, TransitKind kind, uint point, uint nowMs, PlayerbotOptions options, uint capMs = uint.MaxValue)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(options);
+        Dictionary<(TransitKind, uint), Entry> table = Tables.GetOrCreateValue(player);
+        if (!table.TryGetValue((kind, point), out Entry? entry))
+        {
+            if (table.Count >= MaxPoints) table.Clear();
+            table[(kind, point)] = entry = new Entry();
+        }
+
+        entry.Failures = Math.Min(entry.Failures + 1, 64);
+        uint wait = Math.Min(options.Travel.BackoffMs(entry.Failures), capMs);
+        entry.UntilMs = unchecked(nowMs + wait);
+        return wait;
+    }
+
+    /// <summary>Whether <paramref name="point"/> is waiting out a failure at <paramref name="nowMs"/>.</summary>
+    internal static bool IsBackedOff(Player player, TransitKind kind, uint point, uint nowMs)
+        => Tables.TryGetValue(player, out var table) && table.TryGetValue((kind, point), out Entry? entry)
+            && unchecked((int)(entry.UntilMs - nowMs)) > 0;
+
+    /// <summary>Whether any point of <paramref name="kind"/> is waiting out a failure at <paramref name="nowMs"/>.</summary>
+    internal static bool AnyBackedOff(Player player, TransitKind kind, uint nowMs)
+    {
+        if (!Tables.TryGetValue(player, out var table)) return false;
+        foreach (((TransitKind k, _), Entry entry) in table)
+        {
+            if (k == kind && unchecked((int)(entry.UntilMs - nowMs)) > 0) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>The failures in a row of <paramref name="point"/> since its last success (0: none).</summary>
+    internal static int Failures(Player player, TransitKind kind, uint point)
+        => Tables.TryGetValue(player, out var table) && table.TryGetValue((kind, point), out Entry? entry) ? entry.Failures : 0;
+
+    /// <summary>The point worked (a flight landed, a ride arrived): forget its failures and its wait.</summary>
+    internal static void Clear(Player player, TransitKind kind, uint point)
+    {
+        if (Tables.TryGetValue(player, out var table)) table.Remove((kind, point));
+    }
+}
+
 /// <summary>
 /// Autonomous bots use flight paths the way a player does (docs/areas/playbots.md, "Flight paths"). Two parts, both through the real
 /// handlers (<c>NpcServiceHandlers</c>, <see cref="WorldSession.TryManagedAction"/>), never by writing the taxi mask or starting a flight:
@@ -250,8 +344,16 @@ internal sealed class TaxiIndex
 /// or CMSG_ACTIVATETAXIEXPRESS (several), read SMSG_ACTIVATETAXIREPLY, and wait while the server flies the bot. The brain drives the
 /// trip before anything else (<see cref="PlayerbotBrain"/>), so the bot neither thinks nor moves in the air.</item>
 /// </list>
-/// A refused or failed attempt backs taxi use off for <see cref="PlayerbotTaxiOptions.BackoffMinutes"/> and the goal walks instead. Thread
-/// affinity: world thread; per-bot state hangs off the <see cref="Player"/> and goes with it.
+/// <para>
+/// A refused or failed attempt backs the departure node off (<see cref="PlayerbotTransitBackoff"/>: <c>Travel.TransitBackoffSeconds</c>
+/// doubling to <c>Travel.TransitBackoffMaxSeconds</c>, capped by <see cref="PlayerbotTaxiOptions.BackoffMinutes"/>); the goal walks, or flies
+/// from another known node. A landing clears the node's failures.
+/// </para>
+/// <para>
+/// A bot that passes within <see cref="DetourYards"/> of a flight master it may approach whose node it does not know takes a learning detour
+/// (<see cref="TaxiTrip.LearnOnly"/>): it walks to the master and asks it, as a player who spots a gryphon master does; no flight.
+/// </para>
+/// Thread affinity: world thread; per-bot state hangs off the <see cref="Player"/> and goes with it.
 /// </summary>
 internal static class PlayerbotTaxi
 {
@@ -299,6 +401,15 @@ internal static class PlayerbotTaxi
     /// <summary>Failed trips in a row (no landing between) that make a bot's taxi use a repeated failure.</summary>
     internal const int RepeatedFailures = 3;
 
+    /// <summary>The walk to a flight master fails after this many refused plans in a row (pending tile reads do not count; a route resets the count).</summary>
+    internal const int MaxRefusedPlans = 3;
+
+    /// <summary>The bot may be refused a stop (the action budget) this many thinks in a row before the flight request; then the trip fails with <c>stop-refused</c>.</summary>
+    internal const int MaxStopAttempts = 20;
+
+    /// <summary>A flight master spawn this close (yards, straight line) to a bot, whose node the bot does not know, is worth a learning detour.</summary>
+    internal const float DetourYards = 80f;
+
     private const int MaxAskMemo = 32;
 
     private static readonly ConditionalWeakTable<Player, TaxiTrip> Trips = [];
@@ -307,8 +418,6 @@ internal static class PlayerbotTaxi
 
     private sealed class Memo
     {
-        public bool HasBackoff;
-        public uint BackoffUntilMs;
         public uint NextScanMs;
 
         /// <summary>Trips that failed since the last one that landed; the repeated-failure anomaly is reported once at <see cref="RepeatedFailures"/>.</summary>
@@ -392,6 +501,10 @@ internal static class PlayerbotTaxi
     internal static bool IsActive(Player player)
         => Trips.TryGetValue(player, out TaxiTrip? trip) && trip.Stage is TaxiStage.ToMaster or TaxiStage.Flying;
 
+    /// <summary>Whether a trip that takes the bot somewhere is under way (a learning detour, <see cref="TaxiTrip.LearnOnly"/>, is not one).</summary>
+    private static bool IsTravelTrip(Player player)
+        => Trips.TryGetValue(player, out TaxiTrip? trip) && !trip.LearnOnly && trip.Stage is TaxiStage.ToMaster or TaxiStage.Flying;
+
     /// <summary>The server is flying the bot (UNIT_FLAG_TAXI_FLIGHT; also true for a flight no trip of ours began).</summary>
     internal static bool IsFlying(Player player) => (player.UnitFlags & UnitFlags.TaxiFlight) != 0;
 
@@ -399,9 +512,14 @@ internal static class PlayerbotTaxi
     internal static string? LastFailure(Player player)
         => Trips.TryGetValue(player, out TaxiTrip? trip) && trip.Stage == TaxiStage.Failed ? trip.Failure : null;
 
-    /// <summary>Whether taxi use is backed off for this bot at <paramref name="nowMs"/> (a failed attempt lately).</summary>
-    internal static bool IsBackedOff(Player player, uint nowMs)
-        => Memos.TryGetValue(player, out Memo? memo) && memo.HasBackoff && unchecked((int)(memo.BackoffUntilMs - nowMs)) > 0;
+    /// <summary>Whether any flight node is backed off for this bot at <paramref name="nowMs"/> (a failed attempt lately; inspection).</summary>
+    internal static bool IsBackedOff(Player player, uint nowMs) => PlayerbotTransitBackoff.AnyBackedOff(player, TransitKind.Taxi, nowMs);
+
+    /// <summary>Whether the flight path <paramref name="node"/> is backed off for this bot at <paramref name="nowMs"/>: a trip departing there failed lately.</summary>
+    internal static bool IsBackedOff(Player player, uint node, uint nowMs) => PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Taxi, node, nowMs);
+
+    /// <summary>The next <see cref="Discover"/> scans at once instead of waiting out <see cref="ScanIntervalMs"/> (tests, inspection).</summary>
+    internal static void ForceNextScan(Player player) => Memos.GetOrCreateValue(player).NextScanMs = 0;
 
     /// <summary>Drop the trip without a packet (death, a controller taking the bot over). A flight in the air is the server's and goes on.</summary>
     internal static void Cancel(Player player)
@@ -414,6 +532,12 @@ internal static class PlayerbotTaxi
     /// in the taxi mask and answers SMSG_NEW_TAXI_PATH (vmangos <c>HandleTaxiQueryAvailableNodes</c>). Cheap: at most one look at the
     /// visible objects per <see cref="ScanIntervalMs"/>, and a request only for a visible, usable flight master whose node is not known. True
     /// when a request was sent.
+    /// <para>
+    /// When no master is within reach to ask, the same scan looks for a flight master spawn within <see cref="DetourYards"/> of the bot that it
+    /// may approach and whose node it does not know (nor has backed off): a learning detour (<see cref="TaxiTrip.LearnOnly"/>) begins, which
+    /// <see cref="Drive"/> walks and ends by asking that master. Not while a trip is under way, or the bot is in a tram or lift ride. It
+    /// returns false then (nothing was sent yet).
+    /// </para>
     /// </summary>
     internal static bool Discover(WorldSession session, Player player, PlayerbotOptions options)
     {
@@ -446,7 +570,49 @@ internal static class PlayerbotTaxi
             return true;
         }
 
+        if (!Trips.TryGetValue(player, out TaxiTrip? current) || current.Stage is TaxiStage.Done or TaxiStage.Failed)
+        {
+            if (!PlayerbotTram.IsTraveling(player) && !PlayerbotElevator.IsTraveling(player))
+                TryBeginLearnTrip(session, player, services, index, state, content, now);
+        }
+
         return false;
+    }
+
+    /// <summary>
+    /// Begin a learning detour to the nearest flight master spawn within <see cref="DetourYards"/> whose node is unknown and not backed off.
+    /// Cost: one pass over the cached flight master spawns (a few dozen in the whole world), a squared distance each; the node lookup only for
+    /// spawns inside the radius.
+    /// </summary>
+    private static void TryBeginLearnTrip(WorldSession session, Player player, QuestNpcServices services, TaxiIndex index, PlayerNpcState state,
+        CreatureContent? content, uint now)
+    {
+        if (content is null || session.Services.GetService<QuestNpcFeature>()?.FactionTemplates is not { } factions || player.Map is not { } map) return;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        if (!IsFinite(here)) return;
+        bool alliance = player.Team == Team.Alliance;
+        float bestSq = DetourYards * DetourYards;
+        CreatureSpawn? best = null;
+        uint bestNode = 0;
+        foreach ((CreatureSpawn spawn, uint faction) in TableOf(content).Spawns)
+        {
+            if (spawn.MapId != map.MapId || !float.IsFinite(spawn.X) || !float.IsFinite(spawn.Y) || !float.IsFinite(spawn.Z)) continue;
+            float dx = spawn.X - here.X, dy = spawn.Y - here.Y, dz = spawn.Z - here.Z;
+            float distSq = (dx * dx) + (dy * dy) + (dz * dz);
+            if (distSq >= bestSq) continue;
+            uint node = index.Nearest(spawn.MapId, spawn.X, spawn.Y, spawn.Z, alliance);
+            if (node == 0 || TaxiIndex.IsKnown(state.TaxiMask, node) || IsBackedOff(player, node, now)) continue;
+            if (!PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, faction)) continue;
+            best = spawn;
+            bestNode = node;
+            bestSq = distSq;
+        }
+
+        if (best is null) return;
+        Trips.AddOrUpdate(player, new TaxiTrip(map.MapId, [bestNode], 0, best.Entry, new Vector3(best.X, best.Y, best.Z), new Vector3(best.X, best.Y, best.Z), now)
+        {
+            LearnOnly = true,
+        });
     }
 
     /// <summary>
@@ -460,8 +626,9 @@ internal static class PlayerbotTaxi
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(options);
         if (!options.Taxi.Enabled) return false;
-        if (IsActive(player)) return true;
-        return TryPlanTaxi(session, player, mapId, destination, options, out _, out _, out _);
+        if (IsTravelTrip(player)) return true;
+        if (IsActive(player)) return false;
+        return TryPlanTaxi(session, player, mapId, destination, options, uint.MaxValue, out _, out _, out _);
     }
 
     /// <summary>
@@ -472,19 +639,29 @@ internal static class PlayerbotTaxi
     /// discounts) the bot can pay now.
     /// </summary>
     internal static TaxiTravel TryTravelByTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options)
+        => TryTravelByTaxi(session, player, mapId, destination, options, uint.MaxValue);
+
+    /// <summary>
+    /// <see cref="TryTravelByTaxi(WorldSession, Player, uint, Vector3, PlayerbotOptions)"/> with the fare held to at most
+    /// <paramref name="maxFare"/> copper as well as the bot's money (a journey's spend left, <see cref="TravelJourney.SpendLeft"/>): a route
+    /// that costs more is not flown, and the goal walks. 0 flies nothing. A trip already under way answers as there.
+    /// </summary>
+    internal static TaxiTravel TryTravelByTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options, uint maxFare)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(options);
         if (!options.Taxi.Enabled) return TaxiTravel.Walk;
-        if (IsActive(player)) return TaxiTravel.Traveling;
-        if (!TryPlanTaxi(session, player, mapId, destination, options, out uint[] route, out uint fare, out CreatureSpawn master))
+        if (IsTravelTrip(player)) return TaxiTravel.Traveling;
+        if (IsActive(player)) return TaxiTravel.Walk; // a learning detour owns the bot; the goal walks meanwhile
+        if (!TryPlanTaxi(session, player, mapId, destination, options, maxFare, out uint[] route, out uint fare, out CreatureSpawn master))
             return TaxiTravel.Walk;
         Trips.AddOrUpdate(player, new TaxiTrip(mapId, route, fare, master.Entry, new Vector3(master.X, master.Y, master.Z), destination, session.World.NowMs));
         return TaxiTravel.Traveling;
     }
 
-    private static bool TryPlanTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options,
+    /// <param name="maxFare">The most the fare may cost on top of the bot's money (uint.MaxValue: only the money bounds it).</param>
+    private static bool TryPlanTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options, uint maxFare,
         out uint[] route, out uint fare, out CreatureSpawn master)
     {
         route = [];
@@ -495,7 +672,6 @@ internal static class PlayerbotTaxi
             || player.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0)
             return false;
         uint now = session.World.NowMs;
-        if (IsBackedOff(player, now)) return false;
         Vector3 here = new(player.X, player.Y, player.Z);
         if (!IsFinite(here) || !IsFinite(destination)) return false;
         float straight = Vector3.Distance(here, destination);
@@ -505,22 +681,26 @@ internal static class PlayerbotTaxi
         TaxiIndex index = TaxiIndex.Of(services.Npcs);
         bool alliance = player.Team == Team.Alliance;
 
-        // The departure: the known node nearest the bot, close enough to walk to.
+        // The departure: the known node nearest the bot, close enough to walk to, and not backed off after a failed trip from it (another
+        // known node may still fly).
         TaxiNode? source = null;
         float nearest = taxi.MaxWalkToMasterYards;
         foreach (TaxiNode node in index.All)
         {
             if (node.MapId != mapId || (alliance ? node.MountAlliance : node.MountHorde) == 0 || !TaxiIndex.IsKnown(state.TaxiMask, node.Id)) continue;
+            if (IsBackedOff(player, node.Id, now)) continue;
             float walk = Vector3.Distance(here, new Vector3(node.X, node.Y, node.Z));
             if (walk <= nearest) { source = node; nearest = walk; }
         }
 
         if (source is null) return false;
         Memo cache = Memos.GetOrCreateValue(player);
-        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, player.Money, index, taxi.MaxWalkToMasterYards, out bool routed, out route, out fare))
+        // What the fare may cost: the money, and a journey's spend left (the cache is keyed by this budget, not the money alone).
+        uint budget = Math.Min(player.Money, maxFare);
+        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, budget, index, taxi.MaxWalkToMasterYards, out bool routed, out route, out fare))
         {
-            routed = index.TryRoute(state.TaxiMask, source, here, destination, player.Money, taxi.MaxWalkToMasterYards, straight, out route, out fare);
-            cache.Store(state.TaxiMask, source.Id, destination, here, player.Money, index, taxi.MaxWalkToMasterYards, routed, route, fare);
+            routed = index.TryRoute(state.TaxiMask, source, here, destination, budget, taxi.MaxWalkToMasterYards, straight, out route, out fare);
+            cache.Store(state.TaxiMask, source.Id, destination, here, budget, index, taxi.MaxWalkToMasterYards, routed, route, fare);
         }
 
         if (!routed) return false;
@@ -570,6 +750,7 @@ internal static class PlayerbotTaxi
 
             trip.Stage = TaxiStage.Done;
             Memos.GetOrCreateValue(player).Failures = 0;
+            PlayerbotTransitBackoff.Clear(player, TransitKind.Taxi, trip.Nodes[0]);
             CheckLanding(session, player, trip);
             return TaxiStep.Arrived;
         }
@@ -594,7 +775,12 @@ internal static class PlayerbotTaxi
             return Fail(session, player, trip, options, now, "master-missing", AnomalySeverity.Warning,
                 "no flight master of the departure node can be talked to where it stands", out failure);
         if (!Walk(session, player, trip, options, elapsedMs, now))
-            return Fail(session, player, trip, options, now, "master-unreachable", AnomalySeverity.Warning, "no way to the flight master", out failure);
+        {
+            return Fail(session, player, trip, options, now, "master-unreachable", AnomalySeverity.Warning,
+                trip.RefusedPlans >= MaxRefusedPlans ? $"no way to the flight master (the path was refused {MaxRefusedPlans} times in a row)" : "no way to the flight master",
+                out failure);
+        }
+
         return TaxiStep.Traveling;
     }
 
@@ -602,12 +788,19 @@ internal static class PlayerbotTaxi
         uint now, out string? failure)
     {
         failure = null;
+        if (trip.LearnOnly) return Learn(session, player, trip, options, state, master, now, out failure);
         if (!TaxiIndex.IsKnown(state.TaxiMask, trip.Nodes[0]))
             return Fail(session, player, trip, options, now, "node-forgotten", AnomalySeverity.Info, "the departure node is no longer known", out failure);
         if (player.Money < trip.Fare)
             return Fail(session, player, trip, options, now, "cannot-pay", AnomalySeverity.Info, "the bot can no longer pay the fare", out failure);
         // A client reports itself standing before it asks for a flight (ERR_TAXIPLAYERMOVING / NOTSTANDING).
-        if (!PlayerbotMovementControl.Stop(session, player)) return TaxiStep.Traveling;
+        if (!PlayerbotMovementControl.Stop(session, player))
+        {
+            return ++trip.StopAttempts > MaxStopAttempts
+                ? Fail(session, player, trip, options, now, "stop-refused", AnomalySeverity.Warning, "the bot could not be brought to a stop before the flight request", out failure)
+                : TaxiStep.Traveling;
+        }
+
         WorldOpcode opcode = trip.Nodes.Length == 2 ? WorldOpcode.CmsgActivatetaxi : WorldOpcode.CmsgActivatetaxiexpress;
         // A reply nobody read (a flight another controller asked for) must not be taken for the answer to this request.
         session.DrainManagedPackets(WorldOpcode.SmsgActivatetaxireply);
@@ -646,6 +839,41 @@ internal static class PlayerbotTaxi
         trip.Route = null;
         BeginFlightWatch(player, trip, index, now);
         return TaxiStep.Traveling;
+    }
+
+    /// <summary>
+    /// The end of a learning detour (<see cref="TaxiTrip.LearnOnly"/>): the master of the node is in reach; ask it (CMSG_TAXIQUERYAVAILABLENODES, the
+    /// real handler) and check the node is known afterwards. No flight. The budget may refuse the request a few thinks (<see cref="MaxActivateAttempts"/>).
+    /// </summary>
+    private static TaxiStep Learn(WorldSession session, Player player, TaxiTrip trip, PlayerbotOptions options, PlayerNpcState state, NpcInfo master, uint now,
+        out string? failure)
+    {
+        failure = null;
+        uint node = trip.Nodes[0];
+        if (!TaxiIndex.IsKnown(state.TaxiMask, node))
+        {
+            if (!session.TryManagedAction(WorldOpcode.CmsgTaxiqueryavailablenodes, GuidPayload(master.Guid)))
+            {
+                if (session.ManagedBudget is { Remaining: <= 0 })
+                {
+                    return ++trip.Attempts > MaxActivateAttempts
+                        ? Fail(session, player, trip, options, now, "budget-starved", AnomalySeverity.Warning, "the action budget never allowed the node query", out failure)
+                        : TaxiStep.Traveling;
+                }
+
+                return Fail(session, player, trip, options, now, "session-refused", AnomalySeverity.Warning,
+                    "the session refused the node query (closed, settling a quest reward, or not in the world)", out failure);
+            }
+
+            if (!TaxiIndex.IsKnown(state.TaxiMask, node))
+                return Fail(session, player, trip, options, now, "node-not-learned", AnomalySeverity.Warning, $"the flight master did not teach node {node}", out failure);
+        }
+
+        trip.Stage = TaxiStage.Done;
+        trip.Route = null;
+        PlayerbotMovementControl.Stop(session, player);
+        PlayerbotTransitBackoff.Clear(player, TransitKind.Taxi, node);
+        return TaxiStep.Arrived;
     }
 
     /// <summary>Record when and where the flight began and how long it may take (the straight lines between the route's nodes at the slowest expected speed, plus a grace).</summary>
@@ -761,8 +989,8 @@ internal static class PlayerbotTaxi
         trip.Stage = TaxiStage.Failed;
         trip.Route = null;
         Memo memo = Memos.GetOrCreateValue(player);
-        memo.HasBackoff = true;
-        memo.BackoffUntilMs = unchecked(now + ((uint)Math.Clamp(options.Taxi.BackoffMinutes, 1, 1440) * 60_000u));
+        // Only the departure node is backed off: a failed trip from it says nothing about another node's master.
+        PlayerbotTransitBackoff.Fail(player, TransitKind.Taxi, trip.Nodes[0], now, options, (uint)Math.Clamp(options.Taxi.BackoffMinutes, 1, 1440) * 60_000u);
         failure = trip.Failure;
         PlayerbotAnomalies.Report(player, Area, code, $"{why} (route {string.Join('>', trip.Nodes)})", severity);
         if (++memo.Failures == RepeatedFailures)
@@ -770,7 +998,10 @@ internal static class PlayerbotTaxi
         return TaxiStep.Failed;
     }
 
-    /// <summary>Walk towards the flight master's spawn; false when the bot got no <see cref="ProgressYards"/> closer within <see cref="NoProgressMs"/>.</summary>
+    /// <summary>
+    /// Walk towards the flight master's spawn; false when the bot got no <see cref="ProgressYards"/> closer within <see cref="NoProgressMs"/>, or
+    /// the navigation refused <see cref="MaxRefusedPlans"/> plans in a row (<see cref="TaxiTrip.RefusedPlans"/>).
+    /// </summary>
     private static bool Walk(WorldSession session, Player player, TaxiTrip trip, PlayerbotOptions options, uint elapsedMs, uint now)
     {
         float left = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), trip.Master);
@@ -791,11 +1022,13 @@ internal static class PlayerbotTaxi
         PlanOutcome planned = PlayerbotNavigation.PlanToward(player, trip.Master, options, ref trip.Tiles, now, out PlayerbotRoute? next);
         if (planned != PlanOutcome.Route || next is null)
         {
-            // Pending (tiles still being read) and refused alike wait PlanRetryMs; the progress bound ends a walk that never gets going.
+            // Pending (tiles still being read) and refused alike wait PlanRetryMs. Pending is no verdict; MaxRefusedPlans refusals in a row end
+            // the walk (and back the node off) at once, the progress bound ends one that never gets going otherwise.
             trip.NextPlanMs = unchecked(now + PlanRetryMs);
-            return true;
+            return planned != PlanOutcome.Refused || ++trip.RefusedPlans < MaxRefusedPlans;
         }
 
+        trip.RefusedPlans = 0;
         trip.Route = next;
         PlayerbotNavigation.TryAdvance(session, next, options, elapsedMs, now);
         return true;
@@ -826,8 +1059,7 @@ internal static class PlayerbotTaxi
     {
         if (session.Services.GetService<CreatureWorldFeature>()?.Content is not { } content) return null;
         if (session.Services.GetService<QuestNpcFeature>()?.FactionTemplates is not { } factions) return null;
-        MasterTable table = MasterTables.TryGetValue(content, out MasterTable? cached) && cached.Version == content.DefinitionsVersion
-            ? cached : BuildMasterTable(content);
+        MasterTable table = TableOf(content);
         bool alliance = player.Team == Team.Alliance;
         CreatureSpawn? best = null;
         float bestDist = float.PositiveInfinity;
@@ -842,6 +1074,9 @@ internal static class PlayerbotTaxi
 
         return best;
     }
+
+    private static MasterTable TableOf(CreatureContent content)
+        => MasterTables.TryGetValue(content, out MasterTable? cached) && cached.Version == content.DefinitionsVersion ? cached : BuildMasterTable(content);
 
     private static MasterTable BuildMasterTable(CreatureContent content)
     {

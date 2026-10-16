@@ -43,13 +43,13 @@ internal sealed class FleetWorld : IAsyncDisposable
 
     public ManagedPlayerbotFeature Bots => PartyTestHost.Feature(Host);
 
-    public static Task<FleetWorld> StartAsync(Action<PlayerbotOptions>? configure = null)
+    public static Task<FleetWorld> StartAsync(Action<PlayerbotOptions>? configure = null, Action<IServiceCollection>? configureServices = null)
     {
         WorldTestHost host = PartyTestHost.Start(options =>
         {
             options.MaxBots = 8;
             configure?.Invoke(options);
-        });
+        }, configureServices);
         return Task.FromResult(new FleetWorld(host));
     }
 

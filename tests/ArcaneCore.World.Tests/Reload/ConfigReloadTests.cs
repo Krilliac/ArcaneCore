@@ -691,6 +691,12 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Taxi)}:{property.Name}");
         }
 
+        // Multi-leg travel is live key by key (docs/areas/playbots.md, Travel).
+        foreach (PropertyInfo property in typeof(PlayerbotTravelOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Travel)}:{property.Name}");
+        }
+
         // The population section is live key by key (docs/areas/playbots-population.md).
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Population.PlayerbotPopulationOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

@@ -196,6 +196,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bots discover flight masters and fly between known nodes on long trips (<c>World:Playerbots:Taxi</c>; live).</summary>
     public PlayerbotTaxiOptions Taxi { get; set; } = new();
 
+    /// <summary>Bots plan multi-leg trips to far places by boat, zeppelin, flight path, hearthstone and mage portal (<c>World:Playerbots:Travel</c>; live).</summary>
+    public PlayerbotTravelOptions Travel { get; set; } = new();
+
     /// <summary>A target number of bots kept online by level band and the world's tick time (<c>World:Playerbots:Population</c>; live; off by default).</summary>
     public Population.PlayerbotPopulationOptions Population { get; set; } = new();
 
@@ -295,6 +298,8 @@ public sealed class PlayerbotOptions
         Contention.Validate();
         if (Taxi is null) throw new InvalidOperationException($"{SectionName}:Taxi is missing.");
         Taxi.Validate();
+        if (Travel is null) throw new InvalidOperationException($"{SectionName}:Travel is missing.");
+        Travel.Validate();
         if (Population is null) throw new InvalidOperationException($"{SectionName}:Population is missing.");
         Population.Validate();
         if (Social is null) throw new InvalidOperationException($"{SectionName}:Social is missing.");
