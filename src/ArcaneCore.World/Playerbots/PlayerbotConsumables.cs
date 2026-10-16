@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Items;
@@ -119,7 +120,35 @@ internal static class PlayerbotConsumables
     internal static bool TryClassify(ItemTemplate template, SpellSystem spells, out PlayerbotConsumableKind kind)
         => TryClassify(template, spells.Store, out kind);
 
+    /// <summary>
+    /// The food/drink classification of each template, per spell store: pure on (template, store), and read for every carried item, vendor
+    /// row and protected-item check of a think. Both keys are immutable content objects compared by reference and held weakly, so a reload of
+    /// either (a new store, new templates) misses and the old entries go with the old objects. Thread-safe; a race computes twice, same result.
+    /// </summary>
+    private static readonly ConditionalWeakTable<SpellStore, ConditionalWeakTable<ItemTemplate, Classified>> s_classified = new();
+
     internal static bool TryClassify(ItemTemplate template, SpellStore store, out PlayerbotConsumableKind kind)
+    {
+        if (template is null || store is null)
+            return ComputeClassify(template!, store!, out kind); // uncached: exactly as before the table, including its null behaviour
+        ConditionalWeakTable<ItemTemplate, Classified> byTemplate = s_classified.GetValue(store, static _ => new());
+        if (!byTemplate.TryGetValue(template, out Classified? classified))
+        {
+            classified = ComputeClassify(template, store, out PlayerbotConsumableKind computed) ? new Classified(true, computed) : Classified.No;
+            byTemplate.AddOrUpdate(template, classified);
+        }
+
+        kind = classified.Kind;
+        return classified.Ok;
+    }
+
+    private sealed record Classified(bool Ok, PlayerbotConsumableKind Kind)
+    {
+        public static readonly Classified No = new(false, default);
+    }
+
+    /// <summary>The classification <see cref="TryClassify(ItemTemplate, SpellStore, out PlayerbotConsumableKind)"/> keeps per template.</summary>
+    internal static bool ComputeClassify(ItemTemplate template, SpellStore store, out PlayerbotConsumableKind kind)
     {
         kind = default;
         SpellInfo? normal = null;

@@ -55,14 +55,23 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
             return true;
         }
 
+        bool targetGhost = target.Combat.DeathState == DeathState.Dead;
+        bool viewerLiving = viewer.Combat.DeathState != DeathState.Dead;
+
+        // The living see the living whatever the raid says: answered before the raid lookup, which builds the target's member list and is
+        // otherwise paid by nearly every pair of a visibility pass (the answer is the one the steps below give).
+        if (viewerLiving && !targetGhost)
+        {
+            return true;
+        }
+
         // "Ghost visibility by raid members."
         if (groups?.Invoke() is { } resolver && resolver.GetGroupMembers(target, raid: true).Contains(viewer.Guid))
         {
             return true;
         }
 
-        bool targetGhost = target.Combat.DeathState == DeathState.Dead;
-        if (viewer.Combat.DeathState != DeathState.Dead)
+        if (viewerLiving)
         {
             // A living player sees living players and players waiting at their body, not ghosts.
             return !targetGhost;
