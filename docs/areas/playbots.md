@@ -1479,8 +1479,9 @@ line the model cannot.
   (`qwen2`, `llama-bpe`, `smollm`, `gpt2`) from the metadata. `ChatModel`/`ChatInferenceContext` run the `llama` and `qwen2`
   decoders (RMSNorm, RoPE, grouped-query attention with a key/value cache, SwiGLU, tied or separate output, qwen2's q/k/v biases).
   A file of another architecture, tokenizer or quantization, or with RoPE scaling, is refused at load with the reason.
-- **Threads and budget.** Each reply runs on a dedicated BelowNormal-priority generation thread with `Threads` (2) BelowNormal
-  helpers for the matrix products: never the thread pool, never the world thread. `MaxConcurrent` (1) replies run at once and
+- **Threads and budget.** Replies run on the engine's own BelowNormal-priority threads (the scheduler thread, plus one per slot
+  when several slots run in a step), each slot with `Threads` (2) BelowNormal helpers for the matrix products: never the thread
+  pool, never the world thread. `MaxConcurrent` (1) replies run at once and
   `MaxQueued` (2) may wait; past that the request is "busy" and the templates answer. A reply that is not done within `BudgetMs`
   (6000, checked between passes, prompt included) is dropped; `CircuitBreakerOverruns` (3) overruns in a row rest the model for
   `CircuitBreakerSeconds` (300; anomaly `bot-chat/inprocess-circuit-open`). `BudgetMs` must be below `TimeoutSeconds` x 1000.
@@ -1490,8 +1491,25 @@ line the model cannot.
   (the same `DynamicSystem` the remote providers get) and a one-line reminder, then the remembered exchanges and the line. The
   rule block is identical for every bot, so the key/value cache keeps it between replies and only the bot's facts and the
   conversation are computed per reply. The model writes the line itself (no JSON), so plain-language orders are not read from an
-  in-process reply; the templates' command patterns still work. Sampling: `Temperature` (0.7), `TopK` (40), `TopP` (0.9),
-  `RepetitionPenalty` (1.15), `MaxNewTokens` (48), stop at end-of-turn or a line break; `Seed` set makes it deterministic.
+  in-process reply; the templates' command patterns still work. Sampling is the sampler chain ported from Sonder-Inference
+  (`Inference/Sampling/`, Apache-2.0, THIRD_PARTY_NOTICES.md): penalties over the last `RepetitionWindow` (64) tokens with
+  `RepetitionPenalty` (1.15), then `TopK` (40), `TopP` (0.9), `MinP` (0.05), `Temperature` (0.7) and a seeded draw (greedy at
+  temperature 0); `Seed` set makes it deterministic. Before every token the one-chat-line constraint masks anything that would
+  start markup or a role token (any `|`, `<think`), or a second line once the line has text; leading blank lines are trimmed. The
+  reply stops at end-of-turn, at `MaxNewTokens` (48) or at any of `StopSequences` (none by default; the match is not said).
+- **Scheduler.** One BelowNormal engine thread runs the iteration-level scheduler ported from Sonder-Inference
+  (`Inference/Scheduling/`) over the `MaxConcurrent` slots: each step every resident reply gets either a prompt chunk of
+  `PrefillChunkTokens` (64) or one decode token (decode first), and the slots run in parallel. Requests are classed: a player who
+  named or whispered the bot (`interactive_player`) before another bot (`bot_to_bot`) before guild chatter, announcements and
+  lines put to a whole channel (`ambient`). When no slot is free, a waiting request of a higher class preempts a running one of a
+  lower class (that reply is recomputed later from its prompt and what it wrote); an ambient request still waiting after
+  `AmbientQueueMs` (4000) is dropped. A request is cancelled when the chat's deadline passes, when its bot stops (logout,
+  removal: `PlayerbotChat.Abandon`) or, for an ambient line, when a player starts talking to that bot; an abandoned reply is not
+  said and counts against no provider. With an in-process provider the chat runs `2 + MaxConcurrent + MaxQueued` workers (at most
+  16) so the scheduler sees the competing requests.
+- **Prefix cache.** Each slot keeps the tokens it last held; across slots, whole 16-token blocks of prompt keys and values are kept
+  in a pool of `PrefixCacheTokens` (1024; the ported KV block manager: chained block hashes, LRU eviction of unreferenced blocks)
+  and copied into whichever slot a reply lands on. The system rules every prompt starts with are computed once at load.
 - **Screen.** A reply is dropped (and the templates answer) when it is empty, longer than `MaxReplyCharacters` (160), holds markup,
   quotes, a link, an emoji or a non-Latin character, a leaked role token (`im_start`, `assistant:`) or a model name; a reply cut by
   the token limit keeps its last whole sentence. The ordinary output screening then applies as for any model.
@@ -1500,8 +1518,12 @@ line the model cannot.
 - **Status.** At start: `Bot chat provider #N: InProcess <model> <arch> <params> <quant>, <threads> threads, budget <ms> ms` and a
   line with the layers, vocabulary, context, mapped megabytes and cache size. `.playerbot chat status` adds `Bot chat in-process:`
   with the load state, replies, tokens, tokens per second (generation and prompt), reused prompt tokens, fallbacks, overruns, the
-  circuit, busy, filtered, unloaded, cancelled and errors. Meters `arcanecore.playerbot.chat.inprocess.replies`, `.tokens`,
-  `.overruns` and `.fallbacks` (by `reason`).
+  circuit, busy, filtered, unloaded, cancelled, errors and dropped, then the scheduler (`sched active= queued= preempt=` priority/KV
+  `dropped=`, per class `ttft=` / `itl=` / `queue=` p50/p95 in ms over the last 256 replies) and the prefix cache (`warm=` tokens
+  prefilled at load, `restored=` tokens copied in, `stored=`, `blocks=` used/total, `evicted=`). At start a further line names the
+  classes, slots, prefill chunk, prefix-cache size, the shared prefix's tokens and prefill time, and the sampling. Meters
+  `arcanecore.playerbot.chat.inprocess.replies`, `.tokens`, `.overruns` and `.fallbacks` (by `reason`, now also `dropped`), and by
+  `workload`: histograms `.ttft`, `.itl` (a reply's mean), `.queue` (ms), counters `.preemptions`, `.dropped`, and `.prefix_tokens`.
 
 `World:Playerbots:Chat:InProcess` (read when the model loads, at start: changing it takes a restart):
 
@@ -1514,7 +1536,11 @@ line the model cannot.
 | `BudgetMs` | 250..60000 (6000): the hard wall-clock budget of one reply. |
 | `MaxNewTokens` | 8..256 (48). |
 | `ContextTokens` | 256..32768 (1024, capped at the model's): prompt plus reply. |
-| `Temperature`, `TopK`, `TopP`, `RepetitionPenalty`, `Seed` | Sampling (0.7, 40, 0.9, 1.15, unset). |
+| `Temperature`, `TopK`, `TopP`, `MinP`, `RepetitionPenalty`, `RepetitionWindow`, `Seed` | Sampling (0.7, 40, 0.9, 0.05, 1.15, 64, unset); `MinP` 0..1, `RepetitionWindow` 0..1024. |
+| `StopSequences` | At most 8 strings of 1..32 characters that end a reply (none). |
+| `AmbientQueueMs` | 250..60000 (4000): how long ambient chatter may wait for a slot before it is dropped. |
+| `PrefixCacheTokens` | 0..16384 (1024; 0 = off): prompt tokens kept in the shared prefix cache. |
+| `PrefillChunkTokens` | 32..512 (64): prompt tokens one reply computes per scheduler step. |
 | `MaxReplyCharacters` | 40..255 (160). |
 | `CircuitBreakerOverruns`, `CircuitBreakerSeconds` | 1..100 (3), 10..3600 (300). |
 

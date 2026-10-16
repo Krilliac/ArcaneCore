@@ -46,9 +46,9 @@ public readonly record struct PreemptionEvent(
 
 public sealed class StepPlan
 {
-    public ulong StepIndex { get; init; }
+    public ulong StepIndex { get; set; }
 
-    public long PlannedAt { get; init; }
+    public long PlannedAt { get; set; }
 
     public List<ScheduledWork> Work { get; } = [];
 
@@ -68,6 +68,20 @@ public sealed class StepPlan
     public uint TotalTokens => PrefillTokens + DecodeTokens;
 
     public bool IsEmpty => Work.Count == 0;
+
+    /// <summary>ArcaneCore addition: empty the plan for reuse (<see cref="InferenceScheduler.PlanStep(StepPlan)"/>).</summary>
+    internal void Clear(ulong stepIndex, long plannedAt)
+    {
+        StepIndex = stepIndex;
+        PlannedAt = plannedAt;
+        Work.Clear();
+        Admitted.Clear();
+        Preempted.Clear();
+        Failed.Clear();
+        Dropped.Clear();
+        PrefillTokens = 0;
+        DecodeTokens = 0;
+    }
 }
 
 /// <summary>Backend feedback for a completed step.</summary>
@@ -820,15 +834,23 @@ public sealed class InferenceScheduler
     }
 
     /// <summary>Plan the next engine step. Throws if a plan is already in flight.</summary>
-    public StepPlan PlanStep()
+    public StepPlan PlanStep() => PlanStep(new StepPlan());
+
+    /// <summary>
+    /// ArcaneCore addition: plan the next step into <paramref name="reuse"/> (cleared first), so a long-running engine loop allocates
+    /// no plan per step (a decode step is one token per sequence).
+    /// </summary>
+    public StepPlan PlanStep(StepPlan reuse)
     {
+        ArgumentNullException.ThrowIfNull(reuse);
         if (_inFlight.HasValue)
         {
             throw new InvalidOperationException("InferenceScheduler.PlanStep: previous plan not completed");
         }
 
         long now = _clock.NowUs;
-        var plan = new StepPlan { StepIndex = _counters.Steps, PlannedAt = now };
+        StepPlan plan = reuse;
+        plan.Clear(_counters.Steps, now);
 
         DropExpired(plan, now);
 
