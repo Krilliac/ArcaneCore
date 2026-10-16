@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+
 namespace ArcaneCore.World.Warden;
 
 /// <summary>Where a session's Warden is (MaNGOS Zero WardenProtocol.h WardenState).</summary>
@@ -261,7 +263,9 @@ public sealed class WardenSession
         }
 
         _pending = batch;
-        SendPlain(WardenCodec.CheckRequest(batch, () => (uint)_random.NextInt64(0, 1L << 32)));
+        // The scan seeds key the page and driver HMACs the client must answer, so they come from the cryptographic generator: a
+        // System.Random sequence can be recovered from the seeds it already sent, letting a cheat precompute the next batch's answers.
+        SendPlain(WardenCodec.CheckRequest(batch, static () => (uint)RandomNumberGenerator.GetInt32(int.MinValue, int.MaxValue)));
         Await(WardenState.AwaitingCheckResult);
     }
 
