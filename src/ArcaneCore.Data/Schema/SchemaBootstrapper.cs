@@ -252,7 +252,9 @@ public static class SchemaBootstrapper
                 await schemaLock.CompleteAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            // Only a database this build accepted (and not in validate-only mode): a refused or read-only check leaves it byte-for-byte untouched.
+            // Only a database this build accepted (and not in validate-only mode): this step never touches a refused or read-only-checked database.
+            // (A second, best-effort attempt: EF's SqliteDatabaseCreator.Create already switched a file it created. Independently, with SqliteSynchronous=NORMAL the
+            // connection interceptor puts any EMPTY database into WAL on open, validate-only included: SqliteConnectionPragmaInterceptor.WalIfEmpty.)
             if (!options.ValidateOnly)
             {
                 await UseWriteAheadLogAsync(db, definition, logger, cancellationToken).ConfigureAwait(false);

@@ -6,6 +6,7 @@ using ArcaneCore.Data.Schema.Upgrade;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -188,6 +189,8 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     {
         // A brand-new install: characters.db does not exist yet and Database:SqliteSynchronous=NORMAL. The very first connection
         // (EF's create) used to find the new file in journal mode 'delete' and log NORMAL as refused at ERROR ("FAIL" on the console).
+        // RED comes from the final log assertion ONLY: without the fix the WAL, synchronous and EffectiveFor checks pass too, because EF's create and the
+        // schema bootstrap switch the file to WAL right after that first open and every later open applies NORMAL. Startup never failed; the ERROR was false.
         string path = Path.Combine(_directory, "fresh-characters.db");
         Assert.False(File.Exists(path));
         string characters = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
@@ -205,6 +208,69 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
             db.GetService<IDbContextOptions>().FindExtension<CoreOptionsExtension>()!.Interceptors!.OfType<SqliteConnectionPragmaInterceptor>());
         Assert.Equal(SqliteSynchronousMode.Normal, pragma.EffectiveFor(db.Database.GetDbConnection().DataSource));
         Assert.DoesNotContain(errors.Errors, line => line.Contains("SqliteSynchronous", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_WithPooling_ReusedConnectionIsNormalAndNoRefusal()
+    {
+        // The production default: Pooling=true, so the handle EF's create opened goes back to the pool and is handed out again. As above, RED comes from the log
+        // assertion only.
+        string path = Path.Combine(_directory, "fresh-pooled-characters.db");
+        Assert.False(File.Exists(path));
+        string characters = new SqliteConnectionStringBuilder { DataSource = path, Pooling = true }.ToString();
+        var errors = new CapturingLoggerProvider();
+        string? efConnectionString = null;
+        try
+        {
+            await using ServiceProvider provider = Build(false, [("Database:Provider", "Sqlite"), ("Database:ConnectionString", characters), ("Database:SqliteSynchronous", "Normal")], errors);
+            int exit = await DatabaseStartup.InitializeAsync(() => provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync(), provider, new StringWriter());
+            Assert.Equal(0, exit);
+
+            await using AsyncServiceScope scope = provider.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            efConnectionString = db.Database.GetConnectionString();
+            await db.Database.OpenConnectionAsync();
+            Assert.Equal("wal", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
+            Assert.Equal(1L, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
+            await db.Database.CloseConnectionAsync();
+
+            // A plain open with EF's exact connection string takes the pooled handle back WITHOUT the interceptor running: it still carries the NORMAL that was
+            // applied on it (a fresh, unpooled handle would report SQLite's default FULL, 2).
+            await using (var reused = new SqliteConnection(efConnectionString))
+            {
+                await reused.OpenAsync();
+                Assert.Equal(1L, await ScalarAsync(reused, "PRAGMA synchronous"));
+            }
+
+            Assert.DoesNotContain(errors.Errors, line => line.Contains("SqliteSynchronous", StringComparison.Ordinal));
+        }
+        finally
+        {
+            // Release only this test's pool so the temp directory can be deleted; other tests' pools are untouched.
+            if (efConnectionString is not null)
+            {
+                using var owner = new SqliteConnection(efConnectionString);
+                SqliteConnection.ClearPool(owner);
+            }
+
+            using var raw = new SqliteConnection(characters);
+            SqliteConnection.ClearPool(raw);
+        }
+    }
+
+    [Fact]
+    public void EfCreate_SwitchesANewFileToWal_AfterOpening()
+    {
+        // Pins the third-party behaviour the interceptor's comment relies on: EF's SqliteDatabaseCreator.Create runs PRAGMA journal_mode = 'wal' after it has
+        // opened the connection (so an interceptor on that open still sees the default rollback journal). No interceptor here.
+        string path = Path.Combine(_directory, "ef-create.db");
+        using var db = new DbContext(new DbContextOptionsBuilder<DbContext>().UseSqlite(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()).Options);
+        db.GetService<IRelationalDatabaseCreator>().Create();
+        using var raw = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+        raw.Open();
+        using SqliteCommand command = raw.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode;";
+        Assert.Equal("wal", command.ExecuteScalar());
     }
 
     [Fact]

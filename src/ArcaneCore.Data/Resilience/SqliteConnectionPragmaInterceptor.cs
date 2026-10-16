@@ -44,7 +44,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
 
     /// <summary>
     /// The configured <c>Database:SqliteSynchronous</c>. Normal is only applied to a database that is in WAL mode (in a rollback-journal mode NORMAL can corrupt the
-    /// file on power loss); any other database gets FULL and an error log line. An empty, just-created file is put into WAL first (<see cref="WalIfEmpty"/>). See <see cref="EffectiveFor"/>.
+    /// file on power loss); any other database gets FULL and an error log line. An empty database (page_count 0) is put into WAL first (<see cref="WalIfEmpty"/>). See <see cref="EffectiveFor"/>.
     /// </summary>
     public SqliteSynchronousMode Synchronous { get; }
 
@@ -151,7 +151,8 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
             {
                 await using SqliteCommand mode = sqlite.CreateCommand();
                 mode.CommandText = "PRAGMA journal_mode;";
-                ApplySynchronous(sqlite, WalIfEmpty(sqlite, await mode.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string));
+                string? journalMode = await mode.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+                ApplySynchronous(sqlite, await WalIfEmptyAsync(sqlite, journalMode, cancellationToken).ConfigureAwait(false));
             }
             else
             {
@@ -161,12 +162,19 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
     }
 
     /// <summary>
-    /// The journal mode NORMAL is judged against. A database that is not in WAL but is EMPTY (<c>page_count</c> 0: a file that did not exist until this open
-    /// created it) is put into WAL first and the resulting mode returned. Without this, the first connection of a fresh install (EF's create) found SQLite's
-    /// default rollback journal and refused the configured NORMAL at ERROR, although the schema bootstrap switches the file to WAL a moment later. An empty
-    /// file has no schema or rows to protect, so this never changes a database the bootstrap would refuse or leave untouched (validate-only); a populated
-    /// non-WAL file is only read here and stays fail-closed on FULL. Runs only when NORMAL is configured and the file is not already in WAL (rare: the WAL
-    /// mode is persistent), so the common open pays nothing extra. If the switch is refused (another connection holds the file) the mode is unchanged.
+    /// The journal mode NORMAL is judged against. A database that is not in WAL but is EMPTY (<c>page_count</c> 0) is put into WAL first and the resulting mode returned.
+    /// <para>
+    /// Why: on a new file the first connection is EF's own create (<c>SqliteDatabaseCreator.Create</c>), which opens the connection, which runs this interceptor,
+    /// and only THEN runs <c>PRAGMA journal_mode = 'wal'</c>; the schema bootstrap repeats the switch, best effort, after it has accepted the schema. So this open
+    /// used to see SQLite's default rollback journal and log the configured NORMAL as refused at ERROR ("FAIL" on the console), although the file was in WAL
+    /// moments later and later connections got NORMAL. This change removes that false ERROR on the first open of a new file; startup completed either way.
+    /// </para>
+    /// <para>
+    /// Scope: an empty database has no schema or rows, so nothing is lost, but its file IS written (the WAL header, plus <c>-wal</c>/<c>-shm</c>). That includes a
+    /// zero-byte file that already existed (touched, or left by a crashed create), and it happens on any open, a validate-only bootstrap included, whenever NORMAL is
+    /// configured. A populated non-WAL file is only read here and stays fail-closed on FULL. Runs only when NORMAL is configured and the file is not already in WAL
+    /// (the mode is persistent), so the common open pays nothing extra. If the switch is refused (another connection holds the file) the mode is unchanged.
+    /// </para>
     /// </summary>
     private static string? WalIfEmpty(SqliteConnection connection, string? journalMode)
     {
@@ -187,6 +195,33 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
             using SqliteCommand wal = connection.CreateCommand();
             wal.CommandText = "PRAGMA journal_mode=WAL;";
             return wal.ExecuteScalar() as string ?? journalMode;
+        }
+        catch (SqliteException)
+        {
+            return journalMode; // fail closed: ApplySynchronous keeps FULL and reports the mode it was given
+        }
+    }
+
+    /// <summary>The async form of <see cref="WalIfEmpty"/>, same rules.</summary>
+    private static async Task<string?> WalIfEmptyAsync(SqliteConnection connection, string? journalMode, CancellationToken cancellationToken)
+    {
+        if (string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
+        {
+            return journalMode;
+        }
+
+        try
+        {
+            await using SqliteCommand pages = connection.CreateCommand();
+            pages.CommandText = "PRAGMA page_count;";
+            if (await pages.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not long count || count != 0)
+            {
+                return journalMode;
+            }
+
+            await using SqliteCommand wal = connection.CreateCommand();
+            wal.CommandText = "PRAGMA journal_mode=WAL;";
+            return await wal.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string ?? journalMode;
         }
         catch (SqliteException)
         {
