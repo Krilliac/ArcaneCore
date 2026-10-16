@@ -122,6 +122,26 @@ public interface IMeshPointQuery
 }
 
 /// <summary>
+/// Optional: a pathfinder that can say whether its navigation mesh has a walkable surface straight under (or over) a point. The mesh is
+/// built from the same terrain and model data by the reference generator (vmangos <c>MoveMapGen</c>, <c>TerrainBuilder::loadVMap</c>),
+/// so a polygon there is a floor the world was built with even where the model query misses it (a gap in the extracted model, the
+/// overhanging edge of a ledge polygon). "Unavailable" is false: no mesh, the tile under the point not loaded, nothing in the window.
+/// World coordinates; world thread.
+/// </summary>
+public interface IMeshFloorQuery
+{
+    /// <summary>
+    /// Whether a mesh polygon lies straight under or over (<paramref name="x"/>, <paramref name="y"/>) (within
+    /// <see cref="MeshFloorHorizontalYards"/>) with its surface between <paramref name="z"/> - <paramref name="below"/> and
+    /// <paramref name="z"/> + <paramref name="above"/>; <paramref name="height"/> is that surface. Never reads a tile.
+    /// </summary>
+    bool TryGetMeshFloor(uint mapId, float x, float y, float z, float below, float above, out float height);
+
+    /// <summary>How far sideways from the point a polygon may lie and still count as "straight under it" (half a navmesh cell).</summary>
+    const float MeshFloorHorizontalYards = 0.25f;
+}
+
+/// <summary>
 /// The answer of <see cref="IMeshPointQuery.Raycast"/>. <see cref="Fraction"/> is the share of the horizontal segment walked (1: it
 /// reached <c>end</c>), measured from the start's position on the mesh; <see cref="Point"/> is where it stopped, on the mesh surface.
 /// </summary>
