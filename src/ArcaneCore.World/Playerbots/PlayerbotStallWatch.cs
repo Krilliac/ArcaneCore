@@ -194,40 +194,58 @@ internal sealed class PlayerbotStallWatch
     /// <summary>Stalls of the same bot in one <see cref="PinCellYards"/> cell that mark the cell a dead-end pin and escalate recovery.</summary>
     internal const int PinStallsToEscalate = 2;
 
-    internal const int MaxPinCells = 64;
+    private PlayerbotDeferLedger? _ledger;
 
-    internal readonly record struct PinCell(uint MapId, int CellX, int CellY);
+    /// <summary>The world whose clock the pin backoffs are read against (<see cref="PlayerbotNavigation.IsDeadEndPin"/> asks at its <c>NowMs</c>); null: no pin is ever reported.</summary>
+    internal ArcaneCore.Game.Maps.WorldRuntime? World { get; init; }
 
-    private readonly Dictionary<PinCell, int> _pinStalls = [];
-    private readonly Queue<PinCell> _pinOrder = [];
-
-    internal static PinCell CellOf(uint mapId, float x, float y)
-        => new(mapId, (int)MathF.Floor(x / PinCellYards), (int)MathF.Floor(y / PinCellYards));
-
-    /// <summary>Record a stall give-up at <c>(x, y)</c> on <paramref name="mapId"/> and return how many times this bot has stalled in that 10-yard cell.</summary>
-    internal int RecordPinStall(uint mapId, float x, float y)
+    /// <summary>
+    /// Where the pin cells are kept (<see cref="DeferKind.PinCell"/>): the bot's own ledger, which the brain binds at construction
+    /// (<see cref="PlayerbotSuspensions.Ledger"/>); a watch used alone has a ledger of its own.
+    /// </summary>
+    internal PlayerbotDeferLedger Ledger
     {
-        if (!float.IsFinite(x) || !float.IsFinite(y)) return 0;
-        PinCell cell = CellOf(mapId, x, y);
-        if (!_pinStalls.TryGetValue(cell, out int count))
-        {
-            if (_pinStalls.Count >= MaxPinCells && _pinOrder.TryDequeue(out PinCell oldest))
-                _pinStalls.Remove(oldest);
-            _pinOrder.Enqueue(cell);
-        }
-
-        count++;
-        _pinStalls[cell] = count;
-        return count;
+        get => _ledger ??= new PlayerbotDeferLedger();
+        init => _ledger = value;
     }
 
-    /// <summary>How many times this bot has stalled inside the 10-yard cell containing <c>(x, y)</c> on <paramref name="mapId"/>.</summary>
-    internal int PinStallCount(uint mapId, float x, float y)
-        => float.IsFinite(x) && float.IsFinite(y) ? _pinStalls.GetValueOrDefault(CellOf(mapId, x, y)) : 0;
+    /// <summary>The ledger's time for the world time <paramref name="nowMs"/> (<see cref="PlayerbotWorldClock.Ms(ArcaneCore.Game.Maps.WorldRuntime, uint)"/>; as it is when the watch has no world).</summary>
+    private long LedgerTime(uint nowMs) => World is { } world ? PlayerbotWorldClock.Ms(world, nowMs) : nowMs;
 
-    /// <summary>Whether the 10-yard cell containing <c>(x, y)</c> on <paramref name="mapId"/> has stalled this bot at least <see cref="PinStallsToEscalate"/> times.</summary>
-    internal bool IsDeadEndPin(uint mapId, float x, float y)
-        => PinStallCount(mapId, x, y) >= PinStallsToEscalate;
+    /// <summary>The pin cell of <c>(x, y)</c> on <paramref name="mapId"/>: map in bits 48-63, cell X in 24-47, cell Y in 0-23.</summary>
+    internal static DeferKey PinKey(uint mapId, float x, float y)
+        => new(DeferKind.PinCell, ((ulong)(mapId & 0xFFFFu) << 48)
+            | ((ulong)(uint)((int)MathF.Floor(x / PinCellYards) & 0xFFFFFF) << 24)
+            | (ulong)(uint)((int)MathF.Floor(y / PinCellYards) & 0xFFFFFF));
+
+    /// <summary>
+    /// Record a stall give-up at <c>(x, y)</c> on <paramref name="mapId"/> at world time <paramref name="nowMs"/> and return how many times this bot has stalled in that 10-yard
+    /// cell. The cell is a dead-end pin (<see cref="IsDeadEndPin"/>) for the ledger's backoff from <paramref name="nowMs"/>: 10, 30, then
+    /// 60 minutes from the second stall (the first is no pin yet); a cell whose last backoff ended an hour ago starts again.
+    /// </summary>
+    internal int RecordPinStall(uint mapId, float x, float y, uint nowMs)
+    {
+        if (!float.IsFinite(x) || !float.IsFinite(y)) return 0;
+        DeferKey key = PinKey(mapId, x, y);
+        long now = LedgerTime(nowMs);
+        // From the third stall a replaced navigation dataset also frees the cell: the mesh the bot kept failing on is gone.
+        return Ledger.Defer(key, now, Ledger.EffectiveStrikes(key, now) + 1 >= 3 ? DeferWake.NavDataset : DeferWake.None).Strikes;
+    }
+
+    /// <summary>How many times this bot has stalled inside the 10-yard cell containing <c>(x, y)</c> on <paramref name="mapId"/> (while remembered).</summary>
+    internal int PinStallCount(uint mapId, float x, float y)
+        => float.IsFinite(x) && float.IsFinite(y) ? Ledger.Strikes(PinKey(mapId, x, y)) : 0;
+
+    /// <summary>
+    /// Whether the 10-yard cell containing <c>(x, y)</c> on <paramref name="mapId"/> has stalled this bot at least
+    /// <see cref="PinStallsToEscalate"/> times and its backoff since the last stall has not ended at world time <paramref name="nowMs"/>.
+    /// </summary>
+    internal bool IsDeadEndPin(uint mapId, float x, float y, uint nowMs)
+    {
+        if (!float.IsFinite(x) || !float.IsFinite(y)) return false;
+        DeferKey key = PinKey(mapId, x, y);
+        return Ledger.Strikes(key) >= PinStallsToEscalate && Ledger.IsDeferred(key, LedgerTime(nowMs));
+    }
 
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and
@@ -254,23 +272,19 @@ internal sealed class PlayerbotStallWatch
 }
 
 /// <summary>
-/// What a stalled bot set aside (<see cref="PlayerbotStallWatch"/>): creature entries and quests the brain's goals skip until
-/// <see cref="SuspendMs"/> of world time passed. Bounded; the oldest goes first.
+/// What a stalled bot set aside (<see cref="PlayerbotStallWatch"/>): creature entries, quests, trainer visits and unreachable quests the
+/// brain's goals skip until a deadline or a change that makes them worth trying again. A facade over the bot's
+/// <see cref="PlayerbotDeferLedger"/> (<see cref="Ledger"/>), which holds the entries, the strikes that escalate repeated set-asides
+/// and the persisted rows; goal components that defer for other reasons use the ledger directly. Bounded by the ledger's caps.
+/// <para>Thread affinity: world thread (<see cref="Version"/> may be read from the save thread).</para>
 /// </summary>
-internal sealed class PlayerbotSuspensions
+internal sealed class PlayerbotSuspensions(PlayerbotDeferLedger? ledger = null, ArcaneCore.Game.Maps.WorldRuntime? world = null)
 {
     /// <summary>How long a stalled goal's target is set aside.</summary>
     internal const uint SuspendMs = 600_000;
 
     /// <summary>The longest a repeated dead-end pin stall sets an entry aside (<see cref="SuspendEntryEscalating"/>).</summary>
     internal const uint MaxSuspendMs = 8 * SuspendMs;
-
-    private const int Max = 64;
-    private readonly Dictionary<uint, uint> _entries = [];
-    private readonly Dictionary<uint, uint> _quests = [];
-    private readonly HashSet<uint> _unreachableQuests = [];
-    private readonly Dictionary<uint, int> _questSetAsides = [];
-    private readonly Dictionary<uint, int> _entryStrikes = [];
 
     /// <summary>
     /// The set-asides of one quest after which a completed quest that is held against the usual rules (a graduated home's leave-home quest,
@@ -279,77 +293,103 @@ internal sealed class PlayerbotSuspensions
     /// </summary>
     internal const int MaxReturnSetAsides = 3;
 
+    private static readonly DeferKey TrainingKey = new(DeferKind.Training, 0);
+
+    private readonly Dictionary<uint, int> _questSetAsides = [];
+
+    /// <summary>The bot's deferrals: the entries behind every set-aside here (and the stall watch's pin cells).</summary>
+    internal PlayerbotDeferLedger Ledger { get; } = ledger ?? new PlayerbotDeferLedger();
+
+    /// <summary>The ledger's time for the world time <paramref name="nowMs"/>: against the world's 64-bit uptime, so the 32-bit clock's wrap never reaches the ledger (without a world, as given).</summary>
+    private long T(uint nowMs) => world is null ? nowMs : PlayerbotWorldClock.Ms(world, nowMs);
+
     /// <summary>How many times this bot has set the quest aside (kept in memory; a restart starts the count again).</summary>
     internal int QuestSetAsideCount(uint quest) => _questSetAsides.GetValueOrDefault(quest);
 
-    private readonly Queue<uint> _unreachableOrder = [];
-    private int _version;
-    internal int Version => Volatile.Read(ref _version);
-
-    internal bool IsEntrySuspended(uint entry, uint nowMs)
-        => entry != 0 && (Active(_entries, entry, nowMs) || Shared?.IsEntrySetAside(entry, nowMs) == true);
-
-    internal bool IsQuestSuspended(uint quest, uint nowMs)
-        => quest != 0 && (_unreachableQuests.Contains(quest) || Active(_quests, quest, nowMs)
-            || Shared?.IsQuestSetAside(quest, nowMs) == true);
-
-    internal bool IsQuestUnreachable(uint quest) => quest != 0 && _unreachableQuests.Contains(quest);
-
-    /// <summary>Never take again a completed quest this bot abandoned after three unreachable-ender diagnoses.</summary>
-    internal void MarkUnreachableQuest(uint quest)
-    {
-        if (quest == 0 || !_unreachableQuests.Add(quest)) return;
-        if (_unreachableOrder.Count >= Max) _unreachableQuests.Remove(_unreachableOrder.Dequeue());
-        _unreachableOrder.Enqueue(quest);
-        Interlocked.Increment(ref _version);
-    }
+    /// <summary>Changes whenever what <see cref="Export"/> would write changed.</summary>
+    internal int Version => Ledger.Version;
 
     /// <summary>What every bot of the world sets aside (<see cref="PlayerbotSharedSetAsides"/>), or null.</summary>
     internal PlayerbotSharedSetAsides? Shared { get; set; }
 
-    private uint _trainingUntilMs;
-    private bool _training;
+    internal bool IsEntrySuspended(uint entry, uint nowMs)
+    {
+        return entry != 0 && (Ledger.IsDeferred(new(DeferKind.Entry, entry), T(nowMs)) || Shared?.IsEntrySetAside(entry, nowMs) == true);
+    }
+
+    internal bool IsQuestSuspended(uint quest, uint nowMs)
+    {
+        long now = T(nowMs);
+        return quest != 0 && (Ledger.IsDeferred(new(DeferKind.UnreachableQuest, quest), now)
+            || Ledger.IsDeferred(new(DeferKind.Quest, quest), now) || Shared?.IsQuestSetAside(quest, nowMs) == true);
+    }
+
+    /// <summary>Whether the quest's ender was diagnosed unreachable and the diagnosis has not expired.</summary>
+    internal bool IsQuestUnreachable(uint quest, uint nowMs)
+        => quest != 0 && Ledger.IsDeferred(new(DeferKind.UnreachableQuest, quest), T(nowMs));
+
+    /// <summary>
+    /// Do not take again a completed quest this bot abandoned after three unreachable-ender diagnoses: for 60 seconds, then 10 minutes,
+    /// 1 hour, 6 hours and 24 hours with each repeat (the last holds), and sooner when the bot levels or the quest data, creature
+    /// definitions or navigation dataset is replaced. Repeated while it is set aside already, it changes nothing.
+    /// </summary>
+    internal void MarkUnreachableQuest(uint quest, uint nowMs)
+    {
+        if (quest == 0) return;
+        DeferKey key = new(DeferKind.UnreachableQuest, quest);
+        long now = T(nowMs);
+        if (Ledger.IsDeferred(key, now)) return;
+        Ledger.Defer(key, now);
+    }
 
     /// <summary>Whether trainer visits are set aside (a death loop on the way to one, <see cref="SuspendTraining"/>).</summary>
     internal bool IsTrainingSuspended(uint nowMs)
     {
-        if (_training && unchecked((int)(_trainingUntilMs - nowMs)) <= 0) _training = false;
-        return _training;
+        return Ledger.IsDeferred(TrainingKey, T(nowMs));
     }
 
     /// <summary>Set every trainer visit aside for <see cref="SuspendMs"/>: the class trainers of a zone are usually in one town.</summary>
     internal void SuspendTraining(uint nowMs)
     {
-        _training = true;
-        _trainingUntilMs = unchecked(nowMs + SuspendMs);
-        Interlocked.Increment(ref _version);
+        long now = T(nowMs);
+        Ledger.Defer(TrainingKey, now, untilMs: now + SuspendMs, strike: false);
     }
 
     internal void SuspendEntry(uint entry, uint nowMs)
     {
         if (entry == 0) return;
-        if (_entryStrikes.Count >= 256 && !_entryStrikes.ContainsKey(entry)) _entryStrikes.Clear();
-        _entryStrikes[entry] = Math.Max(1, _entryStrikes.GetValueOrDefault(entry));
-        Add(_entries, entry, nowMs);
-        Interlocked.Increment(ref _version);
+        long now = T(nowMs);
+        Ledger.Defer(new(DeferKind.Entry, entry), now, untilMs: now + SuspendMs, strike: false);
     }
 
-    internal int EntryStrikeCount(uint entry) => _entryStrikes.GetValueOrDefault(entry);
+    /// <summary>
+    /// The bot turned <paramref name="quest"/> in: forget its unreachable-quest and quest strikes and its set-aside count, so a quest that
+    /// once succeeded starts clean.
+    /// </summary>
+    internal void QuestSucceeded(uint quest)
+    {
+        if (quest == 0) return;
+        Ledger.Succeeded(new(DeferKind.UnreachableQuest, quest));
+        Ledger.Succeeded(new(DeferKind.Quest, quest));
+        _questSetAsides.Remove(quest);
+    }
+
+    /// <summary>Lift the set-aside of <paramref name="entry"/> before its time (the reason for it passed). Its strikes stay.</summary>
+    internal void ReleaseEntry(uint entry, uint nowMs) => Ledger.Wake(new(DeferKind.Entry, entry), T(nowMs));
+
+    /// <summary>Lift the set-aside of <paramref name="quest"/> before its time (the reason for it passed). The count of set-asides is kept.</summary>
+    internal void ReleaseQuest(uint quest, uint nowMs) => Ledger.Wake(new(DeferKind.Quest, quest), T(nowMs));
+
+    internal int EntryStrikeCount(uint entry) => Ledger.Strikes(new(DeferKind.Entry, entry));
 
     /// <summary>
     /// Set <paramref name="entry"/> aside with doubling backoff (<c>2 * SuspendMs</c> up to <see cref="MaxSuspendMs"/>) when a bot
-    /// repeatedly stalls on it at a dead-end pin.
+    /// repeatedly stalls on it at a dead-end pin. Returns the length of the set-aside.
     /// </summary>
     internal uint SuspendEntryEscalating(uint entry, uint nowMs)
     {
         if (entry == 0) return 0;
-        if (_entryStrikes.Count >= 256 && !_entryStrikes.ContainsKey(entry)) _entryStrikes.Clear();
-        int strikes = Math.Max(2, _entryStrikes.GetValueOrDefault(entry) + 1);
-        _entryStrikes[entry] = strikes;
-        uint duration = (uint)Math.Min((ulong)SuspendMs << Math.Min(strikes - 1, 3), MaxSuspendMs);
-        Add(_entries, entry, nowMs, duration);
-        Interlocked.Increment(ref _version);
-        return duration;
+        return Ledger.Defer(new(DeferKind.Entry, entry), T(nowMs), minStrikes: 2).Ms;
     }
 
     /// <param name="countsAsSetAside">False for a set-aside that says nothing about abandoning the quest (a walk refused as a proven dead
@@ -357,78 +397,85 @@ internal sealed class PlayerbotSuspensions
     internal void SuspendQuest(uint quest, uint nowMs, bool countsAsSetAside = true)
     {
         if (quest == 0) return;
-        Add(_quests, quest, nowMs);
-        if (countsAsSetAside)
-        {
-            if (_questSetAsides.Count >= 256 && !_questSetAsides.ContainsKey(quest)) _questSetAsides.Clear();
-            _questSetAsides[quest] = _questSetAsides.GetValueOrDefault(quest) + 1;
-        }
-
-        Interlocked.Increment(ref _version);
+        long now = T(nowMs);
+        Ledger.Defer(new(DeferKind.Quest, quest), now, untilMs: now + SuspendMs, strike: false);
+        if (!countsAsSetAside) return;
+        if (_questSetAsides.Count >= 256 && !_questSetAsides.ContainsKey(quest)) _questSetAsides.Clear();
+        _questSetAsides[quest] = _questSetAsides.GetValueOrDefault(quest) + 1;
     }
 
+    /// <summary>
+    /// The rows to save: the live set-asides of the persisted kinds (entry, quest, training, unreachable quest) with their absolute
+    /// expiry, and an unreachable quest whose set-aside ended with its strikes (expiry now), which only a turn-in clears. An entry's and
+    /// an unreachable quest's <see cref="PlayerbotSetAside.RepeatCount"/> carries its strikes.
+    /// </summary>
     internal PlayerbotSetAside[] Export(Guid botId, int characterId, uint nowMs, long unixNowMs)
     {
-        var rows = new List<PlayerbotSetAside>();
-        foreach ((uint id, uint until) in _entries)
-            if (Remaining(until, nowMs) is > 0 and var remaining)
-                rows.Add(new(botId, characterId, PlayerbotSetAsideKind.Entry, id, unixNowMs + remaining));
-        foreach ((uint id, uint until) in _quests)
-            if (Remaining(until, nowMs) is > 0 and var remaining)
-                rows.Add(new(botId, characterId, PlayerbotSetAsideKind.Quest, id, unixNowMs + remaining));
-        foreach (uint id in _unreachableOrder)
-            rows.Add(new(botId, characterId, PlayerbotSetAsideKind.UnreachableQuest, id, long.MaxValue));
-        if (_training && Remaining(_trainingUntilMs, nowMs) is > 0 and var trainingRemaining)
-            rows.Add(new(botId, characterId, PlayerbotSetAsideKind.Training, 0, unixNowMs + trainingRemaining));
-        return [.. rows];
+        List<DeferRecord> live = Ledger.Persistable(T(nowMs));
+        var rows = new PlayerbotSetAside[live.Count];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            DeferRecord record = live[i];
+            var kind = (PlayerbotSetAsideKind)PlayerbotDeferLedger.PersistAs(record.Key.Kind);
+            int repeat = kind is PlayerbotSetAsideKind.Entry or PlayerbotSetAsideKind.UnreachableQuest
+                ? Math.Min(record.Strikes, PlayerbotSetAside.MaxRepeatCount) : 0;
+            rows[i] = new PlayerbotSetAside(botId, characterId, kind, (uint)record.Key.Id,
+                unixNowMs + record.RemainingMs, repeat);
+        }
+
+        return rows;
     }
 
+    /// <summary>
+    /// Put back saved set-asides. A row that ended is dropped (an unreachable quest's keeps its strikes); one longer than its kind allows (a clock set back) is shortened to the
+    /// kind's longest (escalated entries last up to <see cref="MaxSuspendMs"/>). A legacy never-expiring unreachable-quest row
+    /// (<c>ExpiresUnixMs == long.MaxValue</c>) becomes a finite one: a minute plus a stable share of four more, so the bots that
+    /// restart together do not all retry the quest at once, with two strikes; the next save writes it finite.
+    /// </summary>
     internal void Restore(IEnumerable<PlayerbotSetAside> rows, uint nowMs, long unixNowMs)
     {
+        long now = T(nowMs);
         foreach (PlayerbotSetAside row in rows)
         {
-            if (row.Kind == PlayerbotSetAsideKind.UnreachableQuest && row.TargetId != 0
-                && row.ExpiresUnixMs == long.MaxValue)
-            {
-                MarkUnreachableQuest(row.TargetId);
-                continue;
-            }
-            long remaining = row.ExpiresUnixMs - unixNowMs;
-            if (remaining <= 0 || remaining > SuspendMs) continue;
-            uint until = unchecked(nowMs + (uint)remaining);
+            DeferKind kind;
             switch (row.Kind)
             {
-                case PlayerbotSetAsideKind.Entry when row.TargetId != 0: Restore(_entries, row.TargetId, until, nowMs); break;
-                case PlayerbotSetAsideKind.Quest when row.TargetId != 0: Restore(_quests, row.TargetId, until, nowMs); break;
-                case PlayerbotSetAsideKind.Training when row.TargetId == 0: _training = true; _trainingUntilMs = until; break;
+                case PlayerbotSetAsideKind.Entry when row.TargetId != 0: kind = DeferKind.Entry; break;
+                case PlayerbotSetAsideKind.Quest when row.TargetId != 0: kind = DeferKind.Quest; break;
+                case PlayerbotSetAsideKind.Training when row.TargetId == 0: kind = DeferKind.Training; break;
+                case PlayerbotSetAsideKind.UnreachableQuest when row.TargetId != 0: kind = DeferKind.UnreachableQuest; break;
+                default: continue;
             }
+
+            DeferKey key = new(kind, row.TargetId);
+            if (kind == DeferKind.UnreachableQuest && row.ExpiresUnixMs == long.MaxValue)
+            {
+                Ledger.RestoreEntry(key, now, 60_000u + LegacyStagger(row.BotId, row.TargetId), 2);
+                Ledger.MarkChanged();
+                continue;
+            }
+
+            long remaining = row.ExpiresUnixMs - unixNowMs;
+            if (remaining <= 0)
+            {
+                // An unreachable quest keeps its strikes after its set-aside ended: only a turn-in clears them.
+                if (kind == DeferKind.UnreachableQuest && row.RepeatCount > 0) Ledger.RestoreEntry(key, now, 0, row.RepeatCount);
+                continue;
+            }
+
+            uint ms = (uint)Math.Min(remaining, PlayerbotDeferLedger.PolicyOf(kind).MaxMs);
+            int strikes = kind is DeferKind.Entry or DeferKind.UnreachableQuest ? Math.Max(1, row.RepeatCount) : 1;
+            Ledger.RestoreEntry(key, now, ms, strikes);
         }
     }
 
-    private static long Remaining(uint until, uint nowMs) => Math.Max(0, unchecked((int)(until - nowMs)));
-
-    private static void Restore(Dictionary<uint, uint> set, uint key, uint until, uint nowMs)
+    /// <summary>A stable 0 to 240 s share for a legacy row (<see cref="Restore"/>).</summary>
+    internal static uint LegacyStagger(Guid botId, uint quest)
     {
-        if (set.Count >= Max && !set.ContainsKey(key))
-            set.Remove(set.OrderBy(entry => Remaining(entry.Value, nowMs)).First().Key);
-        set[key] = until;
-    }
-
-    private static bool Active(Dictionary<uint, uint> set, uint key, uint nowMs)
-    {
-        if (!set.TryGetValue(key, out uint until)) return false;
-        if (unchecked((int)(until - nowMs)) > 0) return true;
-        set.Remove(key);
-        return false;
-    }
-
-    private static void Add(Dictionary<uint, uint> set, uint key, uint nowMs, uint durationMs = SuspendMs)
-    {
-        if (key == 0) return;
-        foreach (uint expired in set.Where(entry => unchecked((int)(entry.Value - nowMs)) <= 0).Select(entry => entry.Key).ToArray())
-            set.Remove(expired);
-        if (set.Count >= Max && !set.ContainsKey(key)) set.Remove(set.OrderBy(entry => entry.Value).First().Key);
-        set[key] = unchecked(nowMs + durationMs);
+        Span<byte> bytes = stackalloc byte[16];
+        botId.TryWriteBytes(bytes);
+        ulong bot = BitConverter.ToUInt64(bytes) ^ PlayerbotDeferLedger.Mix(BitConverter.ToUInt64(bytes[8..]));
+        return (uint)(PlayerbotDeferLedger.Mix(bot ^ ((ulong)quest * 0x9E3779B97F4A7C15UL)) % 240_000UL);
     }
 }
 

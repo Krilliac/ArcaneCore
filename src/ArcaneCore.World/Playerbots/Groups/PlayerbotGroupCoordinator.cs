@@ -336,6 +336,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         foreach (PlayerbotGroupBot bot in _bots.Values.OrderBy(b => b.BotId))
         {
             if (!bot.Free || _memberOf.ContainsKey(bot.BotId) || bot.Session.Player is not { IsInWorld: true } player) continue;
+            // A mage serving a portal request, or a bot on a mage leg, may stand in the short-lived party of the portal (party-only portals):
+            // the coordinator leaves it alone until the service ends (PlayerbotMageService leaves that party itself).
+            if (PlayerbotMageService.IsServing(player) || PlayerbotMageService.IsActive(player)) continue;
             if (EvacuateIfStranded(bot, player)) continue;
             if (!_options.Groups.Enabled || !player.IsAlive || GroupManagerOrNull() is not { } groupManager) continue;
             // Never a battleground raid: the match owns it (BattlegroundFeature.LeaveBattlegroundRaid takes the bot out when it leaves).
@@ -1403,7 +1406,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         _setAside[(botId, goal.Key)] = unchecked(Now + ms);
-        if (!suspendInBrain || !_bots.TryGetValue(botId, out PlayerbotGroupBot bot)) return;
+        if (!suspendInBrain || _world is null || !_bots.TryGetValue(botId, out PlayerbotGroupBot bot)) return;
         if (goal.QuestId != 0) bot.Brain.Suspensions.SuspendQuest(goal.QuestId, Now);
         bot.Brain.Suspensions.SuspendEntry(goal.ObjectiveEntry, Now);
     }

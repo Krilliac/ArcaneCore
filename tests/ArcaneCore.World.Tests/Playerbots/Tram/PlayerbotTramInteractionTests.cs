@@ -83,7 +83,7 @@ public sealed class PlayerbotTramInteractionTests(ITestOutputHelper output)
     /// it, and the failure is reported at the exit the bot left by, not where the quest failed.
     /// </summary>
     [Fact]
-    public async Task AFailedTrip_SetsTheGoalAsideForTheBotOnly_NeverForEveryBot()
+    public async Task AFailedTrip_SetsNothingAside_NeitherForTheBotNorForEveryBot()
     {
         await using TramTestWorld world = await TramTestWorld.StartAsync(animation: new TransportAnimationCatalog([(4170u, new TransportAnimationNode(0, 0, 0, 0))]));
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
@@ -103,9 +103,9 @@ public sealed class PlayerbotTramInteractionTests(ITestOutputHelper output)
         {
             stall = await world.TickAsync(() =>
             {
-                int before = brain.StallCount;
+                int before = brain.TransitFailureCount;
                 brain.Update(100);
-                return brain.StallCount != before ? brain.StallReport : null;
+                return brain.TransitFailureCount != before ? brain.LastTransitFailure : null;
             });
         }
 
@@ -115,7 +115,7 @@ public sealed class PlayerbotTramInteractionTests(ITestOutputHelper output)
         await world.OnWorldAsync(() =>
         {
             uint now = world.Host.World.NowMs;
-            Assert.True(brain.Suspensions.IsQuestSuspended(400, now), "the bot's own set-aside is missing");
+            Assert.False(brain.Suspensions.IsQuestSuspended(400, now), "a failed tram leg set the quest aside (only the leg is given up)");
             Assert.False(shared.IsQuestSetAside(400, now), "a failed tram trip set the quest aside for every bot");
             Assert.Null(brain.SharedSetAside);
         });

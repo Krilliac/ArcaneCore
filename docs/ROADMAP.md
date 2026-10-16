@@ -252,6 +252,11 @@ blanket absence labels without claiming complete vanilla fidelity.
 - **Script hooks:** addon chat. (DuelReset pet cooldowns are done: `DuelResetScript.ResetPetCooldowns`.)
 - **Multi-version:** S1 after #81 (build info on sessions, expansion columns, the gate, build-column migrations); S2 movement codec and typed serializers. Still undecided: which TBC/WotLK content DBs to use, and cross-version characters (decisions 4 and 6 on #61).
 - **Autopatcher:** done (off by default).
+- **Multithreading and parallel performance (later: after the playerbot policy model training, Phase 3 of `docs/design/playerbot-policy-phases.md`):** added 2026-10-15 at Nate's request.
+  - **Today:** one world process runs the whole simulation on its single world thread ([§1](#1-threading-authoritative-world-tick)). The thread pool only takes side work: saves and write queues, policy telemetry, policy scoring, tile prefetch and the region-graph build. So one process uses about one core: the Node1 training pilot ran 240 bots on about 0.6 core. The bot training fleet scales out by running more instances.
+  - **To do:** design and implement multithreaded world updates and the related techniques. That means parallel map/instance updates, keeping one writer per map, and moving bot think and pathfinding work off the world thread, with results applied on the tick. It also covers batched nav queries and an allocation/GC pass. Verify the per-map update-thread model against the references before writing code.
+  - **Not included:** live switching to Release and server GC is a separate pass for Nate to call. Live stays on Debug, and Debug is never built with optimization.
+  - Needs its own design and an explicit go, and it interacts with M15 clustering.
 - Nate has approved Warden module bytes in the repo and the bot-stall pathing change.
 
 ### Known flakes
@@ -261,7 +266,7 @@ blanket absence labels without claiming complete vanilla fidelity.
 ### Gaps by area
 - **Pets:** untraining price, taught-ability state and loyalty need persistence, which needs a characters schema bump *after* v60 (held by Claude's #326). Still open: stable gaps, happiness emote, DuelReset pet cooldowns, possess limits (#434).
 - **Handlers:** helm/cloak show flags aren't persisted (needs schema). Whois lacks account email. Spirit guide gossip timer is sent as 0. Far Sight needs real camera state in `Pets/Control/UnitControl.cs` (#436 only resets/restores). More unhandled opcodes remain in `docs/reference/opcodes.md`.
-- **Zone scripts:** about 75 cmangos zone scripts are unported; batches 1–3 cover ~13. Continue in batches of 5–8 per PR.
+- **Zone scripts:** about 68 cmangos zone scripts are unported; batches 1–4 cover ~20 (batch 4: Calvin Montague, Taskmaster Fizzule, Aquementas, Deathstalker Faerleia, `go_rune_of_the_defiler`, `go_mausoleum_door`, `go_mausoleum_trigger`; skipped candidates and reasons in `docs/integration/zone-scripts-batch4-20261016.md`). Continue in batches of 5–8 per PR.
 - **SmartAI:** CALL_FOR_HELP, other rejected actions/targets from `docs/integration/smartai-slice2-20261010.md`, AIName for GOs.
 - **Area triggers:** all 10 ported; leftovers are DB-side data (Captured Arkonarin, Felwood kitten q4506, Hendel `creature_movement_template` 4967).
 - **Other (from 2026-10-10, still open):** Warden API-hook/EndScene/login checks and live client test; AH bot gaps (`docs/areas/auction-house-bot.md`); Docker untested; addon chat hook; multi-version S1/S2 (waiting on Nate's decisions 4 and 6 on #61).

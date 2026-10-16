@@ -295,20 +295,20 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
             brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
             brain.GiveUpStalledGoal(world.Player, shareable: false);
             Assert.Equal(1, brain.StallWatch.PinStallCount(0, pinPos.X, pinPos.Y));
-            Assert.False(brain.StallWatch.IsDeadEndPin(0, pinPos.X, pinPos.Y));
+            Assert.False(brain.StallWatch.IsDeadEndPin(0, pinPos.X, pinPos.Y, world.Host.World.NowMs));
             Assert.Equal(1, brain.Suspensions.EntryStrikeCount(266));
-            Assert.False(brain.Suspensions.IsQuestUnreachable(65));
+            Assert.False(brain.Suspensions.IsQuestUnreachable(65, world.Host.World.NowMs));
 
             // Second stall in the same 10-yard cell: marks cell as a dead-end pin, escalates suspension (strike 2 = 2x duration),
             // marks repeated quest unreachable, and triggers Hearthstone/bind recovery off the dead-end pin.
             brain.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
             brain.GiveUpStalledGoal(world.Player, shareable: false);
             Assert.Equal(2, brain.StallWatch.PinStallCount(0, pinPos.X, pinPos.Y));
-            Assert.True(brain.StallWatch.IsDeadEndPin(0, pinPos.X, pinPos.Y));
+            Assert.True(brain.StallWatch.IsDeadEndPin(0, pinPos.X, pinPos.Y, world.Host.World.NowMs));
             Assert.True(PlayerbotNavigation.IsDeadEndPin(world.Player, pinPos));
             Assert.Equal(2, brain.Suspensions.EntryStrikeCount(266));
             Assert.True(brain.Suspensions.IsEntrySuspended(266, world.Host.World.NowMs + PlayerbotSuspensions.SuspendMs + 1_000));
-            Assert.True(brain.Suspensions.IsQuestUnreachable(65));
+            Assert.True(brain.Suspensions.IsQuestUnreachable(65, world.Host.World.NowMs));
             return true;
         });
 
@@ -328,6 +328,22 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
             return PlayerbotNavigation.PlanToward(world.Player, pinPos, options, ref wait, world.Host.World.NowMs, out _) == PlanOutcome.Refused;
         });
         Assert.True(refused, "navigation into a remembered dead-end pin cell must be refused");
+
+        // The pin is remembered for ten minutes, not for good: real thinks over the world clock, and the cell is open again.
+        for (int minute = 1; minute <= 9; minute++)
+        {
+            await world.Host.World.AdvanceClockAsync(60_000);
+            await world.Host.OnWorldAsync(() => { world.Session.ManagedBudget = new ManagedActionBudget(1); brain.Update(500); return true; });
+        }
+
+        Assert.True(await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsDeadEndPin(world.Player, pinPos)), "about nine minutes on");
+        for (int minute = 1; minute <= 2; minute++)
+        {
+            await world.Host.World.AdvanceClockAsync(60_000);
+            await world.Host.OnWorldAsync(() => { world.Session.ManagedBudget = new ManagedActionBudget(1); brain.Update(500); return true; });
+        }
+
+        Assert.False(await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsDeadEndPin(world.Player, pinPos)), "past the ten minutes");
     }
 
     [Fact]

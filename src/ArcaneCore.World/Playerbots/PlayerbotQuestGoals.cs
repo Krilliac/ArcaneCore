@@ -173,7 +173,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             {
                 // A homed bot abandons on its own position and never gets a durable mark. An unhomed bot only abandons
                 // what static content proved infeasible and the bot cannot reach from where it stands.
-                if (Home is null) Suspensions?.MarkUnreachableQuest(id);
+                if (Home is null) Suspensions?.MarkUnreachableQuest(id, _session.World.NowMs);
                 return true;
             }
             if (attempted) Refuse(id, _session.World.NowMs);
@@ -236,6 +236,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (state.Quests.Get(_stageQuest)?.Rewarded == true)
             {
+                Suspensions?.QuestSucceeded(_stageQuest);
                 NeedsBagSpaceForTurnIn = false;
                 ClearStage();
                 return false;
@@ -1061,7 +1062,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             && _session.Services.GetService<QuestNpcFeature>()?.Services.Quests.Get(questId) is { } quest
             && (quest.IsAutoComplete || (quest.ReqItemCount.All(c => c == 0) && quest.ReqCreatureOrGOCount.All(c => c == 0)));
         if (missingUnlistedReq)
-            Suspensions?.MarkUnreachableQuest(questId);
+            Suspensions?.MarkUnreachableQuest(questId, now);
 
         Refuse(questId, now);
         Suspensions?.SuspendQuest(questId, now);

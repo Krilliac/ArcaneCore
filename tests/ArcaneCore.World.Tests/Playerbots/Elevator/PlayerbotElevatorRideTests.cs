@@ -163,8 +163,8 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
 
     /// <summary>
     /// The timeout: cars that never stand still at the foot (a path without a stop) are never boarded. The bot waits at the landing for
-    /// two cycles and 30 s (90 s), then the trip fails with its reason, the brain reports it as the bot's own stall, the bot is still on the
-    /// canyon floor, and no new ride begins for <see cref="PlayerbotElevator.RetryAfterFailureMs"/>.
+    /// two cycles and 30 s (90 s), then the trip fails with its reason, the brain gives the leg up (LastTransitFailure) without setting the quest aside, the bot is still on the
+    /// canyon floor, and the lift is backed off (<see cref="PlayerbotTransitBackoff"/>).
     /// </summary>
     [Fact]
     public async Task CarsThatNeverStandAtTheFoot_TheWaitTimesOut_AndTheRideFails()
@@ -189,9 +189,9 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         {
             (string? report, ElevatorStage? stage) = await world.TickAsync(() =>
             {
-                int before = brain.StallCount;
+                int before = brain.TransitFailureCount;
                 brain.Update(100);
-                return (brain.StallCount != before ? brain.StallReport : null, PlayerbotElevator.TripOf(world.Player)?.Stage);
+                return (brain.TransitFailureCount != before ? brain.LastTransitFailure : null, PlayerbotElevator.TripOf(world.Player)?.Stage);
             });
             if (stage == ElevatorStage.Waiting && waitingSince == 0) waitingSince = world.Host.World.NowMs;
             Assert.NotEqual(ElevatorStage.Aboard, stage);
@@ -209,6 +209,20 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
             Assert.Equal(ElevatorStage.Failed, PlayerbotElevator.TripOf(world.Player)!.Stage);
             Assert.True(MathF.Abs(world.Player.Z - ElevatorTestWorld.BottomFloor) < 1f, $"at {world.Player.Z}, not on the canyon floor");
             Assert.False(PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.Ratchet, options), "a new ride began at once");
+            Assert.True(PlayerbotElevator.IsHeldOff(world.Session, world.Player, ElevatorTestWorld.Ratchet));
+            PlayerbotElevator.Cancel(world.Player);
+        });
+
+        // Only the lift's own backoff holds it (TransitBackoffSeconds, 60 s at first): ten seconds after it ran out the ride begins again,
+        // long before any ten-minute hold of the bot's whole lift use would have ended.
+        uint backoffEnds = failedAt + ((uint)options.Travel.TransitBackoffSeconds * 1000) + 10_000;
+        uint now = await world.OnWorldAsync(() => world.Host.World.NowMs);
+        if (unchecked((int)(backoffEnds - now)) > 0) await world.AdvanceAsync(backoffEnds - now);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.True(world.Host.World.NowMs - failedAt < 600_000, "the clock ran ten minutes past the failure: the check proves nothing");
+            Assert.False(PlayerbotElevator.IsHeldOff(world.Session, world.Player, ElevatorTestWorld.Ratchet), "still held off after the lift's backoff");
+            Assert.True(PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.Ratchet, options), "the ride did not begin after the backoff");
         });
     }
 
@@ -234,7 +248,7 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         Assert.Equal(ElevatorStep.Failed, step);
         Assert.StartsWith("elevator: no way to", failure);
         Assert.Contains("the Great Lift", failure);
-        Assert.InRange(took, PlayerbotElevator.NoProgressMs, PlayerbotElevator.NoProgressMs + 60_000);
+        Assert.InRange(took, 1u, PlayerbotElevator.NoProgressMs + 60_000); // the refused plans end it before the progress bound
         Assert.True(await world.OnWorldAsync(() => world.Player.X < ElevatorTestWorld.Cliff), "the bot crossed the cliff");
     }
 

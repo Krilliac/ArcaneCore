@@ -55,6 +55,9 @@ internal sealed class ElevatorLift
 
     public IReadOnlyList<ElevatorCar> Cars { get; }
 
+    /// <summary>A stable id of this lift for per-bot bookkeeping (<see cref="PlayerbotTransitBackoff"/>): its map and shaft centre, rounded to the yard.</summary>
+    public uint Key => unchecked((uint)HashCode.Combine(MapId, (int)MathF.Round(Centre.X), (int)MathF.Round(Centre.Y)));
+
     /// <summary>The middle of the cars' shafts, flat.</summary>
     public Vector2 Centre { get; }
 
@@ -358,6 +361,15 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
     public float Best { get; set; } = float.PositiveInfinity;
     public uint BestMs { get; set; } = nowMs;
     public uint NextPlanMs { get; set; }
+
+    /// <summary>The wait for navigation tiles still being read when the way to the lift is planned.</summary>
+    public TileWait Tiles;
+
+    /// <summary>Planning calls in a row that the navigation refused (not pending, not a route): <see cref="PlayerbotElevator.MaxRefusedPlans"/> fail the walk.</summary>
+    public int RefusedPlans { get; set; }
+
+    /// <summary>The lift was backed off for this trip's failure already (once per trip).</summary>
+    public bool BackoffRecorded { get; set; }
     public ElevatorCar? Car { get; set; }
     public GameObject? CarObject { get; set; }
     public Vector3 Landing { get; set; }
@@ -419,7 +431,8 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
 /// the offset. Nothing teleports it.
 /// </para>
 /// <para>
-/// Fails closed, with a stall reason and no retry for <see cref="RetryAfterFailureMs"/>: no car of the lift in the world, no floor beside a
+/// Fails closed, with a stall reason, and that lift waits out its own backoff (<see cref="PlayerbotTransitBackoff"/>; another lift is not
+/// held back): no car of the lift in the world, no floor beside a
 /// car at the bot's level, no way to that landing (no progress for <see cref="NoProgressMs"/>), no car standing at the landing within two
 /// cycles and 30 s. Aboard: a car that does not stand at the other level within a cycle and 30 s is left where it stands next at either
 /// level; one that leaves the world under the bot (or a bot knocked off it in the shaft) drops the bot (<see cref="Drop"/>).
@@ -492,8 +505,11 @@ internal static class PlayerbotElevator
 
     internal const uint NoProgressMs = 60_000;
 
-    /// <summary>A failed trip is not tried again for this long.</summary>
-    internal const uint RetryAfterFailureMs = 600_000;
+    /// <summary>
+    /// The walk to a lift fails after this many refused plans in a row (pending tile reads do not count; a route resets the count) instead
+    /// of waiting out <see cref="NoProgressMs"/>; the lift is then backed off (<see cref="PlayerbotTransitBackoff"/>).
+    /// </summary>
+    internal const int MaxRefusedPlans = PlayerbotTaxi.MaxRefusedPlans;
 
     /// <summary>A stop the car leaves sooner than this is not boarded (the next one is waited for).</summary>
     internal const uint BoardMarginMs = 1_000;
@@ -528,7 +544,6 @@ internal static class PlayerbotElevator
     private const string AnomalyArea = "elevator";
 
     private static readonly ConditionalWeakTable<Player, ElevatorTrip> Trips = [];
-    private static readonly ConditionalWeakTable<Player, StrongBox<uint>> FailedAt = [];
     private static readonly ConditionalWeakTable<Player, List<uint>> RescueTimestamps = [];
 
     /// <summary>Each bot's wait for the navigation tiles of the direct walk <see cref="TryBegin"/> weighs against the lift.</summary>
@@ -582,7 +597,6 @@ internal static class PlayerbotElevator
         if (IsTraveling(player)) return true;
         if (!player.IsAlive || !player.IsInWorld || player.Map is not { } map) return false;
         uint now = session.World.NowMs;
-        if (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs) return false;
         if (NetworkOf(session) is not { } network) return false;
         Vector3 bot = new(player.X, player.Y, player.Z);
         if (network.Choose(map.MapId, bot, goal, SurveyOf(session.World, map)) is not { } choice) return false;
@@ -606,9 +620,29 @@ internal static class PlayerbotElevator
             return false;
         }
 
+        // A lift that failed lately (its own backoff) is not ridden again yet; another lift and the mesh walk above are never held back.
+        if (IsHeldOff(session, player, choice.Lift)) return false;
         ElevatorTrip begun = Begin(session, player, choice.Lift, choice.From, goal);
         begun.Options = options;
         return true;
+    }
+
+    private static bool IsHeldOff(WorldSession session, Player player, ElevatorLift lift)
+        => PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Lift, lift.Key, session.World.NowMs);
+
+    /// <summary>
+    /// Whether a lift is the way to <paramref name="goal"/> but a failed ride keeps <see cref="TryBegin"/> from riding it now (that lift's
+    /// backoff after a failure): the caller defers the goal for a short retry instead of judging the walk there refused. Unlike
+    /// <see cref="TryBegin"/> this does not weigh the mesh walk, so a caller asks it only after <see cref="TryBegin"/> returned false without a
+    /// walk. World thread, no side effects.
+    /// </summary>
+    internal static bool IsHeldOff(WorldSession session, Player player, Vector3 goal)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+        if (IsTraveling(player) || !player.IsAlive || !player.IsInWorld || player.Map is not { } map || NetworkOf(session) is not { } network) return false;
+        return network.Choose(map.MapId, new Vector3(player.X, player.Y, player.Z), goal, SurveyOf(session.World, map)) is { } choice
+            && IsHeldOff(session, player, choice.Lift);
     }
 
     /// <summary>
@@ -1052,12 +1086,18 @@ internal static class PlayerbotElevator
                 trip.Stage = ElevatorStage.Done;
                 trip.StageMs = now; // when it arrived (inspection)
                 trip.Failure = null;
+                PlayerbotTransitBackoff.Clear(player, TransitKind.Lift, trip.Lift.Key);
                 CheckArrivedAnomalies(session, player, map, trip, options, now);
                 break;
             case ElevatorStep.Failed:
                 if (trip.Stage is ElevatorStage.ToStop or ElevatorStage.Waiting) PlayerbotMovementControl.Stop(session, player);
                 trip.Stage = ElevatorStage.Failed;
-                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
+                if (!trip.BackoffRecorded)
+                {
+                    trip.BackoffRecorded = true;
+                    PlayerbotTransitBackoff.Fail(player, TransitKind.Lift, trip.Lift.Key, now, options);
+                }
+
                 failure = trip.Failure ?? "elevator: the trip failed (no reason recorded)";
                 if (!trip.TripFailedReported)
                 {
@@ -1091,7 +1131,7 @@ internal static class PlayerbotElevator
                 Vector3 approachTarget = LandingBeside(map, stop, bot) ?? stop;
                 if (Walk(session, player, trip, approachTarget, options, elapsedMs, now)) return ElevatorStep.Traveling;
                 return Fail(trip, string.Create(CultureInfo.InvariantCulture,
-                    $"elevator: no way to {trip.Lift.Name} ({Word(trip.From)} level) from {bot.X:F1},{bot.Y:F1},{bot.Z:F1}"));
+                    $"elevator: no way to {trip.Lift.Name} ({Word(trip.From)} level) from {bot.X:F1},{bot.Y:F1},{bot.Z:F1}{(trip.RefusedPlans >= MaxRefusedPlans ? $" (the path was refused {MaxRefusedPlans} times in a row)" : string.Empty)}"));
             }
 
             float best = trip.Best;
@@ -1508,7 +1548,8 @@ internal static class PlayerbotElevator
 
     /// <summary>
     /// Follow (planning when needed, one path query per <see cref="PlanRetryMs"/> while none is found) a route towards
-    /// <paramref name="target"/>; false when the bot got no <see cref="ProgressYards"/> closer within <see cref="NoProgressMs"/>.
+    /// <paramref name="target"/>; false when the bot got no <see cref="ProgressYards"/> closer within <see cref="NoProgressMs"/>, or the navigation refused
+    /// <see cref="MaxRefusedPlans"/> plans in a row (<see cref="ElevatorTrip.RefusedPlans"/>).
     /// </summary>
     private static bool Walk(WorldSession session, Player player, ElevatorTrip trip, Vector3 target, PlayerbotOptions options, uint elapsedMs,
         uint now)
@@ -1532,14 +1573,16 @@ internal static class PlayerbotElevator
 
         trip.Route = null;
         if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
-        // A plan refused for want of a tile still being read is retried like any other refusal (a query per PlanRetryMs, no give-up
-        // inside NoProgressMs, which is longer than the tile wait): this walk sets nothing aside, so the plain answer is enough.
-        if (!PlayerbotNavigation.TryPlanToward(player, target, options, out PlayerbotRoute? next) || next is null)
+        // A plan refused for want of a tile still being read is no verdict (a query per PlanRetryMs, TileWait.MaxMs, then it is one);
+        // MaxRefusedPlans refusals in a row end the walk, a route resets the count.
+        PlanOutcome planned = PlayerbotNavigation.PlanToward(player, target, options, ref trip.Tiles, now, out PlayerbotRoute? next);
+        if (planned != PlanOutcome.Route || next is null)
         {
             trip.NextPlanMs = unchecked(now + PlanRetryMs);
-            return true;
+            return planned != PlanOutcome.Refused || ++trip.RefusedPlans < MaxRefusedPlans;
         }
 
+        trip.RefusedPlans = 0;
         trip.HadRoute = true;
         trip.Route = next;
         PlayerbotNavigation.TryAdvance(session, next, options, elapsedMs, now);
@@ -1558,6 +1601,7 @@ internal static class PlayerbotElevator
         trip.Stage = stage;
         trip.StageMs = now;
         trip.NextPlanMs = now;
+        trip.RefusedPlans = 0;
         trip.Best = float.PositiveInfinity;
         trip.BestMs = now;
         trip.Route = null;

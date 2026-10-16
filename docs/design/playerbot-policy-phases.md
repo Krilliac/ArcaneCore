@@ -19,10 +19,16 @@ Telemetry is off by default. It writes goal records (`"k":"goal"`), an optional 
 the combat-decision records phase 4 will need (`"k":"fight"`, `"k":"skip"`; docs/areas/playbots.md, Combat decisions). Output is
 bounded and rotating, and is written off the world thread.
 
-### Pending: the opportunity goal (branch `claude/bot-opportunity`, not on main yet)
+### The opportunity goal (done)
 
-That branch adds an opportunity goal: chests, locked chests, gathering nodes and rares, with reward weighed against risk by
-`PlayerbotRiskModel` and the guards cleared to reach the target. Once it lands on main, it joins the policy like this:
+The opportunity goal (chests, locked chests, gathering nodes and rares, with reward weighed against risk by `PlayerbotRiskModel` and the
+guards cleared to reach the target) joins the policy like this. Items 1 and 2 are implemented (`PlayerbotPolicyGoal.Opportunity`,
+`PlayerbotOpportunities.HasCandidate` and `Sink`, `PlayerbotOpportunityRecord`). The goal list is part of the weights-file layout, so a model
+trained before it is refused by its goal names, and the record version is 2 because the `open` bits moved (a trainer reads both: version 1
+bits are remapped through the old seven-goal order). The `loot` of a rare is null because the brain, not the controller, loots its corpse.
+
+**Merge order.** The phase 3 trainer fix (`claude/bot-policy-phase3`: `GOALS` with `Opportunity`, record version 2, the version 1 remap)
+lands with or before this change; a trainer without it writes a model the server refuses.
 
 1. **One more candidate goal.** Add `Opportunity` to `PlayerbotPolicyGoal` at its ladder position and add its open-goal probe to
    `PolicySnapshot`. Map its `PlayerbotGoalKind` in `PlayerbotPolicySchema.GoalOf` and add a promotion case in `TryPromotedGoal` under

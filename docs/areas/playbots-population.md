@@ -541,9 +541,12 @@ across the water of Teldrassil (Darnassus from Darkshore), or one to another con
 anomaly per reason, naming the real one: across water, or the bot stands on a dungeon or battleground map), and the progression's own moves
 never teleport (the Danger rule is not applied to the way to a town home). What still teleports are the Home options' returns of a displaced
 bot, as for any home: another map (`OtherMap`), a walk set aside as blocked (`WalkBlocked`), `ReturnMode` Teleport, an unsafe spirit-healer
-landing and stalled ground. Bots never take boats, zeppelins or trams themselves; until a travel layer exists, a Teldrassil bot with the option
-off has no town secondary. All of it goes through one seam, `IPlayerbotHomeTravel` (`CanReachWithoutTeleport`, `Decide`): the
-default is `DefaultHomeTravel`; a travel layer registers its own service of that type.
+landing and stalled ground. All of it goes through one seam, `IPlayerbotHomeTravel` (`CanReachWithoutTeleport`, `Decide`). The daemon
+registers authentic travel's `PlayerbotTravelHomeTravel` (docs/areas/playbots.md, Travel): with `World:Playerbots:Travel` on and a return
+mode other than Walk, a town across the sea counts as reachable when a boat or zeppelin route joins the two (Teldrassil by the Auberdine
+boat), and the brain travels there by boat, zeppelin, flight path or portal before the return rules (the teleport) are asked. In Walk mode,
+with travel off, or without such a route it answers as `DefaultHomeTravel` does, and a Teldrassil bot with the option off has no town
+secondary.
 
 **Release level.** `FreshReleaseLevel` is now 10 (was 12): the bot is in the town of the next zone as it finishes its start zone. A level
 reset to 1 puts a bot with a town home back on the start-area flow.

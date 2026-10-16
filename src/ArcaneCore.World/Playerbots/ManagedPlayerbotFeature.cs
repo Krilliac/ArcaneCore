@@ -599,7 +599,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     active.Brain.ResumeAfterGroup();
                 }
             }
-            if (controller is not null && active.Session.Player is { } taken) PlayerbotTaxi.Cancel(taken);
+            if (controller is not null && active.Session.Player is { } taken)
+            {
+                PlayerbotTaxi.Cancel(taken);
+                // The journey and its legs end (a ship leg aboard rides on to the next port, PlayerbotShip.Cancel, and the brain steps the
+                // bot off there once the controller detaches; the controller is the administrator's explicit choice meanwhile).
+                PlayerbotTravel.CancelLegs(active.Session, taken);
+            }
             active.Session.ManagedBudget = null;
             if (controller is not null && active.Session.Player is { } player && (active.PartyDriven || active.Party.IsEngaged))
             {
@@ -619,6 +625,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>Whether a running autonomous bot is driven by its party AI (it is in a real player's group) instead of the brain.</summary>
     public bool IsPartyDriven(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && active.PartyDriven;
+
+    /// <summary>
+    /// Why the brain does not drive a running bot now (null when it does, or the bot is not running): a controller holds it, the
+    /// battlegrounds coordinator or a bot-led group drives it, or its party AI does (it is in a real player's group). A journey begun for
+    /// such a bot would be cancelled by that driver at once (<see cref="PlayerbotTravel.CancelLegs"/>). World thread.
+    /// </summary>
+    internal string? HeldFromBrain(Guid botId)
+    {
+        if (!_active.TryGetValue(botId, out ActiveBot? active)) return null;
+        if (active.Controller is not null) return "a controller holds the bot";
+        if (active.BattlegroundDriven || battlegrounds?.Drives(botId) == true) return "the battleground coordinator drives the bot";
+        if (active.GroupDriven || coordinator?.Drives(botId) == true) return "a bot-led group drives the bot";
+        if (active.PartyDriven) return "the bot follows its party (a real player's group)";
+        return null;
+    }
 
     /// <summary>Whether the bot is in the active set (test seam; <see cref="FindBrain"/> also hides a paused one).</summary>
     internal bool IsActive(Guid botId) => _active.ContainsKey(botId);
@@ -1158,6 +1179,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 policy.Telemetry = new Policy.PlayerbotPolicyTelemetry(_options.Policy.Telemetry,
                     Path.Combine(contentRoot, _options.Policy.Telemetry.Directory), _setAsideTime, logger);
+                if (services.GetService<ArcaneCore.Kernel.Ops.Watchdog.TickMonitor>() is { Enabled: true } monitor)
+                    policy.Telemetry.TickHealth = () => monitor.BudgetMicros < long.MaxValue ? new Policy.PlayerbotTickHealth(monitor.Overruns, monitor.BudgetMicros) : null;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
             {
@@ -1211,13 +1234,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
     }
 
-    private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
+    /// <summary>A brain for the bot. <paramref name="restoreLoaded"/>: put back the set-asides read at startup (a start); a brain that replaces a running one gets the running one's state instead (<see cref="ReplaceBrain"/>), which the startup rows are older than.</summary>
+    private PlayerbotBrain NewBrain(WorldSession session, Guid botId, bool restoreLoaded = true)
     {
         var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
-        if (_policy?.Telemetry is { } telemetry) brain.Risk.CombatSink = telemetry.Combat;
+        if (_policy?.Telemetry is { } telemetry)
+        {
+            brain.Risk.CombatSink = telemetry.Combat;
+            brain.Opportunities.Sink = telemetry.Combat;
+        }
+
         if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
-        if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
+        if (restoreLoaded && _loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
         return brain;
     }
@@ -1663,11 +1692,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
-                        if (!active.BattlegroundDriven) PlayerbotTaxi.Cancel(driven);
+                        if (!active.BattlegroundDriven)
+                        {
+                            PlayerbotTaxi.Cancel(driven);
+                            PlayerbotTravel.CancelLegs(active.Session, driven);
+                        }
+
                         active.BattlegroundDriven = true;
-                        driver = "battleground";
-                        PlayerbotThinkProbe.Phase("battleground");
-                        battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
+                        if (HoldAboard(active, driven, sinceLast))
+                        {
+                            driver = "ship";
+                        }
+                        else
+                        {
+                            driver = "battleground";
+                            PlayerbotThinkProbe.Phase("battleground");
+                            battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
+                        }
                     }
                     // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
                     // quests and memories (its routes and targets belong to another place).
@@ -1679,11 +1720,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             active.PartyDriven = false;
                         }
 
-                        if (!active.GroupDriven) PlayerbotTaxi.Cancel(driven);
+                        if (!active.GroupDriven)
+                        {
+                            PlayerbotTaxi.Cancel(driven);
+                            PlayerbotTravel.CancelLegs(active.Session, driven);
+                        }
+
                         active.GroupDriven = true;
-                        driver = "group";
-                        PlayerbotThinkProbe.Phase("group");
-                        coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
+                        if (HoldAboard(active, driven, sinceLast))
+                        {
+                            driver = "ship";
+                        }
+                        else
+                        {
+                            driver = "group";
+                            PlayerbotThinkProbe.Phase("group");
+                            coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
+                        }
                     }
                     else
                     {
@@ -1740,6 +1793,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         PlayerbotMotion.SettleAfterThink(session, player, abandoned || brain.Goal != goalBefore, renewals, sinceLast);
     }
 
+    /// <summary>
+    /// A bot aboard a ship whose leg was cancelled (a party, a battleground or a bot-led group took it over) is never put off at sea: its leg
+    /// rides on to the next port and steps off there (<see cref="PlayerbotShip.Cancel"/>), driven here until it ends (movement orders
+    /// acknowledged first, as the brain does). True while the ship leg still holds the bot; the new driver takes it from the dock. A leg
+    /// that failed with the bot still aboard stays active the same way (<see cref="ShipTrip.Settling"/>), so no bot is left on a ship
+    /// without a driver.
+    /// </summary>
+    private bool HoldAboard(ActiveBot active, Player driven, uint sinceLast) => HoldAboard(active.Session, driven, _options, sinceLast);
+
+    /// <inheritdoc cref="HoldAboard(ActiveBot, Player, uint)"/>
+    internal static bool HoldAboard(WorldSession session, Player driven, PlayerbotOptions options, uint sinceLast)
+    {
+        if (!PlayerbotShip.IsActive(driven)) return false;
+        if (!PlayerbotMovementControl.Update(session, driven)) PlayerbotShip.Drive(session, driven, options, sinceLast, out _);
+        return PlayerbotShip.IsActive(driven);
+    }
+
     /// <summary>One tick of an autonomous bot outside a bot-led group: its party AI in a real player's group, its brain otherwise.</summary>
     private string UpdateAutonomous(ActiveBot active, Player driven, uint sinceLast)
     {
@@ -1767,6 +1837,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     PlayerbotElevator.Drive(active.Session, driven, _options, sinceLast, out _);
                 return "elevator";
             }
+
+            // The journey and its legs end the same way; a bot aboard a ship rides on to the next port and steps off there (never at sea),
+            // driven here meanwhile, and the party AI takes it on the dock.
+            PlayerbotTravel.CancelLegs(active.Session, driven);
+            if (HoldAboard(active, driven, sinceLast)) return "ship";
         }
         active.PartyDriven = party;
         if (party)
@@ -2300,7 +2375,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             PlayerbotSetAside[] current = active.Brain.Suspensions.Export(active.Record.BotId, active.Record.CharacterId,
                 active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
             active.Brain.Stop();
-            active.Brain = NewBrain(active.Session, active.Record.BotId);
+            active.Brain = NewBrain(active.Session, active.Record.BotId, restoreLoaded: false);
             active.Brain.Suspensions.Restore(current, active.Session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
             Volatile.Write(ref active.SavedSetAsideVersion, -1);
         }
