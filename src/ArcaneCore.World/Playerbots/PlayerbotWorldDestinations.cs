@@ -444,13 +444,14 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             bool attemptedBefore = attempted;
             attempted = true;
             Vector3 destination = new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z);
-            // Across Teldrassil's water on this map no walk reaches the spawn. With journeys allowed (WaterJourneysAllowed) it is passed over
-            // without a path query, and the nearest one whose goal is not waiting gets a journey only when no entry on this side is walked to
-            // (after the loop): a farther giver on the bot's own side is worth more than a boat. Otherwise the rules below judge it as before.
-            if (waterJourneys && _navigationPlan is null
+            // Across Teldrassil's water on this map no walk reaches the spawn. With journeys allowed (WaterJourneysAllowed) and its goal not
+            // waiting after a failed journey, it is passed over without a path query, and the nearest such one gets a journey only when no
+            // entry on this side is walked to (after the loop): a farther giver on the bot's own side is worth more than a boat. A waiting
+            // goal, or none allowed, is judged by the rules below as before (a known flight path, or the free unreachable skip that sets it aside).
+            if (waterJourneys && _navigationPlan is null && !JourneyWaiting((entry.Entry, questId), now)
                 && Population.PopulationTownProgression.SeparatedByWater(map.MapId, player.X, player.Y, map.MapId, destination.X, destination.Y))
             {
-                if (waterGoal is null && !JourneyWaiting((entry.Entry, questId), now)) waterGoal = (entry.Entry, questId, destination);
+                waterGoal ??= (entry.Entry, questId, destination);
                 attempted = attemptedBefore;
                 continue;
             }
@@ -1063,7 +1064,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// quest) waits as the home return does (PlayerbotBrain.TryTravelHome): a journey for it that failed (its anomaly is reported once by
     /// the journey) or could not begin waits the transit backoff before the next, doubling while it keeps failing; one that arrived clears
     /// the wait. Journeys others began (home, <c>.playerbot travel</c>) neither count nor clear. False: travel off or not registered, the goal
-    /// waiting, or no journey under way afterwards (none began, or the bot already stands at the goal); the caller goes on as before.
+    /// waiting, or no journey under way afterwards (none began, or the bot already stands at the goal: either way the goal then waits); the
+    /// caller goes on as before.
     /// </summary>
     private bool TryJourneyToGoal(Player player, uint entry, uint questId, uint toMap, Vector3 destination, uint now)
     {

@@ -195,6 +195,29 @@ public sealed class QuestGoalJourneyTests
     }
 
     /// <summary>
+    /// A goal across the water whose journey could not begin is not passed over while it waits: the next think judges it by the rules from
+    /// before the journeys (here the walk the open pathfinder grants; on real data the flight path, or the unreachable skip that sets it
+    /// aside), so the goal is never held without a decision for the whole backoff.
+    /// </summary>
+    [Fact]
+    public async Task AWaterGoalWhoseJourneyFailed_IsJudgedByTheWalkRules_WhileItWaits()
+    {
+        var travel = new ScriptedTravel(begins: false);
+        await using JourneyHost host = await JourneyHost.StartAsync(travel, TeldrassilSpawn);
+        await host.PlaceAsync(1, Darkshore);
+        await host.Host.OnWorldAsync(() => WorldCollision.Of(host.Host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder()));
+        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()));
+
+        Assert.False(await host.OnWorldAsync(() => destinations.Update(host.Player, Hunted, 100)), "the refused journey owned the think");
+        Assert.Equal([(1u, At(TeldrassilSpawn))], travel.Begun);
+        Assert.False(await host.OnWorldAsync(() => PlayerbotMotion.IsActive(host.Player)), "walked in the think the journey was asked for");
+
+        Assert.True(await host.OnWorldAsync(() => destinations.Update(host.Player, Hunted, 100)), "the waiting goal was passed over undecided");
+        Assert.Single(travel.Begun); // waiting: no second journey asked for
+        Assert.True(await host.OnWorldAsync(() => PlayerbotMotion.IsActive(host.Player)), "the walk rules did not take the waiting goal");
+    }
+
+    /// <summary>
     /// A spawn on the bot's own side is walked to although one across the water is nearer: the water is no shortcut, so the journey waits
     /// until nothing on this side is left.
     /// </summary>

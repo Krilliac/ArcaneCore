@@ -891,7 +891,8 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   creature with no spawn on the bot's map (its first spawn, by map then spawn, on a map bots may enter that is no dungeon or battleground;
   a homed bot's hunt stays inside its home), or a destination across Teldrassil's water on map 1 (a giver, a completed quest's ender, a
   hunted creature). A spawn across the water is passed over without a path query, and the nearest one gets the journey only when no entry
-  on the bot's side was walked to; the tram's gate holds (`TransitAllowed`: no boat for an unhomed bot below `TramMinLevel`). The brain
+  on the bot's side was walked to; while its goal waits after a failed journey it is judged as before (a known flight path, or the free
+  unreachable skip that sets it aside); the tram's gate holds (`TransitAllowed`: no boat for an unhomed bot below `TramMinLevel`). The brain
   drives the journey from the next think, and the destination plans again where it ends. Each goal (its creature entry and quest) waits as
   the home return does: a journey for it that failed or could not begin waits the transit backoff before the next, doubling while it keeps
   failing, and one that arrived clears the wait; other goals do not wait for it (64 goals held at most). A completed quest's ender on
