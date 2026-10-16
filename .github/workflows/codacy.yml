@@ -50,16 +50,31 @@ jobs:
       # more than 20 runs in one upload. Give each run its own category, codacy/<tool>/ (a repeated tool gets -1, -2, ...), so each
       # tool's alerts keep a stable home across scans, then split the runs, sorted by category, into files of at most 20, one upload
       # each. The uploads set no category of their own: one would override these. More runs than the three uploads hold fail here.
+      # Code scanning also rejects the whole file when one run holds more than 25,000 results (25,876 on 2026-10-16). Style and
+      # complexity linters (markdownlint, lizard) are not security findings and are dropped; any other run over the cap keeps its
+      # most severe 25,000 results and says so in the log.
       - name: Give each Codacy tool its own SARIF category
         run: |
           python3 - <<'PY'
           import json, re, sys
           with open("results.sarif", encoding="utf-8") as f:
               sarif = json.load(f)
+          NOT_SECURITY = ("markdownlint", "lizard")
+          MAX_RESULTS = 25000
+          SEVERITY = {"error": 0, "warning": 1, "note": 2, "none": 3}
           seen = {}
-          runs = sarif.get("runs", [])
-          for run in runs:
+          runs = []
+          for run in sarif.get("runs", []):
               name = re.sub(r"[^a-z0-9]+", "-", run.get("tool", {}).get("driver", {}).get("name", "unknown").lower()).strip("-") or "unknown"
+              results = run.get("results") or []
+              if name.startswith(NOT_SECURITY):
+                  print(f"dropped {name}: {len(results)} style/complexity result(s)")
+                  continue
+              if len(results) > MAX_RESULTS:
+                  results.sort(key=lambda r: SEVERITY.get(r.get("level", "warning"), 1))
+                  print(f"::warning::{name} has {len(results)} results; uploading its {MAX_RESULTS} most severe")
+                  run["results"] = results[:MAX_RESULTS]
+              runs.append(run)
               index = seen.get(name, 0)
               seen[name] = index + 1
               run["automationDetails"] = {"id": f"codacy/{name}{'' if index == 0 else f'-{index}'}/"}
