@@ -522,11 +522,14 @@ internal sealed class PlayerbotSharedSetAsides
     /// <summary>
     /// The world whose 64-bit uptime is the records' clock (<see cref="PlayerbotWorldClock.Ms(ArcaneCore.Game.Maps.WorldRuntime, uint)"/>): a
     /// record is kept until its key is evicted, so its deadline can be weeks old when it is asked, past what a 32-bit difference tells apart.
-    /// Without a world the given time is used as it is.
+    /// Without a world (tests only; the feature sets it on attach) the given time is used as it is, with no wrap handling, so a caller
+    /// without a world must keep its times well below <see cref="uint.MaxValue"/>.
     /// </summary>
     internal ArcaneCore.Game.Maps.WorldRuntime? World { get; set; }
 
+    // The records' 64-bit time for a 32-bit world time: see World.
     private long T(uint nowMs) => World is { } world ? PlayerbotWorldClock.Ms(world, nowMs) : nowMs;
+
     internal int Version => Volatile.Read(ref _version);
 
     /// <summary>Goals remembered (bounded by <see cref="MaxKeys"/>).</summary>
