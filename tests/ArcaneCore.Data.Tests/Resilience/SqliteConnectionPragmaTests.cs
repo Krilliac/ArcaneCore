@@ -261,10 +261,27 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     [Fact]
     public async Task AFreshDatabaseFile_ConfiguredNormal_ConcurrentOpensAllGetWalAndNormal()
     {
+        await ConcurrentFreshOpens("fresh-concurrent.db");
+    }
+
+    [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_ConcurrentOpensRepeatedly_NeverLoseWal()
+    {
+        // The race is a few microseconds wide (a loser reads the empty file, the winner then writes page 1, the loser's page_count sees 1 and gives up), so one round
+        // rarely hits it; many rounds make a regression fail reliably instead of once in a full-suite run.
+        for (int round = 0; round < 40; round++)
+        {
+            await ConcurrentFreshOpens($"fresh-concurrent-{round}.db");
+        }
+    }
+
+    private async Task ConcurrentFreshOpens(string fileName)
+    {
         // Many connections opening a file that does not exist yet at the same moment: each may see the empty rollback-journal file and try the WAL switch,
         // which needs an exclusive lock. busy_timeout is set before the switch, so the losers wait instead of failing: no open throws, every connection ends in
-        // WAL on NORMAL, and nothing is logged as refused.
-        string path = Path.Combine(_directory, "fresh-concurrent.db");
+        // WAL on NORMAL, and nothing is logged as refused. A loser that read journal_mode before the winner's switch and page_count after it sees a non-empty
+        // file; it must re-read the mode rather than judge a WAL file by the stale answer.
+        string path = Path.Combine(_directory, fileName);
         Assert.False(File.Exists(path));
         string connection = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
         var errors = new CapturingLoggerProvider();

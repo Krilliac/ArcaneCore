@@ -189,7 +189,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
             pages.CommandText = "PRAGMA page_count;";
             if (pages.ExecuteScalar() is not long count || count != 0)
             {
-                return journalMode;
+                return CurrentMode(connection) ?? journalMode;
             }
 
             using SqliteCommand wal = connection.CreateCommand();
@@ -200,6 +200,24 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
         {
             return journalMode; // fail closed: ApplySynchronous keeps FULL and reports the mode it was given
         }
+    }
+
+    /// <summary>
+    /// The journal mode as it is now. Needed when <c>page_count</c> says the file is no longer empty: a concurrent opener may have switched it to WAL (which writes page 1) between
+    /// this connection's earlier <c>journal_mode</c> read and its <c>page_count</c> read, so the earlier answer is stale and judging by it would leave a WAL file on FULL.
+    /// </summary>
+    private static string? CurrentMode(SqliteConnection connection)
+    {
+        using SqliteCommand mode = connection.CreateCommand();
+        mode.CommandText = "PRAGMA journal_mode;";
+        return mode.ExecuteScalar() as string;
+    }
+
+    private static async Task<string?> CurrentModeAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using SqliteCommand mode = connection.CreateCommand();
+        mode.CommandText = "PRAGMA journal_mode;";
+        return await mode.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
     }
 
     /// <summary>The async form of <see cref="WalIfEmpty"/>, same rules.</summary>
@@ -216,7 +234,7 @@ public sealed class SqliteConnectionPragmaInterceptor : DbConnectionInterceptor
             pages.CommandText = "PRAGMA page_count;";
             if (await pages.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not long count || count != 0)
             {
-                return journalMode;
+                return await CurrentModeAsync(connection, cancellationToken).ConfigureAwait(false) ?? journalMode;
             }
 
             await using SqliteCommand wal = connection.CreateCommand();
