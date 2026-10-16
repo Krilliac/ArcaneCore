@@ -518,6 +518,18 @@ internal sealed class PlayerbotSharedSetAsides
 
     private readonly Dictionary<(bool Quest, uint Id), Record> _records = [];
     private int _version;
+
+    /// <summary>
+    /// The world whose 64-bit uptime is the records' clock (<see cref="PlayerbotWorldClock.Ms(ArcaneCore.Game.Maps.WorldRuntime, uint)"/>): a
+    /// record is kept until its key is evicted, so its deadline can be weeks old when it is asked, past what a 32-bit difference tells apart.
+    /// Without a world (tests only; the feature sets it on attach) the given time is used as it is, with no wrap handling, so a caller
+    /// without a world must keep its times well below <see cref="uint.MaxValue"/>.
+    /// </summary>
+    internal ArcaneCore.Game.Maps.WorldRuntime? World { get; set; }
+
+    // The records' 64-bit time for a 32-bit world time: see World.
+    private long T(uint nowMs) => World is { } world ? PlayerbotWorldClock.Ms(world, nowMs) : nowMs;
+
     internal int Version => Volatile.Read(ref _version);
 
     /// <summary>Goals remembered (bounded by <see cref="MaxKeys"/>).</summary>
@@ -538,6 +550,7 @@ internal sealed class PlayerbotSharedSetAsides
             _ => default,
         };
         if (key.Id == 0) return null;
+        long now = T(nowMs);
         if (!_records.TryGetValue(key, out Record? record))
         {
             if (_records.Count >= MaxKeys)
@@ -545,18 +558,18 @@ internal sealed class PlayerbotSharedSetAsides
             _records[key] = record = new Record();
         }
 
-        if (record.Times != 0 && unchecked(nowMs - record.LastMs) > RepeatQuietMs && !Active(record, nowMs))
+        if (record.Times != 0 && now - record.LastMs > RepeatQuietMs && !Active(record, now))
         {
             record.Times = 0;
             record.UntilMs = 0;
         }
-        record.LastMs = nowMs;
-        record.Bots.RemoveAll(seen => unchecked(nowMs - seen.AtMs) > WindowMs || seen.Bot == bot);
-        record.Bots.Add(new Stall(bot, nowMs, map, position));
-        if (record.Bots.Count < BotsToShare || Active(record, nowMs)) return null;
+        record.LastMs = now;
+        record.Bots.RemoveAll(seen => now - seen.AtMs > WindowMs || seen.Bot == bot);
+        record.Bots.Add(new Stall(bot, now, map, position));
+        if (record.Bots.Count < BotsToShare || Active(record, now)) return null;
         uint length = (uint)Math.Min((ulong)SetAsideMs << Math.Min(record.Times, 8), MaxSetAsideMs);
         record.Times = Math.Min(record.Times + 1, PlayerbotSetAside.MaxRepeatCount);
-        record.UntilMs = unchecked(nowMs + length);
+        record.UntilMs = now + length;
         Interlocked.Increment(ref _version);
         string stalls = string.Join("; ", record.Bots.Select(seen => string.Create(CultureInfo.InvariantCulture,
             $"{seen.Position.X:F1},{seen.Position.Y:F1},{seen.Position.Z:F1} map {seen.Map}")));
@@ -565,18 +578,22 @@ internal sealed class PlayerbotSharedSetAsides
             $"{(key.Quest ? "quest" : "entry")} {key.Id} for {length / 60_000} min"), stalls);
     }
 
-    internal bool IsQuestSetAside(uint quest, uint nowMs) => _records.TryGetValue((true, quest), out Record? record) && Active(record, nowMs);
+    internal bool IsQuestSetAside(uint quest, uint nowMs) => _records.TryGetValue((true, quest), out Record? record) && Active(record, T(nowMs));
 
-    internal bool IsEntrySetAside(uint entry, uint nowMs) => _records.TryGetValue((false, entry), out Record? record) && Active(record, nowMs);
+    internal bool IsEntrySetAside(uint entry, uint nowMs) => _records.TryGetValue((false, entry), out Record? record) && Active(record, T(nowMs));
 
     internal PlayerbotSetAside[] Export(uint nowMs, long unixNowMs)
-        => [.. _records.Where(pair => pair.Key.Id != 0 && Remaining(pair.Value.UntilMs, nowMs) is > 0)
+    {
+        long now = T(nowMs);
+        return [.. _records.Where(pair => pair.Key.Id != 0 && Remaining(pair.Value.UntilMs, now) is > 0)
             .Select(pair => new PlayerbotSetAside(Guid.Empty, 0,
                 pair.Key.Quest ? PlayerbotSetAsideKind.SharedQuest : PlayerbotSetAsideKind.SharedEntry,
-                pair.Key.Id, unixNowMs + Remaining(pair.Value.UntilMs, nowMs), pair.Value.Times))];
+                pair.Key.Id, unixNowMs + Remaining(pair.Value.UntilMs, now), pair.Value.Times))];
+    }
 
     internal void Restore(IEnumerable<PlayerbotSetAside> rows, uint nowMs, long unixNowMs)
     {
+        long now = T(nowMs);
         foreach (PlayerbotSetAside row in rows)
         {
             long remaining = row.ExpiresUnixMs - unixNowMs;
@@ -585,23 +602,23 @@ internal sealed class PlayerbotSharedSetAsides
             if (!quest && row.Kind != PlayerbotSetAsideKind.SharedEntry) continue;
             _records[(quest, row.TargetId)] = new Record
             {
-                UntilMs = unchecked(nowMs + (uint)remaining), Times = Math.Clamp(row.RepeatCount, 1, PlayerbotSetAside.MaxRepeatCount), LastMs = nowMs,
+                UntilMs = now + remaining, Times = Math.Clamp(row.RepeatCount, 1, PlayerbotSetAside.MaxRepeatCount), LastMs = now,
             };
         }
     }
 
-    private static long Remaining(uint until, uint nowMs) => Math.Max(0, unchecked((int)(until - nowMs)));
+    private static long Remaining(long until, long now) => Math.Max(0, until - now);
 
-    private static bool Active(Record record, uint nowMs) => record.UntilMs != 0 && unchecked((int)(record.UntilMs - nowMs)) > 0;
+    private static bool Active(Record record, long now) => record.UntilMs != 0 && record.UntilMs > now;
 
-    private readonly record struct Stall(ulong Bot, uint AtMs, uint Map, Vector3 Position);
+    private readonly record struct Stall(ulong Bot, long AtMs, uint Map, Vector3 Position);
 
     private sealed class Record
     {
         public List<Stall> Bots { get; } = [];
-        public uint UntilMs { get; set; }
+        public long UntilMs { get; set; }
         public int Times { get; set; }
-        public uint LastMs { get; set; }
+        public long LastMs { get; set; }
     }
 }
 

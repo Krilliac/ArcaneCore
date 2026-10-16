@@ -260,6 +260,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             services.GetService<TimeProvider>() ?? TimeProvider.System, logger);
         if (_options.Enabled) _chat.LogConfiguration();
         _world = world;
+        _sharedSetAsides.World = world;
         if (_options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
         {
             ILogger ownerLogger = logger;
