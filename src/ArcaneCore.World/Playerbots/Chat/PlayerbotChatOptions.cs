@@ -74,6 +74,9 @@ public enum PlayerbotChatProviderKind
     /// (OpenAI, OpenRouter, and local servers such as Ollama or LM Studio).
     /// </summary>
     OpenAICompatible,
+
+    /// <summary>A GGUF model run on this server's CPU by managed code (<c>InProcess</c> options; no network, no key, no cost).</summary>
+    InProcess,
 }
 
 /// <summary>A provider's optional moderation step before a player's line is sent to it (<see cref="PlayerbotChatProviderOptions.Moderation"/>).</summary>
@@ -151,6 +154,9 @@ public sealed class PlayerbotChatOptions
     /// </summary>
     public PlayerbotChatSafetyOptions Safety { get; set; } = new();
 
+    /// <summary><c>InProcess</c>: the model of an <see cref="PlayerbotChatProviderKind.InProcess"/> provider (docs/areas/playbots.md, In-process model).</summary>
+    public PlayerbotChatInProcessOptions InProcess { get; set; } = new();
+
     /// <summary>
     /// <c>Speech</c>: how bots speak on their own and where (world channels, rate limits, bot-to-bot talk, emote replies). Every line a bot
     /// says goes through the bot chat service, its safety screening and these limits (docs/areas/playbots.md, Bot speech).
@@ -194,6 +200,7 @@ public sealed class PlayerbotChatOptions
         if (MaxQueuedRequests is < 1 or > 256) throw new InvalidOperationException($"{section}: MaxQueuedRequests must be 1..256.");
         if (Safety is null) throw new InvalidOperationException($"{section}:Safety is missing.");
         Safety.Validate();
+        (InProcess ?? throw new InvalidOperationException($"{section}:InProcess is missing.")).Validate(this);
         if (Speech is null) throw new InvalidOperationException($"{section}:Speech is missing.");
         Speech.Validate();
         if (Voice is null) throw new InvalidOperationException($"{section}:Voice is missing.");
@@ -337,7 +344,7 @@ public sealed class PlayerbotChatProviderOptions
     {
         get
         {
-            if (Kind == PlayerbotChatProviderKind.Builtin) return (0, 0);
+            if (Kind is PlayerbotChatProviderKind.Builtin or PlayerbotChatProviderKind.InProcess) return (0, 0);
             (double Input, double Output)? known = Kind == PlayerbotChatProviderKind.Anthropic ? KnownAnthropicPrice(EffectiveModel) : null;
             double? input = InputUsdPerMillionTokens ?? known?.Input;
             double? output = OutputUsdPerMillionTokens ?? known?.Output;
@@ -369,9 +376,10 @@ public sealed class PlayerbotChatProviderOptions
     /// <summary>This entry's problem (null when valid).</summary>
     internal string? Problem()
     {
-        if (!Enum.IsDefined(Kind)) return "Kind must be Builtin, Anthropic or OpenAICompatible";
+        if (!Enum.IsDefined(Kind)) return "Kind must be Builtin, Anthropic, OpenAICompatible or InProcess";
         if (MaxRepliesPerHour is < 1 or > 100_000) return "MaxRepliesPerHour must be 1..100000";
         if (Kind == PlayerbotChatProviderKind.Builtin) return null;
+        if (Kind == PlayerbotChatProviderKind.InProcess) return PlayerbotChatInProcessOptions.ProviderProblem(this);
         if (MaxTokens is < 16 or > 1024) return "MaxTokens must be 16..1024";
         if (Kind == PlayerbotChatProviderKind.OpenAICompatible && string.IsNullOrWhiteSpace(BaseUrl)) return "BaseUrl is required for OpenAICompatible";
         if (!string.IsNullOrWhiteSpace(BaseUrl))
