@@ -393,7 +393,12 @@ feature reads:
   empty, so their 2802 spawns with `creature.id` 0 never appeared. On a copy of the wave-9 rehearsal's world (2026-10-08): 4799 rows (the
   dump's 4863 less the 64 of 32 guids that are in no `creature` row), leaving the 568 spawns that only cmangos spawn groups resolve. A second
   run with the same inputs leaves the same rows. `gameobject_spawn_entry` and the five spawn group tables (world 44) are filled the same
-  way (`SpawnGroupDumpImporter.FillAsync`; see "Spawn groups" above). It then checks what the world logs at start: teleports and taverns without a trigger,
+  way (`SpawnGroupDumpImporter.FillAsync`; see "Spawn groups" above). The ordinary entry paths of `creature_movement_template` (path
+  ids outside the `script_waypoint` / `waypoint_path` namespaces) are filled the same way, only when the world has none
+  (`FillEntryPathsAsync`): a world built before the table existed gets it empty from the schema upgrade, and the ScriptDev2 refresh writes
+  only its namespaced copies. The live world of 2026-10-16 had none of classic-db z2815's 15,402 rows on 544 paths, so 326 waypoint
+  spawns had no path (`creature/waypoint-path-missing`) and the relay MOVEMENT steps naming an entry path were skipped; with the dump's
+  paths and formation leaders walking their `waypoint_path`, one spawn (42162, entry 14479, no path in classic-db either) remains. It then checks what the world logs at start: teleports and taverns without a trigger,
   battleground start locations that are not safe locations, transports without a type-15 object, portals to a map with no
   `map_template` row (vmangos "unknown target map"), graveyard links to a zone with no `area_template` row (vmangos "not existing zone
   id"; checked only when the table has rows, as the world does), and, with `TaxiPathNode.dbc` in `--dbc-dir`, every ship the world would
