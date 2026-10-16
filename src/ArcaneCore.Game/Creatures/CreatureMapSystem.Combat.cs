@@ -313,7 +313,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     /// </summary>
     IReadOnlyList<Vector3> ICreaturePathQuery.FindPath(Creature creature, Vector3 destination, out bool reachable)
     {
-        PlannedPath plan = PlanPath(creature, destination);
+        PlannedPath plan = PlanPath(creature, destination, chase: true);
         reachable = plan.Outcome is PathOutcome.Mesh or PathOutcome.Direct or PathOutcome.Deferred;
         return plan.Corners;
     }

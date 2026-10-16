@@ -288,6 +288,17 @@ public sealed record PathOptions
     /// polygon the corridor reaches is a whole path ending at the nearest mesh point.
     /// </summary>
     public float EndTolerance { get; init; }
+
+    /// <summary>
+    /// With <see cref="EndTolerance"/> 0: when no polygon this query may use lies in the <see cref="MMaps.NavMeshPathfinder.NearExtents"/> or
+    /// <see cref="MMaps.NavMeshPathfinder.FarExtents"/> column of the destination, look for one in cmangos' wider
+    /// <see cref="MMaps.NavMeshPathfinder.WideExtents"/> box (<c>FarPolySearchBound</c>, MotionGenerators/PathFinder.h:59, read by
+    /// <c>PathFinder::getPolyByLocation</c>) and answer the path to its nearest point as <see cref="PathType.Incomplete"/>
+    /// (<c>BuildPolyPath</c> farFromPoly: <c>closestPointOnPoly</c>, <c>PATHFIND_INCOMPLETE</c>). A walker chasing a target that swims
+    /// off a shore then runs to the water's edge instead of standing where it was. Off by default (the endpoint search of every other
+    /// query is unchanged); creature chase and follow turn it on.
+    /// </summary>
+    public bool WideEndSearch { get; init; }
 }
 
 /// <summary>A path answer: its classification and its corner points (world coordinates).</summary>

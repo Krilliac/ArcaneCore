@@ -32,6 +32,7 @@ public sealed class CreatureOutcomeAnomalyTests
     private const uint MovingEntry = 949011;
     private const uint StunnedEntry = 949012;
     private const uint IdleEntry = 949013;
+    private const uint UnreachableChaserEntry = 949014;
     private const uint CombatEmptyEntry = 949020;
     private const uint CombatHealthyEntry = 949021;
     private const uint CombatEndedEntry = 949022;
@@ -251,6 +252,29 @@ public sealed class CreatureOutcomeAnomalyTests
         s.Run(10_000);
 
         Assert.True(s.Wolf.X > before + 5f, $"the wolf went from {before} to {s.Wolf.X}");
+        Assert.Empty(capture.Notices);
+    }
+
+    [Fact]
+    public void AChaserStandingBecauseItsTargetIsUnreachable_IsNotStuck()
+    {
+        // vmangos TargetedMovementGenerator.cpp:188-189 / cmangos ChaseMovementGenerator::DispatchSplineToPosition: with no path (or at the
+        // end of a partial one) the chaser stands on purpose while the unreachable-target timer runs (soft evade at 3 s, evade at 24 s;
+        // an evade that never comes is creature/stuck-in-combat). Live 2026-10-16: 351 of 851 "stuck while chasing" reports followed a
+        // path-failed report for the same creature within a minute.
+        using Scene s = Start(UnreachableChaserEntry, pathfinder: new FixedPathfinder(route: false));
+        using AnomalyCapture capture = CaptureFor("creature/stuck", UnreachableChaserEntry);
+
+        s.Map.Combat.DealDamage(s.Player, s.Wolf, 1, direct: false);
+        s.Run(CreatureAnomalies.StuckThresholdMs + 4_000);
+
+        // The state the stuck check reads: chasing a living victim out of melee reach, in combat, standing still.
+        Assert.Equal(MovementGeneratorType.Chase, s.Wolf.Motion.CurrentType);
+        Assert.True(s.Wolf.Combat.IsInCombat);
+        Assert.False(MapCombat.CanReachWithMeleeAutoAttack(s.Wolf, s.Player));
+        Assert.False(s.Wolf.IsMoving);
+        Assert.Equal(WolfX, s.Wolf.X, 3);
+        Assert.False(s.Wolf.Motion.IsReachable);
         Assert.Empty(capture.Notices);
     }
 
