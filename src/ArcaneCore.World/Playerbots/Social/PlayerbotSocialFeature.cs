@@ -165,6 +165,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
     private readonly PlayerbotChannelMembership _channels = new();
+    private readonly PlayerbotConversations _conversations = new();
+    private readonly PlayerbotWorldChatter _worldChatter = new();
+    private readonly ArcaneCore.World.Playerbots.Chat.PlayerbotNeedsVoice _voice = new(services, logger);
     private readonly HashSet<Map> _maps = [];
     private WorldRuntime? _world;
     private long _clockMs;
@@ -196,6 +199,15 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     /// <summary>The bots' world channel membership (General, Trade, LocalDefense, LookingForGroup).</summary>
     internal PlayerbotChannelMembership Channels => _channels;
 
+    /// <summary>The bot-to-bot conversation director.</summary>
+    internal PlayerbotConversations Conversations => _conversations;
+
+    /// <summary>The bots' answers to real players' LFM/WTB lines in world channels.</summary>
+    internal PlayerbotWorldChatter WorldChatter => _worldChatter;
+
+    /// <summary>The bot voice: wants and needs said in world, party and battleground chat (<see cref="ArcaneCore.World.Playerbots.Chat.PlayerbotNeedsVoice"/>).</summary>
+    internal ArcaneCore.World.Playerbots.Chat.PlayerbotNeedsVoice Voice => _voice;
+
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
@@ -217,8 +229,11 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
         foreach (Map map in _maps) map.Combat.UnitKilled -= OnUnitKilled;
         _maps.Clear();
+        _conversations.Stop();
+        _worldChatter.Stop();
         if (_subscribedGuilds is { } guilds) guilds.MemberJoined -= OnMemberJoined;
         if (_subscribed && services.GetService<ProgressionFeature>() is { } progression) progression.Progression.LevelChanged -= OnLevelChanged;
+        _voice.Unhook();
         _subscribedGuilds = null;
         _subscribed = false;
         return Task.CompletedTask;
@@ -280,6 +295,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _chat.Speak(pass);
         _emotes.Run(pass);
         RunChannels(pass);
+        _conversations.Run(pass);
+        _worldChatter.Run(pass);
+        _voice.Run(pass);
         _membership.Prune(pass);
         Passes++;
     }
@@ -391,6 +409,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     private void OnLevelChanged(Player player)
     {
+        if (_options.Enabled) _voice.OnLevelChanged(player);
         if (ChatTopicsWanted && NewPass(0, gatherBots: false) is { } pass) _chat.OnLevelChanged(pass, player);
     }
 
@@ -406,6 +425,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     private void OnUnitKilled(Game.Entities.Unit? killer, Game.Entities.Unit victim)
     {
+        if (_options.Enabled && victim.Map is { } killedOn) _conversations.OnUnitKilled(killedOn, killer, victim);
         if (!ChatTopicsWanted || victim.Map is not { } map || NewPass(0, gatherBots: false) is not { } pass) return;
         _chat.OnUnitKilled(pass, map, killer, victim);
     }

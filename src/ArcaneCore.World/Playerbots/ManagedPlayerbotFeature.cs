@@ -1375,6 +1375,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
                 active.Brain.Stop();
                 if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
+                _chat?.Abandon(bot.BotId); // replies still being written for it are no longer wanted
             }
 
             bool stoppingWritten = false;
@@ -2291,6 +2292,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
+        _chat?.Abandon(botId); // replies still being written for it are no longer wanted
         try { if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(botId); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

@@ -163,6 +163,18 @@ public sealed class PlayerbotChatOptions
     /// </summary>
     public PlayerbotSpeechOptions Speech { get; set; } = new();
 
+    /// <summary>
+    /// <c>Conversation</c>: bots talking with each other (the conversation director) and their answers to real players' world channel
+    /// lines (LFM, WTB). Every line goes through the speech limits of <see cref="Speech"/> (docs/areas/playbots.md, Conversations).
+    /// </summary>
+    public PlayerbotConversationOptions Conversation { get; set; } = new();
+
+    /// <summary>
+    /// <c>Voice</c>: what bots say on their own about their goals and needs (LFG/LFM, WTS/WTB, party needs, run plans, battleground
+    /// callouts, quest help, dings), through the bot chat service and the <see cref="Speech"/> limits (docs/areas/playbots.md, Bot voice).
+    /// </summary>
+    public PlayerbotVoiceOptions Voice { get; set; } = new();
+
     /// <summary>The providers in the order they are tried: the configured ones, then the built-in templates (the configured entry or a default one).</summary>
     internal IReadOnlyList<PlayerbotChatProviderOptions> EffectiveProviders()
     {
@@ -197,6 +209,10 @@ public sealed class PlayerbotChatOptions
         (InProcess ?? throw new InvalidOperationException($"{section}:InProcess is missing.")).Validate(this);
         if (Speech is null) throw new InvalidOperationException($"{section}:Speech is missing.");
         Speech.Validate();
+        if (Conversation is null) throw new InvalidOperationException($"{section}:Conversation is missing.");
+        Conversation.Validate();
+        if (Voice is null) throw new InvalidOperationException($"{section}:Voice is missing.");
+        Voice.Validate();
     }
 
     /// <summary>Whether a model provider (anything but the built-in templates) is configured.</summary>

@@ -143,7 +143,14 @@ internal sealed class PlayerbotPartyAI
         _random = new Random(session.AccountId);
         _chat = chat;
         _botId = botId;
+        _chatEvents.Items = entry => _session.Services.GetService<IItemTemplateStore>()?.Find(entry);
+        _chatEvents.MapKind = mapId => Game.Maps.Templates.WorldMaps.Of(_session.World).Registry.Find(mapId) is { Instanceable: true } map
+            ? (map.IsBattleground ? 2 : 1, map.Name)
+            : (0, null);
     }
+
+    /// <summary>The bot's remembered events for its chat (the persona, and the conversation director's topics).</summary>
+    internal Chat.PlayerbotChatEvents ChatEvents => _chatEvents;
 
     /// <summary>The last resurrection cast (inspection and tests: the dead member's name).</summary>
     internal string? LastResurrection { get; private set; }
@@ -357,9 +364,13 @@ internal sealed class PlayerbotPartyAI
         bool isGm = sender is not null && IsGm(sender);
         ObjectGuid master = ResolveMaster(player);
         // Every line heard is input for the chat service's listeners (later lanes react to channel talk, needs, LFG calls), bots' lines too.
-        if (_chat is { IsActive: true, HasHearers: true } hearer && sender is not null && line.Sender != player.Guid)
-            hearer.Hear(new Chat.BotHeardLine(_botId, player.Guid, player.Name, line.Type, line.ChannelName, line.Sender, sender.Name, senderIsBot,
-                line.Text, line.Type == ChatType.Whisper || Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name), FirstHearing: false));
+        // A line the bot voice answered itself (an "inv" to its LFG call, a price question to its WTS call) gets no other reply; the
+        // master's lines are never taken from the orders.
+        if (_chat is { IsActive: true, HasHearers: true } hearer && sender is not null && line.Sender != player.Guid
+            && hearer.Hear(new Chat.BotHeardLine(_botId, player.Guid, player.Name, line.Type, line.ChannelName, line.Sender, sender.Name, senderIsBot,
+                line.Text, line.Type == ChatType.Whisper || Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name), FirstHearing: false))
+            && sender.Guid != master)
+            return;
         bool botsHeard = _chat is { IsActive: true } listening && listening.SpeechOptions is { Enabled: true, BotToBot: true };
         switch (PlayerbotChatCommands.Classify(line, player.Guid, master, senderIsBot, botsHeard))
         {
@@ -392,7 +403,8 @@ internal sealed class PlayerbotPartyAI
             case PlayerbotChatSource.Bot when sender is not null:
                 // Another bot's line: only the chat service answers it, only when it names this bot (or whispers it), and only while the
                 // exchange between the two has turns and budget left (PlayerbotSpeechLimiter.NextBotTurn). Never an order, never a fixed reply.
-                if (line.Type == ChatType.Whisper || Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name))
+                // A conversation the director runs between the two writes both sides: neither answers the other on its own then.
+                if ((line.Type == ChatType.Whisper || Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name)) && !_chat!.IsDirected(sender.Guid, player.Guid))
                 {
                     int turn = _chat!.NextBotTurn(sender.Guid, player.Guid);
                     if (turn > 0) Converse(player, line, sender, master, senderIsBot: true, turn);
@@ -448,7 +460,7 @@ internal sealed class PlayerbotPartyAI
         {
             Target = sender.Name, TargetGuid = sender.Guid, ChannelName = line.ChannelName, IsReply = true, ToBot = senderIsBot, Turn = turn,
         };
-        var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master, isGm), sender.Guid, sender.Name, line.Type, line.Text, fromMaster,
+        var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master, isGm, sender, line.Text), sender.Guid, sender.Name, line.Type, line.Text, fromMaster,
             !senderIsBot && InviteAllowed(player, sender), senderIsBot ? 0 : sender.AccountId, FromGm: isGm, Speech: speech, SenderIsBot: senderIsBot,
             Addressed: addressed);
         // The AI disclosure comes first, once per login of the speaker (a new Player is made at every login); never to a bot.
@@ -486,8 +498,12 @@ internal sealed class PlayerbotPartyAI
     /// <summary>The bot's facts for a line it starts itself (world thread; the social features' guild announcements and greetings).</summary>
     internal Chat.BotChatPersona PersonaFor(Player p) => Persona(p, ResolveMaster(p));
 
-    /// <summary>The bot's facts for the chat (world thread): who and where it is, what it does, its group and recent events.</summary>
-    private Chat.BotChatPersona Persona(Player player, ObjectGuid master, bool includeDebug = false)
+    /// <summary>
+    /// The bot's facts for the chat (world thread): who and where it is, what it does, its group and recent events, and its real state
+    /// (<see cref="Chat.PlayerbotPersonaFacts"/>). <paramref name="speaker"/> and <paramref name="heard"/>: the player being answered and
+    /// the line (whether the speaker is in trade range or the group; a place the line asks about).
+    /// </summary>
+    private Chat.BotChatPersona Persona(Player player, ObjectGuid master, bool includeDebug = false, Player? speaker = null, string? heard = null)
     {
         (string? zone, string? subzone) = ZoneNames(player);
         PlayerbotGoalKind? goal = null;
@@ -499,8 +515,67 @@ internal sealed class PlayerbotPartyAI
         string? masterName = master.IsEmpty ? null : _session.World.FindOnlinePlayer(master)?.Name;
         bool inGroup = Services.Social?.Groups.GetGroup(player.Guid) is not null;
         string? debugSummary = includeDebug ? DebugLine(player) : null;
+        Chat.BotChatFacts facts = Chat.PlayerbotPersonaFacts.Build(_session, player, questId, heard);
+        if (speaker is not null)
+            facts = facts with
+            {
+                SpeakerNearby = ReferenceEquals(speaker.Map, player.Map) && Distance(speaker, player) <= TradeReach,
+                SpeakerInGroup = Services.Social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true,
+            };
         return new Chat.BotChatPersona(player.Name, player.Race, player.Class, player.Gender, player.Level, zone, subzone, goal, quest,
-            masterName, inGroup, _chatEvents.Recent(Now), DebugSummary: debugSummary);
+            masterName, inGroup, _chatEvents.Recent(Now), DebugSummary: debugSummary, Facts: facts);
+    }
+
+    /// <summary>The trade distance (vmangos TRADE_DISTANCE, 11.11 yards; a little less, so the server never refuses it).</summary>
+    internal const float TradeReach = 10f;
+
+    /// <summary>
+    /// World thread: a social act a chat reply asks for (<see cref="Chat.BotChatAction"/>), checked again here and carried out only
+    /// through the bot's own client packets: an invitation (CMSG_GROUP_INVITE) when the bot has no group or leads one with room, the
+    /// speaker is free, of its faction and allowed by its invite policy; a trade (CMSG_INITIATE_TRADE) with a speaker in trade range who is
+    /// in its group or allowed by its policy, while the bot is alive and out of combat; a quest share for its party master only; an LFG
+    /// line in the LookingForGroup channel when it is free. Never for another bot.
+    /// </summary>
+    private void PerformAction(Player player, Chat.BotChatReply reply)
+    {
+        if (reply.Action == Chat.BotChatAction.None || _session.World.FindOnlinePlayer(reply.SenderGuid) is not { } speaker || speaker.Guid == player.Guid) return;
+        if (speaker.Session is WorldSession { IsManaged: true }) return;
+        SocialContext? social = Services.Social;
+        switch (reply.Action)
+        {
+            case Chat.BotChatAction.Invite:
+            {
+                if (social is null || speaker.Team != player.Team || !InviteAllowed(player, speaker) || social.Groups.GetGroup(speaker.Guid) is not null) return;
+                if (social.Groups.GetGroup(player.Guid) is { } group && (!group.IsLeader(player.Guid) || group.IsFull)) return;
+                var writer = new PacketWriter(speaker.Name.Length + 1);
+                writer.WriteCString(speaker.Name);
+                Act(WorldOpcode.CmsgGroupInvite, writer.ToArray(), budgeted: false);
+                return;
+            }
+
+            case Chat.BotChatAction.OpenTrade:
+            {
+                if (!player.IsAlive || player.Combat.IsInCombat || !ReferenceEquals(speaker.Map, player.Map) || Distance(speaker, player) > TradeReach) return;
+                bool trusted = social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true || InviteAllowed(player, speaker);
+                if (trusted) Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(speaker.Guid.Value), budgeted: false);
+                return;
+            }
+
+            case Chat.BotChatAction.ShareQuest:
+                if (ResolveMaster(player) == speaker.Guid) ShareQuestsWithParty(player);
+                return;
+
+            case Chat.BotChatAction.JoinLfg:
+            {
+                if (_chat is not { } chat || social?.Groups.GetGroup(player.Guid) is not null || !player.IsAlive) return;
+                Chat.BotChatPersona persona = Persona(player, ObjectGuid.Empty);
+                if (persona.Facts?.SuitedDungeon is null) return;
+                var ask = new Chat.BotChatAsk(_botId, player.Guid, persona, player.Guid, player.Name, ChatType.Channel, string.Empty, false, false);
+                if (Chat.PlayerbotBuiltinChat.Pick("post.lfg", ask, null, _random) is { } text)
+                    chat.TrySpeak(_botId, player.Guid, Chat.BotSpeech.InChannel(Chat.PlayerbotChannelMembership.LookingForGroup, text, "lfg", Chat.BotSpeechPriority.Normal));
+                return;
+            }
+        }
     }
 
     private (string? Zone, string? Subzone) ZoneNames(Player player)
@@ -540,6 +615,7 @@ internal sealed class PlayerbotPartyAI
     {
         if (_chat is { } chat && SpeechOf(reply) is { } speech)
             Chat.PlayerbotSpeechDelivery.Deliver(chat, _botId, _session, player, speech);
+        if (reply.Action != Chat.BotChatAction.None) PerformAction(player, reply);
 
         if (reply.Command is { } command)
         {
@@ -595,6 +671,7 @@ internal sealed class PlayerbotPartyAI
         response.WriteUInt64(caster.Value);
         response.WriteByte(member ? (byte)1 : (byte)0);
         Act(WorldOpcode.CmsgResurrectResponse, response.ToArray(), budgeted: false);
+        if (member) _chat?.Voice.NoteResurrection(_botId, caster, _chat.NowMs); // the bot voice thanks the caster once alive ("ty")
     }
 
     /// <summary>

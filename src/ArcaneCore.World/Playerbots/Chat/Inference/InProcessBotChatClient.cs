@@ -1,6 +1,8 @@
 using System.Diagnostics.Metrics;
 using System.Globalization;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Playerbots.Chat.Inference.Scheduling;
+using ArcaneCore.World.Playerbots.Chat.Inference.Serving;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Playerbots.Chat.Inference;
@@ -34,7 +36,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
     private int _waiting;
     private int _consecutiveOverruns;
     private DateTimeOffset _circuitOpenUntil;
-    private long _replies, _tokens, _promptTokens, _reusedTokens, _overruns, _circuitOpens, _busy, _filtered, _unloaded, _cancelled, _errors;
+    private long _replies, _tokens, _promptTokens, _reusedTokens, _overruns, _circuitOpens, _busy, _filtered, _unloaded, _cancelled, _errors, _dropped;
     private double _decodeMs, _prefillMs;
     private int _disposed;
 
@@ -106,7 +108,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
             ChatGenerationResult result;
             try
             {
-                result = await engine.GenerateAsync(tokens, settings, cancellationToken).ConfigureAwait(false);
+                result = await engine.GenerateAsync(tokens, settings, WorkloadOf(prompt.Workload), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -150,6 +152,12 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
                 return Fallback("cancelled", BotChatResult.Fail(BotChatOutcome.Timeout));
             case ChatGenerationStatus.ContextFull:
                 return Fallback("context", BotChatResult.Fail(BotChatOutcome.BadResponse));
+            case ChatGenerationStatus.Dropped:
+                Interlocked.Increment(ref _dropped);
+                return Fallback("dropped", BotChatResult.Fail(BotChatOutcome.RateLimited, TimeSpan.FromSeconds(1)));
+            case ChatGenerationStatus.Failed:
+                Interlocked.Increment(ref _errors);
+                return Fallback("error", BotChatResult.Fail(BotChatOutcome.BadResponse));
         }
 
         lock (_gate) _consecutiveOverruns = 0;
@@ -203,8 +211,23 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
         if (InProcessChatMeters.Fallbacks.Enabled) InProcessChatMeters.Fallbacks.Add(1, new KeyValuePair<string, object?>("reason", reason));
     }
 
+    /// <summary>The sampling of one reply: the ported sampler chain's settings, the chat-line constraint (one line) and the stop strings.</summary>
     internal static ChatGenerationSettings Settings(PlayerbotChatInProcessOptions options) => new(
-        options.MaxNewTokens, options.BudgetMs, (float)options.Temperature, options.TopK, (float)options.TopP, (float)options.RepetitionPenalty, options.Seed);
+        options.MaxNewTokens, options.BudgetMs, (float)options.Temperature, options.TopK, (float)options.TopP, (float)options.RepetitionPenalty, options.Seed,
+        StopAtNewline: true, PenaltyWindow: options.RepetitionWindow, MinP: (float)options.MinP,
+        StopSequences: options.StopSequences is { Count: > 0 } stops ? stops : null);
+
+    /// <summary>The engine's scheduling settings.</summary>
+    internal static ChatServingOptions Serving(PlayerbotChatInProcessOptions options)
+        => new(options.PrefixCacheTokens, options.AmbientQueueMs, options.PrefillChunkTokens);
+
+    /// <summary>The scheduler class of a request's workload.</summary>
+    internal static WorkloadClass WorkloadOf(BotChatWorkload workload) => workload switch
+    {
+        BotChatWorkload.BotToBot => WorkloadClass.BotToBot,
+        BotChatWorkload.Ambient => WorkloadClass.Ambient,
+        _ => WorkloadClass.InteractivePlayer,
+    };
 
     /// <summary>The bot's name from its facts ("You are Bob, a level ..."), for removing a "Bob:" the model may start with.</summary>
     internal static string BotNameOf(BotChatPrompt prompt)
@@ -236,7 +259,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
             path = Path.GetFullPath(Path.Combine(_contentRoot, options.ModelPath));
             InProcessChatEngine engine = _loader is { } load
                 ? load(path, options)
-                : InProcessChatEngine.Load(path, options.ContextTokens, options.Threads, options.MaxConcurrent);
+                : InProcessChatEngine.Load(path, options.ContextTokens, options.Threads, options.MaxConcurrent, Serving(options));
             ChatModel model = engine.Model;
             int index = _options.Chat.EffectiveProviders().ToList().FindIndex(p => p.Kind == PlayerbotChatProviderKind.InProcess);
             _logger?.LogInformation("Bot chat provider #{Index}: InProcess {Model} {Arch} {Params} {Quant}, {Threads} threads, budget {Budget} ms",
@@ -245,6 +268,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
                 "Bot chat in-process model {Path}: {Layers} layers, {Dim} wide, vocabulary {Vocab}, context {Context} tokens x {Slots} slot(s), {FileMb} MB mapped, {CacheMb} MB of cache and buffers, pre-tokenizer {Pre}{Exact}",
                 path, model.Config.Layers, model.Config.Dim, model.Config.Vocabulary, engine.ContextTokens, engine.Slots,
                 model.File.FileLength / (1024 * 1024), engine.AllocatedBytes / (1024 * 1024), model.Tokenizer.Pre, model.Tokenizer.PreExact ? string.Empty : " (unknown: the gpt2 split stands in)");
+            LogServing(engine, options, WarmSharedPrefix(engine));
             return engine;
         }
         catch (Exception error) when (error is not OutOfMemoryException)
@@ -262,6 +286,33 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
     // --- status -------------------------------------------------------------------------------------------------------------
 
     /// <summary>The counters (tests, the status line).</summary>
+    /// <summary>Compute the system rules every prompt starts with once, into the prefix cache (a failure only costs the reuse). Returns (tokens, ms).</summary>
+    private (int Tokens, double Ms) WarmSharedPrefix(InProcessChatEngine engine)
+    {
+        if (engine.PrefixCacheTokens == 0) return (0, 0);
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            Task<int> warm = engine.WarmPrefixAsync(InProcessChatPrompt.SharedPrefix(engine.Model.Tokenizer));
+            int tokens = warm.Wait(TimeSpan.FromSeconds(60)) ? warm.Result : 0;
+            return (tokens, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            _logger?.LogWarning("Bot chat in-process model: the shared prompt prefix was not cached ({Type}: {Message}); every reply computes it", error.GetType().Name, error.Message);
+            return (0, 0);
+        }
+    }
+
+    private void LogServing(InProcessChatEngine engine, PlayerbotChatInProcessOptions options, (int Tokens, double Ms) warm)
+    {
+        ChatServingOptions serving = engine.Serving;
+        _logger?.LogInformation(
+            "Bot chat in-process scheduler: interactive_player > bot_to_bot > ambient (a higher class preempts a lower one, ambient dropped after {AmbientMs} ms queued), {Slots} slot(s), prefill chunk {Chunk} tokens; prefix cache {PrefixTokens} tokens, shared prefix {Warm} tokens prefilled once in {WarmMs:0} ms; sampling temperature {Temperature} top_k {TopK} top_p {TopP} min_p {MinP} repeat {Repeat} over {Window}, {Stops} stop string(s), one-line constraint on",
+            serving.AmbientQueueMs, engine.Slots, serving.PrefillChunkTokens, engine.PrefixCacheTokens, warm.Tokens, warm.Ms,
+            options.Temperature, options.TopK, options.TopP, options.MinP, options.RepetitionPenalty, options.RepetitionWindow, options.StopSequences?.Count ?? 0);
+    }
+
     internal InProcessChatStats Stats()
     {
         double prefill, decode;
@@ -277,7 +328,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
         return new InProcessChatStats(Interlocked.Read(ref _replies), tokens, decode > 0 ? tokens / (decode / 1000) : 0,
             computed, Interlocked.Read(ref _reusedTokens), prefill > 0 ? computed / (prefill / 1000) : 0,
             Interlocked.Read(ref _overruns), Interlocked.Read(ref _circuitOpens), open, Interlocked.Read(ref _busy), Interlocked.Read(ref _filtered),
-            Interlocked.Read(ref _unloaded), Interlocked.Read(ref _cancelled), Interlocked.Read(ref _errors));
+            Interlocked.Read(ref _unloaded), Interlocked.Read(ref _cancelled), Interlocked.Read(ref _errors), Interlocked.Read(ref _dropped));
     }
 
     /// <summary>The <c>.playerbot chat status</c> line, or null when no InProcess provider is configured and none was ever loaded.</summary>
@@ -297,7 +348,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
         InProcessChatStats s = Stats();
         PlayerbotChatInProcessOptions o = _options.Chat.InProcess;
         return string.Create(CultureInfo.InvariantCulture,
-            $"Bot chat in-process: {state} model={model} budget={o.BudgetMs}ms replies={s.Replies} tokens={s.Tokens} tok/s={s.TokensPerSecond:0.0} prompt-tok/s={s.PromptTokensPerSecond:0.0} reused={s.ReusedTokens} fallbacks={s.Fallbacks} overruns={s.Overruns} circuit={(s.CircuitOpen ? "open" : "closed")} busy={s.Busy} filtered={s.Filtered} unloaded={s.Unloaded} cancelled={s.Cancelled} errors={s.Errors}");
+            $"Bot chat in-process: {state} model={model} budget={o.BudgetMs}ms replies={s.Replies} tokens={s.Tokens} tok/s={s.TokensPerSecond:0.0} prompt-tok/s={s.PromptTokensPerSecond:0.0} reused={s.ReusedTokens} fallbacks={s.Fallbacks} overruns={s.Overruns} circuit={(s.CircuitOpen ? "open" : "closed")} busy={s.Busy} filtered={s.Filtered} unloaded={s.Unloaded} cancelled={s.Cancelled} errors={s.Errors} dropped={s.Dropped}{(Engine is { } running ? " " + running.ServingStats.Describe() : string.Empty)}");
     }
 
     public void Dispose()
@@ -320,10 +371,10 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
 /// <summary>The in-process model's counters (<c>.playerbot chat status</c>; tokens per second are averages since start).</summary>
 internal readonly record struct InProcessChatStats(
     long Replies, long Tokens, double TokensPerSecond, long PromptTokens, long ReusedTokens, double PromptTokensPerSecond,
-    long Overruns, long CircuitOpens, bool CircuitOpen, long Busy, long Filtered, long Unloaded, long Cancelled, long Errors)
+    long Overruns, long CircuitOpens, bool CircuitOpen, long Busy, long Filtered, long Unloaded, long Cancelled, long Errors, long Dropped = 0)
 {
     /// <summary>Requests the templates (or the next provider) answered instead.</summary>
-    public long Fallbacks => Overruns + Busy + Filtered + Unloaded + Cancelled + Errors;
+    public long Fallbacks => Overruns + Busy + Filtered + Unloaded + Cancelled + Errors + Dropped;
 }
 
 /// <summary>The in-process chat instruments, on the bot chat meter (<see cref="PlayerbotChatMeters.Meter"/>; docs/ops/metrics.md).</summary>

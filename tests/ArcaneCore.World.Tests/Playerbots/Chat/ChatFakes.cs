@@ -95,6 +95,31 @@ internal static class ChatSamples
         Race race = Race.Human, Class @class = Class.Warrior)
         => new("Chatbot", race, @class, Gender.Male, level, zone, subzone, goal, quest, master, inGroup, []);
 
+    /// <summary>Facts with every field a template can name filled in.</summary>
+    public static BotChatFacts FullFacts() => new()
+    {
+        HealthPct = 80,
+        ManaPct = 45,
+        AverageItemLevel = 14,
+        NotableItems = ["Cruel Barb"],
+        BagFree = 3,
+        BagTotal = 16,
+        Food = 6,
+        Drink = 0,
+        Money = 12_345,
+        Needs = [BotChatNeed.Water, BotChatNeed.Gold],
+        Surplus = [new BotChatItem(2589, "Linen Cloth", 12, 1, 13)],
+        Objective = "Kobold Vermin 4/10",
+        Quests = ["Wolves Across the Border", "The Fargodeep Mine"],
+        Role = BotChatRole.Healer,
+        Spec = "holy",
+        Guild = "Lazy Raiders",
+        NearbyCreature = "Mother Fang",
+        Instance = "The Deadmines",
+        SuitedDungeon = "The Deadmines",
+        Place = new BotChatPlace("Goldshire", "Elwynn Forest", "Eastern Kingdoms", SameZone: true),
+    };
+
     public static BotChatAsk Ask(string text, BotChatPersona? persona = null, ulong sender = 0x42, ChatType channel = ChatType.Whisper,
         bool fromMaster = false, bool inviteAllowed = false, Guid? bot = null, string name = "Nathan", int account = 0)
         => new(bot ?? BotId, new ObjectGuid(0x7), persona ?? Persona(), new ObjectGuid(sender), name, channel, text, fromMaster, inviteAllowed, account);
