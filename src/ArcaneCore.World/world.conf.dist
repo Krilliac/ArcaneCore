@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       483 keys
+#   WORLD                       493 keys
 #
 ###############################################################################
 
@@ -13366,9 +13366,12 @@ World.Playerbots.StallSeconds = 120
 
 #
 #    World.Playerbots.Taxi.BackoffMinutes
-#        Description: Minutes a bot does not try to fly after a flight attempt failed (the server
-#                     refused the flight, the flight master could not be reached, or none stood
-#                     where the node is): it walks meanwhile (1..1440; default 10).
+#        Description: The longest, in minutes, a flight node is backed off after trips from it
+#                     failed (the server refused the flight, the flight master could not be reached,
+#                     or none stood where the node is): the per-node cap on the schedule of
+#                     World:Playerbots:Travel (TransitBackoffSeconds doubling to
+#                     TransitBackoffMaxSeconds). Only the failing node waits; the bot walks, or
+#                     flies from another known node, meanwhile (1..1440; default 10).
 #        Type: int
 #        Default: 10
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -13480,6 +13483,133 @@ World.Playerbots.ThinkIntervalMs = 500
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ThinkStarvedGapMs = 10000
+
+#
+#    World.Playerbots.Travel.Boats
+#        Description: Let bots ride the boats (Menethil - Auberdine, Menethil - Theramore, Auberdine
+#                     - Rut'theran, Booty Bay - Ratchet; on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.Boats = true
+
+#
+#    World.Playerbots.Travel.Enabled
+#        Description: Let bots plan multi-leg trips to far places (on by default). Off: no trip is
+#                     planned and a far goal stays where its caller leaves it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.Enabled = true
+
+#
+#    World.Playerbots.Travel.Hearthstone
+#        Description: Let bots use their hearthstone (item 6948) as a leg when it is off cooldown
+#                     and the bind point is on the way (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.Hearthstone = true
+
+#
+#    World.Playerbots.Travel.MageService
+#        Description: Let mage bots offer their Teleport and Portal spells as a service (on by
+#                     default): a mage teleports itself, and opens a portal for a bot of its faction
+#                     that asks on the in-world request board. Off: no mage teleports for travel and
+#                     no portal is asked for or opened.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.MageService = true
+
+#
+#    World.Playerbots.Travel.MageServiceFeeCopper
+#        Description: Copper a requester pays the mage for a portal, by a real trade of money
+#                     (0..100000; default 0: the service is free). The portal is planned only when
+#                     the bot can pay it inside MaxTravelSpendCopper.
+#        Type: uint
+#        Default: 0
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.MageServiceFeeCopper = 0
+
+#
+#    World.Playerbots.Travel.MageServiceRadiusYards
+#        Description: A bot asks for a portal only from a mage within this many yards of it, on its
+#                     map (10..1000; default 150).
+#        Type: float
+#        Default: 150
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.MageServiceRadiusYards = 150
+
+#
+#    World.Playerbots.Travel.MaxTravelSpendCopper
+#        Description: The most copper one trip may spend on fares, fees and reagents together
+#                     (0..10000000; default 10000, one gold). 0: only free means (walking, boats,
+#                     zeppelins, the tram, lifts, the hearthstone, a free portal, the bot's own
+#                     teleport when it has the rune).
+#        Type: uint
+#        Default: 10000
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.MaxTravelSpendCopper = 10000
+
+#
+#    World.Playerbots.Travel.TransitBackoffMaxSeconds
+#        Description: The longest wait (seconds) before a failed transit point is tried again
+#                     (10..86400; default 300). Must not be below TransitBackoffSeconds.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.TransitBackoffMaxSeconds = 300
+
+#
+#    World.Playerbots.Travel.TransitBackoffSeconds
+#        Description: The first wait (seconds) before a bot tries a transit point again (one flight
+#                     master's node, tram platform, lift, dock) that just failed it; each further
+#                     failure of the same point doubles the wait up to TransitBackoffMaxSeconds
+#                     (10..3600; default 60).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.TransitBackoffSeconds = 60
+
+#
+#    World.Playerbots.Travel.Zeppelins
+#        Description: Let Horde bots ride the zeppelins (Orgrimmar - Undercity, Orgrimmar -
+#                     Grom'gol, Undercity - Grom'gol; on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.Zeppelins = true
 
 #----------------------------------------------------------------------------
 # World:Playerbots:Qa

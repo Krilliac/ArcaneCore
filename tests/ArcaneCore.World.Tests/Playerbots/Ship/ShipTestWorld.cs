@@ -49,12 +49,14 @@ internal sealed class ShipTestWorld : IAsyncDisposable
 
     public TeleportService Teleports => Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
 
-    public static async Task<ShipTestWorld> StartAsync(byte race = 1)
+    /// <param name="configureServices">More services for the host (after the ships and the clock), e.g. the travel seam.</param>
+    public static async Task<ShipTestWorld> StartAsync(byte race = 1, Action<IServiceCollection>? configureServices = null)
     {
         WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
             TransportWorldContent.Register(services, withBootyBayBoat: true);
             services.AddSingleton<IWorldFeature, ManualClockFeature>();
+            configureServices?.Invoke(services);
         });
         TransportFeature feature = host.WorldServices.GetRequiredService<TransportFeature>();
         await host.WaitForWorldAsync(() => feature.System is { Ships.Count: 3 }, "the ferry, the crossing and the Booty Bay boat sail");

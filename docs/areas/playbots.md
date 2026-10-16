@@ -875,13 +875,20 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   `portal-not-opened`, `portal-not-used`, `portal-vanished`, `portal-unreachable`, `portal-use-refused`, `rune-purchase-failed`,
   `request-lost`, `services-unavailable`.
 - **Off-thread reachability** (`PlayerbotTravel.CanReachStatic`, for the home progression's sweep): the same map, or maps the faction's
-  ship routes join, from the routes the world thread published at the first journey; no switch and no walk is judged there.
+  ship routes join, from the routes the world thread published at the first journey; the Travel, Boats and Zeppelins switches count, no
+  walk is judged there.
+- **Home returns.** The home progression's travel seam (`IPlayerbotHomeTravel`) is registered as `PlayerbotTravelHomeTravel`: a town home
+  on another map counts as reachable without a teleport when published boat or zeppelin routes a bot of either faction may ride join the
+  two maps, and a home across Teldrassil's water on map 1 when a rideable route has a port on each side; its return rules (`Decide`) stay
+  the Home options'. A homed bot whose home lies across the sea (another map, or Teldrassil's water) begins a journey there
+  (`IPlayerbotTravel.TryBegin`) instead of the home teleport, except in `ReturnMode` Walk; when none can begin, the return rules decide as
+  before (the config-gated teleport) and the next journey home waits the transit backoff, doubling while it keeps failing.
 
 Known limits. The deck point (6 yards above the ship's origin, inside an 8 by 3 yard rectangle) and the zeppelin tower climb are
 UNVERIFIED against the hull models and real terrain (the server has no transport collision); the ship tests run on a flat synthetic world.
 The region-graph walk check only separates places the graph can place (ports at sea are not), so a walk across water can be planned and
 then fail and replan. Quest goals do not begin journeys yet (a quest whose ender is on another continent is still skipped, see
-"Intercontinent quest handoffs"); journeys come from `IPlayerbotTravel` callers and the GM command. Portal fees need trading on
+"Intercontinent quest handoffs"); journeys come from `IPlayerbotTravel` callers, home returns and the GM command. Portal fees need trading on
 (`EconomyFeature`); party-only portals need the requester ungrouped.
 
 ### Home area
