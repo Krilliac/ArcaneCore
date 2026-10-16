@@ -124,6 +124,34 @@ public sealed class PlayerbotPolicyEngineTests
     }
 
     [Fact]
+    public async Task ScoresOfTheBotsPreviousThink_AreFresh_PastStaleAfterMs()
+    {
+        // Live 2026-10-16: with ~1000 bots a bot's out-of-combat thinks were 8-17 s apart (p95), so every think found the snapshot its
+        // previous think took older than StaleAfterMs (4.5 s): "agreed" froze and every verdict was stale, and no goal record was written.
+        var options = new PlayerbotPolicyOptions { Enabled = true, StaleAfterMs = 4500 };
+        var engine = new PlayerbotPolicyEngine(options, policy: new StubPolicy(PlayerbotPolicyGoal.Explore));
+        PlayerbotPolicyAgent agent = engine.CreateAgent(4);
+        agent.Request(0, new float[PlayerbotPolicySchema.FeatureCount], TownOrExplore, nowMs: 10_000, think: 7);
+        engine.Dispatch();
+        await engine.WhenIdleAsync();
+
+        // The very next think, 13 s later: nothing happened to the bot between the two, so the snapshot is the freshest there can be.
+        PlayerbotPolicyVerdict next = agent.Decide(10_000 + 13_000, think: 8);
+        Assert.Equal(PlayerbotPolicySource.Applied, next.Source);
+        Assert.Equal(PlayerbotGoalOrNull(PlayerbotPolicyGoal.Explore), next.Promote);
+
+        // Another think came between (a fight, a rest): the state moved on, and the time bound applies again.
+        Assert.Equal(PlayerbotPolicySource.Stale, agent.Decide(10_000 + 13_000, think: 9).Source);
+        // Within StaleAfterMs a later think still uses it.
+        Assert.Equal(PlayerbotPolicySource.Applied, agent.Decide(10_000 + 4500, think: 9).Source);
+        // And the next think past the cap is stale: a bot that did not think for that long is somewhere else.
+        Assert.Equal(PlayerbotPolicySource.Stale,
+            agent.Decide(10_000 + PlayerbotPolicyAgent.NextThinkStaleAfterMs + 1, think: 8).Source);
+        // A caller that does not count thinks keeps the time bound alone.
+        Assert.Equal(PlayerbotPolicySource.Stale, agent.Decide(10_000 + 13_000).Source);
+    }
+
+    [Fact]
     public async Task MissingAndNonFiniteScores_FallBackToTheLadder()
     {
         var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true }, policy: new StubPolicy(PlayerbotPolicyGoal.Explore) { NaN = true });

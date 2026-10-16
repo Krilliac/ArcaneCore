@@ -34,10 +34,14 @@ internal enum PlayerbotPolicyArm : byte
 }
 
 /// <summary>One snapshot of a bot's state taken for scoring (world thread).</summary>
-internal sealed class PlayerbotPolicyWindow(long sequence, uint takenAtMs, float[] features, PlayerbotPolicyGoalMask open, PlayerbotPolicyGoal? explore)
+internal sealed class PlayerbotPolicyWindow(long sequence, uint takenAtMs, float[] features, PlayerbotPolicyGoalMask open, PlayerbotPolicyGoal? explore,
+    long takenAtThink = PlayerbotPolicyAgent.NoThink)
 {
     internal long Sequence { get; } = sequence;
     internal uint TakenAtMs { get; } = takenAtMs;
+
+    /// <summary>The bot's think count (<see cref="PlayerbotBrain.ThinkCount"/>) on the think that took it; <see cref="PlayerbotPolicyAgent.NoThink"/> when not told.</summary>
+    internal long TakenAtThink { get; } = takenAtThink;
     internal float[] Features { get; } = features;
     internal PlayerbotPolicyGoalMask Open { get; } = open;
     internal PlayerbotPolicyGoal? LadderPick => Open.LadderPick;
@@ -77,6 +81,16 @@ internal sealed class PlayerbotPolicyAgent
 
     internal ulong BotGuid { get; }
 
+    /// <summary>A think count not told (<see cref="Request"/>, <see cref="Decide"/>): only <see cref="PlayerbotPolicyOptions.StaleAfterMs"/> bounds the age.</summary>
+    internal const long NoThink = -1;
+
+    /// <summary>
+    /// The age bound (world ms) of a snapshot used by the bot's very next think, in place of <see cref="PlayerbotPolicyOptions.StaleAfterMs"/>:
+    /// under load a bot's out-of-combat thinks can be further apart than that (8-17 s at p95 with 1000 bots on the live Debug server), and
+    /// with no think between the two the snapshot is the freshest state there is. Past this the bot was starved long enough to be elsewhere.
+    /// </summary>
+    internal const uint NextThinkStaleAfterMs = 30_000;
+
     /// <summary>This bot's A/B arm, for good (a hash of its guid against <see cref="PlayerbotPolicyOptions.AbPolicyShare"/>).</summary>
     internal PlayerbotPolicyArm Arm { get; }
 
@@ -107,7 +121,7 @@ internal sealed class PlayerbotPolicyAgent
     /// Take a new snapshot (world thread): it replaces the current one and goes to its map's next batch. With exploration on, the snapshot
     /// may instead name a random open runner-up of the ladder's choice, which its thinks then try first whatever the scores say.
     /// </summary>
-    internal PlayerbotPolicyWindow Request(uint mapId, ReadOnlySpan<float> features, PlayerbotPolicyGoalMask open, uint nowMs)
+    internal PlayerbotPolicyWindow Request(uint mapId, ReadOnlySpan<float> features, PlayerbotPolicyGoalMask open, uint nowMs, long think = NoThink)
     {
         _requested = true;
         _nextRequestMs = unchecked(nowMs + (uint)_engine.Options.IntervalMs);
@@ -122,7 +136,7 @@ internal sealed class PlayerbotPolicyAgent
             for (int goal = 0; goal < PlayerbotPolicySchema.GoalCount; goal++)
                 if (runnersUp.Contains((PlayerbotPolicyGoal)goal) && nth-- == 0) { explore = (PlayerbotPolicyGoal)goal; break; }
         }
-        var window = new PlayerbotPolicyWindow(sequence, nowMs, features.ToArray(), open, explore);
+        var window = new PlayerbotPolicyWindow(sequence, nowMs, features.ToArray(), open, explore, think);
         Window = window;
         // An exploration snapshot needs no scores. Any other goes to the batch; refused (a full batch), its scores are just missing.
         if (explore is null) _engine.Submit(this, mapId, features, sequence);
@@ -145,9 +159,9 @@ internal sealed class PlayerbotPolicyAgent
     /// The goal this think should try before the ladder (world thread), from the current snapshot: its exploration goal, else the best open
     /// goal by its scores when that is not the ladder's own choice. Late, missing and non-finite scores give null (the ladder decides).
     /// </summary>
-    internal PlayerbotPolicyVerdict Decide(uint nowMs)
+    internal PlayerbotPolicyVerdict Decide(uint nowMs, long think = NoThink)
     {
-        PlayerbotPolicyVerdict verdict = DecideCore(nowMs);
+        PlayerbotPolicyVerdict verdict = DecideCore(nowMs, think);
         // The ladder arm keeps what the policy would have chosen (its source and pick) but never tries it.
         if (Arm == PlayerbotPolicyArm.Ladder) verdict = verdict with { Promote = null };
         LastVerdict = verdict;
@@ -178,11 +192,15 @@ internal sealed class PlayerbotPolicyAgent
         _engine.CountRefused();
     }
 
-    private PlayerbotPolicyVerdict DecideCore(uint nowMs)
+    private PlayerbotPolicyVerdict DecideCore(uint nowMs, long think)
     {
         if (Window is not { } window) return new(null, PlayerbotPolicySource.Missing, null, Window);
         uint age = unchecked(nowMs - window.TakenAtMs);
-        if (age > int.MaxValue || age > (uint)_engine.Options.StaleAfterMs) return new(null, PlayerbotPolicySource.Stale, null, window);
+        // The snapshot is taken after a think decides, so the next think is the first that can use it: on that think it is as fresh as
+        // the bot's state can be, however long the bot's think gap (NextThinkStaleAfterMs bounds it); after other thinks, the time bound.
+        bool nextThink = think != NoThink && window.TakenAtThink != NoThink && think == window.TakenAtThink + 1;
+        uint bound = nextThink ? Math.Max(NextThinkStaleAfterMs, (uint)_engine.Options.StaleAfterMs) : (uint)_engine.Options.StaleAfterMs;
+        if (age > int.MaxValue || age > bound) return new(null, PlayerbotPolicySource.Stale, null, window);
         if (window.Refused) return new(null, PlayerbotPolicySource.Refused, null, window);
         if (window.Explore is { } explore) return new(explore, PlayerbotPolicySource.Explored, explore, window);
         if (Volatile.Read(ref _latest) is not { } scores || scores.Sequence != window.Sequence) return new(null, PlayerbotPolicySource.Missing, null, Window);

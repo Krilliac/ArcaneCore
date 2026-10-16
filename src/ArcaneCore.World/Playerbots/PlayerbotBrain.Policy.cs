@@ -44,12 +44,12 @@ internal sealed partial class PlayerbotBrain
         if (PolicyEngine is not { } engine) return false;
         PlayerbotPolicyAgent agent = _policyAgent ??= engine.CreateAgent(player.Guid.Value);
         uint now = _session.World.NowMs;
-        PlayerbotPolicyVerdict verdict = agent.Decide(now);
+        PlayerbotPolicyVerdict verdict = agent.Decide(now, ThinkCount);
         // The snapshot's probes are optional work: a think out of its search budget takes it on a later think.
         if (agent.RequestDue(now) && (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true))
         {
             PlayerbotPolicyGoalMask open = PolicySnapshot(player, _policyFeatures);
-            agent.Request(player.MapId, _policyFeatures, open, now);
+            agent.Request(player.MapId, _policyFeatures, open, now, ThinkCount);
         }
         if (verdict.Promote is not { } goal) return false;
         if (TryPromotedGoal(player, goal, interval)) return true;
@@ -167,6 +167,7 @@ internal sealed partial class PlayerbotBrain
                 bool planned = _destinations.Update(player, 0, interval);
                 _planningGoal = null;
                 if (!planned) return _destinations.WaitingForTiles; // the route's tiles are being read: keep the goal, plan again next think
+                QuestTravelDriven = true;
                 _target = null;
                 AbandonRoute();
                 _attacking = false;

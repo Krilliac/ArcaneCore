@@ -250,6 +250,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     internal bool OpportunityDriven { get; private set; }
 
+    /// <summary>
+    /// The quest destinations controller planned the latest think's trip (the ladder's quest-travel rung, or a promoted
+    /// <see cref="PlayerbotPolicyGoal.QuestTravel"/>). The trip's goal kind is <see cref="PlayerbotGoalKind.Quest"/>, the same as a quest
+    /// worked in sight, so the policy telemetry labels the decision <see cref="PlayerbotPolicyGoal.QuestTravel"/> from this.
+    /// </summary>
+    internal bool QuestTravelDriven { get; private set; }
+
     /// <summary>Single-line diagnostic snapshot of the bot's state and recent trace history.</summary>
     internal string FormatDiagnosticSnapshot(Player player) => _trace.FormatSnapshot(player, this);
 
@@ -466,6 +473,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     private bool _thinkClockArmed;
     private uint _lastThinkMs;
+
+    /// <summary>
+    /// The bot's thinks in the world so far, every kind (combat, rest, the goal ladder): the goal policy tells the think right after a
+    /// snapshot's from one with other thinks in between by it (<see cref="PlayerbotPolicyAgent.Decide"/>).
+    /// </summary>
+    internal long ThinkCount { get; private set; }
     private bool _starvedReported;
     private bool _overranReported;
     private uint _overranReportMs;
@@ -522,6 +535,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
         OpportunityDriven = false;
+        QuestTravelDriven = false;
         _destinations.SkipQuest ??= _quests.IsRefused;
         _destinations.Untakeable ??= IsUntakeable;
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
@@ -546,6 +560,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         LastThinkPhase = "brain";
         _trace.ObserveState(this, _session.World.NowMs);
         CheckThinkClock(player, _session.World.NowMs);
+        ThinkCount++;
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
@@ -1174,6 +1189,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 _planningGoal = null;
                 if (questPlanned)
                 {
+                    QuestTravelDriven = true;
                     _target = null;
                     AbandonRoute();
                     _attacking = false;

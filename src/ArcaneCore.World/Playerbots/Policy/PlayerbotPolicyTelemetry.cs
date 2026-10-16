@@ -221,7 +221,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
                 {
                     progress = ProgressOf(brain, player);
                     state.Open.Enqueue(new OpenDecision(nowMs, _time.GetUtcNow().ToUnixTimeMilliseconds(), player.MapId, player.ZoneId, window, verdict,
-                        brain.Goal, progress.Value, brain.StallCount, state.Deaths, AnomaliesOf(state.Subject), brain.OpportunityDriven));
+                        brain.Goal, progress.Value, brain.StallCount, state.Deaths, AnomaliesOf(state.Subject), brain.OpportunityDriven, brain.QuestTravelDriven));
                 }
                 else Interlocked.Increment(ref _dropped);
             }
@@ -243,7 +243,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
                 AnomaliesOf(state.Subject) - open.Anomalies);
             Enqueue(new PlayerbotPolicyRecord(open.UnixMs, player.Guid.Value, open.Map, open.Zone, open.Window.Features, open.Window.Open,
                 open.Window.LadderPick, open.Verdict.Pick, open.Verdict.Source, open.Window.Explore is not null,
-                PlayerbotPolicySchema.GoalOf(open.Kind, open.Opportunity), open.Kind, WindowMs, outcome, state.Agent?.Arm ?? PlayerbotPolicyArm.Policy));
+                PlayerbotPolicySchema.GoalOf(open.Kind, open.Opportunity, open.QuestTravel), open.Kind, WindowMs, outcome, state.Agent?.Arm ?? PlayerbotPolicyArm.Policy));
         }
     }
 
@@ -388,7 +388,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     }
 
     private sealed record OpenDecision(uint AtMs, long UnixMs, uint Map, uint Zone, PlayerbotPolicyWindow Window, PlayerbotPolicyVerdict Verdict,
-        PlayerbotGoalKind Kind, PlayerbotPolicyProgress Start, int Stalls, int Deaths, long Anomalies, bool Opportunity);
+        PlayerbotGoalKind Kind, PlayerbotPolicyProgress Start, int Stalls, int Deaths, long Anomalies, bool Opportunity, bool QuestTravel);
 }
 
 /// <summary>

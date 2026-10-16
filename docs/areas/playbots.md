@@ -652,7 +652,10 @@ goals the stall watch set aside (deferred or suspended), stalls, zone, map, atta
 **Scoring, off the world thread.** At the end of each world tick `PlayerbotPolicyEngine.Dispatch` hands each map's snapshots to a worker
 task as one batch (one batch in flight per map; at most 1024 rows, past that a snapshot is dropped and counted). The worker scores them in
 chunks within `TickBudgetMs` (2 ms wall time per map batch; the rows past it are left unscored and the overrun counted) and publishes each
-bot's scores. The brain uses them on a later think, while the snapshot is no older than `StaleAfterMs` (4500 world ms). Late, missing,
+bot's scores. The brain uses them on a later think, while the snapshot is no older than `StaleAfterMs` (4500 world ms); on the think
+right after the one that took it (no other think of the bot between, of any kind) the bound is 30 s instead, because a snapshot is first
+usable there however far apart the bot's thinks are (8-17 s at p95 for a 1000-bot Debug server, where the 4.5 s bound alone made every
+verdict stale). Late, missing,
 dropped or non-finite (NaN, infinite) scores make that think fall back to the ladder. Every think on a snapshot decides again and is
 counted (`applied`, `agreed`, `floor`, `explored`, `missing`, `stale`, `non-finite`, `refused`; a refused promotion also counts once as
 `refused` on top of its think's own source), and the feature logs one Info line of the counters every five minutes while the policy is on.
@@ -698,7 +701,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 | `src` | `agreed`, `applied`, `explored`, `nonfinite`, `floor` or `refused` (the promoted goal's controller did not act). |
 | `x` | 1 when the choice was exploration. |
 | `arm` | `policy` or `ladder`: the bot's A/B arm (`AbPolicyShare`). |
-| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. `Opportunity` is the label only when the opportunity controller drove that think (the brain's `Loot` goal alone is also a corpse, so `kind` `Loot` with `goal` null is a corpse). |
+| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. `Opportunity` is the label only when the opportunity controller drove that think (the brain's `Loot` goal alone is also a corpse, so `kind` `Loot` with `goal` null is a corpse). `QuestTravel` is the label when the quest destinations planned that think's trip (its `kind` is `Quest`); records before this label have such thinks as `Quest`. |
 | `w` | The outcome window in seconds. |
 | `o` | The outcome over the window, in this order: `lvl`, `lp` (levels gained with their fractions: experience over the next level's, so it compares across levels and level-ups), `xp`, `money`, `items`, `quests` (with `lvl`, the stall-watch fingerprint delta: levels, experience, copper, item count, quests handed in), `stalls`, `deaths`, `anomalies` (the bot's anomaly-ledger reports). |
 

@@ -144,6 +144,35 @@ public sealed class PlayerbotQuestTravelPriorityTests
     }
 
     [Fact]
+    public async Task AThinkWhoseTripTheQuestDestinationsPlanned_IsLabelledQuestTravel()
+    {
+        // Live telemetry 2026-10-16: 0 of 142950 goal records were labelled QuestTravel, because the trip's goal kind is Quest; the
+        // trainer could never fit the QuestTravel output the policy chooses from.
+        await using WorldTestHost host = Start(new QuestTravelFixture(-8648.95f));
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            QuestNpcFeature feature = host.WorldServices.GetRequiredService<QuestNpcFeature>();
+            feature.Options.OrdinaryRewardQuestIds = [QuestTravelFixture.QuestId];
+            await host.World.InvokeAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new QuestOpenPathfinder());
+                var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+                session.ManagedBudget = new ManagedActionBudget(1);
+                brain.Update(1_000);
+                Assert.Equal(PlayerbotGoalKind.Quest, brain.Goal);
+                Assert.Equal(QuestTravelFixture.QuestId, brain.QuestId);
+                Assert.True(brain.QuestTravelDriven, "the quest destinations planned this think's trip");
+                Assert.Equal(ArcaneCore.World.Playerbots.Policy.PlayerbotPolicyGoal.QuestTravel,
+                    ArcaneCore.World.Playerbots.Policy.PlayerbotPolicySchema.GoalOf(brain.Goal, brain.OpportunityDriven, brain.QuestTravelDriven));
+                brain.Stop();
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task EligibleOffscreenQuestIsAdvisableAndUsesNormalNavigation()
     {
         await using WorldTestHost host = Start(new QuestTravelFixture(-8648.95f));

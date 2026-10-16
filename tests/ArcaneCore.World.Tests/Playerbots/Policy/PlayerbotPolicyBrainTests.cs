@@ -100,6 +100,33 @@ public sealed class PlayerbotPolicyBrainTests
         await engine.DisposeAsync();
     }
 
+    [Fact]
+    public async Task WhenTheBotsThinksAreFarApart_ThePolicyStillDecides()
+    {
+        // Live 2026-10-16: a bot's out-of-combat thinks 8-17 s apart (p95 with ~1000 bots) left every verdict stale (StaleAfterMs 4.5 s),
+        // because a snapshot is taken after a think decides and so is first used by the next think.
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true },
+            policy: new PlayerbotPolicyEngineTests.StubPolicy(PlayerbotPolicyGoal.Explore));
+        await using RiskTestWorld world = await StartAsync();
+        world.Brain.PolicyEngine = engine;
+        Creature mob = await world.OnWorldAsync(() => world.Spawn(Mob(), 50f, 0f));
+        await world.SeeAsync(mob);
+
+        var sources = new List<PlayerbotPolicySource>();
+        for (int i = 0; i < 4; i++)
+        {
+            await world.ThinkAsync();
+            await world.OnWorldAsync(() => { engine.Dispatch(); return true; });
+            await engine.WhenIdleAsync();
+            sources.Add(await world.OnWorldAsync(() => world.Brain.PolicyAgent!.LastVerdict!.Value.Source));
+            await world.Host.World.AdvanceClockAsync(13_000 - RiskTestWorld.ThinkMs); // the next think, 13 s of world time later
+        }
+
+        Assert.Contains(PlayerbotPolicySource.Applied, sources);
+        Assert.True(engine.Stats.Stale == 0, $"stale {engine.Stats.Stale}: {string.Join(", ", sources)}");
+        await engine.DisposeAsync();
+    }
+
     /// <summary>The bot's goal and target after each of <see cref="Thinks"/> thinks next to one grindable mob.</summary>
     private static async Task<IReadOnlyList<string>> RunAsync(PlayerbotPolicyEngine? engine)
     {
