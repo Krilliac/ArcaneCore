@@ -18,7 +18,8 @@ must obey is the server's, enforced by the ordinary handlers.
 | File (`src/ArcaneCore.World/Playerbots/Economy/`) | What it does |
 |---|---|
 | `PlayerbotBudget.cs`, `PlayerbotServiceIndex.cs`, `PlayerbotRidingTrips.cs`, `PlayerbotMount.cs` (folder `Playerbots/Budget/`) | The budget, the shared trainer/vendor index, the riding and mount-vendor trips, and mounting (`World:Playerbots:Budget`, `World:Playerbots:Mounts`). |
-| `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `VisitIntervalMinutes`. |
+| `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `VisitIntervalMinutes`, `BankDeposit`, `BuyBankSlots`. |
+| `PlayerbotBank.cs` (folder `Playerbots/`) | The bank errand while the bot stays at its capital home: deposit goods it does not need, buy a bank bag slot when the bank is nearly full. |
 | `PlayerbotEconomy.cs` | The world side, one per bot (owned by `PlayerbotBrain`): the visit as a state machine, one step per think. |
 | `PlayerbotEconomyPlanner.cs` | The pure decisions: which items are listable, the listing slots, the visit budget, the price plan, the upgrade to buy, the parsing of an auction letter's subject, `PlayerbotRelistMemory`. |
 | `PlayerbotAuctionPricing.cs` | The pure prices: reference price, vendor floor, undercut, start bid, deposit, whether a listing pays. |
@@ -65,6 +66,16 @@ forgets the entry).
 
 Bought: only an item that is an upgrade for one of the bot's own slots, by the same score the equipment goal wears by, so it is worn
 once collected. The bot never buys to resell.
+
+## The bank
+
+While a bot stays at its capital home (`TownStay.Capital`, town progression), the brain asks `PlayerbotBank.Update` after the auction
+visit. At most once a minute it checks whether a visit has work: something to deposit (trade goods and reagents no spell it knows uses,
+gems, recipes, stackable curios; never gear, consumables, ammunition, bags, quest items, grays, the Hearthstone or anything the town
+controller protects) or a bank slot worth buying. A visit walks to a banker of the capital (one in sight first, else the nearest
+approachable banker spawn within 400 yards of the home's centre), opens the bank with `CMSG_BANKER_ACTIVATE`, deposits one item per
+think with `CMSG_AUTOBANK_ITEM` (at most 16 per visit; a refused deposit is not repeated) and may buy one slot with `CMSG_BUY_BANK_SLOT`.
+A visit lasts at most 180 s; the next is at least 30 minutes later. The goal is reported as Vendor, so a stall sets the banker aside.
 
 ## Rules of the house the bot obeys
 
@@ -193,6 +204,8 @@ NPC, loot or attack take the mount off first (`PlayerbotMount.DismountForAction`
 | `MaxListingsPerBot` | `5` | The most auctions one bot has listed at once (0..50), from the house's own owner list. |
 | `BuyUpgradeBudgetFraction` | `0.25` | The share (0..1) of the money held at the start of a visit that the visit may spend in all, deposits and buyout. 0 spends nothing. |
 | `VisitIntervalMinutes` | `30` | Minutes between two visits of one bot (1..1440). |
+| `BankDeposit` | `true` | Deposit goods the bot does not need at a banker while it stays at its capital home. |
+| `BuyBankSlots` | `true` | Buy the next bank bag slot when the bank has fewer than 5 free slots and the price is at most 40% of the bot's gold. |
 
 `World:Playerbots:Budget` (live):
 

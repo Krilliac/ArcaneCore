@@ -1201,6 +1201,10 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         }
     }
 
+    /// <summary>Whether the bot keeps <paramref name="item"/> whatever a vendor or banker would take (the bank errand asks it, <see cref="PlayerbotBank"/>).</summary>
+    internal bool IsProtected(Player player, Item item)
+        => session.Services.GetService<QuestNpcFeature>()?.Services is not { } services || IsProtected(player, item, services);
+
     private bool IsProtected(Player player, Item item, QuestNpcServices services)
     {
         if (session.Services.GetService<SpellFeature>()?.System is { } spells

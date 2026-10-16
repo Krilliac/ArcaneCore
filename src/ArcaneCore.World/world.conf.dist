@@ -11399,6 +11399,35 @@ World.Playerbots.Contention.HelpChance = 0.35
 World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 
 #
+#    World.Playerbots.Economy.BankDeposit
+#        Description: Deposit goods the bot does not need (trade goods and reagents no spell of its
+#                     own uses, gems, recipes, stackable curios) at a banker while it stays at its
+#                     capital home (on by default). Gear, food, potions, ammunition, bags, grays and
+#                     quest items are never deposited.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.BankDeposit = true
+
+#
+#    World.Playerbots.Economy.BuyBankSlots
+#        Description: Buy the next bank bag slot at a banker while the bot stays at its capital home
+#                     when the bank has fewer than 5 free slots and the price is at most 40% of the
+#                     bot's gold (on by default). A bought slot is only space once a bag is put in
+#                     it, which bots do not do yet, so the bank-nearly-full gate keeps the purchase
+#                     rare.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.BuyBankSlots = true
+
+#
 #    World.Playerbots.Economy.BuyUpgradeBudgetFraction
 #        Description: The share of the money a bot holds at the start of a visit that the visit may
 #                     spend in all (0..1): listing deposits and the buyout of an upgrade count
