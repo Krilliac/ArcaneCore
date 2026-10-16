@@ -279,8 +279,8 @@ public sealed class ScriptEnginePrerequisiteTests
     public void AGossipOrQuestOnlyScript_CountsAsImplemented_OnlyBecauseAHandlerIsRegistered(ScriptKind kind)
     {
         var factory = new CreatureAiFactory();
-        CreatureTemplate template = T(9999, "npc_test_only");
-        var catalog = new ScriptCatalog(factory, new CreatureContent([template], [Spawn(1, 9999, 1, 1, mapId: 70)], [], [], []));
+        CreatureTemplate template = T(990_999, "npc_test_only"); // an entry with no entry script (9999, used before, is Ringo since zone scripts batch 6)
+        var catalog = new ScriptCatalog(factory, new CreatureContent([template], [Spawn(1, 990_999, 1, 1, mapId: 70)], [], [], []));
 
         Assert.True(catalog.Resolve(template, 70).ScriptNameMissing); // unknown to every layer
 
