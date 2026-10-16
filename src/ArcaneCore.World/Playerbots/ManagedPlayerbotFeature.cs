@@ -130,6 +130,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Whether this process stopped writing playerbot rows because another world process owns them (see <see cref="SplitBrainConflictThreshold"/>).</summary>
     internal bool SplitBrain => _splitBrain;
 
+    /// <summary>
+    /// Thrown by a home change refused because split brain is latched. <see cref="Done"/> is how many bots it had already stored or cleared before the latch was seen
+    /// (those are real and stay). The message is the refusal code.
+    /// </summary>
+    internal sealed class PlayerbotSplitBrainException(int done) : InvalidOperationException("playerbot-split-brain")
+    {
+        public int Done { get; } = done;
+    }
+
     /// <summary>Bots currently in fault quarantine (tests).</summary>
     internal int QuarantineCount => _quarantine.Count;
 
@@ -739,7 +748,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         CancellationToken cancellationToken = default, bool zoneClipped = true, bool logFailures = true)
     {
         ArgumentNullException.ThrowIfNull(targets);
-        if (_splitBrain) throw new InvalidOperationException("playerbot-split-brain");
+        if (_splitBrain) throw new PlayerbotSplitBrainException(0);
         if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
         if (!float.IsFinite(radius) || radius < PlayerbotHomeBounds.MinRadius || radius > PlayerbotHomeBounds.MaxRadius)
             throw new ArgumentOutOfRangeException(nameof(radius));
@@ -783,7 +792,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }).ConfigureAwait(false);
         }
 
-        if (refused) throw new InvalidOperationException("playerbot-split-brain");
+        if (refused) throw new PlayerbotSplitBrainException(saved.Count);
         return new(saved.Count, failed);
     }
 
@@ -797,7 +806,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal async Task<int> ClearHomesAsync(IReadOnlyList<Guid> botIds, CancellationToken cancellationToken = default, bool byOperator = true)
     {
         ArgumentNullException.ThrowIfNull(botIds);
-        if (_splitBrain) throw new InvalidOperationException("playerbot-split-brain");
+        if (_splitBrain) throw new PlayerbotSplitBrainException(0);
         if (byOperator && HomesClearedByOperator is { } handler)
         {
             Guid[] start = [.. botIds.Where(id => _homes.TryGetValue(id, out PlayerbotHome? h) && Population.PopulationStartAreas.TryParse(h.Place, out _, out _))];
@@ -814,7 +823,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             foreach (Guid botId in botIds)
             {
-                if (_splitBrain) throw new InvalidOperationException("playerbot-split-brain"); // latched while this call ran: clear nothing more
+                if (_splitBrain) throw new PlayerbotSplitBrainException(cleared); // latched while this call ran: clear nothing more
                 bool stored = await store.ClearAsync(botId, cancellationToken).ConfigureAwait(false);
                 done.Add(botId);
                 if (_homes.TryRemove(botId, out _) || stored) cleared++;
@@ -1018,9 +1027,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     public async Task<PlayerbotOperationResult> StopAsync(string idOrName, CancellationToken cancellationToken = default)
     {
+        if (_splitBrain) return new(false, "playerbot-split-brain");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (_splitBrain) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             ManagedPlayerbot? bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
             if (bot is null) return new(false, "bot-not-found");
@@ -2101,7 +2112,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private async Task EnterSplitBrainAsync(int conflicts, ManagedPlayerbot? lastRow)
     {
         _splitBrain = true;
-        _quarantine.Clear(); // a quarantined bot would otherwise be retried on its timer once the latch clears: only an operator start restarts a bot after a split brain
+        _quarantine.Clear(); // no retry timer fires for a quarantined bot once the latch clears; its row stays Faulted, which only an operator start (or a new fault count) leaves
         string row = lastRow is null ? "no row read" : string.Create(CultureInfo.InvariantCulture,
             $"last conflicting row bot {lastRow.BotId:D}: revision {lastRow.Revision}, state {lastRow.State}, updated {DateTimeOffset.FromUnixTimeSeconds(lastRow.UpdatedUnix):u}");
         logger.LogCritical("Split brain: {Conflicts} managed playerbot rows were changed by another writer in one checkpoint (threshold {Threshold}); another world process is writing this characters database ({Row}). This process, the one whose rows were taken over, stops issuing playerbot writes. Stop the other world, then clear it with .playerbot splitbrain clear", conflicts, SplitBrainConflictThreshold, row);
@@ -2165,10 +2176,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private async Task DropFromActiveAsync(ActiveBot active, ManagedPlayerbot? row, bool writeSetAsides = true, bool announce = true)
     {
         Guid botId = active.Record.BotId;
-        if (!announce) { }
-        else if (row is null) logger.LogWarning("Playerbot {BotId} has no registry row any more; dropping it from the active set", botId);
-        else if (row.State == ManagedPlayerbotState.Faulted) logger.LogWarning("Playerbot {BotId} was faulted out of band ({Code}); dropping it from the active set", botId, row.ErrorCode);
-        else WarnConflictOnce(botId, "write (dropped from the active set)");
+        if (announce)
+        {
+            if (row is null) logger.LogWarning("Playerbot {BotId} has no registry row any more; dropping it from the active set", botId);
+            else if (row.State == ManagedPlayerbotState.Faulted) logger.LogWarning("Playerbot {BotId} was faulted out of band ({Code}); dropping it from the active set", botId, row.ErrorCode);
+            else WarnConflictOnce(botId, "write (dropped from the active set)");
+        }
         active.Paused = true;
         // A row that exists keeps the bot's suspensions across a restart, as a stop does.
         // (not when another writer owns the row: then the set-aside rows are theirs too, and this process writes none).

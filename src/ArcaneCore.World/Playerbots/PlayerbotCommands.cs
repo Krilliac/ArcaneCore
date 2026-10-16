@@ -25,7 +25,7 @@ public sealed class PlayerbotCommands : ICommandGroup
                 new ChatCommand("status", AccountSecurity.GameMaster,
                     "Syntax: .playerbot status [$id|$name]\nShow bot lifecycle status.", Status),
                 new ChatCommand("splitbrain", AccountSecurity.Administrator,
-                    "Syntax: .playerbot splitbrain [clear]\nShow whether this world stopped writing playerbot rows because another world process changed them. Stop the other world first, then clear: it re-reads the stored rows, reports them and lifts the latch so playerbot writes resume. Every bot stays stopped until you start it.", SplitBrainCommand),
+                    "Syntax: .playerbot splitbrain [clear]\nShow whether this world stopped writing playerbot rows because another world process changed them. Stop the other world first, then clear: it re-reads the stored rows, reports them and lifts the latch so playerbot writes resume. The population manager (if enabled) then restarts its members over its next passes; every other bot stays stopped until you start it, and quarantined bots stay Faulted until you start them.", SplitBrainCommand),
                 new ChatCommand("list", AccountSecurity.GameMaster,
                     "Syntax: .playerbot list\nList managed bots.", List),
                 new ChatCommand("inspect", AccountSecurity.GameMaster,
@@ -239,7 +239,7 @@ public sealed class PlayerbotCommands : ICommandGroup
                 {
                     ManagedPlayerbotFeature.SplitBrainClear cleared = await feature.ClearSplitBrainAsync().ConfigureAwait(false);
                     context.Reply(cleared.WasSet
-                        ? $"Split brain cleared; playerbot writes resume. Stored rows re-read: {cleared.Rows} bots, {cleared.Enabled} wanted running, {cleared.Faulted} faulted. All are stopped here until you start them."
+                        ? $"Split brain cleared; playerbot writes resume. Stored rows re-read: {cleared.Rows} bots, {cleared.Enabled} wanted running, {cleared.Faulted} faulted. All are stopped here; the population manager (if enabled) restarts its members over its next passes, any other bot stays stopped until you start it."
                         : "No split brain was set.");
                 }
                 catch (Exception error) when (error is not OutOfMemoryException)
@@ -342,7 +342,7 @@ public sealed class PlayerbotCommands : ICommandGroup
             _ = Task.Run(async () =>
             {
                 try { context.Reply($"Playerbot home: {await service.ClearHomesAsync(ids).ConfigureAwait(false)} cleared."); }
-                catch (InvalidOperationException error) when (error.Message == "playerbot-split-brain") { context.Reply("Playerbot home refused: split brain is latched (see .playerbot splitbrain)."); }
+                catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException error) { context.Reply($"Playerbot home refused: split brain is latched (see .playerbot splitbrain); {error.Done} cleared before it."); }
                 catch (Exception error) when (error is not OutOfMemoryException)
                 {
                     service.ReportCommandFault("home clear", error);
@@ -456,7 +456,7 @@ public sealed class PlayerbotCommands : ICommandGroup
                 context.Reply($"Playerbot home: {outcome.Set} set ({description}), {skipped} skipped (not running)"
                     + Unzoned(unzoned) + (outcome.Failed != 0 ? $", {outcome.Failed} failed." : "."));
             }
-            catch (InvalidOperationException error) when (error.Message == "playerbot-split-brain") { context.Reply("Playerbot home refused: split brain is latched (see .playerbot splitbrain)."); }
+            catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException error) { context.Reply($"Playerbot home refused: split brain is latched (see .playerbot splitbrain); {error.Done} set before it."); }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
                 service.ReportCommandFault("home set", error);

@@ -944,10 +944,11 @@ process on the same characters database; it is not a bot fault, so a checkpoint,
 - A row that differs from ours **only in `DesiredEnabled`** is an operator edit (a SQL `UPDATE`): the bot is dropped as above but does not count toward a split brain.
 - More than 3 other refusals in one checkpoint are a **split brain**. The process that owned the rows (usually the older, legitimate world, whose checkpoints are now stale) logs `Split brain` at Critical
   with the last conflicting row's revision, state and update time, **stops every active bot** without a managed-row or set-aside write and stops driving their brains, and stops issuing playerbot
-  writes: checkpoints, creates, starts, stops, deletes, home changes, the fleet reset and the world's shutdown write nothing (each refuses with `playerbot-split-brain`, including a start or create that was
-  already queued behind the checkpoint that latched it; a bot stop in this state waits up to 10 s for that bot's session to close). Home changes (`.playerbot home`) do not take the operation lock, so a
-  bulk home change cannot block starts: they are checked at entry and before each bot, and a single store write already in flight when the latch is set can still land. The population manager
-  stands still while it is set (no pass, no start, create, park or member-row write, and a rush is stopped), quarantined bots are released from quarantine, and only an operator `.playerbot start` restarts a bot. It shows as a `WARNING` line in `.playerbot status`, in `.playerbot splitbrain` and in the gauge `arcanecore.playerbots.split_brain` (1 while set).
+  writes: checkpoints, creates, starts, stops, deletes, home changes, the fleet reset and the world's shutdown write nothing (each operator command refuses with `playerbot-split-brain`, including a start, create, stop, delete
+  or fleet reset that was already queued behind the checkpoint that latched it; the world's shutdown still closes the sessions, waiting up to 10 s per bot for each to close). Home changes (`.playerbot home`) do not take the
+  operation lock, so a bulk home change cannot block starts: they are checked at entry and before each bot, and a single store write already in flight when the latch is set can still land (the command reports how many it
+  stored before the latch). The population manager stands still while it is set: no pass starts, a rush is stopped, and a pass that was already running ends quietly at its next member-row write or bot operation
+  (one store call already in flight can still land). Quarantine is cleared, so no retry timer fires; a quarantined bot's row stays Faulted, which the population does not restart, until an operator starts it. It shows as a `WARNING` line in `.playerbot status`, in `.playerbot splitbrain` and in the gauge `arcanecore.playerbots.split_brain` (1 while set).
 - **Character rows are not covered.** The kicked sessions still save their characters when they close, and the ordinary character autosave continues: there is no clean way to discard a
   session's save, and this change does not add a bypass of the save pipeline. On a file-backed SQLite database the writer lock keeps a second world out in the first place; on MariaDB,
   MySQL and PostgreSQL only `Cluster:Fencing` (`CharacterWriteFenceInterceptor`) bounds the second writer's character writes.
@@ -956,8 +957,8 @@ The older world stands down and the intruder keeps running on purpose: neither w
 PostgreSQL there is no file lock to keep the intruder out in the first place; `Cluster:Fencing` is what bounds it there.
 
 Recovery: stop the other world first. `.playerbot splitbrain clear` (Administrator) re-reads the stored registry rows, reports how many there are, how many are wanted running and how many are
-faulted, and lifts the latch so playerbot writes resume. No bot is active at that point, so nothing in memory needs reconciling: every bot stays stopped until you start it, and each start reads
-its stored row afresh. Clearing while the other world still runs reopens the writes and the conflicts will latch it again. A restart also clears it.
+faulted, and lifts the latch so playerbot writes resume. No bot is active at that point, so nothing in memory needs reconciling, and each start reads its stored row afresh. After a clear the population
+manager (if enabled) restarts its members over its next passes, as in normal operation; every other bot stays stopped until you start it. Clearing while the other world still runs reopens the writes and the conflicts will latch it again. A restart also clears it.
 
 The incident behind this: a deploy started a second world on the live `characters.db`; it restored 863 bots, failed to bind the port and exited, while the refused checkpoints
 counted as faults and disabled 512 bots. A world on a file-backed SQLite characters database now refuses to start while another holds the database

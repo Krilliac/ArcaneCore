@@ -353,9 +353,11 @@ public sealed class ManagedPlayerbotCheckpointTests
 
         Task<PlayerbotOperationResult> delete = feature.DeleteAsync(spare.BotId.Value.ToString());
         Task<FleetResetResult> reset = feature.ResetFleetAsync(new FleetResetPromise(storedBefore.Count, storedBefore.Count), _ => { });
+        Task<PlayerbotOperationResult> stop = feature.StopAsync(spare.BotId.Value.ToString());
         await Task.Delay(200);
         Assert.False(delete.IsCompleted);
         Assert.False(reset.IsCompleted);
+        Assert.False(stop.IsCompleted);
 
         owners.ReleaseHeldUpdates();
         await started.WaitAsync(TimeSpan.FromSeconds(30));
@@ -363,6 +365,7 @@ public sealed class ManagedPlayerbotCheckpointTests
         Assert.True(feature.SplitBrain);
         Assert.Equal("playerbot-split-brain", (await delete.WaitAsync(TimeSpan.FromSeconds(30))).Code);
         Assert.Equal("playerbot-split-brain", (await reset.WaitAsync(TimeSpan.FromSeconds(30))).Code);
+        Assert.Equal("playerbot-split-brain", (await stop.WaitAsync(TimeSpan.FromSeconds(30))).Code);
         Assert.Equal(spareBefore, owners.Peek(spare.BotId.Value));
         Assert.Equal(storedBefore.Count, (await owners.LoadAllAsync()).Count); // not a row deleted
     }
@@ -414,11 +417,13 @@ public sealed class ManagedPlayerbotCheckpointTests
         await feature.ForceSplitBrainForTests();
 
         Assert.Equal("playerbot-split-brain", (await feature.DeleteAsync(id.ToString())).Code);
+        Assert.Equal("playerbot-split-brain", (await feature.StopAsync(id.ToString())).Code);
         Assert.Equal("playerbot-split-brain", (await feature.ResetFleetAsync(new FleetResetPromise(1, 1), _ => { })).Code);
-        InvalidOperationException home = await Assert.ThrowsAsync<InvalidOperationException>(
+        InvalidOperationException home = await Assert.ThrowsAnyAsync<InvalidOperationException>(
             () => feature.SetHomesAsync([new(id, 0, System.Numerics.Vector3.Zero)], 100f, null));
         Assert.Equal("playerbot-split-brain", home.Message);
-        InvalidOperationException clear = await Assert.ThrowsAsync<InvalidOperationException>(() => feature.ClearHomesAsync([id]));
+        Assert.Equal(0, Assert.IsType<ManagedPlayerbotFeature.PlayerbotSplitBrainException>(home).Done);
+        InvalidOperationException clear = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => feature.ClearHomesAsync([id]));
         Assert.Equal("playerbot-split-brain", clear.Message);
         Assert.Equal(before, owners.Peek(id)); // the row (and its character) survive
 
@@ -532,7 +537,7 @@ public sealed class ManagedPlayerbotCheckpointTests
         // From now on this process writes nothing: not a checkpoint, a start, a create, a stop or the world's shutdown.
         Assert.Equal("playerbot-split-brain", (await feature.StartAsync(foreign[0].ToString())).Code);
         Assert.Equal("playerbot-split-brain", (await feature.CreateAsync("Latched", 1, 1)).Code);
-        Assert.True((await feature.StopAsync(last.ToString())).Success);
+        Assert.Equal("playerbot-split-brain", (await feature.StopAsync(last.ToString())).Code);
         await feature.ShutdownBeforeWorldStopAsync();
         Assert.Equal(rows, owners.RowsWritten);
         Assert.Equal(lastRow, owners.Peek(last));
