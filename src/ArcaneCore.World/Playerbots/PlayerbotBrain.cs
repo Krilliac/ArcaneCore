@@ -1461,6 +1461,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         if (_quests.Busy || _town.HasCandidate(player)
             || _quests.PreferredCreatureEntry == 0 && (_trainers.HasCandidate(player) || _riding.HasCandidate(player))) return false;
+        if (TryTravelHome(player, home, state))
+        {
+            DropIntent();
+            _goal = PlayerbotGoalKind.Home;
+            return true;
+        }
+
         PlayerbotHomeTeleportReason teleport = _homeReturn.Judge(player, home, homeOptions);
         if (teleport != PlayerbotHomeTeleportReason.None)
         {
@@ -1476,6 +1483,46 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _goal = PlayerbotGoalKind.Home;
         return true;
     }
+
+    /// <summary>
+    /// A home on another map, or across water on this one (Teldrassil), is travelled to the way a player would (docs/areas/playbots.md,
+    /// Travel): a journey by boat, zeppelin, flight path, hearthstone or portal (<see cref="IPlayerbotTravel.TryBegin"/>), which the brain
+    /// drives from the next think. Only where the return would otherwise teleport (not <see cref="PlayerbotHomeReturnMode.Walk"/>, whose
+    /// off-map bot is left to the operator); when no journey can begin, the return rules decide as before (the config-gated teleport).
+    /// </summary>
+    private bool TryTravelHome(Player player, PlayerbotHomeArea home, PlayerbotHomeState state)
+    {
+        if (_options.Home.ReturnMode == PlayerbotHomeReturnMode.Walk || !_options.Travel.Enabled) return false;
+        PlayerbotTravel.PublishStaticRoutes(_session.World);
+        uint mapId = player.Map?.MapId ?? player.MapId;
+        bool far = state == PlayerbotHomeState.OffMap
+            || Population.PopulationTownProgression.SeparatedByWater(mapId, player.X, player.Y, home.MapId, home.Centre.X, home.Centre.Y);
+        if (!far || _session.Services.GetService<IPlayerbotTravel>() is not { } travel) return false;
+        if (travel.IsTraveling(player)) return true;
+        uint now = _session.World.NowMs;
+        // A journey home that failed (its anomaly is reported once by the journey) or could not begin waits the transit backoff before
+        // the next one, doubling while it keeps failing: the return rules (the teleport fallback) answer meanwhile.
+        if (PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Failed } failed && !ReferenceEquals(failed, _travelHomeCounted))
+        {
+            _travelHomeCounted = failed;
+            _travelHomeRetryAt = unchecked(now + _options.Travel.BackoffMs(++_travelHomeFailures));
+        }
+
+        if (_travelHomeFailures > 0 && unchecked((int)(_travelHomeRetryAt - now)) > 0) return false;
+        if (travel.TryBegin(_session, player, home.MapId, home.Centre, out _))
+        {
+            if (PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Active }) _travelHomeFailures = 0;
+            return true;
+        }
+
+        _travelHomeRetryAt = unchecked(now + _options.Travel.BackoffMs(++_travelHomeFailures));
+        return false;
+    }
+
+    // The journey-home retry wait (TryTravelHome): failures in a row, when the next try may begin, and the failed journey already counted.
+    private int _travelHomeFailures;
+    private uint _travelHomeRetryAt;
+    private TravelJourney? _travelHomeCounted;
 
     /// <summary>
     /// A new stall (<see cref="PlayerbotStallWatch"/>): set the goal's target aside for <see cref="PlayerbotSuspensions.SuspendMs"/>
