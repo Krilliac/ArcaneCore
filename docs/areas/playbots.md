@@ -1387,7 +1387,7 @@ itself and plain game mechanics, never invented lore.
 
 | Key | Meaning |
 |---|---|
-| `Kind` | `Anthropic` (Messages API: `POST {BaseUrl}/v1/messages`, headers `x-api-key` and `anthropic-version: 2023-06-01`), `OpenAICompatible` (`POST {BaseUrl}/chat/completions`, `Authorization: Bearer` when a key is set: OpenAI, OpenRouter, Ollama, LM Studio), or `Builtin`. |
+| `Kind` | `Anthropic` (Messages API: `POST {BaseUrl}/v1/messages`, headers `x-api-key` and `anthropic-version: 2023-06-01`), `OpenAICompatible` (`POST {BaseUrl}/chat/completions`, `Authorization: Bearer` when a key is set: OpenAI, OpenRouter, Ollama, LM Studio), `InProcess` (a GGUF model run inside the world process, below), or `Builtin`. |
 | `BaseUrl` | Anthropic: the origin (empty = `https://api.anthropic.com`). OpenAICompatible: the API base with its version (`https://api.openai.com/v1`, `https://openrouter.ai/api/v1`, `http://localhost:11434/v1`). A key is never sent over plain `http` to a host other than this machine (the configuration is refused). |
 | `Model` | Empty = `claude-haiku-4-5` for Anthropic; required for OpenAICompatible. |
 | `ApiKeyEnvironmentVariable` | The variable that holds the key. Unset: `ANTHROPIC_API_KEY` for Anthropic, none otherwise. `""`: a keyless local server. Keys are read only from the environment, at each request: never from configuration, never logged or shown. |
@@ -1431,6 +1431,88 @@ per-player cooldown keeps one player from spending the budget, the bounded queue
 templates answer once the money or the providers run out. Tests never touch the network: `IBotChatClient` is faked, and the four
 live checks in `PlayerbotChatLiveTests` (one tiny request each to Anthropic, OpenAI, OpenRouter and a local server) run only
 with `ARCANECORE_TEST_LIVE_LLM=1` and that provider's key or `ARCANECORE_TEST_LOCAL_LLM_URL` set.
+
+#### In-process model
+
+`Playerbots/Chat/Inference/`. A provider entry `{ "Kind": "InProcess" }` answers with a small chat model that the world process
+itself runs on the CPU, in managed C# only: no network, no key, no other process or service, no native library. It costs nothing
+(its price is zero, so it never touches `MaxDailySpendUsd`) and it is still a model provider, so the safety screening, disclosure,
+opt-out and the per-player cooldown apply exactly as for the remote ones. **No model ships in the repository and the built-in
+templates stay the default**: without an `InProcess` entry nothing here is loaded, and with one the templates still answer every
+line the model cannot.
+
+- **Engine.** `GgufFile` maps the GGUF file read-only (v2/v3: header, metadata, tensor table, alignment). The weights are never
+  copied: each matrix row is dequantized on the fly into a per-thread buffer (`GgmlQuant`: F32, F16, Q4_0, Q5_0, Q8_0, Q4_K, Q6_K)
+  and dotted with `TensorPrimitives` (SIMD). `BpeTokenizer` reads the gpt2 byte-level BPE vocabulary, merges and pre-tokenizer
+  (`qwen2`, `llama-bpe`, `smollm`, `gpt2`) from the metadata. `ChatModel`/`ChatInferenceContext` run the `llama` and `qwen2`
+  decoders (RMSNorm, RoPE, grouped-query attention with a key/value cache, SwiGLU, tied or separate output, qwen2's q/k/v biases).
+  A file of another architecture, tokenizer or quantization, or with RoPE scaling, is refused at load with the reason.
+- **Threads and budget.** Each reply runs on a dedicated BelowNormal-priority generation thread with `Threads` (2) BelowNormal
+  helpers for the matrix products: never the thread pool, never the world thread. `MaxConcurrent` (1) replies run at once and
+  `MaxQueued` (2) may wait; past that the request is "busy" and the templates answer. A reply that is not done within `BudgetMs`
+  (6000, checked between passes, prompt included) is dropped; `CircuitBreakerOverruns` (3) overruns in a row rest the model for
+  `CircuitBreakerSeconds` (300; anomaly `bot-chat/inprocess-circuit-open`). `BudgetMs` must be below `TimeoutSeconds` x 1000.
+- **Prompt.** ChatML (`<|im_start|>role ... <|im_end|>`, special tokens inserted by id, never parsed from a player's text): a short
+  fixed rule block with the grounding rules (one short 1.12-era chat line; only the facts given; no invented quests, bosses, items,
+  places, players or events; no emojis, quotes, lists or real-world talk; the honest bot answer when asked), then the bot's facts
+  (the same `DynamicSystem` the remote providers get) and a one-line reminder, then the remembered exchanges and the line. The
+  rule block is identical for every bot, so the key/value cache keeps it between replies and only the bot's facts and the
+  conversation are computed per reply. The model writes the line itself (no JSON), so plain-language orders are not read from an
+  in-process reply; the templates' command patterns still work. Sampling: `Temperature` (0.7), `TopK` (40), `TopP` (0.9),
+  `RepetitionPenalty` (1.15), `MaxNewTokens` (48), stop at end-of-turn or a line break; `Seed` set makes it deterministic.
+- **Screen.** A reply is dropped (and the templates answer) when it is empty, longer than `MaxReplyCharacters` (160), holds markup,
+  quotes, a link, an emoji or a non-Latin character, a leaked role token (`im_start`, `assistant:`) or a model name; a reply cut by
+  the token limit keeps its last whole sentence. The ordinary output screening then applies as for any model.
+- **Failure.** A missing or unreadable file is reported once (anomaly `bot-chat/model-load-failed`) and logged; every request then
+  fails as `rejected` and the templates answer. A request is never an exception to the bot.
+- **Status.** At start: `Bot chat provider #N: InProcess <model> <arch> <params> <quant>, <threads> threads, budget <ms> ms` and a
+  line with the layers, vocabulary, context, mapped megabytes and cache size. `.playerbot chat status` adds `Bot chat in-process:`
+  with the load state, replies, tokens, tokens per second (generation and prompt), reused prompt tokens, fallbacks, overruns, the
+  circuit, busy, filtered, unloaded, cancelled and errors. Meters `arcanecore.playerbot.chat.inprocess.replies`, `.tokens`,
+  `.overruns` and `.fallbacks` (by `reason`).
+
+`World:Playerbots:Chat:InProcess` (read when the model loads, at start: changing it takes a restart):
+
+| Key | Meaning |
+|---|---|
+| `ModelPath` | The GGUF file, relative to the content root or absolute (required with an `InProcess` provider). |
+| `Threads` | 1..16 (2): threads one reply computes on. |
+| `MaxConcurrent` | 1..4 (1): replies computed at once; each has its own threads and cache. |
+| `MaxQueued` | 0..64 (2): replies waiting for a slot. |
+| `BudgetMs` | 250..60000 (6000): the hard wall-clock budget of one reply. |
+| `MaxNewTokens` | 8..256 (48). |
+| `ContextTokens` | 256..32768 (1024, capped at the model's): prompt plus reply. |
+| `Temperature`, `TopK`, `TopP`, `RepetitionPenalty`, `Seed` | Sampling (0.7, 40, 0.9, 1.15, unset). |
+| `MaxReplyCharacters` | 40..255 (160). |
+| `CircuitBreakerOverruns`, `CircuitBreakerSeconds` | 1..100 (3), 10..3600 (300). |
+
+```json
+"Chat": {
+  "Providers": [
+    { "Kind": "InProcess", "Model": "smollm2-360m", "MaxRepliesPerHour": 600 }
+  ],
+  "InProcess": { "ModelPath": "models/chat/SmolLM2-360M-Instruct-Q8_0.gguf", "Threads": 2, "BudgetMs": 6000 }
+}
+```
+
+**Which model.** The owner provides the file; nothing is downloaded by the server. Small instruct models that fit the engine:
+
+| Model | File | License | Memory | Notes |
+|---|---|---|---|---|
+| SmolLM2-360M-Instruct | Q8_0 (~0.39 GB) | Apache-2.0 | ~0.4-0.45 GB | llama, `smollm` pre-tokenizer, tied output; 960 wide, so its K-quant files fall back to other types: use Q8_0. |
+| Qwen2.5-0.5B-Instruct | Q8_0 (~0.53 GB) or Q4_K_M (~0.40 GB) | Apache-2.0 | ~0.45-0.6 GB | qwen2, biases, tied output; its Q4_K_M mixes Q4_K, Q5_0, Q6_K and Q8_0 tensors, all read. |
+
+Memory is the mapped file (paged in as it is read) plus, per slot, the key/value cache (SmolLM2-360M: about 80 MB at 1024 tokens;
+Qwen2.5-0.5B: about 25 MB) and a few megabytes of buffers; the tokenizer tables add 10-30 MB. CPU: a reply costs roughly 2 x the
+parameter count in floating-point operations per token, so a 360M model is about 0.7 GFLOP per prompt token and per reply token.
+The cached rule block is computed once; each reply computes its facts and conversation (typically 80-150 tokens) and up to 48
+reply tokens, on `Threads` BelowNormal threads. Expect a few seconds per reply on a desktop core pair; measure on the live
+machine before enabling it:
+
+`tools/ArcaneCore.ChatModelProbe` (in the solution) loads a file through the same engine and prints the model's shape and tensor
+types, the tokenizer round trip of a sample line, the prompt and generation tokens per second (cold, then with the rule block
+cached) and the greedy reply to a sample bot prompt with what the screen keeps of it. Run its built executable with the model path
+(and optionally the thread count and context size). Pick `BudgetMs` from what it reports, under the live load.
 
 #### Safety and provider policies
 
