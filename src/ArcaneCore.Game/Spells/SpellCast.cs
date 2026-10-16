@@ -151,6 +151,13 @@ public sealed class SpellCast
     /// <summary>Damage pushbacks taken (cast bar or channel; vmangos m_delayAtDamageCount).</summary>
     public int PushbackCount { get; internal set; }
 
+    /// <summary>Total elapsed milliseconds spent in the current cast state (Preparing or Casting).</summary>
+    internal long ElapsedMs { get; set; }
+
+    internal bool StuckReported { get; set; }
+
+    internal bool ChannelOrphanReported { get; set; }
+
     internal float CastX { get; set; }
 
     internal float CastY { get; set; }
@@ -266,6 +273,9 @@ public sealed class UnitSpellState
     /// UNIT_STATE_PENDING_CHANNEL_RESET, Spell.cpp:4814-4820); 0 when no reset is pending.
     /// </summary>
     internal uint PendingChannelResetMs { get; set; }
+
+    /// <summary>One <c>channel-object-without-active-cast</c> report per episode; cleared when the channel object is empty again.</summary>
+    internal bool ChannelObjectOrphanReported { get; set; }
 
     internal bool IsIdle => CurrentCast is null && MeleeCast is null && AutoRepeatCast is null && Auras.Count == 0 && SpellCooldowns.Count == 0
         && CategoryCooldowns.Count == 0 && GlobalCooldowns.Count == 0 && SchoolLockouts.Count == 0 && PendingChannelResetMs == 0;

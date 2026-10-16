@@ -8,6 +8,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Transports;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Transports;
 using ArcaneCore.Protocol;
@@ -53,6 +54,9 @@ internal sealed class ElevatorLift
     public uint MapId { get; }
 
     public IReadOnlyList<ElevatorCar> Cars { get; }
+
+    /// <summary>A stable id of this lift for per-bot bookkeeping (<see cref="PlayerbotTransitBackoff"/>): its map and shaft centre, rounded to the yard.</summary>
+    public uint Key => unchecked((uint)HashCode.Combine(MapId, (int)MathF.Round(Centre.X), (int)MathF.Round(Centre.Y)));
 
     /// <summary>The middle of the cars' shafts, flat.</summary>
     public Vector2 Centre { get; }
@@ -357,6 +361,15 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
     public float Best { get; set; } = float.PositiveInfinity;
     public uint BestMs { get; set; } = nowMs;
     public uint NextPlanMs { get; set; }
+
+    /// <summary>The wait for navigation tiles still being read when the way to the lift is planned.</summary>
+    public TileWait Tiles;
+
+    /// <summary>Planning calls in a row that the navigation refused (not pending, not a route): <see cref="PlayerbotElevator.MaxRefusedPlans"/> fail the walk.</summary>
+    public int RefusedPlans { get; set; }
+
+    /// <summary>The lift was backed off for this trip's failure already (once per trip).</summary>
+    public bool BackoffRecorded { get; set; }
     public ElevatorCar? Car { get; set; }
     public GameObject? CarObject { get; set; }
     public Vector3 Landing { get; set; }
@@ -364,6 +377,7 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
     public uint LastBeatMs { get; set; }
     public uint LastDriveMs { get; set; } = nowMs;
     public uint LastPumpMs { get; set; } = nowMs;
+    public uint NextPumpChooseMs { get; set; }
     public ElevatorStep? PendingStep { get; set; }
     public bool LeftStop { get; set; }
     public Vector3 FallLanding { get; set; }
@@ -378,6 +392,29 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
 
     /// <summary>Rescues refused so far (<see cref="PlayerbotElevator.Rescue"/>); the trip fails after <c>MaxRescueTries</c>.</summary>
     public int RescueTries { get; set; }
+
+    public uint BeganMs { get; } = nowMs;
+    public Vector3 StartPosition { get; set; }
+    public PlayerbotOptions? Options { get; set; }
+    public bool HadRoute { get; set; }
+    public bool StopActiveAtFrom { get; set; }
+    public uint StopMaxStandsForMs { get; set; }
+    public string? StopSkipReason { get; set; }
+    public uint NextStopAtMs { get; set; }
+    public int MissedStops { get; set; }
+    public bool BoardWindowShortReported { get; set; }
+    public bool WaitingInsideDoorReported { get; set; }
+    public bool DetachedReported { get; set; }
+    public bool LeftBehindReported { get; set; }
+    public bool DestStopActive { get; set; }
+    public string? DestSkipReason { get; set; }
+    public uint NextDestStopAtMs { get; set; }
+    public int PassedDestinations { get; set; }
+    public ElevatorLevel? StepOffLevel { get; set; }
+    public bool PitFallReported { get; set; }
+    public bool RescueRefusedReported { get; set; }
+    public bool TripFailedReported { get; set; }
+    public bool TripSlowReported { get; set; }
 }
 
 /// <summary>
@@ -394,7 +431,8 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
 /// the offset. Nothing teleports it.
 /// </para>
 /// <para>
-/// Fails closed, with a stall reason and no retry for <see cref="RetryAfterFailureMs"/>: no car of the lift in the world, no floor beside a
+/// Fails closed, with a stall reason, and that lift waits out its own backoff (<see cref="PlayerbotTransitBackoff"/>; another lift is not
+/// held back): no car of the lift in the world, no floor beside a
 /// car at the bot's level, no way to that landing (no progress for <see cref="NoProgressMs"/>), no car standing at the landing within two
 /// cycles and 30 s. Aboard: a car that does not stand at the other level within a cycle and 30 s is left where it stands next at either
 /// level; one that leaves the world under the bot (or a bot knocked off it in the shaft) drops the bot (<see cref="Drop"/>).
@@ -439,6 +477,9 @@ internal static class PlayerbotElevator
     /// </summary>
     internal static readonly float[] VaultLandingRadii = [CarHalfYards + 6.5f, CarHalfYards + 7.5f, CarHalfYards + 8.5f];
 
+    /// <summary>Outer radius of the closed Undercity vault lift doors (9.06..10.60 yards from the shaft centre).</summary>
+    internal const float VaultDoorOuterYards = 10.6f;
+
     /// <summary>A landing's floor lies within this of the level, vertically.</summary>
     internal const float LandingFloorYards = 2.5f;
 
@@ -464,8 +505,11 @@ internal static class PlayerbotElevator
 
     internal const uint NoProgressMs = 60_000;
 
-    /// <summary>A failed trip is not tried again for this long.</summary>
-    internal const uint RetryAfterFailureMs = 600_000;
+    /// <summary>
+    /// The walk to a lift fails after this many refused plans in a row (pending tile reads do not count; a route resets the count) instead
+    /// of waiting out <see cref="NoProgressMs"/>; the lift is then backed off (<see cref="PlayerbotTransitBackoff"/>).
+    /// </summary>
+    internal const int MaxRefusedPlans = PlayerbotTaxi.MaxRefusedPlans;
 
     /// <summary>A stop the car leaves sooner than this is not boarded (the next one is waited for).</summary>
     internal const uint BoardMarginMs = 1_000;
@@ -479,6 +523,13 @@ internal static class PlayerbotElevator
     /// <summary>A bot found within this of a car's height, inside its footprint, stands on it (<see cref="Settle"/>).</summary>
     internal const float OnCarYards = 2.5f;
 
+    /// <summary>
+    /// Vertical gap between the car and a supposedly-aboard bot beyond which the car has left the bot behind. The bot's own height is
+    /// only as fresh as its last heartbeat (<see cref="HeartbeatMs"/>, 500 ms) and a car moves up to ~25 yards a second, so a bot that
+    /// rides correctly lags the car by up to ~9 yards (8.1 measured on a clean Great Lift ride); 25 yards is a bot missing a few beats.
+    /// </summary>
+    internal const float LeftBehindYards = 25f;
+
     /// <summary>How long <see cref="Settle"/> waits for a car's object to be in the world (its grid loading) before it rescues the bot.</summary>
     internal const uint SettleWaitMs = 10_000;
 
@@ -489,9 +540,11 @@ internal static class PlayerbotElevator
     private const int MaxRescueTries = 3;
 
     private const uint SampleMs = 250;
+    private const uint RescueWindowMs = 600_000;
+    private const string AnomalyArea = "elevator";
 
     private static readonly ConditionalWeakTable<Player, ElevatorTrip> Trips = [];
-    private static readonly ConditionalWeakTable<Player, StrongBox<uint>> FailedAt = [];
+    private static readonly ConditionalWeakTable<Player, List<uint>> RescueTimestamps = [];
 
     /// <summary>Each bot's wait for the navigation tiles of the direct walk <see cref="TryBegin"/> weighs against the lift.</summary>
     private static readonly ConditionalWeakTable<Player, StrongBox<TileWait>> TileWaits = [];
@@ -544,7 +597,6 @@ internal static class PlayerbotElevator
         if (IsTraveling(player)) return true;
         if (!player.IsAlive || !player.IsInWorld || player.Map is not { } map) return false;
         uint now = session.World.NowMs;
-        if (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs) return false;
         if (NetworkOf(session) is not { } network) return false;
         Vector3 bot = new(player.X, player.Y, player.Z);
         if (network.Choose(map.MapId, bot, goal, SurveyOf(session.World, map)) is not { } choice) return false;
@@ -568,8 +620,29 @@ internal static class PlayerbotElevator
             return false;
         }
 
-        Begin(session, player, choice.Lift, choice.From, goal);
+        // A lift that failed lately (its own backoff) is not ridden again yet; another lift and the mesh walk above are never held back.
+        if (IsHeldOff(session, player, choice.Lift)) return false;
+        ElevatorTrip begun = Begin(session, player, choice.Lift, choice.From, goal);
+        begun.Options = options;
         return true;
+    }
+
+    private static bool IsHeldOff(WorldSession session, Player player, ElevatorLift lift)
+        => PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Lift, lift.Key, session.World.NowMs);
+
+    /// <summary>
+    /// Whether a lift is the way to <paramref name="goal"/> but a failed ride keeps <see cref="TryBegin"/> from riding it now (that lift's
+    /// backoff after a failure): the caller defers the goal for a short retry instead of judging the walk there refused. Unlike
+    /// <see cref="TryBegin"/> this does not weigh the mesh walk, so a caller asks it only after <see cref="TryBegin"/> returned false without a
+    /// walk. World thread, no side effects.
+    /// </summary>
+    internal static bool IsHeldOff(WorldSession session, Player player, Vector3 goal)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+        if (IsTraveling(player) || !player.IsAlive || !player.IsInWorld || player.Map is not { } map || NetworkOf(session) is not { } network) return false;
+        return network.Choose(map.MapId, new Vector3(player.X, player.Y, player.Z), goal, SurveyOf(session.World, map)) is { } choice
+            && IsHeldOff(session, player, choice.Lift);
     }
 
     /// <summary>
@@ -595,7 +668,11 @@ internal static class PlayerbotElevator
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(lift);
-        var trip = new ElevatorTrip(lift, from, goal, session.World.NowMs) { NextPlanMs = session.World.NowMs };
+        var trip = new ElevatorTrip(lift, from, goal, session.World.NowMs)
+        {
+            NextPlanMs = session.World.NowMs,
+            StartPosition = new Vector3(player.X, player.Y, player.Z),
+        };
         Trips.AddOrUpdate(player, trip);
         return trip;
     }
@@ -663,8 +740,20 @@ internal static class PlayerbotElevator
         {
             case ElevatorStage.ToStop:
             {
-                if (trip.Car is null || trip.CarObject is not { IsInWorld: true } || !ReferenceEquals(trip.CarObject.Map, map)) return;
                 Vector3 bot = new(player.X, player.Y, player.Z);
+                if (trip.Car is null || trip.CarObject is not { IsInWorld: true } || !ReferenceEquals(trip.CarObject.Map, map))
+                {
+                    if (trip.Options is not { } opt || Vector2.Distance(ElevatorNetwork.Flat(bot), trip.Lift.Centre) > ApproachYards) return;
+                    // ChooseCar allocates and may plan a path per candidate: the pump retries it at most once per PlanRetryMs.
+                    if (trip.NextPumpChooseMs != 0 && unchecked((int)(now - trip.NextPumpChooseMs)) < 0) return;
+                    trip.NextPumpChooseMs = unchecked(now + PlanRetryMs) | 1u;
+                    float best = trip.Best;
+                    uint bestMs = trip.BestMs;
+                    PlayerbotRoute? route = trip.Route;
+                    if (!ChooseCar(player, map, trip, opt, now, out _)) { trip.Route = route; return; }
+                    (trip.Best, trip.BestMs, trip.Route) = (best, bestMs, route);
+                }
+
                 if (Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(trip.Landing)) <= AtLandingYards
                     && MathF.Abs(bot.Z - trip.Landing.Z) <= LandingFloorYards + 1f)
                 {
@@ -684,27 +773,7 @@ internal static class PlayerbotElevator
 
                 uint cycle = system.ElevatorCycle(live);
                 if (cycle == 0) return;
-                float level = car.At(trip.From).Z;
-                if (StandingAt(system, live, level, 0) is not { } at) return;
-                Vector3 bot = new(player.X, player.Y, player.Z);
-                if (Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(at)) > LandingRadii[^1] + AtLandingYards
-                    || MathF.Abs(bot.Z - at.Z) > LandingFloorYards + 1f)
-                {
-                    return;
-                }
-
-                if (StandsFor(system, live, at, cycle) < BoardMarginMs) return;
-                if (!PlayerbotMovementControl.Stop(session, player)) return;
-
-                float x = bot.X, y = bot.Y, z = at.Z, o = 0;
-                ShipTransport.CalculatePassengerOffset(ref x, ref y, ref z, ref o, at.X, at.Y, at.Z, live.Orientation);
-                float inside = CarHalfYards - InsideMarginYards;
-                var offset = new Vector3(Math.Clamp(x, -inside, inside), Math.Clamp(y, -inside, inside), 0f);
-                if (!SendAboard(session, player, live, at, offset)) return;
-                trip.Offset = offset;
-                trip.LastBeatMs = now;
-                trip.LeftStop = false;
-                Enter(trip, ElevatorStage.Aboard, now);
+                TryBoardFromWaiting(session, player, map, system, trip, car, live, cycle, now, fromDrive: false);
                 return;
             }
             case ElevatorStage.Aboard:
@@ -716,18 +785,47 @@ internal static class PlayerbotElevator
                     return;
                 }
 
-                if ((player.Movement.Flags & MovementFlags.OnTransport) == 0) return;
                 Vector3 carAt = new(position.X, position.Y, position.Z);
+                if (!CheckAboardState(session, player, trip, live, carAt)) return;
+
                 float fromZ = car.At(trip.From).Z;
                 if (!trip.LeftStop && MathF.Abs(carAt.Z - fromZ) > AtLevelYards) trip.LeftStop = true;
+                bool atTargetStop = false;
                 foreach (ElevatorLevel level in trip.Alighting ? (ElevatorLevel[])[trip.To, trip.From] : [trip.To])
                 {
                     if (!trip.Alighting && !trip.LeftStop) break;
                     if (StandingAt(system, live, car.At(level).Z, 0) is not { } stop) continue;
-                    if (LandingBeside(map, stop, trip.Goal) is not { } ground) continue;
-                    if (!PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation)) return;
+                    atTargetStop = true;
+                    trip.NextDestStopAtMs = 0;
+                    trip.DestStopActive = true;
+                    if (LandingBeside(map, stop, trip.Goal) is not { } ground)
+                    {
+                        trip.DestSkipReason = "no-landing-floor";
+                        continue;
+                    }
+
+                    if (PlayerbotMotion.IsActive(player) && !PlayerbotMovementControl.Stop(session, player))
+                    {
+                        trip.DestSkipReason = "stop-refused";
+                        return;
+                    }
+
+                    if (!PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation))
+                    {
+                        trip.DestSkipReason = "send-step-off-refused";
+                        return;
+                    }
+
+                    trip.DestStopActive = false;
+                    trip.DestSkipReason = null;
+                    trip.StepOffLevel = level;
                     trip.PendingStep = trip.Failure is null ? ElevatorStep.Arrived : ElevatorStep.Failed;
                     return;
+                }
+
+                if (!atTargetStop && (trip.LeftStop || trip.Alighting))
+                {
+                    ObserveDestinationWindow(session, player, system, live, car, carAt, trip, now);
                 }
 
                 Beat(session, player, live, carAt, trip, now);
@@ -742,7 +840,7 @@ internal static class PlayerbotElevator
     /// are told: when a root order is pending (the death root of MapCombat.SetDeathState), the bot's acknowledgement carries this block and
     /// is relayed as MSG_MOVE_ROOT (RootAckHandler); otherwise (a bot already rooted when it died) it is relayed here as MSG_MOVE_HEARTBEAT.
     /// </summary>
-    private static void ClearTransport(WorldSession session, Player player)
+    internal static void ClearTransport(WorldSession session, Player player)
     {
         MovementInfo movement = player.Movement;
         movement.Flags &= ~MovementFlags.OnTransport;
@@ -837,6 +935,7 @@ internal static class PlayerbotElevator
     private static bool BoardFound(WorldSession session, Player player, GameObjectMapSystem system, ElevatorLift lift, ElevatorCar car, GameObject live,
         Vector3 carAt, Vector3 at, uint now)
     {
+        if (!PlayerbotMovementControl.Stop(session, player)) return false;
         ElevatorLevel to = StandingAt(system, live, car.Low.Z, 0) is not null ? ElevatorLevel.Low
             : StandingAt(system, live, car.High.Z, 0) is not null ? ElevatorLevel.High
             : Position(system, live, 500) is { } ahead && ahead.Z > carAt.Z ? ElevatorLevel.High : ElevatorLevel.Low;
@@ -844,12 +943,19 @@ internal static class PlayerbotElevator
         ShipTransport.CalculatePassengerOffset(ref x, ref y, ref z, ref o, carAt.X, carAt.Y, carAt.Z, live.Orientation);
         float inside = CarHalfYards - InsideMarginYards;
         var offset = new Vector3(Math.Clamp(x, -inside, inside), Math.Clamp(y, -inside, inside), 0f);
+        if (!SendAboard(session, player, live, carAt, offset)) return false;
         var trip = new ElevatorTrip(lift, ElevatorLift.Other(to), at, now)
         {
-            Stage = ElevatorStage.Aboard, Alighting = true, LeftStop = true, Car = car, CarObject = live, Offset = offset, LastBeatMs = now,
+            Stage = ElevatorStage.Aboard,
+            Alighting = true,
+            LeftStop = true,
+            Car = car,
+            CarObject = live,
+            Offset = offset,
+            LastBeatMs = now,
+            StartPosition = at,
         };
         Trips.AddOrUpdate(player, trip);
-        SendAboard(session, player, live, carAt, offset);
         return true;
     }
 
@@ -900,6 +1006,13 @@ internal static class PlayerbotElevator
         {
             session.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(PlayerbotElevator)).LogInformation(
                 "Playerbot {Bot}: {Why}; {Placed}", player.Name, why, placed);
+            uint now = session.World.NowMs;
+            List<uint> history = RescueTimestamps.GetOrCreateValue(player);
+            history.RemoveAll(t => unchecked(now - t) > RescueWindowMs);
+            history.Add(now);
+            AnomalySeverity severity = history.Count > 2 ? AnomalySeverity.Warning : AnomalySeverity.Info;
+            ReportAnomaly(session, player, "rescue-teleport",
+                string.Create(CultureInfo.InvariantCulture, $"{why}; {placed} (rescues in 10m: {history.Count})"), severity);
         }
 
         return sent;
@@ -910,8 +1023,11 @@ internal static class PlayerbotElevator
     /// is the trace of a bot left where it stands.
     /// </summary>
     private static void LogRescueRefused(WorldSession session, Player player, string why)
-        => session.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(PlayerbotElevator)).LogWarning(
+    {
+        session.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(PlayerbotElevator)).LogWarning(
             "Playerbot {Bot}: {Why}; the rescue teleport was refused, the bot is left where it stands", player.Name, why);
+        ReportAnomaly(session, player, "rescue-refused", $"{why}; the rescue teleport was refused", AnomalySeverity.Warning);
+    }
 
     /// <summary>
     /// One think of the trip, before anything else the brain does. <see cref="ElevatorStep.Idle"/>: no trip (the brain goes on); without
@@ -935,6 +1051,7 @@ internal static class PlayerbotElevator
             if (trip is null) return ElevatorStep.Idle;
         }
 
+        trip.Options ??= options;
         trip.LastDriveMs = now;
         if (!player.IsAlive)
         {
@@ -969,12 +1086,26 @@ internal static class PlayerbotElevator
                 trip.Stage = ElevatorStage.Done;
                 trip.StageMs = now; // when it arrived (inspection)
                 trip.Failure = null;
+                PlayerbotTransitBackoff.Clear(player, TransitKind.Lift, trip.Lift.Key);
+                CheckArrivedAnomalies(session, player, map, trip, options, now);
                 break;
             case ElevatorStep.Failed:
                 if (trip.Stage is ElevatorStage.ToStop or ElevatorStage.Waiting) PlayerbotMovementControl.Stop(session, player);
                 trip.Stage = ElevatorStage.Failed;
-                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
+                if (!trip.BackoffRecorded)
+                {
+                    trip.BackoffRecorded = true;
+                    PlayerbotTransitBackoff.Fail(player, TransitKind.Lift, trip.Lift.Key, now, options);
+                }
+
                 failure = trip.Failure ?? "elevator: the trip failed (no reason recorded)";
+                if (!trip.TripFailedReported)
+                {
+                    trip.TripFailedReported = true;
+                    string category = ClassifyFailure(trip, failure);
+                    ReportAnomaly(session, player, "trip-failed", $"[{category}] {failure}", AnomalySeverity.Warning);
+                }
+
                 break;
         }
 
@@ -987,6 +1118,7 @@ internal static class PlayerbotElevator
         Vector3 bot = new(player.X, player.Y, player.Z);
         if (InPit(trip.Lift, bot, bot.Z))
         {
+            ReportPitFall(session, player, trip, bot.Z);
             return Drop(session, player, map, trip, now, $"elevator: in the shaft pit of {trip.Lift.Name}");
         }
 
@@ -999,7 +1131,7 @@ internal static class PlayerbotElevator
                 Vector3 approachTarget = LandingBeside(map, stop, bot) ?? stop;
                 if (Walk(session, player, trip, approachTarget, options, elapsedMs, now)) return ElevatorStep.Traveling;
                 return Fail(trip, string.Create(CultureInfo.InvariantCulture,
-                    $"elevator: no way to {trip.Lift.Name} ({Word(trip.From)} level) from {bot.X:F1},{bot.Y:F1},{bot.Z:F1}"));
+                    $"elevator: no way to {trip.Lift.Name} ({Word(trip.From)} level) from {bot.X:F1},{bot.Y:F1},{bot.Z:F1}{(trip.RefusedPlans >= MaxRefusedPlans ? $" (the path was refused {MaxRefusedPlans} times in a row)" : string.Empty)}"));
             }
 
             float best = trip.Best;
@@ -1084,12 +1216,14 @@ internal static class PlayerbotElevator
         Vector3 bot = new(player.X, player.Y, player.Z);
         if (InPit(trip.Lift, bot, bot.Z))
         {
+            ReportPitFall(session, player, trip, bot.Z);
             return Drop(session, player, map, trip, now, $"elevator: in the shaft pit of {trip.Lift.Name}");
         }
 
         if (trip.Car is not { } car || trip.CarObject is not { IsInWorld: true } live || !ReferenceEquals(live.Map, map)
             || map.FindUpdater<GameObjectMapSystem>() is not { } system)
         {
+            FlushStopAtFrom(session, player, trip);
             Enter(trip, ElevatorStage.ToStop, now); // the car left the world: choose again
             trip.Car = null;
             return ElevatorStep.Traveling;
@@ -1099,35 +1233,115 @@ internal static class PlayerbotElevator
         if (cycle == 0) return Fail(trip, $"elevator: the car of {trip.Lift.Name} has no animation");
         if (unchecked(now - trip.StageMs) > (2 * cycle) + 30_000)
         {
+            FlushStopAtFrom(session, player, trip);
             return Fail(trip, string.Create(CultureInfo.InvariantCulture,
                 $"elevator: no car stood at the {Word(trip.From)} landing of {trip.Lift.Name} within {((2 * cycle) + 30_000) / 1000}s"));
         }
 
+        TryBoardFromWaiting(session, player, map, system, trip, car, live, cycle, now, fromDrive: true);
+        return ElevatorStep.Traveling;
+    }
+
+    private static void TryBoardFromWaiting(WorldSession session, Player player, Map map, GameObjectMapSystem system, ElevatorTrip trip,
+        ElevatorCar car, GameObject live, uint cycle, uint now, bool fromDrive)
+    {
+        CheckWaitingLanding(session, player, map, trip, car);
         float level = car.At(trip.From).Z;
-        if (StandingAt(system, live, level, 0) is not { } at) return ElevatorStep.Traveling;
-        if (Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(at)) > LandingRadii[^1] + AtLandingYards
-            || MathF.Abs(bot.Z - at.Z) > LandingFloorYards + 1f)
+        if (StandingAt(system, live, level, 0) is not { } at)
         {
-            // Not beside it (pushed away while waiting): walk back to a landing.
-            Enter(trip, ElevatorStage.ToStop, now);
-            trip.Car = null;
-            return ElevatorStep.Traveling;
+            FlushStopAtFrom(session, player, trip);
+            if (trip.NextStopAtMs != 0 && unchecked((int)(now - (trip.NextStopAtMs + BoardMarginMs))) > 0)
+            {
+                trip.MissedStops++;
+                ReportAnomaly(session, player, "board-missed",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"elevator: missed boarding {trip.Lift.Name} at {Word(trip.From)} level (missed stops: {trip.MissedStops}, reason: pump-not-sampled)"),
+                    AnomalySeverity.Warning);
+                trip.NextStopAtMs = 0;
+            }
+
+            if (trip.NextStopAtMs == 0)
+            {
+                if (NextStop(system, live, level, 0) is { } nextIn)
+                {
+                    uint due = unchecked(now + nextIn);
+                    trip.NextStopAtMs = due == 0 ? 1u : due;
+                }
+                else if (!trip.BoardWindowShortReported)
+                {
+                    ReportBoardWindowShort(session, player, system, live, trip, level, cycle);
+                }
+            }
+
+            return;
         }
 
-        if (StandsFor(system, live, at, cycle) < BoardMarginMs) return ElevatorStep.Traveling; // about to leave: the next stop
-        if (!PlayerbotMovementControl.Stop(session, player)) return ElevatorStep.Traveling;
+        trip.NextStopAtMs = 0;
+        uint standsFor = StandsFor(system, live, at, cycle);
+        if (!trip.StopActiveAtFrom)
+        {
+            trip.StopActiveAtFrom = true;
+            trip.StopMaxStandsForMs = standsFor;
+            trip.StopSkipReason = null;
+        }
+        else if (standsFor > trip.StopMaxStandsForMs)
+        {
+            trip.StopMaxStandsForMs = standsFor;
+        }
+
+        Vector3 bot = new(player.X, player.Y, player.Z);
+        float flatDist = Vector2.Distance(ElevatorNetwork.Flat(bot), ElevatorNetwork.Flat(at));
+        float zDiff = MathF.Abs(bot.Z - at.Z);
+        if (flatDist > LandingRadii[^1] + AtLandingYards || zDiff > LandingFloorYards + 1f)
+        {
+            trip.StopSkipReason = flatDist > LandingRadii[^1] + AtLandingYards ? "drifted-from-landing" : "z-mismatch";
+            if (fromDrive)
+            {
+                // Not beside it (pushed away while waiting): walk back to a landing.
+                FlushStopAtFrom(session, player, trip);
+                Enter(trip, ElevatorStage.ToStop, now);
+                trip.Car = null;
+            }
+
+            return;
+        }
+
+        if (standsFor < BoardMarginMs)
+        {
+            trip.StopSkipReason ??= "window-short";
+            if (!trip.BoardWindowShortReported && trip.StopMaxStandsForMs < BoardMarginMs && NextStop(system, live, level, 0) is null)
+            {
+                ReportBoardWindowShort(session, player, system, live, trip, level, cycle);
+            }
+
+            return;
+        }
+
+        if (!PlayerbotMovementControl.Stop(session, player))
+        {
+            trip.StopSkipReason = "stop-refused";
+            return;
+        }
 
         // Step aboard: the point of the car's floor nearest to where the bot stands.
         float x = bot.X, y = bot.Y, z = at.Z, o = 0;
         ShipTransport.CalculatePassengerOffset(ref x, ref y, ref z, ref o, at.X, at.Y, at.Z, live.Orientation);
         float inside = CarHalfYards - InsideMarginYards;
         var offset = new Vector3(Math.Clamp(x, -inside, inside), Math.Clamp(y, -inside, inside), 0f);
-        if (!SendAboard(session, player, live, at, offset)) return ElevatorStep.Traveling;
+        if (!SendAboard(session, player, live, at, offset))
+        {
+            trip.StopSkipReason = "send-aboard-refused";
+            return;
+        }
+
+        trip.StopActiveAtFrom = false;
+        trip.StopMaxStandsForMs = 0;
+        trip.StopSkipReason = null;
+        trip.NextStopAtMs = 0;
         trip.Offset = offset;
         trip.LastBeatMs = now;
         trip.LeftStop = false;
         Enter(trip, ElevatorStage.Aboard, now);
-        return ElevatorStep.Traveling;
     }
 
     private static ElevatorStep Ride(WorldSession session, Player player, Map map, ElevatorTrip trip, uint now)
@@ -1139,7 +1353,7 @@ internal static class PlayerbotElevator
         }
 
         Vector3 carAt = new(position.X, position.Y, position.Z);
-        if ((player.Movement.Flags & MovementFlags.OnTransport) == 0)
+        if (!CheckAboardState(session, player, trip, live, carAt))
         {
             // Something took the bot off the car (a knock-back, a fear): on the floor it is just off; in the shaft it falls.
             return Drop(session, player, map, trip, now, $"elevator: knocked off the car of {trip.Lift.Name}");
@@ -1150,13 +1364,19 @@ internal static class PlayerbotElevator
         if (!trip.LeftStop && MathF.Abs(carAt.Z - fromZ) > AtLevelYards) trip.LeftStop = true;
         // At the other level (alighting: at the next stop at either level), step off onto the landing nearest the destination (alighting:
         // nearest the bot).
+        bool atTargetStop = false;
         foreach (ElevatorLevel level in trip.Alighting ? (ElevatorLevel[])[trip.To, trip.From] : [trip.To])
         {
             if (!trip.Alighting && !trip.LeftStop) break;
             if (StandingAt(system, live, car.At(level).Z, 0) is not { } stop) continue;
+            atTargetStop = true;
+            trip.NextDestStopAtMs = 0;
+            trip.DestStopActive = true;
             if (LandingBeside(map, stop, trip.Goal) is not { } ground)
             {
+                trip.DestSkipReason = "no-landing-floor";
                 if (trip.Alighting) continue;
+                FlushPassedDestination(session, player, trip, "no-landing-floor");
                 // No floor there: ride back and get off where the bot got on (the trip fails there).
                 trip.Failure ??= string.Create(CultureInfo.InvariantCulture,
                     $"elevator: no floor beside the car of {trip.Lift.Name} at its {Word(trip.To)} level");
@@ -1165,12 +1385,36 @@ internal static class PlayerbotElevator
                 return Beat(session, player, live, carAt, trip, now);
             }
 
-            if (!PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation)) return ElevatorStep.Traveling;
+            if (PlayerbotMotion.IsActive(player) && !PlayerbotMovementControl.Stop(session, player))
+            {
+                trip.DestSkipReason = "stop-refused";
+                return ElevatorStep.Traveling;
+            }
+
+            if (!PlayerbotMotion.SendStepOff(session, player, ground, player.Orientation))
+            {
+                trip.DestSkipReason = "send-step-off-refused";
+                return ElevatorStep.Traveling;
+            }
+
+            trip.DestStopActive = false;
+            trip.DestSkipReason = null;
+            trip.StepOffLevel = level;
             return trip.Failure is null ? ElevatorStep.Arrived : ElevatorStep.Failed;
+        }
+
+        if (!atTargetStop && (trip.LeftStop || trip.Alighting))
+        {
+            ObserveDestinationWindow(session, player, system, live, car, carAt, trip, now);
         }
 
         if (unchecked(now - trip.StageMs) > cycle + 30_000)
         {
+            if (trip.DestStopActive)
+            {
+                FlushPassedDestination(session, player, trip, trip.DestSkipReason ?? "timeout");
+            }
+
             // The car never stood at the other level (it should within one cycle): off where it stands next, at either level.
             trip.Failure ??= string.Create(CultureInfo.InvariantCulture,
                 $"elevator: the car of {trip.Lift.Name} did not stand at its {Word(trip.To)} level within {(cycle + 30_000) / 1000}s");
@@ -1189,7 +1433,12 @@ internal static class PlayerbotElevator
 
     private static ElevatorStep Beat(WorldSession session, Player player, GameObject car, Vector3 carAt, ElevatorTrip trip, uint now)
     {
-        if (unchecked(now - trip.LastBeatMs) >= HeartbeatMs && SendAboard(session, player, car, carAt, trip.Offset)) trip.LastBeatMs = now;
+        if (unchecked(now - trip.LastBeatMs) >= HeartbeatMs)
+        {
+            if (PlayerbotMotion.IsActive(player)) PlayerbotMovementControl.Stop(session, player);
+            if (SendAboard(session, player, car, carAt, trip.Offset)) trip.LastBeatMs = now;
+        }
+
         return ElevatorStep.Traveling;
     }
 
@@ -1201,12 +1450,17 @@ internal static class PlayerbotElevator
     /// landing (<see cref="Rescue"/>), retried while the
     /// teleport is refused, up to <see cref="MaxRescueTries"/> times.
     /// </summary>
-    private static ElevatorStep Drop(WorldSession session, Player player, Map map, ElevatorTrip trip, uint now, string why)
+    internal static ElevatorStep Drop(WorldSession session, Player player, Map map, ElevatorTrip trip, uint now, string why)
     {
         trip.Failure ??= why;
         Vector3 at = new(player.X, player.Y, player.Z);
         float floor = FloorBelow(map, at);
         bool pit = float.IsFinite(floor) && InPit(trip.Lift, at, floor);
+        if (pit)
+        {
+            ReportPitFall(session, player, trip, floor);
+        }
+
         if (!pit && float.IsFinite(floor) && at.Z - floor < AirborneYards)
         {
             if ((player.Movement.Flags & MovementFlags.OnTransport) != 0
@@ -1221,6 +1475,13 @@ internal static class PlayerbotElevator
             {
                 trip.Failure = $"{trip.Failure}; {placed}";
                 return ElevatorStep.Failed;
+            }
+
+            if (!trip.RescueRefusedReported)
+            {
+                trip.RescueRefusedReported = true;
+                ReportAnomaly(session, player, "rescue-refused",
+                    $"{trip.Failure}; the rescue teleport was refused", AnomalySeverity.Warning);
             }
 
             if (++trip.RescueTries < MaxRescueTries) return ElevatorStep.Traveling;
@@ -1287,7 +1548,8 @@ internal static class PlayerbotElevator
 
     /// <summary>
     /// Follow (planning when needed, one path query per <see cref="PlanRetryMs"/> while none is found) a route towards
-    /// <paramref name="target"/>; false when the bot got no <see cref="ProgressYards"/> closer within <see cref="NoProgressMs"/>.
+    /// <paramref name="target"/>; false when the bot got no <see cref="ProgressYards"/> closer within <see cref="NoProgressMs"/>, or the navigation refused
+    /// <see cref="MaxRefusedPlans"/> plans in a row (<see cref="ElevatorTrip.RefusedPlans"/>).
     /// </summary>
     private static bool Walk(WorldSession session, Player player, ElevatorTrip trip, Vector3 target, PlayerbotOptions options, uint elapsedMs,
         uint now)
@@ -1303,17 +1565,25 @@ internal static class PlayerbotElevator
             return false;
         }
 
-        if (trip.Route is { Complete: false } route && PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now)) return true;
-        trip.Route = null;
-        if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
-        // A plan refused for want of a tile still being read is retried like any other refusal (a query per PlanRetryMs, no give-up
-        // inside NoProgressMs, which is longer than the tile wait): this walk sets nothing aside, so the plain answer is enough.
-        if (!PlayerbotNavigation.TryPlanToward(player, target, options, out PlayerbotRoute? next) || next is null)
+        if (trip.Route is { Complete: false } route && PlayerbotNavigation.TryAdvance(session, route, options, elapsedMs, now))
         {
-            trip.NextPlanMs = unchecked(now + PlanRetryMs);
+            trip.HadRoute = true;
             return true;
         }
 
+        trip.Route = null;
+        if (unchecked((int)(trip.NextPlanMs - now)) > 0) return true;
+        // A plan refused for want of a tile still being read is no verdict (a query per PlanRetryMs, TileWait.MaxMs, then it is one);
+        // MaxRefusedPlans refusals in a row end the walk, a route resets the count.
+        PlanOutcome planned = PlayerbotNavigation.PlanToward(player, target, options, ref trip.Tiles, now, out PlayerbotRoute? next);
+        if (planned != PlanOutcome.Route || next is null)
+        {
+            trip.NextPlanMs = unchecked(now + PlanRetryMs);
+            return planned != PlanOutcome.Refused || ++trip.RefusedPlans < MaxRefusedPlans;
+        }
+
+        trip.RefusedPlans = 0;
+        trip.HadRoute = true;
         trip.Route = next;
         PlayerbotNavigation.TryAdvance(session, next, options, elapsedMs, now);
         return true;
@@ -1331,10 +1601,225 @@ internal static class PlayerbotElevator
         trip.Stage = stage;
         trip.StageMs = now;
         trip.NextPlanMs = now;
+        trip.RefusedPlans = 0;
         trip.Best = float.PositiveInfinity;
         trip.BestMs = now;
         trip.Route = null;
     }
+
+    private static void ReportAnomaly(WorldSession session, Player player, string code, string detail,
+        AnomalySeverity severity = AnomalySeverity.Warning)
+    {
+        if (session.IsInChaosProbe) return;
+        PlayerbotAnomalies.Report(player, AnomalyArea, code, detail, severity);
+    }
+
+    internal static void ReportPitFall(WorldSession session, Player player, ElevatorTrip trip, float floorZ)
+    {
+        if (trip.PitFallReported) return;
+        trip.PitFallReported = true;
+        ReportAnomaly(session, player, "pit-fall",
+            string.Create(CultureInfo.InvariantCulture,
+                $"elevator: bot in or above shaft pit of {trip.Lift.Name} at z {player.Z:F1} (pit floor z {floorZ:F1})"),
+            AnomalySeverity.Warning);
+    }
+
+    internal static void CheckWaitingLanding(WorldSession session, Player player, Map map, ElevatorTrip trip, ElevatorCar car)
+    {
+        if (trip.WaitingInsideDoorReported) return;
+        Vector3 stop = car.At(trip.From);
+        Vector3 checkPos = trip.Landing == default ? new Vector3(player.X, player.Y, player.Z) : trip.Landing;
+        float radial = Vector2.Distance(ElevatorNetwork.Flat(checkPos), ElevatorNetwork.Flat(stop));
+        float botRadial = Vector2.Distance(new Vector2(player.X, player.Y), ElevatorNetwork.Flat(stop));
+        bool vault = ElevatorRegions.IsVaultLift(map.MapId, stop);
+        bool insideDoor = vault && (radial < VaultDoorOuterYards || botRadial < VaultDoorOuterYards);
+        bool insideShaft = radial < CarHalfYards || botRadial < CarHalfYards;
+        bool offMesh = map.Collision.MeshPoints is not null && !PlayerbotNavigation.OnWalkableMesh(map, checkPos);
+        if (!insideDoor && !insideShaft && !offMesh) return;
+
+        trip.WaitingInsideDoorReported = true;
+        string reason = insideDoor ? "inside-vault-door" : insideShaft ? "inside-shaft" : "off-walkable-mesh";
+        ReportAnomaly(session, player, "waiting-inside-door",
+            string.Create(CultureInfo.InvariantCulture,
+                $"elevator: waiting for {trip.Lift.Name} ({Word(trip.From)}) at radial {MathF.Min(radial, botRadial):F2} yd ({reason})"),
+            AnomalySeverity.Warning);
+    }
+
+    internal static void FlushStopAtFrom(WorldSession session, Player player, ElevatorTrip trip)
+    {
+        if (!trip.StopActiveAtFrom) return;
+        uint maxWindow = trip.StopMaxStandsForMs;
+        string reason = trip.StopSkipReason ?? "unboarded";
+        trip.StopActiveAtFrom = false;
+        trip.StopMaxStandsForMs = 0;
+        trip.StopSkipReason = null;
+        if (maxWindow < BoardMarginMs) return;
+
+        trip.MissedStops++;
+        ReportAnomaly(session, player, "board-missed",
+            string.Create(CultureInfo.InvariantCulture,
+                $"elevator: missed boarding {trip.Lift.Name} at {Word(trip.From)} level (missed stops: {trip.MissedStops}, window {maxWindow}ms, reason: {reason})"),
+            AnomalySeverity.Warning);
+    }
+
+    private static void ReportBoardWindowShort(WorldSession session, Player player, GameObjectMapSystem system, GameObject live,
+        ElevatorTrip trip, float levelZ, uint cycle)
+    {
+        trip.BoardWindowShortReported = true;
+        uint maxStand = MaxCycleStandMs(system, live, levelZ, cycle);
+        ReportAnomaly(session, player, "board-window-short",
+            string.Create(CultureInfo.InvariantCulture,
+                $"elevator: {trip.Lift.Name} ({Word(trip.From)} level) max standing window {maxStand}ms < {BoardMarginMs}ms across {cycle}ms cycle"),
+            AnomalySeverity.Warning);
+    }
+
+    private static uint MaxCycleStandMs(GameObjectMapSystem system, GameObject car, float levelZ, uint cycle)
+    {
+        uint best = 0;
+        for (uint t = 0; t < cycle; t += SampleMs)
+        {
+            if (StandingAt(system, car, levelZ, t) is not { } at) continue;
+            uint stays = SampleMs;
+            while (stays < cycle && Position(system, car, t + stays) is { } then && Vector3.Distance(then, at) <= StandingYards)
+                stays += SampleMs;
+            if (stays > best) best = stays;
+            t += stays;
+        }
+
+        return best;
+    }
+
+    internal static bool CheckAboardState(WorldSession session, Player player, ElevatorTrip trip, GameObject live, Vector3 carAt)
+    {
+        bool hasTransport = (player.Movement.Flags & MovementFlags.OnTransport) != 0;
+        bool guidMatches = player.Movement.TransportGuid == live.Guid.Value;
+        if (MathF.Abs(carAt.Z - player.Z) > LeftBehindYards && !trip.LeftBehindReported)
+        {
+            trip.LeftBehindReported = true;
+            ReportAnomaly(session, player, "left-behind",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"elevator: car of {trip.Lift.Name} at z {carAt.Z:F1} moved > {LeftBehindYards:F1} yd from bot at z {player.Z:F1} while Aboard (onTransport={hasTransport})"),
+                AnomalySeverity.Warning);
+        }
+
+        // Report-only: the base treated the OnTransport flag alone as aboard, so a bot on another transport keeps riding.
+        if (hasTransport && guidMatches) return true;
+
+        if (!trip.DetachedReported)
+        {
+            trip.DetachedReported = true;
+            string cause = !hasTransport && session.Services.GetService<TeleportFeature>()?.Teleports.StageOf(player) is not null ? "teleport"
+                : hasTransport && !guidMatches ? "transport-guid-mismatch"
+                : player.Combat.IsInCombat ? "combat-knockback"
+                : player.Locomotion.Pending.Count > 0 ? "locomotion-order"
+                : "knockback-or-cleared";
+            ReportAnomaly(session, player, "detached-mid-ride",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"elevator: detached from {trip.Lift.Name} mid-ride at z {player.Z:F1} (car z {carAt.Z:F1}, cause: {cause}, onTransport={hasTransport}, transportGuid=0x{player.Movement.TransportGuid:X})"),
+                AnomalySeverity.Warning);
+        }
+
+        return hasTransport;
+    }
+
+    internal static void ObserveDestinationWindow(WorldSession session, Player player, GameObjectMapSystem system, GameObject live,
+        ElevatorCar car, Vector3 carAt, ElevatorTrip trip, uint now)
+    {
+        float toZ = car.At(trip.To).Z;
+        if (trip.DestStopActive)
+        {
+            if (MathF.Abs(carAt.Z - toZ) > AtLevelYards)
+            {
+                FlushPassedDestination(session, player, trip, trip.DestSkipReason ?? "left-before-step-off");
+            }
+
+            return;
+        }
+
+        if (trip.NextDestStopAtMs != 0 && unchecked((int)(now - (trip.NextDestStopAtMs + BoardMarginMs))) > 0)
+        {
+            FlushPassedDestination(session, player, trip, "pump-gap");
+            trip.NextDestStopAtMs = 0;
+        }
+
+        if (trip.NextDestStopAtMs == 0 && NextStop(system, live, toZ, 0) is { } nextIn)
+        {
+            uint due = unchecked(now + nextIn);
+            trip.NextDestStopAtMs = due == 0 ? 1u : due;
+        }
+    }
+
+    private static void FlushPassedDestination(WorldSession session, Player player, ElevatorTrip trip, string reason)
+    {
+        trip.DestStopActive = false;
+        trip.DestSkipReason = null;
+        trip.PassedDestinations++;
+        ReportAnomaly(session, player, "passed-destination",
+            string.Create(CultureInfo.InvariantCulture,
+                $"elevator: passed {Word(trip.To)} destination stop on {trip.Lift.Name} without stepping off (count: {trip.PassedDestinations}, reason: {reason})"),
+            AnomalySeverity.Warning);
+    }
+
+    internal static void CheckArrivedAnomalies(WorldSession session, Player player, Map map, ElevatorTrip trip, PlayerbotOptions options, uint now)
+    {
+        if (trip.Car is { } car)
+        {
+            ElevatorLevel targetLevel = trip.Alighting && trip.StepOffLevel is { } alighted ? alighted : trip.To;
+            Vector3 stop = car.At(targetLevel);
+            if (MathF.Abs(player.Z - stop.Z) > LandingFloorYards + 1f)
+            {
+                ReportAnomaly(session, player, "arrived-wrong-level",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"elevator: arrived on {trip.Lift.Name} at z {player.Z:F1}, expected {Word(targetLevel)} level z {stop.Z:F1}"),
+                    AnomalySeverity.Warning);
+            }
+
+            Vector3 pos = new(player.X, player.Y, player.Z);
+            float radial = Vector2.Distance(ElevatorNetwork.Flat(pos), ElevatorNetwork.Flat(stop));
+            bool insideVaultDoor = ElevatorRegions.IsVaultLift(map.MapId, stop) && radial < VaultDoorOuterYards;
+            bool insideShaft = radial < CarHalfYards;
+            bool offMesh = map.Collision.MeshPoints is not null && !PlayerbotNavigation.OnWalkableMesh(map, pos);
+            if (insideVaultDoor || insideShaft || offMesh)
+            {
+                string reason = insideVaultDoor ? "inside-vault-door" : insideShaft ? "inside-shaft" : "off-walkable-mesh";
+                ReportAnomaly(session, player, "arrived-off-landing",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"elevator: stepped off {trip.Lift.Name} ({Word(targetLevel)}) at radial {radial:F2} yd ({reason})"),
+                    AnomalySeverity.Warning);
+            }
+        }
+
+        if (!trip.TripSlowReported)
+        {
+            uint cycleMs = trip.Car?.CycleMs ?? (trip.Lift.Cars.Count > 0 ? trip.Lift.Cars[0].CycleMs : 40_000u);
+            if (cycleMs == 0) cycleMs = 40_000u;
+            float speed = MathF.Max(1f, options.MoveSpeed);
+            float walkDist = Vector2.Distance(ElevatorNetwork.Flat(trip.StartPosition), trip.Lift.Centre);
+            uint walkMs = (uint)(walkDist / speed * 1000f);
+            uint expectedMaxMs = (3 * cycleMs) + walkMs + 30_000u;
+            uint durationMs = unchecked(now - trip.BeganMs);
+            if (durationMs > expectedMaxMs)
+            {
+                trip.TripSlowReported = true;
+                ReportAnomaly(session, player, "trip-slow",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"elevator: trip on {trip.Lift.Name} took {durationMs / 1000.0:F1}s, expected <= {expectedMaxMs / 1000.0:F1}s (cycle {cycleMs}ms, walk est {walkMs}ms, missedStops {trip.MissedStops})"),
+                    AnomalySeverity.Warning);
+            }
+        }
+    }
+
+    private static string ClassifyFailure(ElevatorTrip trip, string failure)
+        => failure.Contains("left for map", StringComparison.Ordinal) ? "map-changed"
+            : failure.Contains("no way to", StringComparison.Ordinal) ? (trip.HadRoute ? "no-progress" : "no-way")
+            : failure.Contains("no car of", StringComparison.Ordinal) || failure.Contains("no game objects", StringComparison.Ordinal) ? "no-car"
+            : failure.Contains("no animation", StringComparison.Ordinal) ? "no-animation"
+            : failure.Contains("no floor beside", StringComparison.Ordinal) ? "no-floor"
+            : failure.Contains("within ", StringComparison.Ordinal) ? "timeout"
+            : failure.Contains("left the world under", StringComparison.Ordinal) ? "car-despawned"
+            : failure.Contains("knocked off", StringComparison.Ordinal) ? "detached"
+            : failure.Contains("shaft pit", StringComparison.Ordinal) ? "pit"
+            : "failed";
 
     private static string Word(ElevatorLevel level) => level == ElevatorLevel.Low ? "lower" : "upper";
 

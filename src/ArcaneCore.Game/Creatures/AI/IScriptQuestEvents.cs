@@ -23,4 +23,10 @@ public interface IScriptQuestEvents
 
     /// <summary>The online members of the player's group, the player included; empty when not grouped (vmangos IsPlayerOrGroupInRange).</summary>
     IReadOnlyList<Player> GroupMembersOf(Player player);
+
+    /// <summary>
+    /// Whether <paramref name="questId"/> is in the player's log and not yet complete (cmangos <c>Player::GetQuestStatus(questId) ==
+    /// QUEST_STATUS_INCOMPLETE</c>, as the ScriptDev2 creature scripts ask it). False by default, so a binding without a quest log answers no.
+    /// </summary>
+    bool IsQuestIncomplete(Player player, uint questId) => false;
 }

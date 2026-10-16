@@ -54,6 +54,8 @@ public sealed partial class CreatureMapSystem
             }
         }
 
+        RecordEvadeAnomaly(creature); // report-only: the third engine evade inside the loop window is an anomaly
+
         // The default generator's reset position (the last reached waypoint, where a wanderer stands inside its disc), else the spawn
         // point: vmangos HomeMovementGenerator::_setTargetLocation, HomeMovementGenerator.cpp:52-56.
         CreatureHome home = creature.Motion.Default.GetResetPosition(creature) ?? creature.Home;
@@ -179,6 +181,20 @@ public sealed partial class CreatureMapSystem
         if (creature.IsAlive)
         {
             creature.Motion.Remove(MovementGeneratorType.Chase);
+        }
+    }
+
+    /// <summary>
+    /// The aura reset of an evade (cmangos Unit::RemoveAllAurasOnEvade) for a script's own evade: what <see cref="EnterEvadeMode"/> removes, so
+    /// a non-permanent positive aura a player put on the creature survives (all positive ones with KEEP_POSITIVE_AURAS_ON_EVADE). Does nothing
+    /// when the spell caster cannot reset auras.
+    /// </summary>
+    public void ResetAurasOnEvade(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (_ai.Spells is ICreatureAuraReset reset)
+        {
+            reset.ResetAuras(creature, (creature.Template.Behaviour & CreatureBehaviourFlags.KeepPositiveAurasOnEvade) != 0);
         }
     }
 

@@ -18,11 +18,15 @@ namespace ArcaneCore.Game.Maps.Collision.VMaps;
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollisionTilePrefetch
+public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLifecycle, ICollisionTilePrefetch
 {
     private readonly string _directory;
     private readonly ILogger _logger;
     private readonly Dictionary<uint, VMapTree?> _trees = [];
+
+    // Tiles whose load was attempted and whose vmtile file does not exist (vmangos StaticMapTree::LoadMapTile: loaded, empty). Kept apart from
+    // VMapTree.IsTileLoaded, which keeps meaning "a model tile was read" (anti-cheat HasModels uses it). Cleared on unload.
+    private readonly HashSet<(uint MapId, int X, int Y)> _emptyTiles = [];
     private readonly Dictionary<string, WorldModel?> _models = new(StringComparer.Ordinal);
 
     // Prefetch (TilePrefetchCache): parsed tile spawn lists, the models they need that were not cached yet (parsed on the pool), and
@@ -78,12 +82,24 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
             return true;
         }
 
+        if (_emptyTiles.Contains((mapId, tileX, tileY)))
+        {
+            return false; // same answer as the attempt that found no file: no model tile is loaded
+        }
+
         string path = Path.Combine(_directory, VMapFormat.TileFileName(mapId, tileX, tileY));
         if (!_prefetch.TryTake(mapId, tileX, tileY, out List<(ModelSpawn Spawn, uint Slot)> spawns))
         {
-            byte[]? bytes = ReadFile(path, missingIsNormal: true);
+            byte[]? bytes = ReadFile(path, missingIsNormal: true, out bool missing);
             if (bytes is null)
             {
+                if (missing)
+                {
+                    // vmangos StaticMapTree::LoadMapTile: a missing tile file is a tile without models. Remembered apart from the tree's
+                    // loaded tiles so IsTileLoaded (and anti-cheat HasModels) stay false; CoverageAt answers Loaded for it.
+                    _emptyTiles.Add((mapId, tileX, tileY));
+                }
+
                 return false;
             }
 
@@ -105,6 +121,7 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
     /// <summary>Release a tile's models (vmangos <c>VMapManager2::unloadMap</c>).</summary>
     public void UnloadTile(uint mapId, int tileX, int tileY)
     {
+        _emptyTiles.Remove((mapId, tileX, tileY)); // a reload tries the file again
         if (_trees.GetValueOrDefault(mapId) is { } tree)
         {
             tree.RemoveTile((tileX, tileY));
@@ -199,6 +216,24 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
         return true;
     }
 
+    /// <summary>Coverage of a terrain tile. Reads the map's vmtree from disk on first use (<see cref="GetTree"/>).</summary>
+    public ModelCoverage CoverageAt(uint mapId, int tileX, int tileY)
+    {
+        if (!HeightEnabled)
+        {
+            return ModelCoverage.Unavailable;
+        }
+
+        if (GetTree(mapId) is not { } tree)
+        {
+            return ModelCoverage.None;
+        }
+
+        return !tree.IsTiled || tree.IsTileLoaded(tileX, tileY) || _emptyTiles.Contains((mapId, tileX, tileY))
+            ? ModelCoverage.Loaded
+            : ModelCoverage.TileNotLoaded;
+    }
+
     public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
     {
         var point = new Vector3(x, y, z);
@@ -225,7 +260,7 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
     private VMapTree? LoadTree(uint mapId)
     {
         string path = Path.Combine(_directory, VMapFormat.TreeFileName(mapId));
-        byte[]? bytes = ReadFile(path, missingIsNormal: true);
+        byte[]? bytes = ReadFile(path, missingIsNormal: true, out _);
         if (bytes is null)
         {
             return null;
@@ -289,7 +324,7 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
         else
         {
             string path = Path.Combine(_directory, VMapFormat.ModelFileName(name));
-            byte[]? bytes = ReadFile(path, missingIsNormal: false);
+            byte[]? bytes = ReadFile(path, missingIsNormal: false, out _);
             if (bytes is not null)
             {
                 try
@@ -309,8 +344,9 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
         return model;
     }
 
-    private byte[]? ReadFile(string path, bool missingIsNormal)
+    private byte[]? ReadFile(string path, bool missingIsNormal, out bool missing)
     {
+        missing = false;
         try
         {
             if (!File.Exists(path))
@@ -320,6 +356,7 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
                     _logger.LogError("VMaps: could not find {Path}", path);
                 }
 
+                missing = true;
                 return null;
             }
 

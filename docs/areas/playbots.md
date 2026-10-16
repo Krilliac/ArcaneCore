@@ -14,7 +14,17 @@ password-less Player accounts and logs them in through an ordinary socketless `W
 handler (`TryManagedAction`), and server replies are captured into a bounded outbound queue.
 Configuration is `World:Playerbots` (`Enabled`, `MaxBots` 8, `MaxRegisteredBots` 1000, `ThinkIntervalMs` 500,
 `MaxActionsPerTick` 48, `AllowedMaps` [0, 1], `FaultBackoffSeconds` 30, `MaxFaults` 3,
-`FaultWindowSeconds` 3600, `AllowLocalLlm`, ...; off by default).
+`FaultWindowSeconds` 3600, `Policy`, ...; off by default).
+
+**Think cadence.** Motion runs every tick for every bot; a bot *thinks* (targets, spells, retreat) when the rotation reaches it
+(`PlayerbotThinkRotation`). The tick's think time is `PlayerbotThinkBudget`: `clamp(ThinkBudgetTickShare x (tick interval - the time the
+world spent on everything but the bots) - what the bots already used this tick, ThinkBudgetMinMs, ThinkBudgetMaxMs)`, defaults
+0.6 / 8 ms / 30 ms (min = max is a fixed budget; at least one bot always thinks). Two lanes: a bot in combat, dead or a ghost that has
+not thought for `CombatThinkIntervalMs` (300) is thought for first, for at most `CombatLaneShare` (0.7) of the budget; then every bot from
+the fair cursor (the rest of the budget, so a crowd of fights cannot starve the others). The actions split in two hard budgets as well (the combat lane has `floor(CombatLaneShare x MaxActionsPerTick)` of its own, the rest is the other bots'), and the main lane thinks for at least one bot every tick. With room for everyone every bot still thinks
+every tick. `.playerbot cadence` prints the last minute's think gap p50/p95/p99/max (all bots and the combat/dead lane), thinks per tick,
+the budget and the share of ticks that ended on the time or action budget (the same line is logged once a minute). A bot silent for
+longer than `ThinkStarvedGapMs` (10 s, 0 = off) is reported once per episode as the `cadence/think-starved` anomaly.
 
 **Caps.** `MaxBots` (0..1000) bounds the bots **running** at once: a stopped, faulted or quarantined bot holds no slot, and a
 start beyond it is refused with `playerbot-capacity` (a startup restore or quarantine retry waits for a slot). `MaxRegisteredBots`
@@ -48,7 +58,8 @@ all stops in the current group settle. The world thread and final save queue sto
 
 Before a pull the brain weighs each candidate's risk against its reward, and in a fight it retreats past the creatures' leash when
 it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. The risk decision ends each `.playerbot status`
-line and has its own `BOTINSPECT` line.
+line and has its own `BOTINSPECT` line. Chests, locked chests it can open, rares and the guards of gathering nodes are weighed the same
+way (`World:Playerbots:Opportunities`, live): `docs/areas/playbots-opportunities.md`.
 
 Bots also use the faction auction house and the mailbox: they list loot they have no use for, buy one gear upgrade within a budget
 and collect what sold, expired or was won (`World:Playerbots:Economy`, live): `docs/areas/playbots-economy.md`.
@@ -77,7 +88,7 @@ banners, as it does the classic-db goobers; never Alterac Valley), fill the queu
 `PlayerbotBattlegroundCoordinator` and `PlayerbotBattlegroundAI` (`World:Playerbots:Battlegrounds`, live; `.playerbot battlegrounds`):
 `docs/areas/playbots-battlegrounds.md`.
 
-Zero-allocation batched policy inference (`World:Playerbots:Inference`, `Enabled` true by default, `ModelPath`, `TensorRtCachePath`, `GpuDeviceId`, `MaxBatchSize` 128) evaluates up to 128 active bots per world tick inside `PlayerbotBatchCoordinator` (`src/ArcaneCore.World/Playerbots/AI/Inference/`) using 64-byte aligned native observation/logit buffers (`NativeMemory.AlignedAlloc`), ONNX Runtime `OrtIoBinding` (falling back to a deterministic `TensorPrimitives` SIMD linear policy when `ModelPath` is unset or absent), and a 24-byte explicit-layout C# 15 `[Union]` value type (`PlayerbotAction`: `IdleAction`, `MoveToAction`, `CastSpellAction`, `PetCommandAction`) with zero managed heap allocations per tick.
+The goal ladder can be re-ranked by a built-in CPU goal policy (`World:Playerbots:Policy`, **off by default**; with no `ModelPath` it scores with the ladder itself, so it always agrees and the bots choose the goals they would without it). It replaced the ONNX/TensorRT batch pass and the local Ollama planner; see Goal policy below.
 
 ### Autonomous and scripted mode
 
@@ -123,10 +134,14 @@ statically infeasible only if it has a creature giver on map 0 or 1 and, for eve
 G, or L is above 0 and every giver-to-ender distance on G exceeds L; a quest with no creature giver on map 0 or 1 is never
 infeasible. The quest is abandoned only when it is not reachable now and statically infeasible, so a bot on the ender's
 continent, or one that merely wandered far from a local hand-in while finishing objectives, keeps it. Successful
-abandonment uses `CMSG_QUESTLOG_REMOVE_QUEST` and frees the slot. An unhomed bot durably refuses an abandoned quest; a
-homed bot and a server-refused packet record no durable refusal. Durable refusals outlive later
-config changes: raising `MaxDeliveryYards` does not lift refusals already recorded; they age out through the 64-entry
-per-bot FIFO. A refused abandon packet is retried only after the normal refusal interval. A quest whose enders are all on
+abandonment uses `CMSG_QUESTLOG_REMOVE_QUEST` and frees the slot. An unhomed bot marks an abandoned quest *unreachable* for a while; a
+homed bot and a server-refused packet record no mark. The mark is the bot's unreachable-quest deferral
+(`DeferKind.UnreachableQuest`, below): it lasts 60 seconds, then 10 minutes, 1 hour, 6 hours and 24 hours with each repeat (the last holds, so a
+quest the bot keeps abandoning is not taken again every few minutes for ever; a turn-in that can never be satisfied escalates the same way), and ends
+sooner when the bot gains a level or the quest store, creature definitions or navigation dataset is replaced (the fleet-wide causes release
+after a stable 0 to 60 s stagger per bot, not all at once). It is saved with a finite expiry and its strikes in the row's `RepeatCount`; a row
+an older build wrote with no expiry (`long.MaxValue`) is restored with a staggered one to five minutes and two strikes. At most 64 are kept
+(when full, a new mark replaces the ended one with the fewest strikes, else the one that ends soonest; see the defer ledger below). A refused abandon packet is retried only after the normal refusal interval. A quest whose enders are all on
 the other continent from its giver is still abandoned when the distance limit is disabled; unknown or scripted enders
 remain eligible. Homed bots keep their home-area and short-return rules. Giver-to-ender facts (per-map giver presence and
 ender spawns with their nearest-giver distance) are shared and cached by quest store, creature content, definition
@@ -202,10 +217,20 @@ which is exact and needs no path search.
   polygons is a plaza, not a fragment. When the ground beside the fragment is a cliff or too far, as at both live pins, the stall path takes over:
   the brain's island escape (`EscapeIsland`) treats a fragment bot as an island bot and teleports it home or to its bind point.
 - **Dead-end pin memory and Hearthstone escalation** (`PlayerbotStallWatch.RecordPinStall` / `IsDeadEndPin`, `PlayerbotSuspensions.SuspendEntryEscalating`):
-  each stall give-up records the bot's 10-yard coordinate cell (`PinCell(mapId, floor(x/10), floor(y/10))`, bounded to 64 cells per bot). Once a cell
-  accumulates `PinStallsToEscalate` (2) stalls, `PlayerbotNavigation` refuses destinations and partial-route endpoints inside that cell (`IsDeadEndPin`),
+  each stall give-up records the bot's 10-yard coordinate cell (a `DeferKind.PinCell` key packing map, floor(x/10), floor(y/10); bounded to 64 cells per bot). Once a cell
+  accumulates `PinStallsToEscalate` (2) stalls, `PlayerbotNavigation` refuses destinations and partial-route endpoints inside that cell (`IsDeadEndPin`)
+  for the cell's backoff since its last stall (10, 30, then 60 minutes from the second stall, read against the world clock at each ask; the first stall is recorded but is no pin yet; a cell whose backoff ended an hour ago starts again; from the third stall a replaced navigation dataset frees it),
   `GiveUpStalledGoal` escalates the stalled target entry's suspension (`SuspendEntryEscalating`, doubling up to `MaxSuspendMs` = 80 minutes) and marks
-  repeated quest stalls unreachable for the session, and `EscapeIsland` treats the pinned bot as an island escape, teleporting it home or to its bind point.
+  repeated quest stalls unreachable (the escalating mark above), and `EscapeIsland` treats the pinned bot as an island escape, teleporting it home or to its bind point.
+- **The defer ledger** (`PlayerbotDeferLedger`, one per bot, `PlayerbotSuspensions.Ledger`): the one place a bot records what it put off.
+  A key is a `DeferKind` and an id; `Defer` gives it a deadline (the kind's step by strike: entry, quest and training keep their 10 minute steps, the entry doubling up to 80 minutes; an unreachable quest 60 s, 10 min, 1 h, 6 h, 24 h;
+  a pin cell 10, 30, 60 min from its second stall) and optional wake causes
+  (`DeferWake`: a level gained, a replaced navigation dataset, creature definitions or quest store). `PlayerbotBrain.ObserveDeferWakes` compares the bot
+  with its last think once per alive think (a handful of field reads through feature references cached per brain, so a swap between a deferral beginning and the next think still wakes it), and wakes the waiters; a wake or a lapse keeps the strikes (so the next deferral is longer), `Succeeded` forgets them, an hour of quiet decays them (except an unreachable quest's, which only a turn-in clears: `PlayerbotQuestGoals` calls `QuestSucceeded` when the reward is confirmed, forgetting the quest's unreachable and quest strikes, so a quest that once succeeded starts clean).
+  Caps: 64 per kind (1 for training; 257 in all, under the store's 512 rows per bot). Recording never refuses, so when a kind is full a new key always costs one existing entry its strikes: the ended entry with the fewest effective (decayed) strikes goes first, the oldest of those; a live deferral is cut short only when no entry has ended (then the one soonest to end). Time: the ledger runs on the world's 64-bit `Uptime` in milliseconds (the facades convert the 32-bit `NowMs` against it), so an ended deferral never reads live again at 2^31 or 2^32 ms of uptime, whatever the bot did or did not do in between.
+  Entry, quest, training and unreachable-quest deferrals persist (`PlayerbotSetAside` kinds 0, 1, 2, 5; an entry's and an unreachable
+  quest's strikes in `RepeatCount`); an unreachable quest whose set-aside ended is saved too (expiry = the save time) so a restart keeps its strikes until a turn-in; the rest live in memory. A restart restores an escalated entry for its full remaining time (up to the kind's longest) and continues its
+  escalation. `PlayerbotSuspensions` is the facade the goals call.
 
 Neeka Bloodscar, #194's ender, stands at the top of the Kargath tower, whose upper flight of stairs the mesh flags steep: the walkable mesh
 ends 13 yards below her. A destination indoors (inside a model's group, `MapCollision.IsOutdoors`) is reached over steep polygons when the
@@ -339,8 +364,9 @@ live 2026-10-11, 117 dwarf and gnome bots with Dun Morogh, Ironforge and Loch Mo
   entrance. A Coldridge bot walks to Talin or Sten in its own zone and takes Ironforge's entrance (ClassicDB 2175) for Stormwind; a
   Goldshire bot uses Stormwind's entrance (2173) for Coldridge. Duskwood to Thorium Point (Searing Gorge) uses the tram via Ironforge.
   Unknown zones do not
-  start a trip. A failed trip is not tried again for 10 minutes (`RetryAfterFailureMs`); the destination then falls back to the walk and
-  the ordinary stall watch.
+  start a trip. A failed trip backs off only the entrance it began at (`PlayerbotTransitBackoff`,
+  `World:Playerbots:Travel:TransitBackoffSeconds` doubling per failure); the other entrance is taken at once, and meanwhile the destination
+  falls back to the walk and the ordinary stall watch. A lift that failed is backed off the same way, alone.
 * **The tram, from the data.** `TramNetwork.Build` reads the area triggers: the two entrances on the continent whose
   `areatrigger_teleport` leads to map 369 (classic-db 2173 Stormwind, 2175 Ironforge), each paired with the exit on map 369 nearest its
   landing whose teleport lands back beside it (2171, 2166). Anything else (one entrance, an exit missing or landing elsewhere) is no
@@ -593,6 +619,145 @@ every tick with a `PlayerbotControllerContext` (`TryAction`, `AcknowledgeServerO
 Stopping a bot detaches its controller; `IsScripted(botId)` reports the mode. Switching back
 to autonomous mode resumes the brain with whatever state it had before.
 
+### Goal policy
+
+`World:Playerbots:Policy` (`src/ArcaneCore.World/Playerbots/Policy/`, off by default) lets a scored policy re-rank the out-of-combat goal
+ladder in `PlayerbotBrain.Update`. It is **advisory**: the rule ladder stays the default and the fallback, and a promoted goal is tried by its
+own controller under its own rung's guards, which recheck the live rules, and under the guards of the rungs it jumps: resurrection
+sickness stands every promotion but `Town` down (as the ladder stands every rung below town down), and a quest creature in sight keeps
+a bot off a `Train` or `Mount` trip. A promotion its controller refuses leaves the ladder in charge for the rest of that snapshot
+(counted `refused`), so it is not retried every think. Chat (`World:Playerbots:Chat`) is separate and unaffected.
+
+**Goals.** `PlayerbotPolicyGoal`, in ladder order: `Quest` (a giver or ender in sight), `Town` (vendor, trainer list, repair),
+`Opportunity` (a chest, locked chest or rare in reach, [playbots-opportunities.md](playbots-opportunities.md)), `Train`,
+`Mount`, `QuestTravel` (a giver or ender out of sight), `Grind` (a creature in sight), `Explore` (always open). The first open goal is the
+ladder's choice. `Opportunity` is open when the opportunity controller has a find in reach that is not set aside (`PlayerbotOpportunities.HasCandidate`:
+one scan of the visible objects into a reused list, no weighing); a promotion goes through the controller's own think, which weighs the find and refuses it as
+the ladder's rung would (a refusal is counted `refused`). A promotion that chooses a guard to pull hands the think to the combat path, as the rung does. The goal record's `goal`
+label is `Opportunity` only when the opportunity controller drove the think at which the decision was taken (`PlayerbotBrain.OpportunityDriven`:
+it walked, opened, waited or chose a guard to pull). The brain's `Loot` goal covers a chest and a corpse alike, so it is not mapped by `kind`
+alone: looting a corpse after a fight has no policy goal (`goal` null), as before. Crafting and auction errands keep their rungs but have no cheap probe, so no policy moves them; `Quest` is the first rung (never
+a promotion) and `Grind` is the floor (a policy that picks it leaves the ladder in charge, counted `floor`).
+
+**Hook.** One call at the top of the ladder (`PlayerbotBrain.Policy.cs`, `TryPolicyGoal`, after rest, equipment, class upkeep and the walk
+home). Each think it first **decides** from the bot's current snapshot: the best open goal by the snapshot's scores, tried first when it is not
+the ladder's own choice; then, every `IntervalMs` (3000), it takes a **new snapshot** (features plus the open goals, from the same probes the
+rungs check) for the next batch. With no engine (`Enabled` false) the hook returns at once and the ladder runs exactly as it always has.
+With the engine on and the rule ladder scoring, the policy always agrees, but its snapshots still run the rungs' probes (which refresh
+the same candidate caches the rungs use) every `IntervalMs`: the goals chosen are the ladder's, the think's work is not quite the same.
+
+**Features** (`PlayerbotPolicySchema.FeatureNames`, each about 0..1): level, money, free bag slots, quests in the log, quests ready to hand in,
+goals the stall watch set aside (deferred or suspended), stalls, zone, map, attackable creatures in sight, health, inside the home area.
+
+**Scoring, off the world thread.** At the end of each world tick `PlayerbotPolicyEngine.Dispatch` hands each map's snapshots to a worker
+task as one batch (one batch in flight per map; at most 1024 rows, past that a snapshot is dropped and counted). The worker scores them in
+chunks within `TickBudgetMs` (2 ms wall time per map batch; the rows past it are left unscored and the overrun counted) and publishes each
+bot's scores. The brain uses them on a later think, while the snapshot is no older than `StaleAfterMs` (4500 world ms). Late, missing,
+dropped or non-finite (NaN, infinite) scores make that think fall back to the ladder. Every think on a snapshot decides again and is
+counted (`applied`, `agreed`, `floor`, `explored`, `missing`, `stale`, `non-finite`, `refused`; a refused promotion also counts once as
+`refused` on top of its think's own source), and the feature logs one Info line of the counters every five minutes while the policy is on.
+
+**Policies.** `IPlayerbotPolicy.Score(features, count, scores)`: a batch of rows in, one score per goal per row out, higher is better.
+`RuleBasedPolicy` scores each goal by its ladder rank, so its best open goal is always the ladder's own choice (the default, and the fallback).
+`PlayerbotModelPolicy` is the built-in model: optional per-feature standardisation (`mean`, `scale`), then 1..3 dense layers (ReLU between,
+linear last; one layer is a linear model), evaluated with `TensorPrimitives` SIMD dot products on the CPU. A bot costs at most a few thousand
+multiply-adds (12 features x 64 hidden + 64 x 8 goals is about 1.3k), so there is no GPU path: moving a batch to a GPU would cost more than
+scoring it, and deployed servers have none. Feature 5 (`set_asides`) counts the bot's set-asides that still have time left; since the defer ledger it no longer counts an unreachable quest whose set-aside ended but whose strikes are kept, so a model trained earlier sees that input shifted (lower) for such bots.
+
+**Weights file** (`ModelPath`, JSON, at most 4 MiB, relative to the profile folder): `{"format":"arcanecore.playerbot-policy","version":1,
+"features":[...],"goals":[...],"mean":[...],"scale":[...],"layers":[{"inputs":I,"outputs":O,"activation":"relu"|"linear","weights":[O*I],
+"bias":[O]}]}`. The feature and goal names must equal the server's, in order (a model trained on another layout is refused: adding
+`Opportunity` changed the goal list, so a model trained before it, with seven goals, no longer loads and the ladder scores until one is retrained; telemetry written before the change has `v` 1 with the old `open` bit order, so a reader reindexes it: every bit from `Train` (old bit 2) up moves one place). A file that is
+missing, unreadable, malformed, of the wrong layout or with a non-finite number **never stops the server**: it is reported once
+(anomaly `bot-policy/model-load-failed`, with the reason), logged as a warning, and the ladder scores instead.
+Training is described below.
+
+**Exploration.** `ExplorationRate` (0..0.2, default 0): the chance that a snapshot, instead of being scored, names one of the ladder's open
+runner-up goals at random (never the ladder's own choice, never `Grind`), which its thinks then try first. It exists to gather telemetry the
+ladder alone never produces; it needs `Enabled`.
+
+**Telemetry** (`World:Playerbots:Policy:Telemetry`, off by default; needs `Enabled`). One record per decision: the first think that had a
+snapshot's scores or exploration goal (a think on a stale snapshot, or before its scores came back, is not one, so a snapshot whose scores
+never came is not written), written after `OutcomeMinutes` (5) of world time with its outcome. JSON lines, one object per line:
+
+| Key | Meaning |
+|---|---|
+| `v` | Record version (2). Version 2 added the `Opportunity` goal, which moved every goal after `Town` up one bit in `open` (`Explore` went from bit 6 to bit 7); a version 1 file has the old seven-goal bits. The trainer (`tools/playerbot-policy/train.py`) reads both, remapping version 1 bits. |
+| `k` | `goal` (this table); `fight`, `skip` and `opportunity` are the combat records below; `health` is the tick-health record below. |
+| `t` | Unix ms of the decision. |
+| `bot` | The bot's player guid (hex). |
+| `map`, `zone` | Where it decided. |
+| `f` | The feature vector (`FeatureNames` order). |
+| `open` | The open goals (bit `1 << goal`). |
+| `ladder`, `pick` | The ladder's choice; the policy's (or exploration's) choice, null when there were no scores. |
+| `src` | `agreed`, `applied`, `explored`, `nonfinite`, `floor` or `refused` (the promoted goal's controller did not act). |
+| `x` | 1 when the choice was exploration. |
+| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. `Opportunity` is the label only when the opportunity controller drove that think (the brain's `Loot` goal alone is also a corpse, so `kind` `Loot` with `goal` null is a corpse). |
+| `w` | The outcome window in seconds. |
+| `o` | The outcome over the window, in this order: `lvl`, `lp` (levels gained with their fractions: experience over the next level's, so it compares across levels and level-ups), `xp`, `money`, `items`, `quests` (with `lvl`, the stall-watch fingerprint delta: levels, experience, copper, item count, quests handed in), `stalls`, `deaths`, `anomalies` (the bot's anomaly-ledger reports). |
+
+The world thread only queues finished records (8192 at most; past that a record is dropped and counted); a writer task formats and appends
+them to `Directory` (`telemetry/playerbot-policy`, relative to the profile folder) as `policy-NNNNNNNN.jsonl`, each at most `MaxFileBytes`
+(16 MiB), at most `MaxFiles` (16) of them, the oldest deleted before the next is made (when a reader holds the oldest open, no new file is
+made and lines are refused and counted until it can be deleted; one warning when refusing starts, one line when it ends, and the counts in the five-minute line). A decision whose bot leaves, or gets a new brain (noticed at that brain's first policy think), before its window ends
+is dropped, never written with a partial outcome; deaths are seen only on thinks the brain drives (not while a group or battleground
+driver has the bot). A full disk or missing folder stops the telemetry (fault site `playerbot.policy-telemetry-io`), never the
+server.
+
+**Tick health** (`k` `health`, written with the goal records whenever telemetry is on and the tick monitor runs). Every 10 s of world time the
+world thread reads the watchdog tick monitor's cumulative count of frames over its budget (`Ops:Watchdog:TickMonitor`, the same count as the
+overrun warning) and queues one record; the writer task formats it like the others. The first interval after start only takes the baseline.
+Keys: `v`, `k`, `t` (unix ms at the interval's end, the clock `t` of the goal records uses), `ms` (the interval's length, so it began at
+`t - ms`), `over` (frames over the budget within it), `budget` (the budget in ms). It exists so a trainer can drop decisions made while the
+world lagged (a concurrent build pushes bot think gaps to seconds): a decision whose `[t, t + w]` overlaps a health interval with
+`over > 0` describes a lagging world. No percentile is written: the tick monitor keeps only its count cheaply. A file with no `health`
+record comes from a build without it, or from a host with the tick monitor disabled.
+
+**Combat decisions** (telemetry only, written with the goal records when telemetry is on; a later phase may score them, gated in
+[docs/design/playerbot-policy-phases.md](../design/playerbot-policy-phases.md)). Nothing here changes a decision: the risk model tells
+`PlayerbotCombatTelemetry` what it assessed and whether the choice took it (`PlayerbotRisk.CombatSink`, after `Assess` and after
+`Judge`; a sink fault is counted and never reaches the decision), and the rest is observed after each think. Two kinds of record:
+
+- `fight`, one per fight (from the first think in combat to the first out of it, or the bot's death), written when the bot's next fight
+  starts (so its downtime is known) or after ten minutes without one (`downtime` null). Its keys:
+  - `engage`: the pull the risk model took (an engage, or a detour with a route), when the fight's first target is that creature; null
+    with risk scoring off or when something else started the fight (a wanderer that aggroed first). It holds `f` (`level`, `health`, `mana` (1 without mana),
+    `level_diff`, `elite`, `health_ratio`, `distance`, `risk`, `reward`, `adds`), `decision` (`engage` or `detour`), `reason` and
+    `entry`.
+  - `targets`: each target pick (the first and each switch, at most four): `c`, the live enemies it chose among (at most four, the
+    chosen one always included), each `target_health`, `level_diff`, `distance`, `attacking_bot`, `elite`; `pick`, the index of the
+    chosen one; and `ttk`, seconds from the pick to that target's death (null if it lived). The target is the bot's melee victim, else
+    its own target when that is one of the enemies.
+  - `retreat`: the retreat decision, null with risk scoring off. It is the verdict that ran (`retreat` 1) or the stay closest to
+    running (`retreat` 0, the least time to die per time to kill). It holds `f` (`health`, `dps_in`, `dps_out`, `enemies`,
+    `time_to_kill`, `time_to_die`, `target_health`) and `reason`.
+  - `rest`: `f` (health, mana and resurrection sickness at the fight's end) and `rested` (1 when the bot's goal became `Rest` within
+    5 s of the looting that followed the fight, or of the fight's end; `Rest` also covers waiting with no food and waiting sickness out,
+    which `sick` helps tell apart).
+  - `o`: `died`, `killed` (the first target died), `ttk` (seconds to that, or null), `fight` (seconds), `damage` (health lost,
+    summed over thinks from the think before the fight; a heal within one think hides that much damage), `damage_pct` (of maximum
+    health) and `downtime` (seconds to the next fight; null past ten minutes, or when the bot left first).
+- `skip`, a pull candidate the choice did not take (`decision` `avoid`, `rest`, or a `detour` with no route; once a minute per
+  creature, at most eight waiting per bot), with the same `f`, `reason` and `entry`, and `o.wait` (seconds until the bot's next fight, null past ten minutes).
+- `opportunity`, one per opportunity decision the controller took (`PlayerbotOpportunities.Sink`, the same pattern as `CombatSink`; a sink
+  fault is counted and never reaches the decision). A verdict of engage or refuse is a decision; a wait (hurt, recovering) is not. Keys, in order:
+  `v`, `k`, `t`, `bot`, `map`, `zone`, `f` (`level`, `health`, `mana` (1 without mana), `distance` (yards, capped at 100, over 50), `kind`
+  (the find's kind, 0 chest, 1 locked chest, 2 node, 3 rare, over 3)), `kind` (`chest`, `lockedchest`, `node`, `rare`), `entry`, `reward` (the
+  net reward in same-level kills, `PlayerbotOpportunityModel`), `risk` (the predicted damage as a share of the bot's health; a hard refusal's
+  infinity is written as 10), `guards` (the guard count; a rare is not one), `reason`, `engaged` (1 when the bot went for it) and `o`.
+  A find the bot went for is written when its episode ends, with `o`: `loot` (copper: the coins plus the vendor price of the items the bot
+  stored from the chest's loot window, counting at most one item per free bag slot (a stack that joins another is missed); 0 for a find given up;
+  null when it succeeded but the loot was not seen, as for a rare, whose corpse the brain loots, or a chest taken before its window was read),
+  `died` (0 or 1), `seconds` (from the decision to the loot, the abandonment, the kill or the death) and `lost` (1 when a rare was tapped and
+  killed by another player, by the server's own tap rule (`PlayerbotBrain.HasLootRights`: groups and pets count as the bot's); a kill that earned nobody the corpse (creatures did most of the damage) is neither a success nor `lost`: `loot` 0, `lost` 0). A find refused or passed over has `engaged` 0 and nulls in `o` (there is no outcome to learn from), once a minute per
+  find per bot; its `reason` is the model's, or `untakeable` (the first guard is one the brain would not take as a target) or `passed-over`
+  (another find was better). An episode whose bot leaves before it ends is not written.
+
+**Training (phase 3, staged separately).** An offline trainer and an A/B report (for `tools/playerbot-policy/`) are staged on their own
+branch, to land once the server has run with telemetry on. They fit
+progress per minute for each (state, goal) from the server's own telemetry only, and write the weights file above. No label may come
+from Claude or any other LLM: training data is what the server's bots did and what followed.
+
 ### Contention
 
 Hundreds of bots with the same quests used to hunt the same mob: the target sort was "quest creature, then nearest" with no tie-break, so
@@ -642,8 +807,11 @@ Every request goes through the real handlers (`WorldSession.TryManagedAction`); 
 - **Discovery.** At most every 2 seconds a bot looks at the objects it sees. A living flight master it may talk to (the server's own
   `InteractableNpc` check: range, faction reaction) whose node (the nearest network node with a mount for the bot's team, as the server maps
   it) the bot does not know gets CMSG_TAXIQUERYAVAILABLENODES. The server learns the node (SMSG_NEW_TAXI_PATH). A master that did not teach its
-  node is asked again after a minute. Known nodes are never asked for. Discovery only happens within interaction range; bots do not detour to
-  unknown masters.
+  node is asked again after a minute. Known nodes are never asked for.
+- **Discovery detour.** A bot that is idle for taxi (no trip, no tram or lift ride) and sees an unknown flight master spawn within about 80
+  yards of itself (`DetourYards`) walks to it, learns the node (query and mask check only, never a flight), and the goal plans again. A learn
+  trip that fails ("node-not-learned", no way, refused plans) backs that node off like any other failure. A node that is backed off, taxi
+  off, or a master further away is not walked to.
 - **Planning.** `TryTravelByTaxi(session, player, mapId, destination, options)` is called by `PlayerbotWorldDestinations` for a quest
   destination after the tram and lift checks (a lift's own walk is kept). The estimate of the walk is the straight line (no path query). Taxi
   is used when it is at least `MinRouteYards` (default 600), the bot knows a node within `MaxWalkToMasterYards` (default 300) of itself, a
@@ -654,16 +822,132 @@ Every request goes through the real handlers (`WorldSession.TryManagedAction`); 
 - **The trip.** The brain drives it before anything else (`PlayerbotTaxi.Drive`): walk to the master, stop, send CMSG_ACTIVATETAXI (one hop) or
   CMSG_ACTIVATETAXIEXPRESS (several hops), read SMSG_ACTIVATETAXIREPLY, then wait. In the air (UNIT_FLAG_TAXI_FLIGHT) the bot neither thinks nor
   moves and the stall watch does not judge it. After the landing the goal that asked for the trip plans again from there (usually a short walk).
-- **Failure.** A refusing reply (for example combat or money; a bot already flying gets no reply at all; a mounted bot is dismounted by the managed action before either request), no reply, no way to the master, no master where the node is, or a
-  budget that never accepts the request ends the trip and backs taxi use off for `BackoffMinutes` (default 10); the goal walks meanwhile. A
-  fight on the way to the master cancels the trip without a backoff. Death cancels it.
+- **Failure.** A refusing reply (for example combat or money; a bot already flying gets no reply at all; a mounted bot is dismounted by the managed action before either request), no reply, no way to the master, no master where the node is, a
+  walk whose plans were refused 3 times in a row (`MaxRefusedPlans`; a pending plan does not count, a route resets the count), a stop that
+  never succeeded in 20 attempts (`MaxStopAttempts`, "stop-refused"), or a budget that never accepts the request ends the trip and backs off
+  the departure node (not taxi as a whole): the wait follows `World:Playerbots:Travel` `BackoffMs` (60 s, doubling per failure of that node,
+  to 300 s), capped by `BackoffMinutes`. A landing clears the node's failures. Other known nodes still fly; the goal walks meanwhile. The
+  same refused-plan bound and per-point backoff apply to the tram (per entrance, which is also failed at once when its teleport trigger
+  refuses the bot, `PlayerbotAreaTriggers.TryConsumeTeleportRefusal`) and to lifts. A failed tram or lift leg gives up only that leg: the
+  quest and its giver are not set aside and no dead-end pin is counted; while the point is backed off the destination waits without a
+  set-aside. A completed quest across the tram for a bot below `TramMinLevel` is held (never abandoned or marked unreachable) and taken up
+  again at the level. A fight on the way to the master cancels the trip without a backoff. Death cancels it.
 - **Config** (`World:Playerbots:Taxi`): `Enabled` (true), `MinRouteYards` (600, 100..20000), `MaxWalkToMasterYards` (300, 10..2000),
-  `BackoffMinutes` (10, 1..1440).
+  `BackoffMinutes` (10, 1..1440; the per-node cap of the Travel schedule).
 
 Deviations from retail 1.12 and vmangos: the client picks its own route and fare; the bot computes both from the same node and path data. It
 sends CMSG_ACTIVATETAXI for a single hop and the express opcode for several (which opcode a 1.12.1 client sends for a single hop is
 UNVERIFIED). Intermediate legs are charged by the server when each starts, as for a player. Cross-map paths and scripted (SEND_TAXI) paths are
 not used.
+
+### Travel
+
+A bot crosses to a far place the way a 1.12 player does, by its own means (`World:Playerbots:Travel`; every key live; not vmangos keys).
+A caller begins a journey through the `IPlayerbotTravel` service (`CanReach`, `TryBegin`, `IsTraveling`); `.playerbot travel $name #map #x
+#y #z` begins one for live validation and prints the planned legs. The brain drives it. Nothing writes the bot's position: every leg goes
+through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, CMSG_GAMEOBJ_USE, group, trade and taxi requests).
+
+- **Means.** Walking (with the Deeprun Tram, lifts and known flight paths taking over long stretches of a walk), flight paths
+  (`PlayerbotTaxi`; its switch is `World:Playerbots:Taxi:Enabled`), boats and zeppelins (`PlayerbotShip` on the routes of
+  `PlayerbotShipNetwork`: the classic `gameobject_template` entries 20808, 176231, 176310, 176244, 177233 are boats, 164871, 175080, 176495
+  Horde zeppelins; Booty Bay - Ratchet takes both factions, the other boats the Alliance; each route's two ports are its TaxiPathNode stop
+  frames), the hearthstone (`PlayerbotHearthstone`: item 6948, its on-use spell, to the bind point), a mage bot's own Teleport and a portal
+  a mage bot opens on request (`PlayerbotMageService`, `PlayerbotPortalBoard`).
+- **The planner** (`PlayerbotTravelPlanner`, pure) searches a small graph (start, goal, every port, the bind point, each own-teleport
+  destination, each portal's mage and destination) for the fewest seconds whose copper fits the spend cap: the lesser of the bot's money,
+  `MaxTravelSpendCopper` and what the journey has not spent yet (a replan plans with what is left). The cap holds for the whole journey: the
+  fares of the flights its walks take (offered only up to what is left) and the portal fees it paid are charged once the server took them
+  (`TravelJourney.SpentCopper`), and a portal leg begun again after a fight asks the mage it already paid, without a second trade. Costs: a walk is the straight line times 1.3 at 7 yards a second; a flight the walks to the departure node and from
+  the landing node plus the hops at 32 yards a second, its fare the undiscounted path price; a boat or zeppelin its round trip (`period`), free;
+  the hearthstone and a Teleport 15 s; a portal 25 s plus the fee. Two walks never follow each other; the hearthstone and each Teleport are
+  used at most once. Ties: fewer legs, then less copper.
+- **Facts** (`PlayerbotTravel.BuildFacts`, from the bot's real state): faction, level, money; the hearthstone when it is ready (switch on,
+  carried, off cooldown); the bot's own Teleports (spell known, rune carried, off cooldown); the portals of listed mages of its faction within
+  `MageServiceRadiusYards` on its map; the ship routes the bot may ride (faction, the Boats and Zeppelins switches, a route with a backed-off
+  dock left out). Two places are walkable when they are on one map and, where the map's walking region graph answers, in one walkable
+  component (the check `IsUnreachableOnFoot` makes); a place the graph cannot place (no navmesh, the graph or a tile not read yet, a point
+  at sea such as a port, a small fragment) counts as joined, and the walk's own failure then replans. A flight needs a known departure node
+  within `MaxWalkToMasterYards` of the stretch's start, a stretch of at least `MinRouteYards`, and a known landing node the fare to which fits
+  the cap (the search `TryTravelByTaxi` makes).
+- **The journey** (`PlayerbotTravel.Drive`). The brain drives, every think and before the taxi, tram and lift drivers: `PlayerbotShip.Drive`,
+  `PlayerbotHearthstone.Drive`, `PlayerbotMageService.Drive` (the bot's own mage leg), `PlayerbotMageService.DriveMage` (a mage serving the
+  board), then the journey. A leg driver that answers Traveling owns the bot that think (no stall judged, no target held). The journey walks
+  its walk legs itself and only begins the others on their drivers. A walk right before a boat, zeppelin or portal leg ends within 100 yards
+  of that leg's start (the next driver walks the last yards to its dock or mage). Within 10 yards of the goal the journey has arrived. A fight
+  makes the journey yield (the brain fights) until it is over, except aboard a ship; a fight before the bot is aboard (on the way to the
+  dock, waiting for the ship, on the gangway) drops that ship leg, a fight during a hearthstone or Teleport cast cancels the cast (not a
+  teleport already begun), and the journey begins the leg again afterwards. Between two legs (never in the middle of one) a bot below 45%
+  health or 35% mana rests first: the brain eats, drinks or sits until `World:Playerbots:Risk:RecoverHealthPct` (at most the risk wait),
+  then the bot stands and the next leg begins (a stand the session refused, its action budget spent, is sent again at the next think; no leg
+  begins seated). A switch turned off (Travel `Enabled`, or the means of the next leg) ends the journey at its
+  next safe point without a report; each driver has its own safe point (aboard a ship, the bot rides to the next port and steps off there).
+- **Failure.** A failed leg (its driver reported it once) defers only that leg (`GiveUpTransitLeg`: no quest set aside, no dead-end pin);
+  the journey replans once from where the bot stands, leaving out the failed means or point on top of the drivers' backoffs; a second
+  failure, or a replan with no route, fails the journey (`travel/leg-failed`, once); a journey is never replanned from aboard a transport. A
+  journey is bounded by twice its planned seconds plus ten minutes (`travel/overdue`), checked before the leg drivers: the leg under way is
+  dropped by its driver's rule, except aboard a ship, where the journey ends once the bot stepped off at the next port; a walk leg's own
+  transit goes too while it has not left (a taxi trip still walking to its master, a tram trip still walking to its entrance, a lift trip not
+  aboard), so no fare is paid for a journey that is over. A cast leg is bounded
+  before the server took its cast too (30 s, or 20 thinks put off: a bot that would not stand still, an action budget spent). Nothing is reported on arrival. Death, a controller, a battleground or a bot-led group taking the bot
+  over cancels the journey and its legs (`PlayerbotTravel.CancelLegs`); a bot aboard a ship is never put off at sea (its leg rides to the
+  next port, driven by the feature until it stepped off, then the new driver takes it). Chaos probes keep off a bot mid-leg.
+- **Ships.** Walk to the walkable point nearest the departure port; wait for the route's ship to wait there with at least 2 s of its stop
+  left (bounded by 1.5 round trips); step onto the deck through movement heartbeats and the heartbeat with MOVEFLAG_ONTRANSPORT (the server
+  boards it); ride (the server carries passengers through the map change); step off at the arrival port and walk off the pier. Sampled
+  every world tick (`PlayerbotShip.Pump` from `PlayerbotMotion.Pump`) so a short stop is not missed. A failure at the departure dock backs
+  that dock off. A failure while the server still carries the bot (`ride-overdue`, `disembark-refused`, `wrong-map`, `left-ship` with the
+  passenger link still held) is reported at once, but the leg settles: it stays under way, rides to the next port the ship waits at and
+  steps off there, and only then ends; so no bot is left aboard without a driver (bounded by two more round trips).
+- **Hearthstone.** Stop, CMSG_USE_ITEM for the stone, wait out the cast standing still, confirm the bot stands at its bind point. An
+  urgent escape always teleports directly (a ten second cast a fight interrupts is no escape). The brain's other bind-point trips use the
+  hearthstone when it is ready; when it is not, only one made for the bot's safety (a bot stranded on ground no route leaves, or exploring
+  among creatures too strong for it) falls back to the direct teleport, and the walk to a completed quest's unreachable ender then does
+  not go to the bind point.
+- **Mage service.** An idle mage bot (alive, out of combat, ungrouped, on no trip of its own) lists itself on the in-world portal board
+  with the portals it knows and can cast; a requester's journey asks for a portal of a listed mage near it; the matched mage stops, buys a
+  Rune of Portals from a vendor stocking it within 300 yards when it has none, waits for the requester, takes the fee
+  (`MageServiceFeeCopper`) by a real trade, casts the Portal, invites the requester into its party when the portal is party-only, and leaves
+  that party when the requester went through. The bot-group coordinator leaves a serving mage and a requester alone. A mage's own Teleport
+  is a CMSG_CAST_SPELL at itself.
+- **Transit backoff.** A failed transit point (a flight path node, a tram entrance, a lift, a ship's departure dock) waits
+  `TransitBackoffSeconds` (60), doubling per failure of that point up to `TransitBackoffMaxSeconds` (300); a success clears it.
+- **Config** (`World:Playerbots:Travel`): `Enabled` (true), `Boats` (true), `Zeppelins` (true), `Hearthstone` (true), `MageService`
+  (true), `MageServiceRadiusYards` (150, 10..1000), `MageServiceFeeCopper` (0, 0..100000), `MaxTravelSpendCopper` (10000, 0..10000000),
+  `TransitBackoffSeconds` (60, 10..3600), `TransitBackoffMaxSeconds` (300, 10..86400, not below `TransitBackoffSeconds`). Flight paths:
+  `World:Playerbots:Taxi:Enabled` (true).
+- **Anomaly codes.** `travel`: `leg-failed`, `overdue`. `ship`: `ship-missing`, `never-docked`, `board-refused`, `left-ship`, `wrong-map`,
+  `ride-overdue`, `disembark-refused`, `dock-unreachable`, `route-bad-data`. `hearth`: `no-hearthstone`, `on-cooldown`, `use-refused`,
+  `cast-interrupted`, `not-arrived`, `services-unavailable`. `mage`: `teleport-cast-refused`, `cast-interrupted`, `not-arrived`,
+  `match-expired`, `mage-gone`, `mage-unreachable`, `fee-trade-failed`, `party-invite-refused`, `portal-cast-refused`, `portal-not-spawned`,
+  `portal-not-opened`, `portal-not-used`, `portal-vanished`, `portal-unreachable`, `portal-use-refused`, `rune-purchase-failed`,
+  `request-lost`, `services-unavailable`.
+- **Off-thread reachability** (`PlayerbotTravel.CanReachStatic`, for the home progression's sweep): the same map, or maps the faction's
+  ship routes join, from the routes the world thread published at the first journey; the Travel, Boats and Zeppelins switches count, no
+  walk is judged there.
+- **Home returns.** The home progression's travel seam (`IPlayerbotHomeTravel`) is registered as `PlayerbotTravelHomeTravel`: a town home
+  on another map counts as reachable without a teleport when published boat or zeppelin routes a bot of either faction may ride join the
+  two maps, and a home across Teldrassil's water on map 1 when a rideable route has a port on each side; its return rules (`Decide`) stay
+  the Home options'. A homed bot whose home lies across the sea (another map, or Teldrassil's water) begins a journey there
+  (`IPlayerbotTravel.TryBegin`) instead of the home teleport, except in `ReturnMode` Walk; when none can begin, the return rules decide as
+  before (the config-gated teleport) and the next journey home waits the transit backoff, doubling while it keeps failing.
+- **Quest goals.** `PlayerbotWorldDestinations` begins a journey (`IPlayerbotTravel.TryBegin`) for a quest goal across the sea: a hunted
+  creature with no spawn on the bot's map (its first spawn, by map then spawn, on a map bots may enter that is no dungeon or battleground;
+  a homed bot's hunt stays inside its home), or a destination across Teldrassil's water on map 1 (a giver, a completed quest's ender, a
+  hunted creature). A spawn across the water is passed over without a path query, and the nearest one gets the journey only when no entry
+  on the bot's side was walked to; while its goal waits after a failed journey it is judged as before (a known flight path, or the free
+  unreachable skip that sets it aside); the tram's gate holds (`TransitAllowed`: no boat for an unhomed bot below `TramMinLevel`). The brain
+  drives the journey from the next think, and the destination plans again where it ends. Each goal (its creature entry and quest) waits as
+  the home return does: a journey for it that failed or could not begin waits the transit backoff before the next, doubling while it keeps
+  failing, and one that arrived clears the wait; other goals do not wait for it (64 goals held at most). A completed quest's ender on
+  another map begins none: the quest goals return only to an ender on the bot's map and abandon a cross-continent delivery ("Intercontinent
+  quest handoffs"). Tests: `QuestGoalJourneyTests`.
+
+Known limits. The deck point (6 yards above the ship's origin, inside an 8 by 3 yard rectangle) and the zeppelin tower climb are
+UNVERIFIED against the hull models and real terrain (the server has no transport collision); the ship tests run on a flat synthetic world.
+The region-graph walk check only separates places the graph can place (ports at sea are not), so a walk across water can be planned and
+then fail and replan. Quest pickup still skips a quest whose enders all stand on another continent ("Intercontinent quest
+handoffs") and a completed quest's ender on another map is no journey (see Quest goals above). Portal fees need trading on
+(`EconomyFeature`); party-only portals need the requester ungrouped.
 
 ### Home area
 
@@ -810,6 +1094,39 @@ single transient bug removed a bot until an operator noticed:
 `docs/integration/playerbot-faults-20261007.md`. Ordinary session closes that are not faults
 (a GM kick) still stop the bot and clear `DesiredEnabled`, as before.
 
+### Another world on the same database
+
+Every `managed_playerbot` write is checked against the row's `Revision`. A refused write (`managed-revision-conflict`) means **another writer owns the row**, usually a second world
+process on the same characters database; it is not a bot fault, so a checkpoint, a start or a stop never counts it toward `MaxFaults`:
+
+- A bot whose checkpoint is refused leaves this process's active set. This process writes no `managed_playerbot` row, no set-aside row and no home for it, so the row keeps
+  everything the owner wrote (`DesiredEnabled` included); one Warning is logged per bot. It is published as stopped here whatever the row says.
+- A restore or `.playerbot start` that is refused answers `managed-revision-conflict` and leaves the row alone.
+- A stop writes the `Stopping` row first and saves the bot's set-aside rows only after that write succeeded. If the write is refused it adopts the stored row, drops the bot and writes
+  nothing: the other writer's state, goal, error code and set-aside rows survive.
+- A row that differs from ours **only in `DesiredEnabled`** is an operator edit (a SQL `UPDATE`): the bot is dropped as above but does not count toward a split brain.
+- More than 3 other refusals in one checkpoint are a **split brain**. The process that owned the rows (usually the older, legitimate world, whose checkpoints are now stale) logs `Split brain` at Critical
+  with the last conflicting row's revision, state and update time, **stops every active bot** without a managed-row or set-aside write and stops driving their brains, and stops issuing playerbot
+  writes: checkpoints, creates, starts, stops, deletes, home changes, the fleet reset and the world's shutdown write nothing (each operator command refuses with `playerbot-split-brain`, including a start, create, stop, delete
+  or fleet reset that was already queued behind the checkpoint that latched it; the world's shutdown writes nothing either; entering split brain already stopped every bot, so it has no session left to close). Home changes (`.playerbot home`) do not take the
+  operation lock, so a bulk home change cannot block starts: they are checked at entry and before each bot, and a single store write already in flight when the latch is set can still land (the command reports how many it
+  stored before the latch). The population manager stands still while it is set: no pass starts, a rush is stopped, and a pass that was already running ends quietly at its next member-row write or bot operation
+  (one store call already in flight can still land; a bot the pass had created but not yet started or recorded when the latch was set stays a registered bot without a population row, which the population treats as an operator bot). Quarantine is cleared, so no retry timer fires; a quarantined bot's row stays Faulted, which the population does not restart, until an operator starts it. It shows as a `WARNING` line in `.playerbot status`, in `.playerbot splitbrain` and in the gauge `arcanecore.playerbots.split_brain` (1 while set).
+- **Character rows are not covered.** The kicked sessions still save their characters when they close, and the ordinary character autosave continues: there is no clean way to discard a
+  session's save, and this change does not add a bypass of the save pipeline. On a file-backed SQLite database the writer lock keeps a second world out in the first place; on MariaDB,
+  MySQL and PostgreSQL only `Cluster:Fencing` (`CharacterWriteFenceInterceptor`) bounds the second writer's character writes.
+
+The older world stands down and the intruder keeps running on purpose: neither world can stop the other, and standing down is the only move that guarantees one writer. On MariaDB, MySQL and
+PostgreSQL there is no file lock to keep the intruder out in the first place; `Cluster:Fencing` is what bounds it there.
+
+Recovery: stop the other world first. `.playerbot splitbrain clear` (Administrator) re-reads the stored registry rows, reports how many there are, how many are wanted running and how many are
+faulted, and lifts the latch so playerbot writes resume. No bot is active at that point, so nothing in memory needs reconciling, and each start reads its stored row afresh. After a clear the population
+manager (if enabled) restarts its members over its next passes, as in normal operation; every other bot stays stopped until you start it. Clearing while the other world still runs reopens the writes and the conflicts will latch it again. A restart also clears it.
+
+The incident behind this: a deploy started a second world on the live `characters.db`; it restored 863 bots, failed to bind the port and exited, while the refused checkpoints
+counted as faults and disabled 512 bots. A world on a file-backed SQLite characters database now refuses to start while another holds the database
+(`<characters database>.world.lock`, taken before the schema initializers) and checks that its port is free before it restores any bot ([operating a realm](../guide/operations.md)).
+
 ### Party bots (a real player's group)
 
 `Playerbots/Party/` (vmangos `src/game/PlayerBots/PartyBotAI.cpp`; the player-facing actions of mangoszero's
@@ -895,6 +1212,7 @@ bots in the service snapshot only, never on a real player.
 | `.playerbot dismiss <sel>` | Administrator | End a follow or stay; the bots go back to autonomous play. |
 | `.playerbot near [#radius]` | GameMaster | List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal, distance (at most 20 lines). |
 | `.playerbot revive <sel>` | Administrator | Revive the dead bots among the selection, as `.revive` does. |
+| `.playerbot travel $id\|$name #map #x #y #z` | Administrator | One running bot begins a journey to the place by its own means ([Travel](#travel)); the reply lists the planned legs (means, end, seconds, copper), or the refusal (a controller, the party AI, a bot-led group or a battleground holds the bot; or the planner's: travel off, no route, a leg of another journey under way). |
 | `.playerbot start <sel> [force]`, `.playerbot stop <sel> [force]` | Administrator | Start or stop every registered bot the selector names; one summary comes back when the worker finishes. |
 
 **Selector `<sel>`.** `all`, a name **prefix** with one trailing star (`Wfbot*`; letters only, a bare star or a star inside a

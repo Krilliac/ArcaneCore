@@ -106,7 +106,7 @@ internal sealed class PlayerbotGuildFounding(ILogger logger)
             return;
         }
 
-        PlayerbotSocialPackets.Send(founder.Session, WorldOpcode.CmsgGuildCreate, PlayerbotSocialPackets.GuildCreate(name));
+        bool sent = PlayerbotSocialPackets.Send(founder.Session, WorldOpcode.CmsgGuildCreate, PlayerbotSocialPackets.GuildCreate(name));
         if (pass.Social.Guilds.GetGuildOf(founder.Player) is { } guild)
         {
             _motd.Add(guild.Id);
@@ -115,6 +115,9 @@ internal sealed class PlayerbotGuildFounding(ILogger logger)
         else
         {
             logger.LogInformation("Playerbot {Bot} could not found the guild {Guild} (the server refused CMSG_GUILD_CREATE)", founder.Player.Name, name);
+            if (!founder.Session.IsInChaosProbe)
+                PlayerbotAnomalies.Report(founder.Player, "social", "guild-action-failed",
+                    $"guild creation for '{name}' failed (sent={sent})");
         }
     }
 
@@ -146,11 +149,14 @@ internal sealed class PlayerbotGuildFounding(ILogger logger)
                     return;
                 }
 
-                PlayerbotSocialPackets.Send(founder.Session, WorldOpcode.CmsgPetitionBuy, PlayerbotSocialPackets.PetitionBuy(npc.Guid, name));
+                bool sent = PlayerbotSocialPackets.Send(founder.Session, WorldOpcode.CmsgPetitionBuy, PlayerbotSocialPackets.PetitionBuy(npc.Guid, name));
                 petition = petitions.GetByOwner(founder.Player.Guid.Low);
                 if (petition is null)
                 {
                     logger.LogInformation("Playerbot {Bot} could not buy a charter for {Guild}", founder.Player.Name, name);
+                    if (!founder.Session.IsInChaosProbe)
+                        PlayerbotAnomalies.Report(founder.Player, "social", "guild-action-failed",
+                            $"charter purchase for '{name}' from petitioner {npc.Guid} failed (sent={sent})");
                     return;
                 }
             }
@@ -205,11 +211,18 @@ internal sealed class PlayerbotGuildFounding(ILogger logger)
         if (!pass.ByCharacter.TryGetValue(charter.Founder, out PlayerbotSocialBot? founder)) { Release("the founder is gone"); return; }
         if (pass.Social.Guilds.GetGuildOf(founder.Player) is not null) { Release("the founder joined a guild"); return; }
         if (petitions.GetByOwner(charter.Founder) is not { } petition) { Release("the charter is gone"); return; }
-        if (pass.NowMs - charter.StartedMs >= pass.Timings.CharterStallMs) { Release("the charter stalled"); return; }
+        if (pass.NowMs - charter.StartedMs >= pass.Timings.CharterStallMs)
+        {
+            if (!founder.Session.IsInChaosProbe)
+                PlayerbotAnomalies.Report(founder.Player, "social", "guild-action-failed",
+                    $"charter founding for '{petition.Name}' stalled after {pass.NowMs - charter.StartedMs}ms");
+            Release("the charter stalled");
+            return;
+        }
 
         if (petitions.IsComplete(petition))
         {
-            PlayerbotSocialPackets.Send(founder.Session, WorldOpcode.CmsgTurnInPetition, PlayerbotSocialPackets.TurnIn(petition.CharterGuid));
+            bool sent = PlayerbotSocialPackets.Send(founder.Session, WorldOpcode.CmsgTurnInPetition, PlayerbotSocialPackets.TurnIn(petition.CharterGuid));
             if (pass.Social.Guilds.GetGuildOf(founder.Player) is { } guild)
             {
                 _motd.Add(guild.Id);
@@ -218,6 +231,9 @@ internal sealed class PlayerbotGuildFounding(ILogger logger)
             }
             else
             {
+                if (!founder.Session.IsInChaosProbe)
+                    PlayerbotAnomalies.Report(founder.Player, "social", "guild-action-failed",
+                        $"charter turn-in for '{petition.Name}' was refused (sent={sent})");
                 Release("the turn-in was refused");
             }
 
@@ -273,7 +289,15 @@ internal sealed class PlayerbotGuildFounding(ILogger logger)
         bool sign = ours;
         if (!ours && pass.World.FindOnlinePlayer(owner) is { Session: WorldSession { IsManaged: false } } realOwner)
             sign = membership.AcceptsCharterOf(pass, bot, realOwner);
-        if (sign) PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgPetitionSign, PlayerbotSocialPackets.PetitionSign(item));
+        if (sign)
+        {
+            bool sent = PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgPetitionSign, PlayerbotSocialPackets.PetitionSign(item));
+            if (petition.ForPlayer(bot.Player.Guid.Low) is null && !bot.Session.IsInChaosProbe)
+            {
+                PlayerbotAnomalies.Report(bot.Player, "social", "guild-action-failed",
+                    $"charter signature for '{petition.Name}' was not recorded (sent={sent})");
+            }
+        }
     }
 
     // --- message of the day -------------------------------------------------------------------------------------------

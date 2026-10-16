@@ -1,12 +1,16 @@
+using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -38,6 +42,12 @@ namespace ArcaneCore.World.Playerbots;
 /// </summary>
 internal static class PlayerbotAreaTriggers
 {
+    /// <summary>
+    /// An area trigger with a teleport that the bot walked into and that did not take it anywhere: <see cref="Update"/> noted it
+    /// (<see cref="TryConsumeTeleportRefusal(Player, out TeleportRefusal)"/>). <paramref name="AtMs"/> is the world time it was noted.
+    /// </summary>
+    internal readonly record struct TeleportRefusal(uint Trigger, string Why, uint AtMs);
+
     private static readonly ConditionalWeakTable<WorldMaps, MapCache> Caches = [];
     private static readonly ConditionalWeakTable<Player, PlayerbotTriggerTracker> Trackers = [];
 
@@ -111,6 +121,51 @@ internal static class PlayerbotAreaTriggers
     internal static uint? TeleportTargetOf(Player player)
         => Trackers.TryGetValue(player, out PlayerbotTriggerTracker? tracker) ? tracker.TeleportTarget : null;
 
+    /// <summary>
+    /// The latest teleport trigger the bot walked into that did not teleport it, if any, and forget it. A walker that expects a particular
+    /// entrance (<see cref="PlayerbotTram"/>) fails its trip at once instead of standing in the volume until its progress bound; the
+    /// <see cref="TeleportRefusal.AtMs"/> stamp lets a consumer ignore a refusal older than what it is doing. Recorded for a trigger blocked by
+    /// <see cref="PlayerbotMapPolicy.AllowsTrigger"/> and for a dispatched trigger after which the bot had not moved (level or faction
+    /// requirement, an ineligible ghost, a refused teleport); one slot per bot, the newest wins. Not recorded during a chaos probe.
+    /// </summary>
+    internal static bool TryConsumeTeleportRefusal(Player player, out TeleportRefusal refusal)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        refusal = default;
+        if (!Trackers.TryGetValue(player, out PlayerbotTriggerTracker? tracker) || tracker.Refusal is not { } noted) return false;
+        tracker.Refusal = null;
+        refusal = noted;
+        return true;
+    }
+
+    /// <summary><see cref="TryConsumeTeleportRefusal(Player, out TeleportRefusal)"/> split into its parts.</summary>
+    internal static bool TryConsumeTeleportRefusal(Player player, out uint trigger, out string why)
+    {
+        bool found = TryConsumeTeleportRefusal(player, out TeleportRefusal refusal);
+        trigger = refusal.Trigger;
+        why = refusal.Why ?? string.Empty;
+        return found;
+    }
+
+    /// <summary>Consume the noted refusal only when it is of <paramref name="trigger"/> and not older than <paramref name="notBeforeMs"/> (world time); another trigger's refusal stays for its own walker.</summary>
+    internal static bool TryConsumeTeleportRefusal(Player player, uint trigger, uint notBeforeMs, out string why)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        why = string.Empty;
+        if (!Trackers.TryGetValue(player, out PlayerbotTriggerTracker? tracker) || tracker.Refusal is not { } noted || noted.Trigger != trigger) return false;
+        tracker.Refusal = null;
+        if (unchecked((int)(noted.AtMs - notBeforeMs)) < 0) return false;
+        why = noted.Why;
+        return true;
+    }
+
+    /// <summary>Forget a noted refusal (a walker starts a new attempt).</summary>
+    internal static void ClearTeleportRefusal(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (Trackers.TryGetValue(player, out PlayerbotTriggerTracker? tracker)) tracker.Refusal = null;
+    }
+
     /// <summary>Forget what the bot is inside (teleport, death): the next position seen sets it again without firing.</summary>
     internal static void Reset(Player player)
     {
@@ -150,15 +205,54 @@ internal static class PlayerbotAreaTriggers
         {
             // The handler may teleport the bot away; a far teleport leaves the map, so stop reporting on this one.
             if (!ReferenceEquals(player.Map, map) || !player.IsInWorld) break;
-            if (!MayTake(maps, player, tracker, trigger)) continue;
+            AreaTriggerTeleport? teleport = maps.FindAreaTriggerTeleport(trigger);
+            if (!MayTake(maps, player, tracker, trigger))
+            {
+                if (teleport is not null && !session.IsInChaosProbe)
+                {
+                    tracker.Refusal = new TeleportRefusal(trigger, string.Create(CultureInfo.InvariantCulture,
+                        $"area trigger {trigger} to map {teleport.TargetMap} blocked by policy"), session.World.NowMs);
+                }
+
+                if (teleport is not null && !session.IsInChaosProbe
+                    && (tracker.TeleportTarget is not null || (!player.IsAlive && player.Combat.Corpse is { } c && c.MapId != map.MapId)))
+                {
+                    PlayerbotAnomalies.Report(player, "nav", "areatrigger-failed",
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"area trigger {trigger} to map {teleport.TargetMap} ({teleport.TargetX:F1},{teleport.TargetY:F1},{teleport.TargetZ:F1}) blocked by policy (target={tracker.TeleportTarget?.ToString(CultureInfo.InvariantCulture) ?? "none"}, alive={player.IsAlive})"),
+                        AnomalySeverity.Warning);
+                }
+
+                continue;
+            }
+
+            Vector3 before = new(player.X, player.Y, player.Z);
             ManagedActionBudget? budget = session.ManagedBudget;
             session.ManagedBudget = null;
-            try { session.TryManagedAction(WorldOpcode.CmsgAreatrigger, BitConverter.GetBytes(trigger)); }
+            bool dispatched;
+            try { dispatched = session.TryManagedAction(WorldOpcode.CmsgAreatrigger, BitConverter.GetBytes(trigger)); }
             finally { session.ManagedBudget = budget; }
             sent.Add(trigger);
+            if (teleport is not null && !session.IsInChaosProbe && !Teleported(session, player, map, before))
+            {
+                tracker.Refusal = new TeleportRefusal(trigger, string.Create(CultureInfo.InvariantCulture,
+                    $"area trigger {trigger} to map {teleport.TargetMap} did not teleport the bot (dispatched={dispatched}, level={player.Level}/{teleport.RequiredLevel})"),
+                    session.World.NowMs);
+                PlayerbotAnomalies.Report(player, "nav", "areatrigger-failed",
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"area trigger {trigger} to map {teleport.TargetMap} ({teleport.TargetX:F1},{teleport.TargetY:F1},{teleport.TargetZ:F1}) did not teleport bot (dispatched={dispatched}, level={player.Level}/{teleport.RequiredLevel}, alive={player.IsAlive})"),
+                    AnomalySeverity.Warning);
+            }
         }
 
         return sent;
+    }
+
+    private static bool Teleported(WorldSession session, Player player, Map map, Vector3 before)
+    {
+        if (!ReferenceEquals(player.Map, map) || !player.IsInWorld) return true;
+        if (session.Services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) == true) return true;
+        return Vector3.DistanceSquared(new Vector3(player.X, player.Y, player.Z), before) > 0.25f;
     }
 
     /// <summary>Whether the bot reports <paramref name="trigger"/> (<see cref="PlayerbotMapPolicy.AllowsTrigger"/>).</summary>
@@ -267,6 +361,9 @@ internal sealed class PlayerbotTriggerTracker
 
     /// <summary>The one map whose teleports the bot may take besides (<see cref="PlayerbotAreaTriggers.AllowTeleportsTo"/>); null: none.</summary>
     internal uint? TeleportTarget { get; set; }
+
+    /// <summary>The latest teleport trigger that did not take the bot (<see cref="PlayerbotAreaTriggers.TryConsumeTeleportRefusal(Player, out PlayerbotAreaTriggers.TeleportRefusal)"/>).</summary>
+    internal PlayerbotAreaTriggers.TeleportRefusal? Refusal { get; set; }
 
     internal bool Knows(object map) => ReferenceEquals(_map, map);
 

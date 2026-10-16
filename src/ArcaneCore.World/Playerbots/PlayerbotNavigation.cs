@@ -202,7 +202,8 @@ internal static class PlayerbotNavigation
     }
 
     internal static bool IsDeadEndPin(Player player, Vector3 point)
-        => StallWatches.TryGetValue(player, out PlayerbotStallWatch? watch) && watch.IsDeadEndPin(player.MapId, point.X, point.Y);
+        => StallWatches.TryGetValue(player, out PlayerbotStallWatch? watch) && watch.World is { } world
+            && watch.IsDeadEndPin(player.MapId, point.X, point.Y, world.NowMs);
 
     /// <summary>The detour offsets tried past a hazard on the way, on either side (yards beyond its radius).</summary>
     private static readonly float[] HazardDetourYards = [5f, 15f];
@@ -363,6 +364,9 @@ internal static class PlayerbotNavigation
     {
         long pending = PendingMark;
         bool planned = PlanTowardSteps(player, goal, options, out route, completedQuestReturn, friendlyTownEnder);
+        // The outcome check (PlayerbotNavigationAnomalies): a pending tile read or a deferred async plan is no verdict, the rest is.
+        PlayerbotNavigationAnomalies.ObservePlan(player, goal, PlayerbotMotion.CurrentPosition(player), planned && route is not null,
+            PendingSince(pending) || PlayerbotAsyncNavigationPlan.Current is { Deferred: true } or { Exhausted: true });
         // A far goal that got no route, or only a few yards of one, may mean the bot stands on a fragment of mesh no walk leaves: the
         // one straight move off it, when the ground beside it is the mesh's large part (TryFragmentHop). Asked only then (never on a
         // pending tile read, which is no verdict on the route), never per tick.
@@ -783,6 +787,8 @@ internal static class PlayerbotNavigation
             // 1645.4, 1665.9, 132.6, where Graveweaver stopped): either refused every route from or through such a place, and a bot
             // that started or stood there never moved again. The motion snaps to a floor where it finds one (PlayerbotMotion).
             route = usable;
+            // The outcome of an exact plan: the route begins at the bot and ends at the destination (a partial plan closes on a goal by design).
+            if (!partial && usable is not null) PlayerbotNavigationAnomalies.CheckExactRoute(player, start, destination, path, usable);
             return true;
         }
 
@@ -972,8 +978,8 @@ internal static class PlayerbotNavigation
     /// never detected: its bots still stall, and are given up goal by goal as before. At most
     /// <see cref="IslandDirections"/> queries, all through <see cref="PlayerbotThinkProbe.Find"/> as fallbacks (counted, and held to the
     /// think's node budget: a query the budget cut short or refused proves nothing and answers no). The brain asks once a stall gives
-    /// a goal up and once when exploring stays confined (PlayerbotBrain.EscapeIsland, EscapeConfinedExplore), and does nothing else
-    /// in that think.
+    /// a goal up and once when exploring stays confined (PlayerbotBrain.EscapeIsland, EscapeConfinedExplore; that one also from where
+    /// the confinement began when the bot said no and has moved off it), and does nothing else in that think.
     /// <para>
     /// Live 2026-10-11 (bot QA #180, live-w23-r1, main 85023136): the ground inside the round wall of the Molsen Farm in Westfall
     /// (x -10305..-10274, y 1355..1385, the wall 1.7 to 3 yards high) is such an island, closed by the collision data too (no floor
@@ -986,9 +992,15 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     internal static bool IsOnMeshIsland(Player player, PlayerbotOptions options)
+        => IsOnMeshIsland(player, PlayerbotMotion.CurrentPosition(player), options);
+
+    /// <summary>
+    /// <see cref="IsOnMeshIsland(Player, PlayerbotOptions)"/> judged from <paramref name="start"/> on the bot's map instead of from where
+    /// the bot stands: the confined-explore check asks it from the point the confinement began (PlayerbotBrain.EscapeConfinedExplore).
+    /// </summary>
+    internal static bool IsOnMeshIsland(Player player, Vector3 start, PlayerbotOptions options)
     {
         if (player.Map is not { } map) return false;
-        Vector3 start = PlayerbotMotion.CurrentPosition(player);
         if (!Finite(start)) return false;
         using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         for (int direction = 0; direction < IslandDirections; direction++)

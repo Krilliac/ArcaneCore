@@ -96,6 +96,7 @@ public static class KnockbackService
         var info = new KnockbackInfo(vcos, vsin, horizontalSpeed, -verticalSpeed); // "notice the - sign in front of speedZ"
         uint counter = player.NextMovementCounter();
         player.Locomotion.Pending.Push(counter, MovementChangeType.KnockBack, apply: true, knockback: info);
+        player.Locomotion.LastTeleportOrKnockbackMs = player.Map.World.NowMs;
         player.Session.Send(WorldOpcode.SmsgMoveKnockBack, KnockbackPackets.BuildOrder(player.Guid.Value, counter, info));
         return true;
     }
@@ -114,6 +115,11 @@ public static class KnockbackService
         {
             state.NoteWrongAck();
             return null;
+        }
+
+        if (player.Map is { } map)
+        {
+            state.LastTeleportOrKnockbackMs = map.World.NowMs;
         }
 
         return sent;

@@ -13,7 +13,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|home|chat|groups|battlegrounds|scenario|summon|send|follow|stay|dismiss|near|revive|fleet|population|qa|chaos>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|splitbrain|list|inspect|invite|home|chat|groups|battlegrounds|travel|scenario|summon|send|follow|stay|dismiss|near|revive|fleet|population|qa|chaos>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
@@ -24,6 +24,8 @@ public sealed class PlayerbotCommands : ICommandGroup
                     "Syntax: .playerbot stop $id|$name|$prefix*|all [force]\nStop a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force).", Stop),
                 new ChatCommand("status", AccountSecurity.GameMaster,
                     "Syntax: .playerbot status [$id|$name]\nShow bot lifecycle status.", Status),
+                new ChatCommand("splitbrain", AccountSecurity.Administrator,
+                    "Syntax: .playerbot splitbrain [clear]\nShow whether this world stopped writing playerbot rows because another world process changed them. Stop the other world first, then clear: it re-reads the stored rows, reports them and lifts the latch so playerbot writes resume. The population manager (if enabled) then restarts its members over its next passes; every other bot stays stopped until you start it, and quarantined bots stay Faulted until you start them.", SplitBrainCommand),
                 new ChatCommand("list", AccountSecurity.GameMaster,
                     "Syntax: .playerbot list\nList managed bots.", List),
                 new ChatCommand("inspect", AccountSecurity.GameMaster,
@@ -50,6 +52,8 @@ public sealed class PlayerbotCommands : ICommandGroup
                     "Syntax: .playerbot groups\nList the bot-led groups (goal, members and roles, state) and the bots waiting for partners.", GroupsCommand),
                 new ChatCommand("battlegrounds", AccountSecurity.GameMaster,
                     "Syntax: .playerbot battlegrounds\nList the bots with battleground business (type, phase, role, activity), the totals and the refused types.", BattlegroundsCommand),
+                new ChatCommand("travel", AccountSecurity.Administrator,
+                    "Syntax: .playerbot travel $id|$name #map #x #y #z\nSend a running bot on a journey to the place by its own means (walking, flight paths, the Deeprun Tram and lifts, boats, zeppelins, its hearthstone, mage teleports and portals) and print the planned legs.", TravelCommand),
                 Scenarios.PlayerbotScenarioCommands.Command,
             ])
     ];
@@ -182,6 +186,8 @@ public sealed class PlayerbotCommands : ICommandGroup
 
     private static bool Status(CommandContext context, string text)
     {
+        if (string.IsNullOrWhiteSpace(text) && context.Session.Services.GetService<ManagedPlayerbotFeature>()?.SplitBrain == true)
+            context.Reply("WARNING: split brain - another world process is writing the playerbot rows; this world writes none (.playerbot splitbrain).");
         IPlayerbotService? service = context.Session.Services.GetService<IPlayerbotService>();
         if (service is null)
         {
@@ -206,6 +212,44 @@ public sealed class PlayerbotCommands : ICommandGroup
         else if (status is { } found)
         {
             context.Reply(Format(found));
+        }
+
+        return true;
+    }
+
+    /// <summary><c>.playerbot splitbrain [clear]</c>: the split-brain latch of <see cref="ManagedPlayerbotFeature"/>.</summary>
+    private static bool SplitBrainCommand(CommandContext context, string text)
+    {
+        string argument = text.Trim();
+        if (argument.Length != 0 && !argument.Equals("clear", StringComparison.OrdinalIgnoreCase)) return false;
+        if (context.Session.Services.GetService<ManagedPlayerbotFeature>() is not { } feature)
+        {
+            context.Reply("Playerbot service is unavailable.");
+            return true;
+        }
+
+        if (argument.Length == 0)
+            context.Reply(feature.SplitBrain
+                ? "Split brain: another world process is writing the playerbot rows; this world writes none. Stop the other world, then .playerbot splitbrain clear."
+                : "No split brain: this world is writing the playerbot rows.");
+        else
+        {
+            context.Reply("Split brain clear accepted (re-reading the stored rows).");
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    ManagedPlayerbotFeature.SplitBrainClear cleared = await feature.ClearSplitBrainAsync().ConfigureAwait(false);
+                    context.Reply(cleared.WasSet
+                        ? $"Split brain cleared; playerbot writes resume. Stored rows re-read: {cleared.Rows} bots, {cleared.Enabled} wanted running, {cleared.Faulted} faulted. All are stopped here; the population manager (if enabled) restarts its members over its next passes, any other bot stays stopped until you start it."
+                        : "No split brain was set.");
+                }
+                catch (Exception error) when (error is not OutOfMemoryException)
+                {
+                    feature.ReportCommandFault("splitbrain-clear", error);
+                    context.Reply($"Split brain clear failed: {error.GetType().Name}.");
+                }
+            });
         }
 
         return true;
@@ -243,6 +287,66 @@ public sealed class PlayerbotCommands : ICommandGroup
 
         PlayerbotOperationResult result = service.InviteToGroup(context.Player, id);
         context.Reply($"Playerbot {(result.Success ? "ok" : "failed")}: {result.Code} ({result.Name ?? id}).");
+        return true;
+    }
+
+    /// <summary>
+    /// <c>.playerbot travel $id|$name #map #x #y #z</c>: plan a journey for a running managed bot through <see cref="IPlayerbotTravel.TryBegin"/>
+    /// (docs/areas/playbots.md, Travel) and print its legs, one line each; the brain drives it from the bot's next think. A bot the brain does
+    /// not drive now (<see cref="ManagedPlayerbotFeature.HeldFromBrain"/>: a controller, a battleground, a bot-led group, its party) is
+    /// refused with that reason; other refusals print the planner's reason. World thread, where commands run.
+    /// </summary>
+    private static bool TravelCommand(CommandContext context, string text)
+    {
+        CommandArgs args = new(text);
+        string? id = args.ExtractArg();
+        if (id is null || !args.ExtractUInt32(out uint mapId) || !args.ExtractFloat(out float x) || !args.ExtractFloat(out float y)
+            || !args.ExtractFloat(out float z) || !args.IsEmpty)
+            return false;
+        IServiceProvider services = context.Session.Services;
+        if (services.GetService<ManagedPlayerbotFeature>() is not { } feature || services.GetService<IPlayerbotTravel>() is not { } travel)
+        {
+            context.Reply("Playerbot service is unavailable.");
+            return true;
+        }
+
+        if (!TryFind(feature, id, out PlayerbotStatus? status) || status is null)
+        {
+            context.Reply("Playerbot not found.");
+            return true;
+        }
+
+        if (feature.FindSession(status.BotId) is not { IsManaged: true } session || session.Player is not { IsInWorld: true, Map: not null } bot)
+        {
+            context.Reply($"Playerbot travel failed: {status.Name} is not running.");
+            return true;
+        }
+
+        // Only the brain drives a journey: a bot another driver holds would have it cancelled at its next tick, so it is refused here.
+        if (feature.HeldFromBrain(status.BotId) is { } held)
+        {
+            context.Reply($"Playerbot travel refused: {status.Name}: {held}.");
+            return true;
+        }
+
+        var goal = new System.Numerics.Vector3(x, y, z);
+        if (!travel.TryBegin(session, bot, mapId, goal, out string? why))
+        {
+            context.Reply($"Playerbot travel refused: {status.Name}: {why}");
+            return true;
+        }
+
+        CultureInfo c = CultureInfo.InvariantCulture;
+        if (PlayerbotTravel.JourneyOf(bot) is not { State: JourneyState.Active } journey || journey.Goal.DistanceTo(new TravelPlace(mapId, goal)) > PlayerbotTravelPlanner.ArrivedYards)
+        {
+            context.Reply($"Playerbot travel: {status.Name} already stands at {PlayerbotTravel.Describe(new TravelPlace(mapId, goal))}.");
+            return true;
+        }
+
+        TravelRoute route = journey.Planned;
+        context.Reply(string.Create(c,
+            $"Playerbot travel: {status.Name} to {PlayerbotTravel.Describe(journey.Goal)}: {route.Legs.Count} leg(s), about {route.Seconds:F0} s, {route.Copper} copper."));
+        for (int i = 0; i < route.Legs.Count; i++) context.Reply(string.Create(c, $"{i + 1}. {PlayerbotTravel.Describe(route.Legs[i])}"));
         return true;
     }
 
@@ -300,6 +404,7 @@ public sealed class PlayerbotCommands : ICommandGroup
             _ = Task.Run(async () =>
             {
                 try { context.Reply($"Playerbot home: {await service.ClearHomesAsync(ids).ConfigureAwait(false)} cleared."); }
+                catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException error) { context.Reply($"Playerbot home refused: split brain is latched (see .playerbot splitbrain); {error.Done} cleared before it."); }
                 catch (Exception error) when (error is not OutOfMemoryException)
                 {
                     service.ReportCommandFault("home clear", error);
@@ -413,6 +518,7 @@ public sealed class PlayerbotCommands : ICommandGroup
                 context.Reply($"Playerbot home: {outcome.Set} set ({description}), {skipped} skipped (not running)"
                     + Unzoned(unzoned) + (outcome.Failed != 0 ? $", {outcome.Failed} failed." : "."));
             }
+            catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException error) { context.Reply($"Playerbot home refused: split brain is latched (see .playerbot splitbrain); {error.Done} set before it."); }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
                 service.ReportCommandFault("home set", error);
@@ -470,6 +576,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         context.Reply($"BOTINSPECT budget={value.Budget ?? "none"}");
         context.Reply(value.Master is null ? "BOTINSPECT party=none"
             : $"BOTINSPECT party=master:{value.Master} mode:{value.PartyMode?.ToString().ToLowerInvariant()}");
+        context.Reply($"BOTINSPECT anomalies={value.Anomalies ?? "none"}");
         if (value.Corpse is { } corpse)
         {
             string distance = corpse.Distance?.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable";

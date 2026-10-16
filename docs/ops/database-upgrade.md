@@ -91,7 +91,7 @@ database older than the baseline reaches it through `arcane-db upgrade` are in [
 | 1 | unexpected failure (a bug, or an input the tool did not anticipate) | maybe: read the message |
 | 2 | usage or configuration: unknown command or option, missing value, no connection string | no |
 | 3 | `status`, `plan`: an upgrade is pending (a normal report; `--no-fail-on-pending` makes it 0 for `set -e` scripts) | no |
-| 4 | refused: database newer than the code, unknown state, blocker (duplicate rows, conflicting index, mismatching table), other sessions connected | no |
+| 4 | refused: database newer than the code, unknown state, blocker (duplicate rows, conflicting index, mismatching table), other sessions connected; the world daemon also exits 4 when another world process holds the characters database writer lock (`<database>.world.lock`) or the lock file cannot be created | no |
 | 5 | drift: the database differs from the model (`check`, or the check at the end of `upgrade`); for `dbc`, a DBC with another layout or a world id no DBC row has | no |
 | 6 | the database server could not be reached or refused the connection (message scrubbed) | no |
 | 7 | the wait for another process's schema lock ran out | no |

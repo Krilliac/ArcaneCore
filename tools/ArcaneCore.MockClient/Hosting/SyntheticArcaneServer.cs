@@ -285,10 +285,20 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         Task stop;
         lock (_gate)
         {
-            stop = _worldStop ??= _worldHost.StopAsync(CancellationToken.None);
+            stop = _worldStop ??= StopWorldAndReleaseAsync();
         }
 
         return stop.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// A complete world stop, then what Program does when the host has run to its end: let go of the characters database's single-writer file lock
+    /// (it outlives the host's own stop so the WAL checkpointer's final checkpoint stays covered). An incomplete stop keeps the lock, as it keeps the durable claim.
+    /// </summary>
+    private async Task StopWorldAndReleaseAsync()
+    {
+        await _worldHost.StopAsync(CancellationToken.None).ConfigureAwait(false);
+        Services.GetService<WorldWriterGuard>()?.Dispose();
     }
 
     public ValueTask DisposeAsync()
@@ -388,6 +398,8 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
 
     private async Task InitializeAsync(CancellationToken cancellationToken)
     {
+        // As in production (WorldStartup): the single-writer lock first, before any schema initializer opens the characters database.
+        _services.GetService<WorldWriterGuard>()?.Acquire();
         await _services.GetRequiredService<AuthDbInitializer>().InitializeAsync(cancellationToken).ConfigureAwait(false);
         await _services.GetRequiredService<CharacterDbInitializer>().InitializeAsync(cancellationToken).ConfigureAwait(false);
         await _services.GetRequiredService<WorldDbInitializer>().InitializeAsync(cancellationToken).ConfigureAwait(false);

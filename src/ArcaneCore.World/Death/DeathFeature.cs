@@ -19,6 +19,7 @@ public sealed class DeathFeature : IWorldFeature, IDisposable
     private readonly IServiceProvider _services;
     private readonly ILogger<DeathFeature> _logger;
     private WorldRuntime? _world;
+    private DeathOutcomeWatcher? _outcomes;
 
     public DeathFeature(IServiceProvider services, ILogger<DeathFeature> logger)
     {
@@ -47,10 +48,13 @@ public sealed class DeathFeature : IWorldFeature, IDisposable
         }
 
         world.PlayerLoggedIn += OnPlayerLoggedIn;
+        _outcomes = new DeathOutcomeWatcher(world);
     }
 
     public void Dispose()
     {
+        _outcomes?.Dispose();
+        _outcomes = null;
         if (_world is { } world)
         {
             world.PlayerLoggedIn -= OnPlayerLoggedIn;

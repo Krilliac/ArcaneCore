@@ -103,6 +103,8 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
     /// <summary>Record the character's current words (copied) and queue a write unless one is waiting.</summary>
     public void Save(int characterId, ReadOnlySpan<uint> words)
     {
+        bool droppedStopped = false;
+        bool droppedClosed = false;
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
@@ -112,22 +114,30 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             {
                 unsaved.Failure = _terminalFailure ?? new InvalidOperationException("the explored-zones write queue is stopped; the change was not persisted");
                 logger.LogError("explored zones of character {Character} arrived after the queue stopped; not persisted", characterId);
-                return;
+                droppedStopped = true;
             }
-
-            if (unsaved.Queued)
+            else if (!unsaved.Queued)
             {
-                return;
+                unsaved.Queued = true;
+                Interlocked.Increment(ref _pending);
+                if (!_channel.Writer.TryWrite(new Work(characterId, Kind.Write, null)))
+                {
+                    unsaved.Queued = false;
+                    Interlocked.Decrement(ref _pending);
+                    unsaved.Failure = new InvalidOperationException("the explored-zones write queue is closed; the change was not persisted");
+                    droppedClosed = true;
+                }
             }
+        }
 
-            unsaved.Queued = true;
-            Interlocked.Increment(ref _pending);
-            if (!_channel.Writer.TryWrite(new Work(characterId, Kind.Write, null)))
-            {
-                unsaved.Queued = false;
-                Interlocked.Decrement(ref _pending);
-                unsaved.Failure = new InvalidOperationException("the explored-zones write queue is closed; the change was not persisted");
-            }
+        if (droppedStopped || droppedClosed)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"character {characterId}",
+                $"queue=ExploredZonesWriteQueue character={characterId} reason={(droppedStopped ? "queue-stopped" : "queue-closed")}",
+                AnomalySeverity.Error);
         }
     }
 
@@ -221,6 +231,12 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
 
         if (failed.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue ExploredZonesWriteQueue",
+                $"queue=ExploredZonesWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"explored-zones writes did not drain for characters {string.Join(", ", failed)}", first);
         }
 
@@ -274,6 +290,12 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             return;
         }
 
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "circuit-open",
+            "queue ExploredZonesWriteQueue",
+            $"queue=ExploredZonesWriteQueue reason=terminal-ownership-failure error={ex.GetType().Name}",
+            AnomalySeverity.Warning);
         logger.LogCritical(ex, "explored-zones write queue entered terminal failure after character ownership rejection");
         try
         {
@@ -485,6 +507,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
             }
         }
 
+        bool newEpisode;
         lock (_gate)
         {
             if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
@@ -492,6 +515,7 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
                 return null;
             }
 
+            newEpisode = failure is not null && unsaved.Failure is null; // a retained write failing again is the same episode
             unsaved.Failure = failure;
             if (failure is null && unsaved.Version == version && !unsaved.Queued)
             {
@@ -501,6 +525,16 @@ public sealed class ExploredZonesWriteQueue(IServiceScopeFactory scopes, ILogger
 
         if (failure is not null && !sweep)
         {
+            if (newEpisode && failure is not CharacterOwnershipRejectedException)
+            {
+                AnomalyLedger.Shared.Report(
+                    "persist",
+                    "write-retry-exhausted",
+                    $"character {characterId}",
+                    $"queue=ExploredZonesWriteQueue character={characterId} attempts={attempts} error={failure.GetType().Name}",
+                    AnomalySeverity.Error);
+            }
+
             logger.LogFault("writequeue-exploredzones", failure, "explored-zones writes for character {Character} are retained after {Max} failed attempts", characterId, attempts);
         }
 

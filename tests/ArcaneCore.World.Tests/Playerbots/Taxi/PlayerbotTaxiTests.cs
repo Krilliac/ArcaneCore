@@ -233,13 +233,16 @@ public sealed partial class PlayerbotTaxiTests
             Assert.Equal(1000u, player.Money);
             Assert.Equal(failure, PlayerbotTaxi.LastFailure(player));
 
-            // Backed off: the same long trip is walked until the window ends.
+            // The departure node is backed off for the first wait of the travel schedule (60 s), no longer (BackoffMinutes only caps it): the
+            // same long trip is walked until the window ends. The other node is not affected.
             player.UnitFlags &= ~UnitFlags.InCombat;
             uint now = rig.Session.World.NowMs;
             Assert.True(PlayerbotTaxi.IsBackedOff(player, now));
+            Assert.True(PlayerbotTaxi.IsBackedOff(player, 1, now));
+            Assert.False(PlayerbotTaxi.IsBackedOff(player, 2, now));
             Assert.Equal(TaxiTravel.Walk, PlayerbotTaxi.TryTravelByTaxi(rig.Session, player, 0, rig.Near(2), options));
-            Assert.True(PlayerbotTaxi.IsBackedOff(player, now + (9 * 60_000u)));
-            Assert.False(PlayerbotTaxi.IsBackedOff(player, now + (11 * 60_000u)));
+            Assert.True(PlayerbotTaxi.IsBackedOff(player, 1, now + 50_000u));
+            Assert.False(PlayerbotTaxi.IsBackedOff(player, 1, now + 70_000u));
             return 0;
         });
     }
@@ -368,9 +371,9 @@ public sealed partial class PlayerbotTaxiTests
         public Task WaitForMasterOutOfSightAsync()
             => _host.WaitForWorldAsync(() => !Session.Player!.VisibleObjects.Contains(TaxiFixture.MasterGuid), "the master leaves sight");
 
-        public static async Task<Rig> StartAsync(bool withQuest = false)
+        public static async Task<Rig> StartAsync(bool withQuest = false, bool alternateDeparture = false)
         {
-            TaxiServices.Current.Value = new TaxiFixture { WithQuest = withQuest };
+            TaxiServices.Current.Value = new TaxiFixture { WithQuest = withQuest, AlternateDeparture = alternateDeparture };
             WorldTestHost host = WorldTestHost.Start();
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
             await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TaxiFixture.MasterGuid), "flight master visible");

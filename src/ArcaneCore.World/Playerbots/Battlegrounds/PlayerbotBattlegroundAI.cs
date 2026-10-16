@@ -106,6 +106,9 @@ internal sealed class PlayerbotBattlegroundAI
     internal bool TravelRefused { get; private set; }
 
     private uint _atMasterMs;
+    private uint _inMatchIdleMs;
+    private bool _reportedObjectiveUnreachable;
+    private bool _reportedIdleInMatch;
 
     private long Now => (long)_session.World.Uptime.TotalMilliseconds;
 
@@ -119,6 +122,9 @@ internal sealed class PlayerbotBattlegroundAI
         _attacking = false;
         TravelRefused = false;
         _atMasterMs = 0;
+        _inMatchIdleMs = 0;
+        _reportedObjectiveUnreachable = false;
+        _reportedIdleInMatch = false;
         _spells.GroupRole = null;
         _spells.Reset();
         _recovery.Reset();
@@ -149,13 +155,19 @@ internal sealed class PlayerbotBattlegroundAI
         {
             Hold(player);
             _atMasterMs = unchecked(_atMasterMs + interval);
-            if (_atMasterMs >= 5_000) TravelRefused = true;
+            if (_atMasterMs >= 5_000)
+            {
+                TravelRefused = true;
+                ReportObjectiveUnreachable(player, $"no living battlemaster at {at}");
+            }
             return false;
         }
 
         _atMasterMs = 0;
         bool walking = WalkTo(player, at, interval, toward: true);
         TravelRefused = !walking;
+        if (TravelRefused)
+            ReportObjectiveUnreachable(player, $"route to battlemaster at {at} was refused");
         return walking;
     }
 
@@ -187,6 +199,7 @@ internal sealed class PlayerbotBattlegroundAI
         {
             Goal = PlayerbotGoalKind.Recover;
             Activity = "corpse-run";
+            _inMatchIdleMs = 0;
             // Not before the gates open, nor after the end: the server refuses a reclaim outside a running match (vmangos
             // HandleReclaimCorpseOpcode, the BattleGround status check) and resurrects everyone at the end.
             if (match.Status == BattlegroundStatus.InProgress) _recovery.Update(player, interval);
@@ -201,6 +214,7 @@ internal sealed class PlayerbotBattlegroundAI
             // Behind the gates before the start, frozen at the end (BattleGround.cpp:290-464, 651-769).
             if (_target is not null) ClearTarget(player);
             Activity = match.Status == BattlegroundStatus.WaitLeave ? "match-over" : "waiting-start";
+            _inMatchIdleMs = 0;
             Hold(player);
             return;
         }
@@ -208,6 +222,7 @@ internal sealed class PlayerbotBattlegroundAI
         if (Casting(player))
         {
             Activity = "casting";
+            _inMatchIdleMs = 0;
             return;
         }
 
@@ -216,13 +231,18 @@ internal sealed class PlayerbotBattlegroundAI
         if (enemy is not null)
         {
             Activity = "fighting";
+            _inMatchIdleMs = 0;
             Fight(player, enemy, interval);
             return;
         }
 
         if (_target is not null) ClearTarget(player);
         TargetEntry = 0;
-        if (!player.Combat.IsInCombat && _spells.UpdateOutOfCombat(player, interval)) return;
+        if (!player.Combat.IsInCombat && _spells.UpdateOutOfCombat(player, interval))
+        {
+            _inMatchIdleMs = 0;
+            return;
+        }
         switch (match)
         {
             case WarsongGulch wsg:
@@ -239,6 +259,40 @@ internal sealed class PlayerbotBattlegroundAI
                 Hold(player);
                 break;
         }
+
+        ObserveMatchOutcome(player, match, interval);
+    }
+
+    private void ObserveMatchOutcome(Player player, Battleground match, uint interval)
+    {
+        if (Activity is "no-flag" or "no-banners" or "no-banner-spell")
+            ReportObjectiveUnreachable(player, $"battleground {match.Type} objective unavailable ({Activity})");
+
+        bool unproductive = Activity is "idle" or "unsupported" or "no-flag" or "no-banners" or "no-banner-spell";
+        if (unproductive)
+        {
+            _inMatchIdleMs = unchecked(_inMatchIdleMs + interval);
+            if (Activity == "unsupported" || _inMatchIdleMs >= 15_000)
+                ReportIdleInMatch(player, $"bot idle in {match.Type} match {match.InstanceId} (activity={Activity}, idleMs={_inMatchIdleMs})");
+        }
+        else
+        {
+            _inMatchIdleMs = 0;
+        }
+    }
+
+    private void ReportObjectiveUnreachable(Player player, string detail)
+    {
+        if (_reportedObjectiveUnreachable || _session.IsInChaosProbe) return;
+        _reportedObjectiveUnreachable = true;
+        PlayerbotAnomalies.Report(player, "bg", "objective-unreachable", detail);
+    }
+
+    private void ReportIdleInMatch(Player player, string detail)
+    {
+        if (_reportedIdleInMatch || _session.IsInChaosProbe) return;
+        _reportedIdleInMatch = true;
+        PlayerbotAnomalies.Report(player, "bg", "idle-in-match", detail);
     }
 
     // --- Warsong Gulch ---------------------------------------------------------------------------------------------------
@@ -701,6 +755,8 @@ internal sealed class PlayerbotBattlegroundAI
                 _route = null;
                 PlayerbotMovementControl.Stop(_session, player);
                 // A tile of the way is still being read: the goal is kept and planned to again next think, not reported unreachable.
+                if (planned != PlanOutcome.Pending)
+                    ReportObjectiveUnreachable(player, $"route to battleground objective at {goal} was refused");
                 return planned == PlanOutcome.Pending;
             }
 

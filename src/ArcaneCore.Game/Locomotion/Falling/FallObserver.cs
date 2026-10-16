@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.Game.Spells;
 
@@ -77,6 +78,9 @@ public static class FallDamageCalculator
 [MovementObserver(Order = 20)]
 public sealed class FallObserver : IClientMovementObserver
 {
+    /// <summary>Maximum duration (ms) a player may continuously hold falling flags without landing before <c>move/fall-without-landing</c> is reported.</summary>
+    public const uint MaxUnresolvedFallMs = 30_000;
+
     public void BeforeApply(MovementObserverContext context, in MovementInfo previous, ref MovementInfo incoming)
     {
         Player player = context.Player;
@@ -88,17 +92,17 @@ public sealed class FallObserver : IClientMovementObserver
             HandleFall(context, state, previous, incoming);
         }
 
-        UpdateFallInformation(state, previous, incoming, context.Opcode);
+        UpdateFallInformation(player, context.World.NowMs, state, previous, incoming, context.Opcode);
     }
 
     /// <summary>vmangos Player::UpdateFallInformationIfNeed.</summary>
-    private static void UpdateFallInformation(LocomotionState state, in MovementInfo previous, in MovementInfo incoming, WorldOpcode opcode)
+    private static void UpdateFallInformation(Player player, uint nowMs, LocomotionState state, in MovementInfo previous, in MovementInfo incoming, WorldOpcode opcode)
     {
         if (opcode is WorldOpcode.MsgMoveFallLand or WorldOpcode.MsgMoveStartSwim
             || (incoming.Flags & (MovementFlags.Hover | MovementFlags.SafeFall)) != 0
             || (incoming.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) == 0)
         {
-            if (state.IsFalling)
+            if (state.IsFalling || state.FallStartedAtMs is not null)
             {
                 state.ResetFall();
             }
@@ -106,12 +110,58 @@ public sealed class FallObserver : IClientMovementObserver
             return;
         }
 
+        bool wasFalling = state.IsFalling;
         float currentZ = incoming.HasFlag(MovementFlags.OnTransport) ? incoming.TransportZ : incoming.Z;
         // A recorded start of 0 is a real height. Only "not falling" means there is nothing to update
         // (vmangos uses !m_fallStartZ for both, Player.cpp:20811, and loses a fall that begins at 0).
         if (!state.IsFalling || state.FallStartZ < currentZ || previous.TransportGuid != incoming.TransportGuid)
         {
             state.FallStartZ = currentZ;
+        }
+
+        if (!wasFalling || state.FallStartedAtMs is null)
+        {
+            state.FallStartedAtMs = nowMs;
+            state.FallWithoutLandingReported = false;
+        }
+
+        CheckFallDuration(player, state, nowMs, incoming.FallTime, incoming.X, incoming.Y, incoming.Z, incoming.Flags);
+    }
+
+    internal static void CheckFallDuration(Player player, LocomotionState state, uint nowMs, uint clientFallTime, float x, float y, float z, MovementFlags flags)
+    {
+        if (state.SuppressAnomalies
+            || player.IsGameMaster
+            || player.Transport is not null
+            || (player.UnitFlags & UnitFlags.TaxiFlight) != 0
+            || (flags & (MovementFlags.OnTransport | MovementFlags.Swimming | MovementFlags.Flying | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.Levitating)) != 0
+            || state.Auras.Has(AuraType.FeatherFall)
+            || state.Auras.Has(AuraType.Hover))
+        {
+            state.FallStartedAtMs = null;
+            state.FallWithoutLandingReported = false;
+            return;
+        }
+
+        if ((flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) == 0 && !state.IsFalling)
+        {
+            state.FallStartedAtMs = null;
+            state.FallWithoutLandingReported = false;
+            return;
+        }
+
+        state.FallStartedAtMs ??= nowMs;
+        uint serverElapsed = unchecked(nowMs - state.FallStartedAtMs.Value);
+        uint elapsedMs = Math.Max(serverElapsed, clientFallTime);
+        if (!state.FallWithoutLandingReported && elapsedMs >= MaxUnresolvedFallMs)
+        {
+            state.FallWithoutLandingReported = true;
+            AnomalyLedger.Shared.Report(
+                "move",
+                "fall-without-landing",
+                $"player {player.Name} (guid {player.Guid.Low})",
+                $"map={player.MapId} durationMs={elapsedMs} fallTime={clientFallTime} pos=({x:F2},{y:F2},{z:F2})",
+                AnomalySeverity.Warning);
         }
     }
 

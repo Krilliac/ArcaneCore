@@ -62,7 +62,23 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     }
 
     public bool RemoveTile(int tileX, int tileY)
-        => _byTerrainTile.Remove((tileX, tileY), out (int X, int Y) key) && _tiles.Remove(key);
+    {
+        if (!_byTerrainTile.Remove((tileX, tileY), out (int X, int Y) key) || !_tiles.Remove(key, out NavMeshTile? removed))
+        {
+            return false;
+        }
+
+        // The neighbours' cross-tile portal tables name the removed tile; drop them so it can be collected.
+        foreach (int side in (ReadOnlySpan<int>)[0, 2, 4, 6])
+        {
+            if (NavMeshFormat.SideOffset(side) is { } offset)
+            {
+                GetTile(removed.X + offset.Dx, removed.Y + offset.Dy)?.DropCrossPortalsTo(removed);
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>The nearest passable polygon within <paramref name="extents"/> of a Recast position (Detour <c>findNearestPoly</c>).</summary>
     public bool TryFindNearestPoly(Vector3 center, Vector3 extents, PathOptions options, out NavPolyRef poly, out Vector3 nearest)
@@ -131,15 +147,12 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
                 continue;
             }
 
-            bool alongZ = side is 0 or 4; // the border is a line of constant x; edges run along z
-            float climb = MathF.Max(MathF.Max(tile.WalkableClimb, other.WalkableClimb), 0.5f);
-            foreach (BorderEdge edge in other.GetBorderEdges((side + 4) & 7))
+            // The overlap of this edge with the neighbour's border edges is fixed by the two tiles' geometry; it is worked out once per
+            // edge (NavMeshTile.GetCrossPortals) rather than by scanning every border edge of the neighbour per expansion.
+            foreach (CrossPortal portal in tile.GetCrossPortals(from.Poly, e, other))
             {
-                if (TryOverlap(a, b, edge.A, edge.B, alongZ, climb, out Vector3 pa, out Vector3 pb))
-                {
-                    (Vector3 l, Vector3 r) = Orient(center, pa, pb);
-                    into.Add(new NavNeighbour(new NavPolyRef(other, edge.Poly), l, r, (byte)(side >> 1)));
-                }
+                (Vector3 l, Vector3 r) = Orient(center, portal.A, portal.B);
+                into.Add(new NavNeighbour(new NavPolyRef(other, portal.Poly), l, r, (byte)(side >> 1)));
             }
         }
     }
@@ -178,21 +191,17 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
             return false;
         }
 
-        Vector3 a = tile.Vertices[p.Vertices[edge]];
-        Vector3 b = tile.Vertices[p.Vertices[(edge + 1) % p.VertexCount]];
         bool alongZ = side is 0 or 4;
-        float climb = MathF.Max(MathF.Max(tile.WalkableClimb, other.WalkableClimb), 0.5f);
         float along = alongZ ? crossing.Z : crossing.X;
-        foreach (BorderEdge candidate in other.GetBorderEdges((side + 4) & 7))
+        foreach (CrossPortal portal in tile.GetCrossPortals(from.Poly, edge, other))
         {
-            if (TryOverlap(a, b, candidate.A, candidate.B, alongZ, climb, out Vector3 pa, out Vector3 pb)
-                && other.Passes(candidate.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags))
+            if (other.Passes(portal.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags))
             {
-                float low = MathF.Min(alongZ ? pa.Z : pa.X, alongZ ? pb.Z : pb.X) - 0.05f;
-                float high = MathF.Max(alongZ ? pa.Z : pa.X, alongZ ? pb.Z : pb.X) + 0.05f;
+                float low = MathF.Min(alongZ ? portal.A.Z : portal.A.X, alongZ ? portal.B.Z : portal.B.X) - 0.05f;
+                float high = MathF.Max(alongZ ? portal.A.Z : portal.A.X, alongZ ? portal.B.Z : portal.B.X) + 0.05f;
                 if (along >= low && along <= high)
                 {
-                    next = new NavPolyRef(other, candidate.Poly);
+                    next = new NavPolyRef(other, portal.Poly);
                     return true;
                 }
             }

@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Transports;
 
@@ -25,8 +26,15 @@ namespace ArcaneCore.Game.GameObjects;
 /// </summary>
 public sealed partial class GameObjectMapSystem
 {
+    /// <summary>Minimum stationary floor stop duration (ms) for a vertical elevator car before reporting <c>elevator-car/stop-too-short</c>.</summary>
+    public const uint MinElevatorStopMs = 1000;
+
+    private const float StationaryNodeToleranceYards = 0.05f;
     private TransportAnimationCatalog _elevatorAnimations = TransportAnimationCatalog.Empty;
     private readonly List<GameObject> _mapWideElevators = [];
+    private readonly HashSet<ulong> _reportedNoAnimationSpawns = [];
+    private readonly HashSet<ulong> _reportedShortStopSpawns = [];
+    private readonly HashSet<ulong> _reportedNonFinitePositionSpawns = [];
 
     /// <summary>
     /// The elevator and tram animations (TransportAnimation.dbc), shared by every map; empty without the DBC. Setting it creates the map-wide
@@ -38,6 +46,8 @@ public sealed partial class GameObjectMapSystem
         set
         {
             _elevatorAnimations = value ?? TransportAnimationCatalog.Empty;
+            _reportedNoAnimationSpawns.Clear();
+            _reportedShortStopSpawns.Clear();
             InstallMapWideElevators();
         }
     }
@@ -71,8 +81,17 @@ public sealed partial class GameObjectMapSystem
         {
             foreach (GameObjectSpawn spawn in spawns.ToArray())
             {
-                if (_content.FindTemplate(spawn.Entry) is not { } template || (GameObjectType)template.Type != GameObjectType.Transport
-                    || ElevatorReach(spawn.Entry) <= Map.VisibilityRange)
+                if (_content.FindTemplate(spawn.Entry) is not { } template || (GameObjectType)template.Type != GameObjectType.Transport)
+                {
+                    continue;
+                }
+
+                if ((spawn.SpawnFlags & 0x02) == 0)
+                {
+                    ValidateElevatorSpawn(spawn.Entry, spawn.Guid);
+                }
+
+                if (ElevatorReach(spawn.Entry) <= Map.VisibilityRange)
                 {
                     continue;
                 }
@@ -118,16 +137,18 @@ public sealed partial class GameObjectMapSystem
 
     private void UpdateElevators()
     {
-        if (ElevatorAnimations.Count == 0)
-        {
-            return;
-        }
-
         foreach (GameObject go in _objects.Values)
         {
-            if (go.Type == GameObjectType.Transport && ElevatorAnimations.TotalTime(go.Entry) is var total and not 0)
+            if (go.Type != GameObjectType.Transport)
+            {
+                continue;
+            }
+
+            ValidateElevatorObject(go);
+            if (ElevatorAnimations.TotalTime(go.Entry) is var total and not 0)
             {
                 go.PathProgress = (uint)((_clockMs - go.CreatedAtMs) % total);
+                _ = ElevatorPositionAt(go, go.PathProgress);
             }
         }
     }
@@ -147,7 +168,13 @@ public sealed partial class GameObjectMapSystem
     public uint ElevatorCycle(GameObject go)
     {
         ArgumentNullException.ThrowIfNull(go);
-        return go.Type == GameObjectType.Transport ? ElevatorAnimations.TotalTime(go.Entry) : 0;
+        if (go.Type != GameObjectType.Transport)
+        {
+            return 0;
+        }
+
+        ValidateElevatorObject(go);
+        return ElevatorAnimations.TotalTime(go.Entry);
     }
 
     /// <summary>
@@ -164,15 +191,41 @@ public sealed partial class GameObjectMapSystem
     public (float X, float Y, float Z)? ElevatorPositionAt(GameObject go, uint pathProgress)
     {
         ArgumentNullException.ThrowIfNull(go);
-        if (go.Type != GameObjectType.Transport || ElevatorAnimations.Offset(go.Entry, pathProgress) is not { } offset)
+        if (go.Type != GameObjectType.Transport)
         {
             return null;
         }
 
+        ValidateElevatorObject(go);
+        if (ElevatorAnimations.Offset(go.Entry, pathProgress) is not { } offset)
+        {
+            return null;
+        }
+
+        uint spawnId = go.Spawn?.Guid ?? go.Guid.Counter;
+        ulong episodeKey = ((ulong)go.Entry << 32) | spawnId;
+
         float qx = go.GetFloat(UpdateFields.GameobjectRotation), qy = go.GetFloat(UpdateFields.GameobjectRotation + 1);
         float qz = go.GetFloat(UpdateFields.GameobjectRotation + 2), qw = go.GetFloat(UpdateFields.GameobjectRotation + 3);
+        if (!float.IsFinite(go.X) || !float.IsFinite(go.Y) || !float.IsFinite(go.Z)
+            || !float.IsFinite(offset.X) || !float.IsFinite(offset.Y) || !float.IsFinite(offset.Z)
+            || !float.IsFinite(qx) || !float.IsFinite(qy) || !float.IsFinite(qz) || !float.IsFinite(qw))
+        {
+            if (_reportedNonFinitePositionSpawns.Add(episodeKey))
+            {
+                AnomalyLedger.Shared.Report(
+                    "elevator-car",
+                    "position-non-finite",
+                    $"gameobject entry {go.Entry} spawn {spawnId}",
+                    $"non-finite elevator input on map {Map.MapId} at progress {pathProgress} (pos=({go.X},{go.Y},{go.Z}), offset=({offset.X},{offset.Y},{offset.Z}))",
+                    AnomalySeverity.Error);
+            }
+
+            return null;
+        }
+
         float length = MathF.Sqrt((qx * qx) + (qy * qy) + (qz * qz) + (qw * qw));
-        if (length > 0)
+        if (length > 0 && float.IsFinite(length))
         {
             // Matrix3(Quat) unitizes a copy first.
             (qx, qy, qz, qw) = (qx / length, qy / length, qz / length, qw / length);
@@ -191,6 +244,94 @@ public sealed partial class GameObjectMapSystem
         float rx = (offset.X * m00) + (offset.Y * m10) + (offset.Z * m20);
         float ry = (offset.X * m01) + (offset.Y * m11) + (offset.Z * m21);
         float rz = (offset.X * m02) + (offset.Y * m12) + (offset.Z * m22);
-        return (go.X + rx, go.Y - ry, go.Z + rz);
+        float x = go.X + rx;
+        float y = go.Y - ry;
+        float z = go.Z + rz;
+        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z))
+        {
+            if (_reportedNonFinitePositionSpawns.Add(episodeKey))
+            {
+                AnomalyLedger.Shared.Report(
+                    "elevator-car",
+                    "position-non-finite",
+                    $"gameobject entry {go.Entry} spawn {spawnId}",
+                    $"computed non-finite elevator position ({x},{y},{z}) on map {Map.MapId} at progress {pathProgress}",
+                    AnomalySeverity.Error);
+            }
+
+            return null;
+        }
+
+        _reportedNonFinitePositionSpawns.Remove(episodeKey);
+        return (x, y, z);
+    }
+
+    private void ValidateElevatorObject(GameObject go)
+        => ValidateElevatorSpawn(go.Entry, go.Spawn?.Guid ?? go.Guid.Counter);
+
+    private void ValidateElevatorSpawn(uint entry, uint spawnId)
+    {
+        ulong key = ((ulong)entry << 32) | spawnId;
+        uint totalTime = _elevatorAnimations.TotalTime(entry);
+        if (totalTime == 0)
+        {
+            if (_reportedNoAnimationSpawns.Add(key))
+            {
+                AnomalyLedger.Shared.Report(
+                    "elevator-car",
+                    "no-animation",
+                    $"gameobject entry {entry} spawn {spawnId}",
+                    $"transport gameobject entry {entry} spawn {spawnId} on map {Map.MapId} has no TransportAnimation keyframes",
+                    AnomalySeverity.Warning);
+            }
+
+            return;
+        }
+
+        IReadOnlyList<TransportAnimationNode> nodes = _elevatorAnimations.Nodes(entry);
+        if (nodes.Count < 2)
+        {
+            return;
+        }
+
+        uint shortestStopMs = uint.MaxValue;
+        int stopCount = 0;
+        for (int i = 0; i < nodes.Count - 1; i++)
+        {
+            TransportAnimationNode a = nodes[i];
+            TransportAnimationNode b = nodes[i + 1];
+            if (b.TimeSeg <= a.TimeSeg)
+            {
+                continue;
+            }
+
+            if (MathF.Abs(b.X - a.X) <= StationaryNodeToleranceYards
+                && MathF.Abs(b.Y - a.Y) <= StationaryNodeToleranceYards
+                && MathF.Abs(b.Z - a.Z) <= StationaryNodeToleranceYards)
+            {
+                uint duration = b.TimeSeg - a.TimeSeg;
+                if (duration < shortestStopMs)
+                {
+                    shortestStopMs = duration;
+                }
+
+                stopCount++;
+            }
+        }
+
+        bool tooShort = (stopCount > 0 && shortestStopMs < MinElevatorStopMs)
+            || totalTime < (2 * MinElevatorStopMs)
+            || (stopCount == 0 && nodes.Count >= 4);
+        if (tooShort && _reportedShortStopSpawns.Add(key))
+        {
+            uint reportedMs = stopCount > 0 ? shortestStopMs : 0;
+            AnomalyLedger.Shared.Report(
+                "elevator-car",
+                "stop-too-short",
+                $"gameobject entry {entry} spawn {spawnId}",
+                $"elevator entry {entry} spawn {spawnId} on map {Map.MapId} has floor stop duration {reportedMs} ms (< {MinElevatorStopMs} ms, cycle {totalTime} ms)",
+                AnomalySeverity.Warning);
+        }
     }
 }
+

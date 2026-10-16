@@ -113,29 +113,36 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     public void AppendCp(int characterId, HonorCpRecord row)
     {
         ArgumentNullException.ThrowIfNull(row);
+        string? dropped;
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
             unsaved.Cp.Add(row);
-            Changed(characterId, unsaved);
+            dropped = Changed(characterId, unsaved);
         }
+
+        ReportDropped(characterId, dropped);
     }
 
     /// <summary>Queue the character's new state (replaces a state still waiting).</summary>
     public void SaveState(int characterId, CharacterHonorState state)
     {
         ArgumentNullException.ThrowIfNull(state);
+        string? dropped;
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
             unsaved.State = state;
-            Changed(characterId, unsaved);
+            dropped = Changed(characterId, unsaved);
         }
+
+        ReportDropped(characterId, dropped);
     }
 
     /// <summary>Queue a reset (HonorMgr::Reset): rows and numbers go, and anything still waiting for the character is discarded.</summary>
     public void Reset(int characterId)
     {
+        string? dropped;
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
@@ -143,8 +150,10 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             unsaved.State = null;
             unsaved.Failure = null;
             unsaved.ResetRequested++;
-            Changed(characterId, unsaved);
+            dropped = Changed(characterId, unsaved);
         }
+
+        ReportDropped(characterId, dropped);
     }
 
     /// <summary>
@@ -153,6 +162,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     /// </summary>
     public void DeleteCharacter(int characterId)
     {
+        string? dropped;
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
@@ -160,8 +170,10 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             unsaved.State = null;
             unsaved.Failure = null;
             unsaved.DeleteRequested++;
-            Changed(characterId, unsaved);
+            dropped = Changed(characterId, unsaved);
         }
+
+        ReportDropped(characterId, dropped);
     }
 
     /// <summary>Drop anything retained for an id about to be reused (the creation hook drained the queue and removes the rows directly).</summary>
@@ -259,6 +271,12 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
 
         if (failed.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue HonorWriteQueue",
+                $"queue=HonorWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"honor writes did not drain for characters {string.Join(", ", failed)}", first);
         }
 
@@ -279,18 +297,18 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     }
 
     /// <summary>Under <see cref="_gate"/>: a change was merged; queue one write unless one is already waiting.</summary>
-    private void Changed(int characterId, Unsaved unsaved)
+    private string? Changed(int characterId, Unsaved unsaved)
     {
         if (_stopped)
         {
             unsaved.Failure = _terminalFailure ?? new InvalidOperationException("the honor write queue is stopped; the change was not persisted");
             logger.LogError("honor change for character {Character} arrived after the queue stopped; not persisted", characterId);
-            return;
+            return "queue-stopped";
         }
 
         if (unsaved.Queued)
         {
-            return;
+            return null;
         }
 
         unsaved.Queued = true;
@@ -301,7 +319,26 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             Interlocked.Decrement(ref _pending);
             unsaved.Failure = new InvalidOperationException("the honor write queue is closed; the change was not persisted");
             logger.LogError("honor change for character {Character} arrived after the queue closed; not persisted", characterId);
+            return "queue-closed";
         }
+
+        return null;
+    }
+
+    /// <summary>Report a change refused by <see cref="Changed"/>; called after the gate is released.</summary>
+    private static void ReportDropped(int characterId, string? reason)
+    {
+        if (reason is null)
+        {
+            return;
+        }
+
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "write-dropped-on-shutdown",
+            $"character {characterId}",
+            $"queue=HonorWriteQueue character={characterId} reason={reason}",
+            AnomalySeverity.Error);
     }
 
     private Exception? RetainedFailureOf(int characterId)
@@ -338,6 +375,12 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             return;
         }
 
+        AnomalyLedger.Shared.Report(
+            "persist",
+            "circuit-open",
+            "queue HonorWriteQueue",
+            $"queue=HonorWriteQueue reason=terminal-ownership-failure error={ex.GetType().Name}",
+            AnomalySeverity.Warning);
         logger.LogCritical(ex, "honor write queue entered terminal failure after character ownership rejection");
         try
         {
@@ -519,17 +562,29 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            bool newEpisode = true;
             lock (_gate)
             {
                 // Never recreate an entry that a delete or a creation removed while the write was in flight.
                 if (_characters.TryGetValue(characterId, out Unsaved? unsaved))
                 {
+                    newEpisode = unsaved.Failure is null; // a retained write failing again is the same episode
                     unsaved.Failure = ex;
                 }
             }
 
             if (!sweep)
             {
+                if (newEpisode && ex is not CharacterOwnershipRejectedException)
+                {
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "write-retry-exhausted",
+                        $"character {characterId}",
+                        $"queue=HonorWriteQueue character={characterId} attempts={MaxAttempts} error={ex.GetType().Name}",
+                        AnomalySeverity.Error);
+                }
+
                 logger.LogFault("writequeue-honor", ex, "honor write for character {Character} failed; retained for retry", characterId);
             }
             else

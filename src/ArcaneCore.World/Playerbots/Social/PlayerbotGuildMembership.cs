@@ -157,11 +157,17 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
             }
 
             bool accept = DecideInvite(pass, bot, guildId);
-            Send(bot, accept ? WorldOpcode.CmsgGuildAccept : WorldOpcode.CmsgGuildDecline);
+            bool sent = Send(bot, accept ? WorldOpcode.CmsgGuildAccept : WorldOpcode.CmsgGuildDecline);
             _pending.Remove(bot.Player.Guid.Low);
             _seenInvites.Remove(bot.Id);
-            if (accept && guilds.GetGuildOf(bot.Player) is { } joined)
-                logger.LogDebug("Playerbot {Bot} joined the guild {Guild}", bot.Player.Name, joined.Name);
+            if (accept)
+            {
+                if (guilds.GetGuildOf(bot.Player) is { } joined)
+                    logger.LogDebug("Playerbot {Bot} joined the guild {Guild}", bot.Player.Name, joined.Name);
+                else if (!bot.Session.IsInChaosProbe)
+                    PlayerbotAnomalies.Report(bot.Player, "social", "guild-action-failed",
+                        $"guild invite acceptance for guild {guildId} failed (sent={sent})");
+            }
         }
     }
 
@@ -201,9 +207,18 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
             PlayerbotSocialBot? candidate = CandidateFor(pass, founding, guild, inviter);
             if (candidate is null) continue;
             _lastRecruit[guild.Id] = pass.NowMs;
-            Send(inviter, WorldOpcode.CmsgGuildInvite, PlayerbotSocialPackets.GuildInvite(candidate.Player.Name));
-            if (guilds.InvitedTo(candidate.Player) == guild.Id) _pending[candidate.Player.Guid.Low] = (guild.Id, pass.NowMs);
-            else _refused[(guild.Id, candidate.Player.Guid.Low)] = pass.NowMs;
+            bool sent = Send(inviter, WorldOpcode.CmsgGuildInvite, PlayerbotSocialPackets.GuildInvite(candidate.Player.Name));
+            if (guilds.InvitedTo(candidate.Player) == guild.Id)
+            {
+                _pending[candidate.Player.Guid.Low] = (guild.Id, pass.NowMs);
+            }
+            else
+            {
+                _refused[(guild.Id, candidate.Player.Guid.Low)] = pass.NowMs;
+                if (!inviter.Session.IsInChaosProbe)
+                    PlayerbotAnomalies.Report(inviter.Player, "social", "guild-action-failed",
+                        $"guild recruitment invite from {inviter.Player.Name} to {candidate.Player.Name} for '{guild.Name}' failed (sent={sent})");
+            }
         }
 
         if (_refused.Count > 256) _refused.Clear();
@@ -264,7 +279,13 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
 
             if (NextPromotion(facts, guild.Ranks.Count) is not { } target) continue;
             _lastPromotion[guild.Id] = pass.NowMs;
-            Send(master, WorldOpcode.CmsgGuildPromote, PlayerbotSocialPackets.GuildPromote(target.Name));
+            bool sent = Send(master, WorldOpcode.CmsgGuildPromote, PlayerbotSocialPackets.GuildPromote(target.Name));
+            byte? postRank = guild.Members.FirstOrDefault(m => m.CharacterId == target.CharacterId)?.Rank;
+            if ((!sent || postRank is null || postRank.Value >= target.Rank) && !master.Session.IsInChaosProbe)
+            {
+                PlayerbotAnomalies.Report(master.Player, "social", "guild-action-failed",
+                    $"guild promotion of {target.Name} in '{guild.Name}' failed (before={target.Rank}, after={postRank?.ToString() ?? "missing"}, sent={sent})");
+            }
         }
     }
 
@@ -279,6 +300,6 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
             if (!pass.BotIds.Contains(id)) _seenInvites.Remove(id);
     }
 
-    private static void Send(PlayerbotSocialBot bot, WorldOpcode opcode, byte[]? payload = null)
+    private static bool Send(PlayerbotSocialBot bot, WorldOpcode opcode, byte[]? payload = null)
         => PlayerbotSocialPackets.Send(bot.Session, opcode, payload ?? []);
 }

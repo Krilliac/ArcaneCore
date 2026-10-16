@@ -1,0 +1,49 @@
+using System.Globalization;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
+
+namespace ArcaneCore.Game.Teleport;
+
+/// <summary>
+/// Front door to <see cref="AnomalyLedger"/> for the server-side outcome checks that concern a player whether a client or a bot
+/// drives it (teleport, death, session): the subject is the stable <c>player Name (guid HEX)</c>, the detail is the caller's text
+/// followed by <c>| map M at x,y,z</c>. Failure path only: callers format their detail after the check failed.
+/// </summary>
+public static class ServerAnomalies
+{
+    /// <summary>Subsystem of the teleport checks.</summary>
+    public const string Teleport = "teleport";
+
+    /// <summary>Subsystem of the death and resurrection checks.</summary>
+    public const string Death = "death";
+
+    /// <summary>Subsystem of the session and network checks.</summary>
+    public const string Session = "session";
+
+    /// <summary>The normalised key for <paramref name="subsystem"/>/<paramref name="code"/>.</summary>
+    public static string Key(string subsystem, string code) => AnomalyLedger.KeyOf(subsystem, code);
+
+    /// <summary>The stable subject for <paramref name="player"/>.</summary>
+    public static string SubjectOf(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        return string.Create(CultureInfo.InvariantCulture, $"player {player.Name} (guid {player.Guid.Value:X})");
+    }
+
+    /// <summary>Report a failed check about <paramref name="player"/>.</summary>
+    public static AnomalyRecording Report(Player player, string subsystem, string code, string detail, AnomalySeverity severity = AnomalySeverity.Warning)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        string where = float.IsFinite(player.X) && float.IsFinite(player.Y) && float.IsFinite(player.Z)
+            ? string.Create(CultureInfo.InvariantCulture, $" | map {player.MapId} at {player.X:F1},{player.Y:F1},{player.Z:F1}")
+            : string.Create(CultureInfo.InvariantCulture, $" | map {player.MapId} at a non-finite position");
+        return AnomalyLedger.Shared.Report(subsystem, code, SubjectOf(player), detail + where, severity);
+    }
+
+    /// <summary>A capture of one player's reports from the shared ledger (tests).</summary>
+    public static AnomalyCapture CaptureFor(Player player)
+    {
+        string subject = SubjectOf(player);
+        return AnomalyLedger.Shared.Capture(n => string.Equals(n.Subject, subject, StringComparison.Ordinal));
+    }
+}

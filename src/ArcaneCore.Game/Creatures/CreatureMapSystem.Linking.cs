@@ -49,7 +49,15 @@ public sealed partial class CreatureMapSystem
             {
                 if (!_spawnGuidDuplicates.TryGetValue(spawn.Guid, out List<Creature>? later))
                     _spawnGuidDuplicates[spawn.Guid] = later = [];
-                if (!later.Contains(creature)) later.Add(creature);
+                if (!later.Contains(creature))
+                {
+                    later.Add(creature);
+                    Creature existing = _bySpawnGuid[spawn.Guid];
+                    CreatureAnomalies.ReportDuplicateRespawn(
+                        creature,
+                        existing,
+                        $"spawn {spawn.Guid} already has live/world creature {existing.Guid} (entry {existing.Entry})");
+                }
             }
         }
 

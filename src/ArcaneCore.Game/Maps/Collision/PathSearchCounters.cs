@@ -24,6 +24,7 @@ public static class PathSearchCounters
     [ThreadStatic] private static bool t_captureTiles;
     private static long s_processTileReads;
     private static long s_processTileReadTicks;
+    private static long s_bvTreesRejected;
     [ThreadStatic] private static TileLoadDetail t_slowestTile;
 
     /// <summary>The slowest tile load since BeginTileCapture on this thread.</summary>
@@ -62,6 +63,14 @@ public static class PathSearchCounters
     /// </summary>
     public static (long Reads, long Ticks) ProcessTileReads
         => (Interlocked.Read(ref s_processTileReads), Interlocked.Read(ref s_processTileReadTicks));
+
+    /// <summary>
+    /// Navigation tiles read, on any thread, whose BV tree was absent or failed verification (<c>NavMeshTile</c>), so nearest-polygon
+    /// lookups on them scan every polygon. Non-zero on a map's data means that lookup is slow there. Bumped once per tile at parse.
+    /// </summary>
+    public static long BvTreesRejected => Interlocked.Read(ref s_bvTreesRejected);
+
+    internal static void NoteBvTreeRejected() => Interlocked.Increment(ref s_bvTreesRejected);
 
     /// <summary>
     /// Times a search on this thread needed a navigation tile that was not resident and answered "pending" instead of reading it

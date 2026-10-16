@@ -59,6 +59,10 @@ public static class WorldServiceCollectionExtensions
         services.Configure<Warden.WardenOptions>(configuration.GetSection(Warden.WardenOptions.SectionName));
         services.Configure<Playerbots.PlayerbotOptions>(options => Playerbots.PlayerbotOptions.ApplyConfiguration(options, configuration));
         services.AddSingleton<Playerbots.IPlayerbotService>(sp => sp.GetRequiredService<Playerbots.ManagedPlayerbotFeature>());
+        // Far travel (docs/areas/playbots.md, Travel): the journey seam; the brain drives journeys, callers begin them through it.
+        services.AddSingleton<Playerbots.IPlayerbotTravel>(sp => new Playerbots.PlayerbotTravel(sp.GetRequiredService<IOptions<Playerbots.PlayerbotOptions>>().Value));
+        // The home progression's travel seam answered by it: a town home across the sea is reachable by boat or zeppelin.
+        services.AddSingleton<Playerbots.IPlayerbotHomeTravel>(sp => new Playerbots.PlayerbotTravelHomeTravel(sp.GetRequiredService<IOptions<Playerbots.PlayerbotOptions>>().Value));
         services.AddPlayerbotQa(configuration); // bot QA: findings from the bots' warnings (docs/areas/playbots-qa.md)
 
         services.AddSingleton(_ => BuildOpcodeTable());
@@ -72,6 +76,7 @@ public static class WorldServiceCollectionExtensions
         services.TryAddSingleton<IAccountSessionClaimStore, InMemoryAccountSessionClaimStore>();
         services.AddSingleton(sp => new SessionRegistry(sp.GetRequiredService<IAccountSessionClaimStore>()));
         services.AddSingleton<ISessionClaims>(sp => sp.GetRequiredService<SessionRegistry>());
+        services.TryAddSingleton<WorldWriterGuard>(); // the characters database's single-writer file lock (WorldStartup takes it before the schema initializers)
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         services.AddSingleton<CharacterPersistenceBarrier>();

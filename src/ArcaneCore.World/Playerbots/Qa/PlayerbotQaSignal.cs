@@ -65,6 +65,12 @@ internal enum QaSignalKind
     /// so a spawn on ground the navigation mesh does not join to the rest (an island platform, a mesh gap) surfaces as content or mesh work.
     /// </summary>
     UnreachableGoal,
+
+    /// <summary>
+    /// A recurring <c>bot-*</c> outcome anomaly recorded in <see cref="ArcaneCore.Kernel.Diagnostics.AnomalyLedger"/>
+    /// (at least <c>Warning</c> severity with 5+ occurrences or 3+ distinct bot subjects).
+    /// </summary>
+    Anomaly,
 }
 
 /// <summary>

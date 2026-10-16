@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Locomotion;
@@ -23,12 +25,95 @@ public sealed class UndermapObserver : IClientMovementObserver
     /// <summary>The height below which a player is in the void (MovementHandler.cpp:1133).</summary>
     public const float VoidHeight = -500.0f;
 
+    /// <summary>Threshold below loaded terrain/WMO floor beyond which a player is considered under the map.</summary>
+    public const float UnderTerrainThresholdYards = 50.0f;
+
+    /// <summary>Minimum interval (ms) between terrain-floor samples for <c>move/under-map</c>.</summary>
+    public const uint TerrainSampleIntervalMs = 1000;
+
+    public void BeforeApply(MovementObserverContext context, in MovementInfo previous, ref MovementInfo incoming)
+    {
+        Player player = context.Player;
+        LocomotionState state = player.Locomotion;
+        if (state.SuppressAnomalies)
+        {
+            return;
+        }
+
+        if (!float.IsFinite(incoming.X) || !float.IsFinite(incoming.Y) || !float.IsFinite(incoming.Z) || !float.IsFinite(incoming.Orientation))
+        {
+            uint nowMs = context.World.NowMs;
+            if (state.LastNonFiniteReportServerMs != nowMs)
+            {
+                state.LastNonFiniteReportServerMs = nowMs;
+                AnomalyLedger.Shared.Report(
+                    "move",
+                    "non-finite",
+                    $"player {player.Name} (guid {player.Guid.Low})",
+                    $"opcode={context.Opcode} map={player.MapId} pos=({incoming.X},{incoming.Y},{incoming.Z}) o={incoming.Orientation}",
+                    AnomalySeverity.Error);
+            }
+        }
+    }
+
     public void AfterApply(MovementObserverContext context, in MovementInfo previous)
     {
         Player player = context.Player;
-        if (player.Movement.Z >= VoidHeight || player.IsGameMaster || player.Map is not { } map)
+        if (player.IsGameMaster || player.Map is not { } map)
         {
             return;
+        }
+
+        LocomotionState state = player.Locomotion;
+        if (player.Movement.Z >= VoidHeight)
+        {
+            if (!state.SuppressAnomalies
+                && player.Transport is null
+                && (player.UnitFlags & UnitFlags.TaxiFlight) == 0
+                && (player.Movement.Flags & (MovementFlags.OnTransport | MovementFlags.Flying | MovementFlags.Swimming)) == 0)
+            {
+                uint nowMs = context.World.NowMs;
+                if (state.LastUndermapSampleMs is null || unchecked(nowMs - state.LastUndermapSampleMs.Value) >= TerrainSampleIntervalMs)
+                {
+                    state.LastUndermapSampleMs = nowMs;
+                    // Terrain alone convicts a player in a cave or a city; the models decide (MapCollision.ClassifyUnderMap; Unknown never convicts).
+                    UnderMapVerdict verdict = map.Collision.ClassifyUnderMap(player.X, player.Y, player.Movement.Z, UnderTerrainThresholdYards);
+                    if (verdict.Kind == UnderMapKind.UnderMap)
+                    {
+                        if (!state.UndermapReportedInEpisode)
+                        {
+                            state.UndermapReportedInEpisode = true;
+                            AnomalyLedger.Shared.Report(
+                                "move",
+                                "under-map",
+                                $"player {player.Name} (guid {player.Guid.Low})",
+                                $"reason=below-terrain map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) floor={player.Movement.Z + verdict.DepthYards:F2}",
+                                AnomalySeverity.Error);
+                        }
+                    }
+                    else
+                    {
+                        state.UndermapReportedInEpisode = false;
+                    }
+                }
+            }
+            else
+            {
+                state.UndermapReportedInEpisode = false;
+            }
+
+            return;
+        }
+
+        if (!state.SuppressAnomalies && !state.UndermapReportedInEpisode)
+        {
+            state.UndermapReportedInEpisode = true;
+            AnomalyLedger.Shared.Report(
+                "move",
+                "under-map",
+                $"player {player.Name} (guid {player.Guid.Low})",
+                $"reason=below-void-height map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) voidHeight={VoidHeight}",
+                AnomalySeverity.Error);
         }
 
         bool repopped = false;

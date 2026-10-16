@@ -58,6 +58,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         public int Version;
         public bool Queued;
         public Exception? Failure;
+        public bool Reported; // this key's failure episode was already reported to the anomaly ledger; cleared when it finally writes
     }
 
     private readonly record struct Work(string Key, Kind Kind, TaskCompletionSource? Done);
@@ -93,6 +94,8 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(write);
+        bool droppedStopped = false;
+        bool droppedClosed = false;
         lock (_gate)
         {
             Unsaved unsaved = Entry(key);
@@ -102,22 +105,30 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
             {
                 unsaved.Failure = new InvalidOperationException($"the {name} write queue is stopped; the change was not persisted");
                 logger.LogError("{Queue} write {Key} arrived after the queue stopped; not persisted", name, key);
-                return;
+                droppedStopped = true;
             }
-
-            if (unsaved.Queued)
+            else if (!unsaved.Queued)
             {
-                return;
+                unsaved.Queued = true;
+                Interlocked.Increment(ref _pending);
+                if (!_channel.Writer.TryWrite(new Work(key, Kind.Write, null)))
+                {
+                    unsaved.Queued = false;
+                    Interlocked.Decrement(ref _pending);
+                    unsaved.Failure = new InvalidOperationException($"the {name} write queue is closed; the change was not persisted");
+                    droppedClosed = true;
+                }
             }
+        }
 
-            unsaved.Queued = true;
-            Interlocked.Increment(ref _pending);
-            if (!_channel.Writer.TryWrite(new Work(key, Kind.Write, null)))
-            {
-                unsaved.Queued = false;
-                Interlocked.Decrement(ref _pending);
-                unsaved.Failure = new InvalidOperationException($"the {name} write queue is closed; the change was not persisted");
-            }
+        if (droppedStopped || droppedClosed)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"queue {name}",
+                $"queue={name} key={key} reason={(droppedStopped ? "queue-stopped" : "queue-closed")}",
+                AnomalySeverity.Error);
         }
     }
 
@@ -181,6 +192,12 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
 
         if (failed.Length > 0)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                $"queue {name}",
+                $"queue={name} undrainedKeys={failed.Length} firstKey={failed[0]}",
+                AnomalySeverity.Error);
             throw new InvalidOperationException($"{name} writes did not drain for {string.Join(", ", failed)}", first);
         }
     }
@@ -318,8 +335,10 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         }
 
         Exception? failure = null;
+        int attemptsMade = 0;
         for (int attempt = 1; attempt <= MaxAttempts; attempt++)
         {
+            attemptsMade = attempt;
             try
             {
                 using IServiceScope scope = scopes.CreateScope();
@@ -348,6 +367,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
             }
         }
 
+        bool report = false;
         lock (_gate)
         {
             if (!_keys.TryGetValue(key, out Unsaved? unsaved))
@@ -356,6 +376,16 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
             }
 
             unsaved.Failure = failure;
+            if (failure is null)
+            {
+                unsaved.Reported = false; // the episode is over: a later failure of this key is a new one
+            }
+            else if (!unsaved.Reported)
+            {
+                unsaved.Reported = true;
+                report = true;
+            }
+
             if (failure is null && unsaved.Version == version && !unsaved.Queued)
             {
                 _keys.Remove(key); // durable and unchanged since: nothing to retain
@@ -364,6 +394,16 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
 
         if (failure is not null)
         {
+            if (report)
+            {
+                AnomalyLedger.Shared.Report(
+                    "persist",
+                    "write-retry-exhausted",
+                    $"queue {name}",
+                    $"queue={name} key={key} attempts={attemptsMade} error={failure.GetType().Name}",
+                    AnomalySeverity.Error);
+            }
+
             logger.LogFault("writequeue-keyed", failure, "{Queue} write {Key} is retained after {Max} failed attempts", name, key, MaxAttempts);
         }
     }

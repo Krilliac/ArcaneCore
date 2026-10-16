@@ -89,7 +89,7 @@ Kalimdor settles in under 1 ms, an unreachable goal's full search of the Eastern
 See the open questions of the lane report for the reasons. Not implemented: the `MapCollision` partial split,
 `PathMoverFactory` (needs a Creature-to-template `InhabitType` accessor from the creature-ai lane),
 FindWalkPoly extents / `farFromPoly` rules, swim/underwater paths, smooth path,
-navmesh raycast and random points, BV tree and off-mesh links, vmap/mmap tile lifecycle shared across instances,
+navmesh raycast and random points, off-mesh links, vmap/mmap tile lifecycle shared across instances,
 model-aware `GetHeightStatic`, WMO liquids, indoor check, dynamic gameobject LOS, DBC-fed WMO areas and
 collision heights, async tile loading, the data-directory inspector. Transports and boats, cMaNGOS mmaps
 (version 8) and WMO area names without `WMOAreaTable.dbc` remain unsupported.

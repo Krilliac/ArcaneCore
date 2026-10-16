@@ -143,6 +143,7 @@ public sealed partial class WorldSession
 
     private void CaptureManagedPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
+        if (_state == SessionState.Closed) { NoteSendAfterClose(opcode); return; }
         // Lean bot: nothing reads this packet back, so it is neither copied nor queued (the ring is not read for other opcodes).
         if (IsLeanBot && !PlayerbotPacketIntake.Contains(opcode) && !HasPacketObserver)
         {
@@ -152,7 +153,7 @@ public sealed partial class WorldSession
 
         lock (_sendLock)
         {
-            if (_state == SessionState.Closed) return;
+            if (_state == SessionState.Closed) { NoteSendAfterClose(opcode); return; }
             byte[] copy = payload.ToArray();
             CapturePacket(false, opcode, payload);
             ManagedPacketObserver?.Invoke(opcode, copy);
@@ -203,6 +204,7 @@ public sealed partial class WorldSession
         {
             if (_state == SessionState.Closed) return;
             _state = SessionState.Closed;
+            Volatile.Write(ref _closedAtTick, Environment.TickCount64);
             _packetCapture?.Dispose();
             _packetCapture = null;
             _managedPackets.Clear();

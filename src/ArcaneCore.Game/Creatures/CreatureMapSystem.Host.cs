@@ -254,6 +254,8 @@ public sealed partial class CreatureMapSystem
         {
             _logger.LogWarning("creature_ai_scripts for creature {Entry} use unsupported {Unsupported}; those parts are skipped",
                 creature.Template.Entry, string.Join(", ", eventAi.Unsupported));
+            CreatureAnomalies.ReportScriptActionUnsupported(
+                creature, $"creature_ai_scripts for creature {creature.Template.Entry} use unsupported {string.Join(", ", eventAi.Unsupported)}");
         }
 
         creature.AI = ai;

@@ -6,8 +6,10 @@ using ArcaneCore.Data.Schema.Upgrade;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests.Resilience;
@@ -180,6 +182,178 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
             Assert.Equal(2000L, await BusyTimeoutAsync(provider, DatabaseComponent.Auth));
             Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.Auth));
         }
+    }
+
+    [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_StartsInWalWithNormalAndNoRefusal()
+    {
+        // A brand-new install: characters.db does not exist yet and Database:SqliteSynchronous=NORMAL. The very first connection
+        // (EF's create) used to find the new file in journal mode 'delete' and log NORMAL as refused at ERROR ("FAIL" on the console).
+        // RED comes from the final log assertion ONLY: without the fix the WAL, synchronous and EffectiveFor checks pass too, because EF's create and the
+        // schema bootstrap switch the file to WAL right after that first open and every later open applies NORMAL. Startup never failed; the ERROR was false.
+        string path = Path.Combine(_directory, "fresh-characters.db");
+        Assert.False(File.Exists(path));
+        string characters = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
+        var errors = new CapturingLoggerProvider();
+        await using ServiceProvider provider = Build(false, [("Database:Provider", "Sqlite"), ("Database:ConnectionString", characters), ("Database:SqliteSynchronous", "Normal")], errors);
+        int exit = await DatabaseStartup.InitializeAsync(() => provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync(), provider, new StringWriter());
+        Assert.Equal(0, exit);
+
+        await using AsyncServiceScope scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        await db.Database.OpenConnectionAsync();
+        Assert.Equal("wal", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
+        Assert.Equal(1L, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
+        SqliteConnectionPragmaInterceptor pragma = Assert.Single(
+            db.GetService<IDbContextOptions>().FindExtension<CoreOptionsExtension>()!.Interceptors!.OfType<SqliteConnectionPragmaInterceptor>());
+        Assert.Equal(SqliteSynchronousMode.Normal, pragma.EffectiveFor(db.Database.GetDbConnection().DataSource));
+        Assert.DoesNotContain(errors.Errors, line => line.Contains("SqliteSynchronous", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_WithPooling_ReusedConnectionIsNormalAndNoRefusal()
+    {
+        // The production default: Pooling=true, so the handle EF's create opened goes back to the pool and is handed out again. As above, RED comes from the log
+        // assertion only.
+        string path = Path.Combine(_directory, "fresh-pooled-characters.db");
+        Assert.False(File.Exists(path));
+        string characters = new SqliteConnectionStringBuilder { DataSource = path, Pooling = true }.ToString();
+        var errors = new CapturingLoggerProvider();
+        string? efConnectionString = null;
+        try
+        {
+            await using ServiceProvider provider = Build(false, [("Database:Provider", "Sqlite"), ("Database:ConnectionString", characters), ("Database:SqliteSynchronous", "Normal")], errors);
+            int exit = await DatabaseStartup.InitializeAsync(() => provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync(), provider, new StringWriter());
+            Assert.Equal(0, exit);
+
+            await using AsyncServiceScope scope = provider.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            efConnectionString = db.Database.GetConnectionString();
+            await db.Database.OpenConnectionAsync();
+            Assert.Equal("wal", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
+            Assert.Equal(1L, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
+            await db.Database.CloseConnectionAsync();
+
+            // A plain open with EF's exact connection string takes the pooled handle back WITHOUT the interceptor running: it still carries the NORMAL that was
+            // applied on it (a fresh, unpooled handle would report SQLite's default FULL, 2).
+            await using (var reused = new SqliteConnection(efConnectionString))
+            {
+                await reused.OpenAsync();
+                Assert.Equal(1L, await ScalarAsync(reused, "PRAGMA synchronous"));
+            }
+
+            Assert.DoesNotContain(errors.Errors, line => line.Contains("SqliteSynchronous", StringComparison.Ordinal));
+        }
+        finally
+        {
+            // Release only this test's pool so the temp directory can be deleted; other tests' pools are untouched.
+            if (efConnectionString is not null)
+            {
+                using var owner = new SqliteConnection(efConnectionString);
+                SqliteConnection.ClearPool(owner);
+            }
+
+            using var raw = new SqliteConnection(characters);
+            SqliteConnection.ClearPool(raw);
+        }
+    }
+
+    [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_ConcurrentOpensAllGetWalAndNormal()
+    {
+        await ConcurrentFreshOpens("fresh-concurrent.db");
+    }
+
+    [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_ConcurrentOpensRepeatedly_NeverLoseWal()
+    {
+        // The race: a loser reads the empty file, the winner then writes page 1, the loser's page_count sees 1 and gives up. One round does not always hit it;
+        // many rounds make a regression fail reliably instead of once in a full-suite run.
+        for (int round = 0; round < 40; round++)
+        {
+            await ConcurrentFreshOpens($"fresh-concurrent-{round}.db");
+        }
+    }
+
+    [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_ConcurrentSyncOpensRepeatedly_NeverLoseWal()
+    {
+        // Same race through the synchronous open (ConnectionOpened -> WalIfEmpty), which the async rounds above do not exercise.
+        for (int round = 0; round < 40; round++)
+        {
+            await ConcurrentFreshOpens($"fresh-concurrent-sync-{round}.db", useSyncOpen: true);
+        }
+    }
+
+    private async Task ConcurrentFreshOpens(string fileName, bool useSyncOpen = false)
+    {
+        // Many connections opening a file that does not exist yet at the same moment: each may see the empty rollback-journal file and try the WAL switch,
+        // which needs an exclusive lock. busy_timeout is set before the switch, so the losers wait instead of failing: no open throws, every connection ends in
+        // WAL on NORMAL, and nothing is logged as refused. A loser that read journal_mode before the winner's switch and page_count after it sees a non-empty
+        // file; it must re-read the mode rather than judge a WAL file by the stale answer.
+        string path = Path.Combine(_directory, fileName);
+        Assert.False(File.Exists(path));
+        string connection = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
+        var errors = new CapturingLoggerProvider();
+        using ILoggerFactory factory = LoggerFactory.Create(logging => logging.AddProvider(errors));
+        SqliteConnectionPragmaInterceptor pragma = SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Normal, factory.CreateLogger("concurrent-open"));
+        using var start = new Barrier(8);
+
+        long[] synchronous = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+        {
+            await using var db = new DbContext(new DbContextOptionsBuilder<DbContext>().UseSqlite(connection).AddInterceptors(pragma).Options);
+            Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(30)), "barrier timed out: the opens were not concurrent");
+            if (useSyncOpen)
+            {
+                db.Database.OpenConnection();
+            }
+            else
+            {
+                await db.Database.OpenConnectionAsync();
+            }
+
+            Assert.Equal("wal", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
+            return (long)(await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"))!;
+        })));
+
+        Assert.All(synchronous, value => Assert.Equal(1L, value));
+        Assert.Equal(SqliteSynchronousMode.Normal, pragma.EffectiveFor(path));
+        Assert.Empty(errors.Errors);
+    }
+
+    [Fact]
+    public void EfCreate_SwitchesANewFileToWal_AfterOpening()
+    {
+        // Pins the third-party behaviour the interceptor's comment relies on: EF's SqliteDatabaseCreator.Create runs PRAGMA journal_mode = 'wal' after it has
+        // opened the connection (so an interceptor on that open still sees the default rollback journal). No interceptor here.
+        string path = Path.Combine(_directory, "ef-create.db");
+        using var db = new DbContext(new DbContextOptionsBuilder<DbContext>().UseSqlite(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()).Options);
+        db.GetService<IRelationalDatabaseCreator>().Create();
+        using var raw = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+        raw.Open();
+        using SqliteCommand command = raw.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode;";
+        Assert.Equal("wal", command.ExecuteScalar());
+    }
+
+    [Fact]
+    public async Task AnExistingRollbackJournalDatabase_ConfiguredNormal_IsLeftAloneAndStaysOnFull()
+    {
+        // Fail closed is unchanged for a file that already has content: the interceptor never rewrites a populated database's journal mode
+        // (the schema bootstrap does that, only once it has accepted the schema), so a bare open of a 'delete'-mode file stays on FULL.
+        string connection = Connection("rollback.db");
+        await using (var raw = new SqliteConnection(connection))
+        {
+            await raw.OpenAsync();
+            await ScalarAsync(raw, "CREATE TABLE t(id INTEGER)");
+            Assert.Equal("delete", await ScalarAsync(raw, "PRAGMA journal_mode"));
+        }
+
+        var builder = new DbContextOptionsBuilder<DbContext>().UseSqlite(connection).AddInterceptors(SqliteConnectionPragmaInterceptor.For(300, 0, SqliteSynchronousMode.Normal));
+        await using var db = new DbContext(builder.Options);
+        await db.Database.OpenConnectionAsync();
+        Assert.Equal("delete", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
+        Assert.Equal(2L, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
     }
 
     [Fact]
@@ -387,11 +561,17 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
 
     private static ServiceProvider Build(params (string Key, string? Value)[] values) => Build(false, values);
 
-    private static ServiceProvider Build(bool withGuard, (string Key, string? Value)[] values)
+    private static ServiceProvider Build(bool withGuard, (string Key, string? Value)[] values, ILoggerProvider? logs = null)
     {
         IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(values.ToDictionary(v => v.Key, v => v.Value)).Build();
         var services = new ServiceCollection();
-        services.AddLogging();
+        services.AddLogging(logging =>
+        {
+            if (logs is not null)
+            {
+                logging.AddProvider(logs);
+            }
+        });
         services.AddAuthDatabase(config);
         services.AddCharacterDatabase(config);
         services.AddWorldDatabase(config);
@@ -401,5 +581,29 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         }
 
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>Collects every Error-or-worse line (the console's "FAIL") from any category.</summary>
+    private sealed class CapturingLoggerProvider : ILoggerProvider, ILogger
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Errors { get; } = new();
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (IsEnabled(logLevel))
+            {
+                Errors.Enqueue(formatter(state, exception));
+            }
+        }
+
+        public void Dispose()
+        {
+        }
     }
 }

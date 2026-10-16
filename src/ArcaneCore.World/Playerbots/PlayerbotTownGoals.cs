@@ -58,6 +58,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private const uint WeaponBow = 2, WeaponGun = 3, WeaponCrossbow = 18;
     private uint _cooldownMs;
+    private bool _cooldownClockedThisThink;
     private uint _repairBackoffUntil;
     private PlayerbotRoute? _route;
     private ObjectGuid _routeTarget;
@@ -97,7 +98,12 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     {
         if (elapsedMs == 0 || !player.IsInWorld || !player.IsAlive || player.Combat.IsInCombat)
             return false;
-        _cooldownMs = elapsedMs >= _cooldownMs ? 0 : _cooldownMs - elapsedMs;
+        // A second Update in one announced think (the goal policy's promotion, then the ladder's rung) does not run the cooldown twice.
+        if (!_thinksAreAnnounced || !_cooldownClockedThisThink)
+        {
+            _cooldownMs = elapsedMs >= _cooldownMs ? 0 : _cooldownMs - elapsedMs;
+            _cooldownClockedThisThink = true;
+        }
         QuestNpcServices? services = session.Services.GetService<QuestNpcFeature>()?.Services;
         if (services is null)
             return false;
@@ -356,6 +362,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         _thinksAreAnnounced = true;
         _repairPlansThisThink = 0;
         _repairClockedThisThink = false;
+        _cooldownClockedThisThink = false;
         MarkThinkQueries();
     }
 
@@ -401,6 +408,10 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private (uint MapId, CreatureContent? Content, int Version) _repairIndex;
     private PlayerbotRoute? _repairRoute;
     private uint _repairSpawn;
+    private uint _repairMissReported;
+
+    /// <summary>A bot this near (yards) the spawn point of the repair NPC it walked to, and seeing no usable NPC, reports it missing (<c>town/service-npc-missing</c>).</summary>
+    internal const float RepairArrivedYards = 8f;
     private uint _repairTripBackoffUntil;
     private uint _repairStuckMs;
     private float _repairBest = float.PositiveInfinity;
@@ -490,6 +501,14 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         {
             Vector3 at = new(current.Spawn.X, current.Spawn.Y, current.Spawn.Z);
             float left = Vector3.Distance(here, at);
+            // Arrived at the repair NPC's own spawn point with nothing of use in sight (this method runs only then): the NPC is not there.
+            if (left <= RepairArrivedYards && _repairMissReported != _repairSpawn && Suspensions?.IsEntrySuspended(current.Entry, now) != true
+                && !PlayerbotNavigationAnomalies.Silenced(player))
+            {
+                _repairMissReported = _repairSpawn;
+                PlayerbotAnomalies.Report(player, "town", "service-npc-missing",
+                    $"stands {left:F1} yd from the spawn of repair NPC {current.Entry} (spawn {_repairSpawn}) and finds no usable service NPC in sight");
+            }
             if (left < _repairBest - 0.5f) { _repairBest = left; _repairStuckMs = 0; }
             else if (!_repairClockedThisThink && !PlayerbotMount.IsBusy(session)) _repairStuckMs += elapsedMs; // a second Update of one think does not run the clock twice
             _repairClockedThisThink = true;
@@ -600,6 +619,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     {
         _repairRoute = null;
         _repairSpawn = 0;
+        _repairMissReported = 0;
         _repairStuckMs = 0;
         _repairBest = float.PositiveInfinity;
     }

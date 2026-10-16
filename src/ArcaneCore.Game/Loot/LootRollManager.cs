@@ -33,7 +33,14 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
     /// <summary>vmangos CountSingleLooterRoll announces a lone looter's need as a roll of 100 (Group.cpp:1094).</summary>
     private const byte SingleLooterRoll = 100;
 
+    /// <summary>How long past <see cref="LootOptions.RollTimeoutMs"/> a roll may run before it is reported as unresolved.</summary>
+    internal const uint OverdueGraceMs = 5000;
+
     private readonly List<LootRoll> _rolls = [];
+    private uint _auditMs;
+
+    /// <summary>The clock the overdue check reads (tests replace it); the roll timers themselves run on the map update diff.</summary>
+    internal TimeProvider Clock { get; set; } = TimeProvider.System;
 
     /// <summary>One group member in a roll; <see cref="Vote"/> is null until the member voted.</summary>
     private sealed class Participant(ObjectGuid guid)
@@ -57,6 +64,11 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
         public List<Participant> Participants { get; } = participants;
 
         public long RemainingMs { get; set; } = remainingMs;
+
+        /// <summary>The roll manager clock at the start (for the overdue check, which does not depend on the map update running).</summary>
+        public long StartedAt { get; init; }
+
+        public bool OverdueReported { get; set; }
     }
 
     /// <summary>Rolls running now.</summary>
@@ -65,6 +77,20 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
     /// <summary>The map update: run the roll timers (world thread).</summary>
     public void Update(Map map, uint diffMs)
     {
+        _auditMs += diffMs;
+        if (_auditMs >= LootService.WindowAuditIntervalMs)
+        {
+            _auditMs = 0;
+            try
+            {
+                service.AuditOpenWindows();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("map-loot-audit", ex);
+            }
+        }
+
         // Resolving removes the roll, so walk backwards; the common case (no roll) costs one comparison.
         for (int i = _rolls.Count - 1; i >= 0; i--)
         {
@@ -166,7 +192,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
                 continue; // vmangos StartLootRoll "no looters": the item is not held and anyone may take it
             }
 
-            var roll = new LootRoll(bag, item, source, group, participants, service.Options.RollTimeoutMs);
+            var roll = new LootRoll(bag, item, source, group, participants, service.Options.RollTimeoutMs) { StartedAt = Clock.GetTimestamp() };
             if (participants.Count == 1)
             {
                 // vmangos Group::CountSingleLooterRoll (Group.cpp:1090-1121): the lone looter needs it with 100; nothing is held.
@@ -205,6 +231,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             return false;
         }
 
+        ReportIfOverdue(roll.Bag);
         if (!Prune(roll) || AllVoted(roll))
         {
             Resolve(roll); // the group was disbanded, or a member who left was the last one the roll waited for
@@ -230,6 +257,43 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Report each running roll of <paramref name="bag"/> that is older than the roll timeout plus <see cref="OverdueGraceMs"/>, once. A roll that
+    /// outlives its timeout means the map update stopped driving the timers (an isolated updater, a stopped map); it is checked when a player touches the
+    /// held item (take, vote), because that is where it shows. Cost: one pass over the live rolls only on those paths.
+    /// </summary>
+    internal void ReportIfOverdue(LootBag bag)
+    {
+        double limitMs = (double)service.Options.RollTimeoutMs + OverdueGraceMs;
+        foreach (LootRoll roll in _rolls)
+        {
+            if (roll.OverdueReported || !ReferenceEquals(roll.Bag, bag))
+            {
+                continue;
+            }
+
+            double ageMs = Clock.GetElapsedTime(roll.StartedAt).TotalMilliseconds;
+            if (ageMs <= limitMs)
+            {
+                continue;
+            }
+
+            roll.OverdueReported = true;
+            int silent = 0;
+            foreach (Participant p in roll.Participants)
+            {
+                if (p.Vote is null)
+                {
+                    silent++;
+                }
+            }
+
+            AnomalyLedger.Shared.Report(LootService.AnomalySubsystem, LootService.RollUnresolvedCode,
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"loot source {bag.Source.Value:X} ({bag.Kind})"),
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"roll for item {roll.Item.ItemId} slot {roll.Item.Slot} is still running {ageMs:F0} ms after it started (timeout {service.Options.RollTimeoutMs} ms, {silent} of {roll.Participants.Count} participants have not voted)"));
+        }
     }
 
     private static bool CanUse(Player player, LootItem item)

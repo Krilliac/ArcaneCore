@@ -97,6 +97,8 @@ public sealed class PlayerbotChaosEngine
 {
     public const int MaxRecentFaults = 32;
     public const int MaxBurstCount = 256;
+    public const uint PostProbeStuckTimeoutMs = 20_000;
+    public const float PostProbeMinProgressYards = 1.5f;
 
     private readonly PlayerbotOptions _options;
     private readonly OpcodeTable _opcodes;
@@ -104,6 +106,7 @@ public sealed class PlayerbotChaosEngine
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<Guid, byte> _assignedBots = new();
     private readonly ConcurrentDictionary<Guid, Random> _botRandoms = new();
+    private readonly ConcurrentDictionary<Guid, PostProbeWatch> _postProbeWatches = new();
     private readonly long[] _categoryCounts = new long[Enum.GetValues<ChaosProbeCategory>().Length];
     private readonly object _faultsGate = new();
     private readonly List<ChaosFaultRecord> _recentFaults = new(MaxRecentFaults);
@@ -113,6 +116,9 @@ public sealed class PlayerbotChaosEngine
     private long _faultsCaught;
     private long _invariantRepairs;
     private int _lastSeed;
+
+    /// <summary>Optional test seam invoked at the end of <see cref="VerifyAndHealAfterProbe"/> before the post-heal verification check.</summary>
+    internal Action<Player>? AfterHealHook { get; set; }
 
     public PlayerbotChaosEngine(PlayerbotOptions options, OpcodeTable opcodes, ILogger logger, TimeProvider? time = null)
     {
@@ -151,6 +157,7 @@ public sealed class PlayerbotChaosEngine
     public void ClearStats(bool clearAssignments = false)
     {
         if (clearAssignments) _assignedBots.Clear();
+        _postProbeWatches.Clear();
         Interlocked.Exchange(ref _probesExecuted, 0);
         Interlocked.Exchange(ref _malformedRejected, 0);
         Interlocked.Exchange(ref _faultsCaught, 0);
@@ -203,16 +210,29 @@ public sealed class PlayerbotChaosEngine
     }
 
     /// <summary>
+    /// True when <paramref name="player"/> is currently aboard an elevator, tram, transport, or taxi flight, or in the middle of a travel leg
+    /// or journey (a ship leg, the hearthstone, a mage leg or portal service: <see cref="PlayerbotTravel.IsMidLeg"/>).
+    /// </summary>
+    public static bool IsTraveling(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        return PlayerbotElevator.IsTraveling(player)
+            || PlayerbotTram.IsTraveling(player)
+            || PlayerbotTravel.IsMidLeg(player)
+            || player.Movement.HasFlag(MovementFlags.OnTransport)
+            || player.Movement.TransportGuid != 0UL
+            || (player.UnitFlags & UnitFlags.TaxiFlight) != 0;
+    }
+
+    /// <summary>
     /// Run <see cref="PlayerbotChaosOptions.ProbesPerThink"/> adversarial probes for <paramref name="botId"/> on the world thread.
     /// Returns the number of probes executed.
     /// </summary>
     public int StepBot(Guid botId, int botOrdinal, WorldSession session, Player player)
     {
+        ObserveBotProgress(botId, player, session.World.NowMs);
         if (!ShouldRunForBot(botId, botOrdinal)) return 0;
-        if (PlayerbotElevator.IsTraveling(player)
-            || PlayerbotTram.IsTraveling(player)
-            || player.Movement.HasFlag(MovementFlags.OnTransport)
-            || (player.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        if (IsTraveling(player))
         {
             return 0;
         }
@@ -227,13 +247,84 @@ public sealed class PlayerbotChaosEngine
     /// </summary>
     public int RunBurst(Guid botId, WorldSession session, Player player, int probesPerBot)
     {
+        ObserveBotProgress(botId, player, session.World.NowMs);
         int bounded = Math.Clamp(probesPerBot, 1, MaxBurstCount);
         return RunProbes(botId, session, player, bounded);
+    }
+
+    /// <summary>
+    /// Observe post-probe movement progress on <paramref name="player"/> and report <c>bot-chaos/probe-left-bot-stuck</c> once per episode
+    /// if a bot with an active movement route makes no progress for <see cref="PostProbeStuckTimeoutMs"/> after a chaos probe.
+    /// </summary>
+    public void ObserveBotProgress(Guid botId, Player player, uint nowMs)
+    {
+        if (!_postProbeWatches.TryGetValue(botId, out PostProbeWatch? watch) || !watch.HasProbed)
+            return;
+
+        if (!player.IsInWorld
+            || player.Map is null
+            || !player.IsAlive
+            || IsTraveling(player)
+            || player.Combat.IsInCombat
+            || !PlayerbotMotion.IsActive(player))
+        {
+            watch.WatchingMotion = false;
+            watch.Reported = false;
+            return;
+        }
+
+        if (!watch.WatchingMotion || watch.MapId != player.MapId)
+        {
+            watch.WatchingMotion = true;
+            watch.MotionSinceMs = nowMs;
+            watch.StartX = player.X;
+            watch.StartY = player.Y;
+            watch.StartZ = player.Z;
+            watch.MapId = player.MapId;
+            watch.Reported = false;
+            return;
+        }
+
+        float dx = player.X - watch.StartX;
+        float dy = player.Y - watch.StartY;
+        float dz = player.Z - watch.StartZ;
+        float distSq = (dx * dx) + (dy * dy) + (dz * dz);
+        if (distSq >= PostProbeMinProgressYards * PostProbeMinProgressYards)
+        {
+            watch.MotionSinceMs = nowMs;
+            watch.StartX = player.X;
+            watch.StartY = player.Y;
+            watch.StartZ = player.Z;
+            watch.Reported = false;
+            return;
+        }
+
+        uint elapsedMs = unchecked(nowMs - watch.MotionSinceMs);
+        if (!watch.Reported && elapsedMs >= PostProbeStuckTimeoutMs)
+        {
+            watch.Reported = true;
+            PlayerbotAnomalies.Report(
+                player,
+                "chaos",
+                "probe-left-bot-stuck",
+                $"bot made no movement progress ({MathF.Sqrt(distSq):F2} yd) for {elapsedMs} ms after chaos probe '{watch.LastProbe}' while motion remained active",
+                AnomalySeverity.Warning);
+        }
     }
 
     private int RunProbes(Guid botId, WorldSession session, Player player, int count)
     {
         if (session.State != SessionState.InWorld || !player.IsInWorld || player.Map is null) return 0;
+        if (IsTraveling(player))
+        {
+            PlayerbotAnomalies.Report(
+                player,
+                "chaos",
+                "probe-on-traveling",
+                $"chaos probe requested while bot is traveling (transport={player.Movement.TransportGuid:X}, flags={player.Movement.Flags}, unitFlags={player.UnitFlags})",
+                AnomalySeverity.Error);
+            return 0;
+        }
 
         PlayerbotChaosOptions cfg = _options.Chaos;
         Span<ChaosProbeCategory> enabledCategories = stackalloc ChaosProbeCategory[15];
@@ -269,15 +360,28 @@ public sealed class PlayerbotChaosEngine
         session.ManagedBudget = null;
         int executed = 0;
         int startOffset = rng.Next(catCount);
+        string lastProbeName = string.Empty;
         try
         {
             for (int i = 0; i < count; i++)
             {
                 if (session.State != SessionState.InWorld || !player.IsInWorld || player.Map is null) break;
+                if (IsTraveling(player))
+                {
+                    PlayerbotAnomalies.Report(
+                        player,
+                        "chaos",
+                        "probe-on-traveling",
+                        $"chaos probe started while bot is traveling during burst (transport={player.Movement.TransportGuid:X}, flags={player.Movement.Flags}, unitFlags={player.UnitFlags})",
+                        AnomalySeverity.Error);
+                    break;
+                }
+
                 ChaosProbeCategory category = count >= catCount && i < catCount
                     ? enabledCategories[(startOffset + i) % catCount]
                     : enabledCategories[rng.Next(catCount)];
                 (WorldOpcode opcode, string probeName, byte[] payload) = BuildProbe(category, rng, player);
+                lastProbeName = $"{category}/{probeName}";
                 ExecuteSingleProbe(botId, session, player, category, probeName, opcode, payload, rng);
                 executed++;
             }
@@ -285,6 +389,23 @@ public sealed class PlayerbotChaosEngine
         finally
         {
             session.ManagedBudget = savedBudget;
+        }
+
+        if (executed > 0)
+        {
+            PostProbeWatch watch = _postProbeWatches.GetOrAdd(botId, static _ => new PostProbeWatch());
+            watch.HasProbed = true;
+            watch.LastProbe = lastProbeName;
+            if (!watch.WatchingMotion && PlayerbotMotion.IsActive(player) && player.IsAlive && !player.Combat.IsInCombat && !IsTraveling(player))
+            {
+                watch.WatchingMotion = true;
+                watch.MotionSinceMs = session.World.NowMs;
+                watch.StartX = player.X;
+                watch.StartY = player.Y;
+                watch.StartZ = player.Z;
+                watch.MapId = player.MapId;
+                watch.Reported = false;
+            }
         }
 
         return executed;
@@ -300,10 +421,13 @@ public sealed class PlayerbotChaosEngine
         byte[] payload,
         Random rng)
     {
+        uint prevMapId = player.MapId;
+        Map? prevMap = player.Map;
         float prevX = player.X, prevY = player.Y, prevZ = player.Z, prevO = player.Orientation;
         MovementInfo prevMovement = player.Movement;
         var prevLastSafe = player.LastSafePosition;
         StandState prevStandState = player.StandState;
+        bool prevAlive = player.IsAlive;
         _ = player.ConsumeRejectedNonFiniteRelocation();
         Interlocked.Increment(ref _probesExecuted);
         Interlocked.Increment(ref _categoryCounts[(int)category]);
@@ -340,13 +464,16 @@ public sealed class PlayerbotChaosEngine
             probeName,
             opcode,
             payload,
+            prevMapId,
+            prevMap,
             prevX,
             prevY,
             prevZ,
             prevO,
             in prevMovement,
             prevLastSafe,
-            prevStandState);
+            prevStandState,
+            prevAlive);
     }
 
     private void DispatchProbePacket(WorldSession session, Player player, WorldOpcode opcode, byte[] payload)
@@ -442,13 +569,16 @@ public sealed class PlayerbotChaosEngine
         string probeName,
         WorldOpcode opcode,
         byte[] payload,
+        uint prevMapId,
+        Map? prevMap,
         float prevX,
         float prevY,
         float prevZ,
         float prevO,
         in MovementInfo prevMovement,
         (uint MapId, float X, float Y, float Z, float O)? prevLastSafe,
-        StandState prevStandState)
+        StandState prevStandState,
+        bool prevAlive)
     {
         player.LastSafePosition = prevLastSafe;
 
@@ -466,11 +596,31 @@ public sealed class PlayerbotChaosEngine
             prevZ = home.Z;
         }
 
+        // Check whether deliberately invalid movement probes were accepted vs cleanly rejected before healing MovementInfo.
+        const MovementFlags ConflictingForwardBack = MovementFlags.Forward | MovementFlags.Backward;
+        const MovementFlags ConflictingStrafe = MovementFlags.StrafeLeft | MovementFlags.StrafeRight;
+        bool hadConflictingFlagsBefore = (prevMovement.Flags & ConflictingForwardBack) == ConflictingForwardBack
+            || (prevMovement.Flags & ConflictingStrafe) == ConflictingStrafe;
+        bool hasConflictingFlagsAfter = (player.Movement.Flags & ConflictingForwardBack) == ConflictingForwardBack
+            || (player.Movement.Flags & ConflictingStrafe) == ConflictingStrafe;
+        bool acceptedConflictingFlags = !hadConflictingFlagsBefore && hasConflictingFlagsAfter;
+
         // 1. Coordinate finiteness invariant: a movement or teleport handler must never leave NaN/Infinity on a player
         // or attempt a non-finite relocation that WorldObject/Unit had to reject at the entity boundary.
         bool rejectedNonFinite = player.ConsumeRejectedNonFiniteRelocation();
-        if (rejectedNonFinite || !float.IsFinite(player.X) || !float.IsFinite(player.Y) || !float.IsFinite(player.Z) || !float.IsFinite(player.Orientation))
+        bool nonFiniteAfter = rejectedNonFinite
+            || !float.IsFinite(player.X)
+            || !float.IsFinite(player.Y)
+            || !float.IsFinite(player.Z)
+            || !float.IsFinite(player.Orientation);
+        if (nonFiniteAfter)
         {
+            PlayerbotAnomalies.Report(
+                player,
+                "chaos",
+                "server-accepted-bad-input",
+                $"server accepted non-finite coordinates on {category}/{probeName} ({opcode})",
+                AnomalySeverity.Warning);
             player.Relocate(prevX, prevY, prevZ, float.IsFinite(player.Orientation) ? player.Orientation : prevO, session.World.NowMs);
             _ = player.ConsumeRejectedNonFiniteRelocation();
             Interlocked.Increment(ref _invariantRepairs);
@@ -483,11 +633,52 @@ public sealed class PlayerbotChaosEngine
                 payload,
                 new InvalidOperationException($"Non-finite player position after {opcode} ({probeName}); restored to ({prevX:F1},{prevY:F1},{prevZ:F1})."));
         }
-        else if (player.X != prevX || player.Y != prevY || player.Z != prevZ || player.Orientation != prevO)
+        else
         {
-            // Prevent fuzzed movement packets (e.g., all-zero or random-float MSG_MOVE_* frames) from relocating bots
-            // to Null Island (0, 0, 0) or through walls/air during chaos probes.
-            player.Relocate(prevX, prevY, prevZ, prevO, session.World.NowMs);
+            if (probeName is "move-nan-x-guard-check" or "move-inf-z-guard-check"
+                || (probeName == "move-conflicting-flags" && !acceptedConflictingFlags))
+            {
+                // Expected rejection of deliberate invalid movement input in chaos mode.
+                Interlocked.Increment(ref _malformedRejected);
+            }
+
+            if (player.X != prevX || player.Y != prevY || player.Z != prevZ || player.Orientation != prevO)
+            {
+                // Prevent fuzzed movement packets (e.g., all-zero or random-float MSG_MOVE_* frames) from relocating bots
+                // to Null Island (0, 0, 0) or through walls/air during chaos probes.
+                player.Relocate(prevX, prevY, prevZ, prevO, session.World.NowMs);
+            }
+        }
+
+        if (acceptedConflictingFlags)
+        {
+            PlayerbotAnomalies.Report(
+                player,
+                "chaos",
+                "server-accepted-bad-input",
+                $"server accepted conflicting movement flags ({player.Movement.Flags}) on {category}/{probeName} ({opcode})",
+                AnomalySeverity.Warning);
+        }
+
+        if (ReferenceEquals(player.Combat.Victim, player))
+        {
+            PlayerbotAnomalies.Report(
+                player,
+                "chaos",
+                "server-accepted-bad-input",
+                $"server accepted self-attack (Victim == self) on {category}/{probeName} ({opcode})",
+                AnomalySeverity.Warning);
+        }
+
+        if (prevAlive != player.IsAlive
+            && (category == ChaosProbeCategory.DeathAndResurrection || opcode is WorldOpcode.CmsgRepopRequest or WorldOpcode.CmsgSelfRes or WorldOpcode.CmsgReclaimCorpse or WorldOpcode.CmsgResurrectResponse))
+        {
+            PlayerbotAnomalies.Report(
+                player,
+                "chaos",
+                "server-accepted-bad-input",
+                $"server accepted out-of-state life transition (alive {prevAlive} -> {player.IsAlive}) on {category}/{probeName} ({opcode})",
+                AnomalySeverity.Warning);
         }
 
         // Restore pre-probe MovementInfo flags & transport binding if a fuzzed MSG_MOVE_* packet or Relocate stripped them
@@ -526,11 +717,61 @@ public sealed class PlayerbotChaosEngine
             bool lifeFixed = map.Combat.VerifyPlayerLifeInvariants(player);
             bool combatFixed = map.Combat.VerifyUnitCombatInvariants(player);
             bool visFixed = map.VerifyVisibleSetInvariants(player);
+            if (!prevAlive && combatFixed)
+            {
+                PlayerbotAnomalies.Report(
+                    player,
+                    "chaos",
+                    "server-accepted-bad-input",
+                    $"server accepted combat/cast state while dead on {category}/{probeName} ({opcode})",
+                    AnomalySeverity.Warning);
+            }
             if (lifeFixed || combatFixed || visFixed)
             {
                 Interlocked.Increment(ref _invariantRepairs);
             }
         }
+
+        AfterHealHook?.Invoke(player);
+
+        // 3. Verify that post-probe healing restored all pre-probe invariants.
+        MovementFlags expectedFlags = prevMovement.TransportGuid == 0UL
+            ? (prevMovement.Flags & ~MovementFlags.OnTransport)
+            : prevMovement.Flags;
+        bool posMismatch = !float.IsFinite(player.X)
+            || !float.IsFinite(player.Y)
+            || !float.IsFinite(player.Z)
+            || !float.IsFinite(player.Orientation)
+            || MathF.Abs(player.X - prevX) > 1e-3f
+            || MathF.Abs(player.Y - prevY) > 1e-3f
+            || MathF.Abs(player.Z - prevZ) > 1e-3f
+            || MathF.Abs(player.Orientation - prevO) > 1e-3f;
+        bool mapMismatch = player.MapId != prevMapId || !ReferenceEquals(player.Map, prevMap);
+        bool moveMismatch = player.Movement.Flags != expectedFlags || player.Movement.TransportGuid != prevMovement.TransportGuid;
+        bool safeMismatch = player.LastSafePosition != prevLastSafe;
+        bool lifeMismatch = player.IsAlive != prevAlive;
+        if (posMismatch || mapMismatch || moveMismatch || safeMismatch || lifeMismatch || player.IsLoggingOut)
+        {
+            PlayerbotAnomalies.Report(
+                player,
+                "chaos",
+                "heal-mismatch",
+                $"post-probe heal mismatch after {category}/{probeName} ({opcode}): posMismatch={posMismatch}, mapMismatch={mapMismatch} ({prevMapId}->{player.MapId}), moveMismatch={moveMismatch} ({expectedFlags}->{player.Movement.Flags}), safeMismatch={safeMismatch}, lifeMismatch={lifeMismatch} ({prevAlive}->{player.IsAlive}), loggingOut={player.IsLoggingOut}",
+                AnomalySeverity.Error);
+        }
+    }
+
+    private sealed class PostProbeWatch
+    {
+        public bool HasProbed;
+        public bool WatchingMotion;
+        public uint MotionSinceMs;
+        public float StartX;
+        public float StartY;
+        public float StartZ;
+        public uint MapId;
+        public string LastProbe = string.Empty;
+        public bool Reported;
     }
 
     private void RecordFault(

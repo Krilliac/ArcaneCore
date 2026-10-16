@@ -48,6 +48,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     private readonly CreatureContent _content;
     private readonly CreatureOptions _options;
     private readonly ICreatureHeightProvider _height;
+    private readonly IUnderMapClassifier? _underMap;
     private readonly Random _random;
     private readonly Func<uint> _serverTime;
     private readonly ILogger _logger;
@@ -77,7 +78,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         Map map, CreatureContent content, CreatureOptions? options = null, ICreatureHeightProvider? height = null,
         Random? random = null, Func<uint>? serverTime = null, ILogger? logger = null, CreatureAiServices? aiServices = null,
         ICreatureRespawnPersistence? respawnPersistence = null, IRespawnClock? respawnClock = null,
-        Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null)
+        Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null, IUnderMapClassifier? underMap = null)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(content);
@@ -85,6 +86,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _content = content;
         _options = options ?? new CreatureOptions();
         _height = height ?? new MapCreatureHeightProvider(map);
+        _underMap = underMap;
         _random = random ?? new Random();
         _serverTime = serverTime ?? (() => unchecked((uint)_clockMs));
         _logger = logger ?? NullLogger.Instance;
@@ -180,6 +182,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         UpdateCreatures(diffMs);
         t = Lap(t, out _timing.Creatures);
         UpdateSpawnGroups();
+        CheckDormantRespawnStuck(diffMs);
         t = Lap(t, out _timing.SpawnGroups);
         UpdatePendingAi();
         t = Lap(t, out _timing.PendingAi);
@@ -251,6 +254,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     {
         HomePathTeleports++;
         CreaturePathStats.AddHomeTeleport();
+        CreatureAnomalies.ReportHomeUnreachable(creature, new Vector3(x, y, z), "home return fell back to teleport");
         NearTeleport(creature, x, y, z, orientation);
     }
 
@@ -420,6 +424,13 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     internal PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false)
     {
         ArgumentNullException.ThrowIfNull(creature);
+        if (!float.IsFinite(destination.X) || !float.IsFinite(destination.Y) || !float.IsFinite(destination.Z))
+        {
+            CreatureAnomalies.ReportNonFinite(
+                creature,
+                $"Creature {creature.Guid} (entry {creature.Entry}) requested path to non-finite destination ({destination.X}, {destination.Y}, {destination.Z}) on map {Map.MapId}");
+        }
+
         if (!HasPathBudget)
         {
             NoteDeferredPath(creature);
@@ -439,6 +450,16 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         {
             NoPathPaths++;
             CreaturePathStats.AddNoPath();
+            if (toSpawn)
+            {
+                CreatureAnomalies.ReportHomeUnreachable(creature, destination, "no mesh path to home");
+            }
+
+            if (toSpawn || creature.Combat.IsInCombat || creature.Motion.CurrentType is not (MovementGeneratorType.Random or MovementGeneratorType.Fleeing or MovementGeneratorType.Confused))
+            {
+                CreatureAnomalies.ReportPathFailed(creature, start, destination, toSpawn ? "home" : creature.Motion.CurrentType.ToString());
+            }
+
             return PlannedPath.Of(PathOutcome.NoPath);
         }
 
@@ -451,6 +472,15 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         PathOutcome outcome = (path.Type & PathType.Incomplete) != 0 ? PathOutcome.Partial
             : (path.Type & (PathType.NotUsingPath | PathType.Shortcut)) != 0 ? PathOutcome.Direct
             : PathOutcome.Mesh;
+        if (outcome is PathOutcome.Mesh or PathOutcome.Direct)
+        {
+            creature.ClearPathFailedEpisode();
+            if (toSpawn)
+            {
+                creature.ClearHomeUnreachableEpisode();
+            }
+        }
+
         if (outcome == PathOutcome.Mesh && corners.Count >= 2 && Map.Collision.MeshPoints is { } mesh
             && (toSpawn || creature.Combat.IsInCombat || creature.Motion.CurrentType != MovementGeneratorType.Random))
         {
@@ -750,6 +780,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
                         CheckNoMeleePanicEnded(creature);
                         CheckCalledGuard(creature);
+                        CheckAliveCreatureAnomalies(creature, diffMs);
 
                         break;
 
@@ -772,6 +803,10 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
                         if (creature.Spawn is not null && creature.RespawnAtMs <= _clockMs && PoolKeepsOnRespawn(creature) && LinkAllowsSpawn(creature))
                         {
                             Respawn(creature);
+                        }
+                        else
+                        {
+                            CheckRespawnStuck(creature, diffMs, progressedThisTick: false);
                         }
 
                         break;

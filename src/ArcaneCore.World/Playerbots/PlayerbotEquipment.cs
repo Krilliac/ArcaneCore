@@ -9,6 +9,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Spells;
 using ArcaneCore.Protocol;
+using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots;
@@ -30,8 +31,28 @@ internal sealed class PlayerbotEquipment(WorldSession session)
     private readonly PlayerbotTalents _talents = new(session);
     private readonly Dictionary<ulong, uint> _refusedUntil = [];
 
+    /// <summary>A worn item at zero durability this long (world time, out of sight of any repair) is reported.</summary>
+    internal const uint BrokenGearMs = 20 * 60_000;
+
+    /// <summary>The equipped gear is looked over this often.</summary>
+    internal const uint BrokenLookMs = 30_000;
+
+    /// <summary>The same item worn this many times inside <see cref="FlapWindowMs"/> is a swap loop.</summary>
+    internal const int FlapLimit = 3;
+
+    internal const uint FlapWindowMs = 600_000;
+
+    private const int EquipLogSize = 8;
+
+    private uint _nextBrokenLookMs;
+    private uint _brokenSinceMs;
+    private bool _brokenReported;
+    private readonly (ulong Guid, uint AtMs)[] _equipLog = new (ulong, uint)[EquipLogSize];
+    private int _equipLogCount;
+
     internal bool Update(Player player)
     {
+        LookForBrokenGear(player);
         if (!player.IsInWorld || !player.IsAlive || player.Combat.IsInCombat
             || session.ManagedBudget is not { Remaining: > 0 })
             return false;
@@ -234,9 +255,105 @@ internal sealed class PlayerbotEquipment(WorldSession session)
 
         if (!sent)
             return false;
-        if (!InventorySlots.IsEquipmentPos(item.BagSlot, item.Slot) || item.Inventory is null)
-            _refusedUntil[item.Guid.Value] = unchecked(session.World.NowMs + RefusalBackoffMs);
+        CheckEquipOutcome(player, item, slot);
         return true;
+    }
+
+    /// <summary>
+    /// What the equip request did to <paramref name="item"/>, chosen for <paramref name="slot"/> (<see cref="InventorySlots.NullSlot"/>:
+    /// a bag): still in the bags is refused (backed off, and reported as <c>gear/equip-not-applied</c>: the bot and the server's own
+    /// CanEquipItem both judged it wearable), worn is checked for the right slot and for a swap loop.
+    /// </summary>
+    internal void CheckEquipOutcome(Player player, Item item, byte slot)
+    {
+        if (!InventorySlots.IsEquipmentPos(item.BagSlot, item.Slot) || item.Inventory is null)
+        {
+            _refusedUntil[item.Guid.Value] = unchecked(session.World.NowMs + RefusalBackoffMs);
+            PlayerbotAnomalies.Report(player, "gear", "equip-not-applied",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"chose item {item.Entry} for slot {slot}, sent it, and it is still at bag {item.BagSlot} slot {item.Slot}"));
+            return;
+        }
+
+        CheckEquippedWhere(player, item, slot);
+    }
+
+    /// <summary>
+    /// The item landed in the equipment, but where the choice said? A named slot must hold it; no named slot (a bag) means a bag slot.
+    /// Then the swap-loop check: the same item worn <see cref="FlapLimit"/> times inside <see cref="FlapWindowMs"/>.
+    /// </summary>
+    private void CheckEquippedWhere(Player player, Item item, byte slot)
+    {
+        bool right = slot == InventorySlots.NullSlot
+            ? item.Slot >= InventorySlots.BagStart && item.Slot < InventorySlots.BagEnd
+            : item.Slot == slot;
+        if (!right)
+        {
+            PlayerbotAnomalies.Report(player, "gear", "equip-wrong-slot",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"item {item.Entry} was meant for slot {(slot == InventorySlots.NullSlot ? "a bag slot" : slot.ToString(CultureInfo.InvariantCulture))} and sits in slot {item.Slot}"));
+        }
+
+        uint now = session.World.NowMs;
+        _equipLog[_equipLogCount % EquipLogSize] = (item.Guid.Value, now);
+        _equipLogCount++;
+        int worn = 0;
+        for (int index = 0; index < Math.Min(_equipLogCount, EquipLogSize); index++)
+        {
+            (ulong guid, uint at) = _equipLog[index];
+            if (guid == item.Guid.Value && unchecked(now - at) <= FlapWindowMs) worn++;
+        }
+
+        if (worn >= FlapLimit)
+        {
+            for (int index = 0; index < EquipLogSize; index++)
+                if (_equipLog[index].Guid == item.Guid.Value) _equipLog[index] = default;
+            PlayerbotAnomalies.Report(player, "gear", "equip-flapping",
+                string.Create(CultureInfo.InvariantCulture, $"item {item.Entry} worn {worn} times within {FlapWindowMs / 1000} s: two items keep replacing each other"));
+        }
+    }
+
+    /// <summary>
+    /// <c>gear/broken-unrepaired</c>: a worn item at zero durability (it gives nothing) for <see cref="BrokenGearMs"/> of world time while
+    /// the bot lives. Looked at every <see cref="BrokenLookMs"/>: a walk over the equipment slots, no allocation. Info: a bot without
+    /// the money cannot repair, but the count says how many go about broken.
+    /// </summary>
+    private void LookForBrokenGear(Player player)
+    {
+        uint now = session.World.NowMs;
+        if (!player.IsInWorld || !player.IsAlive)
+        {
+            _brokenSinceMs = 0;
+            _brokenReported = false;
+            return;
+        }
+
+        if (unchecked((int)(_nextBrokenLookMs - now)) > 0) return;
+        _nextBrokenLookMs = unchecked(now + BrokenLookMs);
+        Item? broken = null;
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd && broken is null; slot++)
+            if (slot != InventorySlots.Tabard && slot != InventorySlots.Body
+                && player.Inventory.GetItem(InventorySlots.Bag0, slot) is { MaxDurability: > 0, Durability: 0 } worn)
+                broken = worn;
+        if (broken is null)
+        {
+            _brokenSinceMs = 0;
+            _brokenReported = false;
+            return;
+        }
+
+        if (_brokenSinceMs == 0)
+        {
+            _brokenSinceMs = Math.Max(1u, now);
+            return;
+        }
+
+        uint elapsed = unchecked(now - _brokenSinceMs);
+        if (_brokenReported || elapsed < BrokenGearMs || elapsed > int.MaxValue) return;
+        _brokenReported = true;
+        PlayerbotAnomalies.Report(player, "gear", "broken-unrepaired",
+            string.Create(CultureInfo.InvariantCulture, $"item {broken.Entry} in slot {broken.Slot} at zero durability for {elapsed} ms of world time"),
+            ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Info);
     }
 
     /// <summary>The items in the backpack and bags (not worn, not banked), in a stable order, skipping recent refusals.</summary>

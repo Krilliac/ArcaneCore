@@ -33,6 +33,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     /// <summary>Picks after which a retained busy failure is retried even though other snapshots are still waiting, so a saturated queue cannot starve it.</summary>
     private const int RetainedEvery = 16;
 
+    /// <summary>The latency histogram of one successful character write (store call), microseconds.</summary>
+    internal const string SaveLatencyName = LatencyNames.CharacterSave;
+
     /// <summary>Pause before the next write after consecutive "database is locked" failures: 1 s, 2 s, then 5 s.</summary>
     private static readonly long[] BusyBackoffTicks = [Stopwatch.Frequency, 2 * Stopwatch.Frequency, 5 * Stopwatch.Frequency];
 
@@ -46,6 +49,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private readonly Lock _gate = new();
     private readonly Lock _reportGate = new();
     private readonly Dictionary<int, FailedSave> _failed = [];
+    private readonly HashSet<int> _exhaustedReported = []; // under _gate: characters whose retry-exhausted episode was already reported; cleared when the snapshot is written or discarded
     private readonly HashSet<int> _held = [];
     private readonly HashSet<int> _quarantined = [];
     private readonly HashSet<int> _quarantineAnnounced = []; // quarantined characters whose first refused snapshot was announced (guarded by _gate)
@@ -82,6 +86,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         _settings = options?.Value ?? new WorldRuntimeOptions();
         _announcer = announcer;
     }
+
+    /// <summary>Threshold above which a single character snapshot write reports a <c>persist/save-slow</c> anomaly (zero disables).</summary>
+    public TimeSpan SlowSaveThreshold { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>Where the write times go (the shared registry unless a test supplies its own).</summary>
+    internal LatencyRegistry Latency { get; init; } = LatencyRegistry.Shared;
 
     /// <summary>Consecutive "database is locked" failures after which a busy database counts as a storm worth telling the staff about (the whole backoff ladder was used).</summary>
     private const int BusyStormStreak = 3;
@@ -166,6 +176,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             }
             else
             {
+                AnomalyLedger.Shared.Report("persist", "write-dropped-on-shutdown", $"character {state.Id}", $"queue=CharacterSaveQueue character={state.Id} reason=queue-closed", AnomalySeverity.Error);
                 Announce(AnnounceSeverity.Error, "The character save queue is closed: a snapshot was not accepted", $"character {state.Id}", "save-closed");
             }
 
@@ -276,6 +287,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             {
                 // Authoritative publication/loading supersedes any retained old-session state.
                 _failed.Remove(characterId);
+                _exhaustedReported.Remove(characterId);
             }
         }
     }
@@ -292,6 +304,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             _quarantined.Remove(characterId);
             _quarantineAnnounced.Remove(characterId);
             _failed.Remove(characterId);
+            _exhaustedReported.Remove(characterId);
         }
     }
 
@@ -418,6 +431,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
         if (notDrained is not null)
         {
+            AnomalyLedger.Shared.Report("persist", "write-dropped-on-shutdown", "queue CharacterSaveQueue", $"queue=CharacterSaveQueue reason=undrained-on-stop message={notDrained.Message}", AnomalySeverity.Error);
             Announce(AnnounceSeverity.Critical, "The character save queue could not drain: snapshots were not written", notDrained.Message, "save-drain-failed");
             throw notDrained;
         }
@@ -619,14 +633,40 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
             try
             {
+                long writeStart = Stopwatch.GetTimestamp();
                 await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
                 ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
                 await store.SaveStateAsync(state, cancellationToken).ConfigureAwait(false);
+                int previousStreak;
                 lock (_gate)
                 {
+                    previousStreak = _busyStreak;
                     _failed.Remove(state.Id);
+                    _exhaustedReported.Remove(state.Id);
                     _busyStreak = 0;
                     _busyUntil = 0;
+                }
+
+                if (previousStreak > 0)
+                {
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "circuit-recovered",
+                        "queue CharacterSaveQueue",
+                        $"queue=CharacterSaveQueue character={state.Id} previousBusyStreak={previousStreak}",
+                        AnomalySeverity.Info);
+                }
+
+                TimeSpan writeElapsed = Stopwatch.GetElapsedTime(writeStart);
+                Latency.Record(SaveLatencyName, writeElapsed.Ticks / (TimeSpan.TicksPerMillisecond / 1000));
+                if (SlowSaveThreshold > TimeSpan.Zero && writeElapsed >= SlowSaveThreshold)
+                {
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "save-slow",
+                        $"character {state.Id}",
+                        $"queue=CharacterSaveQueue character={state.Id} elapsedMs={(long)writeElapsed.TotalMilliseconds} thresholdMs={(long)SlowSaveThreshold.TotalMilliseconds}",
+                        AnomalySeverity.Info);
                 }
 
                 return false;
@@ -652,6 +692,16 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                     retained = _failed.Count;
                 }
 
+                if (streak == 1)
+                {
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "circuit-open",
+                        "queue CharacterSaveQueue",
+                        $"queue=CharacterSaveQueue reason=database-busy character={state.Id} streak={streak} pauseMs={(long)pause.TotalMilliseconds}",
+                        AnomalySeverity.Warning);
+                }
+
                 if (streak >= BusyStormStreak)
                 {
                     Announce(AnnounceSeverity.Warning, "The database is busy: character saves keep failing and are being retried",
@@ -675,9 +725,21 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                bool newEpisode;
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex);
+                    newEpisode = _exhaustedReported.Add(state.Id); // a retained snapshot failing again is the same episode
+                }
+
+                if (newEpisode)
+                {
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "write-retry-exhausted",
+                        $"character {state.Id}",
+                        $"queue=CharacterSaveQueue character={state.Id} attempts={attempt} error={ex.GetType().Name}",
+                        AnomalySeverity.Error);
                 }
 
                 _logger.LogFault("writequeue-character", ex, "saving character {Id} failed; authoritative snapshot retained", state.Id);
@@ -745,6 +807,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
         if (publish)
         {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "circuit-open",
+                "queue CharacterSaveQueue",
+                $"queue=CharacterSaveQueue reason=terminal-ownership-failure error={failure.GetType().Name}",
+                AnomalySeverity.Warning);
             try { FatalFailure?.Invoke(failure); }
             catch (Exception callbackError) when (callbackError is not OutOfMemoryException)
             { _logger.LogFault("writequeue-character-callback", callbackError, "character save queue fatal-failure callback failed"); }
@@ -961,6 +1029,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
         int warnDepth;
         int warnAgeMs;
         bool warn = false;
+        bool enteredBacklog = false;
         bool cleared = false;
         lock (_reportGate)
         {
@@ -981,6 +1050,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
             bool over = (warnDepth > 0 && depth >= warnDepth) || (warnAgeMs > 0 && age.TotalMilliseconds >= warnAgeMs);
             if (over)
             {
+                if (!_warning)
+                {
+                    enteredBacklog = true;
+                }
+
                 if (!_warning || now - _lastWarning >= ReportRepeatTicks)
                 {
                     warn = true;
@@ -994,6 +1068,16 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
                 _warning = false;
                 cleared = true;
             }
+        }
+
+        if (enteredBacklog)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "queue-backlog",
+                "queue CharacterSaveQueue",
+                $"queue=CharacterSaveQueue depth={depth} ageMs={(long)age.TotalMilliseconds} warnDepth={warnDepth} warnAgeMs={warnAgeMs}",
+                AnomalySeverity.Warning);
         }
 
         if (warn)

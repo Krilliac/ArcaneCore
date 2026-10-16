@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       461 keys
+#   WORLD                       504 keys
 #
 ###############################################################################
 
@@ -10663,18 +10663,6 @@ World.Instances.UnloadDelayMs = 1800000
 #----------------------------------------------------------------------------
 
 #
-#    World.Playerbots.AllowLocalLlm
-#        Description: Let a local language model choose among the bot's candidate goals (off by
-#                     default; the rules choose otherwise).
-#        Type: bool
-#        Default: false
-#        Allowed: true | false
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.AllowLocalLlm = false
-
-#
 #    World.Playerbots.AllowedMaps
 #        Description: The maps bots may act and travel on (non-empty, no duplicates; a configured
 #                     list replaces the default continents 0 and 1).
@@ -11326,6 +11314,35 @@ World.Playerbots.Chat.TimeoutSeconds = 10
 World.Playerbots.ClientFidelity = Lean
 
 #
+#    World.Playerbots.CombatLaneShare
+#        Description: The share (0.1..0.9) of the think time budget and of MaxActionsPerTick the
+#                     combat lane may use. The lane gets floor(share × MaxActionsPerTick) actions of
+#                     its own (none at MaxActionsPerTick 1); the rest, at least one, is the other
+#                     bots' and no fight's think can touch it, so they are never starved by a crowd
+#                     of fights. What the combat lane leaves goes to the other bots too.
+#        Type: double
+#        Default: 0.7
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CombatLaneShare = 0.7
+
+#
+#    World.Playerbots.CombatThinkIntervalMs
+#        Description: Milliseconds (50..60000) after which a bot that is in combat, dead or a ghost
+#                     is due for the think lane that comes first (PlayerbotThinkRotation.TickLanes).
+#                     Under load such a bot thinks about this often; with room for everyone every
+#                     bot thinks every tick as before.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CombatThinkIntervalMs = 300
+
+#
 #    World.Playerbots.Contention.ClaimPenaltyYards
 #        Description: Yards a mob counts as farther away for each other bot already walking to it
 #                     (0..200), when a bot picks among untagged mobs. 0 turns the soft claims off,
@@ -11936,106 +11953,13 @@ World.Playerbots.Home.ReturnMode = Auto
 World.Playerbots.Home.TeleportDistanceYards = 1500
 
 #
-#    World.Playerbots.Inference.EnableTensorRt
-#        Description: Enable the TensorRT execution provider when loading an ONNX model (falls back
-#                     to CPU when unavailable; off by default).
-#        Type: bool
-#        Default: false
-#        Allowed: true | false
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.EnableTensorRt = false
-
-#
-#    World.Playerbots.Inference.Enabled
-#        Description: Run the zero-allocation batched playerbot inference pass each world tick (off
-#                     by default).
-#        Type: bool
-#        Default: false
-#        Allowed: true | false
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.Enabled = false
-
-#
-#    World.Playerbots.Inference.GpuDeviceId
-#        Description: GPU device index for ONNX Runtime TensorRT execution provider (0..15).
-#        Type: int
-#        Default: 0
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.GpuDeviceId = 0
-
-#
-#    World.Playerbots.Inference.ModelPath
-#        Description: Optional path to an ONNX policy model (obs_input [128,64] -&gt; action_output
-#                     [128,16]); empty uses the built-in SIMD policy kernel.
-#        Type: string
-#        Default: ""
-#        Allowed: text
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.ModelPath = ""
-
-#
-#    World.Playerbots.Inference.TensorRtCachePath
-#        Description: Directory where TensorRT engine caches are stored (non-empty, at most 260
-#                     characters).
-#        Type: string
-#        Default: "./cache/trt_11_engines"
-#        Allowed: text
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Inference.TensorRtCachePath = "./cache/trt_11_engines"
-
-#
-#    World.Playerbots.LocalLlmContextSize
-#        Description: The local model's context size in tokens (512..2048).
-#        Type: int
-#        Default: 1024
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.LocalLlmContextSize = 1024
-
-#
-#    World.Playerbots.LocalLlmModel
-#        Description: The local model name sent to the loopback inference endpoint (at most 128
-#                     characters).
-#        Type: string
-#        Default: "R4C3R/qwen3-0.6b-heretic:q4_k_m"
-#        Allowed: text
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.LocalLlmModel = "R4C3R/qwen3-0.6b-heretic:q4_k_m"
-
-#
-#    World.Playerbots.LocalLlmTimeoutMs
-#        Description: Milliseconds a local model choice may take before the rules decide
-#                     (100..10000).
-#        Type: int
-#        Default: 5000
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.LocalLlmTimeoutMs = 5000
-
-#
 #    World.Playerbots.MaxActionsPerTick
 #        Description: The most managed client actions all bots may send in one world tick (1..64).
-#                     The tick's think time is bounded separately, by the 8 ms
-#                     PlayerbotThinkRotation.TickBudgetMs: with about 1000 bots the action budget
-#                     must not be the first limit a tick meets, or each bot waits more ticks for its
-#                     share of actions and its movement lease runs out between thinks.
+#                     The tick's think time is bounded separately, by
+#                     ThinkBudgetMinMs..ThinkBudgetMaxMs (PlayerbotThinkBudget): with about 1000
+#                     bots the action budget must not be the first limit a tick meets, or each bot
+#                     waits more ticks for its share of actions and its movement lease runs out
+#                     between thinks.
 #        Type: int
 #        Default: 48
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -12219,6 +12143,143 @@ World.Playerbots.MoveSpeed = 7
 World.Playerbots.MovementPackets = true
 
 #
+#    World.Playerbots.Opportunities.Chests
+#        Description: Seek unlocked treasure chests, battered and solid chests and footlockers (on
+#                     by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.Chests = true
+
+#
+#    World.Playerbots.Opportunities.Enabled
+#        Description: Let bots seek chests, nodes and rares (on by default). Off: bots ignore them,
+#                     and gather nodes with no regard for guards.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.Enabled = true
+
+#
+#    World.Playerbots.Opportunities.LockedChests
+#        Description: Seek locked chests the bot can open: a rogue with Pick Lock at the skill the
+#                     lock needs, or a bot that carries the key (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.LockedChests = true
+
+#
+#    World.Playerbots.Opportunities.MaxDeathProbability
+#        Description: The highest chance of dying (0.01..0.5; default 0.15) a bot accepts for a
+#                     find, whatever the reward: the fight's risk run through a logistic curve (risk
+#                     0.95 is an even chance, 0.7 about 15%). A hard refusal.
+#        Type: float
+#        Default: 0.15
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.MaxDeathProbability = 0.15
+
+#
+#    World.Playerbots.Opportunities.MaxGuards
+#        Description: The most guards a find may have (0..12; default 4): a larger pack is refused
+#                     whatever it holds. 0 takes unguarded finds only.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.MaxGuards = 4
+
+#
+#    World.Playerbots.Opportunities.MinValue
+#        Description: The least net reward worth a trip (0..20; default 0.75), in same-level kills:
+#                     the find's loot and its guards' experience less the time to walk and fight. 1
+#                     is about what a same-level kill gives.
+#        Type: float
+#        Default: 0.75
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.MinValue = 0.75
+
+#
+#    World.Playerbots.Opportunities.Nodes
+#        Description: Weigh the guards of the herb and mining nodes the bot gathers and leave the
+#                     guarded ones it could not take (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.Nodes = true
+
+#
+#    World.Playerbots.Opportunities.PersonalityVariance
+#        Description: How far a bot's own temperament moves RiskAppetite (0..0.5; default 0.15):
+#                     each bot gets a stable factor from its guid between 1 minus and 1 plus this,
+#                     so a crowd of bots does not take the same finds.
+#        Type: float
+#        Default: 0.15
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.PersonalityVariance = 0.15
+
+#
+#    World.Playerbots.Opportunities.Rares
+#        Description: Hunt rare creatures with loot worth the fight (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.Rares = true
+
+#
+#    World.Playerbots.Opportunities.RiskAppetite
+#        Description: The aggressiveness knob for opportunities alone (0.25..4; default 1), applied
+#                     on top of Risk:Tolerance: it scales the risk a bot accepts for the reward, as
+#                     Tolerance does for a pull. 2 takes finds twice as dangerous, 0.5 only half.
+#                     The cap on the death probability (MaxDeathProbability) holds whatever this
+#                     says.
+#        Type: float
+#        Default: 1
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.RiskAppetite = 1
+
+#
+#    World.Playerbots.Opportunities.ScanRadiusYards
+#        Description: How far (yards, 10..150; default 45) from the bot an opportunity may lie to be
+#                     considered.
+#        Type: float
+#        Default: 45
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.ScanRadiusYards = 45
+
+#
 #    World.Playerbots.Party.Allowlist
 #        Description: Character names whose invitations a bot always accepts, whatever InvitePolicy
 #                     says (case-insensitive).
@@ -12293,6 +12354,139 @@ World.Playerbots.Party.MasterTimeoutSeconds = 60
 World.Playerbots.Party.TeleportToLeader = true
 
 #
+#    World.Playerbots.Policy.Enabled
+#        Description: Score each bot's goals off the world thread and let the scores re-rank the
+#                     ladder's choice (off by default).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Enabled = false
+
+#
+#    World.Playerbots.Policy.ExplorationRate
+#        Description: The chance (0..0.2) that a snapshot's choice is instead one of the ladder's
+#                     eligible runner-up goals, picked at random, for gathering telemetry the ladder
+#                     alone never produces. 0 (the default) never explores.
+#        Type: double
+#        Default: 0
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.ExplorationRate = 0
+
+#
+#    World.Playerbots.Policy.IntervalMs
+#        Description: World milliseconds between two snapshots of one bot's state for scoring
+#                     (500..60000).
+#        Type: int
+#        Default: 3000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.IntervalMs = 3000
+
+#
+#    World.Playerbots.Policy.ModelPath
+#        Description: A goal model weights file (JSON, arcanecore.playerbot-policy v1; relative to
+#                     the profile folder, or absolute). Empty scores with the rule ladder. A file
+#                     that does not load is reported once (anomaly bot-policy/model-load-failed) and
+#                     the ladder scores instead.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.ModelPath = ""
+
+#
+#    World.Playerbots.Policy.StaleAfterMs
+#        Description: Scores taken from a snapshot older than this (world milliseconds) are not
+#                     used: that think, the ladder decides (500..120000).
+#        Type: int
+#        Default: 4500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.StaleAfterMs = 4500
+
+#
+#    World.Playerbots.Policy.Telemetry.Directory
+#        Description: The folder of the telemetry files: relative to the profile folder, or
+#                     absolute.
+#        Type: string
+#        Default: "telemetry/playerbot-policy"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.Directory = "telemetry/playerbot-policy"
+
+#
+#    World.Playerbots.Policy.Telemetry.Enabled
+#        Description: Log each decision's state, choice and outcome (off by default).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.Enabled = false
+
+#
+#    World.Playerbots.Policy.Telemetry.MaxFileBytes
+#        Description: The largest one telemetry file grows before the next one starts, in bytes (64
+#                     KiB..1 GiB).
+#        Type: long
+#        Default: 16777216
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.MaxFileBytes = 16777216
+
+#
+#    World.Playerbots.Policy.Telemetry.MaxFiles
+#        Description: The most telemetry files kept; the oldest goes first (1..1000). The folder
+#                     holds at most MaxFiles x MaxFileBytes.
+#        Type: int
+#        Default: 16
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.MaxFiles = 16
+
+#
+#    World.Playerbots.Policy.Telemetry.OutcomeMinutes
+#        Description: Minutes of world time a decision's outcome is measured over (1..60).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.Telemetry.OutcomeMinutes = 5
+
+#
+#    World.Playerbots.Policy.TickBudgetMs
+#        Description: Wall-clock milliseconds one map's batch may score for in one tick; the rows
+#                     past it are left to the ladder and counted (0.1..50).
+#        Type: double
+#        Default: 2
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Policy.TickBudgetMs = 2
+
+#
 #    World.Playerbots.Population.ActionLogSeconds
 #        Description: The population logs one information line for the passes that parked, started,
 #                     created or moved bots, at most once per this many seconds of world time; the
@@ -12305,6 +12499,22 @@ World.Playerbots.Party.TeleportToLeader = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Population.ActionLogSeconds = 60
+
+#
+#    World.Playerbots.Population.AdoptOperatorHomes
+#        Description: Migration: the sweep also takes over the homes an operator set (any place text
+#                     that is not the population's) for bots of the population, replacing them with
+#                     the home of the bot's level (a level 1 bot with a stale Sentinel Hill home
+#                     gets its start area). Off by default: operator homes are never touched.
+#                     .playerbot population adopt does the same once, until no operator home is
+#                     left. Homes an operator cleared (.playerbot home clear) stay cleared.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.AdoptOperatorHomes = false
 
 #
 #    World.Playerbots.Population.AllianceSharePct
@@ -12353,6 +12563,55 @@ World.Playerbots.Population.AllianceSharePct = 50
 # World.Playerbots.Population.Bands.5.MaxLevel = 60
 # World.Playerbots.Population.Bands.5.MinLevel = 51
 # World.Playerbots.Population.Bands.5.Weight = 1
+
+#
+#    World.Playerbots.Population.CapitalHomeRadius
+#        Description: The radius in yards of a capital home (50..5000), zone-clipped to the city:
+#                     the trainers, auction house, bank and vendors of the city lie inside it.
+#        Type: int
+#        Default: 500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.CapitalHomeRadius = 500
+
+#
+#    World.Playerbots.Population.CapitalMajorSharePct
+#        Description: The share in percent (0..100) of each faction whose master capital is its main
+#                     one (Stormwind for the Alliance, Orgrimmar for the Horde); the rest go to the
+#                     other two capitals, a bot's own race's first.
+#        Type: int
+#        Default: 65
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.CapitalMajorSharePct = 65
+
+#
+#    World.Playerbots.Population.CapitalStayMaxMinutes
+#        Description: The longest time in minutes (1..240; at least CapitalStayMinMinutes) a bot
+#                     stays at its capital.
+#        Type: int
+#        Default: 15
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.CapitalStayMaxMinutes = 15
+
+#
+#    World.Playerbots.Population.CapitalStayMinMinutes
+#        Description: The shortest time in minutes (1..240) a bot stays at its capital (errands,
+#                     then idling near the inn) before it heads back out.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.CapitalStayMinMinutes = 5
 
 #
 #    World.Playerbots.Population.Classes
@@ -12486,15 +12745,17 @@ World.Playerbots.Population.FreshLaunch = false
 
 #
 #    World.Playerbots.Population.FreshReleaseLevel
-#        Description: The level at which a graduated home is removed (2..60; at least
-#                     FreshGraduateLevel, equal skips the widened home).
+#        Description: The level at which a graduated home is replaced by the town homes of the
+#                     progression (TownProgression; removed when that is off) (2..60; at least
+#                     FreshGraduateLevel, equal skips the widened home). 10 puts the bot in the town
+#                     of the next zone as it finishes its start zone.
 #        Type: int
-#        Default: 12
+#        Default: 10
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Population.FreshReleaseLevel = 12
+World.Playerbots.Population.FreshReleaseLevel = 10
 
 #
 #    World.Playerbots.Population.FreshStartHome
@@ -12504,10 +12765,11 @@ World.Playerbots.Population.FreshReleaseLevel = 12
 #                     and creatures of its own valley and does not wander into the next zone's mobs
 #                     or onto the Deeprun Tram. It graduates with the level: from FreshGraduateLevel
 #                     the circle widens to FreshZoneHomeRadius (still clipped to the start zone),
-#                     from FreshReleaseLevel the home is removed and the bot travels on by its own
-#                     goals. Off: new bots get no home and no start-zone cap applies. The
-#                     population's sweep also gives a running fresh-launch bot that has no home one
-#                     for its level.
+#                     from FreshReleaseLevel the home becomes the town homes of TownProgression
+#                     (with it off, the home is removed and the bot travels on by its own goals).
+#                     Off: new bots get no home and no start-zone cap applies. The population's
+#                     sweep also gives a running fresh-launch bot that has no home one for its
+#                     level.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -12733,6 +12995,31 @@ World.Playerbots.Population.RushBrakeWindowSeconds = 5
 World.Playerbots.Population.RushBrakeWindows = 3
 
 #
+#    World.Playerbots.Population.SecondaryStayMaxMinutes
+#        Description: The longest time in minutes (5..1440; at least SecondaryStayMinMinutes) a bot
+#                     stays at its level-band town.
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.SecondaryStayMaxMinutes = 90
+
+#
+#    World.Playerbots.Population.SecondaryStayMinMinutes
+#        Description: The shortest time in minutes (5..1440) a bot stays at its level-band town
+#                     before it heads to the capital. Each bot's stay is fixed per bot (by its id)
+#                     between this and SecondaryStayMaxMinutes, so a fleet does not move in step.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.SecondaryStayMinMinutes = 30
+
+#
 #    World.Playerbots.Population.TargetOnline
 #        Description: The number of managed bots to keep running (0..1000). The effective target is
 #                     the lower of this and World:Playerbots:MaxBots. Bots an operator created count
@@ -12762,6 +13049,121 @@ World.Playerbots.Population.TargetOnline = 0
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Population.TickP95BudgetMs = 60
+
+#
+#    World.Playerbots.Population.TownBandMargin
+#        Description: Levels a bot stays at its level-band town past the maximum level of the town's
+#                     band before the next town takes it (0..10; the hysteresis margin of the band
+#                     change). 0: it moves when its level reaches the maximum.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TownBandMargin = 0
+
+#
+#    World.Playerbots.Population.TownCap
+#        Description: The most bots one level-band town (secondary) may hold (0..1000; 0 = no cap).
+#                     Bots spread over the towns of their band, least populated first; when every
+#                     town of the band is at the cap the least populated still takes the bot.
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TownCap = 60
+
+#
+#    World.Playerbots.Population.TownCaps
+#        Description: Per-town caps that replace TownCap, as a comma-separated list of key=cap (for
+#                     example "sentinel-hill=30,thelsamar=80"; the keys are those of
+#                     PopulationTownProgression.Rows, caps 0..1000, 0 = no cap). Empty: TownCap for
+#                     every town.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TownCaps = ""
+
+#
+#    World.Playerbots.Population.TownHomeRadius
+#        Description: The radius in yards of a secondary town home (50..5000), zone-clipped. 4500
+#                     covers the whole zone so its quests stay allowed; an idle bot still lingers at
+#                     the town centre.
+#        Type: int
+#        Default: 4500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TownHomeRadius = 4500
+
+#
+#    World.Playerbots.Population.TownProgression
+#        Description: Town progression (on by default; needs FreshLaunch and FreshStartHome): from
+#                     FreshReleaseLevel a bot has two homes, its faction capital (the master) and
+#                     the town of its level band (the secondary, PopulationTownProgression), and
+#                     lives at one of them at a time: SecondaryStayMin/MaxMinutes at the secondary,
+#                     CapitalStayMin/MaxMinutes at the capital, and again. The secondary follows the
+#                     level (the next town once the level reaches the cap of the band); a town whose
+#                     centre cannot be found in the world data is reported once and the bot falls
+#                     back to the towns that did resolve (or, with none, no home); a bot with no
+#                     secondary that fits keeps no town home at all, so it explores instead of
+#                     waiting at a capital. Off: a bot past FreshReleaseLevel has no home.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TownProgression = true
+
+#
+#    World.Playerbots.Population.TownProgressionTeleport
+#        Description: The teleport of a town home (on by default): a bot whose new town lies on
+#                     another continent, across the water of Teldrassil or farther than
+#                     TownWalkYards takes the one return teleport (the Home teleport rules and
+#                     cooldown) when it is homed there. Off: bots reach a town by their own means
+#                     only (on foot, by taxi, and, with World:Playerbots:Travel on and a return mode
+#                     other than Walk, by boat, zeppelin or mage portal: docs/areas/playbots.md,
+#                     Travel); a town they cannot reach so is not assigned to that bot (it takes a
+#                     town it can walk to; with none it keeps a home that is not a town home, or has
+#                     none, and explores) and one Info anomaly per reason says so. The progression's
+#                     own moves (the town cycle, a new band town, the Danger rule on the way to a
+#                     town) then never teleport. The Home options' returns of a displaced bot still
+#                     do, as for any home: from another map (OtherMap), a walk set aside as blocked
+#                     (WalkBlocked), the Teleport return mode, an unsafe spirit-healer landing, and
+#                     stalled ground. A bot on Teldrassil, whose only way off is a boat, therefore
+#                     has no town secondary unless it may take the boat (or this option is on).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TownProgressionTeleport = true
+
+#
+#    World.Playerbots.Population.TownWalkYards
+#        Description: The longest trip in yards (100..20000) a bot with a town home walks to it on
+#                     the same continent; farther, or across the water of Teldrassil, or to another
+#                     continent, it takes the one return teleport (the Home teleport rules and
+#                     cooldown). 4500 yards is about 11 minutes on foot. With
+#                     World:Playerbots:Travel on (and a return mode other than Walk), a home across
+#                     the sea is travelled to by boat, zeppelin or portal first, and the teleport is
+#                     the fallback when no journey can begin.
+#        Type: int
+#        Default: 4500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.TownWalkYards = 4500
 
 #
 #    World.Playerbots.Population.TramMinLevel
@@ -13104,9 +13506,12 @@ World.Playerbots.StallSeconds = 120
 
 #
 #    World.Playerbots.Taxi.BackoffMinutes
-#        Description: Minutes a bot does not try to fly after a flight attempt failed (the server
-#                     refused the flight, the flight master could not be reached, or none stood
-#                     where the node is): it walks meanwhile (1..1440; default 10).
+#        Description: The longest, in minutes, a flight node is backed off after trips from it
+#                     failed (the server refused the flight, the flight master could not be reached,
+#                     or none stood where the node is): the per-node cap on the schedule of
+#                     World:Playerbots:Travel (TransitBackoffSeconds doubling to
+#                     TransitBackoffMaxSeconds). Only the failing node waits; the bot walks, or
+#                     flies from another known node, meanwhile (1..1440; default 10).
 #        Type: int
 #        Default: 10
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -13155,6 +13560,46 @@ World.Playerbots.Taxi.MaxWalkToMasterYards = 300
 World.Playerbots.Taxi.MinRouteYards = 600
 
 #
+#    World.Playerbots.ThinkBudgetMaxMs
+#        Description: The most wall time (ms, at least ThinkBudgetMinMs, at most 200) a world tick
+#                     spends on the bots' thinks, however idle the rest of the tick is.
+#        Type: double
+#        Default: 30
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ThinkBudgetMaxMs = 30
+
+#
+#    World.Playerbots.ThinkBudgetMinMs
+#        Description: The least wall time (ms, 1..200) a world tick spends on the bots' thinks,
+#                     however loaded the tick is: the guarantee that a busy server still thinks
+#                     (PlayerbotThinkBudget). At least one bot always thinks per tick. Equal to
+#                     ThinkBudgetMaxMs it is a fixed budget.
+#        Type: double
+#        Default: 8
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ThinkBudgetMinMs = 8
+
+#
+#    World.Playerbots.ThinkBudgetTickShare
+#        Description: The share (0.05..0.95) of a tick's slack (tick interval minus the time the
+#                     world spent on everything but the bots) the bots' work may take; the think
+#                     budget is this share of the slack less what the bots already used this tick,
+#                     between the min and the max.
+#        Type: double
+#        Default: 0.6
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ThinkBudgetTickShare = 0.6
+
+#
 #    World.Playerbots.ThinkIntervalMs
 #        Description: Milliseconds between two decisions of a bot (50..60000).
 #        Type: int
@@ -13164,6 +13609,147 @@ World.Playerbots.Taxi.MinRouteYards = 600
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ThinkIntervalMs = 500
+
+#
+#    World.Playerbots.ThinkStarvedGapMs
+#        Description: A bot that goes longer than this many milliseconds (1000..3600000) of world
+#                     time without a think is reported once per episode as a "cadence think-starved"
+#                     anomaly (PlayerbotAnomalies); 0 turns the report off. The default is the ghost
+#                     walk's stuck bound (PlayerbotRecovery.StuckMs).
+#        Type: int
+#        Default: 10000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ThinkStarvedGapMs = 10000
+
+#
+#    World.Playerbots.Travel.Boats
+#        Description: Let bots ride the boats (Menethil - Auberdine, Menethil - Theramore, Auberdine
+#                     - Rut'theran, Booty Bay - Ratchet; on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.Boats = true
+
+#
+#    World.Playerbots.Travel.Enabled
+#        Description: Let bots plan multi-leg trips to far places (on by default). Off: no trip is
+#                     planned and a far goal stays where its caller leaves it.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.Enabled = true
+
+#
+#    World.Playerbots.Travel.Hearthstone
+#        Description: Let bots use their hearthstone (item 6948) as a leg when it is off cooldown
+#                     and the bind point is on the way (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.Hearthstone = true
+
+#
+#    World.Playerbots.Travel.MageService
+#        Description: Let mage bots offer their Teleport and Portal spells as a service (on by
+#                     default): a mage teleports itself, and opens a portal for a bot of its faction
+#                     that asks on the in-world request board. Off: no mage teleports for travel and
+#                     no portal is asked for or opened.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.MageService = true
+
+#
+#    World.Playerbots.Travel.MageServiceFeeCopper
+#        Description: Copper a requester pays the mage for a portal, by a real trade of money
+#                     (0..100000; default 0: the service is free). The portal is planned only when
+#                     the bot can pay it inside MaxTravelSpendCopper.
+#        Type: uint
+#        Default: 0
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.MageServiceFeeCopper = 0
+
+#
+#    World.Playerbots.Travel.MageServiceRadiusYards
+#        Description: A bot asks for a portal only from a mage within this many yards of it, on its
+#                     map (10..1000; default 150).
+#        Type: float
+#        Default: 150
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.MageServiceRadiusYards = 150
+
+#
+#    World.Playerbots.Travel.MaxTravelSpendCopper
+#        Description: The most copper one trip may spend on fares, fees and reagents together
+#                     (0..10000000; default 10000, one gold). 0: only free means (walking, boats,
+#                     zeppelins, the tram, lifts, the hearthstone, a free portal, the bot's own
+#                     teleport when it has the rune).
+#        Type: uint
+#        Default: 10000
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.MaxTravelSpendCopper = 10000
+
+#
+#    World.Playerbots.Travel.TransitBackoffMaxSeconds
+#        Description: The longest wait (seconds) before a failed transit point is tried again
+#                     (10..86400; default 300). Must not be below TransitBackoffSeconds.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.TransitBackoffMaxSeconds = 300
+
+#
+#    World.Playerbots.Travel.TransitBackoffSeconds
+#        Description: The first wait (seconds) before a bot tries a transit point again (one flight
+#                     master's node, tram platform, lift, dock) that just failed it; each further
+#                     failure of the same point doubles the wait up to TransitBackoffMaxSeconds
+#                     (10..3600; default 60).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.TransitBackoffSeconds = 60
+
+#
+#    World.Playerbots.Travel.Zeppelins
+#        Description: Let Horde bots ride the zeppelins (Orgrimmar - Undercity, Orgrimmar -
+#                     Grom'gol, Undercity - Grom'gol; on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.Zeppelins = true
 
 #----------------------------------------------------------------------------
 # World:Playerbots:Qa

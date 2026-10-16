@@ -249,6 +249,15 @@ public sealed partial class MapCombat : IMapUpdater
                 FaultLedger.Shared.Record("map-combat", ex);
             }
         }
+
+        try
+        {
+            SweepIfDue(diffMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("map-combat", ex);
+        }
     }
 
     private void UpdateUnit(Unit unit, uint diff)
@@ -341,6 +350,7 @@ public sealed partial class MapCombat : IMapUpdater
                 "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: PLAYER_FLAGS_GHOST was set in DeathState.{DeathState}; clearing ghost flag",
                 player.Name, player.Guid.Low, _map.MapId, c.DeathState);
             player.Flags &= ~PlayerFlags.Ghost;
+            ReportHealed(player, "ghost-flag", $"PLAYER_FLAGS_GHOST was set in DeathState.{c.DeathState}; cleared");
             player.NeedsVisibilityUpdate = true;
             healed = true;
         }
@@ -350,6 +360,7 @@ public sealed partial class MapCombat : IMapUpdater
                 "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: DeathState.Dead was missing PLAYER_FLAGS_GHOST; restoring ghost flag",
                 player.Name, player.Guid.Low, _map.MapId);
             player.Flags |= PlayerFlags.Ghost;
+            ReportHealed(player, "ghost-flag", "DeathState.Dead was missing PLAYER_FLAGS_GHOST; restored");
             player.NeedsVisibilityUpdate = true;
             healed = true;
         }
@@ -360,6 +371,7 @@ public sealed partial class MapCombat : IMapUpdater
                 "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: DeathState.Dead had Health=0; restoring ghost Health=1",
                 player.Name, player.Guid.Low, _map.MapId);
             player.Health = 1;
+            ReportHealed(player, "dead-health", "DeathState.Dead had Health=0; restored ghost Health=1");
             healed = true;
         }
 
@@ -372,6 +384,7 @@ public sealed partial class MapCombat : IMapUpdater
                     "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: PLAYER_FIELD_BYTE_RELEASE_TIMER was set while Alive; clearing flag",
                     player.Name, player.Guid.Low, _map.MapId);
                 player.SetByte(UpdateFields.PlayerFieldBytes, 0, (byte)(fieldBytes0 & ~FieldByteReleaseTimer));
+                ReportHealed(player, "release-timer-flag", "PLAYER_FIELD_BYTE_RELEASE_TIMER was set while Alive; cleared");
                 healed = true;
             }
 
@@ -380,6 +393,7 @@ public sealed partial class MapCombat : IMapUpdater
                 _map.Logger.LogWarning(
                     "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: DeathTimer={DeathTimer} was non-zero while Alive; clearing timer",
                     player.Name, player.Guid.Low, _map.MapId, c.DeathTimer);
+                ReportHealed(player, "death-timer", $"DeathTimer={c.DeathTimer} was non-zero while Alive; cleared");
                 c.DeathTimer = 0;
                 healed = true;
             }
@@ -395,6 +409,7 @@ public sealed partial class MapCombat : IMapUpdater
                 "coordinate invariant healed for player {Player} (guid={Guid}) on map {MapId}: non-finite position ({X},{Y},{Z},o={O}); relocating to ({SafeX},{SafeY},{SafeZ},o={SafeO})",
                 player.Name, player.Guid.Low, _map.MapId, player.X, player.Y, player.Z, player.Orientation, safeX, safeY, safeZ, safeO);
             player.Relocate(safeX, safeY, safeZ, safeO, _world.NowMs);
+            ReportHealed(player, "non-finite-position", "non-finite position relocated to the home or origin");
             healed = true;
         }
 
@@ -413,6 +428,7 @@ public sealed partial class MapCombat : IMapUpdater
                     "combat invariant healed for unit {Guid} on map {MapId}: Victim {VictimGuid} left this map (victimMap={VictimMapId}, inWorld={InWorld}); stopping attack",
                     unit.Guid, _map.MapId, victim.Guid, victim.Map?.MapId, victim.IsInWorld);
                 AttackStop(unit);
+                ReportHealed(unit, "victim-left-map", $"melee victim {victim.Guid.Value} left this map; attack stopped");
                 healed = true;
             }
         }
@@ -428,6 +444,7 @@ public sealed partial class MapCombat : IMapUpdater
                         "combat invariant healed for unit {Guid} on map {MapId}: pruning stale attacker {AttackerGuid} (alive={Alive}, matchesVictim={MatchesVictim}, attackerMap={AttackerMapId})",
                         unit.Guid, _map.MapId, attacker.Guid, IsAliveState(attacker), ReferenceEquals(attacker.Combat.Victim, unit), attacker.Map?.MapId);
                     c.AttackersInternal.Remove(attacker);
+                    ReportHealed(unit, "stale-attacker", $"pruned stale attacker {attacker.Guid.Value} (alive={IsAliveState(attacker)})");
                     healed = true;
                 }
             }
@@ -451,6 +468,8 @@ public sealed partial class MapCombat : IMapUpdater
                     {
                         c.ThreatenedByInternal.Remove(holder);
                     }
+
+                    ReportHealed(unit, "stale-threat-holder", $"pruned stale threat holder {holder.Guid.Value} (alive={IsAliveState(holder)})");
                     healed = true;
                 }
             }
@@ -475,6 +494,7 @@ public sealed partial class MapCombat : IMapUpdater
     private void Forget(Unit unit)
     {
         _units.Remove(unit);
+        ForgetEpisodes(unit);
         UnitCombat c = unit.Combat;
         DetachRelations(unit);
         c.Tracker = null;

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Honor;
 using ArcaneCore.World.Instances;
@@ -54,6 +55,9 @@ public sealed class CharacterPersistenceBarrier
 {
     /// <summary>Default maximum time allowed for a unified character persistence barrier flush.</summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>Threshold above which a unified character persistence barrier flush reports a <c>persist/save-slow</c> anomaly (zero disables).</summary>
+    public TimeSpan SlowFlushThreshold { get; init; } = TimeSpan.FromSeconds(2);
 
     private readonly IServiceProvider _services;
     private readonly ILogger<CharacterPersistenceBarrier>? _logger;
@@ -272,6 +276,17 @@ public sealed class CharacterPersistenceBarrier
                 failures,
                 characterId,
                 budget.Token).ConfigureAwait(false);
+        }
+
+        TimeSpan elapsed = stopwatch.Elapsed;
+        if (SlowFlushThreshold > TimeSpan.Zero && elapsed >= SlowFlushThreshold)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "save-slow",
+                $"character {characterId}",
+                $"barrier=CharacterPersistenceBarrier character={characterId} elapsedMs={(long)elapsed.TotalMilliseconds} thresholdMs={(long)SlowFlushThreshold.TotalMilliseconds} failures={failures.Count}",
+                AnomalySeverity.Info);
         }
 
         return new CharacterPersistenceFlushResult(characterId, failures);

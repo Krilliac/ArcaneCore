@@ -1,7 +1,9 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -34,6 +36,9 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
     /// <summary>Test seam: replaces the terrain area-level lookup (real terrain tiles are not available to unit tests).</summary>
     internal Func<WorldSafeLoc, int>? AreaLevelSource { get; set; }
 
+    /// <summary>Test seam: supplies the liquid status at a location when terrain tiles are not loaded on disk.</summary>
+    internal Func<WorldSafeLoc, LiquidStatus>? SurfaceSource { get; set; }
+
     /// <summary>Whether the boost content is loaded; when not, the missing piece is in <paramref name="missing"/> (world thread).</summary>
     public bool BoostAvailable(out string missing) => BoostEnvironment.Resolve(services, out missing) is not null;
 
@@ -47,7 +52,14 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
             return "bot-not-running";
         // Check the planned level and this race's faction before CharacterBoost mutates the new character. Planning makes
         // the same check before creation; this guards a content reload between the plan and the final teleport.
-        if (!IsSafe(session.World, location, checked((byte)level), player.FactionTemplate)) return "placement-unsafe";
+        if (!IsSafe(session.World, location, checked((byte)level), player.FactionTemplate))
+        {
+            string unsafeDetail = TryGetUnsafeSurfaceReason(session.World, location, out string? surfaceReason)
+                ? $"provision placement refused at safeLoc {location.Id} on map {location.MapId} ({location.X:F1},{location.Y:F1},{location.Z:F1}): {surfaceReason}"
+                : $"provision placement refused at safeLoc {location.Id} on map {location.MapId} ({location.X:F1},{location.Y:F1},{location.Z:F1}): hostile spawns or area level unsafe for level {level}";
+            PlayerbotAnomalies.Report(player, "population", "spawn-unsafe", unsafeDetail, AnomalySeverity.Warning);
+            return "placement-unsafe";
+        }
         if (level > player.Level)
         {
             string? refusal = !player.IsAlive ? "bot-dead"
@@ -71,13 +83,56 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
             return "bot-not-running";
         if (!player.IsAlive) return "bot-dead";
         if (player.Combat.IsInCombat) return "bot-in-combat";
-        if (!IsSafe(session.World, location, player.Level, player.FactionTemplate)) return "placement-unsafe";
+        if (!IsSafe(session.World, location, player.Level, player.FactionTemplate))
+        {
+            string unsafeDetail = TryGetUnsafeSurfaceReason(session.World, location, out string? surfaceReason)
+                ? $"relocate placement refused at safeLoc {location.Id} on map {location.MapId} ({location.X:F1},{location.Y:F1},{location.Z:F1}): {surfaceReason}"
+                : $"relocate placement refused at safeLoc {location.Id} on map {location.MapId} ({location.X:F1},{location.Y:F1},{location.Z:F1}): hostile spawns or area level unsafe for level {player.Level}";
+            PlayerbotAnomalies.Report(player, "population", "spawn-unsafe", unsafeDetail, AnomalySeverity.Warning);
+            return "placement-unsafe";
+        }
+
         return TeleportTo(player, location);
+    }
+
+    internal bool TryGetUnsafeSurfaceReason(WorldRuntime world, WorldSafeLoc location, out string? reason)
+    {
+        if (!float.IsFinite(location.X) || !float.IsFinite(location.Y) || !float.IsFinite(location.Z) || !float.IsFinite(location.Orientation))
+        {
+            reason = "non-finite coordinates";
+            return true;
+        }
+
+        LiquidStatus liquid = LiquidStatus.NoWater;
+        if (SurfaceSource is not null)
+        {
+            liquid = SurfaceSource(location);
+        }
+        else
+        {
+            TerrainManager terrain = WorldMaps.Of(world).Terrain;
+            if (terrain.Enabled)
+            {
+                TerrainInfo mapTerrain = terrain.For(location.MapId);
+                liquid = mapTerrain.GetLiquidStatus(location.X, location.Y, location.Z, LiquidTypeFlags.AllLiquids, out _);
+            }
+        }
+
+        if (liquid is LiquidStatus.InWater or LiquidStatus.UnderWater)
+        {
+            reason = $"in water ({liquid})";
+            return true;
+        }
+
+        reason = null;
+        return false;
     }
 
     /// <summary>World thread: one indexed safety check, with no per-teleport terrain dictionary or delegate.</summary>
     internal bool IsSafe(WorldRuntime world, WorldSafeLoc location, byte level, uint faction)
     {
+        if (TryGetUnsafeSurfaceReason(world, location, out _)) return false;
+
         var terrain = WorldMaps.Of(world).Terrain;
         int areaLevel = 0;
         if (AreaLevelSource is not null) areaLevel = AreaLevelSource(location);

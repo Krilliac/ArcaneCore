@@ -33,6 +33,12 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         new ChatCommand("debug", AccountSecurity.GameMaster,
             "Syntax: .playerbot debug [$id|$name]\nShow internal brain, motion, route, stall, risk and trace diagnostics for a running bot.",
             DebugBot),
+        new ChatCommand("cadence", AccountSecurity.GameMaster,
+            "Syntax: .playerbot cadence\nShow how often the bots think: the think gap percentiles (all bots and the combat/dead lane), thinks per tick, the think time budget and the share of ticks that ended on a budget, for the last minute.",
+            Cadence),
+        new ChatCommand("anomalies", AccountSecurity.GameMaster,
+            "Syntax: .playerbot anomalies $name\nShow the recent anomaly history recorded for a bot.",
+            Anomalies),
         new ChatCommand("gear", AccountSecurity.GameMaster,
             "Syntax: .playerbot gear $id|$name\nShow a running bot's equipped items, free bag slots, gold and skills.",
             Gear),
@@ -60,9 +66,39 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         bool isGm = context.IsConsole || context.Security >= AccountSecurity.GameMaster || (!context.IsConsole && context.Player.IsGameMaster);
         context.Reply(PlayerbotChatCommands.HelpFor(isGm));
         context.Reply(isGm
-            ? "Dot commands: .bot <commands|gear|summon|party|status|list|debug> (or .playerbot ...)."
+            ? "Dot commands: .bot <commands|gear|summon|party|status|list|debug|cadence> (or .playerbot ...)."
             : "Dot commands: .bot <commands|gear|summon|party <fill|add|remove|list>>.");
         return true;
+    }
+
+    /// <summary><c>.playerbot cadence</c>: the bots' think cadence over the last finished minute (<see cref="PlayerbotCadenceStats"/>).</summary>
+    internal static bool Cadence(CommandContext context, string text)
+    {
+        if (context.Session.Services.GetService<ManagedPlayerbotFeature>() is not { } feature)
+        {
+            context.Reply("Playerbot service is unavailable.");
+            return true;
+        }
+
+        foreach (string line in CadenceLines(feature.LastCadence, feature.LastThinkBudgetMs)) context.Reply(line);
+        return true;
+    }
+
+    /// <summary>The reply lines of <c>.playerbot cadence</c>.</summary>
+    internal static IEnumerable<string> CadenceLines(PlayerbotCadenceReport? report, double lastBudgetMs)
+    {
+        if (report is not { } r)
+        {
+            yield return string.Create(CultureInfo.InvariantCulture, $"Playerbot cadence: no full minute measured yet (think budget now {lastBudgetMs:F1} ms per tick).");
+            yield break;
+        }
+
+        yield return string.Create(CultureInfo.InvariantCulture,
+            $"Playerbot cadence, last minute: {r.Bots} bots, think gap p50 {r.GapP50Ms} ms, p95 {r.GapP95Ms} ms, p99 {r.GapP99Ms} ms, max {r.GapMaxMs} ms.");
+        yield return string.Create(CultureInfo.InvariantCulture,
+            $"Combat/dead lane: {r.CombatThinks} thinks, gap p50 {r.CombatGapP50Ms} ms, p95 {r.CombatGapP95Ms} ms.");
+        yield return string.Create(CultureInfo.InvariantCulture,
+            $"{r.ThinksPerTick:F1} thinks per tick over {r.Ticks} ticks; think budget {r.AvgBudgetMs:F1} ms on average (now {lastBudgetMs:F1} ms); ticks ended on the time budget {r.TimeLimitedPct:F1}%, on the action budget {r.ActionLimitedPct:F1}%.");
     }
 
     internal static bool DebugBot(CommandContext context, string text)
@@ -437,6 +473,14 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         return true;
     }
 
+    internal static bool Anomalies(CommandContext context, string text)
+        => PlayerbotAnomalyHistory.RunCommand(
+            text,
+            context.Session.Services.GetService<ManagedPlayerbotFeature>(),
+            PlayerbotAnomalyHistory.Shared,
+            DateTimeOffset.UtcNow,
+            context.Reply);
+
     private static string SlotName(byte slot) => slot switch
     {
         InventorySlots.Head => "Head",
@@ -470,7 +514,7 @@ public sealed class BotAliasCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("bot", AccountSecurity.GameMaster,
-            "Syntax: .bot <commands|status|list|debug|gear|summon|party>\nShorthand for .playerbot commands.",
+            "Syntax: .bot <commands|status|list|debug|anomalies|gear|summon|party>\nShorthand for .playerbot commands.",
             Children:
             [
                 new ChatCommand("commands", AccountSecurity.GameMaster,
@@ -493,6 +537,12 @@ public sealed class BotAliasCommands : ICommandGroup
                 new ChatCommand("debug", AccountSecurity.GameMaster,
                     "Syntax: .bot debug [$id|$name]\nShow internal brain, motion, route, stall, risk and trace diagnostics for a running bot.",
                     PlayerbotExtraCommands.DebugBot),
+                new ChatCommand("cadence", AccountSecurity.GameMaster,
+                    "Syntax: .bot cadence\nShow how often the bots think (think gap percentiles, thinks per tick, think budget) for the last minute.",
+                    PlayerbotExtraCommands.Cadence),
+                new ChatCommand("anomalies", AccountSecurity.GameMaster,
+                    "Syntax: .bot anomalies $name\nShow the recent anomaly history recorded for a bot.",
+                    PlayerbotExtraCommands.Anomalies),
                 new ChatCommand("gear", AccountSecurity.GameMaster,
                     "Syntax: .bot gear $id|$name\nShow a running bot's equipped items, free bag slots, gold and skills.",
                     PlayerbotExtraCommands.Gear),

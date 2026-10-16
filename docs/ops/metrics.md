@@ -46,6 +46,7 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_world_sessions` | gauge | authenticated world sessions |
 | `arcanecore_world_players_online` | gauge | characters in the world (TC `online_players`) |
 | `arcanecore_world_maps_loaded` | gauge | maps and instances at the last sample |
+| `arcanecore_playerbots_split_brain` | gauge | 1 while this world stopped writing playerbot rows because another world process changed them (`.playerbot splitbrain`, [playerbots](../areas/playbots.md#another-world-on-the-same-database)), otherwise 0 |
 | `arcanecore_nav_tile_installs_total` | counter | navigation mesh tiles installed on the thread that needed them: path-query reads and grid tile loads, nearly all on the world thread; the slow-map-update line shows the same count per update |
 | `arcanecore_nav_tile_install_time_milliseconds_total` | counter | time those installations took (a tile read under disk contention can take seconds) |
 | `arcanecore_creature_path_straight_fallbacks_total` | counter | authored creature routes (waypoint, point, formation, scripted move) walked along a straight line because the navmesh had no path |

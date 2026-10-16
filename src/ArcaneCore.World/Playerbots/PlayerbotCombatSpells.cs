@@ -35,6 +35,14 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     private uint _itemBlockedUntil;
     private PlayerbotAbilities? _abilities;
     private PlayerbotRole _role;
+    private readonly PlayerbotCombatWatch _watch = new();
+
+    /// <summary>
+    /// The outcome check of the bot's item uses (<see cref="PlayerbotConsumableWatch"/>). A caller that sends CMSG_USE_ITEM itself takes
+    /// <see cref="PlayerbotConsumableWatch.Begin"/> before the packet and hands the result to <see cref="PlayerbotConsumableWatch.Sent"/>
+    /// when the server took it.
+    /// </summary>
+    internal PlayerbotConsumableWatch Consumables { get; } = new();
 
     /// <summary>
     /// The creature the bot is closing in on before a fight (set by its controller): the out-of-combat upkeep prepares for it
@@ -57,6 +65,8 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         _itemBlockedUntil = 0;
         _abilities = null;
         PullTarget = null;
+        _watch.Reset();
+        Consumables.Reset();
     }
 
     /// <summary>
@@ -90,13 +100,18 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             return false;
         }
 
+        uint nowMs = session.World.NowMs;
+        Consumables.Poll(player, feature.System, nowMs);
+        _watch.Fight(player, nowMs);
         UnitSpellState? state = feature.System.GetState(player.Guid);
-        if (state?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting }
-            )
+        if (state?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting } running)
         {
+            _watch.Casting(player, running, nowMs);
             PlayerbotMovementControl.Stop(session, player);
             return true;
         }
+
+        _watch.NotCasting();
 
         // A queued next-swing spell is compatible with the ordinary melee action; let
         // the brain continue its normal swing/chase decision rather than suppressing it.
@@ -156,8 +171,13 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         {
             _failureBackoffMs = FailureBackoffMs;
             _lastRefusedSpell = spell.Id;
+            _watch.Refused(player, spell, session.World.NowMs);
         }
-        else _lastRefusedSpell = 0;
+        else
+        {
+            _lastRefusedSpell = 0;
+            _watch.Accepted(spell);
+        }
 
         // A refused cast permits ordinary chase/melee while spell retries back off.
         return accepted && feature.System.GetState(player.Guid)?.MeleeCast is null;
@@ -175,6 +195,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             || session.Services.GetService<SpellFeature>() is not { } feature)
             return false;
 
+        Consumables.Poll(player, feature.System, session.World.NowMs);
         if (feature.System.GetState(player.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting })
         {
             PlayerbotMovementControl.Stop(session, player);
@@ -231,7 +252,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             SpellCastTargets targets = bandageSpell is not null && IsExplicitUnit(bandageSpell)
                 ? SpellCastTargets.ForUnit(player.Guid)
                 : SpellCastTargets.ForSelf();
-            return session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(bandage.BagSlot, bandage.Slot, targets));
+            return UseItemWatched(player, system, bandage, PlayerbotNavigation.UseItemPayload(bandage.BagSlot, bandage.Slot, targets));
         }
 
         // 2. Temporary weapon enhancement items (sharpening stones, weightstones, wizard/mana oils) on main-hand weapon.
@@ -247,7 +268,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
             _itemBlockedUntil = unchecked(session.World.NowMs + 2000);
             var itemTarget = new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = mainHand.Guid };
-            return session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(enhItem.BagSlot, enhItem.Slot, itemTarget));
+            return UseItemWatched(player, system, enhItem, PlayerbotNavigation.UseItemPayload(enhItem.BagSlot, enhItem.Slot, itemTarget));
         }
 
         // 3. Buff scrolls and elixirs out of combat when the aura is not already present.
@@ -258,10 +279,20 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             SpellCastTargets targets = buffSpell is not null && IsExplicitUnit(buffSpell)
                 ? SpellCastTargets.ForUnit(player.Guid)
                 : SpellCastTargets.ForSelf();
-            return session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(buffItem.BagSlot, buffItem.Slot, targets));
+            return UseItemWatched(player, system, buffItem, PlayerbotNavigation.UseItemPayload(buffItem.BagSlot, buffItem.Slot, targets));
         }
 
         return false;
+    }
+
+    /// <summary>CMSG_USE_ITEM for <paramref name="item"/>, with the outcome check (<see cref="Consumables"/>) around it.</summary>
+    private bool UseItemWatched(Player player, SpellSystem system, Item item, byte[] payload)
+    {
+        SpellInfo? spell = item.Template.Spells[0].SpellId is var id and not 0 ? system.Store.Get(id) : null;
+        PlayerbotConsumableWatch.Use use = PlayerbotConsumableWatch.Begin(player, item, spell);
+        if (!session.TryManagedAction(WorldOpcode.CmsgUseItem, payload)) return false;
+        Consumables.Sent(player, use, system, session.World.NowMs);
+        return true;
     }
 
     private static Item? FindBestTempWeaponEnhancement(Player player, Item mainHand, SpellStore store,
@@ -450,7 +481,9 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             case RotationActionKind.UseItem when action.Item is { } item:
                 if (unchecked((int)(_itemBlockedUntil - session.World.NowMs)) > 0) return false;
                 _itemBlockedUntil = unchecked(session.World.NowMs + 2000);
-                return session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(item.Bag, item.Slot));
+                return player.Inventory.GetItem(item.Bag, item.Slot) is { } used
+                    ? UseItemWatched(player, feature.System, used, PlayerbotNavigation.UseItemPayload(item.Bag, item.Slot))
+                    : session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(item.Bag, item.Slot));
 
             case RotationActionKind.PetAttack:
                 return PetAction(player, PetCommandAttack, action.Target);
@@ -528,12 +561,14 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             }
 
             _refusedUntil.Remove(spell.Id);
+            _watch.Accepted(spell);
             return feature.System.GetState(player.Guid)?.MeleeCast is null;
         }
 
         // A refusal leaves that spell out for a while; the rest of the rotation goes on at the next decision.
         if (_refusedUntil.Count >= 64) _refusedUntil.Clear();
         _refusedUntil[spell.Id] = unchecked(session.World.NowMs + RefusalBackoffMs);
+        _watch.Refused(player, spell, session.World.NowMs);
         return false;
     }
 

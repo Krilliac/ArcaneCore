@@ -20,6 +20,24 @@ public sealed partial class WorldSession
     private DuplicatePacketDetector.SessionState? _duplicateState;
     private int _rejectionsSent;
     private int _lootReleasesSent;
+    private readonly RejectionStormTracker _rejectionStorm = new();
+    private long _closedAtTick;
+    private int _sendAfterCloseReported;
+    private int _kickRecorded;
+    private string? _kickReason;
+    private int _logoutOverdueReported;
+
+    /// <summary>Longest a session may stay closed while something still sends to it before that is reported (the world thread removes the player within a tick or two).</summary>
+    internal long SendAfterCloseGraceMs { get; set; } = 5_000;
+
+    /// <summary>Longest a logout may run past its countdown before it is reported as never completed.</summary>
+    internal uint LogoutOverdueGraceMs { get; set; } = 30_000;
+
+    /// <summary>The reason recorded by <see cref="Kick(string)"/>, or null (not kicked, or kicked without a reason).</summary>
+    internal string? KickReason => Volatile.Read(ref _kickReason);
+
+    /// <summary>The stable ledger subject of this session: its account (never positions or times).</summary>
+    internal string AnomalySubject => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"session account {AccountId}");
 
     private void InitObservability(IServiceProvider services)
     {
@@ -66,7 +84,12 @@ public sealed partial class WorldSession
             {
                 Interlocked.Increment(ref _rejectionsSent);
                 rejections.LogOutbound(_rejectionGate, ref _rejectionBucket, LogContext(), opcode, rejection);
+                NoteRejectionForStorm(opcode, rejection);
             }
+        }
+        else if (ClientRejectionDecoder.IsCandidate(opcode) && ClientRejectionDecoder.TryDecode(opcode, payload, out ClientRejection unlogged))
+        {
+            NoteRejectionForStorm(opcode, unlogged);
         }
 
         if (_duplicates is { } detector && (!_managed || detector.IncludeBots))
@@ -77,6 +100,117 @@ public sealed partial class WorldSession
                 detector.Report(state, LogContext(), hit);
             }
         }
+    }
+
+    /// <summary>
+    /// H1 outcome check <c>session/rejection-storm</c>: a handler that keeps refusing one account's client (RejectionStormTracker.Threshold refusals within
+    /// RejectionStormTracker.WindowMs) is looping on a request nobody fixes. One report per storm; a window below the threshold re-arms it. A synthetic
+    /// chaos probe is expected to be refused and is not counted. Cost: one lock and a few integer operations per refusal sent.
+    /// </summary>
+    private void NoteRejectionForStorm(WorldOpcode opcode, in ClientRejection rejection)
+    {
+        if (AccountId == 0 || IsInChaosProbe)
+        {
+            return;
+        }
+
+        int count;
+        lock (_rejectionGate)
+        {
+            if (!_rejectionStorm.Note(Environment.TickCount64, out count))
+            {
+                return;
+            }
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "session",
+            "rejection-storm",
+            AnomalySubject,
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{count} client refusals within {RejectionStormTracker.WindowMs} ms; latest {rejection.Kind} {rejection.ReasonName} for {WorldOpcodeNames.GetName(opcode)} (entry {rejection.Entry}, bot {IsPlayerbot})"));
+    }
+
+    /// <summary>
+    /// H1 outcome check <c>session/send-after-close</c> (Info): a packet was sent to a session that has been closed for more than
+    /// <see cref="SendAfterCloseGraceMs"/>, so a player or object kept talking to a logged-out connection (the player was not removed
+    /// from the world). One report per session. Runs only on the closed path of Send.
+    /// </summary>
+    private void NoteSendAfterClose(WorldOpcode opcode)
+    {
+        long closedAt = Volatile.Read(ref _closedAtTick);
+        if (closedAt == 0 || AccountId == 0 || Environment.TickCount64 - closedAt < SendAfterCloseGraceMs
+            || Interlocked.Exchange(ref _sendAfterCloseReported, 1) != 0)
+        {
+            return;
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "session",
+            "send-after-close",
+            AnomalySubject,
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{WorldOpcodeNames.GetName(opcode)} sent {Environment.TickCount64 - closedAt} ms after the session closed; the player is still being driven (in world: {Player is not null})"),
+            ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Info);
+    }
+
+    /// <summary>
+    /// H1 outcome check <c>session/kick-no-reason</c> (Info): the session was kicked by a caller that recorded no reason
+    /// (<see cref="Kick()"/>, not <see cref="Kick(string)"/>), so the disconnect would be unexplained. The detail names the calling method.
+    /// Not reported before authentication, once the session is already closed (the socket went away), or for the console. Runs once per session.
+    /// </summary>
+    private void ReportKickWithoutReason()
+    {
+        if (AccountId == 0 || _state is ArcaneCore.World.Handlers.SessionState.Connected or ArcaneCore.World.Handlers.SessionState.Closed)
+        {
+            return;
+        }
+
+        string caller = "unknown";
+        try
+        {
+            // The first frame outside this class, not a fixed depth: the JIT may inline Kick() into its caller, which removes a frame
+            // (a fixed skip of 3 then named the caller's caller), and may inline this report and KickCore as well, so no frame is skipped.
+            // WorldSession itself must not call Kick(): its frame would be skipped and the report would name its caller instead.
+            foreach (System.Diagnostics.StackFrame stackFrame in new System.Diagnostics.StackTrace(false).GetFrames())
+            {
+                if (stackFrame.GetMethod() is { } method && method.DeclaringType != typeof(WorldSession))
+                {
+                    caller = (method.DeclaringType?.Name ?? "?") + "." + method.Name;
+                    break;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // the caller stays unknown; the report is what matters
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "session",
+            "kick-no-reason",
+            AnomalySubject,
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"session kicked with no recorded reason by {caller} (state {_state}, bot {IsPlayerbot})"),
+            ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Info);
+    }
+
+    /// <summary>
+    /// H1 outcome check <c>session/logout-overdue</c>: a logout countdown that ran <see cref="LogoutOverdueGraceMs"/> past
+    /// <c>World:LogoutDelayMs</c> without the map completing it. Called for each in-world session each tick: one nullable test while not logging out.
+    /// One report per session.
+    /// </summary>
+    private void CheckLogoutOverdue(Player player)
+    {
+        if (!player.IsLoggingOut || _logoutOverdueReported != 0
+            || !player.IsLogoutDue(World.NowMs, unchecked(World.Options.LogoutDelayMs + LogoutOverdueGraceMs))
+            || Interlocked.Exchange(ref _logoutOverdueReported, 1) != 0)
+        {
+            return;
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "session",
+            "logout-overdue",
+            AnomalySubject,
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"logout of '{player.Name}' (guid {player.Guid.Low}) did not complete {LogoutOverdueGraceMs} ms after its {World.Options.LogoutDelayMs} ms countdown (map {player.MapId}, in map {player.Map is not null})"));
     }
 
     /// <summary>True once the duplicate detector has allocated this session's state (tests: a managed bot must never get one while bots are excluded).</summary>
