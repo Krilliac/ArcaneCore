@@ -18,6 +18,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Progression;
 /// cast the server rejected although the reagents are in the bags. The recipe is a synthetic consumable the bot wants (a consumable it carries
 /// fewer than five of), made from one reagent.
 /// </summary>
+[Collection(PlayerbotCraftingCollection.Name)]
 public sealed class PlayerbotCraftingAnomalyTests
 {
     private const uint Reagent = 99501;
@@ -78,22 +79,16 @@ public sealed class PlayerbotCraftingAnomalyTests
     }
 
     [Fact]
-    public async Task CraftFailed_Fires_WhenTheRecipeNeedsASpellFocusThatIsNotAround_AndNotAgainDuringTheBackoff()
+    public async Task CraftFailed_Silent_WhenTheRecipeNeedsASpellFocusThatIsNotAround()
     {
+        // No forge or fire around is the ordinary state of a bot in the field, not an anomaly (see PlayerbotCraftingSpellFocusTests).
         await RunAsync(CraftSpell(focus: 777), (host, session, crafting, player) => host.OnWorldAsync(() =>
         {
             using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
 
             Assert.False(Step(session, crafting, player));
-            Assert.Equal(1, capture.Count(CraftFailed));
-            AnomalyNotice notice = capture.Notices.Single(n => n.Key == CraftFailed);
-            Assert.Equal(AnomalySeverity.Warning, notice.Severity);
-            Assert.Contains($"craft spell {Recipe} missing nearby spell focus 777", notice.Detail, StringComparison.Ordinal);
-
-            // The recipe is set aside for a minute: the next thinks neither try it nor report it.
             Assert.False(Step(session, crafting, player));
-            Assert.False(Step(session, crafting, player));
-            Assert.Equal(1, capture.Count(CraftFailed));
+            Assert.False(capture.Any(CraftFailed), capture.Describe());
             Assert.Equal(3u, player.Inventory.GetItemCount(Reagent));
             return true;
         }));
