@@ -17,8 +17,8 @@ public sealed class PlayerbotPopulationAnomalyTests
     private const string BandDeficit = "bot-population/band-deficit";
     private const string LoginFailed = "bot-population/login-failed";
 
-    private static AnomalyCapture CaptureBand(int minLevel, int maxLevel)
-        => AnomalyLedger.Shared.Capture(n => n.Key == BandDeficit && n.Subject == $"band {minLevel}-{maxLevel}");
+    private static AnomalyCapture CaptureBand(PopulationTestHost world, int minLevel, int maxLevel)
+        => PlayerbotAnomalies.CaptureIn(world.Host.World, n => n.Key == BandDeficit && n.Subject == $"band {minLevel}-{maxLevel}");
 
     /// <summary>One pass with a fresh tick window, then the feature's clock moves on by <paramref name="advanceMs"/>.</summary>
     private static async Task PassAsync(PopulationTestHost world, long advanceMs)
@@ -43,7 +43,7 @@ public sealed class PlayerbotPopulationAnomalyTests
     {
         await using PopulationTestHost world = await StartWantingOneBotAsync(2, 9);
         world.Feature.Provisioner.AreaLevelSource = _ => 60; // no zone fits level 2-9: the band cannot be filled
-        using AnomalyCapture capture = CaptureBand(2, 9);
+        using AnomalyCapture capture = CaptureBand(world, 2, 9);
 
         await PassAsync(world, 31_000);
         await PassAsync(world, 31_000);
@@ -66,7 +66,7 @@ public sealed class PlayerbotPopulationAnomalyTests
     {
         await using PopulationTestHost world = await StartWantingOneBotAsync(3, 8);
         world.Feature.Provisioner.AreaLevelSource = _ => 60;
-        using AnomalyCapture capture = CaptureBand(3, 8);
+        using AnomalyCapture capture = CaptureBand(world, 3, 8);
 
         // Three passes, but all inside a minute: the time bound is not met.
         await PassAsync(world, 5_000);
@@ -87,7 +87,7 @@ public sealed class PlayerbotPopulationAnomalyTests
     public async Task BandDeficit_StaysSilent_WhenTheBandIsFilled()
     {
         await using PopulationTestHost world = await StartWantingOneBotAsync(1, 9);
-        using AnomalyCapture capture = CaptureBand(1, 9);
+        using AnomalyCapture capture = CaptureBand(world, 1, 9);
 
         for (int i = 0; i < 5; i++) await PassAsync(world, 61_000);
 

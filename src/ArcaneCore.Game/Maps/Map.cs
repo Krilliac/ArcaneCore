@@ -125,7 +125,7 @@ public sealed class Map
     public uint MapId { get; }
 
     /// <summary>The owning runtime, for map-local systems that publish world facts.</summary>
-    internal WorldRuntime World => _world;
+    public WorldRuntime World => _world;
 
     /// <summary>The instance this map object simulates: 0 for the shared copy, else a dungeon/raid instance id.</summary>
     public uint InstanceId { get; }

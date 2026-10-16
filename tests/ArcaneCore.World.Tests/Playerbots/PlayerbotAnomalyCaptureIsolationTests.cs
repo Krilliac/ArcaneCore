@@ -1,0 +1,77 @@
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.Playerbots;
+
+/// <summary>
+/// Every test world names its bot "Controlone" (guid 1), and the anomaly ledger is process-wide, so a capture that matched on the bot's
+/// subject alone heard every other test world's reports about its namesake. A bot report carries the world it was made in, and a bot
+/// capture keeps only its own world's: two live worlds with identically named bots do not see each other.
+/// </summary>
+public sealed class PlayerbotAnomalyCaptureIsolationTests
+{
+    private const string Area = "isolation";
+
+    [Fact]
+    public async Task TwoLiveWorlds_WithIdenticallyNamedBots_DoNotSeeEachOthersAnomalies()
+    {
+        await using WorldTestHost hostA = WorldTestHost.Start();
+        await using WorldTestHost hostB = WorldTestHost.Start();
+        WorldSession sessionA = await PlayerbotMovementControlTests.EnterAsync(hostA);
+        WorldSession sessionB = await PlayerbotMovementControlTests.EnterAsync(hostB);
+        try
+        {
+            Player botA = sessionA.Player!;
+            Player botB = sessionB.Player!;
+            Assert.Equal(PlayerbotAnomalies.SubjectOf(botA), PlayerbotAnomalies.SubjectOf(botB)); // the premise: the same subject in both worlds
+            Assert.NotSame(botA.Map!.World, botB.Map!.World);
+
+            using AnomalyCapture seenByA = PlayerbotAnomalies.CaptureFor(botA);
+            using AnomalyCapture seenByB = PlayerbotAnomalies.CaptureFor(botB);
+
+            await hostA.World.InvokeAsync(() => PlayerbotAnomalies.Report(botA, Area, "only-in-a", "world A failed a check"));
+            await hostB.World.InvokeAsync(() => PlayerbotAnomalies.Report(botB, Area, "only-in-b", "world B failed a check"));
+
+            Assert.True(seenByA.Any(PlayerbotAnomalies.Key(Area, "only-in-a")), seenByA.Describe());
+            Assert.True(seenByB.Any(PlayerbotAnomalies.Key(Area, "only-in-b")), seenByB.Describe());
+            Assert.False(seenByA.Any(PlayerbotAnomalies.Key(Area, "only-in-b")), "world A heard world B: " + seenByA.Describe());
+            Assert.False(seenByB.Any(PlayerbotAnomalies.Key(Area, "only-in-a")), "world B heard world A: " + seenByB.Describe());
+        }
+        finally
+        {
+            sessionA.Kick();
+            sessionB.Kick();
+            await sessionA.ManagedClosed;
+            await sessionB.ManagedClosed;
+        }
+    }
+
+    [Fact]
+    public async Task AWorldCapture_KeepsOnlyReportsStampedWithThatWorld()
+    {
+        await using WorldTestHost hostA = WorldTestHost.Start();
+        await using WorldTestHost hostB = WorldTestHost.Start();
+        WorldSession sessionA = await PlayerbotMovementControlTests.EnterAsync(hostA);
+        WorldSession sessionB = await PlayerbotMovementControlTests.EnterAsync(hostB);
+        try
+        {
+            using AnomalyCapture inA = PlayerbotAnomalies.CaptureIn(hostA.World, n => n.Key == PlayerbotAnomalies.Key(Area, "world-scoped"));
+
+            await hostB.World.InvokeAsync(() => PlayerbotAnomalies.Report(sessionB.Player!, Area, "world-scoped", "reported in B"));
+            Assert.False(inA.Any(PlayerbotAnomalies.Key(Area, "world-scoped")), inA.Describe());
+
+            await hostA.World.InvokeAsync(() => PlayerbotAnomalies.Report(sessionA.Player!, Area, "world-scoped", "reported in A"));
+            Assert.Equal(1, inA.Count(PlayerbotAnomalies.Key(Area, "world-scoped")));
+        }
+        finally
+        {
+            sessionA.Kick();
+            sessionB.Kick();
+            await sessionA.ManagedClosed;
+            await sessionB.ManagedClosed;
+        }
+    }
+}

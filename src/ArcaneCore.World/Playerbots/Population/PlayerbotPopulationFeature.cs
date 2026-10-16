@@ -722,7 +722,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                             "parked-unexpected",
                             botLabel,
                             $"population-owned bot transitioned to {memberState} outside population park pass (zone={member.ZoneId}, band={member.Band})",
-                            AnomalySeverity.Warning);
+                            AnomalySeverity.Warning,
+                            origin: _world);
                     }
                 }
             }
@@ -877,7 +878,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                     "band-deficit",
                     $"band {band.MinLevel}-{band.MaxLevel}",
                     $"band {band.MinLevel}-{band.MaxLevel} below target for {elapsedMs}ms across {passes} passes (want={want}, have={current}, note={ctxNote ?? "none"})",
-                    AnomalySeverity.Info);
+                    AnomalySeverity.Info,
+                    origin: _world);
             }
 
             _bandDeficits[i] = (state.SinceMs, passes, current, reported);
@@ -995,7 +997,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         return (started, created);
     }
 
-    private static void ReportLoginFailed(IReadOnlyDictionary<Guid, ManagedPlayerbot> known, Guid botId, int characterId, string? fallbackName,
+    private void ReportLoginFailed(IReadOnlyDictionary<Guid, ManagedPlayerbot> known, Guid botId, int characterId, string? fallbackName,
         PlayerbotOperationResult result, string stage)
     {
         if (result.Code is "playerbot-capacity" or "playerbot-stopping" or "playerbots-disabled" or "playerbots-reset")
@@ -1010,7 +1012,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             "login-failed",
             subject,
             $"population {stage} failed to bring bot online: code={result.Code}",
-            AnomalySeverity.Warning);
+            AnomalySeverity.Warning,
+            origin: _world);
     }
 
     /// <summary>
@@ -1380,7 +1383,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             "town-unresolved",
             "population towns",
             $"the centre of {fresh.Length} town(s) could not be found (no spawn of their anchor NPC on the map): {string.Join(',', fresh)}; bots fall back to the towns that did resolve, or to no home",
-            AnomalySeverity.Warning);
+            AnomalySeverity.Warning,
+            origin: _world);
     }
 
     /// <summary>One anomaly per town (per process) whose map the server does not allow for playerbot homes, so a capital or town that vanishes from the progression is explained.</summary>
@@ -1392,7 +1396,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             "town-map-not-allowed",
             $"town {key}",
             $"the town {key} is on map {mapId}, which World:Playerbots:AllowedMaps does not allow for homes: no bot is homed there",
-            AnomalySeverity.Warning);
+            AnomalySeverity.Warning,
+            origin: _world);
     }
 
     /// <summary>
@@ -1521,7 +1526,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             "town-unreachable",
             $"bot {bot.BotId:D}",
             detail,
-            AnomalySeverity.Info);
+            AnomalySeverity.Info,
+            origin: _world);
     }
 
     /// <summary>Bots holding town state (stay clock, fit count): tests.</summary>

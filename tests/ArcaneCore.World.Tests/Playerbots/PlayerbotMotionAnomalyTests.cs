@@ -16,15 +16,13 @@ namespace ArcaneCore.World.Tests.Playerbots;
 internal static class H1AnomalyKit
 {
     /// <summary>
-    /// The reports of one bot made on this host's world thread. The ledger is process-wide and other tests' bots share the name and
-    /// guid of <see cref="PlayerbotMovementControlTests.EnterAsync"/>'s, so the subject alone would also catch their reports.
+    /// The reports of one bot in this host's world (<see cref="PlayerbotAnomalies.CaptureFor"/>: other tests' bots share the name and guid of
+    /// <see cref="PlayerbotMovementControlTests.EnterAsync"/>'s, but their reports name another world).
     /// </summary>
-    internal static async Task<AnomalyCapture> CaptureAsync(WorldTestHost host, Player player)
+    internal static Task<AnomalyCapture> CaptureAsync(WorldTestHost host, Player player)
     {
-        int worldThread = await host.OnWorldAsync(() => Environment.CurrentManagedThreadId);
-        string subject = PlayerbotAnomalies.SubjectOf(player);
-        return AnomalyLedger.Shared.Capture(n => string.Equals(n.Subject, subject, StringComparison.Ordinal)
-            && Environment.CurrentManagedThreadId == worldThread);
+        ArgumentNullException.ThrowIfNull(host);
+        return Task.FromResult(PlayerbotAnomalies.CaptureFor(player));
     }
 
     internal sealed class ManualClock : IWorldFeature
