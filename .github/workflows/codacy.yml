@@ -46,8 +46,47 @@ jobs:
           gh-code-scanning-compat: true
           max-allowed-issues: 2147483647
 
-      - name: Upload SARIF results file
+      # The CLI writes one SARIF run per bundled tool (31 on 2026-10-16), and code scanning refuses several runs under one category and
+      # more than 20 runs in one upload. Give each run its own category, codacy/<tool>/ (a repeated tool gets -1, -2, ...), so each
+      # tool's alerts keep a stable home across scans, then split the runs, sorted by category, into files of at most 20, one upload
+      # each. The uploads set no category of their own: one would override these. More runs than the three uploads hold fail here.
+      - name: Give each Codacy tool its own SARIF category
+        run: |
+          python3 - <<'PY'
+          import json, re, sys
+          with open("results.sarif", encoding="utf-8") as f:
+              sarif = json.load(f)
+          seen = {}
+          runs = sarif.get("runs", [])
+          for run in runs:
+              name = re.sub(r"[^a-z0-9]+", "-", run.get("tool", {}).get("driver", {}).get("name", "unknown").lower()).strip("-") or "unknown"
+              index = seen.get(name, 0)
+              seen[name] = index + 1
+              run["automationDetails"] = {"id": f"codacy/{name}{'' if index == 0 else f'-{index}'}/"}
+          runs.sort(key=lambda run: run["automationDetails"]["id"])
+          chunks = [runs[i:i + 20] for i in range(0, len(runs), 20)]
+          if len(chunks) > 3:
+              sys.exit(f"{len(runs)} SARIF runs need {len(chunks)} uploads; add upload steps to codacy.yml")
+          for number, chunk in enumerate(chunks, 1):
+              with open(f"codacy-results-{number}.sarif", "w", encoding="utf-8") as f:
+                  json.dump({**sarif, "runs": chunk}, f)
+          print(f"{len(runs)} run(s) in {len(chunks)} file(s): {', '.join(sorted(seen))}")
+          PY
+
+      - name: Upload SARIF results (1 of 3)
+        if: hashFiles('codacy-results-1.sarif') != ''
         uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
         with:
-          sarif_file: results.sarif
-          category: codacy
+          sarif_file: codacy-results-1.sarif
+
+      - name: Upload SARIF results (2 of 3)
+        if: hashFiles('codacy-results-2.sarif') != ''
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          sarif_file: codacy-results-2.sarif
+
+      - name: Upload SARIF results (3 of 3)
+        if: hashFiles('codacy-results-3.sarif') != ''
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          sarif_file: codacy-results-3.sarif

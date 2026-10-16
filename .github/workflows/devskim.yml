@@ -54,11 +54,13 @@ jobs:
       # - DS162092 localhost/127.0.0.1: loopback defaults and test endpoints, which are the safe default.
       # - DS172412: the word "unsafe" in bot placement and recovery names; the project has no unsafe code.
       # - DS450000: "net11" read as an old .NET Framework target; it is .NET 11.
+      # The filtered SARIF goes to a new file: the scanner's container writes devskim-results.sarif as root, so the runner user cannot
+      # overwrite it in place (PermissionError).
       - name: Remove reviewed false positives
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           input: devskim-results.sarif
-          output: devskim-results.sarif
+          output: devskim-filtered.sarif
           patterns: |
             -**/tests/**:DS148264
             -**/src/ArcaneCore.Game/**:DS148264
@@ -119,5 +121,5 @@ jobs:
       - name: Upload DevSkim scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
         with:
-          sarif_file: devskim-results.sarif
+          sarif_file: devskim-filtered.sarif
           category: devskim
