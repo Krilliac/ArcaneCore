@@ -129,6 +129,21 @@ public sealed class ZoneGameObjectScriptTests : IDisposable
     }
 
     [Fact]
+    public void UlagGoesAfter300SecondsOutOfCombat()
+    {
+        var ai = new MausoleumDoorAi((_, quest) => quest == MausoleumDoorAi.QuestUlag);
+        ai.OnUse(_objects, Door, _player);
+        Creature ulag = Assert.Single(Ulags);
+        _player.Relocate(ulag.X, ulag.Y, ulag.Z, 0, 0); // keep his grid awake
+
+        for (int i = 0; i < 295; i++) _world.RunTick(1_000);
+        Assert.Single(Ulags, c => c.IsAlive);
+
+        for (int i = 0; i < 10; i++) _world.RunTick(1_000);
+        Assert.Empty(Ulags);
+    }
+
+    [Fact]
     public void TheDoorDoesNothingWithoutTheQuestOrWithoutATriggerWithin30Yards()
     {
         GameObject trigger = NearTrigger;

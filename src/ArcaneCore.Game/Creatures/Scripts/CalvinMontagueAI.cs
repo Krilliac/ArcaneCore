@@ -5,12 +5,13 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 
 /// <summary>
 /// Calvin Montague (entry 6784, Tirisfal Glades), the beat-him-up quest 590 (ScriptDev2 QUEST_590): mangos-classic ScriptDev2 <c>npc_calvin_montague</c>
-/// (eastern_kingdoms/tirisfal_glades.cpp:89-168, registered :181-199). He stands friendly and immune to players (Reset, :100-107); taking the
+/// (eastern_kingdoms/tirisfal_glades.cpp:89-168, registered :193-197). He stands friendly and immune to players (Reset, :100-107); taking the
 /// quest turns him hostile (faction 168, restored when the fight stops or he respawns) and he attacks the player (:170-179). A hit that would
 /// leave him under 15% is clamped (DamageTaken, :109-123): the fight stops, he goes passive, and five seconds later he says his line (-1000356),
 /// 7.5 s after that the player gets the event credit and he drinks (spell 2639, triggered), and 7.5 s later he evades, which resets him.
-/// Differences: the combat engine's invincibility threshold (15% of maximum health) stands in for the clamp, so a hit that would pass 15% leaves
-/// him on 15% rather than just under it; the player who gets the credit is his victim at that moment, where the source stores the dealer.
+/// Differences: the combat engine's invincibility threshold (the highest health under 15%) stands in for the clamp, so a hit that would pass it leaves
+/// him on that health rather than on 1 hp; the player who gets the credit is his victim at that moment, where the source stores the dealer of the
+/// clamped hit (creature AIs have no per-creature DamageTaken seam; MapCombat.DamageTaken is a map-wide event with no AI removal hook to unsubscribe from).
 /// </summary>
 public sealed class CalvinMontagueAI(Creature creature) : ScriptedAI(creature), IQuestScriptAI
 {
@@ -33,7 +34,9 @@ public sealed class CalvinMontagueAI(Creature creature) : ScriptedAI(creature), 
         Me.ReactState = CreatureReactState.Aggressive;
         Me.UnitFlags |= UnitFlags.ImmuneToPlayer;
         // DamageTaken's 15% rule applies to every hit, so the threshold stands from the start (a friendly, immune Calvin is never hit by players).
-        Me.InvincibilityHpThreshold = Math.Max(1u, (uint)((ulong)Me.MaxHealth * 15 / 100));
+        // The source triggers when (health - damage) * 100 / max < 15 (:111), i.e. strictly under 15%: the highest such health is
+        // ceil(15% of max) - 1, and a hit landing exactly on 15% leaves him above the threshold and does not trigger.
+        Me.InvincibilityHpThreshold = Math.Max(1u, (uint)(((ulong)Me.MaxHealth * 15 + 99) / 100) - 1);
     }
 
     /// <summary>QuestAccept_npc_calvin_montague (:170-179).</summary>

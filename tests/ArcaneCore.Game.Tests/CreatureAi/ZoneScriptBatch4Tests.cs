@@ -26,11 +26,10 @@ public sealed class ZoneScriptBatch4Tests
     {
         public List<(Creature Caster, uint Spell, Unit? Target, bool Triggered)> Casts { get; } = [];
 
-        public event Action<Unit, Unit, SpellInfo>? SpellHit
-        {
-            add { }
-            remove { }
-        }
+        public event Action<Unit, Unit, SpellInfo>? SpellHit;
+
+        /// <summary>What the spell system does when a spell lands: the creature system hears of it through <see cref="SpellHit"/>.</summary>
+        public void Land(Unit caster, Unit target, uint spellId) => SpellHit?.Invoke(caster, target, new SpellInfo { Id = spellId });
 
         public CreatureCastResult Cast(Creature caster, uint spellId, Unit? target, bool triggered)
         {
@@ -192,7 +191,9 @@ public sealed class ZoneScriptBatch4Tests
         var ai = rig.Ai<CalvinMontagueAI>();
         ai.OnQuestAccept(rig.Player, CalvinMontagueAI.QuestCalvin);
 
-        rig.Map.Combat.DealDamage(rig.Player, rig.Npc, rig.Npc.Health); // a lethal hit
+        // A lethal hit from another player: the credit still goes to his victim (the player who took the quest), see the class summary.
+        (Player other, _) = AddPlayer(rig.World, 2, 1, 1);
+        rig.Map.Combat.DealDamage(other, rig.Npc, rig.Npc.Health);
         Assert.True(rig.Npc.IsAlive);
         rig.World.RunTick(100);
 
@@ -224,6 +225,31 @@ public sealed class ZoneScriptBatch4Tests
         Assert.Equal(UnitFlags.ImmuneToPlayer, rig.Npc.UnitFlags & UnitFlags.ImmuneToPlayer);
         Assert.Equal(CreatureReactState.Aggressive, rig.Npc.ReactState);
         Assert.Single(rig.Quest.Completed);
+    }
+
+    [Fact]
+    public void Calvin_AHitLandingExactlyOn15PercentDoesNotTrigger_OneMoreHitDoes()
+    {
+        using var rig = new Rig(CalvinMontagueAI.Entry, b =>
+        {
+            Friendly()(b);
+            b.MinLevelHealth = 100;
+            b.MaxLevelHealth = 100;
+        }, [CalvinMontagueAI.SayComplete]);
+        var ai = rig.Ai<CalvinMontagueAI>();
+        Assert.Equal(100u, rig.Npc.MaxHealth);
+        ai.OnQuestAccept(rig.Player, CalvinMontagueAI.QuestCalvin);
+
+        rig.Map.Combat.DealDamage(rig.Player, rig.Npc, 85, startsCombat: false); Assert.Equal(15u, rig.Npc.Health);
+        rig.World.RunTick(100);
+        Assert.Equal(15u, rig.Npc.Health);
+        Assert.Equal(0, ai.Phase);
+        Assert.True(rig.Npc.Combat.IsInCombat);
+
+        rig.Map.Combat.DealDamage(rig.Player, rig.Npc, 1); // 14%: strictly under
+        rig.World.RunTick(100);
+        Assert.Equal(1, ai.Phase);
+        Assert.False(rig.Npc.Combat.IsInCombat);
     }
 
     [Fact]
@@ -349,6 +375,21 @@ public sealed class ZoneScriptBatch4Tests
         Assert.Equal(0u, rig.Npc.NpcFlags & (uint)NpcFlags.QuestGiver);
         Assert.Equal(UnitFlags.None, rig.Npc.UnitFlags & UnitFlags.ImmuneToPlayer);
         Assert.Equal(32u, rig.Npc.FactionTemplate); // the evade home gave the faction back (he never left home)
+    }
+
+    [Fact]
+    public void Fizzule_AFlareLandedByTheSpellSystemReachesHisScript()
+    {
+        using Rig rig = FizzuleRig();
+        var ai = rig.Ai<TaskmasterFizzuleAI>();
+
+        rig.Caster.Land(rig.Player, rig.Npc, TaskmasterFizzuleAI.SpellFlare);
+
+        Assert.Equal(1, ai.FlareCount);
+        Assert.True(ai.IsCalmed);
+
+        rig.Caster.Land(rig.Npc, rig.Npc, TaskmasterFizzuleAI.SpellFlare); // not a player
+        Assert.Equal(1, ai.FlareCount);
     }
 
     [Fact]

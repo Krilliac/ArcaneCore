@@ -25,7 +25,7 @@ internal sealed class RuneOfTheDefilerAi : IGameObjectAi
 }
 
 /// <summary>
-/// go_mausoleum_door (mangos-classic eastern_kingdoms/tirisfal_glades.cpp:47-60, registered :183-187): while quest 1819 is incomplete, using the
+/// go_mausoleum_door (mangos-classic eastern_kingdoms/tirisfal_glades.cpp:47-60, registered :183-186): while quest 1819 is incomplete, using the
 /// Doors (176594) when a Mausoleum Trigger (104593) stands within 30 yd of the player resets that trigger to ready and summons Ulag the Cleaver
 /// (6390) at the mausoleum for 300 s (TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN). It never handles the use: the door opens as usual.
 /// </summary>
@@ -63,7 +63,7 @@ internal sealed class MausoleumDoorAi(Func<Player, uint, bool> questIncomplete) 
 }
 
 /// <summary>
-/// go_mausoleum_trigger (mangos-classic eastern_kingdoms/tirisfal_glades.cpp:62-77, registered :189-193): while quest 1819 is incomplete, using
+/// go_mausoleum_trigger (mangos-classic eastern_kingdoms/tirisfal_glades.cpp:62-75, registered :188-191): while quest 1819 is incomplete, using
 /// the Mausoleum Trigger (104593) when the Doors (176594) stand within 30 yd of the player presses the trigger (Active) and clears the door's
 /// interact-condition flag so it can be opened; the use is then handled. Without the quest or the door the use is left to the object.
 /// </summary>

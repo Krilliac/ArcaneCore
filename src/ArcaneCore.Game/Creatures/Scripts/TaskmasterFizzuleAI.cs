@@ -29,7 +29,7 @@ public sealed class TaskmasterFizzuleAI(Creature creature) : ScriptedAI(creature
     {
     }
 
-    /// <summary>EnterEvadeMode (:172-181): calmed, he only drops his auras and the fight; otherwise the normal evade.</summary>
+    /// <summary>EnterEvadeMode (:172-181): calmed, he only drops his evade-removable auras and the fight; otherwise the normal evade.</summary>
     public override bool OnEnterEvadeMode()
     {
         if (_resetMs == 0)
@@ -39,7 +39,7 @@ public sealed class TaskmasterFizzuleAI(Creature creature) : ScriptedAI(creature
 
         if (System is { } system)
         {
-            system.RemoveAllAuras(Me);
+            system.ResetAurasOnEvade(Me);
             system.StopCombatInPlace(Me);
         }
 
