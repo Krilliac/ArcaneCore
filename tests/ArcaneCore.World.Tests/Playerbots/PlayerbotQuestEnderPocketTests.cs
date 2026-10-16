@@ -291,6 +291,7 @@ public sealed partial class PlayerbotQuestReturnTests
 
     private static async Task AddPocketAsync(ReturnFixture fixture, byte mobLevel)
     {
+        var pack = new List<ArcaneCore.Game.ObjectGuid>();
         await fixture.Host.World.InvokeAsync(() =>
         {
             var player = fixture.Session.Player!;
@@ -310,9 +311,14 @@ public sealed partial class PlayerbotQuestReturnTests
                 }, null, CreatureContent.Empty, new Random((int)i + 1));
                 mob.SetPosition(originX + 128 + (i % 2) * 3, player.Y + ((int)i - 4) * 2, player.Z, 0);
                 player.Map.AddObject(mob);
+                pack.Add(mob.Guid);
             }
             player.SetPosition(originX + 55, player.Y, player.Z, 0);
             return true;
         });
+        // The pack becomes visible only at the next map update, and the hazard scan reads VisibleObjects. A tick drains many posted
+        // commands before it updates the maps, and InvokeAsync resumes the test on another thread, so the next command could land in
+        // the same drain and scan an empty pocket ("no unpassable strong hazard ... visible=1").
+        await fixture.Host.WaitForWorldAsync(() => pack.All(guid => fixture.Session.Player!.VisibleObjects.Contains(guid)), "ender pocket visibility");
     }
 }
