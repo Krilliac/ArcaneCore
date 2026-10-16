@@ -671,6 +671,11 @@ internal static class PlayerbotMageService
             leg.MageGuid = request.MageGuid;
             // The mage this bot paid already for this portal (the paid leg was dropped by a fight): its request is paid, no second trade.
             if (!request.Paid && leg.PrepaidMage != 0 && request.MageGuid == leg.PrepaidMage) request.Paid = true;
+            // Another mage took the request of a portal already paid to the first: this one is not paid, and the fee is not traded a second
+            // time here (the journey checked no spend for it). The leg ends unreported; the journey's replan prices a new portal against what
+            // it may still spend.
+            if (!request.Paid && leg.PrepaidMage != 0 && request.MageGuid != leg.PrepaidMage && request.FeeCopper > 0)
+                return Quit(session, player, leg, $"mage {request.MageGuid:X} took the request, but the fee was paid to mage {leg.PrepaidMage:X}", out failure);
             if (Online(session, request.MageGuid) is not { IsInWorld: true } mage || mage.MapId != player.MapId)
                 return FailLeg(session, player, leg, "mage-gone", $"matched mage {request.MageGuid:X} left the map", AnomalySeverity.Info, out failure);
             AcceptMageInvite(session, player, leg);

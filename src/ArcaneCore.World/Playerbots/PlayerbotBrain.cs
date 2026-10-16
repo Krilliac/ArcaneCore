@@ -1501,17 +1501,24 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (travel.IsTraveling(player)) return true;
         uint now = _session.World.NowMs;
         // A journey home that failed (its anomaly is reported once by the journey) or could not begin waits the transit backoff before
-        // the next one, doubling while it keeps failing: the return rules (the teleport fallback) answer meanwhile.
-        if (PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Failed } failed && !ReferenceEquals(failed, _travelHomeCounted))
+        // the next one, doubling while it keeps failing; only a journey home that arrived starts the count again. Journeys others began
+        // (.playerbot travel) do not count. The return rules (the teleport fallback) answer meanwhile.
+        if (_travelHomeJourney is { } last && PlayerbotTravel.JourneyOf(player) is { } current && ReferenceEquals(last, current))
         {
-            _travelHomeCounted = failed;
-            _travelHomeRetryAt = unchecked(now + _options.Travel.BackoffMs(++_travelHomeFailures));
+            if (current.State == JourneyState.Arrived) _travelHomeFailures = 0;
+            else if (current.State != JourneyState.Active)
+                _travelHomeRetryAt = unchecked(now + _options.Travel.BackoffMs(++_travelHomeFailures));
+            _travelHomeJourney = null;
+        }
+        else if (_travelHomeJourney is not null && !ReferenceEquals(_travelHomeJourney, PlayerbotTravel.JourneyOf(player)))
+        {
+            _travelHomeJourney = null; // replaced by a journey another caller began: it neither counts nor clears
         }
 
         if (_travelHomeFailures > 0 && unchecked((int)(_travelHomeRetryAt - now)) > 0) return false;
         if (travel.TryBegin(_session, player, home.MapId, home.Centre, out _))
         {
-            if (PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Active }) _travelHomeFailures = 0;
+            _travelHomeJourney = PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Active } begun ? begun : null;
             return true;
         }
 
@@ -1519,10 +1526,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         return false;
     }
 
-    // The journey-home retry wait (TryTravelHome): failures in a row, when the next try may begin, and the failed journey already counted.
+    // The journey-home retry wait (TryTravelHome): failures in a row, when the next try may begin, and the journey home under way.
     private int _travelHomeFailures;
     private uint _travelHomeRetryAt;
-    private TravelJourney? _travelHomeCounted;
+    private TravelJourney? _travelHomeJourney;
 
     /// <summary>
     /// A new stall (<see cref="PlayerbotStallWatch"/>): set the goal's target aside for <see cref="PlayerbotSuspensions.SuspendMs"/>

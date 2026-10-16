@@ -870,6 +870,11 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
         PlayerbotShip.Cancel(player);
         PlayerbotHearthstone.Cancel(session, player);
         PlayerbotMageService.Cancel(session, player);
+        // A walk leg's own transit trips go too: a taxi still walking to its master, a tram or lift trip not yet aboard (each driver keeps
+        // a flight in the air or a car under way to its end), so no fare is paid for a journey that is over.
+        PlayerbotTaxi.Cancel(player);
+        PlayerbotTram.Cancel(player);
+        PlayerbotElevator.Cancel(player);
         PlayerbotMovementControl.Stop(session, player);
     }
 

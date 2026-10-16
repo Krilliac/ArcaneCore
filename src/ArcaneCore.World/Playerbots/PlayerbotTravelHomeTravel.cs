@@ -22,7 +22,8 @@ internal sealed class PlayerbotTravelHomeTravel(PlayerbotOptions options) : IPla
     {
         if (DefaultHomeTravel.Instance.CanReachWithoutTeleport(fromMap, from, toMap, to)) return true;
         PlayerbotTravelOptions travel = options.Travel;
-        if (!travel.Enabled) return false;
+        // A Walk-mode return never begins a journey (PlayerbotBrain.TryTravelHome): such a home would be one the bot never reaches.
+        if (!travel.Enabled || options.Home.ReturnMode == PlayerbotHomeReturnMode.Walk) return false;
         IReadOnlyList<ShipRoute> published = PlayerbotTravel.StaticRoutes;
         ShipRoute[] routes = published as ShipRoute[] ?? [.. published];
         if (fromMap != toMap)
