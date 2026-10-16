@@ -78,6 +78,27 @@ internal static class BattlegroundBotTestContent
     /// <summary>Arathi Basin, compact: the stables node 20 yards from the Alliance start.</summary>
     public static readonly Vector3 Stables = new(1166.79f, 1200.13f, AbFloor);
 
+    /// <summary>
+    /// Alterac Valley, compact: the Alliance start cave (safe location 611) with an Alliance spirit guide beside it, and the Iceblood graveyard
+    /// (node 4, Horde-held at the start) 60 yards east of it: its Horde banner (classic-db 178364, event (4, 3)) and the Alliance-assaulted
+    /// banner that replaces it (179286, event (4, 0)), both buttons locked by 1479 with <c>noDamageImmune</c> as the real rows have them, and a
+    /// hostile guard 10 yards before the banner.
+    /// </summary>
+    public static readonly Vector3 AvAllianceCave = new(100f, 0f, AvFloor);
+
+    public static readonly Vector3 AvIceblood = new(160f, 0f, AvFloor);
+
+    public static readonly Vector3 AvSpiritGuideAt = new(100f, 6f, AvFloor);
+
+    public static readonly Vector3 AvGuardAt = new(150f, 4f, AvFloor);
+
+    public const uint AvIcebloodHordeBanner = 993401;
+    public const uint AvIcebloodAssaultedBanner = 993402;
+    public const uint AvSpiritGuideEntry = 13116;
+    public const uint AvSpiritGuideSpawn = 993501;
+    public const uint AvGuardEntry = 993502;
+    public const uint AvGuardSpawn = 993503;
+
     public const uint WsgAllianceStandSpawn = 993201;
     public const uint WsgHordeStandSpawn = 993202;
     public const uint AbNeutralBanner = 993301;
@@ -267,6 +288,8 @@ internal static class BattlegroundBotTestContent
                 new BattlegroundEventIndex(AbNeutralBanner, ArathiBasin.NodeStables, ArathiBasin.StatusNeutral),
                 new BattlegroundEventIndex(AbAllianceContestedBanner, ArathiBasin.NodeStables, ArathiBasin.StatusAllianceContested),
                 new BattlegroundEventIndex(AbAllianceBanner, ArathiBasin.NodeStables, ArathiBasin.StatusAllianceOccupied),
+                new BattlegroundEventIndex(AvIcebloodHordeBanner, AlteracValley.NodeIcebloodGrave, 3),
+                new BattlegroundEventIndex(AvIcebloodAssaultedBanner, AlteracValley.NodeIcebloodGrave, 0),
             ],
             [
                 new BattlemasterRecord(AllianceAvMaster, 1), new BattlemasterRecord(HordeAvMaster, 1),
@@ -282,6 +305,16 @@ internal static class BattlegroundBotTestContent
                 Master(AllianceWsgMaster, "Test WSG Battlemaster", 12), Master(HordeWsgMaster, "Test WSG Battlemaster", 29),
                 Master(AllianceAbMaster, "Test AB Battlemaster", 12), Master(HordeAbMaster, "Test AB Battlemaster", 29),
                 Master(AllianceAvMaster, "Test AV Battlemaster", 12), Master(HordeAvMaster, "Test AV Battlemaster", 29),
+                new CreatureTemplate
+                {
+                    Entry = AvSpiritGuideEntry, Name = "Stormpike Spirit Guide", Faction = 12, NpcFlags = (uint)(NpcFlags.Gossip | NpcFlags.SpiritGuide),
+                    DisplayIds = [13337], MinLevel = 60, MaxLevel = 60, MinLevelHealth = 100, MaxLevelHealth = 100, ExtraFlags = Game.Creatures.Creature.ExtraFlagNoAggro,
+                },
+                new CreatureTemplate
+                {
+                    Entry = AvGuardEntry, Name = "Test Iceblood Guard", Faction = 14, DisplayIds = [49], MinLevel = 1, MaxLevel = 1,
+                    MinLevelHealth = 20, MaxLevelHealth = 20, ExtraFlags = Game.Creatures.Creature.ExtraFlagNoAggro,
+                },
             ],
             [
                 .. offered.Contains(BattlegroundType.WarsongGulch)
@@ -293,6 +326,8 @@ internal static class BattlegroundBotTestContent
                 .. offered.Contains(BattlegroundType.AlteracValley)
                     ? [Spawn(AllianceAvMaster, MasterAt(AllianceAvMaster)), Spawn(HordeAvMaster, MasterAt(HordeAvMaster))]
                     : Array.Empty<CreatureSpawn>(),
+                new CreatureSpawn { Guid = AvSpiritGuideSpawn, Entry = AvSpiritGuideEntry, MapId = 30, X = AvSpiritGuideAt.X, Y = AvSpiritGuideAt.Y, Z = AvSpiritGuideAt.Z },
+                new CreatureSpawn { Guid = AvGuardSpawn, Entry = AvGuardEntry, MapId = 30, X = AvGuardAt.X, Y = AvGuardAt.Y, Z = AvGuardAt.Z },
             ], [], [], []));
 
         Task<GameObjectContent> IGameObjectDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new GameObjectContent(
@@ -310,6 +345,7 @@ internal static class BattlegroundBotTestContent
                 BuffTrap(BattlegroundConstants.SpeedBuffEntry, SpeedBuffSpell, 5931, "Speed Buff"),
                 BuffTrap(BattlegroundConstants.RegenBuffEntry, RestorationBuffSpell, 5991, "Food Buff"),
                 BuffTrap(BattlegroundConstants.BerserkBuffEntry, BerserkBuffSpell, 5995, "Berserk Buff"),
+                Banner(178364, "Horde Banner"), Banner(179286, "Contested Banner"),
             ],
             [
                 .. wsgBuffs
@@ -318,6 +354,8 @@ internal static class BattlegroundBotTestContent
                 new GameObjectSpawn { Guid = WsgAllianceStandSpawn, Entry = WarsongGulch.AllianceFlagBaseEntry, MapId = 489, X = AllianceFlag.X, Y = AllianceFlag.Y, Z = AllianceFlag.Z },
                 new GameObjectSpawn { Guid = WsgHordeStandSpawn, Entry = WarsongGulch.HordeFlagBaseEntry, MapId = 489, X = HordeFlag.X, Y = HordeFlag.Y, Z = HordeFlag.Z },
                 BannerSpawn(AbNeutralBanner, 180087), BannerSpawn(AbAllianceContestedBanner, 180085), BannerSpawn(AbAllianceBanner, 180058),
+                new GameObjectSpawn { Guid = AvIcebloodHordeBanner, Entry = 178364, MapId = 30, X = AvIceblood.X, Y = AvIceblood.Y, Z = AvIceblood.Z },
+                new GameObjectSpawn { Guid = AvIcebloodAssaultedBanner, Entry = 179286, MapId = 30, X = AvIceblood.X, Y = AvIceblood.Y, Z = AvIceblood.Z },
             ],
             [BannerLock], [], []));
 

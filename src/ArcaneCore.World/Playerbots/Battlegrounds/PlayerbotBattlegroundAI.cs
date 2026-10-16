@@ -34,13 +34,16 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// node its team may click (neutral, or held or contested by the enemy: the server's own rule) and casts the banner spell 21651 at the
 /// node's banner (CMSG_CAST_SPELL at the object), standing still for its ten-second cast; a teammate already casting there is left to it.
 /// A defender holds one of its team's nodes and defends it the same way once the enemy assaulted it.</item>
+/// <item><b>Alterac Valley</b> (<c>PlayerbotBattlegroundAI.AlteracValley.cs</c>, <see cref="PlayerbotAlteracValleyTactics"/>): the push on the
+/// enemy general through the enemy captain, towers and graveyards along the bot's lane, the own assaulted nodes clicked back and a limited
+/// count of guards.</item>
 /// </list>
 /// <para>
-/// A dead bot releases and runs back to its body through <see cref="PlayerbotRecovery"/>, as a player does here: the battleground spirit
-/// guide's resurrection wave is not modelled by the server (docs/areas/battlegrounds.md, Resurrection), so the corpse run is the way back.
+/// A dead bot releases through <see cref="PlayerbotRecovery"/>: in a battleground the ghost waits at the graveyard's spirit guide for its
+/// resurrection wave (the release put it at the team's nearest held graveyard) instead of running back to its body.
 /// </para>
 /// </summary>
-internal sealed class PlayerbotBattlegroundAI
+internal sealed partial class PlayerbotBattlegroundAI
 {
     /// <summary>vmangos INTERACTION_DISTANCE (5 yards), less a margin: a flag or a battlemaster is used from this close.</summary>
     internal const float InteractYards = 4f;
@@ -204,11 +207,11 @@ internal sealed class PlayerbotBattlegroundAI
         if (dead)
         {
             Goal = PlayerbotGoalKind.Recover;
-            Activity = "corpse-run";
             _inMatchIdleMs = 0;
             // Not before the gates open, nor after the end: the server refuses a reclaim outside a running match (vmangos
             // HandleReclaimCorpseOpcode, the BattleGround status check) and resurrects everyone at the end.
             if (match.Status == BattlegroundStatus.InProgress) _recovery.Update(player, interval);
+            Activity = _recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.AwaitAreaResurrection ? "spirit-guide" : "corpse-run";
             return;
         }
 
@@ -470,50 +473,6 @@ internal sealed class PlayerbotBattlegroundAI
         if (_spells.CastAtObject(player, spell, target.Banner)) BannerCasts++;
     }
 
-    // --- Alterac Valley --------------------------------------------------------------------------------------------------
-
-    private void PlayAlteracValley(Player player, AlteracValley av, Team team, PlayerbotBattlegroundRole role, uint interval)
-    {
-        int teamIndex = BattlegroundConstants.TeamIndex(team);
-        List<(int Node, GameObject Banner)> banners = Banners(player, AlteracValley.NodeCount);
-
-        // vmangos BattleGroundAV::EventPlayerClickedOnFlag (BattleGroundAV.cpp:1288-1368): a controlled node is assaulted when owned by neutral
-        // or the enemy; an assaulted node is defended back when it was ours (TotalOwner == teamIndex) or neutral (Snowfall).
-        bool Clickable(int node)
-            => av.NodeState(node) == AlteracValley.PointControlled
-                ? av.NodeOwner(node) != teamIndex && av.NodeTotalOwner(node) != teamIndex
-                : av.NodeOwner(node) != teamIndex && (av.NodeTotalOwner(node) == teamIndex || av.NodeTotalOwner(node) == AlteracValley.TeamNeutral);
-
-        (int Node, GameObject Banner)? goal = banners.Where(b => Clickable(b.Node) && !TeammateCasting(player, b.Banner))
-            .OrderBy(b => Distance(player, b.Banner)).Select(b => ((int, GameObject)?)b).FirstOrDefault();
-        if (goal is { } target)
-        {
-            TargetEntry = target.Banner.Entry;
-            if (Distance(player, target.Banner) > InteractYards + 0.5f)
-            {
-                Activity = "av-advance";
-                WalkTo(player, new Vector3(target.Banner.X, target.Banner.Y, target.Banner.Z), interval, toward: true);
-                return;
-            }
-
-            if (!PlayerbotMovementControl.Stop(_session, player)) return;
-            _route = null;
-            Activity = "av-claim-banner";
-            if (_session.Services.GetService<SpellFeature>() is { } feature && feature.System.Store.Get(BannerSpell) is { } spell)
-            {
-                if (_spells.CastAtObject(player, spell, target.Banner)) BannerCasts++;
-                return;
-            }
-
-            Act(WorldOpcode.CmsgGameobjUse, PlayerbotNavigation.GuidPayload(target.Banner.Guid.Value));
-            return;
-        }
-
-        BattlegroundStartLocation enemyKeep = team == Team.Alliance ? av.Template.HordeStart : av.Template.AllianceStart;
-        Activity = "av-advance";
-        Guard(player, new Vector3(enemyKeep.X, enemyKeep.Y, enemyKeep.Z), interval);
-    }
-
     /// <summary>
     /// The node banners spawned on the bot's map now, each with its node: the objects whose battleground event (the
     /// <c>gameobject_battleground</c> row, event1 = node) names a node, that the banner spell opens (a lock id) and whose opening the match
@@ -568,7 +527,7 @@ internal sealed class PlayerbotBattlegroundAI
         foreach (Unit unit in player.Combat.Attackers)
         {
             if (unit is Player attacker && IsEnemy(player, attacker, match, enemyTeam)) return attacker;
-            if (match is AlteracValley && unit is Game.Creatures.Creature npcAttacker && IsEnemyCreature(player, npcAttacker)) return npcAttacker;
+            if (match is AlteracValley && unit is Game.Creatures.Creature npcAttacker && IsEnemyCreature(player, npcAttacker, requireHostile: false)) return npcAttacker;
         }
 
         if (_target is Player current && IsEnemy(player, current, match, enemyTeam) && Distance(player, current) <= EngageYards * 1.5f) return current;
@@ -608,11 +567,14 @@ internal sealed class PlayerbotBattlegroundAI
             && ReferenceEquals(other.Map, player.Map) && match.PlayerTeam(other.Guid) == enemyTeam && player.Map is { } map
             && map.Combat.Hooks.CanAttack(player, other);
 
-    /// <summary>A living, attackable Alterac Valley NPC guard, commander or general on the bot's map.</summary>
-    private static bool IsEnemyCreature(Player player, Game.Creatures.Creature creature)
+    /// <summary>
+    /// A living, attackable and hostile Alterac Valley NPC guard, captain, commander or general on the bot's map: the neutral wildlife of the
+    /// valley (the rams and wolves) is left alone unless it attacks the bot (<paramref name="requireHostile"/> false).
+    /// </summary>
+    private static bool IsEnemyCreature(Player player, Game.Creatures.Creature creature, bool requireHostile = true)
         => creature.IsInWorld && creature.IsAlive && ReferenceEquals(creature.Map, player.Map)
             && (creature.NpcFlags & (uint)Game.Npc.NpcFlags.SpiritGuide) == 0 && player.Map is { } map
-            && map.Combat.Hooks.CanAttack(player, creature);
+            && map.Combat.Hooks.CanAttack(player, creature) && (!requireHostile || map.Combat.Hooks.IsHostileTo(player, creature));
 
     /// <summary>A unit attacking the bot that it may hit back (the walk to a battlemaster, a carrier that is blocked).</summary>
     private static Unit? FirstAttacker(Player player)
