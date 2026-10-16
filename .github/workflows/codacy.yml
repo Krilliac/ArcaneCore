@@ -46,8 +46,27 @@ jobs:
           gh-code-scanning-compat: true
           max-allowed-issues: 2147483647
 
+      # The CLI writes one SARIF run per bundled tool, and code scanning refuses several runs under one category. Give each run its
+      # own category, codacy/<tool>/ (a repeated tool gets -1, -2, ...), so each tool's alerts keep a stable home across scans. The
+      # upload therefore sets no category of its own: one would override these.
+      - name: Give each Codacy tool its own SARIF category
+        run: |
+          python3 - <<'PY'
+          import json, re
+          with open("results.sarif", encoding="utf-8") as f:
+              sarif = json.load(f)
+          seen = {}
+          for run in sarif.get("runs", []):
+              name = re.sub(r"[^a-z0-9]+", "-", run.get("tool", {}).get("driver", {}).get("name", "unknown").lower()).strip("-") or "unknown"
+              index = seen.get(name, 0)
+              seen[name] = index + 1
+              run["automationDetails"] = {"id": f"codacy/{name}{'' if index == 0 else f'-{index}'}/"}
+          with open("codacy-results.sarif", "w", encoding="utf-8") as f:
+              json.dump(sarif, f)
+          print(f"{len(sarif.get('runs', []))} run(s): {', '.join(sorted(seen))}")
+          PY
+
       - name: Upload SARIF results file
         uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
         with:
-          sarif_file: results.sarif
-          category: codacy
+          sarif_file: codacy-results.sarif
