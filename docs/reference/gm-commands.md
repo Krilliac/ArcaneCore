@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 237 |
-| `Administrator` | 6 | 350 |
+| `GameMaster` | 3 | 239 |
+| `Administrator` | 6 | 352 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -198,7 +198,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.tele add` | 5 | Administrator | declared retail level | Syntax: .tele add $name — save your current location. |
 | `.tele del` | 5 | Administrator | declared retail level | Syntax: .tele del $name — delete an exact named location. |
 | `.tele name` | 2 | GameMaster | declared retail level | Syntax: .tele name [#playername] #location Teleport the named player, or the selected one, to a location from the game_tele table. |
-| `.bot` ... | 3 | GameMaster | stored level through the map | Syntax: .bot &lt;commands\|status\|list\|debug\|anomalies\|gear\|summon\|party&gt; Shorthand for .playerbot commands. |
+| `.bot` ... | 3 | GameMaster | stored level through the map | Syntax: .bot &lt;commands\|status\|list\|debug\|anomalies\|gear\|summon\|party\|raid&gt; Shorthand for .playerbot commands. |
 | `.bot commands` | 3 | GameMaster | stored level through the map | Syntax: .bot commands List available playerbot chat/whisper commands and .bot subcommands. |
 | `.bot status` | 3 | GameMaster | stored level through the map | Syntax: .bot status [$id\|$name] Show bot lifecycle status. |
 | `.bot list` | 3 | GameMaster | stored level through the map | Syntax: .bot list List managed bots. |
@@ -207,8 +207,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.bot anomalies` | 3 | GameMaster | stored level through the map | Syntax: .bot anomalies $name Show the recent anomaly history recorded for a bot. |
 | `.bot gear` | 3 | GameMaster | stored level through the map | Syntax: .bot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
 | `.bot summon` | 3 | GameMaster | stored level through the map | Syntax: .bot summon $id\|$name Teleport a party bot (or fleet selection for GMs) to you. |
+| `.bot raid` | 3 | GameMaster | stored level through the map | Syntax: .bot raid #count Gather #count online autonomous bots near your level into your raid and summon them to you. With no group a raid is formed; a party is converted to a raid (you must lead it). The count is clamped to the free raid slots (40 members); tanks and healers are mixed in as for a bot raid run. |
 | `.bot party` ... | 3 | GameMaster | stored level through the map | Syntax: .bot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
-| `.bot party fill` | 3 | GameMaster | stored level through the map | Syntax: .bot party fill Invite up to 4 online autonomous bots near your level into your party and summon them to you. |
+| `.bot party fill` | 3 | GameMaster | stored level through the map | Syntax: .bot party fill Invite online autonomous bots near your level and summon them to you: a party is filled to 5; in a raid, up to 5 more per use (at most 40). Use .bot raid #count for a larger raid. |
 | `.bot party add` | 3 | GameMaster | stored level through the map | Syntax: .bot party add $id\|$name Invite a running bot into your party. |
 | `.bot party remove` | 3 | GameMaster | stored level through the map | Syntax: .bot party remove $name Remove a bot from your party. |
 | `.bot party list` | 3 | GameMaster | stored level through the map | Syntax: .bot party list List the bots currently in your party. |
@@ -378,8 +379,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot cadence` | 3 | GameMaster | stored level through the map | Syntax: .playerbot cadence Show how often the bots think: the think gap percentiles (all bots and the combat/dead lane), thinks per tick, the think time budget and the share of ticks that ended on a budget, for the last minute. |
 | `.playerbot anomalies` | 3 | GameMaster | stored level through the map | Syntax: .playerbot anomalies $name Show the recent anomaly history recorded for a bot. |
 | `.playerbot gear` | 3 | GameMaster | stored level through the map | Syntax: .playerbot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
+| `.playerbot raid` | 3 | GameMaster | stored level through the map | Syntax: .playerbot raid #count Gather #count online autonomous bots near your level into your raid and summon them to you. With no group a raid is formed; a party is converted to a raid (you must lead it). The count is clamped to the free raid slots (40 members); tanks and healers are mixed in as for a bot raid run. |
 | `.playerbot party` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
-| `.playerbot party fill` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party fill Invite up to 4 online autonomous bots near your level into your party and summon them to you. |
+| `.playerbot party fill` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party fill Invite online autonomous bots near your level and summon them to you: a party is filled to 5; in a raid, up to 5 more per use (at most 40). Use .playerbot raid #count for a larger raid. |
 | `.playerbot party add` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party add $id\|$name Invite a running bot into your party. |
 | `.playerbot party remove` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party remove $name Remove a bot from your party. |
 | `.playerbot party list` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party list List the bots currently in your party. |

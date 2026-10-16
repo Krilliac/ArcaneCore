@@ -6,7 +6,8 @@ namespace ArcaneCore.Kernel.Configuration.Conf;
 /// Decides which configuration values are secrets and masks them for <c>write-config --current</c>. A key is secret when the last
 /// segment of its path ends with <c>ConnectionString</c> (the password inside is masked, the rest stays readable) or contains
 /// <c>Password</c>, <c>Pwd</c>, <c>Secret</c>, <c>Token</c> or <c>ApiKey</c> (the whole value is masked), except a segment ending with
-/// <c>EnvironmentVariable</c>, which holds the name of the variable a secret is read from, not the secret. A <c>true</c> or <c>false</c>
+/// <c>EnvironmentVariable</c>, which holds the name of the variable a secret is read from, not the secret, or with <c>Tokens</c>, a count
+/// of language-model tokens such as <c>ContextTokens</c>. A <c>true</c> or <c>false</c>
 /// value is never masked: a switch such as <c>GhPassToken</c> is no secret. Independently of the key name, a <c>Password=</c> or
 /// <c>Pwd=</c> component inside any value is masked. Pure functions, thread-safe, no I/O.
 /// </summary>
@@ -53,7 +54,9 @@ public static class ConfSecrets
     private static bool IsWholeValueSecret(string path)
     {
         string segment = LastSegment(path);
-        if (segment.EndsWith("EnvironmentVariable", StringComparison.OrdinalIgnoreCase))
+        // "...Tokens" (plural) counts language-model tokens (InProcess ContextTokens, MaxNewTokens, PrefixCacheTokens, ...), not a credential.
+        if (segment.EndsWith("EnvironmentVariable", StringComparison.OrdinalIgnoreCase)
+            || segment.EndsWith("Tokens", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

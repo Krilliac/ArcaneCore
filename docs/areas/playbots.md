@@ -1669,7 +1669,7 @@ emote), screens it with the output filter, and the world thread says it through 
 - **World channels**: bots join General and LocalDefense of their zone, Trade in capitals and LookingForGroup, and leave the old
   zone's on a zone change, with real join/leave packets (`WorldChannels`, `ChannelChangesPerPass`, on the social pass).
 - **Answers**: a bot answers whispers, and lines naming it in say, yell, party, raid (in raid chat), battleground, guild and world
-  channels, on the channel the line came on (`Chat:Channels`, all by default). A real player's open question in guild chat ("anyone
+  channels, on the channel the line came on (`World:Playerbots:Chat:Channels`, all by default). A real player's open question in guild chat ("anyone
   up for SM?") may be answered without the bot's name, by the built-in only with a group offer, a greeting or thanks.
 - **Bots hearing bots** (`BotToBot`): another bot's line naming the bot is answered with small talk only, at most
   `BotToBotMaxTurns` turns per exchange (a new exchange after `BotToBotQuietSeconds`), `BotToBotPairLinesPerHour` per pair and

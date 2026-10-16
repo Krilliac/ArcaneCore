@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       505 keys
+#   WORLD                       583 keys
 #
 ###############################################################################
 
@@ -10948,15 +10948,207 @@ World.Playerbots.ChaseReplanYards = 5
 
 #
 #    World.Playerbots.Chat.Channels
-#        Description: The lines a bot answers: Whisper, Party and Say (comma-separated; all three by
-#                     default). Values: None, Whisper, Party, Say.
+#        Description: The lines a bot answers: Whisper, Party, Say, Yell, Raid, Battleground, Guild
+#                     and World (comma-separated; all of them by default). A reply goes back on the
+#                     channel the line came on. Values: None, Whisper, Party, Say, Yell, Raid,
+#                     Battleground, Guild, World, All.
 #        Type: PlayerbotChatChannels
-#        Default: Whisper, Party, Say
-#        Allowed: None | Whisper | Party | Say
+#        Default: All
+#        Allowed: None | Whisper | Party | Say | Yell | Raid | Battleground | Guild | World | All
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Chat.Channels = Whisper, Party, Say
+World.Playerbots.Chat.Channels = All
+
+#
+#    World.Playerbots.Chat.Conversation.BotCooldownMinutes
+#        Description: Minutes before one bot starts or joins another conversation (1..1440).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.BotCooldownMinutes = 10
+
+#
+#    World.Playerbots.Chat.Conversation.CandidatesPerPass
+#        Description: How many bots the director looks at per pass when it picks a conversation
+#                     (1..256): the work per pass is bounded by it, whatever the size of the fleet.
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.CandidatesPerPass = 8
+
+#
+#    World.Playerbots.Chat.Conversation.ConversationsPerHour
+#        Description: The most conversations the director starts in an hour, over all bots (0..600;
+#                     0 = none). Each pass rolls against this, so they spread over the hour instead
+#                     of coming in bursts.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.ConversationsPerHour = 20
+
+#
+#    World.Playerbots.Chat.Conversation.Enabled
+#        Description: Let the director start bot-to-bot conversations (on by default; needs
+#                     PlayerbotSpeechOptions.BotToBot).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.Enabled = true
+
+#
+#    World.Playerbots.Chat.Conversation.LineDeadlineSeconds
+#        Description: How long a planned line may wait for the speech limits before the conversation
+#                     is dropped (10..600 seconds).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.LineDeadlineSeconds = 60
+
+#
+#    World.Playerbots.Chat.Conversation.LineGapSeconds
+#        Description: The least seconds between two lines of a conversation (2..120): the time a
+#                     player takes to read and type.
+#        Type: int
+#        Default: 7
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.LineGapSeconds = 7
+
+#
+#    World.Playerbots.Chat.Conversation.LineJitterSeconds
+#        Description: The most extra random seconds added to LineGapSeconds (0..120).
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.LineJitterSeconds = 6
+
+#
+#    World.Playerbots.Chat.Conversation.MaxActive
+#        Description: The most conversations running at once (1..64).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.MaxActive = 4
+
+#
+#    World.Playerbots.Chat.Conversation.MaxHeardQueue
+#        Description: Heard world channel lines waiting for the next social pass at most (8..1024);
+#                     more are dropped.
+#        Type: int
+#        Default: 64
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.MaxHeardQueue = 64
+
+#
+#    World.Playerbots.Chat.Conversation.MaxLines
+#        Description: The most lines one conversation has, the opener included (2..6). The
+#                     bot-to-bot turn cap (PlayerbotSpeechOptions.BotToBotMaxTurns) still applies to
+#                     the answers, so with its default of 3 a conversation has at most 4 lines.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.MaxLines = 4
+
+#
+#    World.Playerbots.Chat.Conversation.NearYards
+#        Description: Two bots "near each other" are at most this many yards apart (5..100) for a
+#                     /say conversation.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.NearYards = 20
+
+#
+#    World.Playerbots.Chat.Conversation.PairCooldownMinutes
+#        Description: Minutes before the same two bots are paired again (1..1440).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.PairCooldownMinutes = 30
+
+#
+#    World.Playerbots.Chat.Conversation.ReactionPlayerCooldownMinutes
+#        Description: Minutes before one bot reacts to the same player's world channel lines again
+#                     (1..1440).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.ReactionPlayerCooldownMinutes = 10
+
+#
+#    World.Playerbots.Chat.Conversation.ReactionsPerLine
+#        Description: How many bots answer one world channel line at most (1..5).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.ReactionsPerLine = 1
+
+#
+#    World.Playerbots.Chat.Conversation.WorldReactions
+#        Description: Answer a real player's world channel line that fits the bot: an LFM for a
+#                     dungeon at the bot's level (a whispered "inv" when the bot is free and its
+#                     role is wanted), a WTB for an item the bot carries spare (a whispered offer)
+#                     (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.WorldReactions = true
+
+#
+#    World.Playerbots.Chat.Conversation.WorldReactionsPerMinute
+#        Description: The most reactions all bots together whisper in a minute (0..60; 0 = none).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Conversation.WorldReactionsPerMinute = 4
 
 #
 #    World.Playerbots.Chat.Enabled
@@ -10969,6 +11161,256 @@ World.Playerbots.Chat.Channels = Whisper, Party, Say
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Chat.Enabled = true
+
+#
+#    World.Playerbots.Chat.InProcess.AmbientQueueMs
+#        Description: How long a line no one is waiting on (guild chatter, announcements) may wait
+#                     for a free slot before it is dropped (250..60000 ms): stale small talk is not
+#                     worth writing. A player's line is never dropped this way.
+#        Type: int
+#        Default: 4000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.AmbientQueueMs = 4000
+
+#
+#    World.Playerbots.Chat.InProcess.BudgetMs
+#        Description: The hard budget of one reply, prompt included, in wall-clock milliseconds
+#                     (250..60000); a reply not done by then is dropped and the templates answer.
+#        Type: int
+#        Default: 6000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.BudgetMs = 6000
+
+#
+#    World.Playerbots.Chat.InProcess.CircuitBreakerOverruns
+#        Description: Budget overruns in a row that open the circuit (1..100): the model then rests
+#                     for CircuitBreakerSeconds and the templates answer.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.CircuitBreakerOverruns = 3
+
+#
+#    World.Playerbots.Chat.InProcess.CircuitBreakerSeconds
+#        Description: How long an open circuit keeps the model out (10..3600 seconds).
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.CircuitBreakerSeconds = 300
+
+#
+#    World.Playerbots.Chat.InProcess.ContextTokens
+#        Description: The context window per slot in tokens (256..32768; capped at the model's own):
+#                     the prompt and the reply must fit.
+#        Type: int
+#        Default: 1024
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.ContextTokens = 1024
+
+#
+#    World.Playerbots.Chat.InProcess.MaxConcurrent
+#        Description: Replies written at once (1..4); each has its own threads and cache.
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.MaxConcurrent = 1
+
+#
+#    World.Playerbots.Chat.InProcess.MaxNewTokens
+#        Description: The most tokens of one reply (8..256).
+#        Type: int
+#        Default: 48
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.MaxNewTokens = 48
+
+#
+#    World.Playerbots.Chat.InProcess.MaxQueued
+#        Description: Replies that may wait for a free slot beyond the running ones (0..64); past it
+#                     the templates answer.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.MaxQueued = 2
+
+#
+#    World.Playerbots.Chat.InProcess.MaxReplyCharacters
+#        Description: The longest reply said (40..255 characters); a longer one is dropped and the
+#                     templates answer.
+#        Type: int
+#        Default: 160
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.MaxReplyCharacters = 160
+
+#
+#    World.Playerbots.Chat.InProcess.MinP
+#        Description: Drop tokens less likely than this fraction of the most likely one (0..1; 0 =
+#                     off).
+#        Type: double
+#        Default: 0.05
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.MinP = 0.05
+
+#
+#    World.Playerbots.Chat.InProcess.ModelPath
+#        Description: The model file (GGUF, llama or qwen2 architecture, gpt2 BPE tokenizer;
+#                     relative to the content root, or absolute), e.g.
+#                     models/chat/SmolLM2-360M-Instruct-Q8_0.gguf.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.ModelPath = ""
+
+#
+#    World.Playerbots.Chat.InProcess.PrefillChunkTokens
+#        Description: Prompt tokens one reply computes per scheduler step (32..512): smaller lets a
+#                     player's line overtake a long prompt sooner.
+#        Type: int
+#        Default: 64
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.PrefillChunkTokens = 64
+
+#
+#    World.Playerbots.Chat.InProcess.PrefixCacheTokens
+#        Description: Prompt tokens kept in the shared prefix cache (0..16384; 0 = off): the keys
+#                     and values of the fixed system rules every bot prompt starts with (and recent
+#                     conversations) are computed once and copied into whichever slot a reply runs
+#                     on.
+#        Type: int
+#        Default: 1024
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.PrefixCacheTokens = 1024
+
+#
+#    World.Playerbots.Chat.InProcess.RepetitionPenalty
+#        Description: The penalty on tokens already in the recent text (1..2; 1 = none).
+#        Type: double
+#        Default: 1.15
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.RepetitionPenalty = 1.15
+
+#
+#    World.Playerbots.Chat.InProcess.RepetitionWindow
+#        Description: How many of the latest tokens (prompt and reply) RepetitionPenalty looks at
+#                     (0..1024; 0 = none).
+#        Type: int
+#        Default: 64
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.RepetitionWindow = 64
+
+#
+#    World.Playerbots.Chat.InProcess.Seed
+#        Description: A fixed seed makes the same prompt give the same reply (unset: a fresh draw
+#                     each time).
+#        Type: int?
+#        Default: (not set)
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+# World.Playerbots.Chat.InProcess.Seed =
+
+#
+#    World.Playerbots.Chat.InProcess.StopSequences
+#        Description: Text that ends a reply where it appears (the text itself is not said), e.g.
+#                     "User:"; at most 8, each 1..32 characters.
+#        Type: List<string>
+#        Default: (empty list)
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+# Empty by default.
+# World.Playerbots.Chat.InProcess.StopSequences.0 =
+
+#
+#    World.Playerbots.Chat.InProcess.Temperature
+#        Description: Sampling temperature (0..2; 0 = always the most likely token).
+#        Type: double
+#        Default: 0.7
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.Temperature = 0.7
+
+#
+#    World.Playerbots.Chat.InProcess.Threads
+#        Description: Threads one reply computes on (1..16; dedicated, BelowNormal priority, never
+#                     the thread pool).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.Threads = 2
+
+#
+#    World.Playerbots.Chat.InProcess.TopK
+#        Description: Sample among the k most likely tokens (1..256).
+#        Type: int
+#        Default: 40
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.TopK = 40
+
+#
+#    World.Playerbots.Chat.InProcess.TopP
+#        Description: Then among the smallest set holding this much probability (0.05..1).
+#        Type: double
+#        Default: 0.9
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.InProcess.TopP = 0.9
 
 #
 #    World.Playerbots.Chat.MaxDailySpendUsd
@@ -11284,6 +11726,270 @@ World.Playerbots.Chat.Safety.StripPersonalData = true
 World.Playerbots.Chat.Safety.TermsFile = ""
 
 #
+#    World.Playerbots.Chat.Speech.BotGapSeconds
+#        Description: The least seconds between two lines a bot starts on its own (0..3600; replies
+#                     are not held by it).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.BotGapSeconds = 20
+
+#
+#    World.Playerbots.Chat.Speech.BotLinesPerMinute
+#        Description: The most lines one bot says in a minute, replies included (1..60).
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.BotLinesPerMinute = 6
+
+#
+#    World.Playerbots.Chat.Speech.BotToBot
+#        Description: Let a bot's line reach other bots as input (on by default), within
+#                     BotToBotMaxTurns, BotToBotPairLinesPerHour and BotToBotLinesPerMinute. Off:
+#                     bots hear only real players, as before.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.BotToBot = true
+
+#
+#    World.Playerbots.Chat.Speech.BotToBotLinesPerMinute
+#        Description: The most lines all bots together say to other bots in a minute (0..600).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.BotToBotLinesPerMinute = 10
+
+#
+#    World.Playerbots.Chat.Speech.BotToBotMaxTurns
+#        Description: The most answers in one exchange between two bots (0..10; 0 = bots never
+#                     answer bots). An exchange ends after BotToBotQuietSeconds of silence between
+#                     them.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.BotToBotMaxTurns = 3
+
+#
+#    World.Playerbots.Chat.Speech.BotToBotPairLinesPerHour
+#        Description: The most lines two bots say to each other in an hour (0..600).
+#        Type: int
+#        Default: 12
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.BotToBotPairLinesPerHour = 12
+
+#
+#    World.Playerbots.Chat.Speech.BotToBotQuietSeconds
+#        Description: Seconds of silence after which an exchange between two bots is over and its
+#                     turns start again (10..3600).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.BotToBotQuietSeconds = 120
+
+#
+#    World.Playerbots.Chat.Speech.ChannelChangesPerPass
+#        Description: The most bots whose channels are changed in one social pass (1..1000), so a
+#                     fleet logging in at once spreads its joins.
+#        Type: int
+#        Default: 25
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.ChannelChangesPerPass = 25
+
+#
+#    World.Playerbots.Chat.Speech.ChannelCrowdBots
+#        Description: How many bots a world channel holds before its budget thins out (1..10000; see
+#                     ChannelLinesPerMinute).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.ChannelCrowdBots = 10
+
+#
+#    World.Playerbots.Chat.Speech.ChannelLinesPerMinute
+#        Description: The most bot lines one world channel hears in a minute, from all bots together
+#                     (0..60; 0 keeps bots silent there). The channel is per zone ("General - Elwynn
+#                     Forest") and per faction; when more than ChannelCrowdBots bots are in it the
+#                     minute stretches in proportion, so a crowded channel hears fewer bot lines,
+#                     never more.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.ChannelLinesPerMinute = 3
+
+#
+#    World.Playerbots.Chat.Speech.DedupeSeconds
+#        Description: Seconds within which the same line is not said twice in the same place by any
+#                     bot (0..3600).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.DedupeSeconds = 120
+
+#
+#    World.Playerbots.Chat.Speech.EmoteReplies
+#        Description: Answer a text emote a player (or bot) aims at a bot in kind: a wave with a
+#                     wave, a bow with a bow, a hug with a blush, a rude gesture with one back or
+#                     nothing (on by default), at most once per EmoteReplyGapSeconds per bot and
+#                     emoter.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.EmoteReplies = true
+
+#
+#    World.Playerbots.Chat.Speech.EmoteReplyGapSeconds
+#        Description: The least seconds between two emote answers from one bot to the same emoter
+#                     (0..3600).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.EmoteReplyGapSeconds = 30
+
+#
+#    World.Playerbots.Chat.Speech.Enabled
+#        Description: Let bots speak through the speech API (on by default). Off: only the answers
+#                     of the chat service of before (whisper, party, say).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.Enabled = true
+
+#
+#    World.Playerbots.Chat.Speech.GroupLinesPerMinute
+#        Description: The most lines the bots of one party, raid or battleground team say in a
+#                     minute (0..120).
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.GroupLinesPerMinute = 8
+
+#
+#    World.Playerbots.Chat.Speech.GuildLinesPerMinute
+#        Description: The most lines the bots of one guild say in guild chat in a minute (0..120;
+#                     the guild announcements keep their own hourly cap too).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.GuildLinesPerMinute = 4
+
+#
+#    World.Playerbots.Chat.Speech.LocalLinesPerMinute
+#        Description: The most /say and /yell lines bots say in a minute in one zone of one map,
+#                     from all bots together (0..120).
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.LocalLinesPerMinute = 6
+
+#
+#    World.Playerbots.Chat.Speech.MaxQueuedLines
+#        Description: Lines waiting for the world thread at once (16..4096); a line that finds the
+#                     queue full is not said.
+#        Type: int
+#        Default: 512
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.MaxQueuedLines = 512
+
+#
+#    World.Playerbots.Chat.Speech.RequireRealListener
+#        Description: A line a bot starts on its own (not a reply) is said only where a real
+#                     (non-bot) player can hear it: someone in say or yell range, a real member of
+#                     the group or guild online, a real member of the world channel, an online
+#                     whisper target (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.RequireRealListener = true
+
+#
+#    World.Playerbots.Chat.Speech.TargetGapSeconds
+#        Description: The least seconds between two lines from one bot to the same player (whisper,
+#                     emote or reply; 0..3600; a high-priority reply is not held).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.TargetGapSeconds = 10
+
+#
+#    World.Playerbots.Chat.Speech.WorldChannels
+#        Description: The zone channels bots join through their own CMSG_JOIN_CHANNEL on login and
+#                     when they change zone, leaving the old zone's ones (General, Trade,
+#                     LocalDefense, LookingForGroup; comma-separated; all by default; None joins
+#                     none and leaves the ones joined). Names and rules are the 1.12 client's:
+#                     General and LocalDefense in every open-world zone, Trade only in a capital,
+#                     LookingForGroup everywhere; none of the zone ones inside an instance or
+#                     battleground. Values: None, General, Trade, LocalDefense, LookingForGroup,
+#                     All.
+#        Type: PlayerbotWorldChannels
+#        Default: All
+#        Allowed: None | General | Trade | LocalDefense | LookingForGroup | All
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Speech.WorldChannels = All
+
+#
 #    World.Playerbots.Chat.TimeoutSeconds
 #        Description: Seconds one model request may take before the next provider is tried (1..60).
 #        Type: int
@@ -11293,6 +11999,238 @@ World.Playerbots.Chat.Safety.TermsFile = ""
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Chat.TimeoutSeconds = 10
+
+#
+#    World.Playerbots.Chat.Voice.AnswerPosts
+#        Description: Answer a real player's whisper to a poster ("inv" to an LFG or LFM call, a
+#                     price question to a WTS call) here (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.AnswerPosts = true
+
+#
+#    World.Playerbots.Chat.Voice.BattlegroundCallSeconds
+#        Description: Seconds within which one battleground callout (the same event or the same
+#                     carrier's whereabouts) is not said again (5..600).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.BattlegroundCallSeconds = 20
+
+#
+#    World.Playerbots.Chat.Voice.BattlegroundCalls
+#        Description: Battleground callouts in battleground chat from the match's real state (on by
+#                     default): Warsong Gulch "our flag taken" and "EFC &lt;where&gt;", Arathi Basin
+#                     "inc &lt;base&gt;", "&lt;base&gt; is ours", "lost &lt;base&gt;", Alterac
+#                     Valley towers and graveyards. One bot says each event; the same callout is not
+#                     repeated within BattlegroundCallSeconds.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.BattlegroundCalls = true
+
+#
+#    World.Playerbots.Chat.Voice.BotsPerPass
+#        Description: The most bots whose state is looked at in one social pass (1..1000), round
+#                     robin over the running bots.
+#        Type: int
+#        Default: 24
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.BotsPerPass = 24
+
+#
+#    World.Playerbots.Chat.Voice.Enabled
+#        Description: Let bots voice their goals and needs (on by default). Off: no topic is
+#                     produced and no LFG or trade whisper is answered here.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.Enabled = true
+
+#
+#    World.Playerbots.Chat.Voice.GeneralSharePercent
+#        Description: The share of LFG and trade calls said in General instead (LFG outside a
+#                     capital, trade outside a capital; 0..100).
+#        Type: int
+#        Default: 25
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.GeneralSharePercent = 25
+
+#
+#    World.Playerbots.Chat.Voice.GroupCalls
+#        Description: Party and raid needs (on by default), each once per fight, death or stop:
+#                     "oom" (a mana user below 10% in a fight), "need heals" (below 30% with a
+#                     healer in the group), "rez pls" (dead, a resurrecting class alive in the
+#                     group), "inc &lt;n&gt;" (a bot group's tank pulling more than one),
+#                     "&lt;mob&gt; on me" (a creature on a bot that is not the tank), "brb" (the bot
+#                     stops to drink, vendor or train), "ty" (after a resurrection or a long buff
+#                     from a group member), "ding" (a level up), "gz" (a real player's "ding"), a
+#                     quest share request in a bot group, and "first time here" (a zone the bot had
+#                     never explored).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.GroupCalls = true
+
+#
+#    World.Playerbots.Chat.Voice.LinesPerPass
+#        Description: The most lines the voice hands to the chat service in one social pass, every
+#                     topic together (1..100).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.LinesPerPass = 4
+
+#
+#    World.Playerbots.Chat.Voice.LookingForGroup
+#        Description: LFG and LFM calls (on by default): a bot waiting for partners for a dungeon,
+#                     raid or elite quest posts "LFG &lt;dungeon&gt;, &lt;lvl&gt; &lt;class&gt;"
+#                     (alone) or "LFM &lt;dungeon&gt; need &lt;role&gt;" (the oldest of several
+#                     waiting for the same goal) in LookingForGroup, or now and then in General
+#                     (GeneralSharePercent); a real player who whispers the poster "inv" is matched
+#                     into the group.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.LookingForGroup = true
+
+#
+#    World.Playerbots.Chat.Voice.LookingForGroupRepeatSeconds
+#        Description: The least seconds between two LFG or LFM calls of one bot (30..3600).
+#        Type: int
+#        Default: 180
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.LookingForGroupRepeatSeconds = 180
+
+#
+#    World.Playerbots.Chat.Voice.MinSellCopper
+#        Description: Items worth less than this many copper at a vendor (per stack) are not offered
+#                     (0..1000000).
+#        Type: int
+#        Default: 200
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.MinSellCopper = 200
+
+#
+#    World.Playerbots.Chat.Voice.PostLifeSeconds
+#        Description: How long a call stays open for whispered answers (60..3600 seconds).
+#        Type: int
+#        Default: 600
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.PostLifeSeconds = 600
+
+#
+#    World.Playerbots.Chat.Voice.PriceMultiplier
+#        Description: A WTS price is the item's vendor price times this (1..50), rounded the way
+#                     players price.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.PriceMultiplier = 4
+
+#
+#    World.Playerbots.Chat.Voice.QuestHelp
+#        Description: Quest help (on by default): a bot waiting for partners for an elite or group
+#                     quest asks General now and then ("anyone for &lt;quest&gt;?") at most once per
+#                     QuestHelpRepeatSeconds.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.QuestHelp = true
+
+#
+#    World.Playerbots.Chat.Voice.QuestHelpRepeatSeconds
+#        Description: The least seconds between two quest help calls of one bot (60..86400).
+#        Type: int
+#        Default: 1200
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.QuestHelpRepeatSeconds = 1200
+
+#
+#    World.Playerbots.Chat.Voice.RunCalls
+#        Description: The bot that leads a dungeon or raid run says the plan in party or raid chat:
+#                     "pulling &lt;boss&gt;", "wait for mana", "wipe, run back", "gg" (on by
+#                     default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.RunCalls = true
+
+#
+#    World.Playerbots.Chat.Voice.Trade
+#        Description: Trade calls (on by default): WTS for tradeable surplus in the bot's bags (no
+#                     grey, no bind-on-pickup or bound item, no quest item, nothing it would wear
+#                     itself) at PriceMultiplier times the vendor price, and WTB for the reagents of
+#                     the recipes it wants; in Trade in a capital, now and then in General elsewhere
+#                     (GeneralSharePercent). A real player who whispers the seller about the item is
+#                     told the price and where the bot is.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.Trade = true
+
+#
+#    World.Playerbots.Chat.Voice.TradeRepeatSeconds
+#        Description: The least seconds between two trade calls of one bot (60..86400).
+#        Type: int
+#        Default: 900
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.TradeRepeatSeconds = 900
 
 #
 #    World.Playerbots.ClientFidelity
@@ -13431,15 +14369,15 @@ World.Playerbots.SlowThinkLogMs = 50
 #        Description: Let an idle bot wave at (CMSG_TEXT_EMOTE) or greet with /say a real player of
 #                     its faction standing within 8 yards, at most once per bot and player in 30
 #                     minutes, once per player in 10 minutes, once per bot in 5 minutes and twelve
-#                     times a minute in all (off by default). A player who ignores the bot is never
+#                     times a minute in all (on by default). A player who ignores the bot is never
 #                     greeted.
 #        Type: bool
-#        Default: false
+#        Default: true
 #        Allowed: true | false
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Social.Emotes.Enabled = false
+World.Playerbots.Social.Emotes.Enabled = true
 
 #
 #    World.Playerbots.Social.GuildChat.Enabled

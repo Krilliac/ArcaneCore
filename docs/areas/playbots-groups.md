@@ -349,7 +349,7 @@ CMSG_GROUP_SET_LEADER) hands the clear to the bots (`PlayerbotGroupCoordinator.H
   someone else also ends it, with no further pass.
 * **Ownership.** One owner at a time: while the coordinator drives a bot (`Drives`) the party AI is disengaged; the party AI's chat
   hook (`PlayerbotPartyAI.GroupOwns`) asks the coordinator before it engages. Scripted bots (a controller holds them) are never adopted:
-  the bot refuses with `I can't lead the clear of <instance>: <reason>.`, as it does when groups are off (`Groups:Enabled`, the kill
+  the bot refuses with `I can't lead the clear of <instance>: <reason>.`, as it does when groups are off (`World:Playerbots:Groups:Enabled`, the kill
   switch), the map is not allowed (`PlayerbotMapPolicy`), no way out is known, or no bot is inside with it.
 * **Capacity.** A handed-over group takes no slot of `MaxGroups` and does not count against `DungeonRuns` concurrency caps; it is no
   quest group either (no quest sharing).
