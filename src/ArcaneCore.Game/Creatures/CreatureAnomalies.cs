@@ -718,6 +718,10 @@ public sealed partial class CreatureMapSystem
             movingKind = 1;
         }
         else if (creature.Motion.CurrentType == MovementGeneratorType.Chase
+            // A chaser whose last path query found the victim unreachable stands on purpose (no path, or at the end of a partial
+            // one: vmangos TargetedMovementGenerator.cpp:188-189, cmangos ChaseMovementGenerator::DispatchSplineToPosition) while the
+            // unreachable-target evade timer runs; that is not stuck. An evade that never comes is creature/stuck-in-combat.
+            && creature.Motion.IsReachable
             && creature.Combat.IsInCombat
             && (creature.AI?.CombatMovement ?? true)
             && creature.Combat.Victim is { IsAlive: true } victim

@@ -421,7 +421,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// are the whole path in one multi-point spline (vmangos MoveSplineInit::MovebyPath) so a move does not re-launch at every corner.
     /// World thread. Allocates the corner list.
     /// </summary>
-    internal PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false)
+    internal PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false, bool chase = false)
     {
         ArgumentNullException.ThrowIfNull(creature);
         if (!float.IsFinite(destination.X) || !float.IsFinite(destination.Y) || !float.IsFinite(destination.Z))
@@ -438,7 +438,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         }
 
         var start = new Vector3(creature.X, creature.Y, creature.Z);
-        PathOptions pathOptions = PathOptionsFor(creature, toSpawn);
+        PathOptions pathOptions = PathOptionsFor(creature, toSpawn, chase);
         PathResult path = SearchPath(start, destination, pathOptions);
         if ((path.Type & PathType.TilesPending) != 0)
         {
@@ -543,13 +543,17 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     private static readonly PathOptions[] s_moverOptions = BuildMoverOptions(0f);
     private static readonly PathOptions[] s_spawnOptions = BuildMoverOptions(PathOptions.VmangosEndTolerance);
+    private static readonly PathOptions[] s_chaseOptions = BuildMoverOptions(0f, wideEndSearch: true);
 
-    private static PathOptions[] BuildMoverOptions(float tolerance)
+    private static PathOptions[] BuildMoverOptions(float tolerance, bool wideEndSearch = false)
     {
         var all = new PathOptions[16]; // InhabitType bits 0-2, plus 8 for a pet
         for (uint inhabit = 0; inhabit < all.Length; inhabit++)
         {
-            all[inhabit] = new PathOptions { Mover = PathMover.FromInhabit(inhabit & 7, isPet: (inhabit & 8) != 0), EndTolerance = tolerance };
+            all[inhabit] = new PathOptions
+            {
+                Mover = PathMover.FromInhabit(inhabit & 7, isPet: (inhabit & 8) != 0), EndTolerance = tolerance, WideEndSearch = wideEndSearch,
+            };
         }
 
         return all;
@@ -558,10 +562,12 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// <summary>
     /// The query options of a creature: its own locomotion (<c>InhabitType</c>, vmangos PathInfo::createFilter), so a flier gets the flier
     /// exception (a hole in the mesh is a flying shortcut, not NoPath) and a walker keeps off water it cannot swim. A return home
-    /// (<paramref name="toSpawn"/>) also takes vmangos' 7 yd end tolerance.
+    /// (<paramref name="toSpawn"/>) also takes vmangos' 7 yd end tolerance. A chase or follow (<paramref name="chase"/>) looks for its
+    /// destination's polygon in cmangos' wider box too (<see cref="PathOptions.WideEndSearch"/>): a target off the mover's mesh (swimming,
+    /// for a creature that cannot swim) is approached to the nearest usable point, unreachable, instead of not at all.
     /// </summary>
-    private static PathOptions PathOptionsFor(Creature creature, bool toSpawn)
-        => (toSpawn ? s_spawnOptions : s_moverOptions)[(creature.Template.InhabitType & 7) | (creature.IsPet ? 8 : 0)];
+    private static PathOptions PathOptionsFor(Creature creature, bool toSpawn, bool chase = false)
+        => (toSpawn ? s_spawnOptions : chase ? s_chaseOptions : s_moverOptions)[(creature.Template.InhabitType & 7) | (creature.IsPet ? 8 : 0)];
 
     /// <summary>One counted search through the map's pathfinder. World thread.</summary>
     private PathResult SearchPath(Vector3 start, Vector3 destination, PathOptions? options = null)

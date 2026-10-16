@@ -31,6 +31,12 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     /// <summary>Second, taller box for points high above or below the mesh (flagged as off the mesh).</summary>
     public static readonly Vector3 FarExtents = new(3, 200, 3);
 
+    /// <summary>
+    /// cmangos-classic <c>FarPolySearchBound</c> {10, 10, 10} (MotionGenerators/PathFinder.h:59): the box an endpoint is looked for in when
+    /// <see cref="PathOptions.WideEndSearch"/> is set and neither column above holds a usable polygon (flagged as off the mesh).
+    /// </summary>
+    public static readonly Vector3 WideExtents = new(10, 10, 10);
+
     private readonly string _directory;
     private readonly ILogger _logger;
     public NavMeshDatasetDescriptor Dataset { get; }
@@ -866,7 +872,7 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         }
 
         if (!TryLocate(mesh, startRc, options, 0f, out NavPolyRef startPoly, out Vector3 startOnMesh, out _)
-            || !TryLocate(mesh, endRc, options, options.EndTolerance, out NavPolyRef endPoly, out Vector3 endOnMesh, out bool endFar))
+            || !TryLocate(mesh, endRc, options, options.EndTolerance, out NavPolyRef endPoly, out Vector3 endOnMesh, out bool endFar, options.WideEndSearch))
         {
             // PathFinder.cpp:190-198: a hole in the mesh is a flying shortcut for a flier, NOPATH otherwise.
             return PathResult.StraightLine(start, end, flier ? PathType.Normal | PathType.NotUsingPath | PathType.FlyPath : PathType.NoPath);
@@ -925,7 +931,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
     private static bool InRange(Vector3 a, Vector3 b, float r, float h)
         => (((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y))) <= r * r && MathF.Abs(a.Z - b.Z) <= h;
 
-    private static bool TryLocate(NavMesh mesh, Vector3 position, PathOptions options, float tolerance, out NavPolyRef poly, out Vector3 onMesh, out bool far)
+    private static bool TryLocate(
+        NavMesh mesh, Vector3 position, PathOptions options, float tolerance, out NavPolyRef poly, out Vector3 onMesh, out bool far, bool wide = false)
     {
         far = false;
         if (tolerance > 0)
@@ -949,7 +956,15 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         }
 
         far = true;
-        return mesh.TryFindNearestPoly(position, FarExtents, options, out poly, out onMesh);
+        if (mesh.TryFindNearestPoly(position, FarExtents, options, out poly, out onMesh))
+        {
+            return true;
+        }
+
+        // cmangos PathFinder::getPolyByLocation's second, wider box (FarPolySearchBound): the destination is off the usable mesh (a
+        // walker's target swimming off a shore: the water polygons under it are not in the walker's filter), and the path goes to the
+        // nearest usable polygon within it, incomplete (BuildPolyPath farFromPoly, PathFinder.cpp:452-475).
+        return wide && mesh.TryFindNearestPoly(position, WideExtents, options, out poly, out onMesh);
     }
 
     /// <summary>Reads a navmesh file's bytes (null when it does not exist); the disk unless a test substitutes it. Runs on the world thread or, for background tile reads, on the pool.</summary>
