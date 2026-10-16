@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Cluster.Transfer;
@@ -78,6 +79,36 @@ public sealed class ClusterCommandTests
         return client;
     }
 
+    /// <summary>The lines of <c>.cluster status</c> (and of a bare <c>.cluster</c>) for one player on map 0 with every lease held.</summary>
+    private const int StatusLines = 5;
+
+    private static readonly System.Text.RegularExpressions.Regex ActiveMaps = new(@"^Active maps matching filter: (\d+) loaded,", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The whole answer of a <c>.cluster routes</c> command: every line up to "Active maps matching filter: N loaded" and the N map lines
+    /// after it. Its replies are sent while the command runs, and between the route lines and the map lines it resolves the bot service and
+    /// counts the online players (the first call in a fresh host JITs that path), so a fixed quiet window after the first line can end in
+    /// that gap under load and drop the map lines (as it once did: only the four route lines came back).
+    /// </summary>
+    private static async Task<string[]> RoutesAsync(WorldTestClient client, string command)
+    {
+        await client.CollectAsync();
+        await client.SendChatAsync(ChatType.Say, Language.Common, command);
+        var lines = new List<string>();
+        int? total = null;
+        while (total is null || lines.Count < total)
+        {
+            string line = (await client.ReadChatAsync()).Text;
+            lines.Add(line);
+            if (total is null && ActiveMaps.Match(line) is { Success: true } active)
+            {
+                total = lines.Count + int.Parse(active.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        return [.. lines];
+    }
+
     [Fact]
     public async Task ClusterCommands_RequireGameMaster_AndDiagRequiresAdministrator()
     {
@@ -94,7 +125,7 @@ public sealed class ClusterCommandTests
         Assert.Equal("This command is not available to you.", (await LinesAsync(gm, ".cluster diag"))[0]);
         Assert.Equal("This command is not available to you.", (await LinesAsync(gm, ".arcane cluster diag"))[0]);
 
-        string[] gmStatus = await LinesAsync(gm, ".cluster");
+        string[] gmStatus = await LinesAsync(gm, ".cluster", StatusLines);
         Assert.Contains(gmStatus, l => l.StartsWith("Cluster node: world-node-alpha", StringComparison.Ordinal));
 
         string[] adminDiag = await LinesAsync(admin, ".cluster diag");
@@ -112,7 +143,7 @@ public sealed class ClusterCommandTests
 
         await using WorldTestClient gm = await Staff(host, AccountSecurity.GameMaster, "GMA", "Gmaaa");
 
-        string[] statusLines = await LinesAsync(gm, ".cluster status");
+        string[] statusLines = await LinesAsync(gm, ".cluster status", StatusLines);
         Assert.Equal(5, statusLines.Length);
         Assert.Contains("Cluster node: world-node-alpha | role=Combined", statusLines[0], StringComparison.Ordinal);
         Assert.Contains("Ownership fence: enabled | worldToken=world:epoch=7:inc=11111111-2222-3333-4444-555555555555", statusLines[1], StringComparison.Ordinal);
@@ -120,7 +151,7 @@ public sealed class ClusterCommandTests
         Assert.Contains("worker=worker:EK", statusLines[2], StringComparison.Ordinal);
         Assert.Contains("Authority leases: world=world-node-alpha(epoch=7) | economy=coordinator:primary(token=1) | social=social:primary(token=1) | instances=coordinator:primary(token=1)", statusLines[4], StringComparison.Ordinal);
 
-        string[] nodeLines = await LinesAsync(gm, ".cluster node Gmaaa");
+        string[] nodeLines = await LinesAsync(gm, ".cluster node Gmaaa", 4);
         Assert.Equal(4, nodeLines.Length);
         Assert.Contains("Host node: world-node-alpha", nodeLines[0], StringComparison.Ordinal);
         Assert.Contains("Character: Gmaaa", nodeLines[1], StringComparison.Ordinal);
@@ -136,38 +167,38 @@ public sealed class ClusterCommandTests
         await using WorldTestHost host = StartWithClusterServices();
         await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADM", "Admiral");
 
-        string[] routeLines = await LinesAsync(admin, ".cluster routes");
+        string[] routeLines = await RoutesAsync(admin, ".cluster routes");
         Assert.Contains("Placement table: 2 static map route(s), 1 bound instance(s).", routeLines);
         Assert.Contains(routeLines, l => l.Contains("route static map 0", StringComparison.Ordinal) && l.Contains("-> worker:EK", StringComparison.Ordinal));
         Assert.Contains(routeLines, l => l.Contains("route static map 1", StringComparison.Ordinal) && l.Contains("-> worker:Kalimdor", StringComparison.Ordinal));
         Assert.Contains(routeLines, l => l.Contains("route instance map 36 inst 1", StringComparison.Ordinal) && l.Contains("-> worker:instances", StringComparison.Ordinal));
         Assert.Contains(routeLines, l => l.StartsWith("map 0 inst 0", StringComparison.Ordinal) && l.Contains("-> worker:EK: 1 player(s) (1h/0b)", StringComparison.Ordinal));
 
-        string[] filteredRoutes = await LinesAsync(admin, ".cluster routes 0");
+        string[] filteredRoutes = await RoutesAsync(admin, ".cluster routes 0");
         Assert.DoesNotContain(filteredRoutes, l => l.Contains("route static map 1", StringComparison.Ordinal));
         Assert.Contains(filteredRoutes, l => l.Contains("route static map 0", StringComparison.Ordinal));
 
-        string[] nodesLines = await LinesAsync(admin, ".cluster nodes");
+        string[] nodesLines = await LinesAsync(admin, ".cluster nodes", 5);
         Assert.Contains(nodesLines, l => l.StartsWith("Local host: node=world-node-alpha role=Combined state=Active", StringComparison.Ordinal));
         Assert.Contains("Registered placement workers: 3", nodesLines);
         Assert.Contains(nodesLines, l => l.StartsWith("worker worker:EK: ready=True draining=False players=478/1200", StringComparison.Ordinal));
         Assert.Contains(nodesLines, l => l.StartsWith("worker worker:Kalimdor: ready=True draining=False players=532/1200", StringComparison.Ordinal));
         Assert.Contains(nodesLines, l => l.StartsWith("worker worker:instances: ready=True draining=False players=15/500", StringComparison.Ordinal));
 
-        string[] leasesLines = await LinesAsync(admin, ".cluster leases");
+        string[] leasesLines = await LinesAsync(admin, ".cluster leases", 3);
         Assert.Equal(3, leasesLines.Length);
         Assert.StartsWith("Character fencing: enabled=True ownerNode=world-node-alpha", leasesLines[0], StringComparison.Ordinal);
         Assert.StartsWith("Authority leases:", leasesLines[1], StringComparison.Ordinal);
         Assert.StartsWith("Write-behind queues:", leasesLines[2], StringComparison.Ordinal);
 
-        string[] socialLines = await LinesAsync(admin, ".cluster social");
+        string[] socialLines = await LinesAsync(admin, ".cluster social", 3);
         Assert.Equal(3, socialLines.Length);
         Assert.StartsWith("Realm presence: online=1 (1 human, 0 bots)", socialLines[0], StringComparison.Ordinal);
         Assert.Contains("worker:EK=1 | worker:Kalimdor=0 | worker:instances=0", socialLines[1], StringComparison.Ordinal);
         Assert.Contains("router=InMemoryClusterSocialRouter", socialLines[2], StringComparison.Ordinal);
 
         // Verify .arcane cluster delegates to the same subcommands
-        string[] arcaneRoutes = await LinesAsync(admin, ".arcane cluster routes 0");
+        string[] arcaneRoutes = await RoutesAsync(admin, ".arcane cluster routes 0");
         Assert.Equal(filteredRoutes, arcaneRoutes);
 
         string[] arcaneDiag = await LinesAsync(admin, ".arcane cluster diag");

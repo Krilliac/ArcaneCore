@@ -979,6 +979,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 // A bot-led group's invitations and loot rolls (PlayerbotGroupCoordinator); everything else is the party AI's own rules.
                 AcceptsBotGroup = (member, inviter) => coordinator?.AcceptsInvite(member, inviter) == true,
                 GroupLootVote = (member, item) => coordinator?.LootVote(member, item),
+                // A group whose lead its master handed to a bot (PlayerbotGroupCoordinator.Handoff.cs) owns the bot until an order takes the lead back.
+                GroupOwns = (member, master, command) => coordinator?.OwnsAgainst(member, master, command) == true,
             };
             var active = new ActiveBot(bot, scope, session, NewBrain(session, bot.BotId), party)
             { Controller = controller };
@@ -1494,7 +1496,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             foreach (ActiveBot active in bots)
                 if (!active.Paused && active.Session.State == SessionState.InWorld && active.Session.Player is not null)
                     _groupBotsScratch.Add(new(active.Record.BotId, active.Session, active.Brain,
-                        active.Controller is null && !active.PartyDriven && battlegrounds?.Holds(active.Record.BotId) != true));
+                        active.Controller is null && !active.PartyDriven && battlegrounds?.Holds(active.Record.BotId) != true,
+                        Scripted: active.Controller is not null));
             try { groups.Update(_groupBotsScratch, elapsedMs); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {

@@ -121,6 +121,22 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonAI.Entry,
                 new ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonGossip(player => services.StateOf(player)?.Quests,
                     (player, questId) => Services.AreaExploredOrEventHappens(player, questId)));
+            // Zone scripts batch 6: Regthar Deathgate, Lady Katrana Prestor and the Desolace kodos.
+            // The creature scripts' own quest check (ScriptQuestEvents.IsQuestIncomplete), read through this feature at gossip time.
+            var scriptQuests = new ArcaneCore.World.Creatures.ScriptQuestEvents(_services);
+            Func<Player, uint, bool> questIncomplete = scriptQuests.IsQuestIncomplete;
+            Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.RegtharDeathgateAI.Entry,
+                new ArcaneCore.Game.Creatures.Scripts.RegtharDeathgateGossip(questIncomplete));
+            Services.RegisterGossipScript(ArcaneCore.Game.Creatures.Scripts.KatranaPrestorGossip.Entry,
+                new ArcaneCore.Game.Creatures.Scripts.KatranaPrestorGossip(questIncomplete,
+                    (player, questId) => Services.AreaExploredOrEventHappens(player, questId)));
+            var kodoGossip = new ArcaneCore.Game.Creatures.Scripts.AgedDyingAncientKodoGossip();
+            foreach (uint kodo in (uint[])[ArcaneCore.Game.Creatures.Scripts.AgedDyingAncientKodoAI.NpcAgedKodo,
+                ArcaneCore.Game.Creatures.Scripts.AgedDyingAncientKodoAI.NpcDyingKodo, ArcaneCore.Game.Creatures.Scripts.AgedDyingAncientKodoAI.NpcAncientKodo,
+                ArcaneCore.Game.Creatures.Scripts.AgedDyingAncientKodoAI.NpcTamedKodo])
+            {
+                Services.RegisterGossipScript(kodo, kodoGossip);
+            }
         }
 
         _world = world;

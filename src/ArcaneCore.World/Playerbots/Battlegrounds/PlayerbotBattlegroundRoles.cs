@@ -6,7 +6,7 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// <summary>What a bot does for its team in a match (<see cref="PlayerbotBattlegroundRoles"/>).</summary>
 internal enum PlayerbotBattlegroundRole : byte
 {
-    /// <summary>Warsong Gulch: takes the enemy flag. Arathi Basin: assaults the enemy's and the neutral nodes.</summary>
+    /// <summary>Warsong Gulch: takes the enemy flag. Arathi Basin and Alterac Valley: assaults the enemy's and the neutral nodes.</summary>
     Attacker,
 
     /// <summary>Warsong Gulch: follows its own flag carrier. Elsewhere the same as <see cref="Attacker"/>.</summary>
@@ -18,8 +18,8 @@ internal enum PlayerbotBattlegroundRole : byte
 
 /// <summary>
 /// Who does what in a match, free of world state (unit tested). A team's bots, ordered by guid, are split by the shares of their match:
-/// Warsong Gulch 40% attackers, 30% escorts and 30% defenders; Arathi Basin 70% assaulters and 30% defenders (Alterac Valley is not played
-/// by bots, <see cref="PlayerbotBattlegroundBrackets.Supported"/>). Healers take the escort places first (vmangos BattleBotAI.cpp:379-421 has a healer follow a teammate; the escort is the
+/// Warsong Gulch 40% attackers, 30% escorts and 30% defenders; Arathi Basin 70% assaulters and 30% defenders; Alterac Valley 80% attackers and
+/// 20% defenders (<see cref="PlayerbotAlteracValleyTactics"/>). Healers take the escort places first (vmangos BattleBotAI.cpp:379-421 has a healer follow a teammate; the escort is the
 /// healer's natural place). The split is deterministic, so every bot computes the same one from the same list.
 /// </summary>
 internal static class PlayerbotBattlegroundRoles
@@ -40,6 +40,13 @@ internal static class PlayerbotBattlegroundRoles
             case BattlegroundType.ArathiBasin:
             {
                 int attackers = (int)Math.Ceiling(count * 0.7);
+                return (attackers, 0, count - attackers);
+            }
+
+            case BattlegroundType.AlteracValley:
+            {
+                // Mostly the push; a few hold and retake the own nodes (PlayerbotAlteracValleyTactics caps them per node).
+                int attackers = (int)Math.Ceiling(count * 0.8);
                 return (attackers, 0, count - attackers);
             }
 

@@ -66,7 +66,8 @@ internal static class PlayerbotSpeechDelivery
     }
 
     /// <summary>Where the line would be said: whether the bot may speak there, whether a real player hears it, its shared scope.</summary>
-    private readonly record struct Place(bool Available, bool HasRealListener, string? ScopeKey, int Bots, string? ChannelName = null, string? Target = null)
+    private readonly record struct Place(bool Available, bool HasRealListener, string? ScopeKey, int Bots, string? ChannelName = null, string? Target = null,
+        ChatType? SayAs = null)
     {
         internal static Place None => new(false, false, null, 0);
 
@@ -111,7 +112,10 @@ internal static class PlayerbotSpeechDelivery
                 bool real = false;
                 foreach (GroupMemberSlot slot in group.Members)
                     if (slot.Guid != player.Guid && world.FindOnlinePlayer(slot.Guid) is { Session: WorldSession { IsManaged: false } }) { real = true; break; }
-                return new Place(true, real, "group:" + group.Id.ToString(CultureInfo.InvariantCulture), 0);
+                // In a raid, party chat reaches only the bot's own subgroup (GroupManager.BroadcastChat): a party line goes on raid chat,
+                // so a player in another subgroup hears it.
+                ChatType? sayAs = speech.Channel == BotSpeechChannel.Party ? PlayerbotChatCommands.GroupChannel(group.IsRaid) : null;
+                return new Place(true, real, "group:" + group.Id.ToString(CultureInfo.InvariantCulture), 0, SayAs: sayAs);
             }
 
             case BotSpeechChannel.Battleground:
@@ -182,7 +186,7 @@ internal static class PlayerbotSpeechDelivery
             BotSpeechChannel.Whisper => (WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Whisper(language, place.Target ?? speech.Target ?? string.Empty, speech.Text)),
             BotSpeechChannel.World => (WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.ChannelMessage(language, place.ChannelName ?? speech.ChannelName ?? string.Empty, speech.Text)),
             BotSpeechChannel.Emote => (WorldOpcode.CmsgTextEmote, BotSocial.PlayerbotSocialPackets.TextEmote(speech.TextEmote, speech.TargetGuid)),
-            _ => (WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(speech.ChatType, language, speech.Text)),
+            _ => (WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(place.SayAs ?? speech.ChatType, language, speech.Text)),
         };
         return BotSocial.PlayerbotSocialPackets.Send(session, opcode, payload);
     }

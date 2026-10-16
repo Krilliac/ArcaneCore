@@ -25,22 +25,28 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// </para>
 /// <list type="bullet">
 /// <item><b>Warsong Gulch</b> (vmangos BattleBotWaypoints.cpp:76-140, <c>WSG_AtAllianceFlag</c> / <c>WSG_AtHordeFlag</c>; BattleGroundWS.cpp:354-480 and
-/// 539-548 for the server side): an attacker walks to the enemy flag stand and uses it (CMSG_GAMEOBJ_USE) once in interaction range; the
-/// carrier walks home into its own flag room trigger (3646 Alliance, 3647 Horde), which its motion reports with CMSG_AREATRIGGER and the
-/// match turns into a capture; an escort follows its own carrier (vmangos <c>BattleBotAI::SelectFollowTarget</c>, BattleBotAI.cpp:379-421)
-/// and attacks otherwise; a defender holds its own flag room; anyone near its own dropped flag returns it, and the enemy carrier of the
-/// own flag is chased and attacked.</item>
-/// <item><b>Arathi Basin</b> (BattleBotWaypoints.cpp:163-215, <c>AtFlag</c>; BattleGroundAB.cpp:337-458): an attacker walks to the nearest
-/// node its team may click (neutral, or held or contested by the enemy: the server's own rule) and casts the banner spell 21651 at the
-/// node's banner (CMSG_CAST_SPELL at the object), standing still for its ten-second cast; a teammate already casting there is left to it.
-/// A defender holds one of its team's nodes and defends it the same way once the enemy assaulted it.</item>
+/// 539-548 for the server side): every think the coordinator gives each bot an order (<see cref="PlayerbotWarsongTactics.Plan"/>, after
+/// mangosbot's <c>BGTactics::selectObjective</c>): the carrier walks home into its own flag room trigger (3646 Alliance, 3647 Horde), which
+/// its motion reports with CMSG_AREATRIGGER and the match turns into a capture; the nearest bot to a dropped flag clicks it (CMSG_GAMEOBJ_USE:
+/// its own returned, the enemy's picked up); defenders hold the flag room and fight intruders; hunters chase and kill the enemy carrier of
+/// the own flag; escorts follow the own carrier (vmangos <c>BattleBotAI::SelectFollowTarget</c>, BattleBotAI.cpp:379-421); the rest take the
+/// enemy flag from its stand (waiting there while it respawns) or hold the middle of the field.</item>
+/// <item><b>Arathi Basin</b>: the team plan of <see cref="PlayerbotArathiBasinTactics"/>, carried out in PlayerbotBattlegroundAI.ArathiBasin.cs
+/// (assault, defend, retreat, buffs).</item>
+/// <item><b>Alterac Valley</b> (<c>PlayerbotBattlegroundAI.AlteracValley.cs</c>, <see cref="PlayerbotAlteracValleyTactics"/>): the push on the
+/// enemy general through the enemy captain, towers and graveyards along the bot's lane, the own assaulted nodes clicked back and a limited
+/// count of guards.</item>
 /// </list>
 /// <para>
-/// A dead bot releases and runs back to its body through <see cref="PlayerbotRecovery"/>, as a player does here: the battleground spirit
-/// guide's resurrection wave is not modelled by the server (docs/areas/battlegrounds.md, Resurrection), so the corpse run is the way back.
+/// A dead bot releases through <see cref="PlayerbotRecovery"/>, which on a battleground map waits beside the graveyard's spirit guide for its
+/// area resurrection wave (CMSG_AREA_SPIRIT_HEALER_QUEUE; cmangos battlegrounds.cpp npc_spirit_guideAI) instead of running to its body.
+/// </para>
+/// <para>
+/// A ranged bot with nothing to cast for <see cref="PlayerbotBrain.RangedIdleLimitMs"/>, or below 10% mana, closes to melee and swings
+/// (vmangos CombatBotBaseAI::BeginChasing keeps the 25-yard caster distance only above 10% mana or with a ranged weapon).
 /// </para>
 /// </summary>
-internal sealed class PlayerbotBattlegroundAI
+internal sealed partial class PlayerbotBattlegroundAI
 {
     /// <summary>vmangos INTERACTION_DISTANCE (5 yards), less a margin: a flag or a battlemaster is used from this close.</summary>
     internal const float InteractYards = 4f;
@@ -64,6 +70,7 @@ internal sealed class PlayerbotBattlegroundAI
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotCombatSpells _spells;
     private readonly PlayerbotRecovery _recovery;
+    private readonly PlayerbotBattlegroundBuffs _buffs = new();
     private readonly float _followAngle;
     private readonly float _followDistance;
     private PlayerbotRoute? _route;
@@ -102,11 +109,31 @@ internal sealed class PlayerbotBattlegroundAI
     /// <summary>The bot's corpse run (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
 
+    /// <summary>The bot's use of the battleground buff objects (inspection and tests).</summary>
+    internal PlayerbotBattlegroundBuffs Buffs => _buffs;
+
     /// <summary>True when the walk to a battlemaster refused a route (or stood at the spot for 5s with no living battlemaster).</summary>
     internal bool TravelRefused { get; private set; }
 
+    /// <summary>The Warsong Gulch order of the last think (inspection and tests).</summary>
+    internal PlayerbotWsgOrder? Order { get; private set; }
+
+    /// <summary>How long the bot has stood still at its decisions in the match (inspection and tests).</summary>
+    internal uint StillMs { get; private set; }
+
+    /// <summary>The bot was idle at its last think (<see cref="PlayerbotWarsongTactics.IsIdle"/>; inspection and tests).</summary>
+    internal bool IdleNow { get; private set; }
+
+    /// <summary>The thinks at which the bot was idle in a match (inspection and tests).</summary>
+    internal int IdleThinks { get; private set; }
+
+    /// <summary>A bot holds the middle of the field within this distance of it.</summary>
+    internal const float MidfieldYards = 15f;
+
     private uint _atMasterMs;
     private uint _inMatchIdleMs;
+    private uint _rangedIdleMs;
+    private Vector3? _lastThinkAt;
     private bool _reportedObjectiveUnreachable;
     private bool _reportedIdleInMatch;
 
@@ -123,11 +150,17 @@ internal sealed class PlayerbotBattlegroundAI
         TravelRefused = false;
         _atMasterMs = 0;
         _inMatchIdleMs = 0;
+        _rangedIdleMs = 0;
+        _lastThinkAt = null;
+        StillMs = 0;
+        IdleNow = false;
+        Order = null;
         _reportedObjectiveUnreachable = false;
         _reportedIdleInMatch = false;
         _spells.GroupRole = null;
         _spells.Reset();
         _recovery.Reset();
+        _buffs.Reset(player.Guid);
         Activity = "idle";
     }
 
@@ -164,17 +197,18 @@ internal sealed class PlayerbotBattlegroundAI
         }
 
         _atMasterMs = 0;
-        bool walking = WalkTo(player, at, interval, toward: true);
+        bool walking = WalkTo(player, at, interval, toward: true, what: "battlemaster");
         TravelRefused = !walking;
-        if (TravelRefused)
-            ReportObjectiveUnreachable(player, $"route to battlemaster at {at} was refused");
         return walking;
     }
 
     // --- in the match ----------------------------------------------------------------------------------------------------
 
-    /// <summary>One tick of a participant (world thread, within the shared action budget like the brain).</summary>
-    internal void Play(Player player, Battleground match, Team team, PlayerbotBattlegroundRole role, uint elapsedMs)
+    /// <summary>
+    /// One tick of a participant (world thread, within the shared action budget like the brain). <paramref name="order"/> is the bot's
+    /// Warsong Gulch order of this tick (<see cref="PlayerbotWarsongTactics.Plan"/>, computed once per match and team by the coordinator).
+    /// </summary>
+    internal void Play(Player player, Battleground match, Team team, PlayerbotBattlegroundRole role, uint elapsedMs, PlayerbotWsgOrder? order = null)
     {
         if (!player.IsInWorld)
         {
@@ -191,6 +225,7 @@ internal sealed class PlayerbotBattlegroundAI
             _attacking = false;
             _route = null;
             _spells.Reset();
+            _buffs.Reset(player.Guid);
             _deathRetired = true;
         }
 
@@ -198,17 +233,33 @@ internal sealed class PlayerbotBattlegroundAI
         if (dead)
         {
             Goal = PlayerbotGoalKind.Recover;
-            Activity = "corpse-run";
+            Activity = "dead";
             _inMatchIdleMs = 0;
+            StillMs = 0;
+            _lastThinkAt = null;
+            IdleNow = false;
             // Not before the gates open, nor after the end: the server refuses a reclaim outside a running match (vmangos
             // HandleReclaimCorpseOpcode, the BattleGround status check) and resurrects everyone at the end.
             if (match.Status == BattlegroundStatus.InProgress) _recovery.Update(player, interval);
+            Activity = _recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.AwaitAreaResurrection ? "spirit-guide" : "corpse-run";
             return;
         }
 
         _deathRetired = false;
         _recovery.Reset();
         PlayerbotNavigation.Guard(player, null);
+        if (player.MapId != match.MapId || player.Map?.InstanceId != match.InstanceId)
+        {
+            // Bound to the match but not on its map (on the way in or out, or put elsewhere): its objectives are coordinates of the
+            // battleground map and mean nothing here; never route to them on another map.
+            if (_target is not null) ClearTarget(player);
+            Activity = "off-map";
+            Order = null;
+            _inMatchIdleMs = 0;
+            Hold(player);
+            return;
+        }
+
         if (match.Status != BattlegroundStatus.InProgress)
         {
             // Behind the gates before the start, frozen at the end (BattleGround.cpp:290-464, 651-769).
@@ -226,13 +277,33 @@ internal sealed class PlayerbotBattlegroundAI
             return;
         }
 
+        if (match is ArathiBasin arathi)
+        {
+            // Arathi Basin plays its own team plan (PlayerbotBattlegroundAI.ArathiBasin.cs): retreat, defend, assault, buffs.
+            PlayArathiBasin(player, arathi, team, role, interval);
+            ObserveMatchOutcome(player, match, interval);
+            return;
+        }
+
         bool carrier = match is WarsongGulch carrying && carrying.FlagPicker(BattlegroundConstants.OtherTeam(team)) == player.Guid;
-        Unit? enemy = carrier ? FirstAttackerIfStill(player) : SelectEnemy(player, match, team);
+        Order = match is WarsongGulch ? order : null;
+        Unit? enemy = carrier ? FirstAttackerIfStill(player) : OrderedEnemy(player, match, team) ?? SelectEnemy(player, match, team, chaseThief: Order is null);
+        if (_buffs.Update(_session, player, match, team, enemy, carrier, Now) is { } buff)
+        {
+            // A speed, restoration or berserking buff worth the detour: walk onto it (the trap casts it; PlayerbotBattlegroundBuffs).
+            Activity = "taking-buff";
+            _inMatchIdleMs = 0;
+            TargetEntry = buff.Entry;
+            if (!WalkTo(player, buff.Position, interval, toward: false)) _buffs.GiveUp(player.Guid, Now);
+            return;
+        }
+
         if (enemy is not null)
         {
-            Activity = "fighting";
+            Activity = Order is { Duty: PlayerbotWsgDuty.HuntCarrier } ? "hunting-carrier" : "fighting";
             _inMatchIdleMs = 0;
             Fight(player, enemy, interval);
+            ObserveStill(player, match, enemy, interval);
             return;
         }
 
@@ -246,10 +317,7 @@ internal sealed class PlayerbotBattlegroundAI
         switch (match)
         {
             case WarsongGulch wsg:
-                PlayWarsong(player, wsg, team, role, interval);
-                break;
-            case ArathiBasin ab:
-                PlayArathi(player, ab, team, role, interval);
+                PlayWarsong(player, wsg, team, Order, interval);
                 break;
             case AlteracValley av:
                 PlayAlteracValley(player, av, team, role, interval);
@@ -261,6 +329,60 @@ internal sealed class PlayerbotBattlegroundAI
         }
 
         ObserveMatchOutcome(player, match, interval);
+        ObserveStill(player, match, null, interval);
+    }
+
+    /// <summary>
+    /// The enemy the bot's order names: the enemy carrier for a hunter (wherever it is: mangosbot sets the objective to its position), an
+    /// intruder of the flag room for a defender. Null when the order names none or it is no attackable enemy now.
+    /// </summary>
+    private Player? OrderedEnemy(Player player, Battleground match, Team team)
+    {
+        if (Order is not { Target.IsEmpty: false } order || order.Duty is not (PlayerbotWsgDuty.HuntCarrier or PlayerbotWsgDuty.DefendFlagRoom)) return null;
+        return Online(order.Target) is { } enemy && IsEnemy(player, enemy, match, BattlegroundConstants.OtherTeam(team)) ? enemy : null;
+    }
+
+    /// <summary>
+    /// The idle check of one think (<see cref="PlayerbotWarsongTactics.IsIdle"/>): a living bot out of combat that stood still for
+    /// <see cref="PlayerbotWarsongTactics.IdleLimitMs"/> although its order sends it somewhere, or an enemy is beside it, is idle; reported
+    /// once per match as <c>bot-bg/idle-in-match</c>. Reads only the bot and the units its order names (no scan).
+    /// </summary>
+    private void ObserveStill(Player player, Battleground match, Unit? fighting, uint interval)
+    {
+        Vector3 here = Position(player);
+        bool still = _lastThinkAt is { } last && Vector3.Distance(last, here) < PlayerbotWarsongTactics.StillYards;
+        _lastThinkAt = here;
+        StillMs = still ? unchecked(StillMs + Math.Max(1u, interval)) : 0;
+        if (Order is not { } order)
+        {
+            IdleNow = false;
+            return;
+        }
+
+        Player? named = order.Target.IsEmpty ? null : Online(order.Target);
+        if (named is not null && !ReferenceEquals(named.Map, player.Map)) named = null;
+        float goal = order.Duty is PlayerbotWsgDuty.EscortCarrier or PlayerbotWsgDuty.HuntCarrier && named is not null
+            ? Distance(player, named)
+            : Vector3.Distance(here, order.Goal);
+        float arrived = order.Duty switch
+        {
+            PlayerbotWsgDuty.Midfield => MidfieldYards + 2f,
+            PlayerbotWsgDuty.EscortCarrier => 10f,
+            PlayerbotWsgDuty.HuntCarrier => EngageYards,
+            PlayerbotWsgDuty.ReturnOwnFlag or PlayerbotWsgDuty.TakeDroppedEnemyFlag => InteractYards + 1f,
+            _ => GuardYards + 2f,
+        };
+        // A bot that swings at its enemy in reach fights (the swing puts it in combat a moment later); one that only stands beside it does not.
+        bool engaged = player.Combat.IsInCombat || (fighting is not null && _attacking);
+        float enemyYards = fighting is not null ? Distance(player, fighting)
+            : named is not null && order.Duty is PlayerbotWsgDuty.HuntCarrier or PlayerbotWsgDuty.DefendFlagRoom or PlayerbotWsgDuty.Midfield
+                ? Distance(player, named) : float.MaxValue;
+        IdleNow = PlayerbotWarsongTactics.IsIdle(player.IsAlive, engaged, StillMs, goal, arrived, enemyYards);
+        if (!IdleNow) return;
+        IdleThinks++;
+        string enemyText = enemyYards == float.MaxValue ? "none" : enemyYards.ToString("F0", System.Globalization.CultureInfo.InvariantCulture) + " yd";
+        ReportIdleInMatch(player, string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"bot idle in {match.Type} match {match.InstanceId}: {order.Duty} still for {StillMs} ms out of combat, goal {goal:F0} yd away (arrived at {arrived:F0}), enemy {enemyText} (activity={Activity})"));
     }
 
     private void ObserveMatchOutcome(Player player, Battleground match, uint interval)
@@ -268,7 +390,7 @@ internal sealed class PlayerbotBattlegroundAI
         if (Activity is "no-flag" or "no-banners" or "no-banner-spell")
             ReportObjectiveUnreachable(player, $"battleground {match.Type} objective unavailable ({Activity})");
 
-        bool unproductive = Activity is "idle" or "unsupported" or "no-flag" or "no-banners" or "no-banner-spell";
+        bool unproductive = Activity is "idle" or "unsupported" or "no-orders" or "no-flag" or "no-banners" or "no-banner-spell";
         if (unproductive)
         {
             _inMatchIdleMs = unchecked(_inMatchIdleMs + interval);
@@ -297,81 +419,79 @@ internal sealed class PlayerbotBattlegroundAI
 
     // --- Warsong Gulch ---------------------------------------------------------------------------------------------------
 
-    private void PlayWarsong(Player player, WarsongGulch wsg, Team team, PlayerbotBattlegroundRole role, uint interval)
+    /// <summary>The bot's Warsong Gulch order of this think (<see cref="PlayerbotWarsongTactics.Plan"/>), carried out.</summary>
+    private void PlayWarsong(Player player, WarsongGulch wsg, Team team, PlayerbotWsgOrder? order, uint interval)
     {
         Team enemy = BattlegroundConstants.OtherTeam(team);
         Map map = player.Map!;
-        Vector3? home = OwnFlagRoom(team);
-
-        // The carrier runs home; inside its own flag room it waits for its own flag to come back (ForceFlagAreaTrigger captures then).
-        if (wsg.FlagPicker(enemy) == player.Guid)
+        if (order is not { } o)
         {
-            Activity = "carrying";
-            if (home is { } room) WalkTo(player, room, interval, toward: true);
-            else Hold(player);
-            return;
-        }
-
-        // The own flag on the ground: return it (BattleGroundWS.cpp:396-415).
-        if (wsg.FlagState(team) == WsgFlagState.OnGround && map.FindObject(wsg.DroppedFlagGuid(team)) is GameObject dropped
-            && (role == PlayerbotBattlegroundRole.Defender || Distance(player, dropped) <= ReturnFlagYards))
-        {
-            Activity = "returning-flag";
-            UseObject(player, dropped, interval);
-            return;
-        }
-
-        PlayerbotBattlegroundRole acting = role;
-        Player? ownCarrier = wsg.FlagState(enemy) == WsgFlagState.OnPlayer ? Online(wsg.FlagPicker(enemy)) : null;
-        if (acting == PlayerbotBattlegroundRole.Escort && ownCarrier is null) acting = PlayerbotBattlegroundRole.Attacker;
-        switch (acting)
-        {
-            case PlayerbotBattlegroundRole.Escort:
-                Activity = "escorting";
-                Follow(player, ownCarrier!, interval);
-                return;
-
-            case PlayerbotBattlegroundRole.Defender:
-                Activity = "defending";
-                if (home is { } room) Guard(player, room, interval);
-                else Hold(player);
-                return;
-        }
-
-        // An attacker: the enemy flag, from its stand or the ground; a teammate carrying it is escorted.
-        if (wsg.FlagState(enemy) == WsgFlagState.OnGround && map.FindObject(wsg.DroppedFlagGuid(enemy)) is GameObject loose)
-        {
-            Activity = "taking-flag";
-            UseObject(player, loose, interval);
-            return;
-        }
-
-        if (ownCarrier is not null && ownCarrier.Guid != player.Guid)
-        {
-            Activity = "escorting";
-            Follow(player, ownCarrier, interval);
-            return;
-        }
-
-        uint standEntry = enemy == Team.Alliance ? WarsongGulch.AllianceFlagBaseEntry : WarsongGulch.HordeFlagBaseEntry;
-        GameObject? stand = FindObject(player, go => go.Entry == standEntry);
-        if (stand is null)
-        {
-            Activity = "no-flag";
+            Activity = "no-orders";
             Hold(player);
             return;
         }
 
-        if (wsg.FlagState(enemy) == WsgFlagState.OnBase && wsg.IsActiveEvent(enemy == Team.Alliance ? WarsongGulch.EventFlagAlliance : WarsongGulch.EventFlagHorde, 0))
+        switch (o.Duty)
         {
-            Activity = "taking-flag";
-            UseObject(player, stand, interval);
-            return;
-        }
+            case PlayerbotWsgDuty.CarryHome:
+                // Inside its own flag room it waits for its own flag to come back (ForceFlagAreaTrigger captures then).
+                Activity = "carrying";
+                WalkTo(player, o.Goal, interval, toward: true);
+                return;
 
-        // The flag is away or respawning: wait at the enemy stand for it.
-        Activity = "waiting-flag";
-        Guard(player, new Vector3(stand.X, stand.Y, stand.Z), interval);
+            case PlayerbotWsgDuty.ReturnOwnFlag:
+                // BattleGroundWS.cpp:396-415: a click on the own dropped flag returns it.
+                Activity = "returning-flag";
+                if (map.FindObject(wsg.DroppedFlagGuid(team)) is GameObject dropped) UseObject(player, dropped, interval);
+                else WalkTo(player, o.Goal, interval, toward: false);
+                return;
+
+            case PlayerbotWsgDuty.TakeDroppedEnemyFlag:
+                Activity = "taking-flag";
+                if (map.FindObject(wsg.DroppedFlagGuid(enemy)) is GameObject loose) UseObject(player, loose, interval);
+                else WalkTo(player, o.Goal, interval, toward: false);
+                return;
+
+            case PlayerbotWsgDuty.HuntCarrier:
+                // Not attackable from here yet (out of sight or reach): towards it.
+                Activity = "hunting-carrier";
+                WalkTo(player, Online(o.Target) is { } thief && ReferenceEquals(thief.Map, map) ? Position(thief) : o.Goal, interval, toward: true);
+                return;
+
+            case PlayerbotWsgDuty.EscortCarrier:
+                Activity = "escorting";
+                if (Online(o.Target) is { } carrier && carrier.Guid != player.Guid && ReferenceEquals(carrier.Map, map)) Follow(player, carrier, interval);
+                else Guard(player, o.Goal, interval);
+                return;
+
+            case PlayerbotWsgDuty.DefendFlagRoom:
+                Activity = "defending";
+                Guard(player, o.Goal, interval);
+                return;
+
+            case PlayerbotWsgDuty.TakeEnemyFlag:
+            {
+                bool ready = wsg.FlagState(enemy) == WsgFlagState.OnBase
+                    && wsg.IsActiveEvent(enemy == Team.Alliance ? WarsongGulch.EventFlagAlliance : WarsongGulch.EventFlagHorde, 0);
+                if (ready && !o.Target.IsEmpty && map.FindObject(o.Target) is GameObject { IsSpawned: true } stand)
+                {
+                    Activity = "taking-flag";
+                    UseObject(player, stand, interval);
+                    return;
+                }
+
+                // The flag is away or respawning (its stand object is despawned meanwhile): wait at the stand's spawn for it. A flag the
+                // match calls ready whose stand is not on the map is missing content (reported as no-flag), not a respawn.
+                Activity = ready ? "no-flag" : "waiting-flag";
+                Guard(player, o.Goal, interval);
+                return;
+            }
+
+            default:
+                Activity = "midfield";
+                Guard(player, o.Goal, interval, MidfieldYards);
+                return;
+        }
     }
 
     /// <summary>The centre of the team's own flag room trigger (3646 Alliance, 3647 Horde; BattleBotWaypoints.cpp:70-74).</summary>
@@ -379,123 +499,6 @@ internal sealed class PlayerbotBattlegroundAI
     {
         uint id = team == Team.Alliance ? WarsongGulch.AreaTriggerAllianceFlagSpawn : WarsongGulch.AreaTriggerHordeFlagSpawn;
         return Game.Maps.Templates.WorldMaps.Of(_session.World).FindAreaTrigger(id) is { } trigger ? new Vector3(trigger.X, trigger.Y, trigger.Z) : null;
-    }
-
-    // --- Arathi Basin ----------------------------------------------------------------------------------------------------
-
-    private void PlayArathi(Player player, ArathiBasin ab, Team team, PlayerbotBattlegroundRole role, uint interval)
-    {
-        int teamIndex = BattlegroundConstants.TeamIndex(team);
-        List<(int Node, GameObject Banner)> banners = Banners(player, ArathiBasin.NodeCount);
-        if (banners.Count == 0)
-        {
-            Activity = "no-banners";
-            Hold(player);
-            return;
-        }
-
-        // vmangos BattleGroundAB::EventPlayerClickedOnFlag (BattleGroundAB.cpp:351-352): a team clicks a neutral node, or one whose status
-        // belongs to the other team (status % 2 is the other team's index: contested or occupied by it). Statuses 1/2 are contested,
-        // 3/4 occupied (BattleGroundAB.h); an own node the enemy contests is clicked back (defended).
-        bool Clickable(int node) => ab.NodeStatus(node) == ArathiBasin.StatusNeutral || ab.NodeStatus(node) % 2 == teamIndex;
-        bool Ours(int node) => ab.NodeStatus(node) != ArathiBasin.StatusNeutral && ab.NodeStatus(node) % 2 != teamIndex;
-        bool EnemyContested(int node) => ab.NodeStatus(node) is ArathiBasin.StatusAllianceContested or ArathiBasin.StatusHordeContested
-            && ab.NodeStatus(node) % 2 == teamIndex;
-
-        (int Node, GameObject Banner)? goal = null;
-        if (role == PlayerbotBattlegroundRole.Defender)
-        {
-            // The node it guards: its team's or one the enemy contests, chosen by the bot's guid so defenders spread; a contested one is
-            // clicked (defended, or taken back).
-            var held = banners.Where(b => Ours(b.Node) || EnemyContested(b.Node)).GroupBy(b => b.Node).Select(g => g.First()).OrderBy(b => b.Node).ToList();
-            if (held.Count > 0)
-            {
-                (int Node, GameObject Banner) guarded = held[(int)(player.Guid.Low % (uint)held.Count)];
-                if (!Clickable(guarded.Node))
-                {
-                    Activity = "defending";
-                    TargetEntry = guarded.Banner.Entry;
-                    Guard(player, new Vector3(guarded.Banner.X, guarded.Banner.Y, guarded.Banner.Z), interval);
-                    return;
-                }
-
-                goal = guarded;
-            }
-        }
-
-        goal ??= banners.Where(b => Clickable(b.Node) && !TeammateCasting(player, b.Banner))
-            .OrderBy(b => Distance(player, b.Banner)).Select(b => ((int, GameObject)?)b).FirstOrDefault();
-        if (goal is not { } target)
-        {
-            // Nothing to take: guard the nearest own node.
-            (int Node, GameObject Banner)? own = banners.Where(b => Ours(b.Node)).OrderBy(b => Distance(player, b.Banner)).Select(b => ((int, GameObject)?)b).FirstOrDefault();
-            Activity = "defending";
-            if (own is { } node) Guard(player, new Vector3(node.Banner.X, node.Banner.Y, node.Banner.Z), interval);
-            else Hold(player);
-            return;
-        }
-
-        Activity = "assaulting";
-        TargetEntry = target.Banner.Entry;
-        if (Distance(player, target.Banner) > InteractYards)
-        {
-            WalkTo(player, new Vector3(target.Banner.X, target.Banner.Y, target.Banner.Z), interval, toward: false);
-            return;
-        }
-
-        if (!PlayerbotMovementControl.Stop(_session, player)) return;
-        _route = null;
-        if (_session.Services.GetService<SpellFeature>() is not { } feature || feature.System.Store.Get(BannerSpell) is not { } spell)
-        {
-            Activity = "no-banner-spell";
-            return;
-        }
-
-        if (_spells.CastAtObject(player, spell, target.Banner)) BannerCasts++;
-    }
-
-    // --- Alterac Valley --------------------------------------------------------------------------------------------------
-
-    private void PlayAlteracValley(Player player, AlteracValley av, Team team, PlayerbotBattlegroundRole role, uint interval)
-    {
-        int teamIndex = BattlegroundConstants.TeamIndex(team);
-        List<(int Node, GameObject Banner)> banners = Banners(player, AlteracValley.NodeCount);
-
-        // vmangos BattleGroundAV::EventPlayerClickedOnFlag (BattleGroundAV.cpp:1288-1368): a controlled node is assaulted when owned by neutral
-        // or the enemy; an assaulted node is defended back when it was ours (TotalOwner == teamIndex) or neutral (Snowfall).
-        bool Clickable(int node)
-            => av.NodeState(node) == AlteracValley.PointControlled
-                ? av.NodeOwner(node) != teamIndex && av.NodeTotalOwner(node) != teamIndex
-                : av.NodeOwner(node) != teamIndex && (av.NodeTotalOwner(node) == teamIndex || av.NodeTotalOwner(node) == AlteracValley.TeamNeutral);
-
-        (int Node, GameObject Banner)? goal = banners.Where(b => Clickable(b.Node) && !TeammateCasting(player, b.Banner))
-            .OrderBy(b => Distance(player, b.Banner)).Select(b => ((int, GameObject)?)b).FirstOrDefault();
-        if (goal is { } target)
-        {
-            TargetEntry = target.Banner.Entry;
-            if (Distance(player, target.Banner) > InteractYards + 0.5f)
-            {
-                Activity = "av-advance";
-                WalkTo(player, new Vector3(target.Banner.X, target.Banner.Y, target.Banner.Z), interval, toward: true);
-                return;
-            }
-
-            if (!PlayerbotMovementControl.Stop(_session, player)) return;
-            _route = null;
-            Activity = "av-claim-banner";
-            if (_session.Services.GetService<SpellFeature>() is { } feature && feature.System.Store.Get(BannerSpell) is { } spell)
-            {
-                if (_spells.CastAtObject(player, spell, target.Banner)) BannerCasts++;
-                return;
-            }
-
-            Act(WorldOpcode.CmsgGameobjUse, PlayerbotNavigation.GuidPayload(target.Banner.Guid.Value));
-            return;
-        }
-
-        BattlegroundStartLocation enemyKeep = team == Team.Alliance ? av.Template.HordeStart : av.Template.AllianceStart;
-        Activity = "av-advance";
-        Guard(player, new Vector3(enemyKeep.X, enemyKeep.Y, enemyKeep.Z), interval);
     }
 
     /// <summary>
@@ -541,18 +544,20 @@ internal sealed class PlayerbotBattlegroundAI
     /// attacking the bot, then the one it fights already, then the nearest within <see cref="EngageYards"/>. Teammates never: the match's
     /// teams decide, not the faction templates (a player may always attack a player as far as the combat hooks go).
     /// </summary>
-    private Unit? SelectEnemy(Player player, Battleground match, Team team)
+    /// <param name="chaseThief">Chase the carrier of the own flag from <see cref="ChaseCarrierYards"/> (without a Warsong Gulch order; with one,
+    /// the hunters the plan names chase it and the others keep their duty).</param>
+    private Unit? SelectEnemy(Player player, Battleground match, Team team, bool chaseThief = true)
     {
         if (player.Map is not { } map) return null;
         Team enemyTeam = BattlegroundConstants.OtherTeam(team);
-        if (match is WarsongGulch wsg && wsg.FlagState(team) == WsgFlagState.OnPlayer && Online(wsg.FlagPicker(team)) is { } thief
+        if (chaseThief && match is WarsongGulch wsg && wsg.FlagState(team) == WsgFlagState.OnPlayer && Online(wsg.FlagPicker(team)) is { } thief
             && IsEnemy(player, thief, match, enemyTeam) && Distance(player, thief) <= ChaseCarrierYards)
             return thief;
 
         foreach (Unit unit in player.Combat.Attackers)
         {
             if (unit is Player attacker && IsEnemy(player, attacker, match, enemyTeam)) return attacker;
-            if (match is AlteracValley && unit is Game.Creatures.Creature npcAttacker && IsEnemyCreature(player, npcAttacker)) return npcAttacker;
+            if (match is AlteracValley && unit is Game.Creatures.Creature npcAttacker && IsEnemyCreature(player, npcAttacker, requireHostile: false)) return npcAttacker;
         }
 
         if (_target is Player current && IsEnemy(player, current, match, enemyTeam) && Distance(player, current) <= EngageYards * 1.5f) return current;
@@ -592,11 +597,14 @@ internal sealed class PlayerbotBattlegroundAI
             && ReferenceEquals(other.Map, player.Map) && match.PlayerTeam(other.Guid) == enemyTeam && player.Map is { } map
             && map.Combat.Hooks.CanAttack(player, other);
 
-    /// <summary>A living, attackable Alterac Valley NPC guard, commander or general on the bot's map.</summary>
-    private static bool IsEnemyCreature(Player player, Game.Creatures.Creature creature)
+    /// <summary>
+    /// A living, attackable and hostile Alterac Valley NPC guard, captain, commander or general on the bot's map: the neutral wildlife of the
+    /// valley (the rams and wolves) is left alone unless it attacks the bot (<paramref name="requireHostile"/> false).
+    /// </summary>
+    private static bool IsEnemyCreature(Player player, Game.Creatures.Creature creature, bool requireHostile = true)
         => creature.IsInWorld && creature.IsAlive && ReferenceEquals(creature.Map, player.Map)
             && (creature.NpcFlags & (uint)Game.Npc.NpcFlags.SpiritGuide) == 0 && player.Map is { } map
-            && map.Combat.Hooks.CanAttack(player, creature);
+            && map.Combat.Hooks.CanAttack(player, creature) && (!requireHostile || map.Combat.Hooks.IsHostileTo(player, creature));
 
     /// <summary>A unit attacking the bot that it may hit back (the walk to a battlemaster, a carrier that is blocked).</summary>
     private static Unit? FirstAttacker(Player player)
@@ -615,17 +623,29 @@ internal sealed class PlayerbotBattlegroundAI
             _target = target;
             _attacking = false;
             _route = null;
+            _rangedIdleMs = 0;
         }
 
         TargetEntry = target is Game.Creatures.Creature creature ? creature.Entry : 0;
-        if (_spells.Update(player, target, interval)) return;
+        if (_spells.Update(player, target, interval))
+        {
+            _rangedIdleMs = 0;
+            return;
+        }
+
         float distance = Distance(player, target);
+        // A ranged bot with nothing to cast at its range (out of mana, or no spell for this target) closes in and swings instead of standing
+        // there for the whole fight (live 2026-10-16 ~20:10-20:22: Bokae, a mage, and Poforound, a shaman, held in the Horde flag room below
+        // 10% mana for 45 s of one fight each while an enemy fought there). vmangos CombatBotBaseAI::BeginChasing keeps the 25-yard caster
+        // distance only above 10% mana or with a ranged weapon; the brain closes in after RangedIdleLimitMs (PlayerbotBrain.Update).
         PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(_spells.PreferredRange(player), distance,
-            player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player), idleTooLong: false,
+            player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
+            idleTooLong: _rangedIdleMs >= PlayerbotBrain.RangedIdleLimitMs || LowMana(player),
             inMeleeReach: MapCombat.CanReachWithMeleeAutoAttack(player, target));
         switch (position)
         {
             case PlayerbotFightPosition.Hold:
+                _rangedIdleMs = unchecked(_rangedIdleMs + Math.Max(1u, interval));
                 _route = null;
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;
@@ -652,6 +672,17 @@ internal sealed class PlayerbotBattlegroundAI
         if (!_attacking || !ReferenceEquals(player.Combat.Victim, target))
             _attacking = Act(WorldOpcode.CmsgAttackswing, PlayerbotNavigation.GuidPayload(target.Guid.Value));
     }
+
+    /// <summary>A mana user below <see cref="LowManaPct"/> of its mana (vmangos CombatBotBaseAI::BeginChasing's 10%).</summary>
+    internal static bool LowMana(Player player)
+    {
+        if (player.PowerType != PowerType.Mana) return false;
+        uint max = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
+        return max > 0 && Game.Spells.SpellSystem.GetPower(player, PowerType.Mana) * 100UL < max * (ulong)LowManaPct;
+    }
+
+    /// <summary>Below this share of its mana a caster fights in melee (vmangos CombatBotBaseAI::BeginChasing).</summary>
+    internal const int LowManaPct = 10;
 
     private void ClearTarget(Player player)
     {
@@ -719,10 +750,10 @@ internal sealed class PlayerbotBattlegroundAI
         if (!WalkTo(player, point, interval, toward: Distance(player, leader) > 60f)) WalkTo(player, Position(leader), interval, toward: true);
     }
 
-    /// <summary>Stay within <see cref="GuardYards"/> of <paramref name="at"/>.</summary>
-    private void Guard(Player player, Vector3 at, uint interval)
+    /// <summary>Stay within <paramref name="radius"/> (<see cref="GuardYards"/> by default) of <paramref name="at"/>.</summary>
+    private void Guard(Player player, Vector3 at, uint interval, float radius = GuardYards)
     {
-        if (Vector3.Distance(Position(player), at) <= GuardYards) Hold(player);
+        if (Vector3.Distance(Position(player), at) <= radius) Hold(player);
         else WalkTo(player, at, interval, toward: true);
     }
 
@@ -737,7 +768,8 @@ internal sealed class PlayerbotBattlegroundAI
 
     /// <summary>Walk towards <paramref name="goal"/>, planning again when it moved more than 2 yards since the last plan.</summary>
     /// <param name="toward">A far goal: a partial route towards it is fine (<see cref="PlayerbotNavigation.TryPlanToward"/>).</param>
-    private bool WalkTo(Player player, Vector3 goal, uint interval, bool toward)
+    /// <param name="what">What the goal is, for the refusal's report (the walk to a battlemaster is no battleground objective).</param>
+    private bool WalkTo(Player player, Vector3 goal, uint interval, bool toward, string what = "battleground objective")
     {
         if (Vector3.Distance(Position(player), goal) <= 1.5f)
         {
@@ -756,7 +788,7 @@ internal sealed class PlayerbotBattlegroundAI
                 PlayerbotMovementControl.Stop(_session, player);
                 // A tile of the way is still being read: the goal is kept and planned to again next think, not reported unreachable.
                 if (planned != PlanOutcome.Pending)
-                    ReportObjectiveUnreachable(player, $"route to battleground objective at {goal} was refused");
+                    ReportObjectiveUnreachable(player, $"route to {what} at {goal} was refused");
                 return planned == PlanOutcome.Pending;
             }
 

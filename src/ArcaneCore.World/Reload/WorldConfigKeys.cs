@@ -428,6 +428,8 @@ public static class WorldConfigKeys
             v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
         LivePlayerbotsValue("Economy:VisitIntervalMinutes", o => o.Economy.VisitIntervalMinutes, (o, v) => o.Economy.VisitIntervalMinutes = v,
             v => v is >= 1 and <= PlayerbotEconomyOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotEconomyOptions.MaxVisitIntervalMinutes}"),
+        LivePlayerbots("Economy:BankDeposit", o => o.Economy.BankDeposit, (o, v) => o.Economy.BankDeposit = v),
+        LivePlayerbots("Economy:BuyBankSlots", o => o.Economy.BuyBankSlots, (o, v) => o.Economy.BuyBankSlots = v),
         // Not vmangos keys: how bots plan their money and ride (docs/areas/playbots-economy.md). PlayerbotBudget and PlayerbotMount read the
         // shared PlayerbotOptions.Budget / Mounts at every decision.
         LivePlayerbots("Budget:Enabled", o => o.Budget.Enabled, (o, v) => o.Budget.Enabled = v),

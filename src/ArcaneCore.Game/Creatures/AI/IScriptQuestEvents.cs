@@ -29,4 +29,12 @@ public interface IScriptQuestEvents
     /// QUEST_STATUS_INCOMPLETE</c>, as the ScriptDev2 creature scripts ask it). False by default, so a binding without a quest log answers no.
     /// </summary>
     bool IsQuestIncomplete(Player player, uint questId) => false;
+
+    /// <summary>
+    /// cmangos Player::TalkedToCreature from a script (a ScriptDev2 gossip hello): the speak-to credit of <paramref name="creatureEntry"/>,
+    /// counted only by quests with KILL_OR_CAST or SPEAKTO that are not EXPLORATION_OR_EVENT. Nothing by default.
+    /// </summary>
+    void TalkedToCreature(Player player, uint creatureEntry, ObjectGuid source)
+    {
+    }
 }

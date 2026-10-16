@@ -84,17 +84,25 @@ public sealed class GmObjectNpcCommandTests
         public string Single => Assert.Single(Replies);
     }
 
-    private static async Task<Run> SendAsync(WorldTestClient client, string command, WorldOpcode answer = WorldOpcode.SmsgMessagechat)
+    private static async Task<Run> SendAsync(WorldTestClient client, string command, WorldOpcode answer = WorldOpcode.SmsgMessagechat, int replies = 0)
     {
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
         // Wait for the command's answer (a chat line, unless the caller names another packet) before collecting,
         // so a slow world tick is not mistaken for an empty answer.
         List<(WorldOpcode Opcode, byte[] Payload)> packets = await client.CollectFromAsync(answer, Quiet);
-        List<string> replies = [.. packets
-            .Where(p => p.Opcode == WorldOpcode.SmsgMessagechat && p.Payload[0] == (byte)ChatType.System)
-            .Select(p => ChatMessage.Parse(p.Payload).Text)];
-        return new Run(replies, packets);
+        // A command that answers several lines sends them one by one: on a loaded machine the quiet window can end between two of
+        // them, so a caller that knows how many lines come waits for each (read timeout per packet) rather than for a pause.
+        while (SystemLines(packets).Count() < replies)
+        {
+            packets.Add(await client.ReadAsync());
+        }
+
+        return new Run([.. SystemLines(packets)], packets);
     }
+
+    private static IEnumerable<string> SystemLines(List<(WorldOpcode Opcode, byte[] Payload)> packets) => packets
+        .Where(p => p.Opcode == WorldOpcode.SmsgMessagechat && p.Payload[0] == (byte)ChatType.System)
+        .Select(p => ChatMessage.Parse(p.Payload).Text);
 
     private static List<(WorldOpcode Opcode, byte[] Payload)> Chat(Run run, ChatType type)
         => [.. run.Packets.Where(p => p.Opcode == WorldOpcode.SmsgMessagechat && p.Payload[0] == (byte)type)];
@@ -157,7 +165,7 @@ public sealed class GmObjectNpcCommandTests
         await using WorldTestClient moderator = await GmAsync(scene, "SPDYNM", "Spdynm", AccountSecurity.Moderator);
         Assert.Equal("This command is not available to you.", (await SendAsync(moderator, ".spawninfo dynamic")).Single);
 
-        Run off = await SendAsync(gm, ".spawninfo dynamic");
+        Run off = await SendAsync(gm, ".spawninfo dynamic", replies: 3);
         Assert.Equal(3, off.Replies.Count);
         Assert.StartsWith("Dynamic respawn: off; this map scales.", off.Replies[0], StringComparison.Ordinal);
         Assert.Matches(@"^Players within 100 yards \(bots counted\): \d+; threshold 5, 0\.1 per player above it: multiplier x1\.", off.Replies[1]);
@@ -170,7 +178,8 @@ public sealed class GmObjectNpcCommandTests
             options.PlayerThreshold = 0; // the GM alone is over the threshold
             options.ScalePerPlayer = 10f;
         });
-        Run on = await SendAsync(gm, ".spawninfo dynamic");
+        Run on = await SendAsync(gm, ".spawninfo dynamic", replies: 3);
+        Assert.Equal(3, on.Replies.Count);
         Assert.StartsWith("Dynamic respawn: on; this map scales.", on.Replies[0], StringComparison.Ordinal);
         Assert.Contains("(minimum 30 s,", on.Replies[2], StringComparison.Ordinal);
         Assert.Equal(CreatureDeathState.Alive, await host.OnWorldAsync(() => CreatureSystem(scene).Creatures.Single(c => c.Spawn?.Guid == WolfSpawn).DeathState));
@@ -371,7 +380,7 @@ public sealed class GmObjectNpcCommandTests
         await using WorldTestHost host = scene.Host;
         await using WorldTestClient gm = await GmAsync(scene, "GONEAR", "Gonear");
 
-        Run near = await SendAsync(gm, ".gobject near");
+        Run near = await SendAsync(gm, ".gobject near", replies: 2);
         Assert.Equal("Game objects within 10 yards: 1", near.Replies[0]);
         Assert.StartsWith($"{DoorSpawn} entry {DoorEntry} Test Door (Door) spawned at -8948.00 -132.50 83.50, ", near.Replies[1], StringComparison.Ordinal);
         Assert.Equal(2, near.Replies.Count);
@@ -383,7 +392,7 @@ public sealed class GmObjectNpcCommandTests
             Assert.StartsWith("Syntax: .gobject near", (await SendAsync(gm, bad)).Replies[0], StringComparison.Ordinal);
         }
 
-        Run info = await SendAsync(gm, $".gobject info {DoorSpawn}");
+        Run info = await SendAsync(gm, $".gobject info {DoorSpawn}", replies: 4);
         Assert.Equal(4, info.Replies.Count);
         Assert.StartsWith($"Test Door entry {DoorEntry} guid {DoorSpawn} type Door display 5", info.Replies[0], StringComparison.Ordinal);
         Assert.Equal($"database spawn {DoorSpawn}; spawned", info.Replies[1]);
@@ -518,13 +527,13 @@ public sealed class GmObjectNpcCommandTests
         await using WorldTestClient gm = await GmAsync(scene, "NPCINF", "Npcinf");
         await SelectAsync(scene, "Npcinf", WolfSpawn);
 
-        Run info = await SendAsync(gm, ".npc info");
+        Run info = await SendAsync(gm, ".npc info", replies: 4);
         Assert.Equal(4, info.Replies.Count);
         Assert.StartsWith($"Test Wolf entry {WolfEntry} guid {WolfSpawn} level 2 health ", info.Replies[0], StringComparison.Ordinal);
         Assert.Equal($"database spawn {WolfSpawn}; alive", info.Replies[1]);
         Assert.StartsWith("Syntax: .npc info", (await SendAsync(gm, ".npc info now")).Replies[0], StringComparison.Ordinal);
 
-        Run near = await SendAsync(gm, ".npc near");
+        Run near = await SendAsync(gm, ".npc near", replies: 2);
         Assert.Equal("Creatures within 10 yards: 1", near.Replies[0]);
         Assert.StartsWith($"{WolfSpawn} entry {WolfEntry} Test Wolf level 2 alive at -8940.00 -132.00 83.50, ", near.Replies[1], StringComparison.Ordinal);
         Assert.StartsWith("Syntax: .npc near", (await SendAsync(gm, ".npc near 0")).Replies[0], StringComparison.Ordinal);
@@ -622,12 +631,12 @@ public sealed class GmObjectNpcCommandTests
         await gm.CollectAsync(Quiet);
 
         // OnCreatureDied sets RespawnAtMs from the template delay, but only creatures with a Spawn are respawned by the update loop.
-        Run info = await SendAsync(gm, ".npc info");
+        Run info = await SendAsync(gm, ".npc info", replies: 4);
         Assert.Equal(4, info.Replies.Count);
         Assert.StartsWith($"Test Wolf entry {WolfEntry} guid {temporary.Guid.Counter} ", info.Replies[0], StringComparison.Ordinal);
         Assert.Equal("temporary (not saved); corpse, no respawn", info.Replies[1]);
 
-        Run near = await SendAsync(gm, ".spawninfo creature");
+        Run near = await SendAsync(gm, ".spawninfo creature", replies: 3);
         Assert.Equal("Creatures within 40 yards: 2", near.Replies[0]);
         Assert.Contains(near.Replies, r => r.StartsWith($"{temporary.Guid.Counter} entry {WolfEntry} Test Wolf: temporary, corpse, no respawn, ", StringComparison.Ordinal));
         Assert.Contains(near.Replies, r => r.StartsWith($"{WolfSpawn} entry {WolfEntry} Test Wolf: database spawn {WolfSpawn}, alive, ", StringComparison.Ordinal));
@@ -641,25 +650,25 @@ public sealed class GmObjectNpcCommandTests
         await using WorldTestHost host = scene.Host;
         await using WorldTestClient gm = await GmAsync(scene, "SPINF", "Spinf");
 
-        Run creatures = await SendAsync(gm, ".spawninfo creature");
+        Run creatures = await SendAsync(gm, ".spawninfo creature", replies: 2);
         Assert.Equal("Creatures within 40 yards: 1", creatures.Replies[0]);
         Assert.StartsWith($"{WolfSpawn} entry {WolfEntry} Test Wolf: database spawn {WolfSpawn}, alive, ", creatures.Replies[1], StringComparison.Ordinal);
 
         await host.OnWorldAsync(() => CreatureSystem(scene).KillCreature(CreatureSystem(scene).Creatures.Single(c => c.Spawn?.Guid == WolfSpawn)));
         await SendAsync(gm, $".npc add {WolfEntry}");
-        Run dead = await SendAsync(gm, ".spawninfo creature");
+        Run dead = await SendAsync(gm, ".spawninfo creature", replies: 3);
         Assert.Equal("Creatures within 40 yards: 2", dead.Replies[0]);
         Assert.Contains(dead.Replies, r => System.Text.RegularExpressions.Regex.IsMatch(r, $@"^{WolfSpawn} entry {WolfEntry} Test Wolf: database spawn {WolfSpawn}, corpse, respawns in \d+ s, "));
         Assert.Contains(dead.Replies, r => r.Contains(": temporary, alive, ", StringComparison.Ordinal));
 
         await host.OnWorldAsync(() => ObjectSystem(scene).Despawn(ObjectSystem(scene).GameObjects.Single(g => g.Guid.Counter == DoorSpawn)));
         await SendAsync(gm, $".gobject add {DoorEntry}");
-        Run objects = await SendAsync(gm, ".spawninfo gameobject");
+        Run objects = await SendAsync(gm, ".spawninfo gameobject", replies: 3);
         Assert.Equal("Game objects within 40 yards: 2", objects.Replies[0]);
         Assert.Contains(objects.Replies, r => System.Text.RegularExpressions.Regex.IsMatch(r, $@"^{DoorSpawn} entry {DoorEntry} Test Door: database spawn {DoorSpawn}, despawned, respawns in \d+ s, "));
         Assert.Contains(objects.Replies, r => r.Contains(": runtime, spawned, ", StringComparison.Ordinal));
 
-        Run summary = await SendAsync(gm, ".spawninfo summary");
+        Run summary = await SendAsync(gm, ".spawninfo summary", replies: 2);
         Assert.Equal(
             "Creatures on map 0: 3 loaded (2 database, 1 temporary), 2 alive, 1 corpses, 0 dead; 0 respawn time(s) kept for unloaded grids.",
             summary.Replies[0]);

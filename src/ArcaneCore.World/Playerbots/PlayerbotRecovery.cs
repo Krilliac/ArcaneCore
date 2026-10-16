@@ -13,7 +13,9 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Stealth;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Teleport;
@@ -49,6 +51,13 @@ internal enum PlayerbotRecoveryStep
 
     /// <summary>Walk into the entrance trigger of the dungeon the body is in; the server revives a ghost that enters it.</summary>
     WalkToEntrance,
+
+    /// <summary>
+    /// The body is on this map but no plan reaches it (<see cref="PlayerbotRecovery.MaxRefusedPlans"/> refusals in a row): walk into a
+    /// same-map teleport trigger whose far side lies nearer the body, as a player does (the Rut'theran portal up to Darnassus, area
+    /// trigger 542). The navigation does not model the teleport, so the walk ends in the trigger and the corpse run resumes on the far side.
+    /// </summary>
+    WalkToPortal,
 
     /// <summary>Stand at the body while the server's reclaim delay runs (SMSG_CORPSE_RECLAIM_DELAY).</summary>
     WaitForReclaimDelay,
@@ -126,7 +135,19 @@ internal enum PlayerbotSpiritHealerStep
     /// </summary>
     ResumeCorpseRun,
 
-    /// <summary>The fallback stalled too (no progress for <see cref="PlayerbotRecovery.NoProgressMs"/>, or a walk stuck): the recovery faults.</summary>
+    /// <summary>
+    /// No healer in sight and the ghost already at its graveyard, where none stands (graveyard 129 at Rut'theran Village has none in the
+    /// 1.12 world database): walk to the nearest spirit healer of the world's spawns on this map (<c>creature</c> rows whose template
+    /// carries <see cref="NpcFlags.SpiritHealer"/>), through a same-map teleport trigger when that is the shorter way (the Rut'theran
+    /// portal to the Darnassus healer). Once it is in sight the ordinary walk and CMSG_SPIRIT_HEALER_ACTIVATE take over.
+    /// </summary>
+    WalkToHealerSpawn,
+
+    /// <summary>
+    /// The fallback stalled too (no progress for <see cref="PlayerbotRecovery.NoProgressMs"/>, or a walk stuck): reported once
+    /// (<c>recovery/spirit-healer-failed</c>) and the ghost stands; the recovery is tried afresh after
+    /// <see cref="PlayerbotRecovery.GiveUpRetryMs"/>. Never thrown: the brain's think fault quarantined the bot and then disabled it.
+    /// </summary>
     Fault,
 
     /// <summary>
@@ -155,7 +176,11 @@ internal enum PlayerbotSpiritHealerStep
 /// or a walk stopped closing on its goal (or could not be planned) for <see cref="StuckMs"/>, or there is no way back to the body,
 /// the ghost takes the spirit healer instead (CMSG_SPIRIT_HEALER_ACTIVATE, vmangos NPCHandler.cpp:416): the nearest healer it can
 /// see, else it walks to the graveyard of its position, where one stands, else it waits and looks again (nothing found once is no
-/// fault). Only when that fallback stalls the same way does the recovery fault (<see cref="SpiritHealerFailed"/>); a body that cannot even be released for <see cref="NoProgressMs"/> faults with
+/// fault). When that fallback stalls the same way it gives up, reported once (<c>recovery/spirit-healer-failed</c>), and the ghost
+/// stands and tries again after <see cref="GiveUpRetryMs"/>: never an exception (<see cref="SpiritHealerFailed"/> was thrown until
+/// 2026-10-16, and the brain quarantined and then disabled the bot for it). A corpse run whose plan is refused <see cref="MaxRefusedPlans"/>
+/// times in a row walks into a same-map portal leading nearer the body, else takes the healer at once; a ghost at a graveyard with no
+/// healer goes to the nearest one of the world's spawns. A body that cannot even be released for <see cref="NoProgressMs"/> faults with
 /// <see cref="Stalled"/>. Before, a stall or a stuck walk threw at once, and the fault quarantined the bot.</description></item>
 /// <item><description>Waiting at the body while the reclaim delay runs (30, 60 or 120 s by recent deaths, vmangos
 /// GetCorpseReclaimDelay) is progress (live, 2026-10-07: the bots that faulted were only waiting); waiting for hostiles, or walking
@@ -263,6 +288,29 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     internal const long StuckMs = 10_000;
 
     /// <summary>
+    /// A walk whose plan the navigation refused this many times in a row (pending tile reads do not count; a route resets the count) is
+    /// given up at once, like the taxi, tram and ship walks (<see cref="PlayerbotTaxi.MaxRefusedPlans"/>): the body for a same-map portal
+    /// or the spirit healer, a healer for the next. Live 2026-10-16 (Eliaslial): 361 warnings of five refused plans each toward a body
+    /// in Darnassus from Rut'theran, which only the portal joins, before the stuck bound ended the corpse run.
+    /// </summary>
+    internal const int MaxRefusedPlans = 3;
+
+    /// <summary>
+    /// A ghost whose fallback gave up (<see cref="PlayerbotSpiritHealerStep.Fault"/>) stands this long, then tries the whole recovery
+    /// again with fresh bounds (a healer respawned, a tile read, a creature gone). An ArcaneCore choice.
+    /// </summary>
+    internal const long GiveUpRetryMs = 300_000;
+
+    /// <summary>A same-map teleport trigger is walked to from at most this far (straight line).</summary>
+    internal const float MaxPortalWalkYards = 250f;
+
+    /// <summary>The ghost counts as through a portal once it stands this close to the trigger's destination.</summary>
+    internal const float PortalArrivedYards = 20f;
+
+    /// <summary>A portal is taken only when the way through it is shorter than the straight line by at least this much.</summary>
+    internal const float PortalGainYards = 50f;
+
+    /// <summary>
     /// A bound (<see cref="NoProgressMs"/>, <see cref="StuckMs"/>) is judged only after the recovery has acted in more than this many
     /// thinks since the progress or closing it measures from. World time alone is not enough: a bot is thought for only when the
     /// shared action budget and the per-tick time cap reach it (<see cref="PlayerbotThinkRotation"/>), and under load a gap between
@@ -322,7 +370,27 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     private long _areaWaitSinceMs = -1;
     private bool _areaWaitReported;
     private ObjectGuid _areaGuideWalkStalled;
-    private bool _areaFaultReported;
+    private bool _faultReported;
+    private long _gaveUpMs = -1;
+    private int _refusedPlans;
+
+    /// <summary>The same-map portal the corpse run walks into (<see cref="PlayerbotRecoveryStep.WalkToPortal"/>), or null.</summary>
+    private (AreaTriggerTemplate Trigger, Vector3 Exit)? _bodyPortal;
+
+    /// <summary>The spirit healer of the world's spawns the fallback walks to (<see cref="PlayerbotSpiritHealerStep.WalkToHealerSpawn"/>), or null.</summary>
+    private HealerSpawnGoal? _healerSpawnGoal;
+
+    /// <summary>Same-map portals whose walk failed in this death.</summary>
+    private readonly HashSet<uint> _portalsTried = [];
+
+    /// <summary>Spirit healer spawns whose walk failed, or that stood empty on arrival, in this death.</summary>
+    private readonly HashSet<Vector3> _healerSpawnsTried = [];
+
+    /// <summary>The spirit healer spawns of one map of one creature content (cached: the content is replaced on a reload).</summary>
+    private (CreatureContent? Content, uint Map, Vector3[] At) _healerSpawns = (null, 0, []);
+
+    /// <summary>A walk to a spawned spirit healer, through <paramref name="Via"/> (a same-map portal leading to <paramref name="Exit"/>) first when set.</summary>
+    private sealed record HealerSpawnGoal(Vector3 At, AreaTriggerTemplate? Via, Vector3 Exit);
     private long _progressMs = -1;
     private long _closingMs = -1;
     private int _thinksSinceProgress;
@@ -408,9 +476,16 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// <param name="detourLeft">The long route to the healer or graveyard (<see cref="PlayerbotSpiritHealerStep.DetourToHealer"/>) was not tried yet for this death.</param>
     /// <param name="serverAccepts">The walk stalled short of <see cref="SpiritHealerReachYards"/>, and the server's own checks would accept
     /// CMSG_SPIRIT_HEALER_ACTIVATE from where the ghost stands (<see cref="ServerReachProbeYards"/>).</param>
+    /// <param name="graveyardInReach">The ghost already stands within <see cref="SpiritHealerReachYards"/> of the graveyard: walking to it
+    /// cannot close (live 2026-10-16, "graveyard 129 0.6 yd away cannot be reached"), so it is the body or the wait for a healer.</param>
     internal static PlayerbotSpiritHealerStep DecideSpiritHealer(bool healerKnown, bool healerInReach, bool graveyardKnown, bool stalled,
-        bool bodyRunLeft = false, bool detourLeft = false, bool serverAccepts = false)
+        bool bodyRunLeft = false, bool detourLeft = false, bool serverAccepts = false, bool graveyardInReach = false)
     {
+        // A graveyard the ghost stands on is nothing to walk to: no healer stands there (or it would be in sight).
+        if (!healerKnown && graveyardKnown && graveyardInReach)
+            return bodyRunLeft ? PlayerbotSpiritHealerStep.ResumeCorpseRun
+                : stalled ? PlayerbotSpiritHealerStep.Fault : PlayerbotSpiritHealerStep.WaitForHealer;
+
         // A stalled fallback: the healer from here if the server takes it, else by the long way round (to the healer or graveyard),
         // else the body, else the fault (each once per death).
         if (stalled)
@@ -475,10 +550,25 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             return AwaitAreaResurrection(player, guide, elapsedMs, now);
         }
 
+        // A ghost whose fallback gave up stands for GiveUpRetryMs, then tries the recovery afresh (reported once per death all the same).
+        if (_gaveUpMs >= 0 && now - _gaveUpMs > GiveUpRetryMs)
+            RetryAfterGiveUp(player, now);
+
         if (_spiritHealer)
         {
             PlayerbotThinkProbe.Phase("recovery healer");
             return SpiritHealer(player, elapsedMs, now);
+        }
+
+        // The corpse run through a same-map portal (WalkToPortal): walked until the ghost stands at its far side, then the body again.
+        if (ghost && _bodyPortal is { } bodyPortal)
+        {
+            PlayerbotThinkProbe.Phase("recovery portal walk");
+            LastStep = PlayerbotRecoveryStep.WalkToPortal;
+            PortalWalk walk = WalkThroughPortal(player, bodyPortal.Trigger, bodyPortal.Exit, elapsedMs, now, out bool walked);
+            if (walk == PortalWalk.Walking) return walked;
+            _bodyPortal = null;
+            return false;
         }
 
         PlayerbotThinkProbe.Phase("recovery body decision");
@@ -575,7 +665,8 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             case PlayerbotRecoveryStep.WalkToCorpse:
                 PlayerbotThinkProbe.Phase("recovery corpse walk");
                 if (corpse is not { } walkCorpse) return false;
-                return Walk(player, new Vector3(walkCorpse.X, walkCorpse.Y, walkCorpse.Z), walkCorpse.Guid, elapsedMs, now);
+                bool walkedToBody = Walk(player, new Vector3(walkCorpse.X, walkCorpse.Y, walkCorpse.Z), walkCorpse.Guid, elapsedMs, now);
+                return _refusedPlans < MaxRefusedPlans ? walkedToBody : GiveUpUnreachableBody(player, walkCorpse, now);
 
             case PlayerbotRecoveryStep.WalkToEntrance:
                 PlayerbotThinkProbe.Phase("recovery entrance walk");
@@ -616,11 +707,250 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _areaWaitSinceMs = -1;
         _areaWaitReported = false;
         _areaGuideWalkStalled = default;
-        _areaFaultReported = false;
+        _faultReported = false;
+        _gaveUpMs = -1;
+        _bodyPortal = null;
+        _healerSpawnGoal = null;
+        _portalsTried.Clear();
+        _healerSpawnsTried.Clear();
         AreaQueueRequests = 0;
         UnsafeReason = PlayerbotUnsafeBody.None;
         LastStep = PlayerbotRecoveryStep.Release;
         LastSpiritHealerStep = null;
+    }
+
+    /// <summary>
+    /// The fallback gave up <see cref="GiveUpRetryMs"/> ago: try the recovery afresh, body first, with fresh bounds and nothing set
+    /// aside (a healer may have respawned, a tile been read, a camp left). The give-up report is not repeated in this death.
+    /// </summary>
+    private void RetryAfterGiveUp(Player player, long now)
+    {
+        _gaveUpMs = -1;
+        _spiritHealer = false;
+        _preferSpiritHealer = false;
+        _corpseRunResumedFor = default;
+        _detourTriedFor = default;
+        _graveyardDetourTriedFor = 0;
+        _detourWait.Reset();
+        _detourGoal = null;
+        _bodyPortal = null;
+        _healerSpawnGoal = null;
+        _portalsTried.Clear();
+        _healerSpawnsTried.Clear();
+        ClearWalk();
+        PlayerbotMotion.ForgetLoops(player);
+        MarkProgress(now);
+        LastSpiritHealerStep = null;
+        LoggerOf().LogInformation(
+            "Playerbot {Bot} tries its recovery again at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}, {Seconds} s after the spirit-healer fallback gave up",
+            player.Name, player.X, player.Y, player.Z, player.MapId, GiveUpRetryMs / 1000);
+    }
+
+    /// <summary>
+    /// The corpse run's plan was refused <see cref="MaxRefusedPlans"/> times in a row: no walk on the mesh reaches the body from here. A
+    /// same-map portal whose far side is nearer the body is walked into (<see cref="PlayerbotRecoveryStep.WalkToPortal"/>); otherwise the
+    /// spirit healer is taken at once, instead of planning toward the body until the stuck bound (live: hundreds of refused plans).
+    /// </summary>
+    private bool GiveUpUnreachableBody(Player player, Corpse corpse, long now)
+    {
+        var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
+        ClearWalk();
+        MarkProgress(now);
+        if (FindPortalToward(player, body) is { } portal)
+        {
+            _bodyPortal = portal;
+            LastStep = PlayerbotRecoveryStep.WalkToPortal;
+            LoggerOf().LogInformation(
+                "Playerbot {Bot} takes area trigger {Trigger} at ({TX:F1}, {TY:F1}, {TZ:F1}) toward its body at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Refused} plans to it were refused",
+                player.Name, portal.Trigger.Id, portal.Trigger.X, portal.Trigger.Y, portal.Trigger.Z, corpse.X, corpse.Y, corpse.Z, corpse.MapId, MaxRefusedPlans);
+            return false;
+        }
+
+        _spiritHealer = true;
+        LoggerOf().LogInformation(
+            "Playerbot {Bot} takes the spirit healer: its body at ({X:F1}, {Y:F1}, {Z:F1}) map {Map} cannot be reached from ({PX:F1}, {PY:F1}, {PZ:F1}) ({Refused} plans refused, no portal leads nearer)",
+            player.Name, corpse.X, corpse.Y, corpse.Z, corpse.MapId, player.X, player.Y, player.Z, MaxRefusedPlans);
+        return false;
+    }
+
+    /// <summary>How a walk into a same-map portal stands (<see cref="WalkThroughPortal"/>).</summary>
+    private enum PortalWalk
+    {
+        Walking,
+        Taken,
+        Failed,
+    }
+
+    /// <summary>
+    /// Walk into <paramref name="trigger"/> (the motion reports it, <see cref="PlayerbotAreaTriggers"/>, and the server teleports the ghost
+    /// to <paramref name="exit"/>). Taken once the ghost stands within <see cref="PortalArrivedYards"/> of the exit; failed (and set aside
+    /// for this death) when the walk is stuck or refused <see cref="MaxRefusedPlans"/> times.
+    /// </summary>
+    private PortalWalk WalkThroughPortal(Player player, AreaTriggerTemplate trigger, Vector3 exit, uint elapsedMs, long now, out bool walked)
+    {
+        walked = false;
+        if (Distance(player, exit.X, exit.Y, exit.Z) <= PortalArrivedYards)
+        {
+            ClearWalk();
+            PlayerbotMotion.ForgetLoops(player);
+            MarkProgress(now);
+            LoggerOf().LogInformation(
+                "Playerbot {Bot} came through area trigger {Trigger} to ({X:F1}, {Y:F1}, {Z:F1}) map {Map}",
+                player.Name, trigger.Id, player.X, player.Y, player.Z, player.MapId);
+            return PortalWalk.Taken;
+        }
+
+        if (Stuck(now) || _refusedPlans >= MaxRefusedPlans)
+        {
+            _portalsTried.Add(trigger.Id);
+            ClearWalk();
+            MarkProgress(now);
+            LoggerOf().LogInformation(
+                "Playerbot {Bot} could not walk into area trigger {Trigger} at ({TX:F1}, {TY:F1}, {TZ:F1}) map {Map} from ({X:F1}, {Y:F1}, {Z:F1})",
+                player.Name, trigger.Id, trigger.X, trigger.Y, trigger.Z, player.MapId, player.X, player.Y, player.Z);
+            return PortalWalk.Failed;
+        }
+
+        walked = Walk(player, new Vector3(trigger.X, trigger.Y, trigger.Z), trigger, elapsedMs, now);
+        return PortalWalk.Walking;
+    }
+
+    /// <summary>
+    /// The same-map teleport trigger (a portal: its <c>areatrigger_teleport</c> leads to this map) through which <paramref name="goal"/>
+    /// is nearest: within <see cref="MaxPortalWalkYards"/> of the ghost, not tried in this death, and shorter than the straight line by
+    /// <see cref="PortalGainYards"/> (the walk to the trigger plus the straight line from its destination). Null when none is.
+    /// </summary>
+    private (AreaTriggerTemplate Trigger, Vector3 Exit)? FindPortalToward(Player player, Vector3 goal)
+    {
+        float best = Distance(player, goal.X, goal.Y, goal.Z) - PortalGainYards;
+        (AreaTriggerTemplate, Vector3)? found = null;
+        foreach ((AreaTriggerTemplate trigger, Vector3 exit, float toTrigger) in PortalsNear(player))
+        {
+            float cost = toTrigger + Vector3.Distance(exit, goal);
+            if (cost < best)
+            {
+                best = cost;
+                found = (trigger, exit);
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The same-map portals the ghost may walk into from here: triggers on its map whose teleport leads to this map, within
+    /// <see cref="MaxPortalWalkYards"/>, not tried in this death, and not leading back to where it stands.
+    /// </summary>
+    private List<(AreaTriggerTemplate Trigger, Vector3 Exit, float ToTrigger)> PortalsNear(Player player)
+    {
+        var portals = new List<(AreaTriggerTemplate, Vector3, float)>();
+        WorldMaps maps = WorldMaps.Of(session.World);
+        var here = new Vector3(player.X, player.Y, player.Z);
+        foreach (AreaTriggerTemplate trigger in PlayerbotAreaTriggers.OnMap(maps, player.MapId))
+        {
+            if (_portalsTried.Contains(trigger.Id) || maps.FindAreaTriggerTeleport(trigger.Id) is not { } teleport
+                || teleport.TargetMap != player.MapId)
+                continue;
+            float toTrigger = Distance(player, trigger.X, trigger.Y, trigger.Z);
+            var exit = new Vector3(teleport.TargetX, teleport.TargetY, teleport.TargetZ);
+            if (!float.IsFinite(toTrigger) || toTrigger > MaxPortalWalkYards || Vector3.Distance(exit, here) <= 2 * PortalArrivedYards)
+                continue;
+            portals.Add((trigger, exit, toTrigger));
+        }
+
+        return portals;
+    }
+
+    /// <summary>
+    /// The spirit healers of the world's spawns on the ghost's map (<c>creature</c> rows whose template carries
+    /// <see cref="NpcFlags.SpiritHealer"/>), cached per map and creature content.
+    /// </summary>
+    private Vector3[] HealerSpawns(Player player)
+    {
+        if (session.Services.GetService<CreatureWorldFeature>()?.Content is not { } content) return [];
+        if (ReferenceEquals(_healerSpawns.Content, content) && _healerSpawns.Map == player.MapId) return _healerSpawns.At;
+        Vector3[] at = [.. content.GetSpawns(player.MapId)
+            .Where(spawn => content.FindTemplate(spawn.Entry) is { } template && (template.NpcFlags & (uint)NpcFlags.SpiritHealer) != 0)
+            .Select(spawn => new Vector3(spawn.X, spawn.Y, spawn.Z))];
+        _healerSpawns = (content, player.MapId, at);
+        return at;
+    }
+
+    /// <summary>
+    /// The spirit healer of the world's spawns the ghost goes to when none is in sight at its graveyard: the one nearest by the straight
+    /// line, or through a same-map portal (<see cref="PortalsNear"/>) when that is shorter. A healer whose walk failed, or that stood
+    /// empty on arrival, is not chosen again in this death; neither is one within <see cref="PortalArrivedYards"/> (the ghost is there).
+    /// </summary>
+    private HealerSpawnGoal? ChooseHealerSpawn(Player player)
+    {
+        Vector3[] healers = HealerSpawns(player);
+        if (healers.Length == 0) return null;
+        List<(AreaTriggerTemplate Trigger, Vector3 Exit, float ToTrigger)> portals = PortalsNear(player);
+        HealerSpawnGoal? best = null;
+        float bestCost = float.PositiveInfinity;
+        foreach (Vector3 healer in healers)
+        {
+            if (_healerSpawnsTried.Contains(healer)) continue;
+            float direct = Distance(player, healer.X, healer.Y, healer.Z);
+            if (!float.IsFinite(direct) || direct <= PortalArrivedYards) continue;
+            if (direct < bestCost)
+            {
+                bestCost = direct;
+                best = new HealerSpawnGoal(healer, null, default);
+            }
+
+            foreach ((AreaTriggerTemplate trigger, Vector3 exit, float toTrigger) in portals)
+            {
+                float cost = toTrigger + Vector3.Distance(exit, healer);
+                if (cost < bestCost && cost < direct - PortalGainYards)
+                {
+                    bestCost = cost;
+                    best = new HealerSpawnGoal(healer, trigger, exit);
+                }
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// One think of the walk to a spawned healer (<see cref="PlayerbotSpiritHealerStep.WalkToHealerSpawn"/>): through its portal first,
+    /// then to where it stands. <paramref name="keep"/> is false when the goal was given up (stuck, refused, or reached with no healer in
+    /// sight): the fallback then decides afresh in the same think.
+    /// </summary>
+    private bool WalkToHealerSpawn(Player player, HealerSpawnGoal goal, uint elapsedMs, long now, out bool keep)
+    {
+        LastSpiritHealerStep = PlayerbotSpiritHealerStep.WalkToHealerSpawn;
+        keep = true;
+        if (goal.Via is { } via)
+        {
+            switch (WalkThroughPortal(player, via, goal.Exit, elapsedMs, now, out bool walked))
+            {
+                case PortalWalk.Walking:
+                    return walked;
+                case PortalWalk.Taken:
+                    _healerSpawnGoal = goal with { Via = null };
+                    return false;
+                case PortalWalk.Failed:
+                default:
+                    _healerSpawnGoal = null;
+                    keep = false;
+                    return false;
+            }
+        }
+
+        if (player.MapId != _healerSpawns.Map || Distance(player, goal.At.X, goal.At.Y, goal.At.Z) <= SpiritHealerReachYards
+            || Stuck(now) || _refusedPlans >= MaxRefusedPlans)
+        {
+            _healerSpawnsTried.Add(goal.At);
+            _healerSpawnGoal = null;
+            ClearWalk();
+            MarkProgress(now);
+            keep = false;
+            return false;
+        }
+
+        return Walk(player, goal.At, goal, elapsedMs, now);
     }
 
     /// <summary>No progress for <see cref="NoProgressMs"/> of world time and more than <see cref="MinBoundThinks"/> thinks.</summary>
@@ -666,12 +996,36 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             _detourGoal = null;
         }
 
+        // On the way to a spawned healer out of sight (WalkToHealerSpawn), through a portal maybe: on until it comes into sight.
+        if (healer is null && _healerSpawnGoal is { } spawnGoal)
+        {
+            bool walkedToSpawn = WalkToHealerSpawn(player, spawnGoal, elapsedMs, now, out bool keepSpawn);
+            if (keepSpawn) return walkedToSpawn;
+        }
+
         WorldSafeLoc? graveyard = healer is null ? HealerGraveyard(player) : null;
         Corpse? corpse = player.Combat.Corpse;
         bool bodyHere = corpse is not null && corpse.MapId == player.MapId && ReferenceEquals(corpse.Map, player.Map);
         bool inReach = healer is not null && Distance(player, healer.X, healer.Y, healer.Z) <= SpiritHealerReachYards;
         bool graveyardInReach = graveyard is not null && Distance(player, graveyard.X, graveyard.Y, graveyard.Z) <= SpiritHealerReachYards;
-        bool stalled = Stuck(now);
+        // At a graveyard where no healer is in sight (Rut'theran's 129 has none): walking to the point the ghost stands on can never
+        // close (live: "graveyard 129 0.6 yd away cannot be reached"). The nearest healer of the world's spawns instead, through a
+        // same-map portal when that is shorter.
+        if (healer is null && graveyardInReach && _gaveUpMs < 0 && ChooseHealerSpawn(player) is { } chosen)
+        {
+            _healerSpawnGoal = chosen;
+            ClearWalk();
+            MarkProgress(now);
+            LoggerOf().LogInformation(
+                "Playerbot {Bot} sees no spirit healer at graveyard {Graveyard} ({X:F1}, {Y:F1}, {Z:F1}) map {Map} and goes to the one at ({HX:F1}, {HY:F1}, {HZ:F1}){Via}",
+                player.Name, graveyard!.Id, player.X, player.Y, player.Z, player.MapId, chosen.At.X, chosen.At.Y, chosen.At.Z,
+                chosen.Via is { } via ? $" through area trigger {via.Id}" : string.Empty);
+            bool walkedToSpawn = WalkToHealerSpawn(player, chosen, elapsedMs, now, out bool keepSpawn);
+            if (keepSpawn) return walkedToSpawn;
+        }
+
+        // A walk refused MaxRefusedPlans times in a row is as stalled as one stuck for StuckMs: no plan reaches the goal from here.
+        bool stalled = Stuck(now) || _refusedPlans >= MaxRefusedPlans;
         // The server's own range is asked only of a walk that stalled: activating farther out than the walk's goal would change where
         // the bot is revived (among a camp round the healer, the landing escape is judged at the walk's goal).
         bool serverAccepts = stalled && healer is not null && !inReach && ServerAccepts(player, healer);
@@ -680,7 +1034,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             : graveyard is not null && !graveyardInReach && _graveyardDetourTriedFor != graveyard.Id;
         PlayerbotSpiritHealerStep step = DecideSpiritHealer(healer is not null, inReach, graveyard is not null, stalled,
             bodyRunLeft: bodyHere && corpse is { } bodyForRun && _corpseRunResumedFor != bodyForRun.Guid, detourLeft: detourLeft,
-            serverAccepts: serverAccepts);
+            serverAccepts: serverAccepts, graveyardInReach: graveyardInReach);
         if (step == PlayerbotSpiritHealerStep.DetourToHealer)
         {
             PlayerbotThinkProbe.Phase("recovery healer detour");
@@ -724,7 +1078,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
             // No way round within the bounds either: the body, else the fault.
             step = DecideSpiritHealer(healer is not null, false, graveyard is not null, stalled: true,
-                bodyRunLeft: bodyHere && corpse is { } bodyAfterDetour && _corpseRunResumedFor != bodyAfterDetour.Guid);
+                bodyRunLeft: bodyHere && corpse is { } bodyAfterDetour && _corpseRunResumedFor != bodyAfterDetour.Guid, graveyardInReach: graveyardInReach);
         }
 
         LastSpiritHealerStep = step;
@@ -786,22 +1140,18 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 if (TryRelocateToGraveyard(player, graveyard ?? HealerGraveyard(player), now)
                     || TryRelocateToHealer(player, healer, now))
                     return true;
-                if (InBattleground(player))
+                // Never thrown as control flow: the brain's think fault quarantined the bot and, at the third, disabled it (live
+                // 2026-10-16, graveyard 129). Reported once per death; the ghost stands, and the recovery is tried afresh after
+                // GiveUpRetryMs (a battleground ghost is resurrected by the match in the meantime: a spirit guide in sight, its end).
+                if (!_faultReported)
                 {
-                    // A battleground ghost is never quarantined for this: the match resurrects it (a spirit guide coming into sight,
-                    // or the end of the match), so it is reported once and stands, instead of throwing as control flow.
-                    if (!_areaFaultReported)
-                    {
-                        ReportFault(player, healer, graveyard, now, faults: false);
-                        _areaFaultReported = true;
-                    }
-
-                    StandStill(player);
-                    return false;
+                    ReportFault(player, healer, graveyard, now, battleground: InBattleground(player));
+                    _faultReported = true;
                 }
 
-                ReportFault(player, healer, graveyard, now);
-                throw new InvalidOperationException(SpiritHealerFailed);
+                if (_gaveUpMs < 0) _gaveUpMs = now;
+                StandStill(player);
+                return false;
         }
     }
 
@@ -961,13 +1311,15 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     }
 
     /// <summary>The spirit-healer fallback stalled: what it was doing, logged at Information before the fault.</summary>
-    private void ReportFault(Player player, Creature? healer, WorldSafeLoc? graveyard, long now, bool faults = true)
+    private void ReportFault(Player player, Creature? healer, WorldSafeLoc? graveyard, long now, bool battleground)
     {
         Vector3? goal = healer is not null ? new Vector3(healer.X, healer.Y, healer.Z)
             : graveyard is not null ? new Vector3(graveyard.X, graveyard.Y, graveyard.Z) : null;
-        string why = NoProgress(now) ? $"no progress for {(now - _progressMs) / 1000} s" : $"its walk stopped closing for {(now - _closingMs) / 1000} s";
+        string why = NoProgress(now) ? $"no progress for {(now - _progressMs) / 1000} s"
+            : _refusedPlans >= MaxRefusedPlans ? $"its plan was refused {_refusedPlans} times in a row"
+            : $"its walk stopped closing for {(now - _closingMs) / 1000} s";
         PlayerbotAnomalies.Report(player, "recovery", "spirit-healer-failed",
-            $"the spirit-healer fallback gave up: {why}; target {(healer is not null ? "healer " + healer.Entry : graveyard is not null ? "graveyard " + graveyard.Id : "none")}; {(faults ? "the recovery faults" : "the battleground ghost waits for the match")}");
+            $"the spirit-healer fallback gave up: {why}; target {(healer is not null ? "healer " + healer.Entry : graveyard is not null ? "graveyard " + graveyard.Id : "none")}; {(battleground ? "the battleground ghost waits for the match" : $"the ghost stands and tries again in {GiveUpRetryMs / 1000} s")}");
         LoggerOf().LogInformation(
             "Playerbot {Bot} gives up the spirit healer at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Why}; goal {Goal}, {Distance} yd away, route {Route}{Refused}{Refusal}",
             player.Name, player.X, player.Y, player.Z, player.MapId, why,
@@ -1165,9 +1517,13 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             {
                 _route = null;
                 // A tile of the way is still being read: the walk is waiting, not stuck (the stuck clock is paused for the wait's bound).
+                // A refusal counts toward MaxRefusedPlans, which the callers turn into giving the goal up.
                 if (planned == PlanOutcome.Pending) MarkClosing(now);
+                else _refusedPlans++;
                 return false;
             }
+
+            _refusedPlans = 0;
 
             // A fresh route sets its own yardstick; only walking it down counts, so replanning on the spot is not closing.
             _bestRouteLeft = float.PositiveInfinity;
@@ -1212,6 +1568,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     private void ClearWalk()
     {
         _walkWait.Reset();
+        _refusedPlans = 0;
         _detourRoute = false;
         _route = null;
         _goal = null;

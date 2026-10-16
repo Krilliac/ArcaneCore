@@ -1169,11 +1169,16 @@ public sealed class PlayerbotUnsafeBodyRecoveryTests
                 var stealth = ArcaneCore.Game.Stealth.StealthServices.Find(map)!;
                 Creature[] hidden = [.. map.FindUpdater<CreatureMapSystem>()!.Creatures.Where(c => c.Entry is AmbusherEntry or WideDetectorEntry)];
                 Assert.Equal(9, hidden.Length);
-                foreach (Creature creature in hidden) stealth.Registry.SetVisibility(creature, ArcaneCore.Game.Stealth.StealthVisibility.Stealth);
+                // As the MOD_STEALTH handler does (StealthAuras.Apply): NO_DETECT drops each creature from the bot's sight, STEALTH keeps it
+                // out until a detection pass finds it. All in this one world command: the bot never has a tick to see them again first.
+                foreach (Creature creature in hidden)
+                {
+                    stealth.Registry.SetVisibility(creature, ArcaneCore.Game.Stealth.StealthVisibility.NoDetect);
+                    map.RefreshVisibility(creature);
+                    stealth.Registry.SetVisibility(creature, ArcaneCore.Game.Stealth.StealthVisibility.Stealth);
+                    map.RefreshVisibility(creature);
+                }
             });
-            // Out of the grid's sight and back: the creatures are evaluated afresh and stay hidden, as they do for a bot walking up to an ambush.
-            await host.TeleportAsync(0, CampedBody.X, CampedBody.Y + 2000f, CampedBody.Z);
-            await host.TeleportAsync(0, CampedBody.X, CampedBody.Y, CampedBody.Z);
         }
 
         await host.KillAndReleaseAsync();

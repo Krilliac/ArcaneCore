@@ -181,7 +181,7 @@ public sealed class PlayerbotRecoveryTests
     /// those final yards also stalls, relocates the ghost directly onto the spirit healer before ever faulting.
     /// </summary>
     [Fact]
-    public async Task TrappedGhost_RelocatesToGraveyardAndSpiritHealer_BeforeFaulting()
+    public async Task TrappedGhost_RelocatesToGraveyardAndSpiritHealer_BeforeGivingUp()
     {
         await using WorldTestHost host = WorldTestHost.Start(
             configureServices: services => services.AddSingleton<IWorldFeature, ManualClockFeature>());
@@ -268,12 +268,14 @@ public sealed class PlayerbotRecoveryTests
             {
                 Assert.True(Vector3.Distance(new(player.X, player.Y, player.Z), new(healer!.X, healer.Y, healer.Z))
                     <= PlayerbotRecovery.SpiritHealerReachYards);
-                // Remove the healer so activation cannot revive the ghost: a further stall must still fault rather than loop forever.
+                // Remove the healer so activation cannot revive the ghost: a further stall must still end the fallback rather than
+                // loop forever, without an exception (the brain quarantined and then disabled a bot for one).
                 player.VisibleObjects.Remove(healer.Guid);
                 return true;
             });
 
             InvalidOperationException? fault = null;
+            bool gaveUp = false;
             for (int think = 0; think < 100 && fault is null; think++)
             {
                 await host.World.AdvanceClockAsync(2_500);
@@ -283,6 +285,7 @@ public sealed class PlayerbotRecoveryTests
                     try
                     {
                         recovery!.Update(player, 500);
+                        gaveUp |= recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.Fault;
                         return null;
                     }
                     catch (InvalidOperationException ex)
@@ -292,8 +295,9 @@ public sealed class PlayerbotRecoveryTests
                 });
             }
 
-            Assert.NotNull(fault);
-            Assert.Equal(PlayerbotRecovery.SpiritHealerFailed, fault!.Message);
+            Assert.Null(fault);
+            Assert.True(gaveUp, "the fallback never gave up");
+            Assert.False(player.IsAlive);
         }
         finally { session.Kick(); await session.ManagedClosed; }
     }

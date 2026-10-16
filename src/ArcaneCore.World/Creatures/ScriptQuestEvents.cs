@@ -23,6 +23,8 @@ public sealed class ScriptQuestEvents(IServiceProvider services) : IScriptQuestE
 
     public void KilledMonsterCredit(Player player, uint creatureEntry, ObjectGuid source) => Quests?.KilledMonsterCredit(player, creatureEntry, source);
 
+    public void TalkedToCreature(Player player, uint creatureEntry, ObjectGuid source) => Quests?.TalkedToCreature(player, creatureEntry, source);
+
     public void GroupEventFailHappens(Player player, uint questId) => Quests?.GroupEventFailHappens(player, questId);
 
     public bool IsQuestIncomplete(Player player, uint questId)

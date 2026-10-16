@@ -329,6 +329,7 @@ internal sealed class PlayerbotGroupAI
                 if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
                 if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
                 if (!Ready(player)) { Step = "lead:hold-not-ready"; HoldRun(player); return; }
+                if (group.Run is null && group.Handoff?.Sweep is { } sweep) { LeadClear(player, group, sweep, interval); return; }
                 bool walked = WalkTo(player, ObjectivePoint(player, group), interval, toward: true);
                 Step = walked ? "lead:walk-objective" : "lead:no-path-objective";
                 NoteRunProgress(group, walked);
@@ -341,6 +342,27 @@ internal sealed class PlayerbotGroupAI
                 else Hold(player);
                 return;
         }
+    }
+
+    /// <summary>
+    /// A handed-over group without a catalogue route (<see cref="PlayerbotClearList"/>): walk towards the next creature on the clear list, the
+    /// group behind; <see cref="SelectTarget"/> pulls it once it is within <see cref="PlayerbotLeaderHandoff.PullYards"/>. One the leader fails
+    /// to plan a way to for <see cref="RunStuckMs"/> is given up (it leaves the list).
+    /// </summary>
+    private void LeadClear(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotClearList sweep, uint interval)
+    {
+        if (PlayerbotGroupCoordinator.SweepTarget(group, player, _session.World.NowMs, creature => PlayerbotBrain.IsSomeoneElses(player, creature, Groups())) is not { } next)
+        {
+            Step = "lead:hold-cleared";
+            HoldRun(player);
+            return;
+        }
+
+        bool walked = WalkTo(player, new Vector3(next.X, next.Y, next.Z), interval, toward: true);
+        Step = string.Create(CultureInfo.InvariantCulture, $"lead:{(walked ? "walk" : "no-path")}-clear:{next.Entry}");
+        if (!NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, walked, Now)) return;
+        sweep.GiveUp(next.Guid.Value);
+        _stuckSinceMs = _stuckLastMs = 0;
     }
 
     /// <summary>The leader holds still while the run waits (members behind, a rest, a wait for loot): no attempt to walk was made, so no stretch of failed planning goes on.</summary>
@@ -422,6 +444,7 @@ internal sealed class PlayerbotGroupAI
         foreach (PlayerbotGroupCoordinator.Member member in group.Members)
         {
             if (member.Guid == leader.Guid || !member.Joined || _session.World.FindOnlinePlayer(member.Guid) is not { IsAlive: true } other) continue;
+            if (member.Real && group.Handoff is not null) continue; // the player who handed the lead over is never waited for
             if (!ReferenceEquals(other.Map, leader.Map)) continue; // between maps or still outside: the state machine waits for them
             if (Distance(leader, other) > WaitForMembersYards) return true;
         }
@@ -533,6 +556,15 @@ internal sealed class PlayerbotGroupAI
         {
             if (group.Run is { } run) return SelectRunTarget(player, group, run, current);
             if (current is not null) return current;
+            if (group.Handoff?.Sweep is not null)
+            {
+                // A handed-over group's clear list: the next creature once it is in reach (the leader walks to it meanwhile), else what is in the way.
+                if (PlayerbotGroupCoordinator.SweepTarget(group, player, _session.World.NowMs, creature => PlayerbotBrain.IsSomeoneElses(player, creature, Groups())) is { } next
+                    && IsValidTarget(player, next) && Distance(player, next) <= PlayerbotLeaderHandoff.PullYards)
+                    return next;
+                return FindObstacle(player, group);
+            }
+
             if (FindObjectiveCreature(player, group) is { } objective && Distance(player, objective) <= 60f)
             {
                 group.NoteObjective(objective);

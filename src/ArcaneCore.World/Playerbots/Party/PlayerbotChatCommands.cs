@@ -307,6 +307,12 @@ internal static partial class PlayerbotChatCommands
         return writer.ToArray();
     }
 
+    /// <summary>
+    /// The channel a bot's group line goes out on: raid chat in a raid (party chat reaches only the speaker's own subgroup,
+    /// GroupManager.BroadcastChat), party chat otherwise.
+    /// </summary>
+    internal static ChatType GroupChannel(bool raid) => raid ? ChatType.Raid : ChatType.Party;
+
     /// <summary>CMSG_MESSAGECHAT say/yell/party/raid/raid warning/battleground/guild body: u32 type, u32 language, CString text.</summary>
     internal static byte[] Message(ChatType type, Language language, string text)
     {

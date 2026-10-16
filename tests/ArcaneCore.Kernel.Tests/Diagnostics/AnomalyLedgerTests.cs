@@ -56,6 +56,42 @@ public sealed class AnomalyLedgerTests
         Assert.Equal(5, after.Count);
     }
 
+    /// <summary>
+    /// The live log shows many unrelated keys at <c>[count=52 suppressed=0] rate 208.0/h last 15 min, 52.0/h last 1 h</c> soon after a start:
+    /// each key logs its own first <c>FaultLogLimit</c> reports, so every busy key prints a count=52 line, and while all of a key's reports
+    /// fall in the last 15 minutes its 15-minute rate is its count times four. Counts and rates are per key, not shared.
+    /// </summary>
+    [Fact]
+    public void CountsAndRates_ArePerKey_AndTheFifteenMinuteRateIsFourTimesTheReportsInIt()
+    {
+        (AnomalyLedger ledger, ManualTime time) = Create(logLimit: 1000);
+        AnomalyRecording busy = default;
+        for (int i = 0; i < 52; i++)
+        {
+            busy = ledger.Report("creature", "under-map", "creature entry 40 spawn 1", "");
+        }
+
+        AnomalyRecording quiet = default;
+        for (int i = 0; i < 3; i++)
+        {
+            quiet = ledger.Report("bot-motion", "airwalk", "bot A", "");
+        }
+
+        Assert.Equal(52, busy.Count);
+        Assert.Equal(208d, busy.Timing!.Value.RatePerHour15Min);
+        Assert.Equal(52d, busy.Timing!.Value.RatePerHour1Hour);
+        Assert.Equal(3, quiet.Count);
+        Assert.Equal(12d, quiet.Timing!.Value.RatePerHour15Min);
+        Assert.Equal(3d, quiet.Timing!.Value.RatePerHour1Hour);
+
+        time.Advance(TimeSpan.FromMinutes(30)); // the first 52 leave the 15-minute window, not the hour
+        AnomalyRecording later = ledger.Report("creature", "under-map", "creature entry 40 spawn 1", "");
+        Assert.Equal(53, later.Count);
+        Assert.Equal(4d, later.Timing!.Value.RatePerHour15Min);
+        Assert.Equal(53d, later.Timing!.Value.RatePerHour1Hour);
+        Assert.Equal(56, ledger.Total);
+    }
+
     [Fact]
     public void KeysBeyondTheCap_AreCountedInTheOverflowBucket_NotDropped()
     {
