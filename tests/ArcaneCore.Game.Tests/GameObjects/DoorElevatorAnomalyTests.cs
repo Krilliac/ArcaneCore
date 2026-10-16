@@ -36,6 +36,8 @@ public sealed class DoorElevatorAnomalyTests
     private const uint NanRotationCar = 948025;
     private const uint NanNodeCar = 948026;
     private const uint FiniteCar = 948027;
+    private const uint WrapStopTram = 948028;
+    private const uint BouncingLift = 948029;
 
     private sealed class Rig : IDisposable
     {
@@ -319,6 +321,90 @@ public sealed class DoorElevatorAnomalyTests
         Assert.Single(below.Notices);
     }
 
+    /// <summary>
+    /// The Deeprun Tram car 176083 of TransportAnimation.dbc (5875), abridged to its stops: it rests at its platform from 129,333 ms to the
+    /// 143,333 ms end of its cycle and on from 0 to 867 ms (the cycle wraps), and 11,233 ms at the far platform.
+    /// </summary>
+    private static TransportAnimationCatalog WrapStop(uint entry) => new(
+    [
+        (entry, new TransportAnimationNode(0, 0, 0, 0)),
+        (entry, new TransportAnimationNode(867, 0, 0, 0)),
+        (entry, new TransportAnimationNode(4951, -209.990f, 0, -0.107f)),
+        (entry, new TransportAnimationNode(59500, -2481.768f, 0, -1.027f)),
+        (entry, new TransportAnimationNode(70733, -2481.768f, 0, -1.027f)),
+        (entry, new TransportAnimationNode(125308, -209.990f, 0, -0.107f)),
+        (entry, new TransportAnimationNode(129333, 0, 0, 0)),
+        (entry, new TransportAnimationNode(142465, 0, 0, 0)),
+        (entry, new TransportAnimationNode(143333, 0, 0, 0)),
+    ]);
+
+    /// <summary>
+    /// The Blackrock Spire lift 149045 of TransportAnimation.dbc (5875), abridged: 3,233 ms at the bottom, up to its top floor for 3,267 ms,
+    /// then a settling bounce that holds 133 ms within 1.4 yd of the top (27,100-27,233 ms in the DBC) before it goes back down.
+    /// </summary>
+    private static TransportAnimationCatalog Bouncing(uint entry) => new(
+    [
+        (entry, new TransportAnimationNode(0, 0, 0, 0)),
+        (entry, new TransportAnimationNode(3233, 0, 0, 0)),
+        (entry, new TransportAnimationNode(23533, 0, 0, 61.392f)),
+        (entry, new TransportAnimationNode(26800, 0, 0, 61.392f)),
+        (entry, new TransportAnimationNode(27100, 0, 0, 59.997f)),
+        (entry, new TransportAnimationNode(27233, 0, 0, 60.039f)),
+        (entry, new TransportAnimationNode(27400, 0, 0, 59.839f)),
+        (entry, new TransportAnimationNode(49933, 0, 0, 0.119f)),
+    ]);
+
+    [Fact]
+    public void ATramWhosePlatformStopSpansTheCycleWrap_IsOneLongStop_NotAShortOne()
+    {
+        using var rig = new Rig([Car(WrapStopTram)], [GoSpawn(1, WrapStopTram, 3, 0)], WrapStop(WrapStopTram));
+        using AnomalyCapture capture = CaptureEntry("elevator-car/stop-too-short", WrapStopTram);
+        rig.Load();
+
+        rig.Tick(5);
+
+        Assert.Equal((11233u, 2), GameObjectMapSystem.ShortestFloorStop(WrapStop(WrapStopTram).Nodes(WrapStopTram)));
+        Assert.Empty(capture.Notices);
+    }
+
+    [Fact]
+    public void ALiftThatBouncesBrieflyAtAFloorItRestsAt_IsNotAShortStop()
+    {
+        using var rig = new Rig([Car(BouncingLift)], [GoSpawn(1, BouncingLift, 3, 0)], Bouncing(BouncingLift));
+        using AnomalyCapture capture = CaptureEntry("elevator-car/stop-too-short", BouncingLift);
+        rig.Load();
+
+        rig.Tick(5);
+
+        Assert.Equal((3233u, 2), GameObjectMapSystem.ShortestFloorStop(Bouncing(BouncingLift).Nodes(BouncingLift)));
+        Assert.Empty(capture.Notices);
+    }
+
+    /// <summary>Every elevator and tram of the real 5875 TransportAnimation.dbc rests at least <see cref="GameObjectMapSystem.MinElevatorStopMs"/> at each floor.</summary>
+    [RealTransportAnimationDbcFact]
+    public void EveryElevatorOfTheRealTransportAnimationDbc_RestsAtLeastASecondAtEachFloor()
+    {
+        TransportAnimationCatalog catalog = ArcaneCore.Data.Content.Transports.TransportAnimationDbcReader.Load(RealTransportAnimationDbcFactAttribute.Path()!);
+        var shortStops = new List<string>();
+        int withFloors = 0;
+        foreach (uint entry in new uint[] { 2093, 4170, 4171, 4172, 4173, 11898, 11899, 20649, 20650, 20651, 20652, 20653, 20654, 20655, 20656, 20657, 47296, 47297, 80022, 80023, 85556, 128970, 149045, 149046, 152614, 176080, 176081, 176082, 176083, 176084, 176085 })
+        {
+            (uint shortest, int floors) = GameObjectMapSystem.ShortestFloorStop(catalog.Nodes(entry));
+            if (floors > 0)
+            {
+                withFloors++;
+            }
+
+            if (floors == 0 || shortest < GameObjectMapSystem.MinElevatorStopMs)
+            {
+                shortStops.Add($"{entry}: {shortest} ms over {floors} floors");
+            }
+        }
+
+        Assert.Equal(31, withFloors);
+        Assert.Empty(shortStops);
+    }
+
     // --- elevator-car/position-non-finite -----------------------------------------------------------------
 
     [Fact]
@@ -376,5 +462,24 @@ public sealed class DoorElevatorAnomalyTests
         Assert.NotNull(position);
         Assert.Equal(car.Z + 10f, position!.Value.Z, 0.01f); // halfway up the 5 s, 20 yd rise
         Assert.Empty(capture.Notices);
+    }
+}
+
+/// <summary>Skipped (reported as Skipped, not Passed) unless ARCANECORE_TEST_DBC_DIR names a directory holding the build-5875 TransportAnimation.dbc.</summary>
+internal sealed class RealTransportAnimationDbcFactAttribute : FactAttribute
+{
+    public RealTransportAnimationDbcFactAttribute()
+    {
+        if (Path() is null)
+        {
+            Skip = "ARCANECORE_TEST_DBC_DIR must name a directory holding the build-5875 TransportAnimation.dbc; the real-animation check did NOT run.";
+        }
+    }
+
+    public static string? Path()
+    {
+        string? directory = Environment.GetEnvironmentVariable("ARCANECORE_TEST_DBC_DIR");
+        string? file = string.IsNullOrWhiteSpace(directory) ? null : System.IO.Path.Combine(directory, "TransportAnimation.dbc");
+        return file is not null && File.Exists(file) ? file : null;
     }
 }
