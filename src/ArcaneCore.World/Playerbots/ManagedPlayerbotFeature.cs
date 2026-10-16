@@ -72,6 +72,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
     private readonly PlayerbotCadenceStats _cadence = new();
+    private readonly PlayerbotThinkBudget _thinkBudget = new();
+    private double _lastOwnMs;
+    private double _lastBudgetMs = PlayerbotThinkRotation.TickBudgetMs;
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
     private readonly PlayerbotThinkProbe _probe = new();
     private PlayerbotSlowThinkLog? _slowThinks;
@@ -83,10 +86,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal Action<Guid, PlayerbotThinkProbe>? ThinkObserver { get; set; }
 
     /// <summary>
-    /// The wall time a tick spends on the bots' thinks (<see cref="PlayerbotThinkRotation.TickBudgetMs"/> in production). A test world on a
-    /// manual clock sets it to infinity: with a real-time budget the bots visited per simulated tick depend on how loaded the machine is.
+    /// A fixed wall time (ms) a tick spends on the bots' thinks, instead of the adaptive budget of <see cref="PlayerbotThinkBudget"/> (null in
+    /// production). A test world on a manual clock sets it to infinity: with a real-time budget the bots visited per simulated tick depend
+    /// on how loaded the machine is.
     /// </summary>
-    internal double ThinkBudgetMs { get; set; } = PlayerbotThinkRotation.TickBudgetMs;
+    internal double? ThinkBudgetMs { get; set; }
+
+    /// <summary>The action budgets the last tick gave the combat lane and the main lane (tests).</summary>
+    internal (int Combat, int Main) LastLaneActions { get; private set; }
+
+    /// <summary>The inputs of the last tick's think budget: tick interval, smoothed non-bot tick time and the time the bots already used (tests).</summary>
+    internal (double TickIntervalMs, double NonBotMs, double SpentMs) LastThinkBudgetInputs { get; private set; }
+
+    /// <summary>The think budget (ms) the last tick used (<c>.playerbot cadence</c>).</summary>
+    internal double LastThinkBudgetMs => _lastBudgetMs;
+
+    /// <summary>The cadence of the last finished 60 s window (null before the first one).</summary>
+    internal PlayerbotCadenceReport? LastCadence => _cadence.Last;
 
     /// <summary>The slow-think log (null before the first think).</summary>
     internal PlayerbotSlowThinkLog? SlowThinks => _slowThinks;
@@ -1303,6 +1319,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private void Update(uint elapsedMs)
     {
         if (_stopping || !_options.Enabled || _world is not { } world) return;
+        long updateStarted = Stopwatch.GetTimestamp();
+        // What the world spent on everything but the bots in the last tick, smoothed: the think budget is a share of what is left.
+        TickPhases lastTick = world.LastTickPhases;
+        _thinkBudget.Observe((lastTick.CommandsMicros + lastTick.MapsMicros + lastTick.FeaturesMicros) / 1000.0, _lastOwnMs);
         Interlocked.Add(ref _clockMs, elapsedMs);
         int version = Volatile.Read(ref _activeVersion);
         if (version != _orderedVersion)
@@ -1376,28 +1396,59 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
-        var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
-        // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for, and a tick thinks
-        // for no more bots once PlayerbotThinkRotation.TickBudgetMs went by (one think itself is bounded by MaxThinkSearchNodes).
+        // Hard per-lane action budgets (PlayerbotThinkRotation.PriorityActions / ActionReserve): the combat lane draws from its own; the main
+        // lane's is the reserve plus what the combat lane left, created at its first visit, so no fight's think can empty it.
+        int reserve = PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        int combatActions = PlayerbotThinkRotation.PriorityActions(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        var combatBudget = new ManagedActionBudget(combatActions);
+        ManagedActionBudget? mainBudget = null;
+        int mainActions = -1;
+        // A fair rotation in two lanes (PlayerbotThinkRotation.TickLanes): bots in combat, dead or ghosts that are due are thought for first, then
+        // every bot from the main cursor, until the think time budget (PlayerbotThinkBudget; one think itself is bounded by MaxThinkSearchNodes).
+        long thinkStarted = Stopwatch.GetTimestamp();
+        double spentMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
+        LastThinkBudgetInputs = (world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs);
+        double budgetMs = ThinkBudgetMs ?? PlayerbotThinkBudget.Compute(world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs,
+            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare);
+        _lastBudgetMs = budgetMs;
+        uint now = world.NowMs;
+        uint combatIntervalMs = (uint)_options.CombatThinkIntervalMs;
         int thinks = 0;
         bool actionLimited = false;
-        _rotation.TickWithin(bots.Length, ThinkBudgetMs, index =>
-        {
-            if (budget.Remaining <= 0) { actionLimited = true; return false; }
-            Think(bots[index], budget, index);
-            thinks++;
-            return true;
-        });
+        _rotation.TickLanes(bots.Length, budgetMs, _options.CombatLaneShare,
+            index => IsCombatLane(bots[index]) && unchecked(now - bots[index].LastUpdateMs) >= combatIntervalMs
+                ? PlayerbotThinkRotation.ThinkLane.Priority
+                : PlayerbotThinkRotation.ThinkLane.Normal,
+            (index, lane) =>
+            {
+                ManagedActionBudget budget = lane == PlayerbotThinkRotation.ThinkLane.Priority
+                    ? combatBudget
+                    : mainBudget ??= new ManagedActionBudget(mainActions = reserve + combatBudget.Remaining);
+                if (budget.Remaining <= 0)
+                {
+                    if (lane == PlayerbotThinkRotation.ThinkLane.Normal) actionLimited = true;
+                    return false;
+                }
+
+                Think(bots[index], budget, index);
+                thinks++;
+                return true;
+            },
+            () => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds);
+        LastLaneActions = (combatActions, mainActions >= 0 ? mainActions : reserve + combatBudget.Remaining);
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
-        _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited);
+        _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited, budgetMs);
+        ReportStarvedBots(bots, now);
         if (_policy is { } policy) UpdatePolicy(policy);
         if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
             logger.LogInformation(
-                "Playerbot cadence over the last minute: {Bots} bots, think gap p50 {GapP50Ms} ms, p95 {GapP95Ms} ms, max {GapMaxMs} ms; "
-                + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
-                cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapMaxMs, cadence.ThinksPerTick, cadence.Ticks,
-                cadence.TimeLimitedPct, cadence.ActionLimitedPct);
+                "Playerbot cadence over the last minute: {Bots} bots, think gap p50 {GapP50Ms} ms, p95 {GapP95Ms} ms, p99 {GapP99Ms} ms, max {GapMaxMs} ms "
+                + "(combat/dead lane: {CombatThinks} thinks, p50 {CombatP50Ms} ms, p95 {CombatP95Ms} ms); "
+                + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks, budget {AvgBudgetMs:F1} ms; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
+                cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapP99Ms, cadence.GapMaxMs, cadence.CombatThinks, cadence.CombatGapP50Ms, cadence.CombatGapP95Ms,
+                cadence.ThinksPerTick, cadence.Ticks, cadence.AvgBudgetMs, cadence.TimeLimitedPct, cadence.ActionLimitedPct);
         PublishSnapshot(bots, elapsedMs);
+        _lastOwnMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
         {
@@ -1405,6 +1456,30 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 FaultLedger.Shared.Record("playerbot.checkpoint", checkpointEx.GetBaseException());
             _checkpointMs = 0;
             _checkpoint = Task.Run(CheckpointAsync);
+        }
+    }
+
+    /// <summary>Whether the bot is in the first think lane: alive and fighting, or dead or a ghost (world thread).</summary>
+    private static bool IsCombatLane(ActiveBot active)
+        => !active.Paused && active.Session.State == SessionState.InWorld
+           && active.Session.Player is { } player && (!player.IsAlive || player.Combat.IsInCombat);
+
+    /// <summary>
+    /// Reports each bot that has gone longer than <see cref="PlayerbotOptions.ThinkStarvedGapMs"/> without a think, once per episode
+    /// (<see cref="PlayerbotThinkStarvation"/>; the episode ends at its next think). One compare per bot per tick.
+    /// </summary>
+    private void ReportStarvedBots(ActiveBot[] bots, uint now)
+    {
+        uint bound = (uint)_options.ThinkStarvedGapMs;
+        if (bound == 0) return;
+        foreach (ActiveBot active in bots)
+        {
+            if (active.Paused || !active.GapPrimed || active.Session.State != SessionState.InWorld) continue;
+            if (!PlayerbotThinkStarvation.ShouldReport(now, active.LastUpdateMs, bound, ref active.StarvedReported)) continue;
+            if (active.Session.Player is not { } player || active.Session.IsInChaosProbe) continue;
+            PlayerbotAnomalies.Report(player, "cadence", "think-starved",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $"no think for {unchecked(now - active.LastUpdateMs)} ms (bound {bound} ms; {bots.Length} bots, think budget {_lastBudgetMs:F1} ms per tick)"));
         }
     }
 
@@ -1459,11 +1534,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // The first think after login or unpause measures the time since the record was made (or the pause), not a think gap.
             if (active.GapPrimed)
             {
-                _cadence.RecordGap(sinceLast);
+                _cadence.RecordGap(sinceLast, IsCombatLane(active));
                 if (active.Session.Player is { } measured) PlayerbotMotion.NoteThinkGap(measured, sinceLast);
             }
 
             active.GapPrimed = true;
+            active.StarvedReported = false;
             try
             {
                 if (active.Session.Player is { IsInWorld: true } observed) active.Brain.ObserveKillingBlows(observed);
@@ -2412,6 +2488,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public uint LastUpdateMs = session.World.NowMs;
         /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>
         public bool GapPrimed;
+        /// <summary>Whether the current silence of this bot was reported as a starved think gap (cleared by its next think).</summary>
+        public bool StarvedReported;
         public volatile bool Paused;
         public IPlayerbotController? Controller;
         public string? FaultCode;

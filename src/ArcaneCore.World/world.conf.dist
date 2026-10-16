@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       463 keys
+#   WORLD                       469 keys
 #
 ###############################################################################
 
@@ -11314,6 +11314,35 @@ World.Playerbots.Chat.TimeoutSeconds = 10
 World.Playerbots.ClientFidelity = Lean
 
 #
+#    World.Playerbots.CombatLaneShare
+#        Description: The share (0.1..0.9) of the think time budget and of MaxActionsPerTick the
+#                     combat lane may use. The lane gets floor(share × MaxActionsPerTick) actions of
+#                     its own (none at MaxActionsPerTick 1); the rest, at least one, is the other
+#                     bots' and no fight's think can touch it, so they are never starved by a crowd
+#                     of fights. What the combat lane leaves goes to the other bots too.
+#        Type: double
+#        Default: 0.7
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CombatLaneShare = 0.7
+
+#
+#    World.Playerbots.CombatThinkIntervalMs
+#        Description: Milliseconds (50..60000) after which a bot that is in combat, dead or a ghost
+#                     is due for the think lane that comes first (PlayerbotThinkRotation.TickLanes).
+#                     Under load such a bot thinks about this often; with room for everyone every
+#                     bot thinks every tick as before.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CombatThinkIntervalMs = 300
+
+#
 #    World.Playerbots.Contention.ClaimPenaltyYards
 #        Description: Yards a mob counts as farther away for each other bot already walking to it
 #                     (0..200), when a bot picks among untagged mobs. 0 turns the soft claims off,
@@ -11926,10 +11955,11 @@ World.Playerbots.Home.TeleportDistanceYards = 1500
 #
 #    World.Playerbots.MaxActionsPerTick
 #        Description: The most managed client actions all bots may send in one world tick (1..64).
-#                     The tick's think time is bounded separately, by the 8 ms
-#                     PlayerbotThinkRotation.TickBudgetMs: with about 1000 bots the action budget
-#                     must not be the first limit a tick meets, or each bot waits more ticks for its
-#                     share of actions and its movement lease runs out between thinks.
+#                     The tick's think time is bounded separately, by
+#                     ThinkBudgetMinMs..ThinkBudgetMaxMs (PlayerbotThinkBudget): with about 1000
+#                     bots the action budget must not be the first limit a tick meets, or each bot
+#                     waits more ticks for its share of actions and its movement lease runs out
+#                     between thinks.
 #        Type: int
 #        Default: 48
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -13182,6 +13212,46 @@ World.Playerbots.Taxi.MaxWalkToMasterYards = 300
 World.Playerbots.Taxi.MinRouteYards = 600
 
 #
+#    World.Playerbots.ThinkBudgetMaxMs
+#        Description: The most wall time (ms, at least ThinkBudgetMinMs, at most 200) a world tick
+#                     spends on the bots' thinks, however idle the rest of the tick is.
+#        Type: double
+#        Default: 30
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ThinkBudgetMaxMs = 30
+
+#
+#    World.Playerbots.ThinkBudgetMinMs
+#        Description: The least wall time (ms, 1..200) a world tick spends on the bots' thinks,
+#                     however loaded the tick is: the guarantee that a busy server still thinks
+#                     (PlayerbotThinkBudget). At least one bot always thinks per tick. Equal to
+#                     ThinkBudgetMaxMs it is a fixed budget.
+#        Type: double
+#        Default: 8
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ThinkBudgetMinMs = 8
+
+#
+#    World.Playerbots.ThinkBudgetTickShare
+#        Description: The share (0.05..0.95) of a tick's slack (tick interval minus the time the
+#                     world spent on everything but the bots) the bots' work may take; the think
+#                     budget is this share of the slack less what the bots already used this tick,
+#                     between the min and the max.
+#        Type: double
+#        Default: 0.6
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ThinkBudgetTickShare = 0.6
+
+#
 #    World.Playerbots.ThinkIntervalMs
 #        Description: Milliseconds between two decisions of a bot (50..60000).
 #        Type: int
@@ -13191,6 +13261,20 @@ World.Playerbots.Taxi.MinRouteYards = 600
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ThinkIntervalMs = 500
+
+#
+#    World.Playerbots.ThinkStarvedGapMs
+#        Description: A bot that goes longer than this many milliseconds (1000..3600000) of world
+#                     time without a think is reported once per episode as a "cadence think-starved"
+#                     anomaly (PlayerbotAnomalies); 0 turns the report off. The default is the ghost
+#                     walk's stuck bound (PlayerbotRecovery.StuckMs).
+#        Type: int
+#        Default: 10000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.ThinkStarvedGapMs = 10000
 
 #----------------------------------------------------------------------------
 # World:Playerbots:Qa
