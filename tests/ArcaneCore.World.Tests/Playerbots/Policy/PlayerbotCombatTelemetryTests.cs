@@ -28,7 +28,8 @@ public sealed class PlayerbotCombatTelemetryTests
                 // The first fight's record is finished when the second fight starts (its downtime ends there).
                 bool written = await world.ThinkUntilAsync(180_000, () => telemetry.Combat.Fights >= 1,
                     each: () => telemetry.AfterThink(world.Brain, world.Player, world.Host.World.NowMs));
-                Assert.True(written, $"fights {telemetry.Combat.Fights}, first alive {await world.OnWorldAsync(() => first.IsAlive)}");
+                Assert.True(written, $"fights {telemetry.Combat.Fights}, first alive {await world.OnWorldAsync(() => first.IsAlive)}; " + await world.OnWorldAsync(() =>
+                    $"goal{world.Brain.Goal} target {world.Brain.TargetEntry} hp {world.Player.Health}/{world.Player.MaxHealth} at {world.Player.X:F1},{world.Player.Y:F1}; second alive {second.IsAlive} in world {second.IsInWorld} at {second.X:F1},{second.Y:F1} hp {second.Health} combat {second.Combat.IsInCombat}; sees {world.Player.VisibleObjects.Contains(second.Guid)}; first at {first.X:F1},{first.Y:F1}"));
                 await telemetry.FlushAsync();
             }
             await telemetry.DisposeAsync();

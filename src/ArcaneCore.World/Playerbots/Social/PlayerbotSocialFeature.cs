@@ -164,6 +164,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildFounding _founding = new(logger);
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
+    private readonly PlayerbotChannelMembership _channels = new();
     private readonly HashSet<Map> _maps = [];
     private WorldRuntime? _world;
     private long _clockMs;
@@ -191,6 +192,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     internal PlayerbotGuildChat GuildChat => _chat;
 
     internal PlayerbotSocialEmotes Emotes => _emotes;
+
+    /// <summary>The bots' world channel membership (General, Trade, LocalDefense, LookingForGroup).</summary>
+    internal PlayerbotChannelMembership Channels => _channels;
 
     public void Attach(WorldRuntime world)
     {
@@ -275,8 +279,21 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _membership.Promote(pass);
         _chat.Speak(pass);
         _emotes.Run(pass);
+        RunChannels(pass);
         _membership.Prune(pass);
         Passes++;
+    }
+
+    /// <summary>
+    /// Keep each bot in its zone's world channels (<see cref="PlayerbotChannelMembership"/>) while bot speech is on; with it off the bots
+    /// leave them (the wanted set becomes none) and are then left alone.
+    /// </summary>
+    private void RunChannels(PlayerbotSocialPass pass)
+    {
+        if (pass.Chat is not { } chat || pass.Bots.Count == 0) return;
+        var bots = new List<PlayerbotChannelBot>(pass.Bots.Count);
+        foreach (PlayerbotSocialBot bot in pass.Bots) bots.Add(new PlayerbotChannelBot(bot.Id, bot.Session, bot.Player));
+        _channels.Run(bots, pass.Social.Channels, ArcaneCore.Game.Maps.Templates.WorldMaps.Of(pass.World).Areas, chat.SpeechOptions, pass.NowMs);
     }
 
     private List<PlayerbotSocialBot> Gather(ManagedPlayerbotFeature bots)

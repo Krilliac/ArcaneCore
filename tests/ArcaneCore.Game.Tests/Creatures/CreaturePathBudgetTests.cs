@@ -164,6 +164,55 @@ public sealed class CreaturePathBudgetTests
         Assert.Equal(Wolves - 3, c.System.DeferredPathSearches);
     }
 
+    /// <summary>A pathfinder whose every search takes <paramref name="spinMs"/> of wall time (a busy wait, not a sleep).</summary>
+    private sealed class SlowPathfinder(double spinMs) : IPathfinder
+    {
+        public int Calls { get; private set; }
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            Calls++;
+            long until = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(spinMs * System.Diagnostics.Stopwatch.Frequency / 1000.0);
+            while (System.Diagnostics.Stopwatch.GetTimestamp() < until)
+            {
+                System.Threading.Thread.SpinWait(64);
+            }
+
+            PathSearchCounters.RecordSearch(1, 1, capped: false);
+            return new PathResult(PathType.Normal, [start, end]);
+        }
+    }
+
+    [Fact]
+    public void TheTimeBudget_StopsNewSearches_OnceTheUpdatesSearchesHaveSpentIt()
+    {
+        // Each search takes 3 ms of wall time; the budget allows 1 ms. The first search starts (nothing spent yet) and crosses it,
+        // so every later request in the same update waits: one slow search per update, never a flood of them.
+        using Crowd c = Start(new CreaturePathBudget(MaxSearches: int.MaxValue, MaxNodes: long.MaxValue, MaxMilliseconds: 1));
+        var slow = new SlowPathfinder(3);
+        WorldCollision.Of(c.World).Install(pathfinder: slow);
+
+        PullAll(c);
+
+        Assert.Equal(1, slow.Calls);
+        Assert.Equal(Wolves - 1, c.System.DeferredPathSearches);
+        Assert.True(c.System.PathTicksThisTick > 0);
+
+        c.World.RunTick(50); // the next update restores the budget and again serves exactly one (each search outruns it)
+        Assert.Equal(2, slow.Calls);
+    }
+
+    [Fact]
+    public void TheDefaultBudget_HasATimeBound_AndAHandBuiltOneDoesNot()
+    {
+        Assert.True(double.IsFinite(CreaturePathBudget.Default.MaxMilliseconds));
+        Assert.True(CreaturePathBudget.Default.MaxMilliseconds > 0);
+        Assert.True(double.IsPositiveInfinity(new CreaturePathBudget(8, 100).MaxMilliseconds));
+        Assert.True(double.IsPositiveInfinity(CreaturePathBudget.Unlimited.MaxMilliseconds));
+    }
+
     [Fact]
     public void ANonDeferrableRequest_OverBudget_IsDeferred_NeverTheStraightLine()
     {

@@ -265,6 +265,14 @@ public static class NavMeshQuery
     private const float HeuristicScale = 0.999f;
 
     /// <summary>
+    /// Expansions per pooled node (<see cref="PathOptions.MaxSearchNodes"/>) after which a search stops. Detour's loop runs until its open
+    /// list is empty, and a closed node is reopened whenever a cheaper route reaches it (portal-midpoint costs are not consistent), so
+    /// the node pool alone does not bound the work of one search. A search that needs more than this many expansions per node is a
+    /// reopen storm: it answers like a capped search (the node closest to the goal).
+    /// </summary>
+    public const int MaxExpansionsPerNode = 4;
+
+    /// <summary>
     /// A* from <paramref name="start"/> to <paramref name="end"/>; returns the polygon corridor and whether it reaches the goal.
     /// <para>
     /// The search keeps the node semantics of the Detour <c>findPath</c> vmangos runs
@@ -349,8 +357,17 @@ public static class NavMeshQuery
         int expansions = 0;
         bool capped = false;
 
+        int maxExpansions = (int)Math.Min(int.MaxValue, (long)MaxExpansionsPerNode * Math.Max(1, options.MaxSearchNodes));
         while (goal < 0 && open.TryDequeue(out int current, out float priority))
         {
+            if (expansions >= maxExpansions)
+            {
+                // The node pool bounds how many nodes exist, not how often a reopened one is expanded again: stop and answer the
+                // node closest to the goal, as a search that ran out of nodes does.
+                capped = true;
+                break;
+            }
+
             if ((expansions & 31) == 0)
             {
                 options.CancellationToken.ThrowIfCancellationRequested();

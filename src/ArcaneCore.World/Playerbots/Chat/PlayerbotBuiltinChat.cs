@@ -85,6 +85,7 @@ internal static partial class PlayerbotBuiltinChat
     {
         BotChatPersona p = ask.Persona;
         BuiltinChatIntent intent = Classify(ask.Text, p.Name, out PlayerbotPartyCommand? command);
+        if (!SmallTalkAllowed(ask, intent)) return new(null, null);
         switch (intent)
         {
             case BuiltinChatIntent.Ignore:
@@ -123,6 +124,21 @@ internal static partial class PlayerbotBuiltinChat
             default:
                 return new(Pick("unknown", ask, lastLine, random), null);
         }
+    }
+
+    /// <summary>
+    /// Whether the built-in answers <paramref name="intent"/> for this kind of line. A line put to the bot by a real player gets every
+    /// answer. Another bot's line gets small talk only (a greeting, what it is doing, where it is, who it is, thanks, goodbye): never an
+    /// order, a help text, a group offer or the "say again?" of an unknown line, so two bots never loop on misunderstandings. A guild
+    /// question put to nobody in particular is answered only when the bot has something real to say (a group offer, a greeting, thanks).
+    /// </summary>
+    internal static bool SmallTalkAllowed(BotChatAsk ask, BuiltinChatIntent intent)
+    {
+        if (ask.SenderIsBot)
+            return intent is BuiltinChatIntent.Greeting or BuiltinChatIntent.Doing or BuiltinChatIntent.Where or BuiltinChatIntent.Who
+                or BuiltinChatIntent.Thanks or BuiltinChatIntent.Bye;
+        if (!ask.Addressed) return intent is BuiltinChatIntent.Group or BuiltinChatIntent.Greeting or BuiltinChatIntent.Thanks;
+        return true;
     }
 
     /// <summary>

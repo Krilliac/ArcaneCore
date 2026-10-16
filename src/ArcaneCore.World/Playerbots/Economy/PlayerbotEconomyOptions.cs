@@ -36,6 +36,19 @@ public sealed class PlayerbotEconomyOptions
     /// <summary>Minutes between two visits of one bot (1..1440). Bots start at a random point of the first interval.</summary>
     public int VisitIntervalMinutes { get; set; } = 30;
 
+    /// <summary>
+    /// Deposit goods the bot does not need (trade goods and reagents no spell of its own uses, gems, recipes, stackable curios) at a banker
+    /// while it stays at its capital home (on by default). Gear, food, potions, ammunition, bags, grays and quest items are never deposited.
+    /// </summary>
+    public bool BankDeposit { get; set; } = true;
+
+    /// <summary>
+    /// Buy the next bank bag slot at a banker while the bot stays at its capital home when the bank has fewer than 5 free slots and the price
+    /// is at most 40% of the bot's gold (on by default). A bought slot is only space once a bag is put in it, which bots do not do yet, so the
+    /// bank-nearly-full gate keeps the purchase rare.
+    /// </summary>
+    public bool BuyBankSlots { get; set; } = true;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Economy";

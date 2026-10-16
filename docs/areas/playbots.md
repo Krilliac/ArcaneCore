@@ -652,7 +652,10 @@ goals the stall watch set aside (deferred or suspended), stalls, zone, map, atta
 **Scoring, off the world thread.** At the end of each world tick `PlayerbotPolicyEngine.Dispatch` hands each map's snapshots to a worker
 task as one batch (one batch in flight per map; at most 1024 rows, past that a snapshot is dropped and counted). The worker scores them in
 chunks within `TickBudgetMs` (2 ms wall time per map batch; the rows past it are left unscored and the overrun counted) and publishes each
-bot's scores. The brain uses them on a later think, while the snapshot is no older than `StaleAfterMs` (4500 world ms). Late, missing,
+bot's scores. The brain uses them on a later think, while the snapshot is no older than `StaleAfterMs` (4500 world ms); on the think
+right after the one that took it (no other think of the bot between, of any kind) the bound is 30 s instead, because a snapshot is first
+usable there however far apart the bot's thinks are (8-17 s at p95 for a 1000-bot Debug server, where the 4.5 s bound alone made every
+verdict stale). Late, missing,
 dropped or non-finite (NaN, infinite) scores make that think fall back to the ladder. Every think on a snapshot decides again and is
 counted (`applied`, `agreed`, `floor`, `explored`, `missing`, `stale`, `non-finite`, `refused`; a refused promotion also counts once as
 `refused` on top of its think's own source), and the feature logs one Info line of the counters every five minutes while the policy is on.
@@ -676,6 +679,11 @@ Training is described below.
 runner-up goals at random (never the ladder's own choice, never `Grind`), which its thinks then try first. It exists to gather telemetry the
 ladder alone never produces; it needs `Enabled`.
 
+**A/B arms.** `AbPolicyShare` (0..1, default 1): the share of bots in the policy arm. The rest are in the ladder arm, fixed per bot by a
+hash of its guid: they take snapshots and score them like the others, but never promote or explore, so they behave as the ladder alone
+and their telemetry (`arm` `ladder`, with the `pick` and `src` the policy would have had) is the comparison. The per-think counters count
+the ladder arm's would-be choices too.
+
 **Telemetry** (`World:Playerbots:Policy:Telemetry`, off by default; needs `Enabled`). One record per decision: the first think that had a
 snapshot's scores or exploration goal (a think on a stale snapshot, or before its scores came back, is not one, so a snapshot whose scores
 never came is not written), written after `OutcomeMinutes` (5) of world time with its outcome. JSON lines, one object per line:
@@ -692,7 +700,8 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 | `ladder`, `pick` | The ladder's choice; the policy's (or exploration's) choice, null when there were no scores. |
 | `src` | `agreed`, `applied`, `explored`, `nonfinite`, `floor` or `refused` (the promoted goal's controller did not act). |
 | `x` | 1 when the choice was exploration. |
-| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. `Opportunity` is the label only when the opportunity controller drove that think (the brain's `Loot` goal alone is also a corpse, so `kind` `Loot` with `goal` null is a corpse). |
+| `arm` | `policy` or `ladder`: the bot's A/B arm (`AbPolicyShare`). |
+| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. `Opportunity` is the label only when the opportunity controller drove that think (the brain's `Loot` goal alone is also a corpse, so `kind` `Loot` with `goal` null is a corpse). `QuestTravel` is the label when the quest destinations planned that think's trip (its `kind` is `Quest`); records before this label have such thinks as `Quest`. |
 | `w` | The outcome window in seconds. |
 | `o` | The outcome over the window, in this order: `lvl`, `lp` (levels gained with their fractions: experience over the next level's, so it compares across levels and level-ups), `xp`, `money`, `items`, `quests` (with `lvl`, the stall-watch fingerprint delta: levels, experience, copper, item count, quests handed in), `stalls`, `deaths`, `anomalies` (the bot's anomaly-ledger reports). |
 
@@ -753,10 +762,12 @@ record comes from a build without it, or from a host with the tick monitor disab
   find per bot; its `reason` is the model's, or `untakeable` (the first guard is one the brain would not take as a target) or `passed-over`
   (another find was better). An episode whose bot leaves before it ends is not written.
 
-**Training (phase 3, staged separately).** An offline trainer and an A/B report (for `tools/playerbot-policy/`) are staged on their own
-branch, to land once the server has run with telemetry on. They fit
-progress per minute for each (state, goal) from the server's own telemetry only, and write the weights file above. No label may come
-from Claude or any other LLM: training data is what the server's bots did and what followed.
+**Training.** Offline, from the server's own telemetry only (`tools/playerbot-policy/`, README there):
+`train.py TELEMETRY_DIR -o model.json` fits progress per minute for each (state, goal) (levels with fractions, plus weighted quests,
+less weighted stalls, deaths and anomalies) as a ridge model per goal or a small ReLU network, holds out a fifth of the rows, refuses to
+write a model from fewer than `--min-rows` (1000), and writes the weights file above. `ab_report.py TELEMETRY_DIR` compares the two arms
+of a run with `AbPolicyShare` 0.5, per bot-hour, with bootstrap intervals over bots. No label may come from Claude or any other LLM:
+training data is what the server's bots did and what followed. Whether a model ships is decided on that report.
 
 ### Contention
 
@@ -1145,11 +1156,32 @@ where the master goes.
   on it with one CMSG_ADD_FRIEND, so it shows no consent. `.playerbot invite <bot>` (GameMaster; the
   vmangos `.partybot add` analogue) invites a running autonomous bot into the GM's group through the ordinary invite and makes it
   accept whatever its policy says; the invite keeps every ordinary rule (faction, full group, leader or assistant).
+- **Filling a party or raid.** `.bot party fill` (GameMaster) invites online autonomous bots of the caller's team that are alive,
+  in the world, in no group and not scripted, within 5 levels of the caller while there are enough of them (otherwise the nearest
+  levels), and summons them (a bot already being teleported is left to arrive): a party (or no group) is filled to five; once the
+  group is a raid each use adds up to five more (one subgroup's worth), up to 40. Before 2026-10-16 it answered "Your party is
+  already full." in a raid of five. `.bot raid #count` (`.playerbot raid`, GameMaster) gathers `#count` such bots into the caller's
+  raid at once: with no group it forms one and makes it a raid; a party is converted (CMSG_GROUP_RAID_CONVERT rules: only its
+  leader, otherwise the reply names the leader); in a raid the caller must be the leader or an assistant. The count is clamped to
+  the free raid slots (40 less the members) and the reply says so. Both commands pick the same way
+  (`Playerbots/Commands/PlayerbotGroupFill.cs`): tanks first (a warrior before a paladin or druid), then healers (a priest or
+  shaman before a paladin or druid), then the nearest levels; a fill of up to five takes one of each, a larger one the raid run
+  make-up (`World:Playerbots:Groups:DungeonRuns:Raids` `TanksPerTen` and `HealerPercent`: 10, 20 and 39 bots take 1, 2 and 4
+  tanks and 3, 5 and 10 healers at the defaults). The reply gives the counts, the raid size and up to 10 names (`and N more`).
+- **Raids.** Nothing in the party AI depends on the subgroup: the master, following, the assist targets (any member's attacker
+  within 50 yards), the wipe check, resurrection, auto-revive and loot rolls (SMSG_LOOT_START_ROLL goes to every raid member at
+  the group reward distance) work the same in subgroups 2-8 as in subgroup 1, and a bot invited into a raid by hand accepts by
+  its invite policy as into a party. A bot's chat reply to a group line goes out on raid chat in a raid, since party chat reaches
+  only the speaker's own subgroup.
 - **Master.** The group's leader when it is a real player online (a socket client, never a managed bot), otherwise the first
   real player online in member order (vmangos `GetPartyLeader`). While the bot has one, `ManagedPlayerbotFeature` ticks its
   party AI instead of `PlayerbotBrain` (a scripted controller still wins). Out of the group the brain drives it again, a fresh
   one (the old one's routes and targets belong to another place). When every real player of the group is offline or gone, the
   bot waits `MasterTimeoutSeconds` (60, 1..3600), then leaves the group (CMSG_GROUP_DISBAND, vmangos `requestRemoval`).
+- **Leader handoff.** Inside a dungeon or raid, pass the lead to one of your bots (Promote to leader) and the bots clear the
+  instance on their own; the new leader says `I'll lead the clear of <instance>.`. When it is done it says so and passes the lead
+  back; say `follow` (or any order) to take it back sooner. Outside an instance passing the lead changes nothing. Details:
+  [Leader handoff](playbots-groups.md#leader-handoff).
 - **Out of combat** the bot follows at 2-5 yards at a random angle (`PlayerbotNavigation.TryPlan`/`TryAdvance`), eats and drinks
   through `PlayerbotConsumables` while its master is within 30 yards, and catches up with a master it cannot simply walk to as
   [Following and catch-up](#following-and-catch-up) describes: by default it teleports (vmangos `.goname`) to a master more than 100
@@ -1594,6 +1626,33 @@ rules in line with them. Keep `Enabled` on whenever a model provider is configur
 a provider's moderation step on a busy public server. Tell your players, in your server's own terms, that bot chat may be
 processed by a third-party AI service. The screening is a set of word lists and patterns: it will miss some lines and flag a few
 harmless ones, and it says nothing about what a provider will accept.
+
+### Bot speech
+
+Every line a bot says goes through one path (`World:Playerbots:Chat:Speech`, all on by default): `PlayerbotChat.TrySpeak` takes a
+`BotSpeech` (Say, Yell, Party, Raid, RaidWarning for a raid leader, Battleground, Guild, Whisper, a world channel by name, or a text
+emote), screens it with the output filter, and the world thread says it through the bot's own session as a client packet
+(`CMSG_MESSAGECHAT`, `CMSG_TEXT_EMOTE`); the server's own chat handlers deliver it. Nothing is broadcast by the server.
+
+- **Limits** (`PlayerbotSpeechLimiter`): per bot a gap between lines it starts (`BotGapSeconds`) and a per-minute cap
+  (`BotLinesPerMinute`); per target `TargetGapSeconds`; shared per place: a world channel per zone (`ChannelLinesPerMinute`, the
+  minute stretched by the number of bots in it over `ChannelCrowdBots`), the say/yell area (`LocalLinesPerMinute`), a group
+  (`GroupLinesPerMinute`), a guild (`GuildLinesPerMinute`); the same text in the same place once per `DedupeSeconds`.
+- **Listeners**: a line a bot starts on its own is said only when a real player can hear it (`RequireRealListener`); a reply's
+  audience is its addressee.
+- **World channels**: bots join General and LocalDefense of their zone, Trade in capitals and LookingForGroup, and leave the old
+  zone's on a zone change, with real join/leave packets (`WorldChannels`, `ChannelChangesPerPass`, on the social pass).
+- **Answers**: a bot answers whispers, and lines naming it in say, yell, party, raid (in raid chat), battleground, guild and world
+  channels, on the channel the line came on (`Chat:Channels`, all by default). A real player's open question in guild chat ("anyone
+  up for SM?") may be answered without the bot's name, by the built-in only with a group offer, a greeting or thanks.
+- **Bots hearing bots** (`BotToBot`): another bot's line naming the bot is answered with small talk only, at most
+  `BotToBotMaxTurns` turns per exchange (a new exchange after `BotToBotQuietSeconds`), `BotToBotPairLinesPerHour` per pair and
+  `BotToBotLinesPerMinute` in all. Never an order, never the AI disclosure.
+- **Emotes** (`EmoteReplies`): a text emote aimed at a bot is answered in kind (a wave with a wave, a bow with a bow, a hug with a
+  blush), once per emoter per `EmoteReplyGapSeconds`.
+- **Observability**: each said line logs at Debug (`Bot {Bot} says {Channel} ({Topic}, {Length} chars)`) and counts in
+  `arcanecore.playerbot.chat.lines_spoken`; refused ones in `arcanecore.playerbot.chat.lines_dropped` by reason
+  (docs/ops/metrics.md). Lines heard are raised as `PlayerbotChat.LineHeard` for other features to react to.
 
 ## Scenario harness
 

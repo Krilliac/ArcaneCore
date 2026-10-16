@@ -56,7 +56,7 @@ public static class DrainAuras
         // DEAL/TAKE_HARMFUL_PERIODIC (+ TAKEN_ANY_DAMAGE when damage gets through) before the damage; the damage costs no durability on a kill and
         // carries the holder's reflected flag, so a reflected leech cannot kill its own caster in a duel (vmangos SpellAuras.cpp:5994-5999).
         spells.FirePeriodicDamageProcs(caster, target, spell, damage, rolled);
-        uint dealt = spells.Damage.DealSpellDamage(caster, target, spell, damage, periodic: true, startsCombat: true, critical: false, durabilityLoss: false,
+        uint dealt = spells.Damage.DealSpellDamage(caster, target, spell, damage, periodic: true, startsCombat: spell.IsChanneled, critical: false, durabilityLoss: false, // DOT: combat only for a channel (Unit.cpp:696-714)
             reflected: holder.IsReflected && ReferenceEquals(caster, target));
         spells.OnDamageTaken(target, caster, dealt, periodic: true);
 
@@ -146,7 +146,7 @@ public static class DrainAuras
         SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog,
             CasterPeriodicPackets.BuildPeriodicSpellDamageLog(target.Guid, caster.Guid, talent.Id, resisted > 0 ? rolled : damage, talent.School, absorbed: 0, resisted), includeSelf: true);
         spells.FirePeriodicDamageProcs(caster, target, talent, damage, rolled);
-        uint dealt = spells.Damage.DealSpellDamage(caster, target, talent, damage, periodic: true, startsCombat: true, critical: false, durabilityLoss: true,
+        uint dealt = spells.Damage.DealSpellDamage(caster, target, talent, damage, periodic: true, startsCombat: talent.IsChanneled, critical: false, durabilityLoss: true, // DOT (Unit.cpp:696-714)
             reflected: reflected);
         spells.OnDamageTaken(target, caster, dealt, periodic: true);
     }

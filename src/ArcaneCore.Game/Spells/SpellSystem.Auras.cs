@@ -1014,7 +1014,9 @@ public sealed partial class SpellSystem
             FirePeriodicDamageProcs(procCaster, target, holder.Spell, amount, original); // SpellAuras.cpp:5902-5917, before the damage
         }
 
-        uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true, startsCombat: true, critical: false, durabilityLoss: true,
+        // A DOT tick links no combat unless the spell is a channel (vmangos Unit::DealDamage ShouldEnterCombat, Unit.cpp:696-714): a creature
+        // whose poison keeps ticking on a player after it evaded must not be pulled back into combat with nothing on its threat list.
+        uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true, startsCombat: holder.Spell.IsChanneled, critical: false, durabilityLoss: true,
             reflected: holder.IsReflected && ReferenceEquals(caster, target));
         if (dealt > 0 && !target.IsAlive && resolvedCaster is null && target is Player player)
         {

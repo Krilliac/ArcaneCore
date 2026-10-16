@@ -51,7 +51,8 @@ Gates, all required before training starts:
 2. main has the playerbot defer pass.
 3. main has the memoization/tabulation pass (branch `claude/memo-tabulation`).
 4. The live server runs with the policy on, no model, telemetry on (and some exploration), long enough for `train.py`'s
-   `--min-rows` and for every goal to have rows.
+   `--min-rows` and for every goal to have rows (`train.py` refuses a model with a goal under `--min-goal-rows`, 50). `QuestTravel`
+   rows exist only from a build that labels quest-travel thinks as such, and `Mount` rows only once bots reach riding level (40).
 
 The order of work is collect, train, A/B with `AbPolicyShare` 0.5, report, and then a person decides on the report. The README in
 `tools/playerbot-policy/` has the commands.

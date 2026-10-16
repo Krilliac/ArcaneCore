@@ -198,8 +198,8 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     /// <item>Model heights are off, or a tiled model tree whose tile here was never loaded: <see cref="UnderMapKind.Unknown"/>
     /// (models may exist and be unseen). A tile whose vmtile file does not exist counts as loaded and empty (vmangos
     /// <c>StaticMapTree::LoadMapTile</c>), so the terrain decides there.</item>
-    /// <item>Inside a WMO group, or a model floor within <see cref="UnderMapFloorSearch"/> below <c>z + 2</c>:
-    /// <see cref="UnderMapKind.Ok"/>.</item>
+    /// <item>Inside a WMO group, or a model floor within <see cref="UnderMapFloorSearch"/> below <c>z + 2</c>, or a navigation-mesh
+    /// floor in that same window (<see cref="TryGetMeshFloorUnder"/>): <see cref="UnderMapKind.Ok"/>.</item>
     /// <item>Otherwise <see cref="UnderMapKind.UnderMap"/> with depth = terrain height - z.</item>
     /// </list>
     /// Reading the coverage may read the map's vmtree from disk the first time (<see cref="VMapManager.GetTree"/>).
@@ -247,12 +247,35 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
         }
 
         if (models.TryGetAreaInfo(Map.MapId, x, y, z, out _)
-            || models.GetModelHeight(Map.MapId, x, y, z + FloorProbeOffset, UnderMapFloorSearch) is not null)
+            || models.GetModelHeight(Map.MapId, x, y, z + FloorProbeOffset, UnderMapFloorSearch) is not null
+            || TryGetMeshFloorUnder(x, y, z, UnderMapFloorSearch - FloorProbeOffset, out _))
         {
             return UnderMapVerdict.Ok;
         }
 
         return UnderMapVerdict.Under(depth);
+    }
+
+    /// <summary>
+    /// The navigation-mesh floor under a point, searched the way the model floor is: from <c>z + 2</c> down to
+    /// <paramref name="z"/> - <paramref name="maxDropYards"/>, never higher (a floor more than 2 yards over the point is a floor the
+    /// unit is under, and must not excuse it). The mesh is built from the same terrain and model data (vmangos <c>MoveMapGen</c>), so
+    /// a polygon there is a floor even where the model query misses it. False when the map has no mesh or its tile is not loaded.
+    /// The one rule <see cref="ClassifyUnderMap"/> and the bot airwalk check share.
+    /// </summary>
+    public bool TryGetMeshFloorUnder(float x, float y, float z, float maxDropYards, out float height)
+        => TryGetMeshFloor(x, y, z, MathF.Max(0f, maxDropYards), FloorProbeOffset, out height);
+
+    /// <summary>
+    /// Whether this map's navigation mesh has a polygon straight under or over the point with its surface between
+    /// <paramref name="z"/> - <paramref name="below"/> and <paramref name="z"/> + <paramref name="above"/> (<see cref="IMeshFloorQuery"/>);
+    /// false when the map's pathfinder has no mesh or the tile is not loaded. The surface a mesh route is walked on: the route's own
+    /// legs run between polygon corners, whose heights are the coarse polygon's, not the detail surface's.
+    /// </summary>
+    public bool TryGetMeshFloor(float x, float y, float z, float below, float above, out float height)
+    {
+        height = 0f;
+        return _services.PathfinderFor(Map.MapId) is IMeshFloorQuery mesh && mesh.TryGetMeshFloor(Map.MapId, x, y, z, below, above, out height);
     }
 
     /// <summary>

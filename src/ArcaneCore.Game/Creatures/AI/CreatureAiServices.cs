@@ -281,6 +281,13 @@ public sealed class CreatureAiFactory
         [Scripts.RabidBearAI.Entry] = E(static c => new Scripts.RabidBearAI(c)),
         [Scripts.FeeroIronhandAI.Entry] = E(static c => new Scripts.FeeroIronhandAI(c)),
         [Scripts.MorokkAI.Entry] = E(static c => new Scripts.MorokkAI(c)),
+        [Scripts.ScourgeCauldronAI.Entry] = E(static c => new Scripts.ScourgeCauldronAI(c)),
+        [Scripts.RingoAI.Entry] = E(static c => new Scripts.RingoAI(c)),
+        [Scripts.RegtharDeathgateAI.Entry] = E(static c => new Scripts.RegtharDeathgateAI(c)),
+        [Scripts.AgedDyingAncientKodoAI.NpcAgedKodo] = E(static c => new Scripts.AgedDyingAncientKodoAI(c)),
+        [Scripts.AgedDyingAncientKodoAI.NpcDyingKodo] = E(static c => new Scripts.AgedDyingAncientKodoAI(c)),
+        [Scripts.AgedDyingAncientKodoAI.NpcAncientKodo] = E(static c => new Scripts.AgedDyingAncientKodoAI(c)),
+        [Scripts.AgedDyingAncientKodoAI.NpcTamedKodo] = E(static c => new Scripts.AgedDyingAncientKodoAI(c)),
     };
 
     /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>
@@ -317,6 +324,8 @@ public sealed class CreatureAiFactory
         Scripts.DeathstalkerFaerleiaAI.QuestPyrewoodAmbush,
         Scripts.FeeroIronhandAI.QuestSuppliesToAuberdine,
         Scripts.MorokkAI.QuestChallengeMorokk,
+        Scripts.RingoAI.QuestALittleHelp,
+        Scripts.KatranaPrestorGossip.QuestTrueMasters,
         Instances.Scripts.BlackrockDepths.MarshalWindsorAI.QuestJailBreak];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>

@@ -262,13 +262,15 @@ public sealed partial class PlayerbotRealTerrainNavigationTests(ITestOutputHelpe
 
         private TeleportService Teleports => Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
 
-        public static async Task<Terrain> StartAsync(bool withFactions = false)
+        public static async Task<Terrain> StartAsync(bool withFactions = false, Action<IServiceCollection>? services = null)
         {
             string root = Environment.GetEnvironmentVariable(RealTerrainBotFactAttribute.Variable)!;
+            Action<IServiceCollection>? extra = services;
             WorldTestHost host = WorldTestHost.Start(configure: options => options.Maps.DataDirectory = root,
                 configureServices: services =>
                 {
                     services.AddSingleton<IWorldFeature, ManualClock>();
+                    extra?.Invoke(services);
                     if (!withFactions) return;
                     // The scenario world's factions (DungeonBotHost): faction 14 monsters are hostile to the human bot.
                     services.AddSingleton(new FactionTemplateCatalog(

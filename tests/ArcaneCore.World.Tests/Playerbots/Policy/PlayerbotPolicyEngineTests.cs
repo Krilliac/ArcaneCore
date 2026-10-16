@@ -124,6 +124,34 @@ public sealed class PlayerbotPolicyEngineTests
     }
 
     [Fact]
+    public async Task ScoresOfTheBotsPreviousThink_AreFresh_PastStaleAfterMs()
+    {
+        // Live 2026-10-16: with ~1000 bots a bot's out-of-combat thinks were 8-17 s apart (p95), so every think found the snapshot its
+        // previous think took older than StaleAfterMs (4.5 s): "agreed" froze and every verdict was stale, and no goal record was written.
+        var options = new PlayerbotPolicyOptions { Enabled = true, StaleAfterMs = 4500 };
+        var engine = new PlayerbotPolicyEngine(options, policy: new StubPolicy(PlayerbotPolicyGoal.Explore));
+        PlayerbotPolicyAgent agent = engine.CreateAgent(4);
+        agent.Request(0, new float[PlayerbotPolicySchema.FeatureCount], TownOrExplore, nowMs: 10_000, think: 7);
+        engine.Dispatch();
+        await engine.WhenIdleAsync();
+
+        // The very next think, 13 s later: nothing happened to the bot between the two, so the snapshot is the freshest there can be.
+        PlayerbotPolicyVerdict next = agent.Decide(10_000 + 13_000, think: 8);
+        Assert.Equal(PlayerbotPolicySource.Applied, next.Source);
+        Assert.Equal(PlayerbotGoalOrNull(PlayerbotPolicyGoal.Explore), next.Promote);
+
+        // Another think came between (a fight, a rest): the state moved on, and the time bound applies again.
+        Assert.Equal(PlayerbotPolicySource.Stale, agent.Decide(10_000 + 13_000, think: 9).Source);
+        // Within StaleAfterMs a later think still uses it.
+        Assert.Equal(PlayerbotPolicySource.Applied, agent.Decide(10_000 + 4500, think: 9).Source);
+        // And the next think past the cap is stale: a bot that did not think for that long is somewhere else.
+        Assert.Equal(PlayerbotPolicySource.Stale,
+            agent.Decide(10_000 + PlayerbotPolicyAgent.NextThinkStaleAfterMs + 1, think: 8).Source);
+        // A caller that does not count thinks keeps the time bound alone.
+        Assert.Equal(PlayerbotPolicySource.Stale, agent.Decide(10_000 + 13_000).Source);
+    }
+
+    [Fact]
     public async Task MissingAndNonFiniteScores_FallBackToTheLadder()
     {
         var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true }, policy: new StubPolicy(PlayerbotPolicyGoal.Explore) { NaN = true });
@@ -223,6 +251,39 @@ public sealed class PlayerbotPolicyEngineTests
         Assert.True(stats.Unscored > 0, $"unscored {stats.Unscored}");
         int missing = agents.Count(agent => agent.Decide(10).Source == PlayerbotPolicySource.Missing);
         Assert.Equal(stats.Unscored, (long)missing);
+    }
+
+    [Fact]
+    public void TheAbArms_SplitTheBotsByTheirGuid_AtTheShare()
+    {
+        Assert.All(Enumerable.Range(1, 1000), i => Assert.Equal(PlayerbotPolicyArm.Policy, PlayerbotPolicyAgent.ArmOf((ulong)i, 1.0)));
+        Assert.All(Enumerable.Range(1, 1000), i => Assert.Equal(PlayerbotPolicyArm.Ladder, PlayerbotPolicyAgent.ArmOf((ulong)i, 0.0)));
+        // Consecutive guids (as the server hands them out) split near the share, and a bot's arm never changes.
+        int policy = Enumerable.Range(1, 10_000).Count(i => PlayerbotPolicyAgent.ArmOf((ulong)i, 0.5) == PlayerbotPolicyArm.Policy);
+        Assert.InRange(policy, 4_700, 5_300);
+        Assert.Equal(PlayerbotPolicyAgent.ArmOf(42, 0.5), PlayerbotPolicyAgent.ArmOf(42, 0.5));
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotPolicyOptions { Enabled = true, AbPolicyShare = 1.5 }.Validate());
+    }
+
+    [Fact]
+    public async Task TheLadderArm_IsScoredButNeverPromotesOrExplores()
+    {
+        // Share 0: every bot is in the ladder arm.
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true, AbPolicyShare = 0, ExplorationRate = 0.2 },
+            policy: new StubPolicy(PlayerbotPolicyGoal.Explore));
+        PlayerbotPolicyAgent agent = engine.CreateAgent(7);
+        Assert.Equal(PlayerbotPolicyArm.Ladder, agent.Arm);
+        for (uint i = 0; i < 50; i++)
+        {
+            PlayerbotPolicyWindow window = agent.Request(0, new float[PlayerbotPolicySchema.FeatureCount], TownOrExplore, i * 10_000);
+            Assert.Null(window.Explore);
+            engine.Dispatch();
+            await engine.WhenIdleAsync();
+            PlayerbotPolicyVerdict verdict = agent.Decide(i * 10_000 + 10);
+            Assert.Null(verdict.Promote);
+            // What the policy would have done is kept for the comparison.
+            Assert.Equal((PlayerbotPolicySource.Applied, PlayerbotPolicyGoal.Explore), (verdict.Source, verdict.Pick));
+        }
     }
 
     [Fact]

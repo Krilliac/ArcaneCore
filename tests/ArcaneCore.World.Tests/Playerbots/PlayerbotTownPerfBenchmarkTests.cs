@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
@@ -16,6 +17,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using ArcaneCore.World.Tests.Items;
 using Microsoft.Extensions.DependencyInjection;
@@ -130,6 +132,94 @@ public sealed class PlayerbotTownPerfBenchmarkTests(ITestOutputHelper output)
             finally { session.Kick(); await session.ManagedClosed; }
         }
         finally { DenseCityServices.Current.Value = null; }
+    }
+
+    /// <summary>
+    /// The live case (2026-10-16, Ironforge and Kharanos): a bot with money and a spellbook of class spells and recipes stands among
+    /// service NPCs none of which has anything for it. Each think asks <see cref="PlayerbotTownGoals.HasCandidate"/> (the goal policy's
+    /// snapshot) and then runs <see cref="PlayerbotTownGoals.Update"/> (the ladder's town rung): live, 28 ms each ("phases policy snapshot
+    /// 28.4, town 28.2"). Every vendor row is weighed as an equipment upgrade, a crafting supply (every known spell's reagents) and priced.
+    /// </summary>
+    [Fact]
+    public async Task DenseCity_MoneyAndRecipes_NothingToDo_ReportsCostPerThink()
+    {
+        var items = new ItemTestContent();
+        for (uint item = 5000; item < 5030; item++)
+            items.Templates.Templates.Add(new ItemTemplate { Entry = item, Name = $"trade good {item}", Class = (uint)ItemClass.TradeGoods,
+                InventoryType = (uint)InventoryType.NonEquip, ItemLevel = 5, Quality = 1, BuyPrice = 100, SellPrice = 10, Stackable = 20,
+                AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue });
+        for (uint item = 9100; item < 9100 + DenseCityRecipes; item++)
+            items.Templates.Templates.Add(new ItemTemplate { Entry = item, Name = $"potion {item}", Class = (uint)ItemClass.Consumable,
+                InventoryType = (uint)InventoryType.NonEquip, ItemLevel = 5, Quality = 1, Stackable = 20,
+                AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue });
+        using IDisposable itemScope = items.Use();
+        DenseCityServices.Current.Value = new DenseCityFixture();
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Count >= DenseCityFixture.Total, "the city is visible");
+                const int thinks = 100;
+                (double ms, long bytes, bool candidate, bool acted) = await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.Money = 100_000;
+                    TeachDenseCitySpellbook(session, player);
+                    bool has = false, step = false;
+                    for (int warm = 0; warm < 5; warm++) { goals.BeginThink(); has |= goals.HasCandidate(player); step |= goals.Update(player, 1500); }
+                    long before = GC.GetAllocatedBytesForCurrentThread();
+                    long started = Stopwatch.GetTimestamp();
+                    for (int i = 0; i < thinks; i++)
+                    {
+                        goals.BeginThink();
+                        has |= goals.HasCandidate(player);
+                        step |= goals.Update(player, 1500);
+                    }
+
+                    return ((Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency, GC.GetAllocatedBytesForCurrentThread() - before,
+                        has, step);
+                });
+                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"BENCH dense-city-money: {DenseCityFixture.Vendors} vendors x 30 rows, {DenseCityFixture.Trainers} trainers, "
+                    + $"{DenseCitySpells} spells ({DenseCityRecipes} recipes); ms/think (HasCandidate + Update) {ms / thinks:F4}, "
+                    + $"allocated {bytes / thinks} B/think"));
+                Assert.False(candidate, "a vendor was of use: the scan stopped early and measured nothing");
+                Assert.False(acted);
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { DenseCityServices.Current.Value = null; }
+    }
+
+    internal const int DenseCitySpells = 160, DenseCityRecipes = 12;
+
+    /// <summary>
+    /// A spellbook like a mid-level bot's: <see cref="DenseCitySpells"/> spells, <see cref="DenseCityRecipes"/> of them recipes that make a
+    /// consumable the bot wants (so every vendor row is checked against their reagents, items no vendor sells), the rest plain spells.
+    /// </summary>
+    internal static void TeachDenseCitySpellbook(WorldSession session, Player player)
+    {
+        SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+        var spells = new List<SpellInfo>();
+        for (uint i = 0; i < DenseCitySpells; i++)
+        {
+            uint id = 995000 + i;
+            spells.Add(i < DenseCityRecipes
+                ? new SpellInfo
+                {
+                    Id = id,
+                    Effects = [new SpellEffectInfo { Effect = SpellEffectName.CreateItem, ItemType = 9100 + i }, new(), new()],
+                    Reagents = [new SpellReagent(9300 + i, 2), new SpellReagent(9400 + i, 1)],
+                    Totems = [9500 + i, 0],
+                }
+                : new SpellInfo { Id = id, Effects = [new SpellEffectInfo { Effect = SpellEffectName.SchoolDamage }, new(), new()] });
+        }
+
+        feature.System.Store = new SpellStore(spells, [], []);
+        foreach (SpellInfo spell in spells) feature.Spellbook.LearnSpell(player, spell.Id);
     }
 
     private async Task Measure(string label, Vector3 start, double maxQueriesPerThink = 1.0)

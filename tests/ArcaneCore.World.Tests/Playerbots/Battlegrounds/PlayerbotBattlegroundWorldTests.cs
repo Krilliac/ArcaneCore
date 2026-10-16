@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -36,9 +37,9 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>The start countdown is two minutes of game time; a wait for the gates gets three.</summary>
-    private static readonly TimeSpan StartWait = TimeSpan.FromMinutes(3);
+    internal static readonly TimeSpan StartWait = TimeSpan.FromMinutes(3);
 
-    private static async Task RunAsync(ScenarioTestWorld world, string name, Func<ScenarioContext, Task> body)
+    internal static async Task RunAsync(ScenarioTestWorld world, string name, Func<ScenarioContext, Task> body)
     {
         ScenarioReport report = await world.RunAsync(new Scenario(name, body), new ScenarioRunOptions
         {
@@ -48,15 +49,15 @@ public sealed class PlayerbotBattlegroundWorldTests
         Assert.True(report.Passed, report + Environment.NewLine + world.Trace());
     }
 
-    private static BattlegroundManager Manager(ScenarioContext context) => context.Services.GetRequiredService<BattlegroundFeature>().Manager;
+    internal static BattlegroundManager Manager(ScenarioContext context) => context.Services.GetRequiredService<BattlegroundFeature>().Manager;
 
-    private static PlayerbotBattlegroundCoordinator Coordinator(ScenarioContext context) => context.Services.GetRequiredService<PlayerbotBattlegroundCoordinator>();
+    internal static PlayerbotBattlegroundCoordinator Coordinator(ScenarioContext context) => context.Services.GetRequiredService<PlayerbotBattlegroundCoordinator>();
 
     /// <summary>
     /// <see cref="ScenarioContext.WaitUntilAsync"/>, and on a timeout the facts of <paramref name="bots"/> (map, place, binding, the coordinator's
     /// view) in the failure: the scenario's own trace is taken after the run stopped every bot.
     /// </summary>
-    private static async Task WaitExplainedAsync(ScenarioContext context, string what, Func<bool> condition, TimeSpan timeout, params ScenarioBot[] bots)
+    internal static async Task WaitExplainedAsync(ScenarioContext context, string what, Func<bool> condition, TimeSpan timeout, params ScenarioBot[] bots)
     {
         try
         {
@@ -72,7 +73,7 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>An autonomous bot: logged in (scripted, so the run records its packets), then handed to its brain and the coordinators.</summary>
-    private static async Task<ScenarioBot> AutonomousAsync(ScenarioContext context, string name, byte race)
+    internal static async Task<ScenarioBot> AutonomousAsync(ScenarioContext context, string name, byte race)
     {
         ScenarioBot bot = await context.LoginAsync(name, race, characterClass: 1);
         await context.AutonomousAsync(bot);
@@ -80,7 +81,7 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>A scripted Horde opponent queues at its battlemaster for <paramref name="type"/> (it never fights; the coordinator never drives it).</summary>
-    private static async Task<ScenarioBot> ScriptedHordeQueuesAsync(ScenarioContext context, string name, BattlegroundType type, uint master)
+    internal static async Task<ScenarioBot> ScriptedHordeQueuesAsync(ScenarioContext context, string name, BattlegroundType type, uint master)
     {
         ScenarioBot horde = await context.LoginAsync(name, race: 2, characterClass: 1);
         await context.StepAsync($"{name} queues for {type}", async () =>
@@ -98,7 +99,7 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>The scripted bot takes its invitation and ports in, then is parked where it is out of everyone's way.</summary>
-    private static Task PortScriptedAsync(ScenarioContext context, ScenarioBot bot, uint map, (float X, float Y, float Z)? park)
+    internal static Task PortScriptedAsync(ScenarioContext context, ScenarioBot bot, uint map, (float X, float Y, float Z)? park)
         => context.StepAsync($"{bot.Name} ports in", async () =>
         {
             await context.WaitUntilAsync($"{bot.Name} is invited", () => Manager(context).StateOf(bot.Guid).InvitedInstance((BattlegroundQueueType)(byte)BattlegroundManager.TypeOfMap(map)) != 0, StartWait);
@@ -642,7 +643,7 @@ public sealed class PlayerbotBattlegroundWorldTests
     // --- Alterac Valley ------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task Av_IsRefused_NoBotQueues_EvenWithATemplateAndABattlemasterBesideIt()
+    public async Task Av_TwoAutonomousBots_Queue_PortIntoOneMatch_AndPlayTheObjective()
     {
         await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(null, BattlegroundType.AlteracValley);
         await RunAsync(world, "bg-av-flow", async context =>
@@ -670,8 +671,81 @@ public sealed class PlayerbotBattlegroundWorldTests
             {
                 await context.WaitUntilAsync("the match is in progress", () => match.Status == BattlegroundStatus.InProgress, StartWait);
                 await WaitExplainedAsync(context, "the Alliance bot advances or fights in Alterac Valley",
-                    () => coordinator.Find(ally.BotId)?.AI?.Activity is "av-advance" or "av-claim-banner" or "fighting",
+                    () => coordinator.Find(ally.BotId)?.AI?.Activity is "av-advance" or "av-assault" or "av-claim-banner" or "fighting",
                     TimeSpan.FromSeconds(30), ally, horde);
+            });
+        });
+    }
+
+    /// <summary>
+    /// The Alterac Valley objective flow through the real paths: the Alliance bot leaves its start cave for the Horde-held Iceblood graveyard
+    /// (node 4, the first actionable step of its lane), kills the hostile guard before the banner, casts 21651 at the Horde banner (178364) and
+    /// the match turns the opened banner into the assault (node 4 Alliance-owned and assaulted, its graveyards-assaulted score 1). Killed
+    /// there, it is released to its team's nearest held graveyard (the start cave: Iceblood is only assaulted) and waits within the spirit
+    /// guide's wave for the resurrection instead of running back to its body 60 yards away.
+    /// </summary>
+    [Fact]
+    public async Task Av_AutonomousBot_KillsTheGuard_AssaultsTheIcebloodGraveyard_AndWhenKilledWaitsForTheSpiritGuide()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(null, BattlegroundType.AlteracValley);
+        await RunAsync(world, "bg-av-assault", async context =>
+        {
+            ScenarioBot ally = await AutonomousAsync(context, "Bgavassa", race: 1);
+            ScenarioBot horde = await ScriptedHordeQueuesAsync(context, "Bgavassh", BattlegroundType.AlteracValley, Content.HordeAvMaster);
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            await PortScriptedAsync(context, horde, 30, (-100f, 300f, Content.AvFloor));
+            await context.StepAsync("the Alliance bot is in the match", () => context.WaitUntilAsync("in the match",
+                () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch, TimeSpan.FromSeconds(60)));
+            var av = (AlteracValley)(await context.BattlegroundOfAsync(ally))!;
+            coordinator.Options.QueueChancePerMinute = 0f;
+            await context.StepAsync("the gates open", () => context.WaitUntilAsync("in progress", () => av.Status == BattlegroundStatus.InProgress, StartWait));
+
+            Game.Creatures.Creature guard = await context.ReadAsync(() => ally.RequirePlayer().Map!.FindUpdater<Game.Creatures.CreatureMapSystem>()!
+                .Creatures.Single(c => c.Entry == Content.AvGuardEntry));
+            await context.StepAsync("the bot fights and kills the hostile guard on its way", () => WaitExplainedAsync(context, "the guard is dead",
+                () => !guard.IsAlive, TimeSpan.FromSeconds(90), ally));
+
+            long mark = ally.Mark();
+            await context.StepAsync("the bot casts 21651 at the Horde banner and Iceblood is assaulted by the Alliance", async () =>
+            {
+                await WaitExplainedAsync(context, "Iceblood assaulted",
+                    () => av.NodeOwner(AlteracValley.NodeIcebloodGrave) == 0 && av.NodeState(AlteracValley.NodeIcebloodGrave) == AlteracValley.PointAssaulted,
+                    TimeSpan.FromSeconds(90), ally);
+                ScenarioContext.ExpectEqual(1, await context.ReadAsync(() => av.NodeTotalOwner(AlteracValley.NodeIcebloodGrave)), "the total owner (Horde until taken)");
+                ScenarioContext.Expect(ally.Received(WorldOpcode.SmsgSpellGo, SpellIdOf, mark).Contains(PlayerbotBattlegroundAI.BannerSpell), "no SMSG_SPELL_GO of 21651");
+                ScenarioContext.ExpectEqual(1u, await context.ReadAsync(() => ((AvScore)av.ScoreOf(ally.Guid)!).GraveyardsAssaulted), "the bot's graveyards assaulted");
+                ScenarioContext.Expect(coordinator.Find(ally.BotId)?.AI?.BannerCasts >= 1, "the AI submitted no banner cast");
+            });
+
+            System.Numerics.Vector3 body = default;
+            await context.StepAsync("killed at the graveyard, the bot waits at the spirit guide and never runs to its body", async () =>
+            {
+                body = await context.ReadAsync(() =>
+                {
+                    Player p = ally.RequirePlayer();
+                    p.Health = 0;
+                    p.Map!.Combat.KillPlayer(p);
+                    return new System.Numerics.Vector3(p.X, p.Y, p.Z);
+                });
+                await WaitExplainedAsync(context, "the ghost is at the spirit guide", () => coordinator.Find(ally.BotId)?.AI?.Activity == "spirit-guide",
+                    TimeSpan.FromSeconds(60), ally);
+                float closestToBody = float.MaxValue, farthestFromGuide = 0f;
+                for (int second = 0; second < 40; second++)
+                {
+                    await context.IdleAsync(TimeSpan.FromSeconds(1));
+                    (bool ghost, System.Numerics.Vector3 at) = await context.ReadAsync(() =>
+                    {
+                        Player p = ally.RequirePlayer();
+                        return ((p.Flags & PlayerFlags.Ghost) != 0, new System.Numerics.Vector3(p.X, p.Y, p.Z));
+                    });
+                    ScenarioContext.Expect(ghost, $"the bot is no ghost after {second} s (it reclaimed its body)");
+                    closestToBody = MathF.Min(closestToBody, System.Numerics.Vector3.Distance(at, body));
+                    farthestFromGuide = MathF.Max(farthestFromGuide, System.Numerics.Vector3.Distance(at, Content.AvSpiritGuideAt));
+                }
+
+                ScenarioContext.Expect(farthestFromGuide <= 20f, $"the ghost left the spirit guide's wave ({farthestFromGuide:F1} yd)");
+                ScenarioContext.Expect(closestToBody >= 30f, $"the ghost ran towards its body ({closestToBody:F1} yd)");
+                ScenarioContext.ExpectEqual("spirit-guide", coordinator.Find(ally.BotId)?.AI?.Activity, "activity");
             });
         });
     }

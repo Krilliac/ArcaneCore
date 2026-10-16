@@ -355,7 +355,9 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
                 Mode = SqliteOpenMode.ReadWriteCreate,
                 Cache = SqliteCacheMode.Private,
                 Pooling = false,
-                DefaultTimeout = 1,
+                // The shipped lock waits, not a shorter fixture bound: Microsoft.Data.Sqlite's 30 s Default Timeout, which the characters
+                // database's Database:SqliteWriteTimeoutMs (5 s) lowers as on a real server. A one-second bound failed a save that met another
+                // writer's commit on a loaded CI runner ("database is locked"; SyntheticServerSqliteLockTests).
             }.ToString();
         }
 

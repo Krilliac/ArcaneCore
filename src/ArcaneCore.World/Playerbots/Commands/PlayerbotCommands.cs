@@ -10,6 +10,7 @@ using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
@@ -18,7 +19,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.World.Playerbots.Commands;
 
 /// <summary>
-/// Player-accessible and operator companion extensions under <c>.playerbot</c> (<c>gear</c> and <c>party</c>)
+/// Player-accessible and operator companion extensions under <c>.playerbot</c> (<c>gear</c>, <c>party</c> and <c>raid</c>)
 /// plus the <c>.bot</c> root shorthand (<see cref="BotAliasCommands"/>).
 /// </summary>
 public sealed class PlayerbotExtraCommands : ICommandExtension
@@ -42,12 +43,15 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         new ChatCommand("gear", AccountSecurity.GameMaster,
             "Syntax: .playerbot gear $id|$name\nShow a running bot's equipped items, free bag slots, gold and skills.",
             Gear),
+        new ChatCommand("raid", AccountSecurity.GameMaster,
+            "Syntax: .playerbot raid #count\nGather #count online autonomous bots near your level into your raid and summon them to you. With no group a raid is formed; a party is converted to a raid (you must lead it). The count is clamped to the free raid slots (40 members); tanks and healers are mixed in as for a bot raid run.",
+            RaidGather),
         new ChatCommand("party", AccountSecurity.GameMaster,
             "Syntax: .playerbot party <fill|add|remove|list>\nManage playerbot party members.",
             Children:
             [
                 new ChatCommand("fill", AccountSecurity.GameMaster,
-                    "Syntax: .playerbot party fill\nInvite up to 4 online autonomous bots near your level into your party and summon them to you.",
+                    "Syntax: .playerbot party fill\nInvite online autonomous bots near your level and summon them to you: a party is filled to 5; in a raid, up to 5 more per use (at most 40). Use .playerbot raid #count for a larger raid.",
                     PartyFill),
                 new ChatCommand("add", AccountSecurity.GameMaster,
                     "Syntax: .playerbot party add $id|$name\nInvite a running bot into your party.",
@@ -66,7 +70,7 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         bool isGm = context.IsConsole || context.Security >= AccountSecurity.GameMaster || (!context.IsConsole && context.Player.IsGameMaster);
         context.Reply(PlayerbotChatCommands.HelpFor(isGm));
         context.Reply(isGm
-            ? "Dot commands: .bot <commands|gear|summon|party|status|list|debug|cadence> (or .playerbot ...)."
+            ? "Dot commands: .bot <commands|gear|summon|party|raid|status|list|debug|cadence> (or .playerbot ...)."
             : "Dot commands: .bot <commands|gear|summon|party <fill|add|remove|list>>.");
         return true;
     }
@@ -301,6 +305,10 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         return true;
     }
 
+    /// <summary>
+    /// <c>.bot party fill</c>: invite online autonomous bots near the caller's level and summon them. A party (or no group) is filled
+    /// to five; a raid takes one more subgroup's worth, up to forty (<see cref="PlayerbotGroupFill.PartyFillCount"/>).
+    /// </summary>
     internal static bool PartyFill(CommandContext context, string text)
     {
         if (text.Trim().Length != 0)
@@ -323,15 +331,127 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         Player leader = context.Player;
         GroupManager? groups = context.Session.Services.GetService<SocialFeature>()?.Context.Groups;
         Group? existingGroup = groups?.GetGroup(leader.Guid);
-        int currentMembers = existingGroup?.Members.Count ?? 1;
-        int needed = Math.Clamp(5 - currentMembers, 0, 4);
+        bool raid = existingGroup is { IsRaid: true };
+        int needed = PlayerbotGroupFill.PartyFillCount(raid, existingGroup?.MemberCount ?? 1);
         if (needed == 0)
         {
-            context.Reply("Your party is already full.");
+            context.Reply(raid ? "Your raid is already full." : "Your party is already full.");
             return true;
         }
 
-        var candidates = new List<(Guid BotId, Player Bot, int LevelDiff)>();
+        (int tanks, int healers) = PlayerbotGroupFill.RoleTargets(needed, feature.BotOptions.Groups);
+        List<PlayerbotFillCandidate> selected = PlayerbotGroupFill.Select(FillCandidates(feature, groups, leader), needed, tanks, healers);
+        if (selected.Count == 0)
+        {
+            context.Reply("Playerbot party fill: no eligible online bots found.");
+            return true;
+        }
+
+        List<string> invitedNames = InviteAndSummon(context, feature, groups, leader, selected, makeRaid: false, out _);
+        context.Reply(invitedNames.Count == 0
+            ? "Playerbot party fill: 0 bots invited."
+            : $"Playerbot party fill: invited {invitedNames.Count} ({PlayerbotGroupFill.Names(invitedNames)}).");
+        return true;
+    }
+
+    /// <summary>
+    /// <c>.bot raid N</c>: gather N online autonomous bots into the caller's raid. With no group one is formed and made a raid; a party
+    /// is converted to a raid, which only its leader can do; N is clamped to the free raid slots. The bots are picked as party fill
+    /// picks them, with the raid run's tank and healer make-up (<see cref="PlayerbotGroupFill.RoleTargets"/>), invited, made to accept
+    /// and summoned.
+    /// </summary>
+    internal static bool RaidGather(CommandContext context, string text)
+    {
+        var args = new CommandArgs(text);
+        if (!args.ExtractInt32(out int requested) || requested < 1 || !args.IsEmpty)
+        {
+            return false;
+        }
+
+        if (context.IsConsole)
+        {
+            context.Reply(GmStrings.ConsoleNeedsPlayer);
+            return true;
+        }
+
+        if (context.Session.Services.GetService<ManagedPlayerbotFeature>() is not { } feature
+            || context.Session.Services.GetService<SocialFeature>()?.Context.Groups is not { } groups)
+        {
+            context.Reply("Playerbot service is unavailable.");
+            return true;
+        }
+
+        Player leader = context.Player;
+        Group? group = groups.GetGroup(leader.Guid);
+        if (RaidRefusal(group, leader.Guid) is { } refusal)
+        {
+            context.Reply("Playerbot raid: " + refusal);
+            return true;
+        }
+
+        if (group is null && groups.GetInvite(leader.Guid) is { } pending && !pending.IsLeader(leader.Guid))
+        {
+            context.Reply("Playerbot raid: answer your pending group invitation first.");
+            return true;
+        }
+
+        (int count, bool clamped) = PlayerbotGroupFill.RaidFillCount(requested, group?.MemberCount ?? 1);
+        if (count == 0)
+        {
+            context.Reply(string.Create(CultureInfo.InvariantCulture,
+                $"Playerbot raid: your raid is already full ({Group.MaxRaidSize}/{Group.MaxRaidSize})."));
+            return true;
+        }
+
+        if (clamped)
+        {
+            context.Reply(string.Create(CultureInfo.InvariantCulture,
+                $"Playerbot raid: {requested} requested, clamped to the {count} free raid slot{(count == 1 ? string.Empty : "s")}."));
+        }
+
+        (int tanks, int healers) = PlayerbotGroupFill.RoleTargets(count, feature.BotOptions.Groups);
+        List<PlayerbotFillCandidate> selected = PlayerbotGroupFill.Select(FillCandidates(feature, groups, leader), count, tanks, healers);
+        if (selected.Count == 0)
+        {
+            context.Reply("Playerbot raid: no eligible online bots found.");
+            return true;
+        }
+
+        bool wasRaid = group is { IsRaid: true }, hadGroup = group is not null;
+        List<string> invitedNames = InviteAndSummon(context, feature, groups, leader, selected, makeRaid: true, out string? stopped);
+        group = groups.GetGroup(leader.Guid);
+        string formed = wasRaid || group is not { IsRaid: true } ? string.Empty : hadGroup ? ", party converted to a raid" : ", raid formed";
+        int tankCount = selected.Count(c => invitedNames.Contains(c.Name) && PlayerbotGroupContent.CanTank(c.Class));
+        int healerCount = selected.Count(c => invitedNames.Contains(c.Name) && PlayerbotGroupContent.CanHeal(c.Class));
+        context.Reply(invitedNames.Count == 0
+            ? $"Playerbot raid: 0 bots invited{(stopped is null ? "." : $" ({stopped}).")}"
+            : string.Create(CultureInfo.InvariantCulture,
+                $"Playerbot raid: invited {invitedNames.Count} of {count}{formed}; raid {group?.MemberCount ?? 1}/{Group.MaxRaidSize} ({tankCount} tank-capable, {healerCount} healer-capable): {PlayerbotGroupFill.Names(invitedNames)}."));
+        if (stopped is not null && invitedNames.Count > 0)
+        {
+            context.Reply($"Playerbot raid: stopped early ({stopped}).");
+        }
+
+        return true;
+    }
+
+    /// <summary>Why <c>.bot raid</c> refuses the caller's group, or null: a party only its leader converts, a raid only its leader or an assistant fills.</summary>
+    internal static string? RaidRefusal(Group? group, ObjectGuid caller)
+    {
+        if (group is null) return null;
+        if (group.IsBattlegroundGroup) return "you are in a battleground group.";
+        if (!group.IsRaid && !group.IsLeader(caller)) return $"only the party leader ({group.LeaderName}) can convert the party to a raid.";
+        if (group.IsRaid && !group.IsLeaderOrAssistant(caller)) return $"only the raid leader ({group.LeaderName}) or an assistant can invite.";
+        return null;
+    }
+
+    /// <summary>
+    /// The bots party fill and <c>.bot raid</c> may take: running, managed, in the world and alive, of the caller's team, not scripted
+    /// and in no group (and no other pending invitation).
+    /// </summary>
+    private static List<PlayerbotFillCandidate> FillCandidates(ManagedPlayerbotFeature feature, GroupManager? groups, Player leader)
+    {
+        var candidates = new List<PlayerbotFillCandidate>();
         foreach (PlayerbotStatus status in feature.Snapshot())
         {
             if (status.State != ManagedPlayerbotState.Running)
@@ -350,74 +470,61 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
                 continue;
             }
 
-            if (groups?.GetGroup(bot.Guid) is not null)
+            if (groups?.GetGroup(bot.Guid) is not null || groups?.GetInvite(bot.Guid) is not null)
             {
                 continue;
             }
 
-            int diff = Math.Abs((int)bot.Level - leader.Level);
-            candidates.Add((status.BotId, bot, diff));
+            candidates.Add(new PlayerbotFillCandidate(status.BotId, bot.Name, bot.Class, Math.Abs((int)bot.Level - leader.Level)));
         }
 
-        List<(Guid BotId, Player Bot, int LevelDiff)> pool = candidates.Where(c => c.LevelDiff <= 5).ToList();
-        if (pool.Count < needed)
-        {
-            pool = candidates.OrderBy(c => c.LevelDiff).ToList();
-        }
-        else
-        {
-            pool = pool.OrderBy(c => c.LevelDiff).ToList();
-        }
+        return candidates;
+    }
 
-        var selected = new List<(Guid BotId, Player Bot)>(needed);
-        void PickRole(Func<Class, bool> predicate)
-        {
-            if (selected.Count >= needed)
-            {
-                return;
-            }
-
-            int idx = pool.FindIndex(c => predicate(c.Bot.Class));
-            if (idx >= 0)
-            {
-                selected.Add((pool[idx].BotId, pool[idx].Bot));
-                pool.RemoveAt(idx);
-            }
-        }
-
-        PickRole(static cls => cls is Class.Warrior or Class.Druid or Class.Paladin);
-        PickRole(static cls => cls is Class.Priest or Class.Paladin or Class.Shaman or Class.Druid);
-        while (selected.Count < needed && pool.Count > 0)
-        {
-            selected.Add((pool[0].BotId, pool[0].Bot));
-            pool.RemoveAt(0);
-        }
-
-        if (selected.Count == 0)
-        {
-            context.Reply("Playerbot party fill: no eligible online bots found.");
-            return true;
-        }
-
+    /// <summary>
+    /// Invite each selected bot (it accepts at once: <see cref="ManagedPlayerbotFeature.InviteToGroup"/>) and summon it to the leader
+    /// unless it is already being teleported. With <paramref name="makeRaid"/> the group is made a raid as soon as it has two members
+    /// (before the sixth would be refused); <paramref name="stopped"/> says why the invites stopped early, null when they did not.
+    /// </summary>
+    private static List<string> InviteAndSummon(CommandContext context, ManagedPlayerbotFeature feature, GroupManager? groups, Player leader,
+        IReadOnlyList<PlayerbotFillCandidate> selected, bool makeRaid, out string? stopped)
+    {
+        stopped = null;
         TeleportFeature? tele = context.Session.Services.GetService<TeleportFeature>();
         var invitedNames = new List<string>(selected.Count);
-        foreach ((Guid botId, Player bot) in selected)
+        foreach (PlayerbotFillCandidate candidate in selected)
         {
-            PlayerbotOperationResult res = feature.InviteToGroup(leader, botId.ToString());
-            if (res.Success)
+            if (makeRaid && groups?.GetGroup(leader.Guid) is { IsRaid: false } party)
             {
-                invitedNames.Add(bot.Name);
-                if (tele is not null && leader.Map is not null && !tele.Teleports.IsBeingTeleported(bot))
+                groups.ConvertToRaid(leader);
+                if (!party.IsRaid)
                 {
-                    tele.Teleports.TeleportTo(bot, leader.MapId, leader.X, leader.Y, leader.Z, leader.Orientation);
+                    stopped = "the party could not be converted to a raid";
+                    break;
                 }
+            }
+
+            PlayerbotOperationResult res = feature.InviteToGroup(leader, candidate.BotId.ToString());
+            if (!res.Success)
+            {
+                continue;
+            }
+
+            invitedNames.Add(candidate.Name);
+            if (tele is not null && leader.Map is not null && feature.FindSession(candidate.BotId)?.Player is { } bot
+                && !tele.Teleports.IsBeingTeleported(bot))
+            {
+                tele.Teleports.TeleportTo(bot, leader.MapId, leader.X, leader.Y, leader.Z, leader.Orientation);
             }
         }
 
-        context.Reply(invitedNames.Count == 0
-            ? "Playerbot party fill: 0 bots invited."
-            : $"Playerbot party fill: invited {invitedNames.Count} ({string.Join(", ", invitedNames)}).");
-        return true;
+        if (makeRaid && stopped is null && groups?.GetGroup(leader.Guid) is { IsRaid: false } formed)
+        {
+            groups.ConvertToRaid(leader);
+            if (!formed.IsRaid) stopped = "the party could not be converted to a raid";
+        }
+
+        return invitedNames;
     }
 
     internal static bool SummonSingleOrFleet(CommandContext context, string text)
@@ -514,7 +621,7 @@ public sealed class BotAliasCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("bot", AccountSecurity.GameMaster,
-            "Syntax: .bot <commands|status|list|debug|anomalies|gear|summon|party>\nShorthand for .playerbot commands.",
+            "Syntax: .bot <commands|status|list|debug|anomalies|gear|summon|party|raid>\nShorthand for .playerbot commands.",
             Children:
             [
                 new ChatCommand("commands", AccountSecurity.GameMaster,
@@ -549,12 +656,15 @@ public sealed class BotAliasCommands : ICommandGroup
                 new ChatCommand("summon", AccountSecurity.GameMaster,
                     "Syntax: .bot summon $id|$name\nTeleport a party bot (or fleet selection for GMs) to you.",
                     PlayerbotExtraCommands.SummonSingleOrFleet),
+                new ChatCommand("raid", AccountSecurity.GameMaster,
+                    "Syntax: .bot raid #count\nGather #count online autonomous bots near your level into your raid and summon them to you. With no group a raid is formed; a party is converted to a raid (you must lead it). The count is clamped to the free raid slots (40 members); tanks and healers are mixed in as for a bot raid run.",
+                    PlayerbotExtraCommands.RaidGather),
                 new ChatCommand("party", AccountSecurity.GameMaster,
                     "Syntax: .bot party <fill|add|remove|list>\nManage playerbot party members.",
                     Children:
                     [
                         new ChatCommand("fill", AccountSecurity.GameMaster,
-                            "Syntax: .bot party fill\nInvite up to 4 online autonomous bots near your level into your party and summon them to you.",
+                            "Syntax: .bot party fill\nInvite online autonomous bots near your level and summon them to you: a party is filled to 5; in a raid, up to 5 more per use (at most 40). Use .bot raid #count for a larger raid.",
                             PlayerbotExtraCommands.PartyFill),
                         new ChatCommand("add", AccountSecurity.GameMaster,
                             "Syntax: .bot party add $id|$name\nInvite a running bot into your party.",

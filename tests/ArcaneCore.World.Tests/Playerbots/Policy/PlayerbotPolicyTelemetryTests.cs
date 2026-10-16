@@ -117,7 +117,7 @@ public sealed class PlayerbotPolicyTelemetryTests
             string line = Assert.Single(Directory.GetFiles(directory).SelectMany(File.ReadAllLines));
             using JsonDocument document = JsonDocument.Parse(line);
             JsonElement root = document.RootElement;
-            Assert.Equal(["v", "k", "t", "bot", "map", "zone", "f", "open", "ladder", "pick", "src", "x", "goal", "kind", "w", "o"],
+            Assert.Equal(["v", "k", "t", "bot", "map", "zone", "f", "open", "ladder", "pick", "src", "x", "arm", "goal", "kind", "w", "o"],
                 root.EnumerateObject().Select(p => p.Name));
             Assert.Equal(2, root.GetProperty("v").GetInt32());
             Assert.Equal("goal", root.GetProperty("k").GetString());
@@ -130,6 +130,7 @@ public sealed class PlayerbotPolicyTelemetryTests
             Assert.Equal("Explore", root.GetProperty("pick").GetString());
             Assert.Equal("explored", root.GetProperty("src").GetString());
             Assert.Equal(1, root.GetProperty("x").GetInt32());
+            Assert.Equal("policy", root.GetProperty("arm").GetString());
             Assert.Equal("Explore", root.GetProperty("goal").GetString());
             Assert.Equal("Explore", root.GetProperty("kind").GetString());
             Assert.Equal(300, root.GetProperty("w").GetInt32());

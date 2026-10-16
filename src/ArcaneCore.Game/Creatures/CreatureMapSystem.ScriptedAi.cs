@@ -24,6 +24,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>vmangos Player::KilledMonster(cInfo, guid) from a script: the kill credit of <paramref name="entry"/> without group credit.</summary>
     internal void KilledMonsterCredit(Player player, uint entry, ObjectGuid source) => _ai.ScriptQuests?.KilledMonsterCredit(player, entry, source);
 
+    /// <summary>cmangos Player::TalkedToCreature(entry, guid) from a script: the speak-to credit of <paramref name="entry"/>.</summary>
+    internal void TalkedToCreature(Player player, uint entry, ObjectGuid source) => _ai.ScriptQuests?.TalkedToCreature(player, entry, source);
+
     /// <summary>cmangos <c>Player::GetQuestStatus(questId) == QUEST_STATUS_INCOMPLETE</c> from a script; false without the quest seam.</summary>
     internal bool QuestIncomplete(Player player, uint questId) => _ai.ScriptQuests?.IsQuestIncomplete(player, questId) ?? false;
 

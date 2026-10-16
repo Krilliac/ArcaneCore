@@ -6,6 +6,7 @@ using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -87,6 +88,24 @@ public sealed class PlayerbotRecoveryDecisionTests
     [InlineData(true, true, false, true, true, "ResumeCorpseRun")]
     public void DecideSpiritHealer_WithTheBodyOnThisMap(bool healer, bool inReach, bool graveyard, bool stalled, bool bodyRunLeft, string expected)
         => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled, bodyRunLeft));
+
+    /// <summary>
+    /// A ghost already on its graveyard with no healer in sight (live 2026-10-16, graveyard 129 at Rut'theran, which has none): walking
+    /// to the point it stands on can never close ("0.6 yd away cannot be reached"), so it goes back to the body once, else waits, and a
+    /// stall gives up. A graveyard further away is still walked to.
+    /// </summary>
+    [Theory]
+    [InlineData(false, true, "ResumeCorpseRun")]
+    [InlineData(false, false, "WaitForHealer")]
+    [InlineData(true, false, "Fault")]
+    public void DecideSpiritHealer_OnAGraveyardWithoutAHealer_DoesNotWalkToIt(bool stalled, bool bodyRunLeft, string expected)
+    {
+        Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healerKnown: false, healerInReach: false,
+            graveyardKnown: true, stalled, bodyRunLeft, graveyardInReach: true));
+        if (!stalled)
+            Assert.Equal(Healer.WalkToGraveyard, PlayerbotRecovery.DecideSpiritHealer(healerKnown: false, healerInReach: false,
+                graveyardKnown: true, stalled, bodyRunLeft: false, graveyardInReach: false));
+    }
 
     /// <summary>
     /// A stalled fallback with a healer in sight but out of reach tries the long way round to it once (DetourToHealer), then the body,
@@ -645,13 +664,14 @@ public sealed class PlayerbotRecoveryDecisionTests
     }
 
     /// <summary>
-    /// A ghost with no way back and no spirit healer or graveyard anywhere faults — but only once the fallback has failed too, with
-    /// its own code: finding neither is no fault by itself (a healer not yet seen, an area not yet known are transients), so the
-    /// ghost waits and looks again, and faults when the fallback has made no progress for <see cref="PlayerbotRecovery.NoProgressMs"/>.
-    /// Before, the first look that found neither threw at once.
+    /// A ghost with no way back and no spirit healer or graveyard anywhere: finding neither is no fault by itself (a healer not yet
+    /// seen, an area not yet known are transients), so the ghost waits and looks again; when the fallback has made no progress for
+    /// <see cref="PlayerbotRecovery.NoProgressMs"/> it gives up — reported once (<c>recovery/spirit-healer-failed</c>), and the ghost
+    /// stands. Never an exception: <see cref="PlayerbotRecovery.SpiritHealerFailed"/> was thrown as control flow, and the brain's think
+    /// fault quarantined the bot and then disabled it (live 2026-10-16, graveyard 129).
     /// </summary>
     [Fact]
-    public async Task WithoutAnySpiritHealer_TheRecoveryFaultsOnlyWhenTheFallbackFails()
+    public async Task WithoutAnySpiritHealer_TheFallbackGivesUpWithoutThrowing()
     {
         await using DungeonBotHost host = await DungeonBotHost.StartAsync();
         // Kalimdor: no graveyard, no healer, no trigger.
@@ -664,8 +684,9 @@ public sealed class PlayerbotRecoveryDecisionTests
         });
 
         var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
+        using AnomalyCapture cap = H1AnomalyKit.CaptureFor(host.Player);
         InvalidOperationException? fault = null;
-        long faultAt = 0, fallbackAt = -1, start = (long)host.Host.World.Uptime.TotalMilliseconds;
+        long faultAt = -1, fallbackAt = -1, start = (long)host.Host.World.Uptime.TotalMilliseconds;
         bool waited = false;
         int resumed = 0;
         for (int think = 0; think < 400 && fault is null; think++)
@@ -682,12 +703,15 @@ public sealed class PlayerbotRecoveryDecisionTests
                     if (fallbackAt < 0 && recovery.UsingSpiritHealer) fallbackAt = (long)host.Host.World.Uptime.TotalMilliseconds;
                 }
             });
-            faultAt = (long)host.Host.World.Uptime.TotalMilliseconds;
+            if (faultAt < 0 && recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.Fault)
+                faultAt = (long)host.Host.World.Uptime.TotalMilliseconds;
             if (fault is null) await host.AdvanceAsync(500);
         }
 
-        Assert.NotNull(fault);
-        Assert.Equal(PlayerbotRecovery.SpiritHealerFailed, fault!.Message);
+        Assert.Null(fault);
+        Assert.Equal(PlayerbotSpiritHealerStep.Fault, recovery.LastSpiritHealerStep);
+        Assert.Equal(1, cap.Count(PlayerbotAnomalies.Key("recovery", "spirit-healer-failed")));
+        await host.OnWorldAsync(() => Assert.True(host.Player.IsInWorld && !host.Player.IsAlive));
         Assert.True(waited, "the ghost never waited for a healer");
         // The body is on this map: the fallback went back to it once (it is still out of reach here), then waited and faulted.
         Assert.Equal(1, resumed);

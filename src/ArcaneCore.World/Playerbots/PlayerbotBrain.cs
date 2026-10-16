@@ -156,6 +156,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotQuestGoals _quests = new(session, options);
     private readonly PlayerbotTownGoals _town = new(session, options);
     private readonly PlayerbotEconomy _economy = new(session, options);
+    private readonly PlayerbotBank _bank = new(session, options);
+
+    /// <summary>The bot's bank errand at its capital home (<see cref="PlayerbotBank"/>; tests, inspection).</summary>
+    internal PlayerbotBank Bank => _bank;
     private readonly PlayerbotBudget _budget = new(session, options);
     private readonly PlayerbotRidingTrips _riding = new(session, options);
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
@@ -249,6 +253,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <see cref="PlayerbotPolicyGoal.Opportunity"/> from this and not from the goal kind.
     /// </summary>
     internal bool OpportunityDriven { get; private set; }
+
+    /// <summary>
+    /// The quest destinations controller planned the latest think's trip (the ladder's quest-travel rung, or a promoted
+    /// <see cref="PlayerbotPolicyGoal.QuestTravel"/>). The trip's goal kind is <see cref="PlayerbotGoalKind.Quest"/>, the same as a quest
+    /// worked in sight, so the policy telemetry labels the decision <see cref="PlayerbotPolicyGoal.QuestTravel"/> from this.
+    /// </summary>
+    internal bool QuestTravelDriven { get; private set; }
 
     /// <summary>Single-line diagnostic snapshot of the bot's state and recent trace history.</summary>
     internal string FormatDiagnosticSnapshot(Player player) => _trace.FormatSnapshot(player, this);
@@ -466,6 +477,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     private bool _thinkClockArmed;
     private uint _lastThinkMs;
+
+    /// <summary>
+    /// The bot's thinks in the world so far, every kind (combat, rest, the goal ladder): the goal policy tells the think right after a
+    /// snapshot's from one with other thinks in between by it (<see cref="PlayerbotPolicyAgent.Decide"/>).
+    /// </summary>
+    internal long ThinkCount { get; private set; }
     private bool _starvedReported;
     private bool _overranReported;
     private uint _overranReportMs;
@@ -522,6 +539,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
         OpportunityDriven = false;
+        QuestTravelDriven = false;
         _destinations.SkipQuest ??= _quests.IsRefused;
         _destinations.Untakeable ??= IsUntakeable;
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
@@ -530,7 +548,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _destinations.GoalOf ??= () => _planningGoal ?? _goal;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
         _town.Budget = _trainers.Budget = _riding.Budget = _budget; _economy.SpendBudget = _budget;
-        _riding.Suspensions = _suspensions;
+        _riding.Suspensions = _bank.Suspensions = _suspensions;
         _quests.Contention ??= _contention;
         _quests.OnContentionExhausted ??= RaiseContentionExhausted;
         _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
@@ -546,6 +564,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         LastThinkPhase = "brain";
         _trace.ObserveState(this, _session.World.NowMs);
         CheckThinkClock(player, _session.World.NowMs);
+        ThinkCount++;
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
@@ -1120,6 +1139,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             PlayerbotThinkProbe.Phase("economy");
             if (_economy.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
+            PlayerbotThinkProbe.Phase("bank");
+            // Staying at its capital home (town progression): deposit what it does not need, buy a bank slot when the bank is nearly full.
+            // A Vendor errand: a stall sets the banker's entry aside like a vendor's.
+            if (_home is { Stay: Population.TownStay.Capital } capitalHome
+                && _bank.Update(player, capitalHome, item => _town.IsProtected(player, item), interval))
+            { RetireIdleCombatRoute(); _goal = PlayerbotGoalKind.Vendor; TargetEntry = _bank.TargetEntry; return; }
             PlayerbotThinkProbe.Phase("opportunities");
             if (TakeOpportunity(player, interval, out bool opportunityPull)) { if (opportunityPull) goto afterGoalLadder; return; }
             bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0
@@ -1174,6 +1199,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 _planningGoal = null;
                 if (questPlanned)
                 {
+                    QuestTravelDriven = true;
                     _target = null;
                     AbandonRoute();
                     _attacking = false;

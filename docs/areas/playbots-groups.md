@@ -315,6 +315,47 @@ packs left in sight along the path. A bot's status line ends with `group=3:tank:
 A live run needs the world database refreshed from a classic-db dump (the `instance_encounter` table) and terrain; the unit and world
 tests below run on real classic-db rows copied into `RunFixtures`, not on a live replay.
 
+## Leader handoff
+
+A real player who brings managed bots into a dungeon or raid and passes the lead to one of them (the ordinary "Promote to leader",
+CMSG_GROUP_SET_LEADER) hands the clear to the bots (`PlayerbotGroupCoordinator.Handoff.cs`, the pure rules in
+`PlayerbotLeaderHandoff.cs`). The new leader says `I'll lead the clear of <instance>.` in party or raid chat.
+
+* **Trigger.** `GroupManager.LeaderChanged`, read once per coordinator update: the new leader is a running managed bot, the old one a
+  real player still online and still in the group (an offline leader's automatic pass or a player leaving the group never counts), and
+  the new leader stands in an instance (`MapTemplate.IsDungeon`, a dungeon or a raid). Outside an instance nothing happens: the bots
+  keep following the player through the party AI.
+* **Adoption.** The player's own group is adopted as it is, a party or a raid: no re-forming, no travel, no teleport, nobody leaves,
+  every member keeps its raid subgroup. The members are the bots on the same map instance as the new leader (others, and bots invited
+  later, stay with the party AI); the real players are members too, marked real, and are never waited for (`MembersBehind`, the wipe
+  check and the stall watch count bots only). Roles: the tanks and healers a run of that size needs (`RunRoleNeeds`), taken by talent
+  preference then level; a group short of a tank or a healer still clears.
+* **The clear.** An instance the catalogue routes (`Catalogue()`, the wing whose entrance landing or boss is nearest the leader) is run
+  as a dungeon or raid run that has already arrived: its machine starts at `Clear`, bosses already dead (not alive on a loaded grid)
+  are credited, and trash, bosses, roles, loot, rest, wipes (`MaxWipes`), the stall watch and the run's give-up rules all apply as for a
+  run the bots formed. An instance without a route gets a clear list (`PlayerbotClearList`): the hostile creatures alive in the
+  instance at the handoff (one pass over the map's creatures), visited nearest first; the leader walks to the next one and the group
+  pulls it within 30 yards; one the leader cannot plan a way to for 30 seconds is given up; an empty list is rebuilt once (grids
+  loaded meanwhile), then the clear is done. The list is cached: per tick only the current target is looked up.
+* **The end.** When the last boss dies (or the clear list is empty and the loot settled) the leader says
+  `<instance> is clear. The lead is yours again.`; a clear that stops early says `Stopping the clear of <instance>: <reason>.` (wiped too
+  often, stuck, the group left the instance, nobody it follows is in the group any more, the server stopping, ...). Either way the bots
+  stay in the player's group and where they stand: the lead goes back to the player who handed it over (CMSG_GROUP_SET_LEADER from the
+  bot; the first real player online if that one left) and the party AI follows the player again. They never leave the group or walk out,
+  because a bot-formed run's ending would take them out of the player's group and away from the player.
+* **Taking the lead back.** A player who is no longer leader cannot take the lead in the client, so any order to the bots (`follow`,
+  `stay`, `come`, `attack`, `stop`, `leave`, in party chat or a whisper) ends the clear (`called-back`), passes the lead back, and the
+  party AI carries the order out. Other chat (a question, `help`) leaves the clear running. A lead passed back by the bot leader or to
+  someone else also ends it, with no further pass.
+* **Ownership.** One owner at a time: while the coordinator drives a bot (`Drives`) the party AI is disengaged; the party AI's chat
+  hook (`PlayerbotPartyAI.GroupOwns`) asks the coordinator before it engages. Scripted bots (a controller holds them) are never adopted:
+  the bot refuses with `I can't lead the clear of <instance>: <reason>.`, as it does when groups are off (`Groups:Enabled`, the kill
+  switch), the map is not allowed (`PlayerbotMapPolicy`), no way out is known, or no bot is inside with it.
+* **Capacity.** A handed-over group takes no slot of `MaxGroups` and does not count against `DungeonRuns` concurrency caps; it is no
+  quest group either (no quest sharing).
+* **Status.** `.playerbot groups` shows `handoff-from=<player>` (and `clear-list=<left>/<total>`) on the group's line, `:handoff` on a
+  bot's group tag, and a summary line `leader handoffs: 1 leading, 3 adopted, 1 cleared, 1 ended early.`.
+
 ## Configuration (`World:Playerbots:Groups`, live)
 
 | Key | Default | Range | Meaning |
@@ -385,6 +426,14 @@ fixture links map 389 to its AreaTable.dbc area 2437 for graveyard lookup (the b
 wing through the normal formation checks without the random roll. On a retry, a living member still inside walks through the exit to
 join an outside leader before the group gathers. This test does not establish an imported-world or real-terrain RFC clear.
 
+`PlayerbotLeaderHandoffTests`: the clear list (nearest first, the current target kept, the dead dropped, a shunned creature skipped
+but kept, a given-up one never rebuilt), the role assignment (one tank and one healer for five, never a refusal), the wing choice and
+the chat lines; on the scenario world, a real player with five bots inside RFC passing the lead (the group adopted as a run of map 389
+at `Clear`, the take-over line in party chat, the first pack killed), the same outside an instance (nothing adopted), a party `follow`
+taking the lead back (the coordinator lets go, the party AI drives, the bots stay in the group), the Deadmines without a route cleared
+from its list (the boss dead, the clear line, the lead back with the player), and a raid of ten in two subgroups adopted whole with its
+subgroups kept.
+
 ## Live replay (2026-10-08)
 
 `PlayerbotLiveSnapshotReplayTests` on the wave-6 rehearsal snapshot (`D:/ArcaneCore-lanes/_logs/w6-integrate/rehearsal/orig-characters.db`
@@ -414,4 +463,7 @@ d3b26dcb):
 * A run never enters a wing whose entrance is not on a continent (Blackwing Lair), and scripted encounters (the Four Horsemen, summoned
   bosses) are never routed or waited for.
 * The coordinator's groups live in memory: after a restart the bots leave the restored server groups and match again.
+* A handed-over clear without a route visits creatures by straight-line distance, not along the instance's layout, and only the
+  instance the leader stands in: it never travels to another wing. The adopted bots are those inside at the handoff; ones that zone in
+  later follow the player.
 * A bot without a quest for the goal is not matched for it (sharing happens inside a group formed for the goal, below).

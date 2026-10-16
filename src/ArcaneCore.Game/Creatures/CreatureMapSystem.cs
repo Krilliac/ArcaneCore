@@ -172,6 +172,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _clockMs += diffMs;
         _pathSearchesThisTick = 0;
         _pathNodesThisTick = 0;
+        _pathTicksThisTick = 0;
         _timing = default;
         long t = Stopwatch.GetTimestamp();
         RunDeferredMoves();
@@ -421,7 +422,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// are the whole path in one multi-point spline (vmangos MoveSplineInit::MovebyPath) so a move does not re-launch at every corner.
     /// World thread. Allocates the corner list.
     /// </summary>
-    internal PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false)
+    internal PlannedPath PlanPath(Creature creature, Vector3 destination, bool toSpawn = false, bool chase = false)
     {
         ArgumentNullException.ThrowIfNull(creature);
         if (!float.IsFinite(destination.X) || !float.IsFinite(destination.Y) || !float.IsFinite(destination.Z))
@@ -438,7 +439,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         }
 
         var start = new Vector3(creature.X, creature.Y, creature.Z);
-        PathOptions pathOptions = PathOptionsFor(creature, toSpawn);
+        PathOptions pathOptions = PathOptionsFor(creature, toSpawn, chase);
         PathResult path = SearchPath(start, destination, pathOptions);
         if ((path.Type & PathType.TilesPending) != 0)
         {
@@ -495,12 +496,23 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     private int _pathSearchesThisTick;
     private long _pathNodesThisTick;
+    private long _pathTicksThisTick;
+    private CreaturePathBudget _pathBudget = CreaturePathBudget.Default;
+    private long _pathTickLimit = CreaturePathBudget.Default.MaxStopwatchTicks;
 
     /// <summary>
     /// The most path searches and A* nodes creature movement may spend in one map update (reset at the start of <see cref="Update"/>).
     /// A request past it is deferred to a later update (<see cref="DeferredPathSearches"/>); no motion walks straight for want of budget.
     /// </summary>
-    public CreaturePathBudget PathBudget { get; set; } = CreaturePathBudget.Default;
+    public CreaturePathBudget PathBudget
+    {
+        get => _pathBudget;
+        set
+        {
+            _pathBudget = value;
+            _pathTickLimit = value.MaxStopwatchTicks;
+        }
+    }
 
     /// <summary>Searches creature movement has run since the current update began.</summary>
     public int PathSearchesThisTick => _pathSearchesThisTick;
@@ -523,8 +535,16 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// <summary>Evade/home returns done by teleport because no whole mesh path led home (diagnostics, tests).</summary>
     public long HomePathTeleports { get; private set; }
 
-    /// <summary>Whether another search fits the tick's budget. The last search may overshoot the node budget by one search's cap.</summary>
-    public bool HasPathBudget => _pathSearchesThisTick < (_inCrowdedRandomPass ? _randomPassSearchLimit : PathBudget.MaxSearches) && _pathNodesThisTick < PathBudget.MaxNodes;
+    /// <summary>Wall time (<see cref="Stopwatch"/> ticks) creature path searches have spent since the current update began.</summary>
+    public long PathTicksThisTick => _pathTicksThisTick;
+
+    /// <summary>
+    /// Whether another search fits the tick's budget. The last search may overshoot the node budget by one search's cap and the time
+    /// budget (<see cref="CreaturePathBudget.MaxMilliseconds"/>) by one search's time.
+    /// </summary>
+    public bool HasPathBudget => _pathSearchesThisTick < (_inCrowdedRandomPass ? _randomPassSearchLimit : PathBudget.MaxSearches)
+        && _pathNodesThisTick < PathBudget.MaxNodes
+        && _pathTicksThisTick < _pathTickLimit;
 
     private bool _inCrowdedRandomPass;
     private int _randomPassSearchLimit;
@@ -543,13 +563,32 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
 
     private static readonly PathOptions[] s_moverOptions = BuildMoverOptions(0f);
     private static readonly PathOptions[] s_spawnOptions = BuildMoverOptions(PathOptions.VmangosEndTolerance);
+    private static readonly PathOptions[] s_wanderOptions = BuildMoverOptions(0f, WanderMaxSearchNodes);
 
-    private static PathOptions[] BuildMoverOptions(float tolerance)
+    /// <summary>
+    /// The A* node cap of an out-of-combat random-movement leg. The leg goes to a point within the wander distance (vmangos
+    /// <c>GetRandomPoint</c>), so a reachable one is a few dozen polygons away; a point that is not reachable (another floor, an island
+    /// the circle overlaps) made the search exhaust the full <see cref="PathOptions.DefaultMaxSearchNodes"/> pool before it answered a
+    /// partial path, once per wanderer every few seconds (live 2026-10-16, map 0: single random-movement updates of 50-425 ms, most of
+    /// it in path search). A capped leg still answers the partial path toward the point (<see cref="PathOptions.AllowPartial"/>), as the
+    /// full search did.
+    /// </summary>
+    public const int WanderMaxSearchNodes = 512;
+
+    private static readonly PathOptions[] s_chaseOptions = BuildMoverOptions(0f, wideEndSearch: true);
+
+    private static PathOptions[] BuildMoverOptions(float tolerance, int maxSearchNodes = PathOptions.DefaultMaxSearchNodes, bool wideEndSearch = false)
     {
         var all = new PathOptions[16]; // InhabitType bits 0-2, plus 8 for a pet
         for (uint inhabit = 0; inhabit < all.Length; inhabit++)
         {
-            all[inhabit] = new PathOptions { Mover = PathMover.FromInhabit(inhabit & 7, isPet: (inhabit & 8) != 0), EndTolerance = tolerance };
+            all[inhabit] = new PathOptions
+            {
+                Mover = PathMover.FromInhabit(inhabit & 7, isPet: (inhabit & 8) != 0),
+                EndTolerance = tolerance,
+                MaxSearchNodes = maxSearchNodes,
+                WideEndSearch = wideEndSearch,
+            };
         }
 
         return all;
@@ -558,10 +597,19 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     /// <summary>
     /// The query options of a creature: its own locomotion (<c>InhabitType</c>, vmangos PathInfo::createFilter), so a flier gets the flier
     /// exception (a hole in the mesh is a flying shortcut, not NoPath) and a walker keeps off water it cannot swim. A return home
-    /// (<paramref name="toSpawn"/>) also takes vmangos' 7 yd end tolerance.
+    /// (<paramref name="toSpawn"/>) also takes vmangos' 7 yd end tolerance. A chase or follow (<paramref name="chase"/>) looks for its
+    /// destination's polygon in cmangos' wider box too (<see cref="PathOptions.WideEndSearch"/>): a target off the mover's mesh (swimming,
+    /// for a creature that cannot swim) is approached to the nearest usable point, unreachable, instead of not at all.
     /// </summary>
-    private static PathOptions PathOptionsFor(Creature creature, bool toSpawn)
-        => (toSpawn ? s_spawnOptions : s_moverOptions)[(creature.Template.InhabitType & 7) | (creature.IsPet ? 8 : 0)];
+    private static PathOptions PathOptionsFor(Creature creature, bool toSpawn, bool chase = false)
+        => (toSpawn ? s_spawnOptions
+            : chase ? s_chaseOptions
+            : IsWanderLeg(creature) ? s_wanderOptions
+            : s_moverOptions)[(creature.Template.InhabitType & 7) | (creature.IsPet ? 8 : 0)];
+
+    /// <summary>An out-of-combat random-movement leg (<see cref="WanderMaxSearchNodes"/>).</summary>
+    private static bool IsWanderLeg(Creature creature)
+        => !creature.Combat.IsInCombat && creature.Motion.CurrentType == MovementGeneratorType.Random;
 
     /// <summary>One counted search through the map's pathfinder. World thread.</summary>
     private PathResult SearchPath(Vector3 start, Vector3 destination, PathOptions? options = null)
@@ -569,8 +617,14 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         PathSearchTotals before = PathSearchCounters.Current;
         long started = Stopwatch.GetTimestamp();
         PathResult path = Map.Collision.FindPath(start, destination, options);
-        _timing.Path += Stopwatch.GetTimestamp() - started;
+        long elapsed = Stopwatch.GetTimestamp() - started;
+        _timing.Path += elapsed;
         PathSearchTotals spent = PathSearchCounters.Current - before;
+        if (spent.Searches > 0)
+        {
+            _pathTicksThisTick += elapsed; // as with the counts, a straight line without navigation data costs nothing
+        }
+
         _timing.Searches += (int)spent.Searches;
 
         // Only searches that ran A* count: without navigation data the "search" is a straight line and costs nothing.

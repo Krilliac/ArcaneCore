@@ -154,11 +154,11 @@ public sealed partial class PlayerbotGroupCoordinator
         ArgumentNullException.ThrowIfNull(requested);
         ArgumentNullException.ThrowIfNull(botIds);
         if (_world is null || !_options.Groups.Enabled || !_options.Groups.DungeonRuns.Enabled
-            || _groups.Count >= _options.Groups.MaxGroups || GroupManagerOrNull() is not { } groupManager) return null;
+            || OwnGroupCount >= _options.Groups.MaxGroups || GroupManagerOrNull() is not { } groupManager) return null;
         PlayerbotRunPlan? plan = Catalogue().Plans.FirstOrDefault(p => p.MapId == requested.MapId && p.Segment == requested.Segment);
         if (plan is null || botIds.Count != plan.Size || botIds.Distinct().Count() != botIds.Count) return null;
         PlayerbotRunOptions runs = _options.Groups.DungeonRuns;
-        int active = _groups.Count(g => g.Run is { } run && run.Plan.Raid == plan.Raid);
+        int active = _groups.Count(g => g.Handoff is null && g.Run is { } run && run.Plan.Raid == plan.Raid);
         if (plan.Raid ? !runs.Raids.Enabled || active >= runs.Raids.MaxConcurrentRaids : active >= runs.MaxConcurrentRuns) return null;
         if (WorldMaps.Of(_world).FindAreaTriggerTeleport(plan.EntranceTrigger) is not { } teleport) return null;
 
@@ -200,12 +200,12 @@ public sealed partial class PlayerbotGroupCoordinator
         // Dictionary.Remove during enumeration is defined since .NET Core 3.0 (it does not invalidate the enumerator): no snapshot per scan.
         foreach (((Guid, uint, int) key, uint until) in _runSetAside)
             if (unchecked((int)(until - now)) <= 0) _runSetAside.Remove(key);
-        if (!runs.Enabled || runs.StartChancePerMinute <= 0d || _world is null || _groups.Count >= _options.Groups.MaxGroups) return;
+        if (!runs.Enabled || runs.StartChancePerMinute <= 0d || _world is null || OwnGroupCount >= _options.Groups.MaxGroups) return;
         if (GroupManagerOrNull() is not { } groupManager) return;
 
         int dungeonRuns = 0, raidRuns = 0;
         foreach (BotGroup group in _groups)
-            if (group.Run is { } running)
+            if (group.Run is { } running && group.Handoff is null)
             {
                 if (running.Plan.Raid) raidRuns++;
                 else dungeonRuns++;
@@ -449,7 +449,9 @@ public sealed partial class PlayerbotGroupCoordinator
             if (busy && unchecked(now - group.RunDoneMs) <= LootSettleMs) return;
             Note($"group {group.Id} completed {run.Plan.Label}");
             group.Succeeded = true;
-            Enter(group, leader.MapId == group.Goal.MapId ? PlayerbotGroupState.Leaving : PlayerbotGroupState.Disbanding);
+            // A handed-over group stays where it is: the lead goes back to the player and the bots follow them again.
+            if (group.Handoff is { } handoff) EndHandoff(group, success: true, "completed", handBackTo: handoff.HandedBy);
+            else Enter(group, leader.MapId == group.Goal.MapId ? PlayerbotGroupState.Leaving : PlayerbotGroupState.Disbanding);
             return;
         }
 
@@ -634,7 +636,7 @@ public sealed partial class PlayerbotGroupCoordinator
         PlayerbotRunOptions runs = _options.Groups.DungeonRuns;
         int dungeons = 0, raids = 0;
         foreach (BotGroup group in _groups)
-            if (group.Run is { } run)
+            if (group.Run is { } run && group.Handoff is null)
             {
                 if (run.Plan.Raid) raids++;
                 else dungeons++;

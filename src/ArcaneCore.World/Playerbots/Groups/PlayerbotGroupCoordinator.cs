@@ -189,8 +189,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     // --- the feature's calls ------------------------------------------------------------------------------------------
 
-    /// <summary>A running bot as the coordinator sees it (<see cref="Update"/>).</summary>
-    internal readonly record struct PlayerbotGroupBot(Guid BotId, WorldSession Session, PlayerbotBrain Brain, bool Free);
+    /// <summary>A running bot as the coordinator sees it (<see cref="Update"/>); <see cref="Scripted"/> when a controller holds it.</summary>
+    internal readonly record struct PlayerbotGroupBot(Guid BotId, WorldSession Session, PlayerbotBrain Brain, bool Free, bool Scripted = false);
 
     /// <summary>
     /// One world tick (world thread): the running bots (<paramref name="bots"/>; <see cref="PlayerbotGroupBot.Free"/> when autonomous and
@@ -200,6 +200,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         _bots.Clear();
         foreach (PlayerbotGroupBot bot in bots) _bots[bot.BotId] = bot;
+        TakeLeaderChanges(); // leader handoffs (PlayerbotGroupCoordinator.Handoff.cs)
         foreach (BotGroup group in _groups.ToArray())
         {
             try
@@ -277,7 +278,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     {
         if (_memberOf.TryGetValue(botId, out BotGroup? group) && group.Find(botId) is { } member)
             return string.Create(CultureInfo.InvariantCulture,
-                $"group={group.Id}:{member.Role.ToString().ToLowerInvariant()}:{group.State.ToString().ToLowerInvariant()}{(group.LeaderBotId == botId ? ":leader" : string.Empty)}{(group.Run is not null ? ":run" : string.Empty)}");
+                $"group={group.Id}:{member.Role.ToString().ToLowerInvariant()}:{group.State.ToString().ToLowerInvariant()}{(group.LeaderBotId == botId ? ":leader" : string.Empty)}{(group.Run is not null ? ":run" : string.Empty)}{(group.Handoff is not null ? ":handoff" : string.Empty)}");
         if (_waiting.TryGetValue(botId, out Waiting? waiting))
             return string.Create(CultureInfo.InvariantCulture,
                 $"group=waiting:{waiting.Goal.Kind.ToString().ToLowerInvariant()}:{waiting.Goal.Key.Value}:size{waiting.Goal.Size}");
@@ -297,6 +298,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             var text = new StringBuilder();
             text.Append(CultureInfo.InvariantCulture, $"group {group.Id} {group.Goal} state={group.State.ToString().ToLowerInvariant()}");
             text.Append(CultureInfo.InvariantCulture, $" {(group.Raid ? "raid" : "party")} failures={group.Failures} age={unchecked(Now - group.FormedMs) / 1000}s");
+            if (group.Handoff is { } handoff)
+                text.Append(CultureInfo.InvariantCulture, $" handoff-from={handoff.HandedByName}{(handoff.Sweep is { } sweep ? $" clear-list={sweep.Remaining}/{sweep.Initial}" : string.Empty)}");
             if (group.Run is { } reported) text.Append(' ').Append(DescribeRun(reported));
             text.Append(" members=");
             text.AppendJoin(',', group.Members.Select(m =>
@@ -308,6 +311,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         if (RunSummary() is { } runSummary) lines.Add(runSummary);
+        lines.Add(HandoffSummary());
         foreach ((Guid _, Waiting waiting) in _waiting.OrderBy(w => w.Value.SinceMs))
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"waiting {waiting.Name} {waiting.Goal} for {unchecked(Now - waiting.SinceMs) / 1000}s"));
         foreach (string line in Events.TakeLast(5)) lines.Add("last: " + line);
@@ -415,7 +419,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// </summary>
     private void ShareQuests(BotGroup group)
     {
-        if (_world is not { } world || group.Run is not null || services.GetService<QuestNpcFeature>()?.Services is not { } quests) return;
+        if (_world is not { } world || group.Run is not null || group.Handoff is not null || services.GetService<QuestNpcFeature>()?.Services is not { } quests) return;
         var joined = new List<(Member Member, Player Player)>();
         foreach (Member member in group.Members.Where(m => m.Joined))
             if (world.FindOnlinePlayer(member.Guid) is { IsAlive: true } player) joined.Add((member, player));
@@ -665,7 +669,10 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
     }
 
-    private bool QuestGroupSlotFree() => _groups.Count < _options.Groups.MaxGroups && _groups.Count(g => g.Run is null) < QuestGroupLimit;
+    private bool QuestGroupSlotFree() => OwnGroupCount < _options.Groups.MaxGroups && _groups.Count(g => g.Run is null && g.Handoff is null) < QuestGroupLimit;
+
+    /// <summary>The groups the bots formed themselves: a handed-over group (a player's own, <see cref="BotGroup.Handoff"/>) takes no slot of <c>MaxGroups</c>.</summary>
+    private int OwnGroupCount => _groups.Count(g => g.Handoff is null);
 
     private void Match()
     {
@@ -803,6 +810,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         GroupManager? groupManager = GroupManagerOrNull();
+        if (WatchHandoff(group, leader, groupManager)) return;
         if (group.State != PlayerbotGroupState.Disbanding && group.State != PlayerbotGroupState.Forming && groupManager is not null)
         {
             // A member that left the server group (a real player leaving, a bot kicked) is no longer one.
@@ -880,6 +888,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 if (group.Run is { } run)
                 {
                     AdvanceRun(group, leader, run, now);
+                    break;
+                }
+
+                if (group.Handoff?.Sweep is { } sweep)
+                {
+                    AdvanceSweep(group, leader, sweep, now);
                     break;
                 }
 
@@ -1136,7 +1150,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (_world is not { } world) return false;
         int alive = 0, dead = 0;
         bool fighting = false;
-        foreach (Member member in group.Members.Where(m => m.Joined))
+        // A handed-over group counts its bots only: the player who handed the lead over may be anywhere, alive or dead.
+        foreach (Member member in group.Members.Where(m => m.Joined && !(m.Real && group.Handoff is not null)))
         {
             if (world.FindOnlinePlayer(member.Guid) is not { } player) continue;
             if (player.IsAlive)
@@ -1186,7 +1201,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// </summary>
     private bool WatchStall(BotGroup group, Player leader, uint now)
     {
-        if (_world is not { } world || group.Solo || group.Members.Any(m => m.Real) || group.MissingSinceMs != 0
+        // A handed-over group is watched although a real player is in it: the bots lead it, and the player is never waited for.
+        if (_world is not { } world || group.Solo || group.Members.Any(m => m.Real) && group.Handoff is null || group.MissingSinceMs != 0
             || group.State is PlayerbotGroupState.Forming or PlayerbotGroupState.Gathering or PlayerbotGroupState.Regrouping
                 or PlayerbotGroupState.Wiped or PlayerbotGroupState.Leaving or PlayerbotGroupState.Disbanding)
         {
@@ -1302,6 +1318,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <summary>End the group: done, or given up (the goal is then set aside for every bot member unless <paramref name="setAside"/> is off).</summary>
     private void Finish(BotGroup group, bool success, string reason, bool setAside = true)
     {
+        // A handed-over group never walks out or disbands (that would take the bots out of the player's group): it is released in place.
+        if (group.Handoff is { } handoff)
+        {
+            EndHandoff(group, success, reason, handBackTo: handoff.HandedBy);
+            return;
+        }
+
         if (!success && setAside)
             foreach (Member member in group.Members.Where(m => !m.Real))
             {
@@ -1565,6 +1588,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
         /// <summary>The dungeon or raid run this group is on (null for a quest group).</summary>
         public PlayerbotRunMachine? Run { get; set; }
+
+        /// <summary>A player's own group whose lead was handed to a bot inside an instance (<c>PlayerbotGroupCoordinator.Handoff.cs</c>), else null.</summary>
+        public PlayerbotHandoff? Handoff { get; init; }
 
         /// <summary>A reason the group AI found that the run cannot go on (no path to the boss or the entrance); the coordinator gives the run up.</summary>
         public string? RunFault { get; set; }

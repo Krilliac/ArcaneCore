@@ -101,4 +101,32 @@ public sealed class PathSearchCapTests
         Assert.Equal(0, spent.Capped);
         Assert.InRange(spent.Nodes, 100, 4095); // the whole west side was searched, the cap never reached
     }
+
+    /// <summary>
+    /// The node pool bounds the nodes of a search, not its expansions: a reopened node is expanded again. The expansions are bounded too
+    /// (<see cref="NavMeshQuery.MaxExpansionsPerNode"/> per pooled node), so one creature's search cannot cost a map update tens of
+    /// milliseconds whatever the mesh (live 2026-10-16: 65-425 ms of path search in one creature's update).
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    [InlineData(16)]
+    [InlineData(64)]
+    [InlineData(4096)]
+    public void ASearch_NeverExpandsMoreThanItsBound(int cap)
+    {
+        using var fixture = new NavMeshFixture();
+        fixture.WriteParams(MapId);
+        fixture.WriteTile(MapId, 31, 31, new CellTile(0, 0, 0, 0, 20, 20) { Walkable = (i, _) => i != 10 }); // a dead end: the whole side is searched
+        var nav = new NavMeshPathfinder(fixture.Directory);
+        Assert.True(nav.LoadTile(MapId, 31, 31));
+        PathSearchTotals before = PathSearchCounters.Current;
+
+        _ = nav.FindPath(MapId, new Vector3(1, 20, 0), new Vector3(39, 20, 0), new PathOptions { MaxSearchNodes = cap, AllowPartial = true });
+
+        PathSearchTotals spent = PathSearchCounters.Current - before;
+        Assert.Equal(1, spent.Searches);
+        Assert.InRange(spent.Expansions, 1, (long)NavMeshQuery.MaxExpansionsPerNode * cap);
+        Assert.InRange(spent.Nodes, 1, cap);
+    }
 }
