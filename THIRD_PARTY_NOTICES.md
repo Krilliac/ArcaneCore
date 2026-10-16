@@ -70,3 +70,13 @@ SOFTWARE.
 - Scope: referenced by `ArcaneCore.World.Tests` (the opt-in wire oracle and capture tests), `ArcaneCore.MockClient.Tests` (round-trip vectors), and `tools/ArcaneCore.Sniff` (offline decode). No production project under `src/` references it.
 
 The upstream source repository contains no standalone license file at this commit; its project metadata names both license options and `Copyright (c) Gtker 2024`. `tests/ThirdParty/WowWorldMessages/LICENSE-MIT.txt` holds the MIT text for the chosen option with that copyright.
+
+## Sonder-Inference sampling module (ported)
+
+- Repository: Krilliac/Sonder-Inference (https://github.com/Krilliac/Sonder-Inference), local read-only snapshot at `D:/ArcaneCore-lanes/_refs/sonder-inference`
+- Commit: `1c4c152acc0be1f4f811c60e8c20b17cfb794b0b`
+- License: Apache-2.0 (`LICENSE` in the upstream repository; upstream `NOTICE`: "Sonder-Inference, Copyright 2026 Nate Witkowski")
+- Source files ported: `src/sampling/include/sonder/sampling/{types,rng,config,constraint,sampler,samplers,chain,stop}.hpp`, `src/sampling/src/{types,rng,config,constraint,samplers,chain,stop}.cpp`, and the unit tests `src/sampling/tests/test_{rng,stop,config,samplers,chain,constraint}.cpp` (rewritten for xUnit)
+- Derived ArcaneCore files: `src/ArcaneCore.World/Playerbots/Chat/Inference/Sampling/` (`SamplingTypes.cs`, `SamplingRng.cs`, `SamplerConfig.cs`, `IConstraint.cs`, `Samplers.cs`, `SamplerChain.cs`, `StopSequenceMatcher.cs`) and `tests/ArcaneCore.World.Tests/Playerbots/Chat/Inference/Sampling/` (all but `ChatLineConstraintTests.cs`). Each derived file carries a "Ported from" header. `ChatLineConstraint.cs` and its tests are original ArcaneCore code.
+- Changes from upstream: rewritten in C#; candidates live in a reused buffer, typical-p scratch is kept between calls, logit bias/penalties index by token id while candidates are in vocabulary order, greedy and t = 0 pick the canonical argmax in one pass instead of a full sort, and stop sequences are matched on UTF-8 bytes without per-piece allocation. Seeds and selection order are unchanged, so a seed yields the upstream tokens (the seed-42 golden sequence is pinned in the tests). `core_bridge` (mapping Sonder's core config and status types) was not ported.
+- Upstream notes its stage semantics follow llama.cpp's documented sampler behaviour (`tools/completion/README.md`, MIT) as an independent implementation; no llama.cpp code is included here.
