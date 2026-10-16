@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -127,6 +128,14 @@ internal enum PlayerbotSpiritHealerStep
 
     /// <summary>The fallback stalled too (no progress for <see cref="PlayerbotRecovery.NoProgressMs"/>, or a walk stuck): the recovery faults.</summary>
     Fault,
+
+    /// <summary>
+    /// A battleground ghost within <see cref="PlayerbotRecovery.AreaSpiritGuideRangeYards"/> of its graveyard's spirit guide: stand and wait
+    /// for the guide's resurrection wave (Spirit Heal Channel 22011 every 30 s, cmangos battlegrounds.cpp npc_spirit_guideAI, which
+    /// resurrects the dead within 20 yards that carry Waiting to Resurrect, 2584), queueing with CMSG_AREA_SPIRIT_HEALER_QUEUE when the
+    /// aura is missing (cmangos BattleGroundHandler.cpp HandleAreaSpiritHealerQueueOpcode -> GossipHello_npc_spirit_guide).
+    /// </summary>
+    AwaitAreaResurrection,
 }
 
 /// <summary>
@@ -196,6 +205,27 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// terrain knows no zones, so it cannot hold a band of cells without an area). Null: the real lookup.
     /// </summary>
     internal Func<Player, Vector3, WorldSafeLoc?>? GraveyardLookup { get; set; }
+
+    /// <summary>
+    /// Whether the ghost's map resurrects through area spirit guides (a battleground) rather than the world's spirit healer. Null: the map
+    /// is a battleground map (<see cref="BattlegroundManager.TypeOfMap"/>). Tests set it to stand a battleground on another map.
+    /// </summary>
+    internal Func<Player, bool>? AreaSpiritGuides { get; set; }
+
+    /// <summary>CMSG_AREA_SPIRIT_HEALER_QUEUE requests sent in this death (inspection and tests).</summary>
+    internal int AreaQueueRequests { get; private set; }
+
+    /// <summary>
+    /// A battleground ghost waits for the spirit guide's wave from this close: inside the 20 yards the wave reaches (cmangos
+    /// battlegrounds.cpp npc_spirit_guideAI::SpellHitTarget, <c>IsWithinDistInMap(m_creature, 20.0f)</c>) with a margin.
+    /// </summary>
+    internal const float AreaSpiritGuideRangeYards = 15f;
+
+    /// <summary>The guide's resurrection interval (cmangos BattleGround.h RESURRECTION_INTERVAL, 30 000 ms).</summary>
+    internal const long AreaResurrectionIntervalMs = 30_000;
+
+    /// <summary>How often a ghost without Waiting to Resurrect asks the guide again (CMSG_AREA_SPIRIT_HEALER_QUEUE).</summary>
+    internal const long AreaQueueRetryMs = 5_000;
 
     /// <summary>Whether this death's body was kept although judged unsafe, because the healer's landing was worse (inspection and tests).</summary>
     internal bool BodyKeptOverLanding { get; private set; }
@@ -288,6 +318,11 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     private PlayerbotRoute? _route;
     private object? _goal;
+    private long _areaQueueSentMs = -1;
+    private long _areaWaitSinceMs = -1;
+    private bool _areaWaitReported;
+    private ObjectGuid _areaGuideWalkStalled;
+    private bool _areaFaultReported;
     private long _progressMs = -1;
     private long _closingMs = -1;
     private int _thinksSinceProgress;
@@ -432,6 +467,14 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             throw new InvalidOperationException(Stalled);
         }
 
+        // A battleground ghost does not walk back to its body nor look for the world's spirit healer: the graveyard's spirit guide
+        // resurrects the dead round it in waves (cmangos npc_spirit_guideAI), and the release already put the ghost beside it.
+        if (ghost && InBattleground(player) && NearestSpiritGuide(player) is { } guide && guide.Guid != _areaGuideWalkStalled)
+        {
+            PlayerbotThinkProbe.Phase("recovery area spirit guide");
+            return AwaitAreaResurrection(player, guide, elapsedMs, now);
+        }
+
         if (_spiritHealer)
         {
             PlayerbotThinkProbe.Phase("recovery healer");
@@ -569,6 +612,12 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         _detourWait.Reset();
         _detourGoal = null;
         _deathBody = default;
+        _areaQueueSentMs = -1;
+        _areaWaitSinceMs = -1;
+        _areaWaitReported = false;
+        _areaGuideWalkStalled = default;
+        _areaFaultReported = false;
+        AreaQueueRequests = 0;
         UnsafeReason = PlayerbotUnsafeBody.None;
         LastStep = PlayerbotRecoveryStep.Release;
         LastSpiritHealerStep = null;
@@ -737,6 +786,20 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 if (TryRelocateToGraveyard(player, graveyard ?? HealerGraveyard(player), now)
                     || TryRelocateToHealer(player, healer, now))
                     return true;
+                if (InBattleground(player))
+                {
+                    // A battleground ghost is never quarantined for this: the match resurrects it (a spirit guide coming into sight,
+                    // or the end of the match), so it is reported once and stands, instead of throwing as control flow.
+                    if (!_areaFaultReported)
+                    {
+                        ReportFault(player, healer, graveyard, now, faults: false);
+                        _areaFaultReported = true;
+                    }
+
+                    StandStill(player);
+                    return false;
+                }
+
                 ReportFault(player, healer, graveyard, now);
                 throw new InvalidOperationException(SpiritHealerFailed);
         }
@@ -898,13 +961,13 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     }
 
     /// <summary>The spirit-healer fallback stalled: what it was doing, logged at Information before the fault.</summary>
-    private void ReportFault(Player player, Creature? healer, WorldSafeLoc? graveyard, long now)
+    private void ReportFault(Player player, Creature? healer, WorldSafeLoc? graveyard, long now, bool faults = true)
     {
         Vector3? goal = healer is not null ? new Vector3(healer.X, healer.Y, healer.Z)
             : graveyard is not null ? new Vector3(graveyard.X, graveyard.Y, graveyard.Z) : null;
         string why = NoProgress(now) ? $"no progress for {(now - _progressMs) / 1000} s" : $"its walk stopped closing for {(now - _closingMs) / 1000} s";
         PlayerbotAnomalies.Report(player, "recovery", "spirit-healer-failed",
-            $"the spirit-healer fallback gave up: {why}; target {(healer is not null ? "healer " + healer.Entry : graveyard is not null ? "graveyard " + graveyard.Id : "none")}; the recovery faults");
+            $"the spirit-healer fallback gave up: {why}; target {(healer is not null ? "healer " + healer.Entry : graveyard is not null ? "graveyard " + graveyard.Id : "none")}; {(faults ? "the recovery faults" : "the battleground ghost waits for the match")}");
         LoggerOf().LogInformation(
             "Playerbot {Bot} gives up the spirit healer at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Why}; goal {Goal}, {Distance} yd away, route {Route}{Refused}{Refusal}",
             player.Name, player.X, player.Y, player.Z, player.MapId, why,
@@ -1395,6 +1458,84 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
 
         return null;
+    }
+
+    private bool InBattleground(Player player)
+        => AreaSpiritGuides?.Invoke(player) ?? BattlegroundManager.TypeOfMap(player.MapId) != BattlegroundType.None;
+
+    /// <summary>
+    /// The battleground ghost's way back: walk within <see cref="AreaSpiritGuideRangeYards"/> of the spirit guide, then stand there, queued
+    /// for its wave. The release already gave a participant Waiting to Resurrect (vmangos Player::BuildPlayerRepop); a ghost without it
+    /// asks the guide (CMSG_AREA_SPIRIT_HEALER_QUEUE). Waiting in range is progress: the wave comes every
+    /// <see cref="AreaResurrectionIntervalMs"/>; a wait of three intervals is reported once, never thrown. A walk to the guide that stalls
+    /// leaves that guide to the ordinary fallback for this death.
+    /// </summary>
+    private bool AwaitAreaResurrection(Player player, Creature guide, uint elapsedMs, long now)
+    {
+        LastStep = PlayerbotRecoveryStep.SpiritHealer;
+        float distance = Distance(player, guide.X, guide.Y, guide.Z);
+        if (distance > AreaSpiritGuideRangeYards)
+        {
+            _areaWaitSinceMs = -1;
+            if (Stuck(now))
+            {
+                _areaGuideWalkStalled = guide.Guid;
+                ClearWalk();
+                MarkProgress(now);
+                LoggerOf().LogInformation(
+                    "Playerbot {Bot} cannot reach the spirit guide {Guide} at ({X:F1}, {Y:F1}, {Z:F1}) map {Map} from {Distance:F1} yd: the ordinary fallback goes on",
+                    player.Name, guide.Entry, guide.X, guide.Y, guide.Z, player.MapId, distance);
+                return false;
+            }
+
+            LastSpiritHealerStep = PlayerbotSpiritHealerStep.WalkToHealer;
+            return Walk(player, new Vector3(guide.X, guide.Y, guide.Z), guide.Guid, elapsedMs, now);
+        }
+
+        LastSpiritHealerStep = PlayerbotSpiritHealerStep.AwaitAreaResurrection;
+        StandStill(player);
+        MarkProgress(now);
+        if (_areaWaitSinceMs < 0) _areaWaitSinceMs = now;
+        if (!_areaWaitReported && now - _areaWaitSinceMs > 3 * AreaResurrectionIntervalMs)
+        {
+            _areaWaitReported = true;
+            PlayerbotAnomalies.Report(player, "recovery", "area-resurrection-late", string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"waited {(now - _areaWaitSinceMs) / 1000} s within {distance:F1} yd of spirit guide {guide.Entry} without a resurrection wave"));
+        }
+
+        if (WaitingToResurrect(player) || (_areaQueueSentMs >= 0 && now - _areaQueueSentMs < AreaQueueRetryMs))
+            return false;
+        _areaQueueSentMs = now;
+        if (!session.TryManagedAction(WorldOpcode.CmsgAreaSpiritHealerQueue, PlayerbotNavigation.GuidPayload(guide.Guid.Value)))
+            return false;
+        AreaQueueRequests++;
+        return true;
+    }
+
+    private bool WaitingToResurrect(Player player)
+        => session.Services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System is { } spells
+            && spells.HasAura(player, BattlegroundConstants.SpellWaitingToResurrect);
+
+    /// <summary>The nearest living battleground spirit guide the ghost can see (<see cref="NpcFlags.SpiritGuide"/>).</summary>
+    private static Creature? NearestSpiritGuide(Player player)
+    {
+        if (player.Map is not { } map) return null;
+        Creature? nearest = null;
+        float best = float.PositiveInfinity;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (map.FindObject(guid) is not Creature creature || !creature.IsInWorld || !creature.IsAlive
+                || !ReferenceEquals(creature.Map, map) || (creature.NpcFlags & (uint)NpcFlags.SpiritGuide) == 0)
+                continue;
+            float distance = Distance(player, creature.X, creature.Y, creature.Z);
+            if (distance < best)
+            {
+                best = distance;
+                nearest = creature;
+            }
+        }
+
+        return nearest;
     }
 
     /// <summary>The nearest living spirit healer the ghost can see (ghosts see the spirit services across the map's view range).</summary>

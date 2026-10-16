@@ -405,6 +405,70 @@ public sealed class RefreshCliTests : IDisposable
         Assert.Equal((804u, 684u), (kept.SpawnGuid, kept.Entry));
     }
 
+    /// <summary>
+    /// Real classic-db z2815 <c>creature_movement_template</c> rows: Cook Ghilm (1355) path 0, which relay script 25 starts, and entry 1269 path
+    /// 1; plus <c>waypoint_path</c> 19023 point 1 (the Magram patrol formation), which goes to its own namespace. The live world of 2026-10-16
+    /// had none of classic-db's 544 entry paths, so 326 waypoint spawns had no path and every relay waypoint step was skipped.
+    /// </summary>
+    private const string EntryPathDump = """
+        INSERT INTO `creature_movement_template` (`Entry`,`PathId`,`Point`,`PositionX`,`PositionY`,`PositionZ`,`Orientation`,`WaitTime`,`ScriptId`,`Comment`) VALUES (1269,1,1,-5496.71,-455.32,395.437,0.81,10000,126901,NULL),(1269,1,2,-5499.78,-454.443,395.437,1.137,6000,126902,NULL),(1269,1,3,-5497.94,-455.835,395.392,100,1000,126903,NULL),(1355,0,1,-5664.75,-1566.57,383.329,100,7000,135501,'Cook Ghilm'),(1355,0,2,-5666.22,-1565.62,383.257,2.32129,100,135502,'Cook Ghilm');
+        INSERT INTO `waypoint_path` (`PathId`,`Point`,`PositionX`,`PositionY`,`PositionZ`,`Orientation`,`WaitTime`,`ScriptId`,`Comment`) VALUES (19023,1,-1.5,2.5,3.5,100,0,0,NULL);
+        """;
+
+    /// <summary>
+    /// A world built before <c>creature_movement_template</c> existed has the table empty; refresh fills the dump's ordinary entry paths (the
+    /// <c>waypoint_path</c> copy stays in its namespace), and a second run leaves them.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_FillsEmptyEntryPaths_FromTheDump()
+    {
+        string world = await OldWorldAsync();
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump + Environment.NewLine + EntryPathDump);
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("  creature_movement_template (entry paths)  5", output, StringComparison.Ordinal);
+        await using (WorldDbContext db = Open(world))
+        {
+            List<CreatureMovementTemplateRow> rows = await db.Set<CreatureMovementTemplateRow>().ToListAsync();
+            Assert.Equal([(1269u, 1u, 1u), (1269u, 1u, 2u), (1269u, 1u, 3u), (1355u, 0u, 1u), (1355u, 0u, 2u)],
+                rows.Where(r => r.Entry != 0).Select(r => (r.Entry, r.PathId, r.Point)).Order().ToList());
+            CreatureMovementTemplateRow first = rows.Single(r => r.Entry == 1355 && r.Point == 1);
+            Assert.Equal((-5664.75f, 7000u, 135501u), (first.X, first.WaitTimeMs, first.ScriptId));
+            Assert.Equal((0u, 0x4000_0000u | 19023u), rows.Where(r => r.Entry == 0).Select(r => (r.Entry, r.PathId)).Single());
+        }
+
+        (code, output, error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("creature_movement_template (entry paths): the world has entry paths already; left as they are", output, StringComparison.Ordinal);
+        await using WorldDbContext again = Open(world);
+        Assert.Equal(5, await again.Set<CreatureMovementTemplateRow>().CountAsync(r => r.Entry != 0));
+    }
+
+    /// <summary>A world with an entry path of its own keeps exactly what it has (refresh never replaces the creature tables).</summary>
+    [Fact]
+    public async Task Refresh_LeavesAWorldsOwnEntryPaths()
+    {
+        string world = await OldWorldAsync();
+        await using (WorldDbContext seed = Open(world))
+        {
+            seed.Set<CreatureMovementTemplateRow>().Add(new CreatureMovementTemplateRow { Entry = 1355, PathId = 0, Point = 1, X = 9, Y = 9, Z = 9 });
+            await seed.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump + Environment.NewLine + EntryPathDump);
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.DoesNotContain("  creature_movement_template (entry paths)  ", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(world);
+        CreatureMovementTemplateRow kept = await db.Set<CreatureMovementTemplateRow>().SingleAsync(r => r.Entry != 0);
+        Assert.Equal((1355u, 0u, 1u, 9f), (kept.Entry, kept.PathId, kept.Point, kept.X));
+    }
+
     [Fact]
     public async Task Refresh_RunTwice_LeavesTheSameRows()
     {
