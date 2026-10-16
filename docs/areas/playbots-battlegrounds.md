@@ -25,6 +25,7 @@ server's own rules (below).
 | `PlayerbotBattlegroundRoles.cs` | Who attacks, escorts and defends in a match. Unit tested. |
 | `PlayerbotBattlegroundCoordinator.cs` | The world feature: scans free bots, runs every followed bot's queue machine from the server's own state, sends the client packets, rebuilds the demand and the roles, the GM report. |
 | `PlayerbotBattlegroundAI.cs` | One per followed bot: the walk to the battlemaster, and the match (fighting enemy players, the objective, the corpse run). |
+| `PlayerbotBattlegroundBuffs.cs` | The speed, restoration and berserking buff objects: the per-map board (a scan at most every 3 s, a claim per buff and team) and one bot's choice of which buff is worth a detour. Unit tested. |
 
 Changes outside the folder: `ManagedPlayerbotFeature` calls the coordinator every tick after the group coordinator and lets it drive a
 bot before the group AI, the party AI and the brain (`BattlegroundDriven`); a bot the coordinator holds is not free for bot groups and a
@@ -123,6 +124,19 @@ it (vmangos `AtFlag`). The server's open-lock effect turns the opening of a bann
 the opening of a neutral goober banner into its trigger spell cast at the bot, which clicks (docs/areas/battlegrounds.md). A defender guards one of its team's nodes (spread by guid) and casts at it when the enemy contests it;
 with nothing to take, an attacker guards its nearest own node.
 
+**Buff objects** (`PlayerbotBattlegroundBuffs`; Warsong Gulch's speed, restoration and berserking buffs, the Arathi Basin node buffs).
+They are traps (classic-db 179871/179904/179905 and alternates: type 6, data2 radius 0, data3 the spell 23451 / 23493 / 23505, data5
+cooldown 3): a living player within 3 yards sets one off, the trap casts its spell on the player and the match uses it up (vmangos
+`GameObject::Update`, GameObject.cpp:476-551, and `BattleGround::HandleTriggerBuff`, BattleGround.cpp:1713-1757; here
+`MatchRuntime.UpdateBuffTraps`). A bot takes one as a player does, by walking onto it; nothing applies the aura from the bot side. Each
+think, before it fights or plays its objective, the bot checks the map's board (one scan of the map's objects every 3 seconds at most,
+shared by all bots of the match): a buff within 60 yards is worth it when it is speed and the bot carries the enemy flag or chases the
+enemy carrier (anyone else only one within 10 yards), restoration and the bot is under 60% health or mana, berserking and the bot fights
+(never the carrier); a buff whose aura it has is skipped. Its detour (against the flag room for the carrier, the chased carrier for a
+chaser, else its distance) must stay under 40 yards, 20 while an objective is urgent (carrying, chasing, a flag on the ground) and 15 in a
+fight. The bot claims the buff for its team (renewed each think, lapsing after 3 s), so a teammate goes for another; it gives up after 15
+s (and leaves that buff alone for 30 s) and forgets a buff that despawned or someone else took. Activity `taking-buff`.
+
 ## Configuration (`World:Playerbots:Battlegrounds`, live)
 
 | Key | Default | What the code does with it |
@@ -163,6 +177,12 @@ where the group would be, the goal `Battleground` (or `Recover` on a corpse run)
   (`Ab_WithANeutralGooberWhoseSpellIsNoBannerTrigger_IsRefused_NoBotQueues`); Alterac Valley is refused and never queued.
   With the coordinator's group check, its banner routing rule and its real-player filter removed, the party, race, unrouted-goober and
   managed-bot tests go red.
+* Buffs (`PlayerbotBattlegroundBuffTests`): the classic-db templates are recognised; a hurt bot prefers restoration over a closer
+  berserking buff; the carrier prefers speed within the detour cap and never takes berserking; a far buff is ignored while an objective is
+  urgent; two bots of a team never head to the same buff (an enemy may); a despawned buff is dropped and forgotten on the board; an overdue
+  pursuit is given up. End to end (`Wsg_HurtBot_WalksOntoTheRestorationBuff_TheTrapCastsIt_AndTheBuffIsUsedUp`, `StartWithWsgBuffsAsync`):
+  a hurt bot in a running Warsong Gulch match walks onto the restoration buff, the trap casts 23493 on it, the object is used up and the
+  bot lets it go, the berserking buff beside it stays, and the board scanned at most once per 3 s.
 
 The test world's battleground maps are flat with open paths, laid out compactly, with one-player-per-team templates; the battlemasters of
 both factions stand beside the human start, where the scenario world logs every race in; the ids (maps, triggers, flag and banner entries,

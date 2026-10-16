@@ -64,6 +64,7 @@ internal sealed class PlayerbotBattlegroundAI
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotCombatSpells _spells;
     private readonly PlayerbotRecovery _recovery;
+    private readonly PlayerbotBattlegroundBuffs _buffs = new();
     private readonly float _followAngle;
     private readonly float _followDistance;
     private PlayerbotRoute? _route;
@@ -102,6 +103,9 @@ internal sealed class PlayerbotBattlegroundAI
     /// <summary>The bot's corpse run (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
 
+    /// <summary>The bot's use of the battleground buff objects (inspection and tests).</summary>
+    internal PlayerbotBattlegroundBuffs Buffs => _buffs;
+
     /// <summary>True when the walk to a battlemaster refused a route (or stood at the spot for 5s with no living battlemaster).</summary>
     internal bool TravelRefused { get; private set; }
 
@@ -128,6 +132,7 @@ internal sealed class PlayerbotBattlegroundAI
         _spells.GroupRole = null;
         _spells.Reset();
         _recovery.Reset();
+        _buffs.Reset(player.Guid);
         Activity = "idle";
     }
 
@@ -191,6 +196,7 @@ internal sealed class PlayerbotBattlegroundAI
             _attacking = false;
             _route = null;
             _spells.Reset();
+            _buffs.Reset(player.Guid);
             _deathRetired = true;
         }
 
@@ -228,6 +234,16 @@ internal sealed class PlayerbotBattlegroundAI
 
         bool carrier = match is WarsongGulch carrying && carrying.FlagPicker(BattlegroundConstants.OtherTeam(team)) == player.Guid;
         Unit? enemy = carrier ? FirstAttackerIfStill(player) : SelectEnemy(player, match, team);
+        if (_buffs.Update(_session, player, match, team, enemy, carrier, Now) is { } buff)
+        {
+            // A speed, restoration or berserking buff worth the detour: walk onto it (the trap casts it; PlayerbotBattlegroundBuffs).
+            Activity = "taking-buff";
+            _inMatchIdleMs = 0;
+            TargetEntry = buff.Entry;
+            if (!WalkTo(player, buff.Position, interval, toward: false)) _buffs.GiveUp(player.Guid, Now);
+            return;
+        }
+
         if (enemy is not null)
         {
             Activity = "fighting";

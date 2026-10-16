@@ -83,6 +83,32 @@ internal static class BattlegroundBotTestContent
     public const uint AbNeutralBanner = 993301;
     public const uint AbAllianceContestedBanner = 993302;
     public const uint AbAllianceBanner = 993303;
+    public const uint WsgRestorationBuffSpawn = 993401;
+    public const uint WsgBerserkBuffSpawn = 993402;
+
+    /// <summary>Spells of the buff objects (classic-db gameobject_template data3): 179871 Speed, 179904 Restoration, 179905 Berserking.</summary>
+    public const uint SpeedBuffSpell = 23451;
+    public const uint RestorationBuffSpell = 23493;
+    public const uint BerserkBuffSpell = 23505;
+
+    /// <summary>
+    /// The Warsong Gulch buffs of <see cref="WsgBuffs"/>: a restoration buff 20 yards south of the Alliance start (graveyard 769) and a
+    /// berserking buff 20 yards north of it. The places are test fixtures (classic-db's are 90004-90007 around the middle of the real map).
+    /// </summary>
+    public static readonly Vector3 RestorationBuffAt = new(AllianceFlag.X - 15f, AllianceFlag.Y - 20f, WsgFloor);
+    public static readonly Vector3 BerserkBuffAt = new(AllianceFlag.X - 15f, AllianceFlag.Y + 20f, WsgFloor);
+
+    /// <summary>
+    /// A battleground buff object as classic-db's gameobject_template has 179871 / 179904 / 179905: a trap (type 6) whose data2 (radius) is 0,
+    /// data3 the buff spell and data5 (cooldown) 3 - the shape the match's trap update and the bots recognise as a buff.
+    /// </summary>
+    public static GameObjectTemplate BuffTrap(uint entry, uint spell, uint displayId, string name)
+    {
+        uint[] data = new uint[GameObjectTemplate.DataCount];
+        data[3] = spell;
+        data[5] = BattlegroundConstants.BattlegroundTrapCooldownSeconds;
+        return new GameObjectTemplate { Entry = entry, Type = (uint)GameObjectType.Trap, DisplayId = displayId, Name = name, Data = data };
+    }
 
     /// <summary>Lock.dbc 5875 row 1479 (read 2026-10-10): case 1 is LOCK_KEY_SKILL (2) of lock type 17 (LOCKTYPE_SLOW_OPEN), no skill needed.</summary>
     public static readonly LockEntry BannerLock = new(1479, [0, 2, 0, 0, 0, 0, 0, 0], [0, 17, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]);
@@ -108,12 +134,13 @@ internal static class BattlegroundBotTestContent
 
     /// <param name="offered">The types whose battlemasters are spawned (every type's template, map and objectives are loaded regardless).</param>
     /// <param name="neutralBanner">The shape of the stables' neutral banner (<see cref="NeutralBannerShape"/>).</param>
-    public static void Register(IServiceCollection services, IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner = NeutralBannerShape.Button)
+    /// <param name="wsgBuffs">Spawn the Warsong Gulch buffs (<see cref="RestorationBuffAt"/>, <see cref="BerserkBuffAt"/>); off by default.</param>
+    public static void Register(IServiceCollection services, IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner = NeutralBannerShape.Button, bool wsgBuffs = false)
     {
         services.AddSingleton<IMapDataStore>(new Maps());
         services.AddSingleton<IGraveyardDataStore>(new Graveyards());
         services.AddSingleton<IBattlegroundContentStore>(new Battlegrounds());
-        var store = new Content(offered, neutralBanner);
+        var store = new Content(offered, neutralBanner, wsgBuffs);
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddScoped<IGameObjectDataStore>(_ => store);
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Spells()));
@@ -155,6 +182,9 @@ internal static class BattlegroundBotTestContent
             Aura(BattlegroundConstants.SpellDeserter, "Deserter", durationIndex: 4),
             BannerSpell(),
             StablesTriggerSpell(),
+            Aura(SpeedBuffSpell, "Speed", durationIndex: 4),
+            Aura(RestorationBuffSpell, "Restoration", durationIndex: 4),
+            Aura(BerserkBuffSpell, "Berserking", durationIndex: 4),
         ],
         [new SpellCastTimeRow { Id = 1 }, new SpellCastTimeRow { Id = 7, CastTime = 10_000, MinCastTime = 10_000 }],
         [new SpellDurationRow { Id = 21, Duration = -1, MaxDuration = -1 }, new SpellDurationRow { Id = 4, Duration = 900_000, MaxDuration = 900_000 }],
@@ -245,7 +275,7 @@ internal static class BattlegroundBotTestContent
             ]));
     }
 
-    private sealed class Content(IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner) : ICreatureDataStore, IGameObjectDataStore
+    private sealed class Content(IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner, bool wsgBuffs) : ICreatureDataStore, IGameObjectDataStore
     {
         Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
             [
@@ -277,8 +307,14 @@ internal static class BattlegroundBotTestContent
                     NeutralBannerShape.UnroutedGoober => GooberBanner(WarsongGulch.SpellWarsongFlag),
                     _ => Banner(180087, "Stable Banner"),
                 }, Banner(180085, "Contested Banner"), Banner(180058, "Alliance Banner"),
+                BuffTrap(BattlegroundConstants.SpeedBuffEntry, SpeedBuffSpell, 5931, "Speed Buff"),
+                BuffTrap(BattlegroundConstants.RegenBuffEntry, RestorationBuffSpell, 5991, "Food Buff"),
+                BuffTrap(BattlegroundConstants.BerserkBuffEntry, BerserkBuffSpell, 5995, "Berserk Buff"),
             ],
             [
+                .. wsgBuffs
+                    ? [BuffSpawn(WsgRestorationBuffSpawn, BattlegroundConstants.RegenBuffEntry, RestorationBuffAt), BuffSpawn(WsgBerserkBuffSpawn, BattlegroundConstants.BerserkBuffEntry, BerserkBuffAt)]
+                    : Array.Empty<GameObjectSpawn>(),
                 new GameObjectSpawn { Guid = WsgAllianceStandSpawn, Entry = WarsongGulch.AllianceFlagBaseEntry, MapId = 489, X = AllianceFlag.X, Y = AllianceFlag.Y, Z = AllianceFlag.Z },
                 new GameObjectSpawn { Guid = WsgHordeStandSpawn, Entry = WarsongGulch.HordeFlagBaseEntry, MapId = 489, X = HordeFlag.X, Y = HordeFlag.Y, Z = HordeFlag.Z },
                 BannerSpawn(AbNeutralBanner, 180087), BannerSpawn(AbAllianceContestedBanner, 180085), BannerSpawn(AbAllianceBanner, 180058),
@@ -313,6 +349,10 @@ internal static class BattlegroundBotTestContent
 
         private static GameObjectTemplate GooberBanner(uint spell = StablesTrigger) => BattlegroundBotTestContent.GooberBanner(spell);
 
+        /// <summary>A buff spawn as classic-db has them (spawntimesecs 180: a used buff comes back after three minutes).</summary>
+        private static GameObjectSpawn BuffSpawn(uint guid, uint entry, Vector3 at)
+            => new() { Guid = guid, Entry = entry, MapId = 489, X = at.X, Y = at.Y, Z = at.Z, SpawnTimeSeconds = 180 };
+
         private static GameObjectSpawn BannerSpawn(uint guid, uint entry)
             => new() { Guid = guid, Entry = entry, MapId = 529, X = Stables.X, Y = Stables.Y, Z = Stables.Z };
     }
@@ -326,7 +366,14 @@ internal static class BattlegroundBotTestWorld
         => StartAsync(configure, NeutralBannerShape.Button, offered);
 
     /// <param name="neutralBanner">The shape of the stables' neutral banner (<see cref="NeutralBannerShape"/>).</param>
-    public static async Task<ScenarioTestWorld> StartAsync(Action<PlayerbotOptions>? configure, NeutralBannerShape neutralBanner, params BattlegroundType[] offered)
+    public static Task<ScenarioTestWorld> StartAsync(Action<PlayerbotOptions>? configure, NeutralBannerShape neutralBanner, params BattlegroundType[] offered)
+        => StartAsync(configure, neutralBanner, wsgBuffs: false, offered);
+
+    /// <summary>Warsong Gulch with the buff objects of <see cref="BattlegroundBotTestContent.RestorationBuffAt"/> and <see cref="BattlegroundBotTestContent.BerserkBuffAt"/>.</summary>
+    public static Task<ScenarioTestWorld> StartWithWsgBuffsAsync(Action<PlayerbotOptions>? configure = null)
+        => StartAsync(configure, NeutralBannerShape.Button, wsgBuffs: true, BattlegroundType.WarsongGulch);
+
+    private static async Task<ScenarioTestWorld> StartAsync(Action<PlayerbotOptions>? configure, NeutralBannerShape neutralBanner, bool wsgBuffs, params BattlegroundType[] offered)
     {
         var options = new PlayerbotOptions
         {
@@ -336,7 +383,7 @@ internal static class BattlegroundBotTestWorld
         configure?.Invoke(options);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
         {
-            BattlegroundBotTestContent.Register(services, offered.Length == 0 ? [BattlegroundType.WarsongGulch] : offered, neutralBanner);
+            BattlegroundBotTestContent.Register(services, offered.Length == 0 ? [BattlegroundType.WarsongGulch] : offered, neutralBanner, wsgBuffs);
             services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
         });
         await world.Host.OnWorldAsync(() =>
