@@ -78,6 +78,31 @@ public sealed class PopulationSplitBrainTests
     }
 
     [Fact]
+    public async Task ARestartRefusedForSplitBrainMidPass_EndsThePassQuietly_NoFailWarningOrLoginFailedAnomaly()
+    {
+        var warnings = new WarningCounter<PlayerbotPopulationFeature>();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1,
+            configureServices: s => s.AddSingleton<ILogger<PlayerbotPopulationFeature>>(warnings));
+        Guid id = await OwnedParkedBotAsync(world, "Midpassone");
+        world.Ticks.Set(200, 10);
+        using AnomalyCapture anomalies = AnomalyLedger.Shared.Capture(n => n.Subject.Contains(id.ToString("D"), StringComparison.Ordinal));
+        TaskCompletionSource loadHeld = world.Members.HoldNextLoad();
+        Task pass = world.Feature.RunPassNowAsync();
+        await loadHeld.Task.WaitAsync(TimeSpan.FromSeconds(30)); // in flight, before it would restart the parked member
+        int warned = warnings.Count;
+
+        await world.Bots.ForceSplitBrainForTests();
+        world.Members.ReleaseHeldLoad();
+        await pass.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, world.Feature.Status.Passes); // ended without publishing
+        Assert.Equal(0, world.RunningCount);
+        Assert.Empty(anomalies.Notices);
+        Assert.Equal(warned, warnings.Count);
+        Assert.Null(world.Feature.Status.LastError);
+    }
+
+    [Fact]
     public async Task APassInFlightWhenTheLatchIsSet_WritesNoMemberRow_AndEndsQuietly()
     {
         var warnings = new WarningCounter<PlayerbotPopulationFeature>();

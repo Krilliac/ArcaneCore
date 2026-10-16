@@ -1312,8 +1312,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (_active.TryGetValue(bot.BotId, out ActiveBot? active))
         {
             active.Paused = true;
-            // Split brain: another process owns the rows, so this stop leaves the active set without a single managed-row or set-aside write.
-            // The character's own session-close save still runs (there is no clean way to discard it); wait, bounded, for the session to close.
+            // Defence only: entering split brain drops every active bot and every start is refused while it is set, so no bot is active here when it is latched
+            // (a race that latched it between the lookup above and this check is the one way in). Another process owns the rows, so this stop leaves the active
+            // set without a single managed-row or set-aside write. The character's own session-close save still runs (there is no clean way to discard it); wait, bounded, for the session to close.
             if (_splitBrain)
             {
                 await DropFromActiveAsync(active, active.Record, writeSetAsides: false, announce: false).ConfigureAwait(false);

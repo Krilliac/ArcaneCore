@@ -99,7 +99,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private long _passes;
     private long _passesStarted;
 
-    /// <summary>How many passes were started (a pass that is refused before it starts is not counted), whether or not they finished (tests).</summary>
+    /// <summary>How many passes were started (every call that reached the start of a pass, even one that then could not capture the world), whether or not they finished (tests).</summary>
     internal long PassesStarted => Interlocked.Read(ref _passesStarted);
     // Pass-thread-only (one pass at a time): placements refused in a row after a bot was created, and the pass the pause began at.
     private int _placementRefusals;
@@ -1016,7 +1016,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private static void ReportLoginFailed(IReadOnlyDictionary<Guid, ManagedPlayerbot> known, Guid botId, int characterId, string? fallbackName,
         PlayerbotOperationResult result, string stage)
     {
-        if (result.Code is "playerbot-capacity" or "playerbot-stopping" or "playerbots-disabled" or "playerbots-reset" or "playerbot-split-brain")
+        if (result.Code is "playerbot-capacity" or "playerbot-stopping" or "playerbots-disabled" or "playerbots-reset")
         {
             return;
         }
@@ -1225,13 +1225,25 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _optOutToPersist.Clear();
         }
 
-        foreach (Guid id in pending)
+        // An id leaves the queue only once its row is stored (or needs no row): whatever was not reached, or whose write threw, is queued again.
+        int done = 0;
+        try
         {
-            if (ctx.Input.Managed.SplitBrain) return; // another world owns the rows: no member row is written
-            if (!ctx.Members.TryGetValue(id, out PlayerbotPopulationMember? member) || member.Band == HomeOptOutBand) continue;
-            member = member with { Band = HomeOptOutBand, UpdatedUnix = NowUnix() };
-            await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
-            ctx.Members[id] = member;
+            for (; done < pending.Length; done++)
+            {
+                Guid id = pending[done];
+                if (ctx.Input.Managed.SplitBrain) return; // another world owns the rows: no member row is written
+                if (!ctx.Members.TryGetValue(id, out PlayerbotPopulationMember? member) || member.Band == HomeOptOutBand) continue;
+                member = member with { Band = HomeOptOutBand, UpdatedUnix = NowUnix() };
+                await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
+                ctx.Members[id] = member;
+            }
+        }
+        finally
+        {
+            if (done < pending.Length)
+                lock (_optOutGate)
+                    for (int i = done; i < pending.Length; i++) _optOutToPersist.Add(pending[i]);
         }
     }
 
@@ -1700,10 +1712,14 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _homeRetrySweep[bot.BotId] = sweep + HomeRetrySweeps;
         }
 
-        if (cleared.Count > 0 && !managed.SplitBrain)
+        if (cleared.Count > 0)
         {
-            try { changes += await managed.ClearHomesAsync(cleared, ct, byOperator: false).ConfigureAwait(false); }
-            catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException) { } // latched since the check: skip quietly
+            if (managed.SplitBrain) adoptIncomplete = true; // nothing cleared: the adoption is retried after a clear
+            else
+            {
+                try { changes += await managed.ClearHomesAsync(cleared, ct, byOperator: false).ConfigureAwait(false); }
+                catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException) { adoptIncomplete = true; } // latched since the check: skip quietly, retry after a clear
+            }
         }
         // Every operator home of the population is taken over: retire the generation this sweep began with (and no later one).
         if (completed && failed == 0 && !adoptIncomplete) Interlocked.Exchange(ref _adoptDoneGeneration, adoptGeneration);

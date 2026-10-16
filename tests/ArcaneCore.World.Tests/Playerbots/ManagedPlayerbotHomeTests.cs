@@ -287,6 +287,27 @@ public sealed class ManagedPlayerbotHomeTests
     }
 
     [Fact]
+    public async Task ClearHome_WhenSplitBrainLatchesPartway_ReportsHowManyWereClearedBeforeIt_AndRefuses()
+    {
+        var homes = new MemoryHomeStore();
+        await using WorldTestHost host = StartHost(homes);
+        ManagedPlayerbotFeature feature = PartyTestHost.Feature(host);
+        await feature.StartupAsync(default);
+        Guid one = await BotAsync(feature, host, "Hmlatchone"), two = await BotAsync(feature, host, "Hmlatchtwo");
+        Assert.Equal(2, (await feature.SetHomesAsync(
+            [new(one, 0, new Vector3(-8913.23f, 554.633f, 93.7944f)), new(two, 0, new Vector3(-8913.23f, 554.633f, 93.7944f))], 300f, "Stormwind")).Set);
+        await using WorldTestClient admin = await host.EnterWorldAsync("HOMEADMIN7", "Hmadminseven", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        homes.AfterClear = () => feature.ForceSplitBrainForTests().GetAwaiter().GetResult(); // the other world's takeover is seen after the first clear
+
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot home Hmlatch* clear");
+        Assert.Equal(Accepted, (await admin.ReadChatAsync()).Text);
+        Assert.Equal("Playerbot home refused: split brain is latched (see .playerbot splitbrain); 1 cleared before it.", (await admin.ReadChatAsync()).Text);
+        Assert.Single(await homes.LoadAllAsync()); // the second bot's home was not touched
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
     public async Task ClearHomes_WhenTheStoreFailsPartway_StillClearsTheBrainsOfTheBotsAlreadyCleared()
     {
         var homes = new MemoryHomeStore();
@@ -505,6 +526,9 @@ public sealed class ManagedPlayerbotHomeTests
 
         public bool FailSet { get; init; }
 
+        /// <summary>Runs after each successful <see cref="ClearAsync"/> removal (a test latches split brain here).</summary>
+        public Action? AfterClear { get; set; }
+
         /// <summary>1-based: the Nth <see cref="ClearAsync"/> call throws (0: never).</summary>
         public int FailClearOnCall { get; set; }
 
@@ -522,7 +546,9 @@ public sealed class ManagedPlayerbotHomeTests
         {
             if (FailClearOnCall != 0 && Interlocked.Increment(ref _clearCalls) == FailClearOnCall)
                 throw new InvalidOperationException("the characters database is unavailable");
-            return Task.FromResult(_rows.TryRemove(botId, out _));
+            bool removed = _rows.TryRemove(botId, out _);
+            if (removed) AfterClear?.Invoke();
+            return Task.FromResult(removed);
         }
     }
 }
