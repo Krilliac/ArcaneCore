@@ -273,6 +273,14 @@ public sealed class CreatureAiFactory
         [Scripts.TaskmasterFizzuleAI.Entry] = E(static c => new Scripts.TaskmasterFizzuleAI(c)),
         [Scripts.AquementasAI.Entry] = E(static c => new Scripts.AquementasAI(c)),
         [Scripts.DeathstalkerFaerleiaAI.Entry] = E(static c => new Scripts.DeathstalkerFaerleiaAI(c)),
+        [Scripts.SpitelashAI.NpcWarrior] = E(static c => new Scripts.SpitelashAI(c)),
+        [Scripts.SpitelashAI.NpcScreamer] = E(static c => new Scripts.SpitelashAI(c)),
+        [Scripts.SpitelashAI.NpcSerpentGuard] = E(static c => new Scripts.SpitelashAI(c)),
+        [Scripts.SpitelashAI.NpcSiren] = E(static c => new Scripts.SpitelashAI(c)),
+        [Scripts.SpitelashAI.NpcMyrmidon] = E(static c => new Scripts.SpitelashAI(c)),
+        [Scripts.RabidBearAI.Entry] = E(static c => new Scripts.RabidBearAI(c)),
+        [Scripts.FeeroIronhandAI.Entry] = E(static c => new Scripts.FeeroIronhandAI(c)),
+        [Scripts.MorokkAI.Entry] = E(static c => new Scripts.MorokkAI(c)),
     };
 
     /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>
@@ -307,6 +315,8 @@ public sealed class CreatureAiFactory
         Scripts.ProspectorRemtravelAI.QuestAbsentMindedPt2,
         Scripts.CalvinMontagueAI.QuestCalvin,
         Scripts.DeathstalkerFaerleiaAI.QuestPyrewoodAmbush,
+        Scripts.FeeroIronhandAI.QuestSuppliesToAuberdine,
+        Scripts.MorokkAI.QuestChallengeMorokk,
         Instances.Scripts.BlackrockDepths.MarshalWindsorAI.QuestJailBreak];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>

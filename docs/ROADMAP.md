@@ -223,27 +223,21 @@ blanket absence labels without claiming complete vanilla fidelity.
 **Master to-do list for any agent (Claude or Grok) continuing ArcaneCore.** Supersedes the 2026-10-10 section: everything in it (#68–#90, wave 17/18) is merged and `integrate/wave17` is gone.
 
 ### State
-- `main` = `6636ce5a` (merge of #429). Claude merges via "Train N" PRs from `claude/wNN-*` / `integrate/wNN-*`. The Grok lane works in `grok/w37-*` / `grok/w38-*` branches with PRs titled `[grok lane]` straight into `main`.
+- `main` moves with every merge (read `git log origin/main`; the SHA that stood here went stale). Claude merges via "Train N" PRs from `claude/wNN-*` / `integrate/wNN-*`. The Grok lane works in `grok/w37-*` / `grok/w38-*` branches with PRs titled `[grok lane]` straight into `main`.
 - Hosted CI is the test gate (`test (Game|World|Data|Rest)`); drafts skip CI. The box has no push creds (push via GitHub MCP) and builds stay serialized.
 
 ### Merged 2026-10-12/13
 - Claude: #333 (deterministic eight-bot shutdown test).
 - Grok lane: #401 + #405 area-trigger scripts (all 10 cmangos `areatrigger_scripts.cpp`) plus engine pieces (single-player GO traps, temp faction reset on respawn, AI custom events, per-map script data); #404 SmartAI slice 3; #403 pet untraining; #413 pet XP/leveling + training points; #422 pet happiness/loyalty (runaway); #425 hunters learning from pets; #410 helm/cloak toggles + mount special anim + ignored opcodes; #416 LFG/bug report/logout; #417 GM teleport opcodes; #415 comment cleanup; #427 VisibilityAllocationTests flake fix; #428 battleground spirit healers; #429 whois/setrawpos.
 
-### Open PRs (merge order)
-1. #411 zone scripts batch 1 (Lazy Peon, Galen, Miran, Keeshan, Kinelory). Ready; `test (Rest)` failed on last run, recheck/rerun after #427.
-2. #423 zone scripts batch 2 (stacked on #411; draft). Retarget to `main` after #411, mark ready.
-3. #439 zone scripts batch 3 (stacked on #423; **WIP, unbuilt**): Prospector Remtravel, Barrens stealth alert; not registered in `CreatureAiFactory`; Gallywix/Silixiz/Venture Co. lookout planned but not written.
-4. #412 SmartAI slice 3b (SET_FACTION, MORPH, AUTO_ATTACK, ALLOW_COMBAT_MOVE, DIE). `test (Game)` failed; investigate.
-5. #424 SmartAI slice 3c (stacked on #412; draft): KILL, SUMMONED_UNIT, RECEIVE_EMOTE events; SOUND etc.
-6. #434 pets possess summon limits. `test (Game)` and `test (Rest)` failed; investigate.
-7. #435 BATTLEFIELD_JOIN refuse+log, spirit guide gossip. Was green except Data (pending).
-8. #436 Far Sight (CMSG_FAR_SIGHT camera reset/restore). `test (Game)` failed; investigate.
-9. #437 Outdoor PvP capture radius/time vs type-29 templates. Running.
-- #326 Claude clustering (v60), draft. **Claude's; don't touch.**
+### Open PRs
+None of the lane PRs this section used to list is open any more (checked with `gh pr view` on 2026-10-16):
+- Merged: #411 zone scripts batch 1, #423 batch 2, #439 batch 3 (its WIP note is stale: the finished batch 3, Prospector Remtravel and the Barrens stealth-alert speakers, landed in `6f10bc4c` and came in through train #566), #412 SmartAI slice 3b, #434 pets possess summon limits, #435 BATTLEFIELD_JOIN refuse+log and spirit guide gossip, #436 Far Sight, #437 Outdoor PvP capture radius/time, and #326 Claude clustering (v60, `c96e5907`).
+- Closed unmerged: #424 SmartAI slice 3c (KILL, SUMMONED_UNIT, RECEIVE_EMOTE events; SOUND, CALL_FOR_HELP); that work is still open, see "SmartAI" under Gaps by area.
+- Zone scripts batch 5 is in `docs/integration/zone-scripts-batch5-20261016.md`.
 
 ### Open work
-- **World scripts:** about 72 of 186 mangos-classic SD2 scripts are still missing (82 before the Scourge invasion and go_scripts.cpp slice, `docs/integration/world-scripts-scourge-go-20261010.md`). Next up are the 10 area-trigger scripts (`areatrigger_scripts.cpp`). Captured Arkonarin needs a DB path. Felwood kitten (q4506) needs an owned summon plus an entry change. Private Hendel's credit needs `creature_movement_template` 4967 in the DB.
+- **World scripts:** about 72 of 186 mangos-classic SD2 scripts are still missing (82 before the Scourge invasion and go_scripts.cpp slice, `docs/integration/world-scripts-scourge-go-20261010.md`). The 10 area-trigger scripts (`areatrigger_scripts.cpp`) are all ported. Captured Arkonarin needs a DB path. Felwood kitten (q4506) needs an owned summon plus an entry change. Private Hendel's credit needs `creature_movement_template` 4967 in the DB.
 - **SmartAI slice 3:** slice 2 (conditions via `ConditionId`, GO, areatrigger and timed-action-list sources) is done, see `docs/integration/smartai-slice2-20261010.md`. Open: the events, actions and targets listed there as rejected, AIName for game objects, and ending the area-trigger handler when a script ran.
 - **Pets:** Far Sight view extension, the stable (needs `character_pet` slots and a stable-slot column, a schema change), the happiness emote. Done: training-point costs and beast training (`docs/integration/pet-training-20261010.md`), untraining (#403), pet XP and level-up training points (#413), happiness/loyalty (#422), learning from pets (#425), possess summon limits (summon limit, ALREADY_HAVE_CHARM, pet put away for the minion).
 - **Warden:** API-hook/EndScene/login checks, a live 1.12.1 client test, Mac.
@@ -264,9 +258,9 @@ blanket absence labels without claiming complete vanilla fidelity.
 - Mograine Divine Shield timing test: failed once, passed on rerun (timing-sensitive).
 
 ### Gaps by area
-- **Pets:** untraining price, taught-ability state and loyalty need persistence, which needs a characters schema bump *after* v60 (held by Claude's #326). Still open: stable gaps, happiness emote, DuelReset pet cooldowns, possess limits (#434).
-- **Handlers:** helm/cloak show flags aren't persisted (needs schema). Whois lacks account email. Spirit guide gossip timer is sent as 0. Far Sight needs real camera state in `Pets/Control/UnitControl.cs` (#436 only resets/restores). More unhandled opcodes remain in `docs/reference/opcodes.md`.
-- **Zone scripts:** about 68 cmangos zone scripts are unported; batches 1–4 cover ~20 (batch 4: Calvin Montague, Taskmaster Fizzule, Aquementas, Deathstalker Faerleia, `go_rune_of_the_defiler`, `go_mausoleum_door`, `go_mausoleum_trigger`; skipped candidates and reasons in `docs/integration/zone-scripts-batch4-20261016.md`). Continue in batches of 5–8 per PR.
+- **Pets:** untraining price, taught-ability state and loyalty need persistence, which needs a characters schema bump *after* v60 (held by Claude's #326). Still open: stable gaps, happiness emote (possess limits are done, #434; DuelReset pet cooldowns are done).
+- **Handlers:** helm/cloak show flags aren't persisted (needs schema). Whois lacks account email. Spirit guide gossip timer is sent as 0. Far Sight needs real camera state in `Pets/Control/UnitControl.cs` (#436, merged, only resets/restores). More unhandled opcodes remain in `docs/reference/opcodes.md`.
+- **Zone scripts:** about 62 cmangos zone scripts are unported; batches 1–5 cover ~26 (batch 5: Spitelash naga, Rabid Thistle Bear, Feero Ironhand, Overlord Mok'Morokk, `go_lightning`, `go_covert_ops`; batch 4: Calvin Montague, Taskmaster Fizzule, Aquementas, Deathstalker Faerleia, `go_rune_of_the_defiler`, `go_mausoleum_door`, `go_mausoleum_trigger`; skipped candidates and reasons in `docs/integration/zone-scripts-batch5-20261016.md` and `docs/integration/zone-scripts-batch4-20261016.md`). Continue in batches of 5–8 per PR.
 - **SmartAI:** CALL_FOR_HELP, other rejected actions/targets from `docs/integration/smartai-slice2-20261010.md`, AIName for GOs.
 - **Area triggers:** all 10 ported; leftovers are DB-side data (Captured Arkonarin, Felwood kitten q4506, Hendel `creature_movement_template` 4967).
 - **Other (from 2026-10-10, still open):** Warden API-hook/EndScene/login checks and live client test; AH bot gaps (`docs/areas/auction-house-bot.md`); Docker untested; addon chat hook; multi-version S1/S2 (waiting on Nate's decisions 4 and 6 on #61).
