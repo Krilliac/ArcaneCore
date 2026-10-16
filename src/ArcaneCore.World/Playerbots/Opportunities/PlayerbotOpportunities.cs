@@ -6,7 +6,6 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
-using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
@@ -744,8 +743,14 @@ internal sealed class PlayerbotOpportunities
             {
                 _ledger.Complete(episode.Key, now, RareRecheckMs);
                 // Killed by someone else (the corpse is tapped by another): the bot lost it, whatever it was worth.
-                if (KilledBySomeoneElse(player, rare)) episode.Lost = true;
-                else episode.Succeeded = true;
+                // The server's own tap rule (the viewer's tapped flags: LootService.Filter, which knows groups and pets): a kill that earned the
+                // bot or its group the corpse is a success; one another player tapped is lost; one that earned nobody credit (SettleKillCredit,
+                // an NPC did most of the damage) is neither.
+                if (rare.KillCreditAllowed)
+                {
+                    if (PlayerbotBrain.HasLootRights(player, rare)) episode.Succeeded = true;
+                    else episode.Lost = true;
+                }
             }
             else _ledger.Forget(episode.Key);
             EndEpisode();
@@ -764,18 +769,6 @@ internal sealed class PlayerbotOpportunities
         }
 
         return Pull(player, episode, pack, now);
-    }
-
-    /// <summary>
-    /// The rare's loot tap (<see cref="Creature.LootTapper"/>) is another player's: neither the bot, its pet nor anyone in its group (a pet is
-    /// resolved to its owner). A tapper no longer on the map counts as another player.
-    /// </summary>
-    private static bool KilledBySomeoneElse(Player player, Creature rare)
-    {
-        ObjectGuid tap = rare.LootTapper;
-        if (tap.IsEmpty || tap == player.Guid || tap == player.PetGuid) return false;
-        Player? owner = PlayerbotBrain.TaggerOf(player, rare, GroupsOf(player));
-        return owner is null || (owner.Guid != player.Guid && GroupsOf(player)?.AreInSameGroup(player.Guid, owner.Guid) != true);
     }
 
     /// <summary>A rare killed is looked at again after this (its respawn is long; the brain loots the corpse).</summary>
@@ -882,7 +875,7 @@ internal sealed class PlayerbotOpportunities
                 int room = PlayerbotTownGoals.FreeBagSlots(player);
                 if (hasSpace && window.Items is { } items)
                     foreach ((uint item, uint count) in items)
-                        if (room-- > 0 && player.Inventory.Templates.Find(item) is { } template) copper += (ulong)template.SellPrice * Math.Max(1u, count);
+                        if (player.Inventory.Templates.Find(item) is { } template && room-- > 0) copper += (ulong)template.SellPrice * Math.Max(1u, count);
                 episode.LootCopper = copper;
                 episode.LootMeasured = true;
             }

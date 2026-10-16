@@ -678,7 +678,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 | `ladder`, `pick` | The ladder's choice; the policy's (or exploration's) choice, null when there were no scores. |
 | `src` | `agreed`, `applied`, `explored`, `nonfinite`, `floor` or `refused` (the promoted goal's controller did not act). |
 | `x` | 1 when the choice was exploration. |
-| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. |
+| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. `Opportunity` is the label only when the opportunity controller drove that think (the brain's `Loot` goal alone is also a corpse, so `kind` `Loot` with `goal` null is a corpse). |
 | `w` | The outcome window in seconds. |
 | `o` | The outcome over the window, in this order: `lvl`, `lp` (levels gained with their fractions: experience over the next level's, so it compares across levels and level-ups), `xp`, `money`, `items`, `quests` (with `lvl`, the stall-watch fingerprint delta: levels, experience, copper, item count, quests handed in), `stalls`, `deaths`, `anomalies` (the bot's anomaly-ledger reports). |
 
@@ -735,7 +735,7 @@ record comes from a build without it, or from a host with the tick monitor disab
   stored from the chest's loot window, counting at most one item per free bag slot (a stack that joins another is missed); 0 for a find given up;
   null when it succeeded but the loot was not seen, as for a rare, whose corpse the brain loots, or a chest taken before its window was read),
   `died` (0 or 1), `seconds` (from the decision to the loot, the abandonment, the kill or the death) and `lost` (1 when a rare was tapped and
-  killed by another player: not a success, `loot` 0). A find refused or passed over has `engaged` 0 and nulls in `o` (there is no outcome to learn from), once a minute per
+  killed by another player, by the server's own tap rule (`PlayerbotBrain.HasLootRights`: groups and pets count as the bot's); a kill that earned nobody the corpse (creatures did most of the damage) is neither a success nor `lost`: `loot` 0, `lost` 0). A find refused or passed over has `engaged` 0 and nulls in `o` (there is no outcome to learn from), once a minute per
   find per bot; its `reason` is the model's, or `untakeable` (the first guard is one the brain would not take as a target) or `passed-over`
   (another find was better). An episode whose bot leaves before it ends is not written.
 

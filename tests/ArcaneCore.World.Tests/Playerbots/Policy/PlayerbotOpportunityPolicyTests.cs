@@ -4,10 +4,14 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Social;
+using Microsoft.Extensions.DependencyInjection;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Policy;
 using ArcaneCore.World.Tests.Playerbots.Opportunities;
@@ -195,29 +199,152 @@ public sealed class PlayerbotOpportunityPolicyTests
         await engine.DisposeAsync();
     }
 
-    [Fact]
-    public async Task ARareAnotherPlayerKilled_IsLost_NotASuccess()
+    /// <summary>
+    /// The outcome record of a rare the bot went for and killed. <paramref name="beforeKill"/> sets the scene on the world thread (a second
+    /// player in the map, passed in, may tap it first); the bot then lands the killing blow.
+    /// </summary>
+    private static async Task<JsonElement> RareOutcomeAsync(Action<Rig, Bot, Creature> beforeKill, bool credit = true, uint blow = 100_000)
     {
         await using Rig rig = await Rig.StartAsync([]);
+        Bot other = await rig.EnterOtherAsync();
         var records = new List<IPlayerbotTelemetryRecord>();
         rig.Bot.Controller.Sink = new PlayerbotCombatTelemetry(records.Add, () => 5L);
         Creature rare = await rig.World(() => AddCreature(rig.Host, rig.Player, RareEntry, 5f, 2f, 1, 4, 20));
         await rig.Host.WaitForWorldAsync(() => rig.Player.VisibleObjects.Contains(rare.Guid), "rare visible");
         Assert.Same(rare, (await rig.World(() => rig.Bot.Step())).Pull);
-
         await rig.World(() =>
         {
-            rare.LootTapPlayerGuid = new ObjectGuid(0x7777); // another player's tap
-            rig.Player.Map!.Combat.DealDamage(rig.Player, rare, 100_000);
+            beforeKill(rig, other, rare);
+            rig.Player.Map!.Combat.DealDamage(rig.Player, rare, blow);
             Assert.False(rare.IsAlive);
+            Assert.Equal(credit, rare.KillCreditAllowed);
             rig.Bot.Step();
             return true;
         });
+        return Parse(Assert.IsType<PlayerbotOpportunityRecord>(Assert.Single(records))).GetProperty("o");
+    }
 
-        JsonElement outcome = Parse(Assert.IsType<PlayerbotOpportunityRecord>(Assert.Single(records))).GetProperty("o");
+    [Fact]
+    public async Task ARareAnotherPlayerTappedAndKilled_IsLost_NotASuccess()
+    {
+        JsonElement outcome = await RareOutcomeAsync((rig, other, rare) =>
+        {
+            rig.Player.Map!.Combat.DealDamage(other.Player, rare, 1); // the first hit taps it for the other player
+            Assert.Equal(other.Player.Guid, rare.LootTapper);
+        });
+
         Assert.Equal(1, outcome.GetProperty("lost").GetInt32());
         Assert.Equal(0, outcome.GetProperty("loot").GetInt32());
         Assert.Equal(0, outcome.GetProperty("died").GetInt32());
+    }
+
+    [Fact]
+    public async Task ARareAGroupMateTapped_IsNotLost_EvenWithTheMateOutOfTheMap()
+    {
+        JsonElement outcome = await RareOutcomeAsync((rig, other, rare) =>
+        {
+            GroupManager groups = rig.Host.WorldServices.GetRequiredService<SocialFeature>().Context.Groups;
+            groups.Invite(rig.Player, other.Player.Name);
+            groups.Accept(other.Player);
+            Assert.True(groups.AreInSameGroup(rig.Player.Guid, other.Player.Guid));
+            rig.Player.Map!.Combat.DealDamage(other.Player, rare, 1); // the mate taps it, for the group
+            // The mate's guid no longer resolves to a player on the map (offline): the group's tap is still the bot's.
+            rare.LootTapPlayerGuid = new ObjectGuid(0x7777);
+        });
+
+        Assert.Equal(0, outcome.GetProperty("lost").GetInt32());
+        Assert.Equal(JsonValueKind.Null, outcome.GetProperty("loot").ValueKind); // a success whose loot the brain takes
+    }
+
+    [Fact]
+    public async Task ARareTheBotsOwnPetTapped_IsNotLost_EvenWhenThePetIsGone()
+    {
+        JsonElement outcome = await RareOutcomeAsync((rig, other, rare) =>
+        {
+            rig.Player.Map!.Combat.DealDamage(other.Player, rare, 1); // sets the tap and the viewer filter
+            var pet = new ObjectGuid(0x6666);
+            rig.Player.SetPetGuid(pet);
+            rare.LootTapPlayerGuid = pet; // the pet struck first, then despawned: no unit has this guid
+        });
+
+        Assert.Equal(0, outcome.GetProperty("lost").GetInt32());
+        Assert.Equal(JsonValueKind.Null, outcome.GetProperty("loot").ValueKind);
+    }
+
+    [Fact]
+    public async Task ARareKilledWithNoCredit_IsNotASuccess_AndNotLost()
+    {
+        JsonElement outcome = await RareOutcomeAsync((rig, other, rare) =>
+        {
+            // A creature did most of the damage: the kill earns nobody the corpse and SettleKillCredit clears the tap.
+            Creature attacker = AddCreature(rig.Host, rig.Player, 96950, 4f, 2f, 1, 0, 100);
+            rig.Player.Map!.Combat.DealDamage(attacker, rare, 15);
+            Assert.True(rare.IsAlive);
+        }, credit: false, blow: 5);
+
+        Assert.Equal(0, outcome.GetProperty("lost").GetInt32());
+        Assert.Equal(0, outcome.GetProperty("loot").GetInt32()); // 0, not null: not a success
+        Assert.Equal(0, outcome.GetProperty("died").GetInt32());
+    }
+
+    [Fact]
+    public async Task OpportunityDriven_IsClearedOnTheNextThink_WhenTheControllerDoesNothing()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        for (int i = 0; i < 20 && !await rig.World(() => rig.Bot.Brain.OpportunityDriven); i++)
+        {
+            await rig.ThinkBrainAsync();
+            await Task.Delay(25);
+        }
+
+        Assert.True(await rig.World(() => rig.Bot.Brain.OpportunityDriven), "the controller never drove a think");
+        await rig.World(() => { rig.Options.Opportunities.Enabled = false; return true; });
+        await rig.ThinkBrainAsync();
+        Assert.False(await rig.World(() => rig.Bot.Brain.OpportunityDriven));
+    }
+
+    [Fact]
+    public async Task AGoalRecord_OfAControllerDrivenThink_IsLabelledOpportunity()
+    {
+        string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            var options = new PlayerbotPolicyOptions { Enabled = true, Telemetry = { Enabled = true, OutcomeMinutes = 1 } };
+            var engine = new PlayerbotPolicyEngine(options);
+            engine.Telemetry = new PlayerbotPolicyTelemetry(options.Telemetry, directory);
+            await using (Rig rig = await Rig.StartAsync([Free]))
+            {
+                await rig.World(() => { rig.Bot.Brain.PolicyEngine = engine; return true; });
+                uint t = 1_000;
+                int driven = 0;
+                for (int i = 0; i < 8; i++)
+                {
+                    await rig.ThinkBrainAsync();
+                    await rig.World(() =>
+                    {
+                        if (rig.Bot.Brain.OpportunityDriven) driven++;
+                        engine.Telemetry!.AfterThink(rig.Bot.Brain, rig.Player, t);
+                        engine.Dispatch();
+                        return true;
+                    });
+                    await engine.WhenIdleAsync();
+                    t += 100;
+                }
+
+                Assert.True(driven > 0, "the controller never drove a think");
+                // A minute of world time later the decision window is over and it is written.
+                await rig.World(() => { engine.Telemetry!.AfterThink(rig.Bot.Brain, rig.Player, t + 61_000); return true; });
+                await engine.Telemetry!.FlushAsync();
+                Assert.True(engine.Telemetry.Counts.Written > 0, $"queued {engine.Telemetry.Counts.Queued}");
+            }
+
+            await engine.DisposeAsync();
+            JsonElement root = JsonDocument.Parse(Directory.GetFiles(directory).SelectMany(File.ReadAllLines).First()).RootElement;
+            Assert.Equal("goal", root.GetProperty("k").GetString());
+            Assert.Equal("Loot", root.GetProperty("kind").GetString()); // the brain's goal for a chest
+            Assert.Equal("Opportunity", root.GetProperty("goal").GetString());
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     [Fact]
@@ -491,8 +618,25 @@ public sealed class PlayerbotOpportunityPolicyTests
             return guard;
         }
 
+        private readonly List<Bot> _others = [];
+
+        /// <summary>A second player (same map and place) that can tap a creature first or join the bot's group.</summary>
+        public async Task<Bot> EnterOtherAsync()
+        {
+            Bot other = await EnterAsync(Host, "OPPOTH", "Oppother", 1, Options, Claims, () => Clock);
+            _others.Add(other);
+            return other;
+        }
+
         public async ValueTask DisposeAsync()
         {
+            foreach (Bot other in _others)
+            {
+                other.Brain.Stop();
+                other.Session.Kick();
+                await other.Session.ManagedClosed;
+            }
+
             Bot.Brain.Stop();
             Bot.Session.Kick();
             await Bot.Session.ManagedClosed;
