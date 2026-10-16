@@ -43,9 +43,15 @@ public sealed class WorldHost(
     private bool _watchClaims;
     private CancellationTokenSource? _claimWatchStop;
     private Task _claimWatch = Task.CompletedTask;
+    private readonly Lock _stopGate = new();
+    private Task? _stop;
+    private volatile bool _attached; // the features were attached (StartAsync): from then on a stop has a world, features and a save queue to stop
 
     /// <summary>How often a world running with fencing off looks for a claim (test seam); null uses <see cref="CharacterFencingOptions.ClaimWatchIntervalSeconds"/>.</summary>
     internal TimeSpan? ClaimWatchInterval { get; init; }
+
+    /// <summary>Runs where the playerbot restore runs, after the world and the save queue have started, with the start's token (test seam).</summary>
+    internal Func<CancellationToken, Task>? StartupWorkForTesting { get; init; }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -86,7 +92,8 @@ public sealed class WorldHost(
                     .GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync(cancellationToken).ConfigureAwait(false);
                 directory.Load(identities);
 
-                // Features are singletons, so the scope hands out the same instances.
+                // Features are singletons, so the scope hands out the same instances. Set first: a feature that attached before one that threw must still stop.
+                _attached = true;
                 scope.ServiceProvider.AttachWorldFeatures(world);
 
                 if (_fencing.Enabled && scope.ServiceProvider.GetService<IIdRangeReservationStore>() is not null)
@@ -101,20 +108,44 @@ public sealed class WorldHost(
             world.Start();
             await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
             {
+                if (StartupWorkForTesting is { } startupWork)
+                    await startupWork(cancellationToken).ConfigureAwait(false);
                 if (scope.ServiceProvider.GetService<Playerbots.ManagedPlayerbotFeature>() is { } playerbots)
                     await playerbots.StartupAsync(cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
         {
+            // A stop requested while the bots are restored (Ctrl-C, StopApplication) cancels this start; WorldStartup turns it into an orderly stop.
             await StopClaimWatchAsync().ConfigureAwait(false);
+            if (_attached) await StopAfterFailedStartAsync().ConfigureAwait(false);
             throw;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("world-host.start", ex);
             await StopClaimWatchAsync().ConfigureAwait(false);
+            if (_attached) await StopAfterFailedStartAsync().ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// The host never calls <see cref="StopAsync"/> for a start that threw, and <c>Host.RunAsync</c> disposes the container right after. Once the features
+    /// are attached the world thread, the save queue and the restored bots may be running, so they are stopped here exactly as <see cref="StopAsync"/> stops
+    /// them and every queued character snapshot is written while the container is still alive (2026-10-16: a Ctrl-C during the bot restore left the world
+    /// thread and the save queue running into a disposed provider, and the queued snapshots were lost). A failure of this stop is logged and recorded by
+    /// <see cref="StopAsync"/>; the caller still sees the start's own exception.
+    /// </summary>
+    private async Task StopAfterFailedStartAsync()
+    {
+        try
+        {
+            await StopAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogError(ex, "The world stop after a failed start did not complete");
         }
     }
 
@@ -188,10 +219,33 @@ public sealed class WorldHost(
         _claimWatchStop = null;
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Stop the bots, the world thread and the features, drain the save queue, then give back the ownership. Runs once: a start that failed has already
+    /// stopped the world itself (<see cref="StopAfterFailedStartAsync"/>), and the host still stops it when the stop was requested during start
+    /// (<see cref="WorldStartup.RunAsync"/>); later calls return the first stop's task.
+    /// </summary>
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        lock (_stopGate)
+        {
+            return _stop ??= StopCoreAsync(cancellationToken);
+        }
+    }
+
+    private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         List<Exception> failures = [];
         await StopClaimWatchAsync().ConfigureAwait(false);
+
+        if (!_attached)
+        {
+            // Stopped before the start got as far as the features (a stop requested early in the host's start): nothing runs and nothing was written,
+            // so only a durable ownership this start took is given back. The features are never stopped without having been attached.
+            await ReleaseOwnershipAsync(cancellationToken, failures).ConfigureAwait(false);
+            if (failures.Count > 0) throw new AggregateException("World stop before start failed", failures);
+            logger.LogInformation("World stopped before it started");
+            return;
+        }
 
         try
         {
