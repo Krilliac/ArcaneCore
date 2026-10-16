@@ -11,9 +11,9 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots.Travel;
 
 /// <summary>
-/// The brain's own way to its bind point (<c>PlayerbotBrain.TryTeleportToBindPoint</c>): the bot's hearthstone when it is ready, through the
-/// real item use and cast; the direct teleport only for an escape made for the bot's safety when the stone is not ready, and nothing for any
-/// other reason then.
+/// The brain's own way to its bind point (<c>PlayerbotBrain.TryTeleportToBindPoint</c>): an urgent escape teleports directly (a ten second
+/// cast is no escape), with or without a ready stone; any other reason uses the bot's hearthstone when it is ready, through the real item
+/// use and cast, and nothing when it is not.
 /// </summary>
 public sealed class TravelBindHearthTests
 {
@@ -118,7 +118,7 @@ public sealed class TravelBindHearthTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task AnUrgentEscape_FromNullIsland_HearthsWhenReady_AndTeleportsOnlyWhenNot(bool stone)
+    public async Task AnUrgentEscape_FromNullIsland_TeleportsDirectly_EvenWithAReadyHearthstone(bool stone)
     {
         (MageTravelRig rig, WorldSession session, Player player, PlayerbotBrain brain) = await StartAsync(stone ? "Islandhearth" : "Islandtele", stone);
         await using (rig)
@@ -142,7 +142,7 @@ public sealed class TravelBindHearthTests
                     await Task.Delay(50);
                 }
 
-                Assert.Equal((stone, !stone), seen); // the stone when it is ready, else the direct teleport: never both
+                Assert.Equal((false, true), seen); // the direct teleport, never the stone's cast, ready or not
                 Assert.True(await ThinkToBindAsync(rig, session, player, brain), "the bot did not reach its bind point");
             }
             finally

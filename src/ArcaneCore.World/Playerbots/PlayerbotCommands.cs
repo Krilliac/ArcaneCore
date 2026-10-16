@@ -250,8 +250,9 @@ public sealed class PlayerbotCommands : ICommandGroup
 
     /// <summary>
     /// <c>.playerbot travel $id|$name #map #x #y #z</c>: plan a journey for a running managed bot through <see cref="IPlayerbotTravel.TryBegin"/>
-    /// (docs/areas/playbots.md, Travel) and print its legs, one line each; the brain drives it from the bot's next think. Refusals print the
-    /// planner's reason. World thread, where commands run.
+    /// (docs/areas/playbots.md, Travel) and print its legs, one line each; the brain drives it from the bot's next think. A bot the brain does
+    /// not drive now (<see cref="ManagedPlayerbotFeature.HeldFromBrain"/>: a controller, a battleground, a bot-led group, its party) is
+    /// refused with that reason; other refusals print the planner's reason. World thread, where commands run.
     /// </summary>
     private static bool TravelCommand(CommandContext context, string text)
     {
@@ -276,6 +277,13 @@ public sealed class PlayerbotCommands : ICommandGroup
         if (feature.FindSession(status.BotId) is not { IsManaged: true } session || session.Player is not { IsInWorld: true, Map: not null } bot)
         {
             context.Reply($"Playerbot travel failed: {status.Name} is not running.");
+            return true;
+        }
+
+        // Only the brain drives a journey: a bot another driver holds would have it cancelled at its next tick, so it is refused here.
+        if (feature.HeldFromBrain(status.BotId) is { } held)
+        {
+            context.Reply($"Playerbot travel refused: {status.Name}: {held}.");
             return true;
         }
 

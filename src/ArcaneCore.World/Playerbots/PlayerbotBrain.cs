@@ -721,10 +721,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             // Far travel (docs/areas/playbots.md, Travel): the leg drivers first, each owning the bot while its leg is under way (a ship from the
             // walk to the dock until the bot stepped off at the other port; the hearthstone and a mage's Teleport through cast and teleport; a
             // portal asked for until the requester went through; a mage serving a portal request), then the journey, which walks its walk legs
-            // and only begins the others. A fight on the way to a dock ends that ship leg (the journey begins it again after the fight); aboard,
-            // the ship carries the bot on. A failed leg defers only that leg (GiveUpTransitLeg): the journey replans it once.
+            // and only begins the others. A fight before the bot is aboard (on the way to the dock, waiting for the ship, stepping up the
+            // gangway) ends that ship leg, and the journey begins it again after the fight; aboard, the ship carries the bot on. A fight
+            // during a hearthstone or Teleport cast cancels that cast (its driver). A failed leg defers only that leg (GiveUpTransitLeg): the
+            // journey replans it once.
             PlayerbotThinkProbe.Phase("travel legs");
-            if (player.Combat.IsInCombat && PlayerbotShip.TripOf(player) is { Stage: ShipStage.ToDock }) PlayerbotShip.Cancel(player);
+            // The journey's bound first: it drops the leg under way (not aboard a ship), whose driver would otherwise own this think.
+            PlayerbotTravel.EnforceDeadline(_session, player);
+            if (player.Combat.IsInCombat && player.Transport is null
+                && PlayerbotShip.TripOf(player) is { Stage: ShipStage.ToDock or ShipStage.WaitShip or ShipStage.Board })
+                PlayerbotShip.Cancel(player);
             if (TravelOwns(PlayerbotShip.Drive(_session, player, _options, interval, out string? shipFailure), shipFailure, "ship")) return;
             if (TravelOwns(PlayerbotHearthstone.Drive(_session, player, _options, interval, out string? hearthFailure), hearthFailure, "hearth")) return;
             if (TravelOwns(PlayerbotMageService.Drive(_session, player, _options, interval, out string? mageFailure), mageFailure, "mage")) return;
@@ -795,10 +801,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             }
 
             // A journey under way owns the bot between its legs too (a tram, lift or taxi trip of a walk leg just ended: the journey walks on
-            // at the next think). In a fight the journey yields and the brain fights.
+            // at the next think). In a fight the journey yields and the brain fights. A journey resting between two legs (a bot low on health
+            // or mana, PlayerbotTravel.IsResting) has the brain rest the bot meanwhile.
             if (!player.Combat.IsInCombat && PlayerbotTravel.IsJourneying(player))
             {
                 HoldForTravel();
+                if (PlayerbotTravel.IsResting(player)) RestForJourney(player);
                 return;
             }
         }
@@ -1817,6 +1825,24 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         return true;
     }
 
+    /// <summary>
+    /// The rest a journey takes between two legs (<see cref="PlayerbotTravel.IsResting"/>): food or drink up to
+    /// <see cref="PlayerbotRiskOptions.RecoverHealthPct"/> when the bot carries some, otherwise it stops and sits (as the brain's own wait to
+    /// recover); the journey stands it up when the rest ends.
+    /// </summary>
+    private void RestForJourney(Player player)
+    {
+        _goal = PlayerbotGoalKind.Rest;
+        uint wanted = (uint)Math.Clamp(_options.Risk.RecoverHealthPct, 10f, 100f);
+        SpellFeature? spellFeature = _session.Services.GetService<SpellFeature>();
+        if (spellFeature is not null && PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, wanted, wanted, out _))
+            Rest(player, wanted);
+        else if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
+        else if (player.StandState == StandState.Stand
+                 && _session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Sit)))
+            _satToWait = true;
+    }
+
     /// <param name="wantedPct">Eat or drink below this percentage (the ordinary 45/35 when 0).</param>
     private void Rest(Player player, uint wantedPct = 0)
     {
@@ -2639,13 +2665,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     internal bool TeleportToBindPointForQuest(Player player, string why) => TryTeleportToBindPoint(player, why, urgent: false);
 
     /// <summary>
-    /// Send the bot to its bind point when <see cref="BindTeleportRefusal"/> allows it, and log why (<paramref name="why"/>): by its own
-    /// hearthstone when it is ready (<see cref="PlayerbotHearthstone.IsReady"/>: <see cref="PlayerbotTravelOptions.Hearthstone"/> on, the stone
-    /// carried and off cooldown; the leg is driven by the next thinks, PlayerbotHearthstone.Drive), as a 1.12 player does. Only an escape made
-    /// for the bot's safety (<paramref name="safety"/>: an urgent escape, or a bot stranded on ground no route leaves) falls back to the direct
-    /// teleport (vmangos <c>Player::TeleportToHomebind</c>) when the hearthstone is not ready; any other reason then sends the bot nowhere. An
-    /// urgent escape with a teleport under way (the resurrection's own near teleport) teleports at once. True when the bot was sent (or its
-    /// hearthstone cast begun); its intent is dropped, a journey under way with it, and it explores from there.
+    /// Send the bot to its bind point when <see cref="BindTeleportRefusal"/> allows it, and log why (<paramref name="why"/>). An urgent escape
+    /// (<paramref name="urgent"/>: the bot must leave now, and a ten second cast a fight or a fall interrupts is no escape) teleports directly
+    /// (vmangos <c>Player::TeleportToHomebind</c>). Any other reason uses the bot's own hearthstone when it is ready
+    /// (<see cref="PlayerbotHearthstone.IsReady"/>: <see cref="PlayerbotTravelOptions.Hearthstone"/> on, the stone carried and off cooldown; the
+    /// leg is driven by the next thinks, PlayerbotHearthstone.Drive), as a 1.12 player does; when it is not ready only a trip made for the bot's
+    /// safety (<paramref name="safety"/>: stranded on ground no route leaves, or among creatures too strong for it) falls back to the direct teleport, and any other reason sends the bot nowhere. True when the
+    /// bot was sent (or its hearthstone cast begun); its intent is dropped, a journey under way with it, and it explores from there.
     /// </summary>
     private bool TryTeleportToBindPoint(Player player, string why, bool urgent) => TryTeleportToBindPoint(player, why, urgent, safety: urgent);
 
@@ -2667,7 +2693,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (!Invariant.Check(float.IsFinite(bind.X) && float.IsFinite(bind.Y) && float.IsFinite(bind.Z),
             "PlayerbotBrain.TryTeleportToBindPoint requires finite bind point coordinates."))
             return false;
-        if (!(urgent && teleports.IsBeingTeleported(player)) && PlayerbotHearthstone.IsReady(_session, player, _options)
+        if (!urgent && PlayerbotHearthstone.IsReady(_session, player, _options)
             && PlayerbotHearthstone.TryBegin(_session, player, _options, out _))
         {
             PlayerbotTravel.Cancel(player);

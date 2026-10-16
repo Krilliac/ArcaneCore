@@ -35,14 +35,15 @@ internal sealed class TravelCastLeg(TravelMeans means, uint spellId, TravelPlace
 
     public TravelCastStage Stage { get; set; } = TravelCastStage.Start;
 
-    public uint BeganMs { get; } = nowMs;
+    /// <summary>When the leg began (world ms): the start of <see cref="PlayerbotTravelCast.StartBoundMs"/>. Settable for tests.</summary>
+    public uint BeganMs { get; set; } = nowMs;
 
     /// <summary>When the cast was taken by the server (world ms), and how long cast plus teleport may take before the leg is overdue.</summary>
     public uint CastMs { get; set; }
 
     public uint BudgetMs { get; set; }
 
-    /// <summary>Thinks the action budget refused the cast request in a row.</summary>
+    /// <summary>Thinks the cast request was put off (the action budget spent, or the bot not standing still).</summary>
     public int Attempts { get; set; }
 
     /// <summary>The server's own record of the cast: a SMSG_SPELL_GO of the spell, and a teleport of the bot under way.</summary>
@@ -70,11 +71,20 @@ internal static class PlayerbotTravelCast
     /// <summary>Time past the spell's own cast time before the cast is overdue (a lagging world, the teleport and its acknowledgement).</summary>
     internal const uint GraceMs = 20_000;
 
-    /// <summary>The action budget may refuse the cast request this many thinks in a row before the leg is given up.</summary>
+    /// <summary>
+    /// The cast request may be put off this many thinks in all (the action budget spent, or the bot not yet standing still) before the leg is
+    /// given up (<see cref="Sent.BudgetStarved"/>, <see cref="Sent.NotStill"/>).
+    /// </summary>
     internal const int MaxSendAttempts = 20;
 
+    /// <summary>
+    /// A leg whose cast the server has not taken this long after it began (<see cref="TravelCastLeg.BeganMs"/>) is given up, whatever put the
+    /// request off: the bound of the start stage in world time, beside <see cref="MaxSendAttempts"/> in thinks.
+    /// </summary>
+    internal const uint StartBoundMs = 30_000;
+
     /// <summary>The outcome of sending the cast request.</summary>
-    internal enum Sent : byte { Taken, Retry, BudgetStarved, SessionRefused, Refused }
+    internal enum Sent : byte { Taken, Retry, BudgetStarved, NotStill, SessionRefused, Refused }
 
     /// <summary>Whether the bot stands at <paramref name="place"/> (same map, within <see cref="ArriveYards"/>).</summary>
     internal static bool IsAt(Player player, TravelPlace place)
@@ -91,7 +101,9 @@ internal static class PlayerbotTravelCast
     /// <summary>
     /// Stop, stand, and send <paramref name="opcode"/> (CMSG_CAST_SPELL or CMSG_USE_ITEM) for <paramref name="leg"/>; the server took it when its
     /// SMSG_SPELL_START / GO names the spell, the cast slot holds it, or a teleport began (an instant cast). Spell packets nobody read are drained
-    /// first so a stale one is not taken for the answer. <paramref name="reason"/> is the server's refusal reason when it said one.
+    /// first so a stale one is not taken for the answer. <paramref name="reason"/> is the server's refusal reason when it said one. Every think
+    /// the request is put off (<see cref="Sent.Retry"/>) counts in <see cref="TravelCastLeg.Attempts"/>: past <see cref="MaxSendAttempts"/> it
+    /// answers <see cref="Sent.NotStill"/> (the bot would not stand still) or <see cref="Sent.BudgetStarved"/>.
     /// </summary>
     internal static Sent Send(WorldSession session, Player player, SpellSystem spells, TravelCastLeg leg, WorldOpcode opcode, byte[] payload,
         out SpellCastResult? reason)
@@ -100,13 +112,13 @@ internal static class PlayerbotTravelCast
         if (player.StandState != StandState.Stand)
         {
             session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand));
-            if (player.StandState != StandState.Stand) return Sent.Retry;
+            if (player.StandState != StandState.Stand) return ++leg.Attempts > MaxSendAttempts ? Sent.NotStill : Sent.Retry;
         }
 
         // A cast with a cast time needs the bot standing still (SPELL_INTERRUPT_FLAG_MOVEMENT).
         if (player.Movement.HasFlag(MovementFlags.MaskMoving)
             && (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)))
-            return Sent.Retry;
+            return ++leg.Attempts > MaxSendAttempts ? Sent.NotStill : Sent.Retry;
         session.DrainManagedPackets(
             WorldOpcode.SmsgSpellStart, WorldOpcode.SmsgSpellGo, WorldOpcode.SmsgSpellFailure, WorldOpcode.SmsgSpellFailedOther, WorldOpcode.SmsgCastResult);
         if (!session.TryManagedAction(opcode, payload))
@@ -312,7 +324,8 @@ internal static class PlayerbotHearthstone
 
     /// <summary>
     /// One think of the leg, before anything else that moves the bot. <see cref="TravelLegStep.Idle"/>: no leg (or one dropped: the bot died,
-    /// or the switch went off or combat began before the cast). <see cref="TravelLegStep.Traveling"/>: the cast or the teleport under way, the
+    /// the switch went off before the cast, or a fight began before the teleport: a running cast is cancelled). The start is bounded
+    /// (<see cref="PlayerbotTravelCast.StartBoundMs"/>, <see cref="PlayerbotTravelCast.MaxSendAttempts"/>), the cast by its budget. <see cref="TravelLegStep.Traveling"/>: the cast or the teleport under way, the
     /// bot must not move. <see cref="TravelLegStep.Arrived"/> and <see cref="TravelLegStep.Failed"/> are answered once; <paramref name="failure"/>
     /// then says why.
     /// </summary>
@@ -343,7 +356,18 @@ internal static class PlayerbotHearthstone
                 return TravelLegStep.Idle;
             }
 
+            if (unchecked(now - leg.BeganMs) > PlayerbotTravelCast.StartBoundMs)
+                return Fail(player, leg, "use-refused", $"the hearthstone use was not taken within {PlayerbotTravelCast.StartBoundMs} ms ({leg.Attempts} attempts)",
+                    AnomalySeverity.Warning, out failure);
             return Use(session, player, spells, leg, now, out failure);
+        }
+
+        // Attacked during the cast: the cast is cancelled the way a client does and the leg dropped (no report), so the brain fights; the
+        // journey begins the leg again after the fight. A teleport the cast already began is the server's and goes on.
+        if (player.Combat.IsInCombat && !PlayerbotTravelCast.IsTeleporting(session, player))
+        {
+            Cancel(session, player);
+            return TravelLegStep.Idle;
         }
 
         switch (PlayerbotTravelCast.Watch(session, player, spells, leg, now))
@@ -400,6 +424,8 @@ internal static class PlayerbotHearthstone
                 return TravelLegStep.Traveling;
             case PlayerbotTravelCast.Sent.BudgetStarved:
                 return Fail(player, leg, "use-refused", "the action budget never allowed the hearthstone use", AnomalySeverity.Warning, out failure);
+            case PlayerbotTravelCast.Sent.NotStill:
+                return Fail(player, leg, "use-refused", "the bot could not be stood still for the hearthstone use", AnomalySeverity.Warning, out failure);
             case PlayerbotTravelCast.Sent.SessionRefused:
                 return Fail(player, leg, "use-refused", "the session refused the hearthstone use (closed, settling a quest reward, or not in the world)",
                     AnomalySeverity.Warning, out failure);

@@ -431,7 +431,8 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
 /// the offset. Nothing teleports it.
 /// </para>
 /// <para>
-/// Fails closed, with a stall reason and no retry for <see cref="RetryAfterFailureMs"/>: no car of the lift in the world, no floor beside a
+/// Fails closed, with a stall reason, and that lift waits out its own backoff (<see cref="PlayerbotTransitBackoff"/>; another lift is not
+/// held back): no car of the lift in the world, no floor beside a
 /// car at the bot's level, no way to that landing (no progress for <see cref="NoProgressMs"/>), no car standing at the landing within two
 /// cycles and 30 s. Aboard: a car that does not stand at the other level within a cycle and 30 s is left where it stands next at either
 /// level; one that leaves the world under the bot (or a bot knocked off it in the shaft) drops the bot (<see cref="Drop"/>).
@@ -504,9 +505,6 @@ internal static class PlayerbotElevator
 
     internal const uint NoProgressMs = 60_000;
 
-    /// <summary>A failed trip is not tried again for this long.</summary>
-    internal const uint RetryAfterFailureMs = 600_000;
-
     /// <summary>
     /// The walk to a lift fails after this many refused plans in a row (pending tile reads do not count; a route resets the count) instead
     /// of waiting out <see cref="NoProgressMs"/>; the lift is then backed off (<see cref="PlayerbotTransitBackoff"/>).
@@ -546,7 +544,6 @@ internal static class PlayerbotElevator
     private const string AnomalyArea = "elevator";
 
     private static readonly ConditionalWeakTable<Player, ElevatorTrip> Trips = [];
-    private static readonly ConditionalWeakTable<Player, StrongBox<uint>> FailedAt = [];
     private static readonly ConditionalWeakTable<Player, List<uint>> RescueTimestamps = [];
 
     /// <summary>Each bot's wait for the navigation tiles of the direct walk <see cref="TryBegin"/> weighs against the lift.</summary>
@@ -623,7 +620,7 @@ internal static class PlayerbotElevator
             return false;
         }
 
-        // A lift that failed lately (the retry delay, or its own backoff) is not ridden again yet; the mesh walk above is never held back.
+        // A lift that failed lately (its own backoff) is not ridden again yet; another lift and the mesh walk above are never held back.
         if (IsHeldOff(session, player, choice.Lift)) return false;
         ElevatorTrip begun = Begin(session, player, choice.Lift, choice.From, goal);
         begun.Options = options;
@@ -631,15 +628,11 @@ internal static class PlayerbotElevator
     }
 
     private static bool IsHeldOff(WorldSession session, Player player, ElevatorLift lift)
-    {
-        uint now = session.World.NowMs;
-        return (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs)
-            || PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Lift, lift.Key, now);
-    }
+        => PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Lift, lift.Key, session.World.NowMs);
 
     /// <summary>
-    /// Whether a lift is the way to <paramref name="goal"/> but a failed ride keeps <see cref="TryBegin"/> from riding it now (the retry delay
-    /// after a failure, or the lift's backoff): the caller defers the goal for a short retry instead of judging the walk there refused. Unlike
+    /// Whether a lift is the way to <paramref name="goal"/> but a failed ride keeps <see cref="TryBegin"/> from riding it now (that lift's
+    /// backoff after a failure): the caller defers the goal for a short retry instead of judging the walk there refused. Unlike
     /// <see cref="TryBegin"/> this does not weigh the mesh walk, so a caller asks it only after <see cref="TryBegin"/> returned false without a
     /// walk. World thread, no side effects.
     /// </summary>
@@ -1099,7 +1092,6 @@ internal static class PlayerbotElevator
             case ElevatorStep.Failed:
                 if (trip.Stage is ElevatorStage.ToStop or ElevatorStage.Waiting) PlayerbotMovementControl.Stop(session, player);
                 trip.Stage = ElevatorStage.Failed;
-                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
                 if (!trip.BackoffRecorded)
                 {
                     trip.BackoffRecorded = true;

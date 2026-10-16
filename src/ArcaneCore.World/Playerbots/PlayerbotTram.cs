@@ -271,8 +271,9 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
 /// (<see cref="PlayerbotMapPolicy.MayMoveOn"/>). A bot found on the tram map without a trip (a login there after a save on the way)
 /// takes the nearest platform's exit. Fails closed: a car that never stops at the platform within two cycles of the animation, a
 /// platform the bot cannot reach, an exit it cannot walk into, each ends the trip with a stall reason; on the tram map the bot leaves by
-/// the exit of the platform it is at (the server's own teleport of that exit when it cannot walk there), and the trip is not tried
-/// again for <see cref="RetryAfterFailureMs"/>.
+/// the exit of the platform it is at (the server's own teleport of that exit when it cannot walk there), and the entrance the trip began
+/// at waits out its own backoff (<see cref="PlayerbotTransitBackoff"/>, <see cref="PlayerbotTravelOptions.BackoffMs"/>); the other
+/// entrance is not held back.
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
@@ -300,7 +301,10 @@ internal static class PlayerbotTram
 
     internal const uint NoProgressMs = 60_000;
 
-    /// <summary>A failed trip is not tried again for this long.</summary>
+    /// <summary>
+    /// A bot found on the tram map when the data describes no platform is sent to its bind point (and that reported) at most once this
+    /// often. A failed trip holds back only its own entrance (<see cref="PlayerbotTransitBackoff"/>).
+    /// </summary>
     internal const uint RetryAfterFailureMs = 600_000;
 
     /// <summary>
@@ -336,7 +340,7 @@ internal static class PlayerbotTram
     internal const uint SlowTramMapMs = 180_000;
 
     private static readonly ConditionalWeakTable<Player, TramTrip> Trips = [];
-    private static readonly ConditionalWeakTable<Player, StrongBox<uint>> FailedAt = [];
+    private static readonly ConditionalWeakTable<Player, StrongBox<uint>> SentHomeAt = [];
 
     /// <summary>The bot's trip, done or not (inspection and tests).</summary>
     internal static TramTrip? TripOf(Player player) => Trips.TryGetValue(player, out TramTrip? trip) ? trip : null;
@@ -362,7 +366,8 @@ internal static class PlayerbotTram
 
     /// <summary>
     /// Begin a trip towards <paramref name="goal"/> when the tram is the way there (<see cref="TramNetwork.Choose"/>), the world describes
-    /// the tram and no trip failed lately. True when a trip is under way afterwards.
+    /// the tram and the entrance the leg begins at is not backed off (<see cref="PlayerbotTransitBackoff"/>: a trip from it failed lately; a
+    /// failure at the other entrance holds nothing back here). True when a trip is under way afterwards.
     /// </summary>
     internal static bool TryBegin(WorldSession session, Player player, Vector3 goal, Func<Vector3, uint>? zoneAt = null)
     {
@@ -371,7 +376,6 @@ internal static class PlayerbotTram
         if (player.Team != Team.Alliance) return false;
         if (IsTraveling(player)) return true;
         uint now = session.World.NowMs;
-        if (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs) return false;
         if (ChooseLeg(session, player, goal, zoneAt, out TramNetwork? network) is not { } leg || network is null) return false;
         if (PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Tram, leg.From.Entrance.Id, now)) return false;
         PlayerbotAreaTriggers.ClearTeleportRefusal(player);
@@ -384,8 +388,8 @@ internal static class PlayerbotTram
 
     /// <summary>
     /// Whether the tram is the way to <paramref name="goal"/> but a failed trip keeps <see cref="TryBegin"/> from beginning one now (the
-    /// retry delay after a failure, or the entrance's backoff): the caller defers the goal for a short retry instead of judging the walk
-    /// there refused. World thread, no side effects.
+    /// backoff of the entrance the leg begins at): the caller defers the goal for a short retry instead of judging the walk there refused.
+    /// World thread, no side effects.
     /// </summary>
     internal static bool IsHeldOff(WorldSession session, Player player, Vector3 goal, Func<Vector3, uint>? zoneAt = null)
     {
@@ -393,14 +397,12 @@ internal static class PlayerbotTram
         ArgumentNullException.ThrowIfNull(player);
         if (player.Team != Team.Alliance || IsTraveling(player)) return false;
         if (ChooseLeg(session, player, goal, zoneAt, out _) is not { } leg) return false;
-        uint now = session.World.NowMs;
-        return (FailedAt.TryGetValue(player, out StrongBox<uint>? failed) && unchecked(now - failed.Value) < RetryAfterFailureMs)
-            || PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Tram, leg.From.Entrance.Id, now);
+        return PlayerbotTransitBackoff.IsBackedOff(player, TransitKind.Tram, leg.From.Entrance.Id, session.World.NowMs);
     }
 
     /// <summary>
     /// Whether the tram is the way to <paramref name="goal"/> from where the bot stands (the checks of <see cref="TryBegin"/> short of the
-    /// retry delay), without beginning a trip. World thread, no side effects.
+    /// entrance's backoff), without beginning a trip. World thread, no side effects.
     /// </summary>
     internal static bool IsWayTo(WorldSession session, Player player, Vector3 goal, Func<Vector3, uint>? zoneAt = null)
     {
@@ -605,9 +607,9 @@ internal static class PlayerbotTram
                 // stall watch reports it again later; it never loops here silently.
                 TeleportService? homebind = session.Services.GetService<TeleportFeature>()?.Teleports;
                 if (homebind?.IsBeingTeleported(player) == true) return TramStep.Traveling;
-                if (FailedAt.TryGetValue(player, out StrongBox<uint>? lately) && unchecked(now - lately.Value) < RetryAfterFailureMs)
+                if (SentHomeAt.TryGetValue(player, out StrongBox<uint>? lately) && unchecked(now - lately.Value) < RetryAfterFailureMs)
                     return TramStep.Idle;
-                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
+                SentHomeAt.AddOrUpdate(player, new StrongBox<uint>(now));
                 bool canReport = CanReport(session, player);
                 bool sent = homebind is not null && homebind.TeleportToHomebind(player);
                 if (sent && canReport)
@@ -1040,7 +1042,6 @@ internal static class PlayerbotTram
             if (trip.Failure is { } why)
             {
                 trip.Stage = TramStage.Failed;
-                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
                 failure = why;
                 return TramStep.Failed;
             }
@@ -1061,7 +1062,6 @@ internal static class PlayerbotTram
                 trip.Failure = wrongWhy;
                 trip.FailureCategory = "wrong-station";
                 trip.Stage = TramStage.Failed;
-                FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
                 failure = wrongWhy;
                 return TramStep.Failed;
             }
@@ -1087,7 +1087,6 @@ internal static class PlayerbotTram
         {
             // Reported once; a bot still on the tram map begins a fresh way out at a later think.
             trip.Stage = TramStage.Failed;
-            FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
             failure = trip.Failure + "; the exit teleport was refused";
             return TramStep.Failed;
         }
@@ -1152,7 +1151,6 @@ internal static class PlayerbotTram
         trip.Failure = why;
         trip.FailureCategory ??= category;
         trip.Stage = TramStage.Failed;
-        FailedAt.AddOrUpdate(player, new StrongBox<uint>(now));
         return TramStep.Failed;
     }
 

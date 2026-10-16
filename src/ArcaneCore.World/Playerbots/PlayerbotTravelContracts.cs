@@ -127,7 +127,7 @@ internal enum TravelLegStep : byte
 /// <summary>
 /// The one seam of far travel (registered as a service; <see cref="PlayerbotTravel"/> is the implementation). A caller with a far goal
 /// asks whether the bot can get there by its own means and begins the trip; the brain drives a trip under way before anything else. The
-/// home progression's <c>IPlayerbotHomeTravel</c> adapts onto this (<see cref="PlayerbotTravel.CanReachStatic"/> for its off-thread check).
+/// home progression's <c>IPlayerbotHomeTravel</c> adapts onto this (<see cref="PlayerbotTravel.CanReachStatic(bool, uint, System.Numerics.Vector3, uint, System.Numerics.Vector3, PlayerbotTravelOptions)"/> for its off-thread check).
 /// Thread affinity: world thread.
 /// </summary>
 internal interface IPlayerbotTravel

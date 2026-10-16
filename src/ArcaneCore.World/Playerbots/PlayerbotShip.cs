@@ -30,7 +30,7 @@ internal sealed class ShipTrip(ShipRoute route, bool fromA, uint nowMs, Playerbo
     public uint StartedMs { get; } = nowMs;
     public uint StageMs { get; internal set; } = nowMs;
 
-    /// <summary>The reason the leg failed (null while under way and after an arrival).</summary>
+    /// <summary>The reason the leg failed (null after an arrival; while <see cref="Settling"/>, the failure the leg will end with).</summary>
     public string? Failure { get; internal set; }
 
     /// <summary>The anomaly code of the failure (<see cref="PlayerbotShip.AnomalyArea"/>), null for a failure that is not one (a switch turned off).</summary>
@@ -41,6 +41,16 @@ internal sealed class ShipTrip(ShipRoute route, bool fromA, uint nowMs, Playerbo
 
     /// <summary>The ride went past its bound (<see cref="PlayerbotShip.RideGraceMs"/>): reported once, and the bot steps off at the next port it reaches.</summary>
     public bool Overdue { get; internal set; }
+
+    /// <summary>
+    /// The leg failed with the bot still aboard (<c>ride-overdue</c>, <c>disembark-refused</c>, <c>wrong-map</c>, <c>left-ship</c> while the
+    /// server still carries it): reported once, and the leg stays under way, riding to the next port the ship waits at once it sailed and
+    /// stepping off there; only then does it end (<see cref="ShipStage.Failed"/>, or <see cref="ShipStage.Done"/> at the arrival port).
+    /// </summary>
+    public bool Settling { get; internal set; }
+
+    /// <summary>When the leg began settling (bounded by <see cref="PlayerbotShip.SettleBoundMs"/>).</summary>
+    public uint SettleMs { get; internal set; }
 
     /// <summary>The ship has left the departure port with the bot aboard (only then may a stop at that port end the ride).</summary>
     public bool Sailed { get; internal set; }
@@ -98,12 +108,16 @@ internal sealed class ShipTrip(ShipRoute route, bool fromA, uint nowMs, Playerbo
 /// Every failure is reported once per leg (<see cref="PlayerbotAnomalies"/>, area <see cref="AnomalyArea"/>); a leg that arrives reports
 /// nothing. A failure at the departure dock backs that dock off (<see cref="PlayerbotTravelOptions.BackoffMs"/>, doubling per failure).
 /// A switch turned off (<see cref="PlayerbotTravelOptions.Boats"/>, <see cref="PlayerbotTravelOptions.Zeppelins"/>) ends a leg that has not
-/// boarded; aboard, the bot rides to the next port and the leg ends there. Nobody is ever put off a ship at sea.
+/// boarded; aboard, the bot rides to the next port and the leg ends there. Nobody is ever put off a ship at sea: a failure while the server
+/// still carries the bot (<see cref="ShipTrip.Settling"/>) is reported at once, but the leg stays under way (<see cref="IsActive"/>) until the
+/// bot stepped off at the next port the ship waits at, bounded by <see cref="SettleBoundMs"/>.
 /// <para>
-/// The brain owns the call order (see the lane report): <see cref="Drive"/> every think before any other mover while <see cref="IsActive"/>,
-/// <see cref="Cancel"/> on death or when a controller takes the bot, nothing else moving the bot while <see cref="Drive"/> answers
-/// <see cref="TravelLegStep.Traveling"/>; optionally <see cref="Pump"/> every world tick (like PlayerbotTram.Pump) so a short stop at a port
-/// is not missed between thinks.
+/// The call order: <see cref="PlayerbotBrain"/> calls <see cref="Drive"/> every think before any other mover while <see cref="IsActive"/> and
+/// moves nothing else while it answers <see cref="TravelLegStep.Traveling"/>; a fight before the bot is aboard <see cref="Cancel"/>s the leg
+/// so the brain fights (the journey begins it again after); <see cref="PlayerbotTravel.CancelLegs"/> cancels it on death or when a
+/// controller, the party AI, a bot-led group or a battleground takes the bot over, and ManagedPlayerbotFeature drives a leg that still holds
+/// the bot aboard (its HoldAboard) until it ends at a port. <see cref="Pump"/> may run every world tick (like PlayerbotTram.Pump) so a short
+/// stop at a port is not missed between thinks.
 /// </para>
 /// <para>Thread affinity: world thread. Per-bot state lives in a <see cref="ConditionalWeakTable{TKey,TValue}"/> keyed by the player.</para>
 /// </summary>
@@ -146,6 +160,13 @@ internal static class PlayerbotShip
 
     /// <summary>A ride may last the round trip plus this before it is overdue.</summary>
     internal const uint RideGraceMs = 60_000;
+
+    /// <summary>
+    /// A leg settling aboard (<see cref="ShipTrip.Settling"/>) may ride this much longer than two round trips (two more ports at least) before
+    /// it ends where it is; past it the server has refused every way off, and the leg ends <c>Failed</c> aboard (the one failure that leaves
+    /// a bot on a ship, already reported).
+    /// </summary>
+    internal static uint SettleBoundMs(ShipRoute route) => (2 * PeriodMs(route)) + RideGraceMs;
 
     /// <summary>Where the bot steps off: the floor beside the deck, at most this much below or above it, within <see cref="StepOffRadiiYards"/>.</summary>
     internal const float StepOffHeightYards = 8f;
@@ -320,7 +341,9 @@ internal static class PlayerbotShip
         ShipTransport? ship = TransportSystem.Of(session.World)?.FindByEntry(trip.Route.Entry);
         if (ship is null)
         {
-            Fail(session, player, trip, now, "ship-missing", $"ship {trip.Route.Entry} no longer sails (stage {trip.Stage})", backoff: true);
+            // A settling leg whose ship is gone has nothing left to ride to a port: it ends with the failure it settled on.
+            if (trip.Settling) End(trip, now, StripPrefix(trip.Failure) + $"; ship {trip.Route.Entry} no longer sails", trip.FailureCode);
+            else Fail(session, player, trip, now, "ship-missing", $"ship {trip.Route.Entry} no longer sails (stage {trip.Stage})", backoff: true);
             return;
         }
 
@@ -486,26 +509,43 @@ internal static class PlayerbotShip
 
     private static void Ride(WorldSession session, Player player, ShipTransport ship, ShipTrip trip, uint now)
     {
-        if (!ReferenceEquals(player.Transport, ship) || (player.Movement.Flags & MovementFlags.OnTransport) == 0)
+        bool onShip = ReferenceEquals(player.Transport, ship);
+        if (!onShip)
         {
+            // Off the ship (the server let it go): nothing carries the bot any more, and the leg ends here.
             Fail(session, player, trip, now, "left-ship", string.Create(CultureInfo.InvariantCulture,
                 $"no longer aboard ship {trip.Route.Entry} (transport {(player.Transport is { } other ? other.Entry.ToString(CultureInfo.InvariantCulture) : "none")}) {unchecked(now - trip.BoardedMs) / 1000} s after boarding"),
                 backoff: false);
             return;
         }
 
+        if ((player.Movement.Flags & MovementFlags.OnTransport) == 0 && !trip.Settling)
+        {
+            // The server still carries the bot but its movement no longer says so: the leg settles (rides on, steps off at the next port).
+            Fail(session, player, trip, now, "left-ship", string.Create(CultureInfo.InvariantCulture,
+                $"aboard ship {trip.Route.Entry} without MOVEFLAG_ONTRANSPORT {unchecked(now - trip.BoardedMs) / 1000} s after boarding"), backoff: false);
+        }
+
+        if (trip.Settling && unchecked(now - trip.SettleMs) > SettleBoundMs(trip.Route))
+        {
+            End(trip, now, string.Create(CultureInfo.InvariantCulture,
+                $"{StripPrefix(trip.Failure)}; still aboard ship {trip.Route.Entry} {unchecked(now - trip.SettleMs) / 1000} s later, no port took the bot off"), trip.FailureCode);
+            return;
+        }
+
         if (ship.CurrentMap is not { } shipMap || shipMap.MapId != player.MapId)
         {
-            Fail(session, player, trip, now, "wrong-map", string.Create(CultureInfo.InvariantCulture,
-                $"aboard ship {trip.Route.Entry} on map {player.MapId} while the ship sails on map {ship.CurrentMap?.MapId.ToString(CultureInfo.InvariantCulture) ?? "none"}"),
-                backoff: false);
-            return;
+            if (!trip.Settling)
+                Fail(session, player, trip, now, "wrong-map", string.Create(CultureInfo.InvariantCulture,
+                    $"aboard ship {trip.Route.Entry} on map {player.MapId} while the ship sails on map {ship.CurrentMap?.MapId.ToString(CultureInfo.InvariantCulture) ?? "none"}"),
+                    backoff: false);
+            return; // settling: the ship's map change catches up, or the settle bound ends the leg
         }
 
         if (ship.IsMoving) trip.Sailed = true;
         uint riding = unchecked(now - trip.BoardedMs);
         uint period = PeriodMs(trip.Route);
-        if (!trip.Overdue && riding > period + RideGraceMs)
+        if (!trip.Settling && !trip.Overdue && riding > period + RideGraceMs)
         {
             trip.Overdue = true;
             if (CanReport(session, player))
@@ -516,16 +556,18 @@ internal static class PlayerbotShip
             }
         }
 
-        if (riding > (2 * period) + RideGraceMs)
+        if (!trip.Settling && riding > (2 * period) + RideGraceMs)
         {
-            // Still aboard: never put off at sea. The ship carries the bot on; the caller learns the leg failed.
+            // Still aboard: never put off at sea. The leg settles: it rides on to the next port and steps off there, then fails.
             Fail(session, player, trip, now, "ride-overdue", string.Create(CultureInfo.InvariantCulture,
                 $"aboard ship {trip.Route.Entry} for {riding / 1000} s, two round trips, without stepping off"), backoff: false);
             return;
         }
 
-        if (PlayerbotShipNetwork.DockedAt(ship, trip.To)
-            || ((trip.Overdue || trip.Cancelled) && trip.Sailed && PlayerbotShipNetwork.DockedAt(ship, trip.From)))
+        bool atTo = PlayerbotShipNetwork.DockedAt(ship, trip.To), atFrom = PlayerbotShipNetwork.DockedAt(ship, trip.From);
+        bool stepOff = trip.Settling ? trip.Sailed && (atTo || atFrom)
+            : atTo || ((trip.Overdue || trip.Cancelled) && trip.Sailed && atFrom);
+        if (stepOff)
         {
             trip.Attempts = 0;
             trip.StepOff = null;
@@ -617,7 +659,9 @@ internal static class PlayerbotShip
 
         if (at != trip.To)
         {
-            End(trip, now, trip.Cancelled ? "the leg was cancelled; stepped off at the departure port" : "the ride missed the arrival port; stepped off at the departure port",
+            // A settling leg ends with the failure it settled on (reported then); a cancelled or missed ride ends without one.
+            if (trip.Settling) End(trip, now, StripPrefix(trip.Failure) + "; stepped off at the departure port", trip.FailureCode);
+            else End(trip, now, trip.Cancelled ? "the leg was cancelled; stepped off at the departure port" : "the ride missed the arrival port; stepped off at the departure port",
                 code: null);
             return;
         }
@@ -625,6 +669,7 @@ internal static class PlayerbotShip
         trip.Stage = ShipStage.Done;
         trip.StageMs = now;
         trip.Failure = null;
+        trip.FailureCode = null; // a settling leg that still stepped off at the arrival port arrived (its failure was reported when it began)
         if (Docks.TryGetValue(player, out Dictionary<(uint, bool), DockMemo>? docks)) docks.Remove((trip.Route.Entry, trip.FromA));
     }
 
@@ -674,6 +719,12 @@ internal static class PlayerbotShip
 
     private static void Fail(WorldSession session, Player player, ShipTrip trip, uint now, string code, string why, bool backoff)
     {
+        if (trip.Stage is (ShipStage.Ride or ShipStage.Disembark) && !trip.SteppedOff && player.Transport is { } aboard && aboard.Entry == trip.Route.Entry)
+        {
+            Settle(session, player, trip, now, code, why);
+            return;
+        }
+
         if (trip.Stage is ShipStage.ToDock) PlayerbotMovementControl.Stop(session, player);
         End(trip, now, why, code);
         if (!trip.Reported && CanReport(session, player))
@@ -688,6 +739,34 @@ internal static class PlayerbotShip
         memo.Failures++;
         memo.UntilMs = unchecked(now + trip.Options.Travel.BackoffMs(memo.Failures));
     }
+
+    /// <summary>
+    /// A failure with the server still carrying the bot (<see cref="ShipTrip.Settling"/>): reported once now, and the leg rides on until the
+    /// ship has sailed and waits at a port, where the bot steps off; the leg ends after that. A step off a port refused starts the wait over.
+    /// </summary>
+    private static void Settle(WorldSession session, Player player, ShipTrip trip, uint now, string code, string why)
+    {
+        if (!trip.Settling)
+        {
+            trip.Settling = true;
+            trip.SettleMs = now;
+            trip.Failure = "ship: " + why;
+            trip.FailureCode = code;
+            if (!trip.Reported && CanReport(session, player))
+            {
+                trip.Reported = true;
+                PlayerbotAnomalies.Report(player, AnomalyArea, code, string.Create(CultureInfo.InvariantCulture,
+                    $"ship {trip.Route.Entry} ({trip.Route.Means}) from map {trip.From.MapId} to map {trip.To.MapId}: {why} (still aboard: it steps off at the next port)"));
+            }
+        }
+
+        trip.Sailed = false;
+        trip.Attempts = 0;
+        trip.StepOff = null;
+        Enter(trip, ShipStage.Ride, now);
+    }
+
+    private static string StripPrefix(string? failure) => failure is null ? "the leg failed aboard" : failure.StartsWith("ship: ", StringComparison.Ordinal) ? failure[6..] : failure;
 
     private static void End(ShipTrip trip, uint now, string why, string? code)
     {

@@ -136,6 +136,15 @@ internal sealed class MageLeg(TravelMeans means, uint spellId, TravelPlace desti
     /// <summary>The money before the fee trade, and when the last trade request went out.</summary>
     public uint MoneyBefore { get; set; }
 
+    /// <summary>The fee this leg paid the mage (0 until the trade settled): the journey charges it to its spend cap.</summary>
+    public uint PaidCopper { get; set; }
+
+    /// <summary>
+    /// The mage this bot already paid for this portal (a leg begun again after a fight dropped the paid one; 0: none): when that mage takes
+    /// the request it is marked paid, and the fee is not traded again.
+    /// </summary>
+    public ulong PrepaidMage { get; init; }
+
     public uint LastTradeMs { get; set; }
     public string? Failure { get; set; }
 }
@@ -443,7 +452,15 @@ internal static class PlayerbotMageService
 
     /// <summary>Ask for the portal of <paramref name="offer"/> (its mage preferred while it is free); see the other overload.</summary>
     internal static bool TryBeginPortal(WorldSession session, Player player, PortalOffer offer, PlayerbotOptions options, out string? why)
-        => TryBeginPortal(session, player, offer.PortalSpellId, offer.MageGuid, options, out why);
+        => TryBeginPortal(session, player, offer.PortalSpellId, offer.MageGuid, options, 0, out why);
+
+    /// <summary>
+    /// <see cref="TryBeginPortal(WorldSession, Player, PortalOffer, PlayerbotOptions, out string?)"/> for a portal already paid to
+    /// <paramref name="prepaidMage"/> (0: none; <see cref="MageLeg.PrepaidMage"/>): that mage is asked, and when it takes the request the fee
+    /// is not traded again. The money check is skipped for it.
+    /// </summary>
+    internal static bool TryBeginPortal(WorldSession session, Player player, PortalOffer offer, PlayerbotOptions options, ulong prepaidMage, out string? why)
+        => TryBeginPortal(session, player, offer.PortalSpellId, prepaidMage != 0 ? prepaidMage : offer.MageGuid, options, prepaidMage, out why);
 
     /// <summary>
     /// Post a request for the portal <paramref name="portalSpellId"/> on the board and begin the requester's leg; false (with why) when the
@@ -452,9 +469,10 @@ internal static class PlayerbotMageService
     /// way answers true.
     /// </summary>
     internal static bool TryBeginPortal(WorldSession session, Player player, uint portalSpellId, PlayerbotOptions options, out string? why)
-        => TryBeginPortal(session, player, portalSpellId, 0, options, out why);
+        => TryBeginPortal(session, player, portalSpellId, 0, options, 0, out why);
 
-    private static bool TryBeginPortal(WorldSession session, Player player, uint portalSpellId, ulong mage, PlayerbotOptions options, out string? why)
+    private static bool TryBeginPortal(WorldSession session, Player player, uint portalSpellId, ulong mage, PlayerbotOptions options, ulong prepaidMage,
+        out string? why)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
@@ -468,7 +486,7 @@ internal static class PlayerbotMageService
         else if (player.Combat.IsInCombat) why = "in combat";
         else if (index < 0 || !MayUse(player, Portals[index])) why = $"spell {portalSpellId} is not a portal of the bot's faction";
         else if (PortalDestination(session, player, portalSpellId) is not { } destination) why = $"portal {portalSpellId} leads nowhere in the data";
-        else if (fee > 0 && player.Money < fee) why = $"cannot pay the {fee} copper fee";
+        else if (fee > 0 && prepaidMage == 0 && player.Money < fee) why = $"cannot pay the {fee} copper fee";
         else if (fee > 0 && session.Services.GetService<EconomyFeature>() is not { Enabled: true }) why = "a fee is asked but trading is off on this server";
         else if (PortalObject(session, player, portalSpellId)!.GetData(GameObjectMapSystem.SpellCasterPartyOnlyData) != 0
                  && (Groups(session) is not { } groups || groups.GetGroup(player.Guid) is not null || groups.GetInvite(player.Guid) is not null))
@@ -476,7 +494,11 @@ internal static class PlayerbotMageService
         else if (PlayerbotPortalBoard.Post(session, player, portalSpellId, mage, fee) is null) why = "the portal board is full";
         else
         {
-            Legs.AddOrUpdate(player, new MageLeg(TravelMeans.MagePortal, portalSpellId, destination, session.World.NowMs) { Stage = MageLegStage.WaitMatch });
+            Legs.AddOrUpdate(player, new MageLeg(TravelMeans.MagePortal, portalSpellId, destination, session.World.NowMs)
+            {
+                Stage = MageLegStage.WaitMatch,
+                PrepaidMage = prepaidMage,
+            });
             return true;
         }
 
@@ -556,6 +578,10 @@ internal static class PlayerbotMageService
                 return TravelLegStep.Idle;
             }
 
+            if (unchecked(now - cast.BeganMs) > PlayerbotTravelCast.StartBoundMs)
+                return FailLeg(session, player, leg, "teleport-cast-refused",
+                    $"the Teleport cast was not taken within {PlayerbotTravelCast.StartBoundMs} ms ({cast.Attempts} attempts)", AnomalySeverity.Warning, out failure);
+
             SpellInfo? spell = spells.Store.Get(leg.SpellId);
             switch (PlayerbotTravelCast.Send(session, player, spells, cast, WorldOpcode.CmsgCastSpell,
                         PlayerbotTravelCast.CastPayload(leg.SpellId, SpellCastTargets.ForSelf()), out SpellCastResult? reason))
@@ -569,12 +595,22 @@ internal static class PlayerbotMageService
                     return TravelLegStep.Traveling;
                 case PlayerbotTravelCast.Sent.BudgetStarved:
                     return FailLeg(session, player, leg, "teleport-cast-refused", "the action budget never allowed the Teleport cast", AnomalySeverity.Warning, out failure);
+                case PlayerbotTravelCast.Sent.NotStill:
+                    return FailLeg(session, player, leg, "teleport-cast-refused", "the bot could not be stood still for the Teleport cast", AnomalySeverity.Warning, out failure);
                 case PlayerbotTravelCast.Sent.SessionRefused:
                     return FailLeg(session, player, leg, "teleport-cast-refused", "the session refused the Teleport cast", AnomalySeverity.Warning, out failure);
                 default:
                     return FailLeg(session, player, leg, "teleport-cast-refused",
                         $"the server refused Teleport {leg.SpellId}{(reason is { } r ? ": " + r : string.Empty)}", AnomalySeverity.Warning, out failure);
             }
+        }
+
+        // Attacked during the cast: the cast is cancelled and the leg dropped (no report), so the brain fights; the journey begins it again
+        // after the fight. A teleport the cast already began is the server's and goes on.
+        if (player.Combat.IsInCombat && !PlayerbotTravelCast.IsTeleporting(session, player))
+        {
+            Cancel(session, player);
+            return TravelLegStep.Idle;
         }
 
         switch (PlayerbotTravelCast.Watch(session, player, spells, cast, now))
@@ -633,6 +669,8 @@ internal static class PlayerbotMageService
             }
 
             leg.MageGuid = request.MageGuid;
+            // The mage this bot paid already for this portal (the paid leg was dropped by a fight): its request is paid, no second trade.
+            if (!request.Paid && leg.PrepaidMage != 0 && request.MageGuid == leg.PrepaidMage) request.Paid = true;
             if (Online(session, request.MageGuid) is not { IsInWorld: true } mage || mage.MapId != player.MapId)
                 return FailLeg(session, player, leg, "mage-gone", $"matched mage {request.MageGuid:X} left the map", AnomalySeverity.Info, out failure);
             AcceptMageInvite(session, player, leg);
@@ -709,6 +747,7 @@ internal static class PlayerbotMageService
         if (trade is null && leg.MoneyBefore >= player.Money && leg.MoneyBefore - player.Money >= request.FeeCopper)
         {
             request.Paid = true;
+            leg.PaidCopper = request.FeeCopper;
             Enter(leg, MageLegStage.WaitPortal, now);
             return TravelLegStep.Traveling;
         }
@@ -1058,6 +1097,9 @@ internal static class PlayerbotMageService
     private static TravelLegStep CastPortal(WorldSession session, Player player, SpellSystem spells, MageServe serve, PortalRequest request, uint now)
     {
         serve.Cast ??= new TravelCastLeg(TravelMeans.MagePortal, request.PortalSpellId, default, now);
+        if (unchecked(now - serve.Cast.BeganMs) > PlayerbotTravelCast.StartBoundMs)
+            return ServeFail(session, player, serve, request, "portal-cast-refused",
+                $"the portal {request.PortalSpellId} cast was not taken within {PlayerbotTravelCast.StartBoundMs} ms ({serve.Cast.Attempts} attempts)", AnomalySeverity.Warning);
         if (player.Map?.FindUpdater<GameObjectMapSystem>() is { } objects && serve.Before.Count == 0) CollectPortals(objects, player, request.PortalSpellId, serve.Before);
         switch (PlayerbotTravelCast.Send(session, player, spells, serve.Cast, WorldOpcode.CmsgCastSpell,
                     PlayerbotTravelCast.CastPayload(request.PortalSpellId, SpellCastTargets.ForSelf()), out SpellCastResult? reason))

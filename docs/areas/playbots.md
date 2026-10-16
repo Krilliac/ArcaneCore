@@ -339,8 +339,9 @@ live 2026-10-11, 117 dwarf and gnome bots with Dun Morogh, Ironforge and Loch Mo
   entrance. A Coldridge bot walks to Talin or Sten in its own zone and takes Ironforge's entrance (ClassicDB 2175) for Stormwind; a
   Goldshire bot uses Stormwind's entrance (2173) for Coldridge. Duskwood to Thorium Point (Searing Gorge) uses the tram via Ironforge.
   Unknown zones do not
-  start a trip. A failed trip is not tried again for 10 minutes (`RetryAfterFailureMs`); the destination then falls back to the walk and
-  the ordinary stall watch.
+  start a trip. A failed trip backs off only the entrance it began at (`PlayerbotTransitBackoff`,
+  `World:Playerbots:Travel:TransitBackoffSeconds` doubling per failure); the other entrance is taken at once, and meanwhile the destination
+  falls back to the walk and the ordinary stall watch. A lift that failed is backed off the same way, alone.
 * **The tram, from the data.** `TramNetwork.Build` reads the area triggers: the two entrances on the continent whose
   `areatrigger_teleport` leads to map 369 (classic-db 2173 Stormwind, 2175 Ironforge), each paired with the exit on map 369 nearest its
   landing whose teleport lands back beside it (2171, 2166). Anything else (one entrance, an exit missing or landing elsewhere) is no
@@ -689,8 +690,10 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   frames), the hearthstone (`PlayerbotHearthstone`: item 6948, its on-use spell, to the bind point), a mage bot's own Teleport and a portal
   a mage bot opens on request (`PlayerbotMageService`, `PlayerbotPortalBoard`).
 - **The planner** (`PlayerbotTravelPlanner`, pure) searches a small graph (start, goal, every port, the bind point, each own-teleport
-  destination, each portal's mage and destination) for the fewest seconds whose copper fits the spend cap: the lesser of the bot's money and
-  `MaxTravelSpendCopper`. Costs: a walk is the straight line times 1.3 at 7 yards a second; a flight the walks to the departure node and from
+  destination, each portal's mage and destination) for the fewest seconds whose copper fits the spend cap: the lesser of the bot's money,
+  `MaxTravelSpendCopper` and what the journey has not spent yet (a replan plans with what is left). The cap holds for the whole journey: the
+  fares of the flights its walks take (offered only up to what is left) and the portal fees it paid are charged once the server took them
+  (`TravelJourney.SpentCopper`), and a portal leg begun again after a fight asks the mage it already paid, without a second trade. Costs: a walk is the straight line times 1.3 at 7 yards a second; a flight the walks to the departure node and from
   the landing node plus the hops at 32 yards a second, its fare the undiscounted path price; a boat or zeppelin its round trip (`period`), free;
   the hearthstone and a Teleport 15 s; a portal 25 s plus the fee. Two walks never follow each other; the hearthstone and each Teleport are
   used at most once. Ties: fewer legs, then less copper.
@@ -707,24 +710,32 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   board), then the journey. A leg driver that answers Traveling owns the bot that think (no stall judged, no target held). The journey walks
   its walk legs itself and only begins the others on their drivers. A walk right before a boat, zeppelin or portal leg ends within 100 yards
   of that leg's start (the next driver walks the last yards to its dock or mage). Within 10 yards of the goal the journey has arrived. A fight
-  makes the journey yield (the brain fights) until it is over, except aboard a ship; a fight on the way to a dock drops that ship leg, and the
-  journey begins it again afterwards. A switch turned off (Travel `Enabled`, or the means of the next leg) ends the journey at its next safe
-  point without a report; each driver has its own safe point (aboard a ship, the bot rides to the next port and steps off there).
+  makes the journey yield (the brain fights) until it is over, except aboard a ship; a fight before the bot is aboard (on the way to the
+  dock, waiting for the ship, on the gangway) drops that ship leg, a fight during a hearthstone or Teleport cast cancels the cast (not a
+  teleport already begun), and the journey begins the leg again afterwards. Between two legs (never in the middle of one) a bot below 45%
+  health or 35% mana rests first: the brain eats, drinks or sits until `World:Playerbots:Risk:RecoverHealthPct` (at most the risk wait),
+  then the bot stands and the next leg begins. A switch turned off (Travel `Enabled`, or the means of the next leg) ends the journey at its
+  next safe point without a report; each driver has its own safe point (aboard a ship, the bot rides to the next port and steps off there).
 - **Failure.** A failed leg (its driver reported it once) defers only that leg (`GiveUpTransitLeg`: no quest set aside, no dead-end pin);
   the journey replans once from where the bot stands, leaving out the failed means or point on top of the drivers' backoffs; a second
-  failure, or a replan with no route, fails the journey (`travel/leg-failed`, once). A journey is bounded by twice its planned seconds plus
-  ten minutes (`travel/overdue`). Nothing is reported on arrival. Death, a controller, a battleground or a bot-led group taking the bot
+  failure, or a replan with no route, fails the journey (`travel/leg-failed`, once); a journey is never replanned from aboard a transport. A
+  journey is bounded by twice its planned seconds plus ten minutes (`travel/overdue`), checked before the leg drivers: the leg under way is
+  dropped by its driver's rule, except aboard a ship, where the journey ends once the bot stepped off at the next port. A cast leg is bounded
+  before the server took its cast too (30 s, or 20 thinks put off: a bot that would not stand still, an action budget spent). Nothing is reported on arrival. Death, a controller, a battleground or a bot-led group taking the bot
   over cancels the journey and its legs (`PlayerbotTravel.CancelLegs`); a bot aboard a ship is never put off at sea (its leg rides to the
   next port, driven by the feature until it stepped off, then the new driver takes it). Chaos probes keep off a bot mid-leg.
 - **Ships.** Walk to the walkable point nearest the departure port; wait for the route's ship to wait there with at least 2 s of its stop
   left (bounded by 1.5 round trips); step onto the deck through movement heartbeats and the heartbeat with MOVEFLAG_ONTRANSPORT (the server
   boards it); ride (the server carries passengers through the map change); step off at the arrival port and walk off the pier. Sampled
   every world tick (`PlayerbotShip.Pump` from `PlayerbotMotion.Pump`) so a short stop is not missed. A failure at the departure dock backs
-  that dock off.
-- **Hearthstone.** Stop, CMSG_USE_ITEM for the stone, wait out the cast standing still, confirm the bot stands at its bind point. The
-  brain's own bind-point escapes use it too: when the hearthstone is ready the bot hearths instead of the direct teleport; only an escape
-  made for the bot's safety (an urgent escape, a bot stranded on ground no route leaves or among creatures too strong for it) falls back
-  to the direct teleport when the stone is not ready; the walk to a completed quest's unreachable ender then does not go to the bind point.
+  that dock off. A failure while the server still carries the bot (`ride-overdue`, `disembark-refused`, `wrong-map`, `left-ship` with the
+  passenger link still held) is reported at once, but the leg settles: it stays under way, rides to the next port the ship waits at and
+  steps off there, and only then ends; so no bot is left aboard without a driver (bounded by two more round trips).
+- **Hearthstone.** Stop, CMSG_USE_ITEM for the stone, wait out the cast standing still, confirm the bot stands at its bind point. An
+  urgent escape always teleports directly (a ten second cast a fight interrupts is no escape). The brain's other bind-point trips use the
+  hearthstone when it is ready; when it is not, only one made for the bot's safety (a bot stranded on ground no route leaves, or exploring
+  among creatures too strong for it) falls back to the direct teleport, and the walk to a completed quest's unreachable ender then does
+  not go to the bind point.
 - **Mage service.** An idle mage bot (alive, out of combat, ungrouped, on no trip of its own) lists itself on the in-world portal board
   with the portals it knows and can cast; a requester's journey asks for a portal of a listed mage near it; the matched mage stops, buys a
   Rune of Portals from a vendor stocking it within 300 yards when it has none, waits for the requester, takes the fee
@@ -983,7 +994,7 @@ bots in the service snapshot only, never on a real player.
 | `.playerbot dismiss <sel>` | Administrator | End a follow or stay; the bots go back to autonomous play. |
 | `.playerbot near [#radius]` | GameMaster | List the running bots within the radius (default 50, at most 500 yards) of you: level, class, health, state, goal, distance (at most 20 lines). |
 | `.playerbot revive <sel>` | Administrator | Revive the dead bots among the selection, as `.revive` does. |
-| `.playerbot travel $id\|$name #map #x #y #z` | Administrator | One running bot begins a journey to the place by its own means ([Travel](#travel)); the reply lists the planned legs (means, end, seconds, copper), or the planner's refusal (travel off, no route, a leg of another journey under way). |
+| `.playerbot travel $id\|$name #map #x #y #z` | Administrator | One running bot begins a journey to the place by its own means ([Travel](#travel)); the reply lists the planned legs (means, end, seconds, copper), or the refusal (a controller, the party AI, a bot-led group or a battleground holds the bot; or the planner's: travel off, no route, a leg of another journey under way). |
 | `.playerbot start <sel> [force]`, `.playerbot stop <sel> [force]` | Administrator | Start or stop every registered bot the selector names; one summary comes back when the worker finishes. |
 
 **Selector `<sel>`.** `all`, a name **prefix** with one trailing star (`Wfbot*`; letters only, a bare star or a star inside a

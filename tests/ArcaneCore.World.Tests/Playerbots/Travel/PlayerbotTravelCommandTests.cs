@@ -40,6 +40,36 @@ public sealed class PlayerbotTravelCommandTests
         });
     }
 
+    /// <summary>
+    /// Only the brain drives a journey: a bot a controller holds, or one following its party, is refused with the reason, and no journey is
+    /// begun (the driver would cancel it at its next tick).
+    /// </summary>
+    [Fact]
+    public async Task Travel_RefusesABotTheBrainDoesNotDrive_AControllersOrAPartys_AndSaysWhy()
+    {
+        await using FleetWorld world = await StartAsync();
+        await PartyTestHost.InstallFlatGroundAsync(world.Host, FleetWorld.BaseZ);
+        Guid scripted = await world.AddBotAsync("Travelctl", 0);
+        Guid follower = await world.AddBotAsync("Travelpty", 5);
+        await using WorldTestClient gm = await world.AddGmAsync("TRAVELGM", "Travelgm");
+        Assert.True(await world.Bots.SetControllerAsync(scripted, new IdleController()));
+        Assert.Equal(["Playerbot follow: matched=1 following=1 skipped=0"], await FleetWorld.SayAsync(gm, ".playerbot follow Travelpty"));
+        Assert.True(world.Bots.IsPartyDriven(follower));
+        string goal = Place(FleetWorld.BaseX + 300f, FleetWorld.BaseY, FleetWorld.BaseZ);
+
+        string[] held = await world.Console.RunAsync($".playerbot travel Travelctl 0 {goal}");
+        string[] party = await world.Console.RunAsync($".playerbot travel Travelpty 0 {goal}");
+
+        Assert.Equal(["Playerbot travel refused: Travelctl: a controller holds the bot."], held);
+        Assert.Equal(["Playerbot travel refused: Travelpty: the bot follows its party (a real player's group)."], party);
+        await world.Host.OnWorldAsync(() =>
+        {
+            Assert.Null(PlayerbotTravel.JourneyOf(world.Host.World.FindOnlinePlayer("Travelctl")!));
+            Assert.Null(PlayerbotTravel.JourneyOf(world.Host.World.FindOnlinePlayer("Travelpty")!));
+            return 0;
+        });
+    }
+
     [Fact]
     public async Task Travel_Refusals_SayWhy_AndBadArgumentsShowTheSyntax()
     {

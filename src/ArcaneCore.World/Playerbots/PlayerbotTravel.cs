@@ -1,12 +1,15 @@
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,8 +52,21 @@ internal sealed class TravelJourney(TravelPlace goal, TravelRoute route, uint no
     public JourneyState State { get; internal set; } = JourneyState.Active;
     public uint BeganMs { get; } = nowMs;
 
-    /// <summary>The journey fails past this world time: twice the planned seconds plus <see cref="PlayerbotTravel.SlackMs"/>.</summary>
-    public uint DeadlineMs { get; } = deadlineMs;
+    /// <summary>
+    /// The journey fails past this world time: twice the planned seconds plus <see cref="PlayerbotTravel.SlackMs"/>. It applies with a leg
+    /// under way too (the leg is dropped), except aboard a ship: the bot rides to the next port and the journey ends there. Settable for tests.
+    /// </summary>
+    public uint DeadlineMs { get; internal set; } = deadlineMs;
+
+    /// <summary>
+    /// Copper this journey has spent so far: the fares of the flights its walks took (charged once the flight left) and the fees of the
+    /// portals it paid (charged once the trade settled). The whole journey, replan included, spends at most
+    /// <see cref="PlayerbotTravelOptions.MaxTravelSpendCopper"/> (<see cref="SpendLeft"/>).
+    /// </summary>
+    public uint SpentCopper { get; private set; }
+
+    /// <summary>The bot rests between two legs (low health or mana; <see cref="PlayerbotTravel.RestsBetweenLegs"/>): the brain recovers it, then the next leg begins.</summary>
+    public bool Resting => RestSinceMs != 0;
 
     /// <summary>Why the journey failed (null while under way and after an arrival).</summary>
     public string? Failure { get; internal set; }
@@ -72,7 +88,42 @@ internal sealed class TravelJourney(TravelPlace goal, TravelRoute route, uint no
     internal readonly JourneyWalk Walk = new();
     internal bool Returned;
 
+    /// <summary>The fee of the mage leg under way was charged (<see cref="ChargeLeg"/>; once per leg attempt).</summary>
+    internal bool LegCharged;
+
+    /// <summary>The mage and portal spell a fee was paid to on this journey: a portal leg begun again for that portal does not pay twice.</summary>
+    internal (ulong Mage, uint Spell)? PaidPortal;
+
+    /// <summary>When the rest between legs began (0: not resting), and the leg attempt it was taken before (one rest per attempt).</summary>
+    internal uint RestSinceMs;
+    internal int RestedBefore = -1;
+
+    /// <summary>Counts leg attempts (every <see cref="ResetLeg"/>): a leg begun again after a fight is a new attempt that may rest first.</summary>
+    internal int Attempt;
+
     internal TravelLeg? Current => LegIndex < Legs.Count ? Legs[LegIndex] : null;
+
+    /// <summary>What the journey may still spend under <paramref name="travel"/>'s cap (never below 0).</summary>
+    internal uint SpendLeft(PlayerbotTravelOptions travel)
+        => travel.MaxTravelSpendCopper > SpentCopper ? travel.MaxTravelSpendCopper - SpentCopper : 0;
+
+    /// <summary>Add <paramref name="copper"/> to <see cref="SpentCopper"/> (saturating).</summary>
+    internal void Spend(uint copper) => SpentCopper = (uint)Math.Min(uint.MaxValue, (ulong)SpentCopper + copper);
+
+    /// <summary>
+    /// Charge what the leg under way has paid and the journey has not counted yet: the fare of a flight its walk took, the fee of the
+    /// portal it paid (remembered in <see cref="PaidPortal"/>). Called every think and before a leg is reset, so nothing paid is lost.
+    /// </summary>
+    internal void ChargeLeg()
+    {
+        Spend(Walk.TakeFare());
+        if (!LegCharged && LegHandle is MageLeg { PaidCopper: > 0 } mage)
+        {
+            LegCharged = true;
+            Spend(mage.PaidCopper);
+            PaidPortal = (mage.MageGuid, mage.SpellId);
+        }
+    }
 
     internal void UseRoute(TravelRoute route)
     {
@@ -89,8 +140,11 @@ internal sealed class TravelJourney(TravelPlace goal, TravelRoute route, uint no
 
     internal void ResetLeg()
     {
+        ChargeLeg();
         LegStarted = false;
         LegHandle = null;
+        LegCharged = false;
+        Attempt++;
         Walk.Reset();
     }
 }
@@ -137,12 +191,32 @@ internal sealed class JourneyWalk
     private uint _bestMs;
     private uint _startedMs;
     private bool _started;
+    private TaxiTrip? _flight;
+    private bool _flightCharged;
+    private uint _owed;
 
     /// <summary>Refused plans in a row so far (tests).</summary>
     internal int Refused => _refused;
 
+    /// <summary>The fare of the flight this walk began once it left (the server took the money), and anything owed before; once.</summary>
+    internal uint TakeFare()
+    {
+        uint fare = _owed;
+        _owed = 0;
+        if (_flight is { Stage: TaxiStage.Flying or TaxiStage.Done } flight && !_flightCharged)
+        {
+            _flightCharged = true;
+            fare = (uint)Math.Min(uint.MaxValue, (ulong)fare + flight.Fare);
+        }
+
+        return fare;
+    }
+
+    /// <summary>Forget the walk's route and progress (a fare not yet taken stays owed: <see cref="TakeFare"/>).</summary>
     internal void Reset()
     {
+        _owed = TakeFare();
+        _flight = null;
         _route = null;
         _tiles.Reset();
         _refused = 0;
@@ -153,8 +227,10 @@ internal sealed class JourneyWalk
     /// <summary>
     /// One step toward <paramref name="target"/>. <see cref="Outcome.Yield"/>: a tram, lift or taxi trip carries the bot (begun here or
     /// before); its driver in the brain moves it and the walk goes on after it. <see cref="Outcome.Failed"/> with <paramref name="why"/>.
+    /// A flight is taken only for a fare of at most <paramref name="maxFare"/> (the journey's spend left).
     /// </summary>
-    internal Outcome Step(WorldSession session, Player player, PlayerbotOptions options, Vector3 target, uint elapsedMs, uint now, out string? why)
+    internal Outcome Step(WorldSession session, Player player, PlayerbotOptions options, Vector3 target, uint elapsedMs, uint now, uint maxFare,
+        out string? why)
     {
         why = null;
         if (PlayerbotTaxi.IsActive(player) || PlayerbotTram.IsTraveling(player) || PlayerbotElevator.IsTraveling(player))
@@ -211,7 +287,13 @@ internal sealed class JourneyWalk
         {
             if (PlayerbotTram.TryBegin(session, player, target)) return Outcome.Yield;
             if (PlayerbotElevator.TryBegin(session, player, target, options, out walk)) return Outcome.Yield;
-            if (walk is null && PlayerbotTaxi.TryTravelByTaxi(session, player, map.MapId, target, options) == TaxiTravel.Traveling) return Outcome.Yield;
+            if (walk is null && PlayerbotTaxi.TryTravelByTaxi(session, player, map.MapId, target, options, maxFare) == TaxiTravel.Traveling)
+            {
+                _owed = TakeFare();
+                _flight = PlayerbotTaxi.TripOf(player);
+                _flightCharged = false;
+                return Outcome.Yield;
+            }
         }
 
         PlanOutcome planned = walk is not null ? PlanOutcome.Route : PlayerbotNavigation.PlanToward(player, target, options, ref _tiles, now, out walk);
@@ -249,7 +331,7 @@ internal sealed class JourneyWalk
 /// (<see cref="TravelLegStep.Idle"/>) so the brain fights. A switch turned off (<see cref="PlayerbotTravelOptions.Enabled"/>, or the means of the
 /// next leg) ends the journey there without a report.</item>
 /// </list>
-/// Thread affinity: world thread, except <see cref="CanReachStatic"/>. Per-bot state lives in a <see cref="ConditionalWeakTable{TKey,TValue}"/>
+/// Thread affinity: world thread, except <see cref="CanReachStatic(bool, uint, Vector3, uint, Vector3, PlayerbotTravelOptions)"/>. Per-bot state lives in a <see cref="ConditionalWeakTable{TKey,TValue}"/>
 /// keyed by the player; the service instance holds only its options and ship-route source.
 /// </summary>
 internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTravel
@@ -268,10 +350,11 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
 
     private static readonly ConditionalWeakTable<Player, TravelJourney> Journeys = [];
 
-    // The ship routes CanReachStatic answers from: the classic routes of the transport system a journey last saw (immutable records).
+    // The ship routes CanReachStatic answers from: the classic routes of the transport system a journey last saw, an array of immutable
+    // records written once per system (Volatile.Write) and never changed after; readers take it with Volatile.Read.
     private static readonly ConditionalWeakTable<TransportSystem, object> Published = [];
     private static readonly object PublishedMarker = new();
-    private static IReadOnlyList<ShipRoute> s_staticRoutes = [];
+    private static ShipRoute[] s_staticRoutes = [];
 
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
 
@@ -419,6 +502,15 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
     /// </summary>
     internal static TravelFacts BuildFacts(WorldSession session, Player player, PlayerbotOptions options, IReadOnlyList<ShipRoute> allShips,
         TravelExclusions? excluded)
+        => BuildFacts(session, player, options, allShips, excluded, uint.MaxValue);
+
+    /// <summary>
+    /// <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/> for a journey that has
+    /// spent some of its cap already: the spend cap is also at most <paramref name="spendLeft"/> (<see cref="TravelJourney.SpendLeft"/>), so a
+    /// replan never plans past what the whole journey may spend.
+    /// </summary>
+    internal static TravelFacts BuildFacts(WorldSession session, Player player, PlayerbotOptions options, IReadOnlyList<ShipRoute> allShips,
+        TravelExclusions? excluded, uint spendLeft)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
@@ -426,7 +518,7 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
         ArgumentNullException.ThrowIfNull(allShips);
         bool alliance = PlayerbotShipNetwork.IsAlliance(player);
         uint money = player.Money;
-        uint cap = Math.Min(money, options.Travel.MaxTravelSpendCopper);
+        uint cap = Math.Min(Math.Min(money, options.Travel.MaxTravelSpendCopper), spendLeft);
         uint now = session.World.NowMs;
 
         bool hearth = excluded is not { Hearthstone: true } && PlayerbotHearthstone.IsReady(session, player, options);
@@ -548,32 +640,65 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
 
     /// <summary>
     /// Off-thread reachability from static data only (for the home progression's sweep): the same map, or maps the boat and zeppelin routes a
-    /// bot of the faction may ride join (<see cref="PlayerbotShipNetwork.ConnectsMaps"/>). The routes are the classic routes of the transport
-    /// system the world thread last published (<see cref="PublishStaticRoutes"/>, at the first journey begun or driven in a world; immutable
-    /// records, read with a volatile load); before that only the same map answers. Neither the Boats and Zeppelins switches nor any walk is
-    /// judged here (no options and no navmesh off the world thread): a same-map answer is "maybe on foot", and the trip's own planner decides.
-    /// Pure, allocation-light, any thread.
+    /// bot of the faction may ride with <paramref name="travel"/>'s switches join (<see cref="PlayerbotTravelOptions.Enabled"/> off: the same
+    /// map only). The routes are the classic routes of the transport system the world thread last published (<see cref="PublishStaticRoutes"/>,
+    /// at the first journey begun or driven in a world): an immutable array read with a volatile load; before that only the same map answers.
+    /// No walk is judged here (no navmesh off the world thread): a same-map answer is "maybe on foot", and the trip's own planner decides.
+    /// Pure and allocation-free; any thread (the switches are plain reads of the live options).
     /// </summary>
-    internal static bool CanReachStatic(bool alliance, uint fromMap, Vector3 from, uint toMap, Vector3 to)
+    internal static bool CanReachStatic(bool alliance, uint fromMap, Vector3 from, uint toMap, Vector3 to, PlayerbotTravelOptions travel)
     {
         _ = from;
         _ = to;
-        if (fromMap == toMap) return true;
-        IReadOnlyList<ShipRoute> routes = Volatile.Read(ref s_staticRoutes);
-        if (routes.Count == 0) return false;
-        var allowed = new List<ShipRoute>(routes.Count);
-        foreach (ShipRoute route in routes)
-            if (PlayerbotShipNetwork.Admits(route.Access, alliance)) allowed.Add(route);
-        return PlayerbotShipNetwork.ConnectsMaps(allowed, fromMap, toMap);
+        return CanReachStatic(Volatile.Read(ref s_staticRoutes), alliance, fromMap, toMap, travel);
     }
 
-    /// <summary>Publish the classic routes of <paramref name="world"/>'s transport system for <see cref="CanReachStatic"/> (world thread; once per system).</summary>
+    /// <summary>The routes <see cref="CanReachStatic(bool, uint, Vector3, uint, Vector3, PlayerbotTravelOptions)"/> answers from now (tests).</summary>
+    internal static IReadOnlyList<ShipRoute> StaticRoutes => Volatile.Read(ref s_staticRoutes);
+
+    /// <summary>
+    /// <see cref="CanReachStatic(bool, uint, Vector3, uint, Vector3, PlayerbotTravelOptions)"/> over <paramref name="routes"/>: a fixed-point walk
+    /// over the maps the rideable routes join, the reached maps kept on the stack (up to <see cref="StackMaps"/>; more, which the classic routes
+    /// never reach, take one array). Pure.
+    /// </summary>
+    internal static bool CanReachStatic(ReadOnlySpan<ShipRoute> routes, bool alliance, uint fromMap, uint toMap, PlayerbotTravelOptions travel)
+    {
+        ArgumentNullException.ThrowIfNull(travel);
+        if (fromMap == toMap) return true;
+        if (!travel.Enabled || routes.IsEmpty) return false;
+        int capacity = (routes.Length * 2) + 1;
+        Span<uint> reached = capacity <= StackMaps ? stackalloc uint[StackMaps] : new uint[capacity];
+        reached[0] = fromMap;
+        int count = 1;
+        bool grew = true;
+        while (grew)
+        {
+            grew = false;
+            foreach (ShipRoute route in routes)
+            {
+                if (!PlayerbotShipNetwork.MayRide(route, alliance, travel)) continue;
+                bool a = reached[..count].Contains(route.PortA.MapId), b = reached[..count].Contains(route.PortB.MapId);
+                if (a == b) continue;
+                uint other = a ? route.PortB.MapId : route.PortA.MapId;
+                if (other == toMap) return true;
+                reached[count++] = other;
+                grew = true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The most maps <see cref="CanReachStatic(ReadOnlySpan{ShipRoute}, bool, uint, uint, PlayerbotTravelOptions)"/> keeps on the stack.</summary>
+    internal const int StackMaps = 64;
+
+    /// <summary>Publish the classic routes of <paramref name="world"/>'s transport system for <see cref="CanReachStatic(bool, uint, Vector3, uint, Vector3, PlayerbotTravelOptions)"/> (world thread; once per system).</summary>
     internal static void PublishStaticRoutes(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
         if (TransportSystem.Of(world) is not { } system || Published.TryGetValue(system, out _)) return;
         Published.AddOrUpdate(system, PublishedMarker);
-        Volatile.Write(ref s_staticRoutes, PlayerbotShipNetwork.Routes(system));
+        Volatile.Write(ref s_staticRoutes, [.. PlayerbotShipNetwork.Routes(system)]);
     }
 
     // --- the driver -------------------------------------------------------------------------
@@ -603,19 +728,14 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
 
         PublishStaticRoutes(session.World);
         uint now = session.World.NowMs;
+        journey.ChargeLeg();
         if (!options.Travel.Enabled && !LegUnderWay(player))
         {
             End(session, player, journey, JourneyState.SwitchedOff, "travel was switched off", code: null);
             return Answer(journey, out failure);
         }
 
-        if (unchecked((int)(now - journey.DeadlineMs)) > 0 && !LegUnderWay(player))
-        {
-            End(session, player, journey, JourneyState.Failed, string.Create(CultureInfo.InvariantCulture,
-                $"the journey to {Describe(journey.Goal)} still runs {unchecked(now - journey.BeganMs) / 1000} s after it began (bound {unchecked(journey.DeadlineMs - journey.BeganMs) / 1000} s)"),
-                "overdue");
-            return Answer(journey, out failure);
-        }
+        if (EndIfOverdue(session, player, journey, now)) return Answer(journey, out failure);
 
         PlayerbotThinkProbe.Phase("travel");
         // A few legs can end and begin within one think (a hand-off, a leg found done); each loop either returns or moves one leg on.
@@ -627,6 +747,8 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
                 return Answer(journey, out failure);
             }
 
+            // Between two legs a bot low on health or mana rests first (the brain recovers it: RestsBetweenLegs), never in the middle of one.
+            if (!journey.LegStarted && !LegUnderWay(player) && RestsBetweenLegs(session, player, options, journey, now)) return TravelLegStep.Idle;
             if (journey.Current is not { } leg)
             {
                 // The last leg ended short of the goal: a final walk on the goal's map, once; anywhere else the leg failed.
@@ -665,6 +787,91 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
     }
 
     private enum StepResult : byte { Traveling, Yield, Next, Failed, SwitchedOff }
+
+    /// <summary>Between two legs, a bot below this percent of its health (or <see cref="RestManaBelowPct"/> of its mana) rests before the next one.</summary>
+    internal const float RestHealthBelowPct = 45f, RestManaBelowPct = 35f;
+
+    /// <summary>A rest between legs lasts at most this long (as the brain's own wait to recover, <see cref="PlayerbotRisk.MaxWaitMs"/>).</summary>
+    internal const uint MaxRestMs = PlayerbotRisk.MaxWaitMs;
+
+    /// <summary>Whether the journey rests between two legs now (inspection and the brain, which rests the bot while it does).</summary>
+    internal static bool IsResting(Player player)
+        => Journeys.TryGetValue(player, out TravelJourney? journey) && journey.State == JourneyState.Active && journey.Resting;
+
+    /// <summary>
+    /// The rest between two legs: out of combat, a bot below <see cref="RestHealthBelowPct"/> of its health or <see cref="RestManaBelowPct"/>
+    /// of its mana does not begin the next leg; the journey yields (<see cref="TravelLegStep.Idle"/>, <see cref="IsResting"/>) and the brain
+    /// rests the bot (food, drink or sitting). The rest ends at <see cref="PlayerbotRiskOptions.RecoverHealthPct"/> of health and mana, after
+    /// <see cref="MaxRestMs"/>, or in a fight; the bot then stands (CMSG_STANDSTATECHANGE) and the leg begins. Once per leg attempt, so a rest
+    /// that recovered nothing does not hold the journey again. True while resting.
+    /// </summary>
+    private static bool RestsBetweenLegs(WorldSession session, Player player, PlayerbotOptions options, TravelJourney journey, uint now)
+    {
+        if (journey.RestSinceMs != 0)
+        {
+            if (!player.Combat.IsInCombat && !Recovered(player, options.Risk.RecoverHealthPct) && unchecked(now - journey.RestSinceMs) <= MaxRestMs)
+                return true;
+            journey.RestSinceMs = 0;
+            journey.RestedBefore = journey.Attempt;
+            if (player.StandState != StandState.Stand)
+                session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand));
+            return false;
+        }
+
+        if (journey.RestedBefore == journey.Attempt || player.Combat.IsInCombat || !Low(player)) return false;
+        journey.RestSinceMs = Math.Max(1u, now);
+        PlayerbotMovementControl.Stop(session, player);
+        return true;
+    }
+
+    /// <summary>Below <see cref="RestHealthBelowPct"/> of health, or (a mana user) <see cref="RestManaBelowPct"/> of mana.</summary>
+    private static bool Low(Player player)
+    {
+        if (player.MaxHealth > 0 && player.Health * 100f / player.MaxHealth < RestHealthBelowPct) return true;
+        uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
+        return player.PowerType == PowerType.Mana && maxMana > 0 && SpellSystem.GetPower(player, PowerType.Mana) * 100f / maxMana < RestManaBelowPct;
+    }
+
+    /// <summary>Health and (a mana user) mana at <paramref name="wantedPct"/> percent or more (as <see cref="PlayerbotRisk.Recovered"/>).</summary>
+    private static bool Recovered(Player player, float wantedPct)
+    {
+        if (player.MaxHealth > 0 && player.Health * 100f / player.MaxHealth < wantedPct) return false;
+        uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
+        return player.PowerType != PowerType.Mana || maxMana == 0 || SpellSystem.GetPower(player, PowerType.Mana) * 100f / maxMana >= wantedPct;
+    }
+
+    /// <summary>
+    /// The journey's bound (<see cref="TravelJourney.DeadlineMs"/>), called by the brain before the leg drivers (a leg under way owns its
+    /// thinks, and <see cref="Drive"/> runs only after it) and by <see cref="Drive"/>: past it the journey fails (<c>overdue</c>, reported
+    /// once) and the leg under way is dropped by its driver's own rule, except aboard a ship: nobody is put off at sea, and the journey ends
+    /// once the bot stepped off at the next port. <see cref="Drive"/> answers the failure. World thread.
+    /// </summary>
+    internal static void EnforceDeadline(WorldSession session, Player player)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+        if (Journeys.TryGetValue(player, out TravelJourney? journey) && journey.State == JourneyState.Active && player.IsInWorld && player.IsAlive)
+            EndIfOverdue(session, player, journey, session.World.NowMs);
+    }
+
+    private static bool EndIfOverdue(WorldSession session, Player player, TravelJourney journey, uint now)
+    {
+        if (unchecked((int)(now - journey.DeadlineMs)) <= 0 || PlayerbotShip.IsAboard(player)) return false;
+        DropLegs(session, player);
+        End(session, player, journey, JourneyState.Failed, string.Create(CultureInfo.InvariantCulture,
+            $"the journey to {Describe(journey.Goal)} still runs {unchecked(now - journey.BeganMs) / 1000} s after it began (bound {unchecked(journey.DeadlineMs - journey.BeganMs) / 1000} s)"),
+            "overdue");
+        return true;
+    }
+
+    /// <summary>The journey ran past its bound with a leg under way (not aboard a ship): that leg is dropped by its driver's own rule, without a report.</summary>
+    private static void DropLegs(WorldSession session, Player player)
+    {
+        PlayerbotShip.Cancel(player);
+        PlayerbotHearthstone.Cancel(session, player);
+        PlayerbotMageService.Cancel(session, player);
+        PlayerbotMovementControl.Stop(session, player);
+    }
 
     /// <summary>Begin <paramref name="leg"/> on its driver (a walk is driven here at once).</summary>
     private static StepResult Begin(WorldSession session, Player player, PlayerbotOptions options, TravelJourney journey, TravelLeg leg, uint elapsedMs,
@@ -720,8 +927,19 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
                 return StepResult.Traveling;
             case TravelMeans.MagePortal:
             {
-                var offer = new PortalOffer(leg.MageGuid, leg.SpellId, leg.From, leg.To, leg.Copper);
-                if (!PlayerbotMageService.TryBeginPortal(session, player, offer, options, out why)) return StepResult.Failed;
+                // A portal this journey paid for already (its leg dropped by a fight after the fee) is asked of that mage again, unpaid: the
+                // fee is not paid twice. Otherwise the fee must fit what the journey may still spend.
+                ulong prepaid = journey.PaidPortal is { } paid && paid.Spell == leg.SpellId ? paid.Mage : 0;
+                uint fee = options.Travel.MageServiceFeeCopper;
+                if (prepaid == 0 && fee > journey.SpendLeft(options.Travel))
+                {
+                    why = string.Create(CultureInfo.InvariantCulture,
+                        $"mage: the {fee} copper fee is more than the journey may still spend ({journey.SpendLeft(options.Travel)} of {options.Travel.MaxTravelSpendCopper})");
+                    return StepResult.Failed;
+                }
+
+                var offer = new PortalOffer(prepaid != 0 ? prepaid : leg.MageGuid, leg.SpellId, leg.From, leg.To, leg.Copper);
+                if (!PlayerbotMageService.TryBeginPortal(session, player, offer, options, prepaid, out why)) return StepResult.Failed;
                 journey.LegStarted = true;
                 journey.LegHandle = PlayerbotMageService.LegOf(player);
                 return StepResult.Traveling;
@@ -828,7 +1046,7 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
             return StepResult.Next;
         }
 
-        switch (journey.Walk.Step(session, player, options, leg.To.Position, elapsedMs, now, out string? walkWhy))
+        switch (journey.Walk.Step(session, player, options, leg.To.Position, elapsedMs, now, journey.SpendLeft(options.Travel), out string? walkWhy))
         {
             case JourneyWalk.Outcome.Yield:
                 return StepResult.Yield;
@@ -861,10 +1079,16 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
     {
         failure = null;
         if (means == TravelMeans.FlightPath) journey.Excluded.Flights = true;
-        if (!journey.Replanned)
+        journey.ChargeLeg();
+        if (player.Transport is not null)
+        {
+            // Never replanned from aboard a transport (a ship leg that failed with the bot still on the deck): no walk leaves it from here.
+            why += "; the bot is aboard a transport";
+        }
+        else if (!journey.Replanned)
         {
             journey.Replanned = true;
-            TravelFacts facts = BuildFacts(session, player, options, journey.Ships(session.World), journey.Excluded);
+            TravelFacts facts = BuildFacts(session, player, options, journey.Ships(session.World), journey.Excluded, journey.SpendLeft(options.Travel));
             if (PlayerbotTravelPlanner.Plan(facts, TravelPlace.Of(player), journey.Goal) is { } route)
             {
                 journey.Replan = route;

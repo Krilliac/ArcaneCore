@@ -628,7 +628,7 @@ internal static class PlayerbotTaxi
         if (!options.Taxi.Enabled) return false;
         if (IsTravelTrip(player)) return true;
         if (IsActive(player)) return false;
-        return TryPlanTaxi(session, player, mapId, destination, options, out _, out _, out _);
+        return TryPlanTaxi(session, player, mapId, destination, options, uint.MaxValue, out _, out _, out _);
     }
 
     /// <summary>
@@ -639,6 +639,14 @@ internal static class PlayerbotTaxi
     /// discounts) the bot can pay now.
     /// </summary>
     internal static TaxiTravel TryTravelByTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options)
+        => TryTravelByTaxi(session, player, mapId, destination, options, uint.MaxValue);
+
+    /// <summary>
+    /// <see cref="TryTravelByTaxi(WorldSession, Player, uint, Vector3, PlayerbotOptions)"/> with the fare held to at most
+    /// <paramref name="maxFare"/> copper as well as the bot's money (a journey's spend left, <see cref="TravelJourney.SpendLeft"/>): a route
+    /// that costs more is not flown, and the goal walks. 0 flies nothing. A trip already under way answers as there.
+    /// </summary>
+    internal static TaxiTravel TryTravelByTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options, uint maxFare)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
@@ -646,13 +654,14 @@ internal static class PlayerbotTaxi
         if (!options.Taxi.Enabled) return TaxiTravel.Walk;
         if (IsTravelTrip(player)) return TaxiTravel.Traveling;
         if (IsActive(player)) return TaxiTravel.Walk; // a learning detour owns the bot; the goal walks meanwhile
-        if (!TryPlanTaxi(session, player, mapId, destination, options, out uint[] route, out uint fare, out CreatureSpawn master))
+        if (!TryPlanTaxi(session, player, mapId, destination, options, maxFare, out uint[] route, out uint fare, out CreatureSpawn master))
             return TaxiTravel.Walk;
         Trips.AddOrUpdate(player, new TaxiTrip(mapId, route, fare, master.Entry, new Vector3(master.X, master.Y, master.Z), destination, session.World.NowMs));
         return TaxiTravel.Traveling;
     }
 
-    private static bool TryPlanTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options,
+    /// <param name="maxFare">The most the fare may cost on top of the bot's money (uint.MaxValue: only the money bounds it).</param>
+    private static bool TryPlanTaxi(WorldSession session, Player player, uint mapId, Vector3 destination, PlayerbotOptions options, uint maxFare,
         out uint[] route, out uint fare, out CreatureSpawn master)
     {
         route = [];
@@ -686,10 +695,12 @@ internal static class PlayerbotTaxi
 
         if (source is null) return false;
         Memo cache = Memos.GetOrCreateValue(player);
-        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, player.Money, index, taxi.MaxWalkToMasterYards, out bool routed, out route, out fare))
+        // What the fare may cost: the money, and a journey's spend left (the cache is keyed by this budget, not the money alone).
+        uint budget = Math.Min(player.Money, maxFare);
+        if (!cache.TryCached(state.TaxiMask, source.Id, destination, here, budget, index, taxi.MaxWalkToMasterYards, out bool routed, out route, out fare))
         {
-            routed = index.TryRoute(state.TaxiMask, source, here, destination, player.Money, taxi.MaxWalkToMasterYards, straight, out route, out fare);
-            cache.Store(state.TaxiMask, source.Id, destination, here, player.Money, index, taxi.MaxWalkToMasterYards, routed, route, fare);
+            routed = index.TryRoute(state.TaxiMask, source, here, destination, budget, taxi.MaxWalkToMasterYards, straight, out route, out fare);
+            cache.Store(state.TaxiMask, source.Id, destination, here, budget, index, taxi.MaxWalkToMasterYards, routed, route, fare);
         }
 
         if (!routed) return false;

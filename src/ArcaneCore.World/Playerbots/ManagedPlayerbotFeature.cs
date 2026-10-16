@@ -594,6 +594,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Whether a running autonomous bot is driven by its party AI (it is in a real player's group) instead of the brain.</summary>
     public bool IsPartyDriven(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && active.PartyDriven;
 
+    /// <summary>
+    /// Why the brain does not drive a running bot now (null when it does, or the bot is not running): a controller holds it, the
+    /// battlegrounds coordinator or a bot-led group drives it, or its party AI does (it is in a real player's group). A journey begun for
+    /// such a bot would be cancelled by that driver at once (<see cref="PlayerbotTravel.CancelLegs"/>). World thread.
+    /// </summary>
+    internal string? HeldFromBrain(Guid botId)
+    {
+        if (!_active.TryGetValue(botId, out ActiveBot? active)) return null;
+        if (active.Controller is not null) return "a controller holds the bot";
+        if (active.BattlegroundDriven || battlegrounds?.Drives(botId) == true) return "the battleground coordinator drives the bot";
+        if (active.GroupDriven || coordinator?.Drives(botId) == true) return "a bot-led group drives the bot";
+        if (active.PartyDriven) return "the bot follows its party (a real player's group)";
+        return null;
+    }
+
     /// <summary>Whether the bot is in the active set (test seam; <see cref="FindBrain"/> also hides a paused one).</summary>
     internal bool IsActive(Guid botId) => _active.ContainsKey(botId);
 
@@ -1559,12 +1574,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>
     /// A bot aboard a ship whose leg was cancelled (a party, a battleground or a bot-led group took it over) is never put off at sea: its leg
     /// rides on to the next port and steps off there (<see cref="PlayerbotShip.Cancel"/>), driven here until it ends (movement orders
-    /// acknowledged first, as the brain does). True while the ship leg still holds the bot; the new driver takes it from the dock.
+    /// acknowledged first, as the brain does). True while the ship leg still holds the bot; the new driver takes it from the dock. A leg
+    /// that failed with the bot still aboard stays active the same way (<see cref="ShipTrip.Settling"/>), so no bot is left on a ship
+    /// without a driver.
     /// </summary>
-    private bool HoldAboard(ActiveBot active, Player driven, uint sinceLast)
+    private bool HoldAboard(ActiveBot active, Player driven, uint sinceLast) => HoldAboard(active.Session, driven, _options, sinceLast);
+
+    /// <inheritdoc cref="HoldAboard(ActiveBot, Player, uint)"/>
+    internal static bool HoldAboard(WorldSession session, Player driven, PlayerbotOptions options, uint sinceLast)
     {
         if (!PlayerbotShip.IsActive(driven)) return false;
-        if (!PlayerbotMovementControl.Update(active.Session, driven)) PlayerbotShip.Drive(active.Session, driven, _options, sinceLast, out _);
+        if (!PlayerbotMovementControl.Update(session, driven)) PlayerbotShip.Drive(session, driven, options, sinceLast, out _);
         return PlayerbotShip.IsActive(driven);
     }
 
