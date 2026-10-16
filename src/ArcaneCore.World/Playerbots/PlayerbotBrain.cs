@@ -1552,15 +1552,21 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// there, and stalled within two minutes of every login). True when the bot was moved.
     /// </para>
     /// </summary>
-    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false)
+    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null)
     {
         onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
         // A fragment of mesh (the region graph's component of a few regions, PlayerbotNavigation.IsOnMeshFragment) is an island whose
         // one straight hop off (TryPlanToward) found no ground beside it, or was not walkable: the same escape applies.
         // A repeated stall in the same 10-yard dead-end pin cell (deadEndPin) also triggers this escape when local walking did not free the bot.
+        // confinedFrom (EscapeConfinedExplore): where the confinement began. A bot wandering an island ends its 15 seconds anywhere on
+        // it, often at its rim, and from the rim the far side of an island up to twice IslandYards across lies beyond IslandYards; the
+        // walk from that point stayed within IslandYards of it, so the point's ground is the bot's. Asked only when the bot moved off it.
         bool island = PlayerbotHomeArea.IsNullIsland(player.MapId, player.X, player.Y)
             || PlayerbotNavigation.IsOnMeshIsland(player, _options)
+            || (confinedFrom is { } from
+                && System.Numerics.Vector2.DistanceSquared(new(from.X, from.Y), new(player.X, player.Y)) > ConfinedFromMinYards * ConfinedFromMinYards
+                && PlayerbotNavigation.IsOnMeshIsland(player, from, _options))
             || PlayerbotNavigation.IsOnMeshFragment(player);
         if (!island && !deadEndPin) return false;
         onIsland = island;
@@ -2845,6 +2851,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
     }
 
+    /// <summary>How far (flat yards) the bot must have moved off the confinement's start before EscapeIsland also judges from there.</summary>
+    private const float ConfinedFromMinYards = 5f;
+
     private bool EscapeConfinedExplore(Player player)
     {
         if (player.Map is null || !player.IsAlive || player.Combat.IsInCombat) return false;
@@ -2868,7 +2877,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (player.Map is not { InstanceId: 0 }) return false;
         // The check's path searches (up to IslandDirections, counted as the think's fallbacks) are this think's work: the caller plans
         // no route of its own after it.
-        if (!EscapeIsland(player, out bool onIsland) && onIsland)
+        if (!EscapeIsland(player, out bool onIsland, confinedFrom: _exploreIslandAnchor) && onIsland)
         {
             // On an island but not moved (the home teleport is on cooldown, say): ask again in 15 seconds.
             _exploreIslandSince = now;
