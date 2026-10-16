@@ -1190,7 +1190,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
-        if (_policy?.Telemetry is { } telemetry) brain.Risk.CombatSink = telemetry.Combat;
+        if (_policy?.Telemetry is { } telemetry)
+        {
+            brain.Risk.CombatSink = telemetry.Combat;
+            brain.Opportunities.Sink = telemetry.Combat;
+        }
+
         if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
         if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());

@@ -29,6 +29,32 @@ internal interface IPlayerbotCombatSink
     void Judged(Player player, in PlayerbotFightFacts facts, in PlayerbotFightVerdict verdict, uint nowMs);
 }
 
+/// <summary>One opportunity the controller weighed (<see cref="PlayerbotOpportunities"/>).</summary>
+/// <param name="Key">The find's key (its object guid), to match the decision to its outcome.</param>
+/// <param name="Distance">Yards from the bot to the find.</param>
+/// <param name="Guards">The creatures that guard the find (a rare is not counted).</param>
+/// <param name="Reward">The net reward in same-level kills (<see cref="OpportunityVerdict.Net"/>).</param>
+/// <param name="Risk">The predicted damage taken as a share of the bot's health (<see cref="OpportunityVerdict.Risk"/>; infinity for a hard refusal).</param>
+/// <param name="Reason">Why the verdict came out as it did.</param>
+internal readonly record struct OpportunityDecisionInfo(ulong Key, OpportunityKind Kind, uint Entry, float Distance, int Guards, float Reward, float Risk, string Reason);
+
+/// <summary>How an opportunity the bot went for came out. <paramref name="LootCopper"/> is 0 for a find given up, and null when the bot
+/// succeeded but the controller did not see the loot (a rare's corpse is the brain's to loot).</summary>
+internal readonly record struct OpportunityOutcome(ulong? LootCopper, bool Died, uint ElapsedMs);
+
+/// <summary>
+/// Where the opportunity controller tells the telemetry what it decided and how it came out (world thread, inside a think).
+/// <see cref="PlayerbotOpportunities.Sink"/> is null unless the policy telemetry is on; the controller guards the calls.
+/// </summary>
+internal interface IPlayerbotOpportunitySink
+{
+    /// <param name="engaged">The bot went for this find (an episode begins); false: it was refused or passed over.</param>
+    void Decided(Player player, in OpportunityDecisionInfo decision, bool engaged, uint nowMs);
+
+    /// <summary>The episode of the find <paramref name="key"/> ended (looted, killed, given up, or the bot died).</summary>
+    void Ended(ulong botGuid, ulong key, in OpportunityOutcome outcome, uint nowMs);
+}
+
 /// <summary>
 /// Combat-adjacent decision telemetry for a later combat policy (docs/areas/playbots.md, Combat decisions): the four decisions a policy
 /// may one day score (engage or skip a pull, retreat, rest after a fight, which target in a fight) with their features, the option the
@@ -36,8 +62,14 @@ internal interface IPlayerbotCombatSink
 /// the first out of it, or the bot's death) and one <c>skip</c> record per pull candidate turned down (once a minute per creature).
 /// World thread.
 /// </summary>
-internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord> enqueue, Func<long> unixMs) : IPlayerbotCombatSink
+internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord> enqueue, Func<long> unixMs) : IPlayerbotCombatSink, IPlayerbotOpportunitySink
 {
+    /// <summary>An opportunity's features (<c>opportunity</c> records, <c>f</c>).</summary>
+    internal static readonly string[] OpportunityFeatureNames = ["level", "health", "mana", "distance", "kind"];
+
+    /// <summary>The most opportunity finds one bot remembers writing a refusal for (the oldest are forgotten all at once).</summary>
+    internal const int MaxOpportunitySeen = 64;
+
     /// <summary>A candidate turned down is recorded again only after this long.</summary>
     internal const uint SkipRepeatMs = 60_000;
 
@@ -82,6 +114,46 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
     internal long Fights { get; private set; }
 
     internal long Skips { get; private set; }
+
+    /// <summary>Opportunity records queued.</summary>
+    internal long Opportunities { get; private set; }
+
+    /// <summary>
+    /// A find the bot refused or passed over is written once a minute at most (as a skip is); the one it goes for is held until its episode
+    /// ends and written then, with the outcome.
+    /// </summary>
+    public void Decided(Player player, in OpportunityDecisionInfo decision, bool engaged, uint nowMs)
+    {
+        if (BotOf(player) is not { } bot) return;
+        bot.LastSeenMs = nowMs;
+        if (!engaged)
+        {
+            if (bot.OpportunitySeen.TryGetValue(decision.Key, out uint seen) && unchecked(nowMs - seen) < SkipRepeatMs) return;
+            if (bot.OpportunitySeen.Count >= MaxOpportunitySeen) bot.OpportunitySeen.Clear();
+            bot.OpportunitySeen[decision.Key] = nowMs;
+        }
+
+        var record = new PlayerbotOpportunityRecord(unixMs(), player.Guid.Value, player.MapId, player.ZoneId, decision.Key, decision.Kind, decision.Entry,
+            player.Level / 60f, player.MaxHealth > 0 ? (float)player.Health / player.MaxHealth : 0f, ManaPct(player),
+            MathF.Min(decision.Distance, 100f) / 50f, decision.Guards, decision.Reward, decision.Risk, decision.Reason, engaged, Outcome: null);
+        if (engaged)
+        {
+            bot.Opportunity = record;
+            return;
+        }
+
+        Opportunities++;
+        enqueue(record);
+    }
+
+    public void Ended(ulong botGuid, ulong key, in OpportunityOutcome outcome, uint nowMs)
+    {
+        if (!_bots.TryGetValue(botGuid, out Bot? bot) || bot.Opportunity is not { } pending || pending.Key != key) return;
+        bot.Opportunity = null;
+        bot.LastSeenMs = nowMs;
+        Opportunities++;
+        enqueue(pending with { Outcome = outcome });
+    }
 
     public void Assessed(Player player, Creature candidate, in PlayerbotEngagement verdict, bool taken, uint nowMs)
     {
@@ -129,6 +201,7 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
     internal void AfterThink(PlayerbotBrain brain, Player player, uint nowMs)
     {
         brain.Risk.CombatSink = this;
+        brain.Opportunities.Sink = this;
         if (BotOf(player) is not { } bot) return;
         bot.LastSeenMs = nowMs;
         bool alive = player.IsAlive;
@@ -334,7 +407,69 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
         public After? After;
         public readonly List<Choice> Skips = [];
         public readonly Dictionary<ulong, uint> SkipSeen = [];
+        public PlayerbotOpportunityRecord? Opportunity;
+        public readonly Dictionary<ulong, uint> OpportunitySeen = [];
     }
+}
+
+/// <summary>
+/// One opportunity decision (<c>"k":"opportunity"</c>): the features, the estimated reward and risk, the guard count, whether the bot
+/// went for it, and for one it went for the outcome <c>o</c> (<c>loot</c> in copper, <c>died</c> 0/1, <c>seconds</c> from the decision).
+/// A decision not taken has no outcome: <c>o</c> holds nulls. Loot is null too when the bot succeeded but the loot was not seen (a rare).
+/// </summary>
+internal sealed record PlayerbotOpportunityRecord(
+    long UnixMs, ulong Bot, uint Map, uint Zone, ulong Key, OpportunityKind Kind, uint Entry, float Level, float Health, float Mana, float Distance,
+    int Guards, float Reward, float Risk, string Reason, bool Engaged, OpportunityOutcome? Outcome) : IPlayerbotTelemetryRecord
+{
+    public void WriteTo(IBufferWriter<byte> output)
+    {
+        using (var json = new Utf8JsonWriter(output))
+        {
+            json.WriteStartObject();
+            json.WriteNumber("v", PlayerbotPolicyRecord.SchemaVersion);
+            json.WriteString("k", "opportunity");
+            json.WriteNumber("t", UnixMs);
+            json.WriteString("bot", Bot.ToString("X", CultureInfo.InvariantCulture));
+            json.WriteNumber("map", Map);
+            json.WriteNumber("zone", Zone);
+            json.WriteStartArray("f");
+            Write(json, Level);
+            Write(json, Health);
+            Write(json, Mana);
+            Write(json, Distance);
+            Write(json, (byte)Kind / 3f);
+            json.WriteEndArray();
+            json.WriteString("kind", Kind.ToString().ToLowerInvariant());
+            json.WriteNumber("entry", Entry);
+            // A hard refusal's risk is infinite: written as the cap, still far above any risk a bot would take.
+            json.WriteNumber("reward", float.IsFinite(Reward) ? MathF.Round(Reward, 4) : 0f);
+            json.WriteNumber("risk", float.IsNaN(Risk) ? 0f : MathF.Round(MathF.Min(Risk, 10f), 4));
+            json.WriteNumber("guards", Guards);
+            json.WriteString("reason", Reason);
+            json.WriteNumber("engaged", Engaged ? 1 : 0);
+            json.WriteStartObject("o");
+            if (Outcome is { } outcome)
+            {
+                if (outcome.LootCopper is { } loot) json.WriteNumber("loot", loot);
+                else json.WriteNull("loot");
+                json.WriteNumber("died", outcome.Died ? 1 : 0);
+                json.WriteNumber("seconds", Math.Round(outcome.ElapsedMs / 1000.0, 1));
+            }
+            else
+            {
+                json.WriteNull("loot");
+                json.WriteNull("died");
+                json.WriteNull("seconds");
+            }
+
+            json.WriteEndObject();
+            json.WriteEndObject();
+        }
+
+        output.Write("\n"u8);
+    }
+
+    private static void Write(Utf8JsonWriter json, float value) => json.WriteNumberValue(float.IsFinite(value) ? MathF.Round(value, 4) : 0f);
 }
 
 /// <summary>One fight (<c>"k":"fight"</c>): its four decisions and its outcome (docs/areas/playbots.md, Combat decisions).</summary>

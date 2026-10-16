@@ -1095,7 +1095,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _town.BeginThink();
             // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
             PlayerbotThinkProbe.Phase("policy");
-            if (TryPolicyGoal(player, interval)) return;
+            if (TryPolicyGoal(player, interval)) { if (_policyPulled) goto afterGoalLadder; return; }
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }

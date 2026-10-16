@@ -19,10 +19,12 @@ Telemetry is off by default. It writes goal records (`"k":"goal"`), an optional 
 the combat-decision records phase 4 will need (`"k":"fight"`, `"k":"skip"`; docs/areas/playbots.md, Combat decisions). Output is
 bounded and rotating, and is written off the world thread.
 
-### Pending: the opportunity goal (branch `claude/bot-opportunity`, not on main yet)
+### The opportunity goal (done)
 
-That branch adds an opportunity goal: chests, locked chests, gathering nodes and rares, with reward weighed against risk by
-`PlayerbotRiskModel` and the guards cleared to reach the target. Once it lands on main, it joins the policy like this:
+The opportunity goal (chests, locked chests, gathering nodes and rares, with reward weighed against risk by `PlayerbotRiskModel` and the
+guards cleared to reach the target) is on main and joins the policy like this. Both items are implemented (`PlayerbotPolicyGoal.Opportunity`,
+`PlayerbotOpportunities.HasCandidate` and `Sink`, `PlayerbotOpportunityRecord`); the weights-file layout changed, so a model trained before
+it is refused by its goal names. The `loot` of a rare is null because the brain, not the controller, loots its corpse:
 
 1. **One more candidate goal.** Add `Opportunity` to `PlayerbotPolicyGoal` at its ladder position and add its open-goal probe to
    `PolicySnapshot`. Map its `PlayerbotGoalKind` in `PlayerbotPolicySchema.GoalOf` and add a promotion case in `TryPromotedGoal` under

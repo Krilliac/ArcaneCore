@@ -1,0 +1,362 @@
+using System.Buffers;
+using System.Text.Json;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Policy;
+using ArcaneCore.World.Tests.Playerbots.Opportunities;
+using Xunit;
+using static ArcaneCore.World.Tests.Playerbots.Opportunities.OpportunityWorld;
+
+namespace ArcaneCore.World.Tests.Playerbots.Policy;
+
+/// <summary>
+/// The opportunity goal in the goal policy (docs/design/playerbot-policy-phases.md, phase 2): its place in the goal vocabulary, the weights
+/// file that predates it being refused, the open-goal probe and the promotion in a real brain, and the <c>"k":"opportunity"</c> records.
+/// </summary>
+public sealed class PlayerbotOpportunityPolicyTests
+{
+    private static readonly ChestSpawn Free = new(FreeChest, 1, 3f, 0f);
+
+    // --- the goal vocabulary --------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void TheOpportunityGoal_SitsBetweenTownAndTrain_AndEveryGoalFitsTheMask()
+    {
+        Assert.Equal(PlayerbotPolicyGoal.Town + 1, PlayerbotPolicyGoal.Opportunity);
+        Assert.Equal(PlayerbotPolicyGoal.Opportunity + 1, PlayerbotPolicyGoal.Train);
+        Assert.Equal(PlayerbotPolicySchema.GoalCount, Enum.GetValues<PlayerbotPolicyGoal>().Length);
+        Assert.Equal(PlayerbotPolicySchema.GoalCount, PlayerbotPolicySchema.GoalNames.Count);
+        Assert.Contains("Opportunity", PlayerbotPolicySchema.GoalNames);
+
+        var all = default(PlayerbotPolicyGoalMask);
+        foreach (PlayerbotPolicyGoal goal in Enum.GetValues<PlayerbotPolicyGoal>()) all = all.With(goal);
+        Assert.Equal(PlayerbotPolicySchema.GoalCount, all.Count);
+        Assert.True(all.Contains(PlayerbotPolicyGoal.Explore));
+
+        // The ladder takes the opportunity before the trainer trip, the quest travel and the grind, and after a town errand.
+        PlayerbotPolicyGoalMask behind = default(PlayerbotPolicyGoalMask).With(PlayerbotPolicyGoal.Train).With(PlayerbotPolicyGoal.Grind)
+            .With(PlayerbotPolicyGoal.Opportunity);
+        Assert.Equal(PlayerbotPolicyGoal.Opportunity, behind.LadderPick);
+        Assert.Equal(PlayerbotPolicyGoal.Town, behind.With(PlayerbotPolicyGoal.Town).LadderPick);
+    }
+
+    [Fact]
+    public void TheLootGoal_IsLabelledOpportunity()
+    {
+        Assert.Equal(PlayerbotPolicyGoal.Opportunity, PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Loot));
+        // The others keep their rungs.
+        Assert.Equal(PlayerbotPolicyGoal.Grind, PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Grind));
+        Assert.Equal(PlayerbotPolicyGoal.Town, PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Vendor));
+        Assert.Null(PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Combat));
+    }
+
+    [Fact]
+    public void AModelTrainedBeforeTheOpportunityGoal_IsRefused_ByItsGoalNames()
+    {
+        string directory = Directory.CreateTempSubdirectory("policy-model-").FullName;
+        try
+        {
+            string[] oldGoals = [.. PlayerbotPolicySchema.GoalNames.Where(name => name != "Opportunity")];
+            Assert.Equal(PlayerbotPolicySchema.GoalCount - 1, oldGoals.Length);
+            File.WriteAllText(Path.Combine(directory, "old.json"), LinearModelJson(oldGoals));
+            File.WriteAllText(Path.Combine(directory, "new.json"), LinearModelJson(PlayerbotPolicySchema.GoalNames));
+
+            var old = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true, ModelPath = "old.json" }, contentRoot: directory);
+            Assert.False(old.ModelLoaded);
+            Assert.Same(RuleBasedPolicy.Instance, old.Policy);
+            Assert.NotNull(old.ModelError);
+            Assert.Contains("goals", old.ModelError, StringComparison.OrdinalIgnoreCase);
+
+            // The same file with this layout's names loads: the refusal is the goal list, not something else about the file.
+            var current = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true, ModelPath = "new.json" }, contentRoot: directory);
+            Assert.True(current.ModelLoaded, current.ModelError);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    // --- the probe and the promotion ------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task TheSnapshot_ListsTheOpportunityOpen_OnlyWhileAFindIsInReach()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        PlayerbotPolicyGoalMask open = await rig.World(() =>
+        {
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5); // as a think has
+            return rig.Bot.Brain.PolicySnapshot(rig.Player, new float[PlayerbotPolicySchema.FeatureCount]);
+        });
+        Assert.True(open.Contains(PlayerbotPolicyGoal.Opportunity), $"open bits {open.Bits}");
+        Assert.True(open.Contains(PlayerbotPolicyGoal.Explore));
+
+        // A find the controller set aside is no longer open (the probe reads the ledger the controller writes).
+        await rig.World(() => { rig.Bot.Brain.Opportunities.Ledger.Defer(ChestGuid(Free), rig.Host.World.NowMs); return true; });
+        Assert.False(await rig.World(() => rig.Bot.Brain.Opportunities.HasCandidate(rig.Player)));
+        // With the goal off, and with no find at all, it is not open either.
+        await rig.World(() => { rig.Bot.Brain.Opportunities.Ledger.Forget(ChestGuid(Free)); rig.Options.Opportunities.Enabled = false; return true; });
+        Assert.False((await rig.World(() => rig.Bot.Brain.PolicySnapshot(rig.Player, new float[PlayerbotPolicySchema.FeatureCount]))).Contains(PlayerbotPolicyGoal.Opportunity));
+    }
+
+    [Fact]
+    public async Task APolicyThatPrefersTheOpportunity_PromotesItAheadOfAnEarlierOpenGoal()
+    {
+        await using Rig rig = await Rig.StartAsync([Free], tweak: options => options.Opportunities.Enabled = false);
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true },
+            policy: new PlayerbotPolicyEngineTests.StubPolicy(PlayerbotPolicyGoal.Opportunity));
+        await rig.World(() => { rig.Bot.Brain.PolicyEngine = engine; return true; });
+
+        // One think so the bot has its policy agent. The goal is off, so neither the snapshot nor the ladder touches the chest.
+        await rig.ThinkBrainAsync();
+        PlayerbotPolicyAgent agent = (await rig.World(() => rig.Bot.Brain.PolicyAgent))!;
+        Assert.Null(rig.Bot.Brain.Opportunities.ActiveKey);
+
+        // A snapshot in which a town errand comes before the opportunity: the ladder's choice is Town, the model's is Opportunity.
+        PlayerbotPolicyGoalMask open = default(PlayerbotPolicyGoalMask).With(PlayerbotPolicyGoal.Town).With(PlayerbotPolicyGoal.Opportunity)
+            .With(PlayerbotPolicyGoal.Explore);
+        await rig.World(() =>
+        {
+            rig.Options.Opportunities.Enabled = true;
+            agent.Request(rig.Player.MapId, new float[PlayerbotPolicySchema.FeatureCount], open, rig.Host.World.NowMs);
+            engine.Dispatch();
+            return true;
+        });
+        await engine.WhenIdleAsync();
+
+        await rig.ThinkBrainAsync();
+        PlayerbotPolicyVerdict? verdict = await rig.World(() => agent.LastVerdict);
+        Assert.Equal(PlayerbotPolicyGoal.Town, verdict?.Window?.LadderPick);
+        Assert.True(verdict is { Source: PlayerbotPolicySource.Applied, Promote: PlayerbotPolicyGoal.Opportunity },
+            $"source {verdict?.Source}, promote {verdict?.Promote}, refused {engine.Stats.Refused}");
+        Assert.Equal(0, engine.Stats.Refused);
+        Assert.Equal(ChestGuid(Free), rig.Bot.Brain.Opportunities.ActiveKey);
+        Assert.Equal(PlayerbotGoalKind.Loot, await rig.World(() => rig.Bot.Brain.Goal));
+        await engine.DisposeAsync();
+    }
+
+    // --- the records ----------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ALootedChest_IsWrittenOnceItsEpisodeEnds_WithTheFeaturesTheEstimatesAndTheLoot()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        var records = new List<IPlayerbotTelemetryRecord>();
+        var telemetry = new PlayerbotCombatTelemetry(records.Add, () => 1_700_000_000_000L);
+        rig.Bot.Controller.Sink = telemetry;
+
+        Assert.True(await rig.RunAsync(() => rig.Bot.Sink.Any(a => a.Opcode == WorldOpcode.CmsgLootRelease)), "the controller never reached the loot");
+        await rig.PlayLootAsync();
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+
+        PlayerbotOpportunityRecord record = Assert.IsType<PlayerbotOpportunityRecord>(Assert.Single(records));
+        OpportunityVerdict verdict = rig.Bot.Controller.LastVerdict!.Value;
+        JsonElement json = Parse(record);
+        Assert.Equal(["v", "k", "t", "bot", "map", "zone", "f", "kind", "entry", "reward", "risk", "guards", "reason", "engaged", "o"],
+            json.EnumerateObject().Select(p => p.Name));
+        Assert.Equal("opportunity", json.GetProperty("k").GetString());
+        Assert.Equal("chest", json.GetProperty("kind").GetString());
+        Assert.Equal(FreeChest, json.GetProperty("entry").GetUInt32());
+        Assert.Equal(1_700_000_000_000L, json.GetProperty("t").GetInt64());
+        Assert.Equal(1, json.GetProperty("engaged").GetInt32());
+        Assert.Equal(0, json.GetProperty("guards").GetInt32());
+        Assert.Equal(verdict.Net, json.GetProperty("reward").GetSingle(), 3);
+        Assert.Equal(0f, json.GetProperty("risk").GetSingle(), 3);
+
+        float[] features = [.. json.GetProperty("f").EnumerateArray().Select(e => e.GetSingle())];
+        Assert.Equal(PlayerbotCombatTelemetry.OpportunityFeatureNames.Length, features.Length);
+        Assert.Equal(rig.Player.Level / 60f, features[0], 3);
+        Assert.Equal(1f, features[1], 3); // full health
+        Assert.Equal(0f, features[4], 3); // an ordinary chest
+        Assert.InRange(features[3], 0.01f, 0.2f); // the chest is 3 yards away
+
+        // The loot is what the window held that the bot stored: the green item, and the blue one half the time.
+        uint blue = await rig.World(() => rig.Player.Inventory.GetItemCount(BlueItem));
+        JsonElement outcome = json.GetProperty("o");
+        Assert.Equal(["loot", "died", "seconds"], outcome.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(60 + (200 * blue), outcome.GetProperty("loot").GetUInt64());
+        Assert.Equal(0, outcome.GetProperty("died").GetInt32());
+        Assert.True(outcome.GetProperty("seconds").GetDouble() >= 0);
+        Assert.Equal(1, telemetry.Opportunities);
+    }
+
+    [Fact]
+    public async Task ARefusedFind_IsWrittenAsADecisionNotTaken_OncePerMinute_WithNoOutcome()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        var records = new List<IPlayerbotTelemetryRecord>();
+        rig.Bot.Controller.Sink = new PlayerbotCombatTelemetry(records.Add, () => 5L);
+        await rig.AddGuardAsync(96801, 5f, 2f, level: 6);
+
+        Assert.True(await rig.RunClockAsync(() => rig.Bot.Controller.LastVerdict is not null));
+        PlayerbotOpportunityRecord record = Assert.IsType<PlayerbotOpportunityRecord>(Assert.Single(records));
+        JsonElement json = Parse(record);
+        Assert.Equal(0, json.GetProperty("engaged").GetInt32());
+        Assert.Equal(1, json.GetProperty("guards").GetInt32());
+        Assert.Equal("over-level", json.GetProperty("reason").GetString());
+        Assert.All(json.GetProperty("o").EnumerateObject(), p => Assert.Equal(JsonValueKind.Null, p.Value.ValueKind));
+
+        // The controller weighs it again after its own recheck (20 s); the telemetry writes it again only after a minute.
+        rig.Clock += PlayerbotOpportunities.RefusedRecheckMs + 1_000;
+        Assert.True(await rig.RunClockAsync(() => rig.Bot.Controller.Ledger.IsDeferred(ChestGuid(Free), rig.Clock), steps: 20));
+        Assert.Single(records);
+        rig.Clock += PlayerbotCombatTelemetry.SkipRepeatMs;
+        Assert.True(await rig.RunClockAsync(() => records.Count == 2, steps: 60), $"records {records.Count}");
+    }
+
+    [Fact]
+    public async Task ADeathDuringTheEpisode_IsWrittenWithDiedAndNoLoot()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        var records = new List<IPlayerbotTelemetryRecord>();
+        rig.Bot.Controller.Sink = new PlayerbotCombatTelemetry(records.Add, () => 5L);
+        Creature guard = await rig.AddGuardAsync(96802, 5f, 2f);
+        Assert.Same(guard, (await rig.World(() => rig.Bot.Step())).Pull);
+        Assert.Empty(records); // the episode is under way: its record waits for the outcome
+
+        await rig.World(() =>
+        {
+            rig.Player.Map!.Combat.DealDamage(guard, rig.Player, 100_000);
+            Assert.False(rig.Player.IsAlive);
+            rig.Bot.Step();
+            return true;
+        });
+
+        JsonElement json = Parse(Assert.IsType<PlayerbotOpportunityRecord>(Assert.Single(records)));
+        Assert.Equal(1, json.GetProperty("engaged").GetInt32());
+        Assert.Equal(1, json.GetProperty("guards").GetInt32());
+        JsonElement outcome = json.GetProperty("o");
+        Assert.Equal(1, outcome.GetProperty("died").GetInt32());
+        Assert.Equal(0, outcome.GetProperty("loot").GetInt32());
+    }
+
+    [Fact]
+    public async Task ASinkThatThrows_NeverChangesTheDecision()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        rig.Bot.Controller.Sink = new ThrowingSink();
+        Assert.True(await rig.RunAsync(() => rig.Bot.Sink.Any(a => a.Opcode == WorldOpcode.CmsgLootRelease)), "a faulting sink stopped the chest being taken");
+    }
+
+    private static JsonElement Parse(IPlayerbotTelemetryRecord record)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        record.WriteTo(buffer);
+        string line = System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
+        Assert.EndsWith("\n", line, StringComparison.Ordinal);
+        Assert.Single(line.TrimEnd('\n').Split('\n'));
+        return JsonDocument.Parse(line).RootElement.Clone();
+    }
+
+    /// <summary>A model file with the given goal names and one output per name (the weights are zero: only the layout matters).</summary>
+    private static string LinearModelJson(IReadOnlyList<string> goals)
+    {
+        int f = PlayerbotPolicySchema.FeatureCount, g = goals.Count;
+        return JsonSerializer.Serialize(new
+        {
+            format = PlayerbotModelPolicy.Format,
+            version = PlayerbotModelPolicy.Version,
+            features = PlayerbotPolicySchema.FeatureNames,
+            goals,
+            layers = new object[] { new { inputs = f, outputs = g, activation = "linear", weights = new float[g * f], bias = new float[g] } },
+        });
+    }
+
+    private sealed class ThrowingSink : IPlayerbotOpportunitySink
+    {
+        public void Decided(Player player, in OpportunityDecisionInfo decision, bool engaged, uint nowMs) => throw new InvalidOperationException("sink fault");
+
+        public void Ended(ulong botGuid, ulong key, in OpportunityOutcome outcome, uint nowMs) => throw new InvalidOperationException("sink fault");
+    }
+
+    private sealed class Rig : IAsyncDisposable
+    {
+        public WorldTestHost Host = null!;
+        public Bot Bot = null!;
+        public uint Clock = 1_000_000;
+        public PlayerbotClaims Claims = new(64);
+
+        public Player Player => Bot.Player;
+
+        public PlayerbotOptions Options => Bot.Options;
+
+        public static async Task<Rig> StartAsync(IEnumerable<ChestSpawn> chests, Action<PlayerbotOptions>? tweak = null)
+        {
+            ChestSpawn[] spawns = [.. chests];
+            var rig = new Rig { Host = OpportunityWorld.Start(spawns, out _) };
+            var options = new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 };
+            tweak?.Invoke(options);
+            rig.Bot = await EnterAsync(rig.Host, "OPPPOL", "Opppol", 1, options, rig.Claims, () => rig.Clock);
+            foreach (ChestSpawn spawn in spawns)
+                await rig.Host.WaitForWorldAsync(() => rig.Player.VisibleObjects.Contains(new ObjectGuid(ChestGuid(spawn))), "chest " + spawn.Entry + " visible");
+            return rig;
+        }
+
+        public Task<T> World<T>(Func<T> action) => Host.OnWorldAsync(action);
+
+        /// <summary>One think of the whole brain (its ladder, with the policy hook) with a fresh action budget.</summary>
+        public Task ThinkBrainAsync() => World(() =>
+        {
+            Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            Bot.Brain.Update(500);
+            return true;
+        });
+
+        /// <summary>Steps the controller (real time passing for the server's replies) until <paramref name="done"/> or the step budget ends.</summary>
+        public async Task<bool> RunAsync(Func<bool> done, int steps = 60)
+        {
+            for (int i = 0; i < steps; i++)
+            {
+                if (await World(() => { Bot.Step(); return done(); })) return true;
+                await Task.Delay(25);
+            }
+
+            return false;
+        }
+
+        /// <summary>Steps the controller while the fake clock advances until <paramref name="done"/>.</summary>
+        public async Task<bool> RunClockAsync(Func<bool> done, uint stepMs = 500, int steps = 400)
+        {
+            for (int i = 0; i < steps; i++)
+            {
+                if (await World(() => { Bot.Step(); return done(); })) return true;
+                Clock += stepMs;
+                await Task.Delay(2);
+            }
+
+            return false;
+        }
+
+        /// <summary>The loot actions the controller queued, played to the server the way the brain's loot queue does.</summary>
+        public Task PlayLootAsync() => World(() =>
+        {
+            foreach ((WorldOpcode opcode, byte[] payload) in Bot.Sink)
+            {
+                Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+                Assert.True(Bot.Session.TryManagedAction(opcode, payload));
+            }
+
+            Bot.Sink.Clear();
+            return true;
+        });
+
+        public async Task<Creature> AddGuardAsync(uint low, float dx, float dy, byte level = 1)
+        {
+            Creature guard = await World(() => AddCreature(Host, Player, low, dx, dy, level));
+            await Host.WaitForWorldAsync(() => Player.VisibleObjects.Contains(guard.Guid), "guard " + low + " visible");
+            return guard;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Bot.Brain.Stop();
+            Bot.Session.Kick();
+            await Bot.Session.ManagedClosed;
+            await Host.DisposeAsync();
+        }
+    }
+}

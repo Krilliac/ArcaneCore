@@ -125,7 +125,7 @@ public sealed class PlayerbotPolicyTelemetryTests
             Assert.Equal("ABC", root.GetProperty("bot").GetString());
             Assert.Equal(PlayerbotPolicySchema.FeatureCount, root.GetProperty("f").GetArrayLength());
             Assert.Equal(0.25, root.GetProperty("f")[0].GetDouble(), 4);
-            Assert.Equal(0b100_0010, root.GetProperty("open").GetInt32());
+            Assert.Equal(0b1000_0010, root.GetProperty("open").GetInt32());
             Assert.Equal("Town", root.GetProperty("ladder").GetString());
             Assert.Equal("Explore", root.GetProperty("pick").GetString());
             Assert.Equal("explored", root.GetProperty("src").GetString());

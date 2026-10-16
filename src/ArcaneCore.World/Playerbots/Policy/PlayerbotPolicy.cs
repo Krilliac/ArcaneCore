@@ -13,6 +13,8 @@ public enum PlayerbotPolicyGoal : byte
     Quest,
     /// <summary>A town errand: vendor, trainer list, repair (<c>PlayerbotTownGoals</c>).</summary>
     Town,
+    /// <summary>A chest, locked chest or rare worth its guards (<c>PlayerbotOpportunities</c>). The ladder offers it after the town errands, crafting and the auction errands, before the trainer trip.</summary>
+    Opportunity,
     /// <summary>A trip to a class trainer (<c>PlayerbotTrainerDestinations</c>).</summary>
     Train,
     /// <summary>A trip for riding training or a mount (<c>PlayerbotRidingTrips</c>).</summary>
@@ -45,7 +47,7 @@ public readonly record struct PlayerbotPolicyGoalMask(byte Bits)
 public static class PlayerbotPolicySchema
 {
     /// <summary>The number of goals (<see cref="PlayerbotPolicyGoal"/>).</summary>
-    public const int GoalCount = 7;
+    public const int GoalCount = 8;
 
     /// <summary>
     /// The per-bot feature vector, in order. A weights file names these and must name exactly these, in this order: a model trained on
@@ -81,6 +83,7 @@ public static class PlayerbotPolicySchema
     {
         PlayerbotGoalKind.Quest => PlayerbotPolicyGoal.Quest,
         PlayerbotGoalKind.Vendor => PlayerbotPolicyGoal.Town,
+        PlayerbotGoalKind.Loot => PlayerbotPolicyGoal.Opportunity,
         PlayerbotGoalKind.Train => PlayerbotPolicyGoal.Train,
         PlayerbotGoalKind.Mount => PlayerbotPolicyGoal.Mount,
         PlayerbotGoalKind.Grind => PlayerbotPolicyGoal.Grind,
