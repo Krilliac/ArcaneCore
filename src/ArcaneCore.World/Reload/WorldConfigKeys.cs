@@ -179,6 +179,26 @@ public static class WorldConfigKeys
             v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
         LivePlayerbots("Risk:PartyRetreatOnWipe", o => o.Risk.PartyRetreatOnWipe, (o, v) => o.Risk.PartyRetreatOnWipe = v),
 
+        // Not vmangos keys: chests, nodes and rares weighed against their guards (docs/areas/playbots-opportunities.md).
+        // PlayerbotOpportunities reads the shared PlayerbotOptions.Opportunities at every scan and decision.
+        LivePlayerbots("Opportunities:Enabled", o => o.Opportunities.Enabled, (o, v) => o.Opportunities.Enabled = v),
+        LivePlayerbotsValue("Opportunities:ScanRadiusYards", o => o.Opportunities.ScanRadiusYards, (o, v) => o.Opportunities.ScanRadiusYards = v,
+            PlayerbotOpportunityOptions.CheckRadius),
+        LivePlayerbotsValue("Opportunities:RiskAppetite", o => o.Opportunities.RiskAppetite, (o, v) => o.Opportunities.RiskAppetite = v,
+            PlayerbotOpportunityOptions.CheckAppetite),
+        LivePlayerbotsValue("Opportunities:MinValue", o => o.Opportunities.MinValue, (o, v) => o.Opportunities.MinValue = v,
+            PlayerbotOpportunityOptions.CheckMinValue),
+        LivePlayerbotsValue("Opportunities:MaxGuards", o => o.Opportunities.MaxGuards, (o, v) => o.Opportunities.MaxGuards = v,
+            PlayerbotOpportunityOptions.CheckGuards),
+        LivePlayerbotsValue("Opportunities:MaxDeathProbability", o => o.Opportunities.MaxDeathProbability, (o, v) => o.Opportunities.MaxDeathProbability = v,
+            PlayerbotOpportunityOptions.CheckDeath),
+        LivePlayerbotsValue("Opportunities:PersonalityVariance", o => o.Opportunities.PersonalityVariance, (o, v) => o.Opportunities.PersonalityVariance = v,
+            PlayerbotOpportunityOptions.CheckVariance),
+        LivePlayerbots("Opportunities:Chests", o => o.Opportunities.Chests, (o, v) => o.Opportunities.Chests = v),
+        LivePlayerbots("Opportunities:LockedChests", o => o.Opportunities.LockedChests, (o, v) => o.Opportunities.LockedChests = v),
+        LivePlayerbots("Opportunities:Nodes", o => o.Opportunities.Nodes, (o, v) => o.Opportunities.Nodes = v),
+        LivePlayerbots("Opportunities:Rares", o => o.Opportunities.Rares, (o, v) => o.Opportunities.Rares = v),
+
         // Not vmangos keys: bot chat (docs/areas/playbots.md, Bot chat). PlayerbotChat reads the shared PlayerbotOptions.Chat at every
         // line and every provider attempt; the provider list is compared and replaced as one value.
         LivePlayerbots("Chat:Enabled", o => o.Chat.Enabled, (o, v) => o.Chat.Enabled = v),
@@ -322,6 +342,20 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Population:FreshStartZoneCap", o => o.Population.FreshStartZoneCap, (o, v) => o.Population.FreshStartZoneCap = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 1000)),
         LivePlayerbotsValue("Population:LeaveHomeLevelMargin", o => o.Population.LeaveHomeLevelMargin, (o, v) => o.Population.LeaveHomeLevelMargin = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 10)),
         LivePlayerbotsValue("Population:TramMinLevel", o => o.Population.TramMinLevel, (o, v) => o.Population.TramMinLevel = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 60)),
+        LivePlayerbots("Population:TownProgression", o => o.Population.TownProgression, (o, v) => o.Population.TownProgression = v),
+        LivePlayerbotsValue("Population:TownHomeRadius", o => o.Population.TownHomeRadius, (o, v) => o.Population.TownHomeRadius = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 50, 5000)),
+        LivePlayerbotsValue("Population:CapitalHomeRadius", o => o.Population.CapitalHomeRadius, (o, v) => o.Population.CapitalHomeRadius = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 50, 5000)),
+        LivePlayerbotsValue("Population:TownCap", o => o.Population.TownCap, (o, v) => o.Population.TownCap = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 1000)),
+        LivePlayerbotsValue("Population:CapitalMajorSharePct", o => o.Population.CapitalMajorSharePct, (o, v) => o.Population.CapitalMajorSharePct = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 100)),
+        LivePlayerbotsValue("Population:TownWalkYards", o => o.Population.TownWalkYards, (o, v) => o.Population.TownWalkYards = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 100, 20000)),
+        LivePlayerbotsValue("Population:SecondaryStayMinMinutes", o => o.Population.SecondaryStayMinMinutes, (o, v) => o.Population.SecondaryStayMinMinutes = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 5, 1440)),
+        LivePlayerbotsValue("Population:SecondaryStayMaxMinutes", o => o.Population.SecondaryStayMaxMinutes, (o, v) => o.Population.SecondaryStayMaxMinutes = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 5, 1440)),
+        LivePlayerbotsValue("Population:CapitalStayMinMinutes", o => o.Population.CapitalStayMinMinutes, (o, v) => o.Population.CapitalStayMinMinutes = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 240)),
+        LivePlayerbotsValue("Population:CapitalStayMaxMinutes", o => o.Population.CapitalStayMaxMinutes, (o, v) => o.Population.CapitalStayMaxMinutes = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 240)),
+        LivePlayerbotsValue("Population:TownBandMargin", o => o.Population.TownBandMargin, (o, v) => o.Population.TownBandMargin = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 10)),
+        LivePlayerbots("Population:TownProgressionTeleport", o => o.Population.TownProgressionTeleport, (o, v) => o.Population.TownProgressionTeleport = v),
+        LivePlayerbotsValue("Population:TownCaps", o => o.Population.TownCaps, (o, v) => o.Population.TownCaps = v, v => Playerbots.Population.PopulationTownProgression.CheckCaps(v)),
+        LivePlayerbots("Population:AdoptOperatorHomes", o => o.Population.AdoptOperatorHomes, (o, v) => o.Population.AdoptOperatorHomes = v),
         LivePlayerbotsValue("Population:ExcludedZones", o => new Playerbots.Population.PopulationIdList([.. o.Population.ExcludedZones]),
             (o, v) => o.Population.ExcludedZones = [.. v.Items], v => Playerbots.Population.PlayerbotPopulationOptions.CheckZones(v.Items)),
 

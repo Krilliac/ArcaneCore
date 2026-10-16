@@ -378,6 +378,12 @@ public sealed class AuraAndProcCompletenessTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, 30050, SpellCastTargets.ForSelf(), triggered: true));
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, 30051, SpellCastTargets.ForSelf(), triggered: true));
 
+        // The hit table draws from the default Random.Shared-backed roll unless scripted, so a miss, glancing blow or dodge
+        // could land instead of the crit. Script the roll: 5000 is past the 5% miss range and inside the (clamped) crit range.
+        var random = new ScriptedRandom();
+        random.Ints.Enqueue(5000);
+        combat.Random = random;
+
         MeleeDamageInfo hit = combat.CalculateMeleeDamage(attacker, victim, WeaponAttackType.BaseAttack);
         Assert.Equal(MeleeHitOutcome.Crit, hit.Outcome);
         Assert.Equal(210u, hit.TotalDamage);

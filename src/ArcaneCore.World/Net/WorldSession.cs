@@ -410,6 +410,8 @@ public sealed partial class WorldSession : IPlayerSession
             try
             {
                 packet.Handler.World!(this, player, packet.Payload);
+                RecordHandlerLatency(packet.Handler.Opcode, handlerStart);
+
                 LogIfSlowPacket(packet.Handler.Opcode, handlerStart);
             }
             catch (Exception ex) when (IsMalformed(ex))
@@ -497,6 +499,25 @@ public sealed partial class WorldSession : IPlayerSession
 
     // --- world-thread state transitions (called by handlers) ------------------------
 
+    /// <summary>Add one in-world handler run to the opcode's latency histogram. Playerbot sessions are left out: they would drown the players' figures (their cost shows in the tick phases).</summary>
+    internal void RecordHandlerLatency(WorldOpcode opcode, long startTimestamp)
+    {
+        if (!IsPlayerbot)
+        {
+            PacketHandlerLatency.Record(Latency, opcode, startTimestamp);
+        }
+    }
+
+    private long _loginRequestedTimestamp;
+
+    /// <summary>The client asked to log in a character (CMSG_PLAYER_LOGIN reached its handler): the clock for the <c>login.to_world</c> latency, stopped by <see cref="TryEnterWorld"/>.</summary>
+    internal void MarkLoginRequested() => Interlocked.Exchange(ref _loginRequestedTimestamp, Stopwatch.GetTimestamp());
+
+    private ArcaneCore.Kernel.Diagnostics.LatencyRegistry? _latency;
+
+    /// <summary>The latency registry this session reports to: the one in the service provider, else the shared one (resolved once).</summary>
+    internal ArcaneCore.Kernel.Diagnostics.LatencyRegistry Latency => _latency ??= Services.GetService<ArcaneCore.Kernel.Diagnostics.LatencyRegistry>() ?? ArcaneCore.Kernel.Diagnostics.LatencyRegistry.Shared;
+
     /// <summary>Character screen → loading. Fails if the session is no longer at the character screen or has been superseded.</summary>
     public bool TryBeginLogin()
     {
@@ -552,6 +573,12 @@ public sealed partial class WorldSession : IPlayerSession
             Invariant.Assert(Player is null, $"session {RemoteEndpoint} enters the world while still holding player {Player?.Guid}");
             Player = player;
             _state = SessionState.InWorld;
+            long requested = Interlocked.Exchange(ref _loginRequestedTimestamp, 0);
+            if (requested != 0 && !IsPlayerbot)
+            {
+                Latency.RecordSince(ArcaneCore.Kernel.Diagnostics.LatencyNames.LoginToWorld, requested);
+            }
+
             return true;
         }
     }
@@ -565,6 +592,7 @@ public sealed partial class WorldSession : IPlayerSession
             if (_state == SessionState.LoggingIn)
             {
                 _state = SessionState.CharacterSelect;
+                Interlocked.Exchange(ref _loginRequestedTimestamp, 0); // an abandoned login is not a login that completed
             }
         }
     }

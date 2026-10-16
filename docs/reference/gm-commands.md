@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 235 |
-| `Administrator` | 6 | 345 |
+| `GameMaster` | 3 | 237 |
+| `Administrator` | 6 | 348 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -203,6 +203,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.bot status` | 3 | GameMaster | stored level through the map | Syntax: .bot status [$id\|$name] Show bot lifecycle status. |
 | `.bot list` | 3 | GameMaster | stored level through the map | Syntax: .bot list List managed bots. |
 | `.bot debug` | 3 | GameMaster | stored level through the map | Syntax: .bot debug [$id\|$name] Show internal brain, motion, route, stall, risk and trace diagnostics for a running bot. |
+| `.bot cadence` | 3 | GameMaster | stored level through the map | Syntax: .bot cadence Show how often the bots think (think gap percentiles, thinks per tick, think budget) for the last minute. |
 | `.bot anomalies` | 3 | GameMaster | stored level through the map | Syntax: .bot anomalies $name Show the recent anomaly history recorded for a bot. |
 | `.bot gear` | 3 | GameMaster | stored level through the map | Syntax: .bot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
 | `.bot summon` | 3 | GameMaster | stored level through the map | Syntax: .bot summon $id\|$name Teleport a party bot (or fleet selection for GMs) to you. |
@@ -372,6 +373,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot chaos clear` | 6 | Administrator | stored level through the map | Syntax: .playerbot chaos clear [all] Reset chaos probe counters and recent fault history ('all' also clears explicit bot assignments). |
 | `.playerbot commands` | 3 | GameMaster | stored level through the map | Syntax: .playerbot commands List available playerbot chat/whisper commands and .bot subcommands. |
 | `.playerbot debug` | 3 | GameMaster | stored level through the map | Syntax: .playerbot debug [$id\|$name] Show internal brain, motion, route, stall, risk and trace diagnostics for a running bot. |
+| `.playerbot cadence` | 3 | GameMaster | stored level through the map | Syntax: .playerbot cadence Show how often the bots think: the think gap percentiles (all bots and the combat/dead lane), thinks per tick, the think time budget and the share of ticks that ended on a budget, for the last minute. |
 | `.playerbot anomalies` | 3 | GameMaster | stored level through the map | Syntax: .playerbot anomalies $name Show the recent anomaly history recorded for a bot. |
 | `.playerbot gear` | 3 | GameMaster | stored level through the map | Syntax: .playerbot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
 | `.playerbot party` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
@@ -388,11 +390,12 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot revive` | 6 | Administrator | stored level through the map | Syntax: .playerbot revive $name\|$prefix*\|all Revive the dead bots among the selection, as .revive does. |
 | `.playerbot fleet` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot fleet reset [confirm $code] Destructive fleet operations. |
 | `.playerbot fleet reset` | 6 | Administrator | stored level through the map | Syntax: .playerbot fleet reset .playerbot fleet reset confirm $code Simulate a fresh server launch: stop every managed bot and delete every character on a playerbot account (the bot accounts stay). The first form only prints what would happen and a confirm code valid for 60 seconds; the second one does it. Real players' characters are never touched. |
-| `.playerbot population` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot population [status\|enable\|disable\|target #count\|rush #count [#perSecond]\|rush stop] Keep a number of bots online, spread over the level bands, as long as the world's tick time allows. |
+| `.playerbot population` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot population [status\|enable\|disable\|adopt\|target #count\|rush #count [#perSecond]\|rush stop] Keep a number of bots online, spread over the level bands, as long as the world's tick time allows. |
 | `.playerbot population status` | 6 | Administrator | stored level through the map | Syntax: .playerbot population status Show the population manager: its state and why, the tick p95 against the budget, the target and the running, owned and parked bots, and want against have for each level band. |
 | `.playerbot population enable` | 6 | Administrator | stored level through the map | Syntax: .playerbot population enable Turn the population manager on until the next .reload config or restart (World:Playerbots:Population:Enabled). |
 | `.playerbot population disable` | 6 | Administrator | stored level through the map | Syntax: .playerbot population disable Turn the population manager off until the next .reload config or restart. Bots it started keep running. |
 | `.playerbot population target` | 6 | Administrator | stored level through the map | Syntax: .playerbot population target #count Set the number of bots to keep online (0..1000) until the next .reload config or restart (World:Playerbots:Population:TargetOnline). The effective target is also capped by MaxBots. |
+| `.playerbot population adopt` | 6 | Administrator | stored level through the map | Syntax: .playerbot population adopt Take over the homes an operator set (.playerbot send ... SentinelHill, .playerbot home) for the bots of the population: over the next sweeps each gets the home of its level again (a level 1 bot its start area, a graduate its capital and level-band town). Homes of bots an operator created, and homes an operator cleared, are left alone. World:Playerbots:Population:AdoptOperatorHomes does the same for good. |
 | `.playerbot population rush` | 6 | Administrator | stored level through the map | Syntax: .playerbot population rush $count [$perSecond] .playerbot population rush stop Create and start $count new population bots at $perSecond per second (default 5; at most 50), bypassing the add-budget windows. A brake pauses it while the tick p95 stays over World:Playerbots:Population:RushBrakeP95Ms. The existing bot, account and character limits apply. Progress is in .playerbot population status. |
 | `.playerbot qa` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa [top [#n] [all]\|show $id\|spells [#n]\|reset [$id]\|prune [#hours] [closed] [dry]] The playerbot QA findings: stalls, death loops, faults, missing data and spells that do not work, ranked, and the GitHub reporter's state. |
 | `.playerbot qa top` | 3 | GameMaster | stored level through the map | Syntax: .playerbot qa top [#n] [all] List the n (default 10, at most 25) highest-ranked findings with their short ids and when each was last seen. Findings not seen since this server started (stale: possibly fixed by this build) are hidden behind one hint line; 'all' lists them too, after every current one. |

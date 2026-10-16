@@ -102,6 +102,7 @@ recorder are appended to each line so both views are on one line.
   deadlocked without waiting on a stuck graceful-shutdown drain. `Action` set with `ActionHangMs` 0 is a configuration warning (the action
   never fires).
 - Counters: `watchdog.tick.frames`, `watchdog.tick.overruns`, `watchdog.tick.hangs`, `watchdog.tick.actions`, gauges `watchdog.tick.frame_p99_us`, `watchdog.tick.frame_max_us`.
+- Latency gauges (microseconds, last minute, refreshed every check): `watchdog.tick.frame_{p50,p75,p90,p95,p999,mean,stddev}_us`, the same set with `p99` and `max` for the tick body as `watchdog.tick.body_*_us`, and `watchdog.tick.phase_<name>_p50_us` / `_p99_us` for the phases `commands`, `world_tick`, `features`, `maps` and `autosave`. The overrun and summary log lines append `; frame latency last 1 min: p50 .. p75 .. p90 .. p95 .. p99 .. p99.9 .. max .. (n=.., min .., mean .. +/-..)` (the summary adds the 15 minute window), then the tick body and per-phase p50/p99. The percentile primitive is `LatencyHistogram` (log buckets, at most 1/32 above the exact nearest-rank value, rolling 1 and 15 minute windows, lock-free).
 
 ### 2. Memory pressure (`Ops:Watchdog:Memory`)
 

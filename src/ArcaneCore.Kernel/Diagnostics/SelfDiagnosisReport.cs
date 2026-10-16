@@ -181,6 +181,7 @@ public static class SelfDiagnosisReport
                     : fault.Frames.Count > 0 ? string.Join(" <- ", fault.Frames) : "(none)";
                 lines.Add(string.Create(CultureInfo.InvariantCulture,
                     $"  fault {fault.Id} x{fault.Count} {fault.Site} {fault.ExceptionType} [stack: {stack}]: {fault.SampleMessage}"));
+                lines.Add("    " + fault.Timing.Describe());
             }
 
             lines.Add(string.Create(CultureInfo.InvariantCulture,

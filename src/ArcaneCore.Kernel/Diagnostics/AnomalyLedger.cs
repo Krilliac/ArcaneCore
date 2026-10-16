@@ -56,6 +56,12 @@ public sealed class AnomalyLedger
     /// <summary>Distinct subjects remembered per key (<see cref="AnomalySnapshot.DistinctSubjects"/> saturates here).</summary>
     public const int MaxTrackedSubjects = 256;
 
+    /// <summary>Subjects a snapshot lists with their counts.</summary>
+    public const int SnapshotTopSubjects = 5;
+
+    /// <summary>Recent distinct details a snapshot lists.</summary>
+    public const int RecentDetailCount = 3;
+
     /// <summary>The event id of every anomaly log line (category <c>ArcaneCore.Diagnostics.Anomaly</c>).</summary>
     public static readonly EventId LogEventId = new(7201, "Anomaly");
 
@@ -67,6 +73,9 @@ public sealed class AnomalyLedger
     private volatile int _logLimit;
     private volatile ILogger? _logger;
     private long _total;
+    private readonly RateWindow _rate = new();
+    private long _firstTicks;
+    private long _lastTicks;
 
     /// <summary>A ledger with the default bounds on the system clock and no logger (the host attaches one, <see cref="Configure"/>).</summary>
     public AnomalyLedger()
@@ -105,6 +114,19 @@ public sealed class AnomalyLedger
 
     /// <summary>Distinct keys held (the overflow bucket is not counted).</summary>
     public int Distinct => _entries.Count;
+
+    /// <summary>When the first report since start or the last <see cref="Reset"/> arrived, or null when none did.</summary>
+    public DateTimeOffset? FirstSeen => Volatile.Read(ref _firstTicks) is var ticks and not 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
+
+    /// <summary>When the latest report arrived, or null when none did.</summary>
+    public DateTimeOffset? LastSeen => Volatile.Read(ref _lastTicks) is var ticks and not 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
+
+    /// <summary>First and last seen and the reports of the last 15 minutes and the last hour, ledger-wide (no inter-arrival: that is kept per key).</summary>
+    public LedgerTiming Timing()
+    {
+        DateTimeOffset now = _time.GetUtcNow();
+        return new LedgerTiming(FirstSeen, LastSeen, _rate.CountSince(now, 15), _rate.CountSince(now, 60));
+    }
 
     /// <summary>
     /// Attach the logger the throttled lines go to and the per-key log limit (the diagnostics host calls this at start with
@@ -161,7 +183,7 @@ public sealed class AnomalyLedger
         var list = new List<AnomalySnapshot>(_entries.Count + 1);
         foreach (KeyValuePair<string, AnomalyEntry> pair in _entries)
         {
-            AnomalySnapshot snap = pair.Value.ToSnapshot();
+            AnomalySnapshot snap = pair.Value.ToSnapshot(_time.GetUtcNow());
             if (snap.Count > 0) list.Add(snap);
         }
 
@@ -170,7 +192,7 @@ public sealed class AnomalyLedger
             int byCount = b.Count.CompareTo(a.Count);
             return byCount != 0 ? byCount : string.CompareOrdinal(a.Key, b.Key);
         });
-        AnomalySnapshot overflow = _overflow.ToSnapshot();
+        AnomalySnapshot overflow = _overflow.ToSnapshot(_time.GetUtcNow());
         if (overflow.Count > 0) list.Add(overflow);
         return list;
     }
@@ -203,13 +225,13 @@ public sealed class AnomalyLedger
         string trimmed = key.Trim();
         if (string.Equals(trimmed, OverflowKey, StringComparison.Ordinal))
         {
-            AnomalySnapshot overflow = _overflow.ToSnapshot();
+            AnomalySnapshot overflow = _overflow.ToSnapshot(_time.GetUtcNow());
             return overflow.Count > 0 ? overflow : null;
         }
 
         int slash = trimmed.IndexOf('/');
         string normal = slash > 0 ? KeyOf(trimmed[..slash], trimmed[(slash + 1)..]) : trimmed.ToLowerInvariant();
-        return _entries.TryGetValue(normal, out AnomalyEntry? entry) && entry.ToSnapshot() is { Count: > 0 } snap ? snap : null;
+        return _entries.TryGetValue(normal, out AnomalyEntry? entry) && entry.ToSnapshot(_time.GetUtcNow()) is { Count: > 0 } snap ? snap : null;
     }
 
     /// <summary>How many reports <paramref name="key"/> has (0 when none).</summary>
@@ -223,6 +245,9 @@ public sealed class AnomalyLedger
             _entries.Clear();
             _overflow.Clear();
             Interlocked.Exchange(ref _total, 0);
+            Interlocked.Exchange(ref _firstTicks, 0);
+            Interlocked.Exchange(ref _lastTicks, 0);
+            _rate.Clear();
         }
     }
 
@@ -269,6 +294,9 @@ public sealed class AnomalyLedger
         string det = Truncate(detail);
         DateTimeOffset now = _time.GetUtcNow();
         Interlocked.Increment(ref _total);
+        _rate.Add(now);
+        Interlocked.CompareExchange(ref _firstTicks, now.UtcTicks, 0);
+        Interlocked.Exchange(ref _lastTicks, now.UtcTicks);
 
         AnomalyEntry entry = Resolve(key, sub, cod);
         AnomalyRecording recording = entry.Note(now, _logLimit, severity, subj, det);
@@ -279,7 +307,7 @@ public sealed class AnomalyLedger
         Action<AnomalyNotice>? noticed = recording.ShouldLog ? AnomalyNoticed : null;
         if (reported is null && noticed is null && !recording.ShouldLog) return recording;
 
-        var notice = new AnomalyNotice(key, sub, cod, severity, subj, det, recording.Count, recording.Suppressed);
+        var notice = new AnomalyNotice(key, sub, cod, severity, subj, det, recording.Count, recording.Suppressed) { Timing = recording.Timing };
         if (reported is not null) Raise(reported, notice);
         if (recording.ShouldLog)
         {
@@ -316,8 +344,8 @@ public sealed class AnomalyLedger
         {
             if (!logger.IsEnabled(level)) return;
             logger.Log(level, LogEventId,
-                "Anomaly {AnomalyKey} {Subject}: {Detail} [count={Count} suppressed={Suppressed}]",
-                notice.Key, notice.Subject, notice.Detail, notice.Count, notice.Suppressed);
+                "Anomaly {AnomalyKey} {Subject}: {Detail} [count={Count} suppressed={Suppressed}]{Timing}",
+                notice.Key, notice.Subject, notice.Detail, notice.Count, notice.Suppressed, notice.Timing is { } timing ? " " + timing.Describe() : string.Empty);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -342,7 +370,10 @@ public sealed class AnomalyLedger
 
     private sealed class AnomalyEntry(string key, string subsystem, string code)
     {
-        private readonly HashSet<string> _subjects = new(StringComparer.Ordinal);
+        private readonly SubjectTally _subjects = new(MaxTrackedSubjects);
+        private readonly RecentDistinct _recent = new(RecentDetailCount);
+        private readonly RateWindow _rate = new();
+        private GapRing? _gaps;
         private DateTimeOffset _first;
         private DateTimeOffset _last;
         private DateTimeOffset _lastLog = DateTimeOffset.MinValue;
@@ -357,20 +388,27 @@ public sealed class AnomalyLedger
             lock (this)
             {
                 _count++;
+                DateTimeOffset previous = _last;
                 _last = now;
+                _rate.Add(now);
                 if (_count == 1)
                 {
                     _first = now;
                     _worst = severity;
                 }
-                else if (severity > _worst)
+                else
                 {
-                    _worst = severity;
+                    (_gaps ??= new GapRing()).Add(now - previous);
+                    if (severity > _worst)
+                    {
+                        _worst = severity;
+                    }
                 }
 
                 _subject = subject;
                 _detail = detail;
-                if (subject.Length != 0 && _subjects.Count < MaxTrackedSubjects) _subjects.Add(subject);
+                if (subject.Length != 0) _subjects.Add(subject);
+                if (detail.Length != 0) _recent.Add(detail);
 
                 bool log;
                 long suppressed = 0;
@@ -392,7 +430,7 @@ public sealed class AnomalyLedger
                     _sinceLog++;
                 }
 
-                return new AnomalyRecording(key, _count, log, suppressed);
+                return new AnomalyRecording(key, _count, log, suppressed) { Timing = log ? TimingAt(now) : null };
             }
         }
 
@@ -404,18 +442,35 @@ public sealed class AnomalyLedger
                 _sinceLog = 0;
                 _lastLog = DateTimeOffset.MinValue;
                 _subjects.Clear();
+                _recent.Clear();
+                _rate.Clear();
+                _gaps?.Clear();
+                _first = default;
+                _last = default;
                 _subject = string.Empty;
                 _detail = string.Empty;
                 _worst = AnomalySeverity.Info;
             }
         }
 
-        public AnomalySnapshot ToSnapshot()
+        public AnomalySnapshot ToSnapshot(DateTimeOffset now)
         {
             lock (this)
             {
-                return new AnomalySnapshot(key, subsystem, code, _worst, _count, _first, _last, _subject, _detail, _subjects.Count);
+                return new AnomalySnapshot(key, subsystem, code, _worst, _count, _first, _last, _subject, _detail, _subjects.Count)
+                {
+                    Timing = TimingAt(now),
+                    TopSubjects = _subjects.Top(SnapshotTopSubjects),
+                    RecentDetails = _recent.ToList(),
+                };
             }
+        }
+
+        /// <summary>Caller holds the entry lock.</summary>
+        private LedgerTiming TimingAt(DateTimeOffset now)
+        {
+            (TimeSpan? p50, TimeSpan? p99) = _gaps?.Percentiles() ?? (null, null);
+            return new LedgerTiming(_count == 0 ? null : _first, _count == 0 ? null : _last, _rate.CountSince(now, 15), _rate.CountSince(now, 60), p50, p99);
         }
     }
 }
@@ -431,7 +486,11 @@ public sealed record AnomalyLedgerLimits(int MaxKeys = AnomalyLedgerLimits.Defau
 }
 
 /// <summary>What <see cref="AnomalyLedger.Report"/> decided: the key, how often it has now occurred, whether it logged, and how many reports since the previous line were held back.</summary>
-public readonly record struct AnomalyRecording(string Key, long Count, bool ShouldLog, long Suppressed);
+public readonly record struct AnomalyRecording(string Key, long Count, bool ShouldLog, long Suppressed)
+{
+    /// <summary>The key's first/last seen, rates and inter-arrival at this report; set only when <see cref="ShouldLog"/> (the numbers cost a scan the throttled reports skip).</summary>
+    public LedgerTiming? Timing { get; init; }
+}
 
 /// <summary>One report as raised by <see cref="AnomalyLedger.Reported"/> and <see cref="AnomalyLedger.AnomalyNoticed"/>.</summary>
 public sealed record AnomalyNotice(
@@ -442,7 +501,12 @@ public sealed record AnomalyNotice(
     string Subject,
     string Detail,
     long Count,
-    long Suppressed);
+    long Suppressed)
+{
+    /// <summary>The key's timing at this report (rates, inter-arrival); null when the report was not logged.</summary>
+    public LedgerTiming? Timing { get; init; }
+}
+
 
 /// <summary>A point-in-time copy of one ledger key (safe to hold and read from any thread).</summary>
 /// <param name="Severity">The worst severity reported under this key.</param>
@@ -457,7 +521,17 @@ public sealed record AnomalySnapshot(
     DateTimeOffset LastSeen,
     string LastSubject,
     string LastDetail,
-    int DistinctSubjects);
+    int DistinctSubjects)
+{
+    /// <summary>First and last seen, reports in the last 15 minutes and hour (rate per hour) and the p50/p99 gap between reports.</summary>
+    public LedgerTiming Timing { get; init; }
+
+    /// <summary>The subjects reported most under this key with their counts (Space-Saving, bounded: see <see cref="AnomalyLedger.MaxTrackedSubjects"/>), highest first, at most <see cref="AnomalyLedger.SnapshotTopSubjects"/>.</summary>
+    public IReadOnlyList<SubjectCount> TopSubjects { get; init; } = [];
+
+    /// <summary>The newest distinct details (deduplicated), most recent first, at most <see cref="AnomalyLedger.RecentDetailCount"/>.</summary>
+    public IReadOnlyList<string> RecentDetails { get; init; } = [];
+}
 
 /// <summary>
 /// Reports collected from an <see cref="AnomalyLedger"/> while the capture lives (<see cref="AnomalyLedger.Capture"/>). Thread-safe;

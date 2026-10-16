@@ -2,6 +2,7 @@ using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -84,6 +85,24 @@ public sealed class SqliteCheckpointTests : IDisposable
         Insert(app, 5, start: 10_000);
         long after = WalBytes(path);
         Assert.True(after < before / 4, $"WAL stayed at {after} bytes (was {before})");
+    }
+
+    [Fact]
+    public void EveryCheckpointRun_AddsOneSampleToItsDatabasesLatencyHistogram()
+    {
+        string name = "latency-" + Guid.NewGuid().ToString("N");
+        string path = NewWalDb(name + ".db");
+        var options = new SqliteCheckpointOptions();
+        SqliteConnection app = OpenApp(path, options);
+        Insert(app, 20);
+        var checkpointer = new SqliteWalCheckpointer(Target(path), options, new ListLogger(), TimeProvider.System);
+        LatencyHistogram histogram = LatencyRegistry.Shared.Get(LatencyNames.CheckpointPrefix + name);
+        Assert.Equal(0, histogram.Count);
+
+        checkpointer.RunOnce();
+        Assert.Equal(1, histogram.Count);
+        checkpointer.RunOnce();
+        Assert.Equal(2, histogram.Count);
     }
 
     [Fact]

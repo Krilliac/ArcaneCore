@@ -16,12 +16,13 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// </summary>
 public sealed class PlayerbotThinkBudgetTests
 {
-    /// <summary>The wall-time think budget that the group test worlds override defaults to the production constant.</summary>
+    /// <summary>The wall-time think budget that the group test worlds override is the adaptive one by default (no fixed override), with the 8 ms floor.</summary>
     [Fact]
     public async Task ADefaultFeature_ThinksWithinTheProductionTickBudget()
     {
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
-        Assert.Equal(PlayerbotThinkRotation.TickBudgetMs, world.Bots.ThinkBudgetMs);
+        Assert.Null(world.Bots.ThinkBudgetMs);
+        Assert.Equal(PlayerbotThinkRotation.TickBudgetMs, new PlayerbotOptions().ThinkBudgetMinMs);
     }
 
     /// <summary>

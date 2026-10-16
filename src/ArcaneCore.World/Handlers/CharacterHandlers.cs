@@ -298,6 +298,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
     private static async Task HandlePlayerLoginAsync(WorldSession session, byte[] payload)
     {
+        session.MarkLoginRequested();
         var reader = new PacketReader(payload);
         ulong rawGuid = reader.ReadUInt64();
 

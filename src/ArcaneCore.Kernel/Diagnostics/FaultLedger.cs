@@ -46,6 +46,18 @@ public sealed class FaultLedger
     /// <summary>Longest sample message kept (characters).</summary>
     public const int MaxMessageLength = 300;
 
+    /// <summary>Distinct messages tracked per signature (bounded, Space-Saving: see <see cref="SubjectTally"/>).</summary>
+    public const int MaxTrackedMessages = 16;
+
+    /// <summary>Messages a snapshot lists with their counts.</summary>
+    public const int SnapshotTopMessages = 5;
+
+    /// <summary>Recent distinct messages a snapshot lists.</summary>
+    public const int RecentMessageCount = 3;
+
+    /// <summary>Longest message kept in the per-signature tally (characters), so 16 of them stay a few KB.</summary>
+    private const int MaxTallyMessageLength = 160;
+
     private const string AppAssemblyPrefix = "ArcaneCore.";
 
     /// <summary>Distinct signatures remembered by the overflow bucket so each logs its first occurrence.</summary>
@@ -60,6 +72,8 @@ public sealed class FaultLedger
     private volatile bool _beepOnException;
     private long _total;
     private long _lastTicks;
+    private readonly RateWindow _rate = new();
+    private long _firstTicks;
 
     /// <summary>A ledger with the default bounds (512 signatures, 10 logs per signature) on the system clock.</summary>
     public FaultLedger()
@@ -102,6 +116,23 @@ public sealed class FaultLedger
             long ticks = Volatile.Read(ref _lastTicks);
             return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
         }
+    }
+
+    /// <summary>When the first fault since start or the last <see cref="Reset"/> was recorded, or null when none was.</summary>
+    public DateTimeOffset? FirstSeen
+    {
+        get
+        {
+            long ticks = Volatile.Read(ref _firstTicks);
+            return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
+    }
+
+    /// <summary>First and last seen and the faults of the last 15 minutes and the last hour, ledger-wide (no inter-arrival: that is kept per signature).</summary>
+    public LedgerTiming Timing()
+    {
+        DateTimeOffset now = _time.GetUtcNow();
+        return new LedgerTiming(FirstSeen, LastSeen, _rate.CountSince(now, 15), _rate.CountSince(now, 60));
     }
 
     /// <summary>Apply <c>Diagnostics:FaultMaxSignatures</c>, <c>Diagnostics:FaultLogLimit</c> and <c>Diagnostics:BeepOnException</c> (safe to call while recording).</summary>
@@ -162,7 +193,7 @@ public sealed class FaultLedger
             ? message + " (" + recording.Suppressed.ToString(CultureInfo.InvariantCulture) + " more since)"
             : message;
         text = string.Create(CultureInfo.InvariantCulture,
-            $"{text} [fault={recording.Id} count={recording.Count} stack={condensed}]");
+            $"{text} [fault={recording.Id} count={recording.Count} stack={condensed}]{(recording.Timing is { } timing ? $" ({timing.Describe()})" : string.Empty)}");
         logger.Log(level, exception, text, args);
     }
 
@@ -172,7 +203,7 @@ public sealed class FaultLedger
         var list = new List<FaultSnapshot>(_entries.Count + 1);
         foreach (KeyValuePair<string, FaultEntry> pair in _entries)
         {
-            list.Add(pair.Value.ToSnapshot());
+            list.Add(pair.Value.ToSnapshot(_time.GetUtcNow()));
         }
 
         list.Sort(static (a, b) =>
@@ -180,7 +211,7 @@ public sealed class FaultLedger
             int byCount = b.Count.CompareTo(a.Count);
             return byCount != 0 ? byCount : string.CompareOrdinal(a.Id, b.Id);
         });
-        FaultSnapshot overflow = _overflow.ToSnapshot();
+        FaultSnapshot overflow = _overflow.ToSnapshot(_time.GetUtcNow());
         if (overflow.Count > 0)
         {
             list.Add(overflow);
@@ -195,7 +226,7 @@ public sealed class FaultLedger
         var result = new SortedDictionary<string, (int Signatures, long TotalCount)>(StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, FaultEntry> pair in _entries)
         {
-            FaultSnapshot snap = pair.Value.ToSnapshot();
+            FaultSnapshot snap = pair.Value.ToSnapshot(_time.GetUtcNow());
             if (snap.Count <= 0)
             {
                 continue;
@@ -222,7 +253,7 @@ public sealed class FaultLedger
             }
         }
 
-        FaultSnapshot overflow = _overflow.ToSnapshot();
+        FaultSnapshot overflow = _overflow.ToSnapshot(_time.GetUtcNow());
         if (overflow.Count > 0)
         {
             if (result.TryGetValue(OverflowId, out (int Signatures, long TotalCount) agg))
@@ -243,11 +274,11 @@ public sealed class FaultLedger
     {
         if (string.Equals(id, OverflowId, StringComparison.Ordinal))
         {
-            FaultSnapshot overflow = _overflow.ToSnapshot();
+            FaultSnapshot overflow = _overflow.ToSnapshot(_time.GetUtcNow());
             return overflow.Count > 0 ? overflow : null;
         }
 
-        return id is not null && _entries.TryGetValue(id.ToLowerInvariant(), out FaultEntry? entry) ? entry.ToSnapshot() : null;
+        return id is not null && _entries.TryGetValue(id.ToLowerInvariant(), out FaultEntry? entry) ? entry.ToSnapshot(_time.GetUtcNow()) : null;
     }
 
     /// <summary>Forget every signature and the totals (the operator command, tests). Metrics counters are cumulative and keep their values.</summary>
@@ -259,6 +290,8 @@ public sealed class FaultLedger
             _overflow.Clear();
             Interlocked.Exchange(ref _total, 0);
             Interlocked.Exchange(ref _lastTicks, 0);
+            Interlocked.Exchange(ref _firstTicks, 0);
+            _rate.Clear();
         }
     }
 
@@ -431,6 +464,8 @@ public sealed class FaultLedger
 
         Interlocked.Increment(ref _total);
         Interlocked.Exchange(ref _lastTicks, now.UtcTicks);
+        _rate.Add(now);
+        Interlocked.CompareExchange(ref _firstTicks, now.UtcTicks, 0);
         FaultRecording recording = entry.Note(now, _logLimit, exception, ReferenceEquals(entry, _overflow) ? id : null);
         if (recording.ShouldLog && _beepOnException)
         {
@@ -440,7 +475,7 @@ public sealed class FaultLedger
         if (recording.ShouldLog && FaultNoticed is { } noticed)
         {
             string condensed = FormatCondensedStack(exception);
-            var notice = new FaultNotice(recording.Id, site, type, Truncate(exception.Message), recording.Count, recording.Suppressed, terminating, condensed);
+            var notice = new FaultNotice(recording.Id, site, type, Truncate(exception.Message), recording.Count, recording.Suppressed, terminating, condensed) { Timing = recording.Timing };
             foreach (Action<FaultNotice> handler in noticed.GetInvocationList())
             {
                 try
@@ -660,17 +695,57 @@ public sealed class FaultLedger
         private long _count;
         private long _sinceLog;
         private HashSet<string>? _overflowSeen;
+        private readonly SubjectTally _messages = new(MaxTrackedMessages);
+        private readonly RecentDistinct _recent = new(RecentMessageCount);
+        private string? _lastRaw;
+        private string _lastText = string.Empty;
+        private string _lastLine = string.Empty;
+        private readonly RateWindow _rate = new();
+        private GapRing? _gaps;
 
         public FaultRecording Note(DateTimeOffset now, int logLimit, Exception exception, string? overflowId)
         {
             lock (this)
             {
                 _count++;
+                DateTimeOffset previous = _last;
                 _last = now;
+                _rate.Add(now);
+                string raw = exception.Message ?? string.Empty;
+                string text;
+                if (_lastRaw is not null && string.Equals(raw, _lastRaw, StringComparison.Ordinal))
+                {
+                    // The same message as the previous occurrence (a storm repeats one): one dictionary hit, no truncation, copy or recent-list work.
+                    text = _lastText;
+                    if (_lastLine.Length != 0)
+                    {
+                        _messages.Add(_lastLine);
+                    }
+                }
+                else
+                {
+                    text = Truncate(raw);
+                    string line = text.ReplaceLineEndings(" ");
+                    string tallied = line.Length <= MaxTallyMessageLength ? line : line[..MaxTallyMessageLength];
+                    _lastRaw = raw;
+                    _lastText = text;
+                    _lastLine = tallied;
+                    if (line.Length != 0)
+                    {
+                        _messages.Add(tallied);
+                        _recent.Add(line);
+                    }
+                }
+
+                if (_count > 1)
+                {
+                    (_gaps ??= new GapRing()).Add(now - previous);
+                }
+
                 if (_count == 1)
                 {
                     _first = now;
-                    _message = Truncate(exception.Message);
+                    _message = text;
                     if (overflowId is null)
                     {
                         _stack = FormatCondensedStack(exception);
@@ -700,7 +775,7 @@ public sealed class FaultLedger
                     _sinceLog++;
                 }
 
-                return new FaultRecording(id, _count, log, suppressed);
+                return new FaultRecording(id, _count, log, suppressed) { Timing = log ? TimingAt(now) : null };
             }
         }
 
@@ -712,18 +787,35 @@ public sealed class FaultLedger
                 _sinceLog = 0;
                 _lastLog = DateTimeOffset.MinValue;
                 _overflowSeen?.Clear();
+                _messages.Clear();
+                _recent.Clear();
+                _lastRaw = null;
+                _rate.Clear();
+                _gaps?.Clear();
                 _message = string.Empty;
                 _stack = string.Empty;
                 _chain = string.Empty;
             }
         }
 
-        public FaultSnapshot ToSnapshot()
+        public FaultSnapshot ToSnapshot(DateTimeOffset now)
         {
             lock (this)
             {
-                return new FaultSnapshot(id, site, type, frames, _count, _first, _last, _message, _stack, _chain);
+                return new FaultSnapshot(id, site, type, frames, _count, _first, _last, _message, _stack, _chain)
+                {
+                    Timing = TimingAt(now),
+                    TopMessages = _messages.Top(SnapshotTopMessages),
+                    RecentMessages = _recent.ToList(),
+                };
             }
+        }
+
+        /// <summary>Caller holds the entry lock.</summary>
+        private LedgerTiming TimingAt(DateTimeOffset now)
+        {
+            (TimeSpan? p50, TimeSpan? p99) = _gaps?.Percentiles() ?? (null, null);
+            return new LedgerTiming(_count == 0 ? null : _first, _count == 0 ? null : _last, _rate.CountSince(now, 15), _rate.CountSince(now, 60), p50, p99);
         }
     }
 }
@@ -735,7 +827,11 @@ public sealed record FaultLedgerLimits(int MaxSignatures = 512, int LogLimit = 1
 /// What <see cref="FaultLedger.Record(string, Exception, bool)"/> decided: the signature id, how often it has now occurred,
 /// whether the caller should write its log line, and how many occurrences since the previous line were held back.
 /// </summary>
-public readonly record struct FaultRecording(string Id, long Count, bool ShouldLog, long Suppressed);
+public readonly record struct FaultRecording(string Id, long Count, bool ShouldLog, long Suppressed)
+{
+    /// <summary>The signature's first/last seen, rates and inter-arrival at this fault; set only when <see cref="ShouldLog"/> (the numbers cost a scan the throttled faults skip).</summary>
+    public LedgerTiming? Timing { get; init; }
+}
 
 /// <summary>A fault the ledger wants logged now (<see cref="FaultLedger.FaultNoticed"/>): its signature id, where and what, how often so far and how many repeats were held back since the previous notice.</summary>
 /// <param name="Terminating">The process ends because of this fault (an unhandled exception, or an unobserved task exception under a policy other than Log).</param>
@@ -748,7 +844,11 @@ public sealed record FaultNotice(
     long Count,
     long Suppressed,
     bool Terminating = false,
-    string CondensedStack = "");
+    string CondensedStack = "")
+{
+    /// <summary>The signature's timing at this fault (rates, inter-arrival); set for every notice.</summary>
+    public LedgerTiming? Timing { get; init; }
+}
 
 /// <summary>A point-in-time copy of one ledger entry (safe to hold and read from any thread).</summary>
 public sealed record FaultSnapshot(
@@ -761,7 +861,17 @@ public sealed record FaultSnapshot(
     DateTimeOffset LastSeen,
     string SampleMessage,
     string SampleStack = "",
-    string SampleChain = "");
+    string SampleChain = "")
+{
+    /// <summary>First and last seen, faults in the last 15 minutes and hour (rate per hour) and the p50/p99 gap between occurrences.</summary>
+    public LedgerTiming Timing { get; init; }
+
+    /// <summary>The messages this signature threw most, with counts (single line, cut to 160 characters; bounded by <see cref="FaultLedger.MaxTrackedMessages"/>, Space-Saving), highest first, at most <see cref="FaultLedger.SnapshotTopMessages"/>.</summary>
+    public IReadOnlyList<SubjectCount> TopMessages { get; init; } = [];
+
+    /// <summary>The newest distinct messages (deduplicated), most recent first, at most <see cref="FaultLedger.RecentMessageCount"/>.</summary>
+    public IReadOnlyList<string> RecentMessages { get; init; } = [];
+}
 
 /// <summary>
 /// Logs a caught exception through the ledger: the catch sites keep their message template and recovery, and gain a count,

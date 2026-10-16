@@ -167,10 +167,16 @@ public sealed partial class WorldSession
         string caller = "unknown";
         try
         {
-            var frame = new System.Diagnostics.StackTrace(3, false).GetFrame(0)?.GetMethod();
-            if (frame is not null)
+            // The first frame outside this class, not a fixed depth: the JIT may inline Kick() into its caller, which removes a frame
+            // (a fixed skip of 3 then named the caller's caller), and may inline this report and KickCore as well, so no frame is skipped.
+            // WorldSession itself must not call Kick(): its frame would be skipped and the report would name its caller instead.
+            foreach (System.Diagnostics.StackFrame stackFrame in new System.Diagnostics.StackTrace(false).GetFrames())
             {
-                caller = (frame.DeclaringType?.Name ?? "?") + "." + frame.Name;
+                if (stackFrame.GetMethod() is { } method && method.DeclaringType != typeof(WorldSession))
+                {
+                    caller = (method.DeclaringType?.Name ?? "?") + "." + method.Name;
+                    break;
+                }
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
