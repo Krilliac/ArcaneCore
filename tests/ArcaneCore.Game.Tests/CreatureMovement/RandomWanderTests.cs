@@ -155,6 +155,53 @@ public sealed class RandomWanderTests
         Assert.True(wolf.IsMoving);
     }
 
+    /// <summary>A pathfinder that answers no path (or a straight path once <see cref="Route"/> is set) and counts its searches.</summary>
+    private sealed class SwitchablePathfinder : ArcaneCore.Game.Maps.Collision.IPathfinder
+    {
+        public bool Route { get; set; }
+
+        public int Calls { get; private set; }
+
+        public int? LastMaxSearchNodes { get; private set; }
+
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(
+            uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            Calls++;
+            LastMaxSearchNodes = options?.MaxSearchNodes;
+            ArcaneCore.Game.Maps.Collision.PathSearchCounters.RecordSearch(1, 1, capped: false);
+            return Route
+                ? new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.Normal, [start, end])
+                : new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.NoPath, []);
+        }
+    }
+
+    [Fact]
+    public void AWandererWhosePointsHaveNoPath_BacksOff_AndResumesWhenAPathExists()
+    {
+        // Live 2026-10-16: a wanderer that never reaches its points searched every 1-1.5 s for good, each search a full A*. The wait
+        // doubles per failed leg in a row (1-1.5 s, 2-3, 4-6, 8-12, then 16-24 s), so a minute costs about 7 searches, not about 48.
+        (WorldRuntime w, _, Creature wolf, _) = Start(Template());
+        using WorldRuntime world = w;
+        var paths = new SwitchablePathfinder();
+        ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world).Install(pathfinder: paths);
+        var generator = Assert.IsType<RandomMovementGenerator>(wolf.Motion.Default);
+
+        Run(world, 60_000, 50);
+
+        Assert.False(wolf.IsMoving);
+        Assert.InRange(paths.Calls, 4, 10);
+        Assert.Equal(CreatureMapSystem.WanderMaxSearchNodes, paths.LastMaxSearchNodes); // a wander leg runs a small search
+        Assert.True(generator.ConsecutiveNoPath >= 4);
+
+        paths.Route = true;
+        Run(world, 25_000, 50); // longer than the longest wait (24 s)
+        Assert.NotEqual(30f, wolf.X); // a leg ran
+        Assert.Equal(0, generator.ConsecutiveNoPath);
+    }
+
     [Fact]
     public void TheGeneratorTypeNumbers_AreVmangos()
     {

@@ -64,17 +64,32 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
     /// <summary>vmangos RandomMovementGenerator constructor default when the spawn has none.</summary>
     public const float DefaultWanderDistance = 5.0f;
 
+    /// <summary>The most doublings of the no-path wait (1-1.5 s, 2-3 s, ... up to 16-24 s).</summary>
+    public const int MaxNoPathBackoffShift = 4;
+
     private int _nextMoveMs;
     private int _wanderSteps;
+    private int _consecutiveNoPath;
 
     public MovementGeneratorType Type => MovementGeneratorType.Random;
 
     public int NextMoveMs => _nextMoveMs;
 
+    /// <summary>Legs in a row that had no path (the back-off of <see cref="NoPathRetryDelay"/>; reset by a leg that moves).</summary>
+    public int ConsecutiveNoPath => _consecutiveNoPath;
+
+    /// <summary>
+    /// The wait after the <paramref name="failures"/>-th leg in a row without a path: the 1-1.5 s retry doubled for each failure after the
+    /// first, at most <see cref="MaxNoPathBackoffShift"/> times. Exactly one value is drawn from the mover per call.
+    /// </summary>
+    internal static int NoPathRetryDelay(ICreatureMover mover, int failures)
+        => mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs) << Math.Clamp(failures - 1, 0, MaxNoPathBackoffShift);
+
     public void Initialize(Creature creature, ICreatureMover mover)
     {
         _nextMoveMs = 1000;
         _wanderSteps = 0;
+        _consecutiveNoPath = 0;
     }
 
     public bool Update(Creature creature, ICreatureMover mover, uint diffMs)
@@ -155,8 +170,9 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         PlannedPath plan = mover.PlanPath(creature, new Vector3(destX, destY, destZ));
         if (plan.Outcome == PathOutcome.NoPath)
         {
-            // Skip this leg and pick again later (vmangos' mesh point is always reachable, so it never meets this).
-            _nextMoveMs = mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
+            // Skip this leg and pick again later (vmangos' mesh point is always reachable, so it never meets this). A spawn that keeps
+            // drawing points it cannot reach (off the mesh, a closed room) backs off: each search costs the update, the wait does not.
+            _nextMoveMs = NoPathRetryDelay(mover, ++_consecutiveNoPath);
             return true;
         }
 
@@ -166,6 +182,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             return true;
         }
 
+        _consecutiveNoPath = 0;
         mover.MovePath(creature, plan.Corners, run, SplineFacing.None);
 
         if (_wanderSteps > 0 && mover is not ICreaturePathQuery { IsCrowdedRandomPass: true })
