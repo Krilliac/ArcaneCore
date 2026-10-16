@@ -437,6 +437,30 @@ public sealed class CreatureContent
     }
 
     /// <summary>
+    /// The path a formation leader walks: a creature spawn in slot 0 of a spawn group with a formation takes the formation's
+    /// <c>waypoint_path</c> (mangos-classic MotionMaster::Initialize, MotionGenerators/MotionMaster.cpp:83-94: <c>m_currentPathId =
+    /// MovementIdOrWander</c>, origin PATH_FROM_WAYPOINT_PATH) in place of its own default path. Empty when the spawn leads no formation
+    /// or the formation's path has no points.
+    /// </summary>
+    public IReadOnlyList<CreatureWaypoint> GetFormationLeaderPath(uint spawnGuid)
+    {
+        if (spawnGuid == 0 || SpawnGroups.GroupOf(SpawnGroupType.Creature, spawnGuid) is not { Formation: { } formation } group)
+        {
+            return [];
+        }
+
+        foreach (SpawnGroupMember member in group.Members)
+        {
+            if (member.Guid == spawnGuid)
+            {
+                return member.SlotId == 0 ? GetWaypointPath(formation.PathId) : [];
+            }
+        }
+
+        return [];
+    }
+
+    /// <summary>
     /// Static spawns with waypoint movement (MovementType 2) that have no path to walk (see <see cref="ResolveWaypointPath"/>): no
     /// <c>creature_movement</c> rows of their own and no default entry path for their entry or any entry the spawn can become. The
     /// creature feature reports them once at load (vmangos reports each one when its generator loads, WaypointMovementGenerator.cpp:50).
@@ -448,7 +472,8 @@ public sealed class CreatureContent
         {
             foreach (CreatureSpawn spawn in spawns)
             {
-                if (spawn.MovementType != 2 || ResolveWaypointPath(spawn.Guid, spawn.Entry).Points.Count > 0)
+                if (spawn.MovementType != 2 || ResolveWaypointPath(spawn.Guid, spawn.Entry).Points.Count > 0
+                    || GetFormationLeaderPath(spawn.Guid).Count > 0)
                 {
                     continue;
                 }

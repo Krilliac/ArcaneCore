@@ -25,7 +25,7 @@ Numbering is AzerothCore's. "Rejected" is everything not listed.
 
 | Source | Events | Actions | Targets |
 |---|---|---|---|
-| 0 creature | 0, 1, 2, 4, 6, 7, 8, 21, 25, 59, 60, 61 | 1, 5, 11, 12, 17, 22, 23, 24, 28, 30, 31, 41, 67, 69, 73, 74, 80, 87, 88 (5, 17, 24, 28, 41 added in slice 3a, see `smartai-slice3-20261012.md`) | 0-9, 11, 17, 18, 19, 21, 23, 24 |
+| 0 creature | 0, 1, 2, 4, 6, 7, 8, 21, 25, 59, 60, 61 (slices 3c and 3d add more) | 1, 5, 11, 12, 17, 22, 23, 24, 28, 30, 31, 41, 67, 69, 73, 74, 80, 87, 88 (slices 3a-3d add more; the current sets are in `smartai-slice3-20261012.md`) | 0-9, 11, 17, 18, 19, 21, 23, 24 |
 | 1 game object | 1 UPDATE_OOC, 37 AI_INIT, 59, 60, 61, 63 JUST_CREATED, 64 GOSSIP_HELLO | 1, 11, 22, 23, 30, 31, 67, 73, 74, 80, 87, 88 | 0, 1, 7, 8, 9, 11, 17, 18, 19, 21 |
 | 2 area trigger | 46 AREATRIGGER_ONTRIGGER, 61 LINK | 1, 80, 87, 88 | 7, 19, 21 |
 | 9 timed action list | the stored event type is ignored (the caller's timer type replaces it) | the creature set | the creature set |
