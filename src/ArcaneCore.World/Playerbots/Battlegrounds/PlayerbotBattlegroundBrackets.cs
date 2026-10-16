@@ -14,7 +14,7 @@ internal enum PlayerbotBattlegroundRefusal : byte
     MissingContent,
     NoBattlemaster,
 
-    /// <summary>A type the bots do not play: Alterac Valley (its objectives, NPC fights and 40-player scale have no bot AI here).</summary>
+    /// <summary>A type the bots do not play (<see cref="PlayerbotBattlegroundBrackets.Supported"/>; every vanilla type is played now).</summary>
     Unsupported,
 }
 
@@ -22,14 +22,13 @@ internal enum PlayerbotBattlegroundRefusal : byte
 /// Which battlegrounds a bot of a level may queue for, free of world state (unit tested). The bracket is the manager's own:
 /// <see cref="BattlegroundConstants.BracketOfLevel"/> over the template's minimum level, as <see cref="BattlegroundManager.JoinQueue"/>
 /// computes it (vmangos <c>Player::GetBattleGroundBracketIdFromLevel</c>, Player.cpp:19455-19468). Fails closed: a type the bots do not
-/// play (Alterac Valley, <see cref="Supported"/>), a type with no template, no objective content or no friendly battlemaster is skipped,
+/// play (<see cref="Supported"/>), a type with no template, no objective content or no friendly battlemaster is skipped,
 /// never guessed.
 /// </summary>
 internal static class PlayerbotBattlegroundBrackets
 {
     /// <summary>
-    /// The three vanilla battleground types in the order bots consider them. Alterac Valley is listed so that it is refused by name
-    /// (<see cref="PlayerbotBattlegroundRefusal.Unsupported"/>, logged once) rather than silently absent.
+    /// The three vanilla battleground types in the order bots consider them.
     /// </summary>
     internal static readonly BattlegroundType[] Types = [BattlegroundType.WarsongGulch, BattlegroundType.ArathiBasin, BattlegroundType.AlteracValley];
 
