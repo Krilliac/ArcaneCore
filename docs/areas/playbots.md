@@ -652,7 +652,10 @@ goals the stall watch set aside (deferred or suspended), stalls, zone, map, atta
 **Scoring, off the world thread.** At the end of each world tick `PlayerbotPolicyEngine.Dispatch` hands each map's snapshots to a worker
 task as one batch (one batch in flight per map; at most 1024 rows, past that a snapshot is dropped and counted). The worker scores them in
 chunks within `TickBudgetMs` (2 ms wall time per map batch; the rows past it are left unscored and the overrun counted) and publishes each
-bot's scores. The brain uses them on a later think, while the snapshot is no older than `StaleAfterMs` (4500 world ms). Late, missing,
+bot's scores. The brain uses them on a later think, while the snapshot is no older than `StaleAfterMs` (4500 world ms); on the think
+right after the one that took it (no other think of the bot between, of any kind) the bound is 30 s instead, because a snapshot is first
+usable there however far apart the bot's thinks are (8-17 s at p95 for a 1000-bot Debug server, where the 4.5 s bound alone made every
+verdict stale). Late, missing,
 dropped or non-finite (NaN, infinite) scores make that think fall back to the ladder. Every think on a snapshot decides again and is
 counted (`applied`, `agreed`, `floor`, `explored`, `missing`, `stale`, `non-finite`, `refused`; a refused promotion also counts once as
 `refused` on top of its think's own source), and the feature logs one Info line of the counters every five minutes while the policy is on.
@@ -676,6 +679,11 @@ Training is described below.
 runner-up goals at random (never the ladder's own choice, never `Grind`), which its thinks then try first. It exists to gather telemetry the
 ladder alone never produces; it needs `Enabled`.
 
+**A/B arms.** `AbPolicyShare` (0..1, default 1): the share of bots in the policy arm. The rest are in the ladder arm, fixed per bot by a
+hash of its guid: they take snapshots and score them like the others, but never promote or explore, so they behave as the ladder alone
+and their telemetry (`arm` `ladder`, with the `pick` and `src` the policy would have had) is the comparison. The per-think counters count
+the ladder arm's would-be choices too.
+
 **Telemetry** (`World:Playerbots:Policy:Telemetry`, off by default; needs `Enabled`). One record per decision: the first think that had a
 snapshot's scores or exploration goal (a think on a stale snapshot, or before its scores came back, is not one, so a snapshot whose scores
 never came is not written), written after `OutcomeMinutes` (5) of world time with its outcome. JSON lines, one object per line:
@@ -692,7 +700,8 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 | `ladder`, `pick` | The ladder's choice; the policy's (or exploration's) choice, null when there were no scores. |
 | `src` | `agreed`, `applied`, `explored`, `nonfinite`, `floor` or `refused` (the promoted goal's controller did not act). |
 | `x` | 1 when the choice was exploration. |
-| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. `Opportunity` is the label only when the opportunity controller drove that think (the brain's `Loot` goal alone is also a corpse, so `kind` `Loot` with `goal` null is a corpse). |
+| `arm` | `policy` or `ladder`: the bot's A/B arm (`AbPolicyShare`). |
+| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. `Opportunity` is the label only when the opportunity controller drove that think (the brain's `Loot` goal alone is also a corpse, so `kind` `Loot` with `goal` null is a corpse). `QuestTravel` is the label when the quest destinations planned that think's trip (its `kind` is `Quest`); records before this label have such thinks as `Quest`. |
 | `w` | The outcome window in seconds. |
 | `o` | The outcome over the window, in this order: `lvl`, `lp` (levels gained with their fractions: experience over the next level's, so it compares across levels and level-ups), `xp`, `money`, `items`, `quests` (with `lvl`, the stall-watch fingerprint delta: levels, experience, copper, item count, quests handed in), `stalls`, `deaths`, `anomalies` (the bot's anomaly-ledger reports). |
 
@@ -753,10 +762,12 @@ record comes from a build without it, or from a host with the tick monitor disab
   find per bot; its `reason` is the model's, or `untakeable` (the first guard is one the brain would not take as a target) or `passed-over`
   (another find was better). An episode whose bot leaves before it ends is not written.
 
-**Training (phase 3, staged separately).** An offline trainer and an A/B report (for `tools/playerbot-policy/`) are staged on their own
-branch, to land once the server has run with telemetry on. They fit
-progress per minute for each (state, goal) from the server's own telemetry only, and write the weights file above. No label may come
-from Claude or any other LLM: training data is what the server's bots did and what followed.
+**Training.** Offline, from the server's own telemetry only (`tools/playerbot-policy/`, README there):
+`train.py TELEMETRY_DIR -o model.json` fits progress per minute for each (state, goal) (levels with fractions, plus weighted quests,
+less weighted stalls, deaths and anomalies) as a ridge model per goal or a small ReLU network, holds out a fifth of the rows, refuses to
+write a model from fewer than `--min-rows` (1000), and writes the weights file above. `ab_report.py TELEMETRY_DIR` compares the two arms
+of a run with `AbPolicyShare` 0.5, per bot-hour, with bootstrap intervals over bots. No label may come from Claude or any other LLM:
+training data is what the server's bots did and what followed. Whether a model ships is decided on that report.
 
 ### Contention
 

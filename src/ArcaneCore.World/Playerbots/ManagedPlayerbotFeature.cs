@@ -1203,8 +1203,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
         logger.LogInformation(
-            "Playerbot goal policy on: {Policy}, a snapshot every {IntervalMs} ms, stale after {StaleMs} ms, {BudgetMs} ms per map batch, exploration {Rate}, telemetry {Telemetry}",
+            "Playerbot goal policy on: {Policy}, a snapshot every {IntervalMs} ms, stale after {StaleMs} ms, {BudgetMs} ms per map batch, exploration {Rate}, policy arm share {Share}, telemetry {Telemetry}",
             policy.Policy.Name, _options.Policy.IntervalMs, _options.Policy.StaleAfterMs, _options.Policy.TickBudgetMs, _options.Policy.ExplorationRate,
+            _options.Policy.AbPolicyShare,
             policy.Telemetry is null ? "off" : "on");
         _policy = policy;
     }
