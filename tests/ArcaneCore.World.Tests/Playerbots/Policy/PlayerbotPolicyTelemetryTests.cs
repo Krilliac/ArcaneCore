@@ -58,7 +58,7 @@ public sealed class PlayerbotPolicyTelemetryTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    [Fact]
+    [WindowsFileLockFact]
     public void AnOldFileHeldOpen_StopsNewFiles_RatherThanBreakTheBound()
     {
         string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
@@ -194,5 +194,20 @@ public sealed class PlayerbotPolicyTelemetryTests
         return new PlayerbotPolicyRecord(unixMs, 0xABC, 0, 12, features, open, PlayerbotPolicyGoal.Town, PlayerbotPolicyGoal.Explore,
             PlayerbotPolicySource.Explored, Explored: true, PlayerbotPolicyGoal.Explore, PlayerbotGoalKind.Explore, 300_000,
             new PlayerbotPolicyOutcome(0, 0.125, 120, -5, 2, 0, 0, 1, 0));
+    }
+}
+
+/// <summary>
+/// Runs only on Windows: there an open file without delete sharing cannot be deleted, which is the state the test needs. On Linux and
+/// macOS the delete succeeds whatever is held open, so the writer never refuses and the test's premise does not exist.
+/// </summary>
+internal sealed class WindowsFileLockFactAttribute : FactAttribute
+{
+    public WindowsFileLockFactAttribute()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Skip = "needs Windows file locking: elsewhere an open file can still be deleted";
+        }
     }
 }
