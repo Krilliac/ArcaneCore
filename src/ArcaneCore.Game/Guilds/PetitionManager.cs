@@ -197,11 +197,13 @@ public sealed class PetitionManager
         int id = _nextId++;
         Item charter = player.Inventory.StoreNewItem(destination, template, template.BuyCount);
         charter.SetUInt32(UpdateFields.ItemFieldEnchantment + (PetitionConstants.EnchantmentSlot * 3), (uint)id);
-        player.Session.Send(WorldOpcode.SmsgItemPushResult, ItemPackets.ItemPushResult(player.Guid, charter, 1, received: true, created: false, showInChat: true));
 
         var petition = new Petition(id, player.Guid.Low, charter.Guid.Low, name, player.Team);
         _petitions[id] = petition;
         Persistence?.SavePetition(petition.ToData());
+        // The push result last: the send can reach the client before this handler returns, and a client (or a test) that saw the
+        // charter arrive must find its petition already queued for the store.
+        player.Session.Send(WorldOpcode.SmsgItemPushResult, ItemPackets.ItemPushResult(player.Guid, charter, 1, received: true, created: false, showInChat: true));
     }
 
     // --- charter requests ----------------------------------------------------------------------------

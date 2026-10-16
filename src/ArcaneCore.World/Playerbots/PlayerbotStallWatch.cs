@@ -334,6 +334,18 @@ internal sealed class PlayerbotSuspensions
         Interlocked.Increment(ref _version);
     }
 
+    /// <summary>Lift the set-aside of <paramref name="entry"/> before its time (the reason for it passed). Nothing else about the entry changes.</summary>
+    internal void ReleaseEntry(uint entry)
+    {
+        if (_entries.Remove(entry)) Interlocked.Increment(ref _version);
+    }
+
+    /// <summary>Lift the set-aside of <paramref name="quest"/> before its time (the reason for it passed). The count of set-asides is kept.</summary>
+    internal void ReleaseQuest(uint quest)
+    {
+        if (_quests.Remove(quest)) Interlocked.Increment(ref _version);
+    }
+
     internal int EntryStrikeCount(uint entry) => _entryStrikes.GetValueOrDefault(entry);
 
     /// <summary>

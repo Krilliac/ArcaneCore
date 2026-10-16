@@ -295,19 +295,21 @@ public sealed class PlayerbotPopulationOptions
     /// <summary>
     /// The teleport of a town home (on by default): a bot whose new town lies on another continent, across the water of Teldrassil or
     /// farther than TownWalkYards takes the one return teleport (the Home teleport rules and cooldown) when it is homed there. Off:
-    /// bots reach a town on foot or by taxi only; a town that would need a boat, a zeppelin or a teleport is not assigned to that bot
+    /// bots reach a town by their own means only (on foot, by taxi, and, with World:Playerbots:Travel on and a return mode other than
+    /// Walk, by boat, zeppelin or mage portal: docs/areas/playbots.md, Travel); a town they cannot reach so is not assigned to that bot
     /// (it takes a town it can walk to; with none it keeps a home that is not a town home, or has none, and explores) and one Info
     /// anomaly per reason says so. The progression's own moves (the town cycle, a new band town, the Danger rule on the way to a town)
     /// then never teleport. The Home options' returns of a displaced bot still do, as for any home: from another map (OtherMap), a
     /// walk set aside as blocked (WalkBlocked), the Teleport return mode, an unsafe spirit-healer landing, and stalled ground.
-    /// A bot on Teldrassil, whose only way off is a boat, therefore has no town secondary until a boat (or this option) exists.
+    /// A bot on Teldrassil, whose only way off is a boat, therefore has no town secondary unless it may take the boat (or this option is on).
     /// </summary>
     public bool TownProgressionTeleport { get; set; } = true;
 
     /// <summary>
     /// The longest trip in yards (100..20000) a bot with a town home walks to it on the same continent; farther, or across the water of
     /// Teldrassil, or to another continent, it takes the one return teleport (the Home teleport rules and cooldown). 4500 yards is
-    /// about 11 minutes on foot. Bots never take boats, zeppelins or trams themselves.
+    /// about 11 minutes on foot. With World:Playerbots:Travel on (and a return mode other than Walk), a home across the sea is travelled to
+    /// by boat, zeppelin or portal first, and the teleport is the fallback when no journey can begin.
     /// </summary>
     public int TownWalkYards { get; set; } = 4500;
 

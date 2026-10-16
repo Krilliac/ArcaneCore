@@ -320,6 +320,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue) return false;
         if (_backoffUntil != 0) _backoffUntil = 0;
 
+        if (_transitHeld.Count != 0) ReleaseTransitHeld(player);
         RefreshEntries(player, map.MapId, preferredCreatureEntry, returnQuestId);
         bool hunting = preferredCreatureEntry != 0 && returnQuestId == 0;
         if (hunting)
@@ -464,6 +465,15 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 QuestId = questId;
                 ArmTrip(entry.Entry, questId, returnQuestId, preferredCreatureEntry);
                 return true;
+            }
+
+            // The tram or a lift is the way there but a failed leg backed it off (PlayerbotTransitBackoff): the walk to the far side is refused
+            // for that reason alone, so it is neither judged unreachable nor set aside and no quest is abandoned for it. The destination waits
+            // a short retry; the backoff (or the retry delay after the failure) ends by time.
+            if (_navigationPlan is null && transit && walk is null && TransitHeldOff(player, destination))
+            {
+                Backoff(now);
+                return false;
             }
 
             PlayerbotRoute? route = walk;
@@ -925,8 +935,10 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     /// <summary>
     /// A completed quest whose ender the bot cannot reach because it may not take the tram or a lift yet (<see cref="TransitAllowed"/>):
-    /// set aside like any unreachable ender, and after <see cref="PlayerbotSuspensions.MaxReturnSetAsides"/> set-asides abandoned
-    /// through the client's abandon packet and never taken again, so the far plan is not retried forever. Returns true when abandoned.
+    /// the quest and its ender are set aside for the ordinary window without counting towards abandoning (a level is all the bot lacks, so it
+    /// is never abandoned and never marked unreachable), and held until the bot is allowed to ride: the set-aside is lifted at the first
+    /// <see cref="Update"/> after <see cref="TransitAllowed"/> turns true (<see cref="ReleaseTransitHeld"/>). Always returns false (nothing
+    /// is abandoned).
     /// </summary>
     internal bool ConfirmTransitBlocked(Player player, uint questId, uint entry, uint now, string transit = "the tram or a lift")
     {
@@ -934,21 +946,44 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _failCount = 0;
         _failDiagnosed = false;
         ILogger? log = _session.Services.GetService<ILogger<PlayerbotWorldDestinations>>();
-        suspensions.SuspendQuest(questId, now);
+        suspensions.SuspendQuest(questId, now, countsAsSetAside: false);
         suspensions.SuspendEntry(entry, now);
-        int times = suspensions.QuestSetAsideCount(questId);
-        if (times >= PlayerbotSuspensions.MaxReturnSetAsides && PlayerbotQuestGoals.TryAbandonCompletedQuest(_session, player, questId, out _))
+        bool first = !_transitHeld.ContainsKey(questId);
+        if (first && _transitHeld.Count >= MaxTransitHeld) _transitHeld.Clear();
+        _transitHeld[questId] = entry;
+        if (first)
         {
-            suspensions.MarkUnreachableQuest(questId);
-            log?.LogWarning("Playerbot {Bot} abandons completed quest {Quest} (ender {Entry}) after {Times} set-asides: level {Level} is below the tram level and the ender lies across {Transit}",
-                player.Name, questId, entry, times, player.Level, transit);
-            return true;
+            log?.LogInformation("Playerbot {Bot} holds completed quest {Quest} (ender {Entry}) until level {Required}: level {Level} is below the tram level and the ender lies across {Transit}",
+                player.Name, questId, entry, _options.Population.TramMinLevel, player.Level, transit);
         }
 
-        log?.LogWarning("Playerbot {Bot} sets aside completed quest {Quest} (ender {Entry}, set-aside {Times}): level {Level} is below the tram level and the ender lies across {Transit}",
-            player.Name, questId, entry, times, player.Level, transit);
         return false;
     }
+
+    /// <summary>Completed quests held for want of the tram level (<see cref="ConfirmTransitBlocked"/>) and their enders; bounded by <see cref="MaxTransitHeld"/>.</summary>
+    private readonly Dictionary<uint, uint> _transitHeld = [];
+
+    private const int MaxTransitHeld = 32;
+
+    /// <summary>Held quests (<see cref="ConfirmTransitBlocked"/>) whose bot may ride now: their set-asides are lifted so they are taken up again.</summary>
+    private void ReleaseTransitHeld(Player player)
+    {
+        if (!TransitAllowed(Home, player.Level, _options.Population)) return;
+        foreach ((uint quest, uint entry) in _transitHeld)
+        {
+            Suspensions?.ReleaseQuest(quest);
+            Suspensions?.ReleaseEntry(entry);
+        }
+
+        // The far plans refused while the bot could not ride blocked the enders for a while: they are tried afresh.
+        _blockedSpawns.Clear();
+        _farBlockedUntil.Clear();
+        _transitHeld.Clear();
+    }
+
+    /// <summary>The tram or a lift is the way to <paramref name="destination"/> but waiting out a failed leg (<see cref="PlayerbotTransitBackoff"/>).</summary>
+    private bool TransitHeldOff(Player player, Vector3 destination)
+        => PlayerbotTram.IsHeldOff(_session, player, destination, TramZoneAt) || PlayerbotElevator.IsHeldOff(_session, player, destination);
 
     internal static bool IsDestinationEntry(CreatureContent content, QuestStore quests, CreatureSpawn spawn, uint preferredEntry)
     {
