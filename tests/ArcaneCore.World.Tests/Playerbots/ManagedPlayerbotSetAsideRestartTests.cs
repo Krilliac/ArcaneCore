@@ -79,6 +79,105 @@ public sealed class ManagedPlayerbotSetAsideRestartTests
         await restarted.ShutdownBeforeWorldStopAsync();
     }
 
+    [Fact]
+    public async Task Restart_ContinuesEntryEscalation_AndMigratesLegacyUnreachableRow()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var setAsides = new MemorySetAsideStore();
+        Guid id;
+        await using (WorldTestHost first = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            setAsideStore: setAsides))
+        {
+            var feature = first.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+            await feature.StartupAsync(default);
+            id = Assert.IsType<Guid>((await feature.CreateAsync("Escalate", 1, 1)).BotId);
+            Assert.True((await feature.StartAsync(id.ToString())).Success);
+            await first.World.InvokeAsync(() =>
+            {
+                PlayerbotSuspensions suspensions = feature.FindBrain(id)!.Suspensions;
+                suspensions.SuspendEntryEscalating(4321, first.World.NowMs); // strike 2: 20 minutes
+                return true;
+            });
+            await feature.ShutdownBeforeWorldStopAsync();
+        }
+
+        PlayerbotSetAside entry = Assert.Single(await setAsides.LoadAllAsync(), row => row.TargetId == 4321);
+        Assert.Equal(2, entry.RepeatCount);
+        // A row an older build wrote: the unreachable quest that never expires.
+        await setAsides.ReplaceAsync(id, [entry,
+            new PlayerbotSetAside(id, entry.CharacterId, PlayerbotSetAsideKind.UnreachableQuest, 1361, long.MaxValue)]);
+
+        await using WorldTestHost second = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            setAsideStore: setAsides);
+        var restarted = second.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await restarted.StartupAsync(default);
+        Assert.True((await restarted.StartAsync(id.ToString())).Success);
+        await second.World.InvokeAsync(() =>
+        {
+            PlayerbotSuspensions suspensions = restarted.FindBrain(id)!.Suspensions;
+            uint now = second.World.NowMs;
+            Assert.True(suspensions.IsEntrySuspended(4321, now + PlayerbotSuspensions.SuspendMs + 1_000)); // the escalated 20 minutes survived
+            Assert.Equal(2, suspensions.EntryStrikeCount(4321));
+            Assert.True(suspensions.IsQuestSuspended(1361, now));
+            return true;
+        });
+        await restarted.ShutdownBeforeWorldStopAsync();
+        PlayerbotSetAside unreachable = Assert.Single(await setAsides.LoadAllAsync(), row => row.Kind == PlayerbotSetAsideKind.UnreachableQuest);
+        Assert.InRange(unreachable.ExpiresUnixMs, 1, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 301_000); // finite: a minute and a stagger of four
+        Assert.Equal(2, unreachable.RepeatCount);
+    }
+
+    [Fact]
+    public async Task Restart_KeepsTheStrikesOfAnUnreachableQuestWhoseSetAsideEnded()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var setAsides = new MemorySetAsideStore();
+        Guid id;
+        await using (WorldTestHost first = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            setAsideStore: setAsides))
+        {
+            var feature = first.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+            await feature.StartupAsync(default);
+            id = Assert.IsType<Guid>((await feature.CreateAsync("Strikes", 1, 1)).BotId);
+            Assert.True((await feature.StartAsync(id.ToString())).Success);
+            await first.World.InvokeAsync(() =>
+            {
+                PlayerbotSuspensions suspensions = feature.FindBrain(id)!.Suspensions;
+                uint now = first.World.NowMs;
+                var key = new DeferKey(DeferKind.UnreachableQuest, 1361);
+                suspensions.Ledger.Defer(key, now, untilMs: now); // two diagnoses, each over at once
+                suspensions.Ledger.Defer(key, now, untilMs: now);
+                Assert.False(suspensions.IsQuestSuspended(1361, now));
+                return true;
+            });
+            await feature.ShutdownBeforeWorldStopAsync();
+        }
+
+        PlayerbotSetAside saved = Assert.Single(await setAsides.LoadAllAsync(), row => row.Kind == PlayerbotSetAsideKind.UnreachableQuest);
+        Assert.Equal(2, saved.RepeatCount);
+
+        await using WorldTestHost second = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            setAsideStore: setAsides);
+        var restarted = second.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await restarted.StartupAsync(default);
+        Assert.True((await restarted.StartAsync(id.ToString())).Success);
+        await second.World.InvokeAsync(() =>
+        {
+            PlayerbotSuspensions suspensions = restarted.FindBrain(id)!.Suspensions;
+            uint now = second.World.NowMs;
+            Assert.Equal(2, suspensions.Ledger.Strikes(new DeferKey(DeferKind.UnreachableQuest, 1361)));
+            Assert.False(suspensions.IsQuestSuspended(1361, now));
+            suspensions.MarkUnreachableQuest(1361, now); // the third diagnosis: an hour, not a fresh minute
+            Assert.True(suspensions.IsQuestSuspended(1361, now + 3_599_000));
+            return true;
+        });
+        await restarted.ShutdownBeforeWorldStopAsync();
+    }
+
     private sealed class MemorySetAsideStore : IManagedPlayerbotSetAsideStore
     {
         private readonly Dictionary<Guid, PlayerbotSetAside[]> _rows = [];

@@ -90,7 +90,7 @@ internal sealed partial class PlayerbotBrain
         features[2] = PlayerbotTownGoals.FreeBagSlots(player) / 32f;
         features[3] = inLog / 20f;
         features[4] = complete / 20f;
-        features[5] = _suspensions.Export(Guid.Empty, 0, _session.World.NowMs, 0).Length / 16f;
+        features[5] = _suspensions.Export(Guid.Empty, 0, _session.World.NowMs, 0).Count(row => row.ExpiresUnixMs > 0) / 16f; // set-asides with time left (a kept strike count has none)
         features[6] = Math.Min(1f, _stall.Count / 10f);
         features[7] = player.ZoneId / 4096f;
         features[8] = player.MapId / 1024f;

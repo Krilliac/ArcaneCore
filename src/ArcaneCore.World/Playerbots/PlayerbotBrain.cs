@@ -235,8 +235,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>The ghost recovery (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
     private readonly PlayerbotEquipment _equipment = new(session);
-    private readonly PlayerbotStallWatch _stall = new();
-    private readonly PlayerbotSuspensions _suspensions = new() { Shared = shared };
     private readonly PlayerbotTraceLog _trace = new();
 
     /// <summary>Recent decision, route, and loop transitions for QA diagnostics.</summary>
@@ -713,6 +711,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
         NoteThink(_session.World.NowMs);
+        ObserveDeferWakes(player);
 
         // A tram trip (or a bot found on the Deeprun Tram map) owns the bot until it stands on the continent again (PlayerbotTram): nothing
         // else moves it meanwhile, and the stall watch does not judge a bot waiting for its car. A fight on the way to the entrance ends the
@@ -1564,7 +1563,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         uint now = _session.World.NowMs;
         _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
-        int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y);
+        int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y, now);
         bool deadEndPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
         if (deadEndPin)
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
@@ -1583,7 +1582,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 {
                     _suspensions.SuspendEntryEscalating(TargetEntry, now);
                     if (QuestId != 0 && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
-                        _suspensions.MarkUnreachableQuest(QuestId);
+                        _suspensions.MarkUnreachableQuest(QuestId, now);
                 }
                 else
                 {
