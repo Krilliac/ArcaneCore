@@ -61,7 +61,7 @@ internal sealed class PlayerbotPartyAI
     internal static readonly WorldOpcode[] IntakeOpcodes =
     [
         WorldOpcode.SmsgGroupInvite, WorldOpcode.SmsgMessagechat, WorldOpcode.SmsgLootStartRoll, WorldOpcode.SmsgResurrectRequest,
-        WorldOpcode.SmsgTradeStatus,
+        WorldOpcode.SmsgTradeStatus, WorldOpcode.SmsgTextEmote,
     ];
 
     /// <summary>The brain's melee approach distance (PlayerbotBrain: chase until within 4 yards, then swing).</summary>
@@ -125,6 +125,7 @@ internal sealed class PlayerbotPartyAI
     private readonly Guid _botId;
     private readonly Chat.PlayerbotChatEvents _chatEvents = new();
     private readonly PlayerbotFollowDropWatch _followDrop = new();
+    private readonly Dictionary<ObjectGuid, long> _emoteReplies = [];
     private PlayerbotEpisode _deadEpisode;
     private PlayerbotEpisode _inviteEpisode;
     private PlayerbotEpisode _orphanEpisode;
@@ -292,6 +293,7 @@ internal sealed class PlayerbotPartyAI
                 case WorldOpcode.SmsgLootStartRoll: OnLootRoll(player, packet.Payload); break;
                 case WorldOpcode.SmsgResurrectRequest: OnResurrectRequest(player, packet.Payload); break;
                 case WorldOpcode.SmsgTradeStatus: OnTradeStatus(player, packet.Payload); break;
+                case WorldOpcode.SmsgTextEmote: OnTextEmote(player, packet.Payload); break;
             }
         }
 
@@ -354,7 +356,12 @@ internal sealed class PlayerbotPartyAI
         bool senderIsBot = sender?.Session is WorldSession { IsManaged: true };
         bool isGm = sender is not null && IsGm(sender);
         ObjectGuid master = ResolveMaster(player);
-        switch (PlayerbotChatCommands.Classify(line, player.Guid, master, senderIsBot))
+        // Every line heard is input for the chat service's listeners (later lanes react to channel talk, needs, LFG calls), bots' lines too.
+        if (_chat is { IsActive: true, HasHearers: true } hearer && sender is not null && line.Sender != player.Guid)
+            hearer.Hear(new Chat.BotHeardLine(_botId, player.Guid, player.Name, line.Type, line.ChannelName, line.Sender, sender.Name, senderIsBot,
+                line.Text, line.Type == ChatType.Whisper || Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name), FirstHearing: false));
+        bool botsHeard = _chat is { IsActive: true } listening && listening.SpeechOptions is { Enabled: true, BotToBot: true };
+        switch (PlayerbotChatCommands.Classify(line, player.Guid, master, senderIsBot, botsHeard))
         {
             case PlayerbotChatSource.Master when sender is not null:
             {
@@ -382,12 +389,23 @@ internal sealed class PlayerbotPartyAI
                 else if (Converse(player, line, sender, master)) { }
                 else if (_replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.PoliteReply);
                 break;
+            case PlayerbotChatSource.Bot when sender is not null:
+                // Another bot's line: only the chat service answers it, only when it names this bot (or whispers it), and only while the
+                // exchange between the two has turns and budget left (PlayerbotSpeechLimiter.NextBotTurn). Never an order, never a fixed reply.
+                if (line.Type == ChatType.Whisper || Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name))
+                {
+                    int turn = _chat!.NextBotTurn(sender.Guid, player.Guid);
+                    if (turn > 0) Converse(player, line, sender, master, senderIsBot: true, turn);
+                }
+
+                break;
             case PlayerbotChatSource.Ignore when sender is not null && !senderIsBot && sender.Guid != player.Guid:
                 // The master's command word on a channel that is no order (say, yell, guild): dropped, and the master sees nothing.
                 if (!master.IsEmpty && sender.Guid == master && PlayerbotChatCommands.TryParse(line.Text, out PlayerbotPartyCommand unheard))
                     PlayerbotPartyAnomalies.Report(player, PlayerbotPartyAnomalies.CommandIgnored,
                         $"the master's '{unheard}' command came as {line.Type} chat; only whispers and party or raid chat are orders", AnomalySeverity.Info);
-                // A party or say line from a real player: answered when it names the bot.
+                // A line from a real player on any other channel (party, raid, say, yell, battleground, guild, a world channel): answered
+                // on that channel when it names the bot, or, in guild chat, when it is a question put to the whole guild.
                 if (Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name))
                 {
                     if (isGm && PlayerbotChatCommands.IsDebugQuestion(line.Text)) { Tell(player, sender.Name, DebugLine(player)); break; }
@@ -405,30 +423,64 @@ internal sealed class PlayerbotPartyAI
     // --- chat ---------------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Hand a player's line to the chat service (docs/areas/playbots.md, Bot chat). False when chat is off or the line is not one the
-    /// bots answer (the fixed replies of before then apply); true when the line is the chat's, whether or not a reply comes (a
-    /// cooldown, a spent budget or a full queue means silence).
+    /// Hand a line to the chat service (docs/areas/playbots.md, Bot chat). False when chat is off or the line is not one the bots answer
+    /// (the fixed replies of before then apply); true when the line is the chat's, whether or not a reply comes (a cooldown, a spent
+    /// budget or a full queue means silence). The answer goes back on the line's own channel (<see cref="Chat.BotSpeech.ReplyChannelFor"/>:
+    /// raid in raid chat, a world channel line in that channel) as a reply to the speaker, through the speech limits. A whisper is always
+    /// the bot's; any other line only when it names the bot, or, in guild chat, when a real player puts a question to the whole guild
+    /// (one bot answers: the per-speaker cooldown keeps the others quiet). <paramref name="senderIsBot"/>: another bot spoke, at
+    /// <paramref name="turn"/> of their exchange.
     /// </summary>
-    private bool Converse(Player player, PlayerbotChatLine line, Player sender, ObjectGuid master)
+    private bool Converse(Player player, PlayerbotChatLine line, Player sender, ObjectGuid master, bool senderIsBot = false, int turn = 0)
     {
         if (_chat is not { IsActive: true } chat || !chat.Answers(line.Type) || line.Text.Length == 0) return false;
-        bool whisper = line.Type == ChatType.Whisper;
-        if (!whisper)
-        {
-            if (!Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name)) return false;
-            if (line.Type == ChatType.Say && sender.Team != player.Team) return false;
-        }
+        if (Chat.BotSpeech.ReplyChannelFor(line.Type) is not { } replyOn) return false;
+        bool addressed = line.Type == ChatType.Whisper || Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name);
+        if (!addressed && (line.Type != ChatType.Guild || senderIsBot || !Chat.PlayerbotChatPrompts.IsOpenQuestion(line.Text))) return false;
+        if (line.Type is ChatType.Say or ChatType.Yell && sender.Team != player.Team) return false;
+        if (replyOn == Chat.BotSpeechChannel.World && line.ChannelName is null) return false;
 
         _chatEvents.Observe(player, Now);
-        bool fromMaster = !master.IsEmpty && sender.Guid == master;
-        bool isGm = IsGm(sender);
-        var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master, isGm), sender.Guid, sender.Name,
-            line.Type is ChatType.Raid or ChatType.RaidLeader ? ChatType.Party : line.Type, line.Text, fromMaster, InviteAllowed(player, sender),
-            sender.AccountId, FromGm: isGm);
-        // The AI disclosure comes first, once per login of the speaker (a new Player is made at every login).
-        if (chat.TryAsk(ask) == Chat.BotChatAdmission.Queued && chat.TakeDisclosure(ask, Chat.PlayerbotChatSafety.LoginOf(sender)) is { } notice)
+        bool fromMaster = !senderIsBot && !master.IsEmpty && sender.Guid == master;
+        bool isGm = !senderIsBot && IsGm(sender);
+        var speech = new Chat.BotSpeech(replyOn, string.Empty, senderIsBot ? "bot-reply" : "reply",
+            senderIsBot ? Chat.BotSpeechPriority.Normal : Chat.BotSpeechPriority.High)
+        {
+            Target = sender.Name, TargetGuid = sender.Guid, ChannelName = line.ChannelName, IsReply = true, ToBot = senderIsBot, Turn = turn,
+        };
+        var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master, isGm), sender.Guid, sender.Name, line.Type, line.Text, fromMaster,
+            !senderIsBot && InviteAllowed(player, sender), senderIsBot ? 0 : sender.AccountId, FromGm: isGm, Speech: speech, SenderIsBot: senderIsBot,
+            Addressed: addressed);
+        // The AI disclosure comes first, once per login of the speaker (a new Player is made at every login); never to a bot.
+        if (chat.TryAsk(ask) == Chat.BotChatAdmission.Queued && !senderIsBot
+            && chat.TakeDisclosure(ask, Chat.PlayerbotChatSafety.LoginOf(sender)) is { } notice)
             Gm.Core.GmReplies.SendSystemMessage(sender, notice);
         return true;
+    }
+
+    /// <summary>
+    /// A text emote aimed at the bot (SMSG_TEXT_EMOTE naming it): answered in kind (<see cref="BotSocial.PlayerbotSocialEmotes.ReplyTo"/>:
+    /// a wave with a wave, a bow with a bow, a hug with a blush) through the speech API, at most once per
+    /// <see cref="Chat.PlayerbotSpeechOptions.EmoteReplyGapSeconds"/> per emoter, while alive and out of combat. Another bot's emote is
+    /// answered only within the bot-to-bot turns, so two bots never wave at each other forever.
+    /// </summary>
+    private void OnTextEmote(Player player, byte[] payload)
+    {
+        if (_chat is not { IsActive: true } chat || chat.SpeechOptions is not { Enabled: true, EmoteReplies: true } options) return;
+        if (!PlayerbotChatCommands.TryReadTextEmote(payload, out PlayerbotTextEmote emote) || emote.Emoter == player.Guid) return;
+        if (!string.Equals(emote.TargetName, player.Name, StringComparison.OrdinalIgnoreCase)) return;
+        if (!player.IsAlive || player.Combat.IsInCombat || _session.World.FindOnlinePlayer(emote.Emoter) is not { } emoter) return;
+        bool fromBot = emoter.Session is WorldSession { IsManaged: true };
+        long now = Now;
+        long gap = options.EmoteReplyGapSeconds * 1000L;
+        if (_emoteReplies.Count > 64)
+            foreach (KeyValuePair<ObjectGuid, long> stale in _emoteReplies.Where(pair => now - pair.Value >= gap).ToArray()) _emoteReplies.Remove(stale.Key);
+        if (_emoteReplies.TryGetValue(emoter.Guid, out long at) && now - at < gap) return;
+        int turn = 0;
+        if (fromBot && (!options.BotToBot || (turn = chat.NextBotTurn(emoter.Guid, player.Guid)) <= 0)) return;
+        if (BotSocial.PlayerbotSocialEmotes.ReplyTo(emote.TextEmote, _random) is not { } answer) return;
+        _emoteReplies[emoter.Guid] = now;
+        chat.TrySpeak(_botId, player.Guid, Chat.BotSpeech.EmoteAt(answer, emoter.Guid, "emote-reply") with { IsReply = true, ToBot = fromBot, Turn = turn });
     }
 
     /// <summary>The bot's facts for a line it starts itself (world thread; the social features' guild announcements and greetings).</summary>
@@ -480,36 +532,14 @@ internal sealed class PlayerbotPartyAI
     }
 
     /// <summary>
-    /// World thread: say a chat reply through the bot's own CMSG_MESSAGECHAT (a whisper back, the party line or /say), and carry out
-    /// the master's order when the speaker is still the bot's master.
+    /// World thread: say a chat line (a reply, an announcement or a <see cref="Chat.PlayerbotChat.TrySpeak"/> line) through the bot's own
+    /// session (<see cref="Chat.PlayerbotSpeechDelivery"/>: the place checks, the speech limits, then CMSG_MESSAGECHAT or CMSG_TEXT_EMOTE),
+    /// and carry out the master's order when the speaker is still the bot's master.
     /// </summary>
     internal void DeliverChat(Player player, Chat.BotChatReply reply)
     {
-        if (reply.Text is { Length: > 0 } text)
-        {
-            Language language = player.Team == Team.Horde ? Language.Orcish : Language.Common;
-            switch (reply.Channel)
-            {
-                case ChatType.Whisper:
-                    if (_session.World.FindOnlinePlayer(reply.SenderGuid) is not null)
-                        Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Whisper(language, reply.SenderName, text), budgeted: false);
-                    break;
-                case ChatType.Party:
-                    // In a raid, party chat reaches only the bot's own subgroup: the reply goes on raid chat, so a master in another subgroup hears it.
-                    if (Services.Social?.Groups.GetGroup(player.Guid) is { } replyGroup)
-                        Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(PlayerbotChatCommands.GroupChannel(replyGroup.IsRaid), language, text), budgeted: false);
-                    break;
-                case ChatType.Say:
-                    Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(ChatType.Say, language, text), budgeted: false);
-                    break;
-                case ChatType.Guild:
-                    // A guild announcement (docs/areas/playbots-social.md): said only in the guild it was written for, and only while guilded.
-                    if (Services.Social?.Guilds.GetGuildOf(player) is { } guild
-                        && (reply.Guild is null || string.Equals(guild.Name, reply.Guild, StringComparison.OrdinalIgnoreCase)))
-                        Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(ChatType.Guild, language, text), budgeted: false);
-                    break;
-            }
-        }
+        if (_chat is { } chat && SpeechOf(reply) is { } speech)
+            Chat.PlayerbotSpeechDelivery.Deliver(chat, _botId, _session, player, speech);
 
         if (reply.Command is { } command)
         {
@@ -519,6 +549,24 @@ internal sealed class PlayerbotPartyAI
             _masterLostMs = -1;
             Execute(player, current, command, acknowledge: reply.AcknowledgeCommand);
         }
+    }
+
+    /// <summary>
+    /// The envelope a reply is said with: its own (<see cref="Chat.BotChatReply.Speech"/>), or for the replies of before, the channel the
+    /// line came on (a whisper back to the speaker, party, say, a guild announcement in the guild it was written for). Null when there is
+    /// nothing to say.
+    /// </summary>
+    internal static Chat.BotSpeech? SpeechOf(Chat.BotChatReply reply)
+    {
+        string text = reply.Text ?? string.Empty;
+        if (reply.Speech is { } own)
+            return own.Channel == Chat.BotSpeechChannel.Emote ? own : text.Length == 0 ? null : own with { Text = text };
+        if (text.Length == 0 || Chat.BotSpeech.ReplyChannelFor(reply.Channel) is not { } channel) return null;
+        bool announcement = reply.Channel == ChatType.Guild && reply.Guild is not null;
+        return new Chat.BotSpeech(channel, text, announcement ? "guild" : "reply", announcement ? Chat.BotSpeechPriority.Normal : Chat.BotSpeechPriority.High)
+        {
+            Target = reply.SenderName, TargetGuid = announcement ? default : reply.SenderGuid, Guild = reply.Guild, IsReply = !announcement,
+        };
     }
 
     private void OnLootRoll(Player player, byte[] payload)

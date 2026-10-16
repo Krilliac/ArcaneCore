@@ -117,8 +117,8 @@ public sealed class PlayerbotSocialEmoteOptions
 {
     /// <summary>
     /// Let an idle bot wave at (CMSG_TEXT_EMOTE) or greet with /say a real player of its faction standing within 8 yards, at most once per
-    /// bot and player in 30 minutes, once per player in 10 minutes, once per bot in 5 minutes and twelve times a minute in all (off by default).
+    /// bot and player in 30 minutes, once per player in 10 minutes, once per bot in 5 minutes and twelve times a minute in all (on by default).
     /// A player who ignores the bot is never greeted.
     /// </summary>
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
 }

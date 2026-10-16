@@ -37,6 +37,39 @@ public sealed class RollingFileWriterTests : IDisposable
 
     private static string Line(int n) => $"line {n:000}\n"; // 9 bytes
 
+    /// <summary>
+    /// Two processes (the realm and world daemons) append to one shared debug log: every line of both must survive. A plain append
+    /// stream seeks to the end once at open and then writes at its own offset, so the two overwrote each other's lines (the 2026-10-16
+    /// live log lost the world's startup lines, "Bot chat provider" among them). Two streams in one process show the same race.
+    /// </summary>
+    [Fact]
+    public void TwoAppenders_OnOneFile_KeepEveryLine()
+    {
+        // The fix is the Windows append-only open (FILE_APPEND_DATA); .NET on Unix has no O_APPEND FileStream, so there the race remains
+        // and this test proves nothing. The servers run on Windows.
+        if (!OperatingSystem.IsWindows()) return;
+        Directory.CreateDirectory(_dir);
+        using (FileStream a = RollingFileWriter.OpenAppend(LogPath))
+        using (FileStream b = RollingFileWriter.OpenAppend(LogPath))
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                a.Write(System.Text.Encoding.ASCII.GetBytes($"A{i}\n"));
+                a.Flush();
+                b.Write(System.Text.Encoding.ASCII.GetBytes($"B{i}\n"));
+                b.Flush();
+            }
+        }
+
+        string[] lines = ReadShared(LogPath).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(10, lines.Length);
+        for (int i = 0; i < 5; i++)
+        {
+            Assert.Contains($"A{i}", lines);
+            Assert.Contains($"B{i}", lines);
+        }
+    }
+
     [Fact]
     public void RollsAtSize_AndNamesSegmentsByDateAndSequence()
     {

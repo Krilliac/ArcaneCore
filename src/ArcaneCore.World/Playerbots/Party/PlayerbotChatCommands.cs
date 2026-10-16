@@ -73,10 +73,22 @@ internal enum PlayerbotChatSource
 
     /// <summary>Somebody else's whisper: one polite, rate-limited answer.</summary>
     Stranger,
+
+    /// <summary>
+    /// Another managed bot's line, let through as input (<see cref="Chat.PlayerbotSpeechOptions.BotToBot"/>): never an order and never a
+    /// fixed reply; only the chat service answers it, within the bot-to-bot turns and budgets.
+    /// </summary>
+    Bot,
 }
 
-/// <summary>One decoded player SMSG_MESSAGECHAT (vmangos ChatHandler::BuildChatPacket; ChatPackets.BuildMessage).</summary>
-internal readonly record struct PlayerbotChatLine(ChatType Type, Language Language, ObjectGuid Sender, string Text);
+/// <summary>
+/// One decoded player SMSG_MESSAGECHAT (vmangos ChatHandler::BuildChatPacket; ChatPackets.BuildMessage, ChannelPackets.BuildChannelMessage).
+/// <see cref="ChannelName"/> is the world channel of a CHAT_MSG_CHANNEL line (null otherwise).
+/// </summary>
+internal readonly record struct PlayerbotChatLine(ChatType Type, Language Language, ObjectGuid Sender, string Text, string? ChannelName = null);
+
+/// <summary>One decoded SMSG_TEXT_EMOTE: who emoted, the text emote id, and the name of the target (empty: none).</summary>
+internal readonly record struct PlayerbotTextEmote(ObjectGuid Emoter, uint TextEmote, string TargetName);
 
 /// <summary>The party bot's chat: decoding what it hears, parsing commands, and the whispers it sends back (CMSG_MESSAGECHAT).</summary>
 internal static partial class PlayerbotChatCommands
@@ -203,11 +215,13 @@ internal static partial class PlayerbotChatCommands
 
     /// <summary>
     /// Whose line it is: the master's whisper or party (raid) line is a command; another player's whisper gets the polite answer;
-    /// everything else, and every line from the bot itself or from another managed bot, is ignored.
+    /// a managed bot's line is <see cref="PlayerbotChatSource.Bot"/> when <paramref name="botsHeard"/> lets bots hear bots, and ignored
+    /// otherwise; the bot's own line and everything else are ignored.
     /// </summary>
-    internal static PlayerbotChatSource Classify(PlayerbotChatLine line, ObjectGuid self, ObjectGuid master, bool senderIsBot)
+    internal static PlayerbotChatSource Classify(PlayerbotChatLine line, ObjectGuid self, ObjectGuid master, bool senderIsBot, bool botsHeard = false)
     {
-        if (line.Sender.IsEmpty || line.Sender == self || senderIsBot) return PlayerbotChatSource.Ignore;
+        if (line.Sender.IsEmpty || line.Sender == self) return PlayerbotChatSource.Ignore;
+        if (senderIsBot) return botsHeard ? PlayerbotChatSource.Bot : PlayerbotChatSource.Ignore;
         bool whisper = line.Type == ChatType.Whisper;
         bool group = line.Type is ChatType.Party or ChatType.Raid or ChatType.RaidLeader;
         if (!master.IsEmpty && line.Sender == master && (whisper || group)) return PlayerbotChatSource.Master;
@@ -216,28 +230,70 @@ internal static partial class PlayerbotChatCommands
 
     /// <summary>
     /// Decode a player chat line: u8 type, u32 language, u64 sender, a second u64 for say/party/yell, u32 size, CString text, u8 tag.
-    /// False for channel and monster lines (their layout differs) and for a body that does not fit.
+    /// A channel line (CHAT_MSG_CHANNEL) is u8 type, u32 language, CString channel, u32 player rank, u64 sender, u32 size, CString text,
+    /// u8 tag (ChannelPackets.BuildChannelMessage). False for monster lines (their layout differs) and for a body that does not fit.
     /// </summary>
     internal static bool TryRead(byte[] payload, out PlayerbotChatLine line)
     {
         line = default;
         if (payload.Length < 18) return false;
         var type = (ChatType)payload[0];
-        if (type is ChatType.Channel or ChatType.MonsterSay or ChatType.MonsterYell or ChatType.MonsterEmote
+        if (type is ChatType.MonsterSay or ChatType.MonsterYell or ChatType.MonsterEmote
             or ChatType.MonsterWhisper or ChatType.RaidBossEmote or ChatType.RaidBossWhisper) return false;
         var reader = new PacketReader(payload.AsSpan(1));
-        if (!reader.TryReadUInt32(out uint language) || !reader.TryReadUInt64(out ulong sender)) return false;
-        if ((type is ChatType.Say or ChatType.Party or ChatType.Yell) && !reader.TryReadUInt64(out _)) return false;
-        if (!reader.TryReadUInt32(out uint size) || size == 0 || size > reader.Remaining) return false;
         try
         {
-            line = new PlayerbotChatLine(type, (Language)language, new ObjectGuid(sender), reader.ReadCString());
+            if (!reader.TryReadUInt32(out uint language)) return false;
+            string? channel = null;
+            if (type == ChatType.Channel)
+            {
+                channel = reader.ReadCString();
+                if (channel.Length == 0 || !reader.TryReadUInt32(out _)) return false;
+            }
+
+            if (!reader.TryReadUInt64(out ulong sender)) return false;
+            if ((type is ChatType.Say or ChatType.Party or ChatType.Yell) && !reader.TryReadUInt64(out _)) return false;
+            if (!reader.TryReadUInt32(out uint size) || size == 0 || size > reader.Remaining) return false;
+            line = new PlayerbotChatLine(type, (Language)language, new ObjectGuid(sender), reader.ReadCString(), channel);
             return true;
         }
         catch (ArgumentOutOfRangeException)
         {
             return false; // no terminator (PacketReader's malformed-packet exception)
         }
+    }
+
+    /// <summary>
+    /// Decode SMSG_TEXT_EMOTE (ChatPackets.BuildTextEmote, vmangos HandleTextEmoteOpcode): u64 emoter, u32 text emote, u32 emote number,
+    /// u32 name size (with the terminator), CString target name (empty: no target). False for a body that does not fit.
+    /// </summary>
+    internal static bool TryReadTextEmote(byte[] payload, out PlayerbotTextEmote emote)
+    {
+        emote = default;
+        if (payload.Length < 21) return false;
+        var reader = new PacketReader(payload);
+        try
+        {
+            if (!reader.TryReadUInt64(out ulong emoter) || !reader.TryReadUInt32(out uint textEmote) || !reader.TryReadUInt32(out _)
+                || !reader.TryReadUInt32(out uint size) || size == 0 || size > reader.Remaining) return false;
+            emote = new PlayerbotTextEmote(new ObjectGuid(emoter), textEmote, reader.ReadCString());
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>CMSG_MESSAGECHAT channel body: u32 type (CHAT_MSG_CHANNEL), u32 language, CString channel, CString text.</summary>
+    internal static byte[] ChannelMessage(Language language, string channel, string text)
+    {
+        var writer = new PacketWriter(16 + channel.Length + text.Length);
+        writer.WriteUInt32((uint)ChatType.Channel);
+        writer.WriteUInt32((uint)language);
+        writer.WriteCString(channel);
+        writer.WriteCString(text);
+        return writer.ToArray();
     }
 
     /// <summary>CMSG_MESSAGECHAT whisper body: u32 type, u32 language, CString target, CString text.</summary>
@@ -257,7 +313,7 @@ internal static partial class PlayerbotChatCommands
     /// </summary>
     internal static ChatType GroupChannel(bool raid) => raid ? ChatType.Raid : ChatType.Party;
 
-    /// <summary>CMSG_MESSAGECHAT say/party/raid body: u32 type, u32 language, CString text.</summary>
+    /// <summary>CMSG_MESSAGECHAT say/yell/party/raid/raid warning/battleground/guild body: u32 type, u32 language, CString text.</summary>
     internal static byte[] Message(ChatType type, Language language, string text)
     {
         var writer = new PacketWriter(12 + text.Length);

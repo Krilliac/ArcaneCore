@@ -35,6 +35,12 @@ internal sealed record BotChatTopic(string TemplateKey, string Instruction, IRea
 /// One line a player said to a bot, with everything a provider needs to answer it. <see cref="SenderAccountId"/> is for the safety
 /// records and the automatic mute only (0 when unknown); it never reaches a provider, and neither do the GUIDs. A <see cref="Topic"/>
 /// makes it an announcement the bot starts itself: <see cref="Text"/> is then a plain sentence of what happened.
+/// <para>
+/// <see cref="Speech"/> is where and how the answer is said (the reply channel, the world channel's name, the target, the priority and,
+/// for a bot speaker, the bot-to-bot turn); null keeps the old rule (the answer goes back on <see cref="Channel"/>, a guild announcement
+/// in its guild). <see cref="SenderIsBot"/>: another managed bot spoke (the line is never flagged against it, and only small talk is
+/// answered); <see cref="Addressed"/>: the line named the bot or was a whisper (false for a question put to a whole guild).
+/// </para>
 /// </summary>
 internal sealed record BotChatAsk(
     Guid BotId,
@@ -48,11 +54,16 @@ internal sealed record BotChatAsk(
     bool InviteAllowed,
     int SenderAccountId = 0,
     BotChatTopic? Topic = null,
-    bool FromGm = false);
+    bool FromGm = false,
+    BotSpeech? Speech = null,
+    bool SenderIsBot = false,
+    bool Addressed = true);
 
 /// <summary>
 /// A reply on its way back to the world thread: said by the bot on <see cref="Channel"/>, and the master's order, if any.
 /// <see cref="Guild"/> is the guild a guild-chat announcement is for (null otherwise): it is not said in another one.
+/// <see cref="Speech"/> is the envelope the line is said with (<see cref="BotChatAsk.Speech"/>, or the line of <see cref="PlayerbotChat.TrySpeak"/>);
+/// null for the old replies, which go back on <see cref="Channel"/>.
 /// </summary>
 internal sealed record BotChatReply(
     Guid BotId,
@@ -63,7 +74,8 @@ internal sealed record BotChatReply(
     PlayerbotPartyCommand? Command,
     bool AcknowledgeCommand,
     string Provider,
-    string? Guild = null);
+    string? Guild = null,
+    BotSpeech? Speech = null);
 
 /// <summary>One earlier line of a conversation: the player's (<see cref="FromPlayer"/>) or the bot's.</summary>
 public sealed record BotChatTurn(bool FromPlayer, string Text);

@@ -81,7 +81,7 @@ again next pass.
 
 ## Emotes
 
-`World:Playerbots:Social:Emotes:Enabled` (off by default). An idle bot (autonomous, in no party or bot group, alive, out of combat)
+`World:Playerbots:Social:Emotes:Enabled` (on by default). An idle bot (autonomous, in no party or bot group, alive, out of combat)
 waves (`CMSG_TEXT_EMOTE`, `TEXTEMOTE_WAVE` = 101, vmangos `SharedDefines.h`) or greets in /say with a built-in `social.greet` line
 (never a model, screened by the output filter) at a real player of its faction within 8 yards on the same map, alive, out of combat,
 who has not ignored the bot. Limits, on world time: once per bot and player in 30 minutes, once per player in 10, once per bot in 5,

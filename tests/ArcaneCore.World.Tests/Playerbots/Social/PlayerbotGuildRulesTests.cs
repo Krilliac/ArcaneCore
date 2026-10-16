@@ -145,7 +145,7 @@ public sealed class PlayerbotGuildRulesTests
         Assert.Equal(PlayerbotGuildCreation.Auto, options.Guilds.Creation);
         Assert.True(options.GuildChat.Enabled);
         Assert.Equal(4, options.GuildChat.MessagesPerHour);
-        Assert.False(options.Emotes.Enabled); // greeting real players is opt-in
+        Assert.True(options.Emotes.Enabled); // idle bots greet real players nearby, within the documented gaps
     }
 
     [Fact]

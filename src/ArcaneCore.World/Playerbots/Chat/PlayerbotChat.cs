@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Threading.Channels;
+using ArcaneCore.Game;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -75,6 +76,11 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     private readonly Random _random = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly PlayerbotChatSafety _safety;
+    private readonly PlayerbotSpeechLimiter _limiter = new();
+    private readonly Dictionary<string, long> _heard = new(StringComparer.Ordinal);
+    private int _pendingSpeech;
+    private long _spoken;
+    private long _speechDropped;
     private Channel<BotChatAsk>? _queue;
     private Task[] _workers = [];
     private int _queued;
@@ -102,17 +108,157 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     /// <summary>Whether bots answer chat now (live: <c>.reload config</c>). Off: every line takes the fixed path of before.</summary>
     internal bool IsActive => Volatile.Read(ref _disposed) == 0 && Options.Enabled;
 
-    /// <summary>Whether <paramref name="channel"/> is one the bots answer.</summary>
+    /// <summary>The speech options (<c>World:Playerbots:Chat:Speech</c>, live).</summary>
+    internal PlayerbotSpeechOptions SpeechOptions => Options.Speech;
+
+    /// <summary>The central rate limiter of bot speech (world thread; tests).</summary>
+    internal PlayerbotSpeechLimiter Limiter => _limiter;
+
+    /// <summary>Lines bots have said through <see cref="NoteSpoken"/> so far.</summary>
+    internal long Spoken => Interlocked.Read(ref _spoken);
+
+    /// <summary>Lines refused by <see cref="TrySpeak"/> or stopped at delivery (<see cref="NoteDropped"/>).</summary>
+    internal long SpeechDropped => Interlocked.Read(ref _speechDropped);
+
+    /// <summary>The chat clock in milliseconds (the limiter's time).</summary>
+    internal long NowMs => _time.GetUtcNow().ToUnixTimeMilliseconds();
+
+    /// <summary>
+    /// Whether <paramref name="channel"/> is one the bots answer. A raid or raid warning line is answered while <c>Raid</c> or
+    /// <c>Party</c> is listed (raid lines were answered under Party before Raid existed).
+    /// </summary>
     internal bool Answers(ChatType channel)
     {
         PlayerbotChatChannels wanted = channel switch
         {
             ChatType.Whisper => PlayerbotChatChannels.Whisper,
-            ChatType.Party or ChatType.Raid or ChatType.RaidLeader => PlayerbotChatChannels.Party,
+            ChatType.Party => PlayerbotChatChannels.Party,
+            ChatType.Raid or ChatType.RaidLeader or ChatType.RaidWarning => PlayerbotChatChannels.Raid | PlayerbotChatChannels.Party,
             ChatType.Say => PlayerbotChatChannels.Say,
+            ChatType.Yell => PlayerbotChatChannels.Yell,
+            ChatType.Battleground or ChatType.BattlegroundLeader => PlayerbotChatChannels.Battleground,
+            ChatType.Guild => PlayerbotChatChannels.Guild,
+            ChatType.Channel => PlayerbotChatChannels.World,
             _ => PlayerbotChatChannels.None,
         };
         return wanted != PlayerbotChatChannels.None && (Options.Channels & wanted) != 0;
+    }
+
+    // --- speech -------------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// World thread: a line a bot says on its own (a topic, a need, an LFG call, an emote) or for another lane. The line is checked
+    /// (chat and speech on, a text or an emote, a target or a channel name where one is needed), screened by the chat safety's output
+    /// filter like a model's reply, cleaned to the client's 255 characters, peeked against the bot's own limits
+    /// (<see cref="PlayerbotSpeechLimiter.Peek"/>) and queued; the world thread's drain says it through the bot's session as a client's
+    /// chat packet after the place checks (a listener, the channel's budget, the dedupe: <see cref="PlayerbotSpeechDelivery"/>). Queued
+    /// means it reached the queue, not that it will be heard.
+    /// </summary>
+    internal BotSpeechAdmission TrySpeak(Guid botId, ObjectGuid botGuid, BotSpeech speech)
+    {
+        ArgumentNullException.ThrowIfNull(speech);
+        PlayerbotSpeechOptions options = SpeechOptions;
+        if (!IsActive || !options.Enabled) return BotSpeechAdmission.Disabled;
+        string text = string.Empty;
+        if (speech.Channel == BotSpeechChannel.Emote)
+        {
+            if (speech.TextEmote == 0) return BotSpeechAdmission.Empty;
+        }
+        else
+        {
+            if (PlayerbotChatPrompts.Sanitize(speech.Text) is not { } clean) return BotSpeechAdmission.Empty;
+            text = clean;
+            if (speech.Channel == BotSpeechChannel.Whisper && string.IsNullOrWhiteSpace(speech.Target)) return BotSpeechAdmission.Empty;
+            if (speech.Channel == BotSpeechChannel.World && string.IsNullOrWhiteSpace(speech.ChannelName)) return BotSpeechAdmission.Empty;
+            PlayerbotChatSafetyOptions safety = Options.Safety;
+            if (safety.Enabled && safety.ScreenOutput && _safety.ScreenOutput(text) is { } verdict && (verdict.Flagged || verdict.TimedOut))
+                return Refused(speech, BotSpeechAdmission.Flagged);
+        }
+
+        BotSpeechAdmission peek = _limiter.Peek(botId, botGuid, speech, options, NowMs);
+        if (peek != BotSpeechAdmission.Queued) return Refused(speech, peek);
+        if (Interlocked.Increment(ref _pendingSpeech) > options.MaxQueuedLines)
+        {
+            Interlocked.Decrement(ref _pendingSpeech);
+            return Refused(speech, BotSpeechAdmission.QueueFull);
+        }
+
+        BotSpeech said = speech with { Text = text };
+        _replies.Enqueue(new BotChatReply(botId, speech.TargetGuid, speech.Target ?? string.Empty, said.ChatType, text.Length == 0 ? null : text, null,
+            AcknowledgeCommand: false, SpeechProvider, speech.Guild, said));
+        return BotSpeechAdmission.Queued;
+    }
+
+    /// <summary>The <see cref="BotChatReply.Provider"/> of a <see cref="TrySpeak"/> line.</summary>
+    internal const string SpeechProvider = "Speech";
+
+    private BotSpeechAdmission Refused(BotSpeech speech, BotSpeechAdmission why)
+    {
+        NoteDropped(speech, why);
+        return why;
+    }
+
+    /// <summary>
+    /// The turn a bot's answer to another bot would have now (1 for a new exchange), or 0 when bots must not answer (bot-to-bot talk off,
+    /// the exchange's turns spent, the pair's or the global budget spent). World thread; nothing is taken.
+    /// </summary>
+    internal int NextBotTurn(ObjectGuid speaker, ObjectGuid listener) => _limiter.NextBotTurn(speaker, listener, SpeechOptions, NowMs);
+
+    /// <summary>World thread, at delivery: count and log a line a bot said (bot, channel, topic and length; never the text).</summary>
+    internal void NoteSpoken(string bot, BotSpeech speech, int length)
+    {
+        Interlocked.Increment(ref _spoken);
+        PlayerbotChatMeters.CountSpoken(speech.Channel, speech.Topic);
+        _logger.LogDebug("Bot {Bot} says {Channel}{Where} ({Topic}, {Length} chars)", bot, speech.Channel,
+            speech.ChannelName is { } name ? " in " + name : string.Empty, speech.Topic, length);
+    }
+
+    /// <summary>Count a line that was not said, by reason (<see cref="PlayerbotChatMeters.CountDropped"/>).</summary>
+    internal void NoteDropped(BotSpeech speech, BotSpeechAdmission why)
+    {
+        Interlocked.Increment(ref _speechDropped);
+        PlayerbotChatMeters.CountDropped(speech.Channel, why);
+    }
+
+    /// <summary>
+    /// World thread: every chat line a bot's session received, for the lanes that react to what bots hear (another bot's line flagged
+    /// <see cref="BotHeardLine.SenderIsBot"/>). Raised by <see cref="Hear"/>; a handler that throws is logged and recorded.
+    /// </summary>
+    internal event Action<BotHeardLine>? LineHeard;
+
+    /// <summary>Whether anything listens to <see cref="LineHeard"/> (the party AI skips building the line otherwise).</summary>
+    internal bool HasHearers => LineHeard is not null;
+
+    /// <summary>
+    /// World thread: hand a heard line to <see cref="LineHeard"/>. <see cref="BotHeardLine.FirstHearing"/> is set here: true for the first
+    /// bot reporting this sender's line on this channel within ten seconds (a channel line reaches every bot in the channel).
+    /// </summary>
+    internal void Hear(BotHeardLine line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        if (LineHeard is not { } handlers) return;
+        long now = NowMs;
+        string key = string.Concat(((byte)line.Type).ToString(CultureInfo.InvariantCulture), "|", line.ChannelName, "|",
+            line.SenderGuid.Value.ToString("X", CultureInfo.InvariantCulture), "|", line.Text);
+        bool first;
+        lock (_heard)
+        {
+            if (_heard.Count > 4096)
+                foreach (KeyValuePair<string, long> stale in _heard.Where(pair => now - pair.Value > 10_000).ToArray()) _heard.Remove(stale.Key);
+            if (_heard.Count > 4096) _heard.Clear();
+            first = !_heard.TryGetValue(key, out long at) || now - at > 10_000;
+            if (first) _heard[key] = now;
+        }
+
+        try
+        {
+            handlers(line with { FirstHearing = first });
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot-chat", error);
+            _logger.LogWarning(error, "Bot chat: a heard-line handler failed");
+        }
     }
 
     /// <summary>
@@ -126,7 +272,8 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         if (!Answers(ask.Channel)) return BotChatAdmission.Channel;
         if (_safety.TryChoice(ask) is { } choice)
         {
-            _replies.Enqueue(new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, choice, null, AcknowledgeCommand: false, "Safety"));
+            _replies.Enqueue(new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, choice, null, AcknowledgeCommand: false, "Safety",
+                Speech: ask.Speech));
             return BotChatAdmission.Choice;
         }
 
@@ -150,7 +297,9 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     }
 
     /// <summary>
-    /// World thread: take an announcement a bot makes on its own (<see cref="BotChatAsk.Topic"/> set; a guild line, docs/areas/playbots-social.md).
+    /// World thread: take an announcement a bot makes on its own (<see cref="BotChatAsk.Topic"/> set): a guild line (docs/areas/playbots-social.md)
+    /// or, with <see cref="BotChatAsk.Speech"/> set, a line on any channel the speech API knows (the topic's built-in template, or a model's
+    /// line when one is configured; it is said with that envelope, through the same limits as <see cref="TrySpeak"/>).
     /// Nobody spoke, so there is no channel list, safety choice or per-player cooldown to apply: the line needs chat on, a provider
     /// with budget (the hourly caps, the spend cap) and room in the queue. Queued means a worker will write it (or, when every provider
     /// fails, nothing will); anything else means it was not taken.
@@ -218,7 +367,12 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     {
         if (_replies.IsEmpty) return [];
         var ready = new List<BotChatReply>();
-        while (ready.Count < MaxRepliesPerDrain && _replies.TryDequeue(out BotChatReply? reply)) ready.Add(reply);
+        while (ready.Count < MaxRepliesPerDrain && _replies.TryDequeue(out BotChatReply? reply))
+        {
+            if (ReferenceEquals(reply.Provider, SpeechProvider)) Interlocked.Decrement(ref _pendingSpeech);
+            ready.Add(reply);
+        }
+
         return ready;
     }
 
@@ -272,7 +426,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                     {
                         if (await AnswerAsync(ask).ConfigureAwait(false) is { } reply)
                         {
-                            _replies.Enqueue(reply);
+                            _replies.Enqueue(reply.Speech is null && ask.Speech is not null ? reply with { Speech = ask.Speech } : reply);
                             Interlocked.Increment(ref _answered);
                         }
                         else
@@ -320,6 +474,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             SafetyVerdict verdict = _safety.ScreenInput(ask.Text, filter);
             if (verdict.Category is { } category)
             {
+                if (ask.SenderIsBot) return null; // another bot's line: no strike, no brush-off, no exchange
                 _safety.Flag(ask, category.ToString(), BotChatFlagSource.Local, Strikes(category), ask.Text);
                 return Flagged(ask, category, safety);
             }
@@ -345,6 +500,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                 BotChatModeration moderation = await ModerateAsync(provider, key, ask, options).ConfigureAwait(false);
                 if (moderation.Verdict == BotChatModerationVerdict.Flagged)
                 {
+                    if (ask.SenderIsBot) return null;
                     _safety.Flag(ask, moderation.Category ?? "flagged", BotChatFlagSource.Moderation, strike: true, ask.Text);
                     return Flagged(ask, null, safety);
                 }
