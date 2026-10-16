@@ -1,7 +1,7 @@
 # Redeploys the local live server from a built worktree: graceful Ctrl-C stop of World then Realm, a snapshot of <LiveHome>\bin, an
 # optional world.db swap, a copy of both Debug builds into <LiveHome>\bin, then a start of each daemon in its own console through
 # launch-daemon.ps1 at AboveNormal priority.
-#   pwsh -NoProfile -File tools/ops/live/redeploy.ps1 [-Src <worktree>] [-WorldDbSwap <world.db>] [-LiveHome <dir>] [-Profile <dir>]
+#   pwsh -NoProfile -File tools/ops/live/redeploy.ps1 [-Src <worktree>] [-WorldDbSwap <world.db> [-WorldDb <target>]] [-LiveHome <dir>] [-Profile <dir>]
 # **Touches the live server.** -Src defaults to the worktree this script is in; build it first (dotnet build ArcaneCore.slnx, Debug:
 # live stays a Debug build). Uses ARCANECORE_LIVE_HOME and ARCANECORE_LIVE_PROFILE when the parameters are omitted.
 param(
@@ -9,6 +9,9 @@ param(
     # A refreshed world database (for example a content-importer refresh run on a copy) put in place while the World is stopped.
     # The old one, with its -wal/-shm, is kept beside it as world.db.bak-<stamp>.
     [string]$WorldDbSwap = '',
+    # The world database the swap replaces. Default: the Data Source of Database:World:ConnectionString in the profile's
+    # appsettings.json (the file the World actually opens, which need not be in the profile directory).
+    [string]$WorldDb = '',
     [string]$LiveHome,
     [Alias('Profile')][string]$LiveProfile,
     [int]$WorldStopTimeoutSec = 180,
@@ -18,8 +21,24 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LiveEnv.ps1')
 $LiveHome = Resolve-LiveHome $LiveHome
 $LiveProfile = Resolve-LiveProfile $LiveProfile
-$worldDb = Join-Path $LiveProfile 'world.db'
 $launcher = Join-Path $PSScriptRoot 'launch-daemon.ps1'
+
+function Get-ProfileWorldDb([string]$ProfileDir) {
+    $settings = Get-Content -Raw -LiteralPath (Join-Path $ProfileDir 'appsettings.json') | ConvertFrom-Json
+    $world = $settings.Database.World
+    if (-not $world -or $world.Provider -ne 'Sqlite') { throw 'appsettings.json Database:World is not a Sqlite database: pass -WorldDb' }
+    if ($world.ConnectionString -notmatch '(?i)(?:^|;)\s*Data Source\s*=\s*([^;]+)') { throw 'no Data Source in Database:World:ConnectionString: pass -WorldDb' }
+    $path = $Matches[1].Trim()
+    if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $ProfileDir $path }
+    return $path
+}
+
+if ($WorldDbSwap) {
+    if (-not $WorldDb) { $WorldDb = Get-ProfileWorldDb $LiveProfile }
+    if (-not (Test-Path -LiteralPath $WorldDb)) { throw "world database $WorldDb not found" }
+    if ((Get-Item -LiteralPath $WorldDb).Length -eq 0) { throw "world database $WorldDb is empty: not the database the World uses? pass -WorldDb" }
+    "world.db to swap: $WorldDb"
+}
 
 foreach ($proj in 'ArcaneCore.Realm', 'ArcaneCore.World') {
     $built = Join-Path $Src "src\$proj\bin\Debug\net11.0\$proj.exe"
