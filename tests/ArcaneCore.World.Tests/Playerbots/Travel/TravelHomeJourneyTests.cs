@@ -288,4 +288,174 @@ public sealed class TravelHomeJourneyTests(ITestOutputHelper output)
             brain.Stop();
         }
     }
+
+    /// <summary>The production travel seam, recording the journeys the brain begins through it (world thread only).</summary>
+    private sealed class RecordingTravel(PlayerbotTravel inner) : IPlayerbotTravel
+    {
+        public PlayerbotTravel Inner => inner;
+
+        public List<(TravelJourney? Journey, uint AtMs)> Begun { get; } = [];
+
+        public bool CanReach(WorldSession session, Player player, uint toMap, Vector3 to) => inner.CanReach(session, player, toMap, to);
+
+        public bool TryBegin(WorldSession session, Player player, uint toMap, Vector3 to, out string? why)
+        {
+            bool begun = inner.TryBegin(session, player, toMap, to, out why);
+            Begun.Add((begun ? PlayerbotTravel.JourneyOf(player) : null, session.World.NowMs));
+            return begun;
+        }
+
+        public bool IsTraveling(Player player) => inner.IsTraveling(player);
+    }
+
+    /// <summary>
+    /// Journeys home that BEGIN and later fail count towards the doubling backoff (10 s after the first, 20 s after the second: a begun
+    /// journey does not clear the count), journeys another caller began (as <c>.playerbot travel</c> does, through the same service) neither
+    /// count nor clear it, whether begun in the wait or over a journey home under way, and only a journey home that arrived starts the count
+    /// again (the next failure waits 10 s). The production seam (<see cref="PlayerbotTravel"/>) plans the real walk, boat and walk to map 1;
+    /// each journey is failed by its own bound (<see cref="TravelJourney.DeadlineMs"/>, <c>overdue</c>) and the arrival is set on the journey.
+    /// </summary>
+    [Fact]
+    public async Task JourneysHomeThatBeganAndFailed_DoubleTheBackoff_OnlyAnArrivalClearsIt_AndOthersJourneysDoNotCount()
+    {
+        PlayerbotOptions options = Options(PlayerbotHomeReturnMode.Auto);
+        options.Travel.TransitBackoffSeconds = 10;
+        options.Travel.TransitBackoffMaxSeconds = 300;
+        Assert.Equal(10_000u, options.Travel.BackoffMs(1));
+        Assert.Equal(20_000u, options.Travel.BackoffMs(2));
+        var travel = new RecordingTravel(new PlayerbotTravel(options));
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync(configureServices: services => services.AddSingleton<IPlayerbotTravel>(travel));
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        var home = new PlayerbotHomeArea(1, TravelJourneyShipTests.Goal, 30f, "Porthome");
+        Vector3 elsewhere = ShipTestWorld.Start + new Vector3(-40f, 0f, 0f);
+        var brain = new PlayerbotBrain(world.Session, options);
+
+        Task<uint> NowAsync() => world.OnWorldAsync(() => world.Host.World.NowMs);
+
+        async Task AdvanceToAsync(uint at)
+        {
+            uint now = await NowAsync();
+            if (unchecked((int)(at - now)) > 0) await world.AdvanceAsync(at - now);
+        }
+
+        Task<int> BegunAsync() => world.OnWorldAsync(() => travel.Begun.Count);
+
+        // The journey under way runs past its bound: the next think fails it (overdue), the one after reads it in TryTravelHome. The
+        // world time of that think (the backoff counts from it).
+        async Task<uint> FailJourneyAsync(TravelJourney expected)
+        {
+            await world.OnWorldAsync(() =>
+            {
+                TravelJourney journey = PlayerbotTravel.JourneyOf(world.Player)!;
+                Assert.Same(expected, journey);
+                Assert.Equal(JourneyState.Active, journey.State);
+                journey.DeadlineMs = unchecked(world.Host.World.NowMs - 1);
+            });
+            await ThinkAsync(world, brain);
+            await world.OnWorldAsync(() => Assert.Equal(JourneyState.Failed, expected.State));
+            uint at = await NowAsync();
+            await ThinkAsync(world, brain);
+            return at;
+        }
+
+        async Task<TravelJourney> LastBegunAsync(int count)
+            => await world.OnWorldAsync(() =>
+            {
+                Assert.Equal(count, travel.Begun.Count);
+                TravelJourney journey = travel.Begun[^1].Journey ?? throw new Xunit.Sdk.XunitException("the journey home did not begin");
+                Assert.Equal(new TravelPlace(1, home.Centre), journey.Goal);
+                Assert.Equal(JourneyState.Active, journey.State);
+                return journey;
+            });
+
+        try
+        {
+            await world.OnWorldAsync(() => brain.Home = home);
+            await ThinkAsync(world, brain);
+            TravelJourney first = await LastBegunAsync(1);
+
+            // The first journey home fails: the wait is BackoffMs(1). The return rules teleport the bot home meanwhile (the once a cooldown
+            // allows); it is put back on map 0.
+            uint failedAt = await FailJourneyAsync(first);
+            await world.OnWorldAsync(() => Assert.Equal(1, brain.HomeReturn.Teleports));
+            bool onMap1 = false;
+            for (int i = 0; i < 200 && !onMap1; i++)
+            {
+                onMap1 = await world.OnWorldAsync(() =>
+                {
+                    PlayerbotMovementControl.Update(world.Session, world.Player);
+                    return world.Player.IsInWorld && world.Player.MapId == 1 && world.Teleports.StageOf(world.Player) is null;
+                });
+                if (!onMap1) await world.AdvanceAsync(50);
+            }
+
+            Assert.True(onMap1, "the home teleport did not take the bot to map 1");
+            await world.PlaceAsync(0, ShipTestWorld.Start);
+            await AdvanceToAsync(failedAt + 9_000);
+            await ThinkAsync(world, brain);
+            Assert.Equal(1, await BegunAsync());
+            await AdvanceToAsync(failedAt + 10_000);
+            await ThinkAsync(world, brain);
+            TravelJourney second = await LastBegunAsync(2);
+
+            // The second journey home BEGAN and failed: the count was not cleared by its beginning, the wait doubles to BackoffMs(2).
+            failedAt = await FailJourneyAsync(second);
+            await AdvanceToAsync(failedAt + 15_000);
+            await ThinkAsync(world, brain);
+            await world.OnWorldAsync(() =>
+            {
+                Assert.Equal(2, travel.Begun.Count); // 15 s after the second failure: still waiting
+                Assert.Equal(1, brain.HomeReturn.Teleports);
+                Assert.Equal(0u, world.Player.MapId);
+            });
+
+            // In the wait, another caller's journey begins and fails: it does not count (the wait still ends 20 s after the second failure).
+            TravelJourney other = await world.OnWorldAsync(() =>
+            {
+                Assert.True(travel.Inner.TryBegin(world.Session, world.Player, 0, elsewhere, out string? why), why);
+                return PlayerbotTravel.JourneyOf(world.Player)!;
+            });
+            await ThinkAsync(world, brain);
+            await FailJourneyAsync(other);
+            Assert.Equal(2, await BegunAsync());
+            Assert.True(await NowAsync() - failedAt < 20_000u);
+            await AdvanceToAsync(failedAt + 20_000);
+            await ThinkAsync(world, brain);
+            TravelJourney third = await LastBegunAsync(3);
+
+            // Another caller's journey replaces the journey home under way and fails: neither counts, and with the wait over the journey
+            // home begins again at once.
+            other = await world.OnWorldAsync(() =>
+            {
+                Assert.True(travel.Inner.TryBegin(world.Session, world.Player, 0, elsewhere, out string? why), why);
+                TravelJourney replacing = PlayerbotTravel.JourneyOf(world.Player)!;
+                Assert.NotSame(third, replacing);
+                return replacing;
+            });
+            await FailJourneyAsync(other);
+            TravelJourney fourth = await LastBegunAsync(4);
+
+            // The journey home arrives: the count starts again, so the next journey begins at once, and its failure waits BackoffMs(1).
+            await world.OnWorldAsync(() => fourth.State = JourneyState.Arrived);
+            await ThinkAsync(world, brain);
+            TravelJourney fifth = await LastBegunAsync(5);
+            failedAt = await FailJourneyAsync(fifth);
+            await AdvanceToAsync(failedAt + 9_000);
+            await ThinkAsync(world, brain);
+            Assert.Equal(5, await BegunAsync());
+            await AdvanceToAsync(failedAt + 10_000);
+            await ThinkAsync(world, brain);
+            await LastBegunAsync(6);
+            await world.OnWorldAsync(() =>
+            {
+                Assert.Equal(1, brain.HomeReturn.Teleports);
+                Assert.All(travel.Begun, b => Assert.NotNull(b.Journey));
+            });
+            await TraceAsync(world, brain);
+        }
+        finally
+        {
+            brain.Stop();
+        }
+    }
 }

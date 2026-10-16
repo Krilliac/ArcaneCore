@@ -207,6 +207,44 @@ public sealed class TravelHomeAdapterTests : IDisposable
         Assert.False(CrossesToTeldrassil(Adapter(new PlayerbotTravelOptions { Enabled = false })));
     }
 
+    // --- the Walk return mode -------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A Walk-mode return never begins a journey (PlayerbotBrain.TryTravelHome), so a home across the sea is one such a bot never reaches:
+    /// in Walk mode the adapter answers as the default (no crossing, to another map or to Teldrassil) with every route published and every
+    /// switch on; Auto and Teleport cross. The mode is read live, and the default's own yes cases stay yes in Walk mode.
+    /// </summary>
+    [Fact]
+    public void InWalkMode_NoCrossingIsReachable_EvenWithTheRoutesPublished()
+    {
+        Publish(BootyBay, OrgrimmarUndercity, AuberdineRuttheran);
+        var options = new PlayerbotOptions();
+        var adapter = new PlayerbotTravelHomeTravel(options);
+        foreach (PlayerbotHomeReturnMode crosses in new[] { PlayerbotHomeReturnMode.Auto, PlayerbotHomeReturnMode.Teleport })
+        {
+            options.Home.ReturnMode = crosses;
+            Assert.True(CrossesToKalimdor(adapter), $"{crosses}: no crossing to Kalimdor");
+            Assert.True(CrossesToTeldrassil(adapter), $"{crosses}: no crossing to Teldrassil");
+        }
+
+        options.Home.ReturnMode = PlayerbotHomeReturnMode.Walk;
+        Assert.True(options.Travel.Enabled && options.Travel.Boats && options.Travel.Zeppelins);
+        Assert.False(CrossesToKalimdor(adapter));
+        Assert.False(adapter.CanReachWithoutTeleport(1, Darkshore, 0, Elwynn));
+        Assert.False(CrossesToTeldrassil(adapter));
+        Assert.False(adapter.CanReachWithoutTeleport(1, Teldrassil, 1, Darkshore));
+        Assert.Equal(DefaultHomeTravel.Instance.CanReachWithoutTeleport(0, Elwynn, 1, Darkshore), CrossesToKalimdor(adapter));
+        Assert.Equal(DefaultHomeTravel.Instance.CanReachWithoutTeleport(1, Darkshore, 1, Teldrassil), CrossesToTeldrassil(adapter));
+
+        // The default's own cases are unchanged in Walk mode.
+        Assert.True(adapter.CanReachWithoutTeleport(0, Elwynn, 0, Elwynn + new Vector3(3000f, 0f, 0f)));
+        Assert.True(adapter.CanReachWithoutTeleport(1, Teldrassil, 1, Teldrassil + new Vector3(200f, 200f, 0f)));
+
+        // Live: back to Auto, the crossings answer again.
+        options.Home.ReturnMode = PlayerbotHomeReturnMode.Auto;
+        Assert.True(CrossesToKalimdor(adapter) && CrossesToTeldrassil(adapter));
+    }
+
     // --- the default's cases --------------------------------------------------------------------------------------------
 
     [Fact]

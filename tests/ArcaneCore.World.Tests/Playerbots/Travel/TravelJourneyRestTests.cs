@@ -2,6 +2,8 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Tests.Playerbots.Ship;
 using Xunit;
@@ -87,5 +89,54 @@ public sealed class TravelJourneyRestTests(ITestOutputHelper output)
         {
             brain.Stop();
         }
+    }
+
+    /// <summary>
+    /// The rest ends at a think whose action budget is spent: the stand (CMSG_STANDSTATECHANGE) is refused, and the next leg does not begin
+    /// with the bot seated; the next think sends the stand again, the bot stands, and the leg begins. The journey alone is driven, each think
+    /// with the budget given.
+    /// </summary>
+    [Fact]
+    public async Task AStandRefusedWhenTheRestEnds_IsSentAgain_AndTheNextLegDoesNotBeginSeated()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        PlayerbotOptions options = TravelJourneyShipTests.Options();
+        var travel = new PlayerbotTravel(options);
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            void Think(int budget)
+            {
+                world.Session.ManagedBudget = new ManagedActionBudget(budget);
+                PlayerbotTravel.Drive(world.Session, player, options, 100, out _);
+            }
+
+            player.Health = player.MaxHealth * 3 / 10;
+            Assert.True(travel.TryBegin(world.Session, player, 1, TravelJourneyShipTests.Goal, out string? why), why);
+            TravelJourney journey = PlayerbotTravel.JourneyOf(player)!;
+            Think(4);
+            Assert.True(PlayerbotTravel.IsResting(player), "the journey did not rest a bot at 30% health");
+
+            // Seated as the brain's rest seats it (the real handler).
+            world.Session.ManagedBudget = new ManagedActionBudget(4);
+            Assert.True(world.Session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Sit)));
+            Assert.Equal(StandState.Sit, player.StandState);
+
+            // Recovered, at a think with no action left: the stand is refused, and the leg waits.
+            player.Health = player.MaxHealth;
+            Think(0);
+            Assert.False(PlayerbotTravel.IsResting(player));
+            Assert.Equal(StandState.Sit, player.StandState);
+            Assert.False(journey.LegStarted, "the leg began with the bot seated");
+            Assert.Equal(JourneyState.Active, journey.State);
+
+            // The next think stands the bot, and the leg begins.
+            Think(4);
+            Assert.Equal(StandState.Stand, player.StandState);
+            Assert.True(journey.LegStarted, "the leg did not begin once the bot stood");
+            Assert.False(PlayerbotTravel.IsResting(player));
+            return 0;
+        });
     }
 }

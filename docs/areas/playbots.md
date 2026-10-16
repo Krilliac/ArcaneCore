@@ -834,13 +834,16 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   dock, waiting for the ship, on the gangway) drops that ship leg, a fight during a hearthstone or Teleport cast cancels the cast (not a
   teleport already begun), and the journey begins the leg again afterwards. Between two legs (never in the middle of one) a bot below 45%
   health or 35% mana rests first: the brain eats, drinks or sits until `World:Playerbots:Risk:RecoverHealthPct` (at most the risk wait),
-  then the bot stands and the next leg begins. A switch turned off (Travel `Enabled`, or the means of the next leg) ends the journey at its
+  then the bot stands and the next leg begins (a stand the session refused, its action budget spent, is sent again at the next think; no leg
+  begins seated). A switch turned off (Travel `Enabled`, or the means of the next leg) ends the journey at its
   next safe point without a report; each driver has its own safe point (aboard a ship, the bot rides to the next port and steps off there).
 - **Failure.** A failed leg (its driver reported it once) defers only that leg (`GiveUpTransitLeg`: no quest set aside, no dead-end pin);
   the journey replans once from where the bot stands, leaving out the failed means or point on top of the drivers' backoffs; a second
   failure, or a replan with no route, fails the journey (`travel/leg-failed`, once); a journey is never replanned from aboard a transport. A
   journey is bounded by twice its planned seconds plus ten minutes (`travel/overdue`), checked before the leg drivers: the leg under way is
-  dropped by its driver's rule, except aboard a ship, where the journey ends once the bot stepped off at the next port. A cast leg is bounded
+  dropped by its driver's rule, except aboard a ship, where the journey ends once the bot stepped off at the next port; a walk leg's own
+  transit goes too while it has not left (a taxi trip still walking to its master, a tram trip still walking to its entrance, a lift trip not
+  aboard), so no fare is paid for a journey that is over. A cast leg is bounded
   before the server took its cast too (30 s, or 20 thinks put off: a bot that would not stand still, an action budget spent). Nothing is reported on arrival. Death, a controller, a battleground or a bot-led group taking the bot
   over cancels the journey and its legs (`PlayerbotTravel.CancelLegs`); a bot aboard a ship is never put off at sea (its leg rides to the
   next port, driven by the feature until it stepped off, then the new driver takes it). Chaos probes keep off a bot mid-leg.

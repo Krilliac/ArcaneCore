@@ -98,6 +98,9 @@ internal sealed class TravelJourney(TravelPlace goal, TravelRoute route, uint no
     internal uint RestSinceMs;
     internal int RestedBefore = -1;
 
+    /// <summary>The rest ended with the bot not standing yet (its stand was refused): the next leg waits until it stands.</summary>
+    internal bool StandAfterRest;
+
     /// <summary>Counts leg attempts (every <see cref="ResetLeg"/>): a leg begun again after a fight is a new attempt that may rest first.</summary>
     internal int Attempt;
 
@@ -802,8 +805,9 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
     /// The rest between two legs: out of combat, a bot below <see cref="RestHealthBelowPct"/> of its health or <see cref="RestManaBelowPct"/>
     /// of its mana does not begin the next leg; the journey yields (<see cref="TravelLegStep.Idle"/>, <see cref="IsResting"/>) and the brain
     /// rests the bot (food, drink or sitting). The rest ends at <see cref="PlayerbotRiskOptions.RecoverHealthPct"/> of health and mana, after
-    /// <see cref="MaxRestMs"/>, or in a fight; the bot then stands (CMSG_STANDSTATECHANGE) and the leg begins. Once per leg attempt, so a rest
-    /// that recovered nothing does not hold the journey again. True while resting.
+    /// <see cref="MaxRestMs"/>, or in a fight; the bot then stands (CMSG_STANDSTATECHANGE) and the leg begins. A stand the session refused
+    /// (the action budget spent) is sent again at the next think, and the leg waits for it: no leg begins seated. Once per leg attempt, so a
+    /// rest that recovered nothing does not hold the journey again. True while resting or standing up.
     /// </summary>
     private static bool RestsBetweenLegs(WorldSession session, Player player, PlayerbotOptions options, TravelJourney journey, uint now)
     {
@@ -813,8 +817,21 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
                 return true;
             journey.RestSinceMs = 0;
             journey.RestedBefore = journey.Attempt;
-            if (player.StandState != StandState.Stand)
-                session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand));
+            journey.StandAfterRest = true;
+        }
+
+        if (journey.StandAfterRest)
+        {
+            // In a fight the leg yields anyway (Begin) and the brain fights; standing is the fight's.
+            if (player.StandState == StandState.Stand || player.Combat.IsInCombat)
+            {
+                journey.StandAfterRest = false;
+                return false;
+            }
+
+            session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Stand));
+            if (player.StandState != StandState.Stand) return true; // refused: stand again at the next think
+            journey.StandAfterRest = false;
             return false;
         }
 
@@ -870,10 +887,11 @@ internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTrav
         PlayerbotShip.Cancel(player);
         PlayerbotHearthstone.Cancel(session, player);
         PlayerbotMageService.Cancel(session, player);
-        // A walk leg's own transit trips go too: a taxi still walking to its master, a tram or lift trip not yet aboard (each driver keeps
-        // a flight in the air or a car under way to its end), so no fare is paid for a journey that is over.
+        // A walk leg's own transit trips go too: a taxi still walking to its master, a tram trip still walking to its entrance, a lift trip
+        // not yet aboard (each driver keeps a flight in the air, a bot inside the tram map or a car under way to its end: PlayerbotTram.Cancel
+        // drops a trip at any stage, so only one not yet in the tram is dropped), so no fare is paid for a journey that is over.
         PlayerbotTaxi.Cancel(player);
-        PlayerbotTram.Cancel(player);
+        if (PlayerbotTram.TripOf(player) is { Stage: TramStage.ToEntrance }) PlayerbotTram.Cancel(player);
         PlayerbotElevator.Cancel(player);
         PlayerbotMovementControl.Stop(session, player);
     }
