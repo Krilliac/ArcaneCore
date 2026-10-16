@@ -3,6 +3,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Characters;
@@ -114,6 +115,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     // The giver and quest of the trip last committed to (route, tram or lift); consumed by SettleArrival.
     private uint _travelEntry;
     private uint _travelQuest;
+
+    // The quest-goal journey retry wait (TryJourneyToGoal), per goal (its creature entry and quest): failures in a row and when the next
+    // try may begin; and the journey a quest goal began, with that goal.
+    private const int MaxJourneyWaits = 64;
+    private readonly Dictionary<(uint Entry, uint Quest), (int Failures, uint RetryAt)> _journeyWaits = [];
+    private TravelJourney? _goalJourney;
+    private (uint Entry, uint Quest) _goalJourneyKey;
 
     /// <summary>Quest givers and enders a stalled bot set aside (<see cref="PlayerbotStallWatch"/>).</summary>
     internal PlayerbotSuspensions? Suspensions { get; set; }
@@ -400,6 +408,10 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             Backoff(now);
             return false;
         }
+        // A quest goal with no spawn on this map (a completed quest's ender, an objective's creature on another continent): a journey there.
+        if (_entries.Count == 0 && _navigationPlan is null && (returnQuestId != 0 || preferredCreatureEntry != 0)
+            && TryJourneyOffMap(player, map.MapId, preferredCreatureEntry, returnQuestId, preferredQuestId, services, state, loot, now)) return true;
+
         int scanned = 0;
         bool attempted = false;
         foreach (DestinationEntry entry in _entries
@@ -429,6 +441,18 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             bool attemptedBefore = attempted;
             attempted = true;
             Vector3 destination = new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z);
+            // Across Teldrassil's water on this map: a journey there (TryJourneyToGoal). When none begins, the rules below judge the walk as
+            // before (the region graph skips a spawn no walk reaches).
+            if (_navigationPlan is null
+                && Population.PopulationTownProgression.SeparatedByWater(map.MapId, player.X, player.Y, map.MapId, destination.X, destination.Y)
+                && TryJourneyToGoal(player, entry.Entry, questId, map.MapId, destination, now))
+            {
+                ClearRoute();
+                TargetEntry = entry.Entry;
+                QuestId = questId;
+                return true;
+            }
+
             // Across the Deeprun Tram (Stormwind and Ironforge sides of the continent): the brain drives the trip from the next think,
             // and the destination plans again from the other platform's exit (PlayerbotTram). A low-level bot with no home takes no
             // tram or lift trip (TransitAllowed): the live fresh launch sent about 76 level 1 bots to Stormwind quests by the tram.
@@ -979,6 +1003,94 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _blockedSpawns.Clear();
         _farBlockedUntil.Clear();
         _transitHeld.Clear();
+    }
+
+    /// <summary>
+    /// A quest goal whose creature has no spawn on <paramref name="mapId"/> (the entries are listed per map): the first spawn on another map
+    /// a bot may enter that is no dungeon or battleground (an instance has no journey; its entrance is the group coordinator's), by map then
+    /// spawn, is travelled to (<see cref="TryJourneyToGoal"/>). The goal is the completed <paramref name="returnQuestId"/>'s enders, or the
+    /// hunted <paramref name="preferredCreatureEntry"/> (inside the home, for a homed bot). True when a journey is under way.
+    /// </summary>
+    private bool TryJourneyOffMap(Player player, uint mapId, uint preferredCreatureEntry, uint returnQuestId, uint preferredQuestId,
+        QuestNpcServices? services, PlayerNpcState? state, LootContent? loot, uint now)
+    {
+        if (!_options.Travel.Enabled || _content is not { } content || _quests is not { } quests) return false;
+        WorldMaps maps = WorldMaps.Of(_session.World);
+        IEnumerable<uint> goals = returnQuestId != 0 ? quests.CreatureEndersOf(returnQuestId).Take(MaxEntryScan) : [preferredCreatureEntry];
+        foreach (uint entry in goals)
+        {
+            if (Suspended(entry)
+                || !Eligible(entry, preferredCreatureEntry, player, services, state, returnQuestId, SkipQuest, loot, Home, content, true, out uint questId))
+                continue;
+            if (questId == 0 && preferredCreatureEntry != 0) questId = preferredQuestId;
+            CreatureSpawn? spawn = content.MapsWithSpawns
+                .Where(other => other != mapId && PlayerbotMapPolicy.Allows(_options.AllowedMaps, other, null, current: false)
+                    && maps.Registry.Find(other) is not ({ IsDungeon: true } or { IsBattleground: true }))
+                .Order()
+                .SelectMany(other => content.GetSpawns(other, entry))
+                .FirstOrDefault(s => IsDestinationEntry(content, quests, s, preferredCreatureEntry)
+                    && (returnQuestId != 0 || Home is not { } home || home.Contains(s)));
+            if (spawn is null) continue;
+            if (!TryJourneyToGoal(player, entry, questId, spawn.MapId, new Vector3(spawn.X, spawn.Y, spawn.Z), now)) continue;
+            ClearRoute();
+            TargetEntry = entry;
+            QuestId = questId;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// A quest goal on another map, or across Teldrassil's water on this one, is travelled to the way a player would (docs/areas/playbots.md,
+    /// Travel): a journey by boat, zeppelin, flight path, hearthstone or portal (<see cref="IPlayerbotTravel.TryBegin"/>), which the brain
+    /// drives from the next think; once it ends the destination plans again from where the bot stands. Each goal (its creature entry and
+    /// quest) waits as the home return does (PlayerbotBrain.TryTravelHome): a journey for it that failed (its anomaly is reported once by
+    /// the journey) or could not begin waits the transit backoff before the next, doubling while it keeps failing; one that arrived clears
+    /// the wait. Journeys others began (home, <c>.playerbot travel</c>) neither count nor clear. False: travel off or not registered, the goal
+    /// waiting, or no journey began; the caller goes on as before.
+    /// </summary>
+    private bool TryJourneyToGoal(Player player, uint entry, uint questId, uint toMap, Vector3 destination, uint now)
+    {
+        if (!_options.Travel.Enabled || _session.Services.GetService<IPlayerbotTravel>() is not { } travel) return false;
+        SettleGoalJourney(player, now);
+        if (travel.IsTraveling(player)) return true;
+        var key = (entry, questId);
+        if (_journeyWaits.TryGetValue(key, out (int Failures, uint RetryAt) wait) && unchecked((int)(wait.RetryAt - now)) > 0) return false;
+        if (travel.TryBegin(_session, player, toMap, destination, out _))
+        {
+            _goalJourney = PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Active } begun ? begun : null;
+            _goalJourneyKey = key;
+            return true;
+        }
+
+        WaitAfterFailure(key, now);
+        return false;
+    }
+
+    /// <summary>The journey a quest goal began has ended: arrived clears its goal's wait, failed lengthens it (see <see cref="TryJourneyToGoal"/>).</summary>
+    private void SettleGoalJourney(Player player, uint now)
+    {
+        if (_goalJourney is not { } last) return;
+        if (!ReferenceEquals(last, PlayerbotTravel.JourneyOf(player)))
+        {
+            _goalJourney = null; // replaced by a journey another caller began: it neither counts nor clears
+            return;
+        }
+
+        if (last.State == JourneyState.Active) return;
+        if (last.State == JourneyState.Arrived) _journeyWaits.Remove(_goalJourneyKey);
+        else WaitAfterFailure(_goalJourneyKey, now);
+        _goalJourney = null;
+    }
+
+    private void WaitAfterFailure((uint Entry, uint Quest) key, uint now)
+    {
+        if (!_journeyWaits.ContainsKey(key) && _journeyWaits.Count >= MaxJourneyWaits)
+            foreach ((uint Entry, uint Quest) over in _journeyWaits.Where(w => unchecked((int)(w.Value.RetryAt - now)) <= 0).Select(w => w.Key).ToList())
+                _journeyWaits.Remove(over);
+        int failures = _journeyWaits.TryGetValue(key, out (int Failures, uint RetryAt) wait) ? wait.Failures + 1 : 1;
+        _journeyWaits[key] = (failures, unchecked(now + _options.Travel.BackoffMs(failures)));
     }
 
     /// <summary>The tram or a lift is the way to <paramref name="destination"/> but waiting out a failed leg (<see cref="PlayerbotTransitBackoff"/>).</summary>
