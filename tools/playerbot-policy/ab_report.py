@@ -67,17 +67,22 @@ def load(directory: str, args=None):
     tally = health_filter.Tally()
     if args is not None and not args.no_health_filter:
         health_filter.read_tick_logs(health, args.tick_log)
-        gate = health.build(args.max_overruns)
+        gate = health.build(args.max_overruns, args.window_slack_s, args.tick_log_tail_s)
+    arm_counts = {"policy": [0, 0], "ladder": [0, 0]}  # [dropped, seen]
     for arm, record in decisions:
         if gate is not None:
             verdict = gate.classify(record.get("t", 0), record["w"])
             tally.add(record.get("goal") or "(none)", verdict)
+            arm_counts[arm][1] += 1
             if verdict == "drop":
+                arm_counts[arm][0] += 1
                 continue
         minutes = record["w"] / 60.0
         per_arm[arm][record["bot"]].append({name: record["o"][key] / minutes for name, key in METRICS})
     if gate is not None:
         health_filter.describe(health, tally, args.max_overruns)
+        for arm, (dropped, seen) in arm_counts.items():
+            print(f"  arm {arm}: dropped {dropped} of {seen}", file=sys.stderr)
     elif args is not None:
         print("health filter off (--no-health-filter): every decision kept", file=sys.stderr)
     return per_arm, skipped

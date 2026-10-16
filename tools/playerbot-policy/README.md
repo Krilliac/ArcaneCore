@@ -50,6 +50,15 @@ rewards or examples produced by Claude or any other LLM (Anthropic's terms prohi
      warning is rate limited, and the log's own time span counts as covered. The log and the telemetry must come from the same run
      and the same clock (the log's `ts` is UTC or carries an offset; telemetry `t` is unix ms).
 
+   - The checked span is `[t, t + w + slack]`: the server closes an outcome on the first think after the window has elapsed, so under
+     lag the real span runs longer than `w`. `--window-slack-s` (default 10, one health interval) sets the slack, and the coverage test
+     uses the same extended span.
+   - The last `--tick-log-tail-s` (default 30, `WarnIntervalSeconds`) of a tick log does not count as covered, because an overrun
+     there is reported only after the log ends. Each warning window is widened by 1 s (its "in the last S s" is truncated).
+   - **One server per directory.** Coverage is global across the files of a directory (one server's health and goal records are split
+     across files), so a directory must hold a single server's run. The tools warn when health intervals of different files overlap
+     in time, which means two servers or runs are mixed.
+
    Test the filter with `python -I tools/playerbot-policy/test_health_filter.py` (run from outside the folder; stdlib `unittest`
    plus numpy).
 

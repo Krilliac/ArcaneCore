@@ -99,11 +99,15 @@ def drop_overrun_decisions(rows: list[dict], health, args) -> list[dict]:
         print("health filter off (--no-health-filter): every decision kept", file=sys.stderr)
         return rows
     health_filter.read_tick_logs(health, args.tick_log)
-    gate = health.build(args.max_overruns)
+    gate = health.build(args.max_overruns, args.window_slack_s, args.tick_log_tail_s)
     tally = health_filter.Tally()
     kept = []
     for record in rows:
-        verdict = gate.classify(record["t"], record.get("w", 0))
+        t = record.get("t")
+        if isinstance(t, int) and not isinstance(t, bool):
+            verdict = gate.classify(t, record.get("w", 0))
+        else:
+            verdict = "unverified"  # no usable decision time: it cannot be checked, so it is kept and counted
         tally.add(record.get("goal") or "(none)", verdict)
         if verdict != "drop":
             kept.append(record)

@@ -64,7 +64,7 @@ def write(directory: str, name: str, records: list[dict]) -> str:
 
 
 def args(**overrides) -> argparse.Namespace:
-    values = {"max_overruns": 0, "no_health_filter": False, "tick_log": []}
+    values = {"max_overruns": 0, "no_health_filter": False, "tick_log": [], "window_slack_s": 10.0, "tick_log_tail_s": 30.0}
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -77,11 +77,11 @@ def quiet(function, *a, **k):
 
 
 class FilterTests(unittest.TestCase):
-    def build(self, records, max_overruns=0):
+    def build(self, records, max_overruns=0, slack=0.0):
         h = health_filter.Health()
         for record in records:
             h.add_record(record, "f")
-        return h.build(max_overruns)
+        return h.build(max_overruns, slack)
 
     def test_windows_before_during_and_after(self):
         gate = self.build(health_run(0, 1000, {500: 3}))
@@ -116,6 +116,65 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(3, h.bad)
         self.assertEqual([], h.intervals)
 
+    def test_the_outcome_span_is_extended_by_the_slack_for_overlap_and_coverage(self):
+        records = health_run(0, 1000, {500: 3})
+        # [190, 490] ends where the overrun interval (490, 500] begins; the server may close the outcome up to 10 s late.
+        self.assertEqual("keep", self.build(records).classify(T0 + 190_000, 300))
+        self.assertEqual("drop", self.build(records, slack=10).classify(T0 + 190_000, 300))
+        self.assertEqual("keep", self.build(records, slack=10).classify(T0 + 179_000, 300))
+        # Coverage ends at 1000 s: [695, 995] is covered, [695, 1005] is not.
+        self.assertEqual("keep", self.build(records).classify(T0 + 695_000, 300))
+        self.assertEqual("unverified", self.build(records, slack=10).classify(T0 + 695_000, 300))
+        parser = argparse.ArgumentParser()
+        health_filter.add_arguments(parser)
+        self.assertEqual(10.0, parser.parse_args([]).window_slack_s)
+        self.assertEqual(30.0, parser.parse_args([]).tick_log_tail_s)
+
+    def _tick_log(self, d, lines):
+        path = os.path.join(d, "world.jsonl")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        h = health_filter.Health()
+        h.add_tick_log(path)
+        return h
+
+    def test_the_tail_of_a_tick_log_is_not_covered_and_warning_windows_are_widened(self):
+        warn = ('{"ts":"2026-10-15T04:26:13.650Z","level":"Warning","eventId":7101,"eventName":"TickOverrun",'
+                '"message":"world tick overran its 100 ms budget 10 time(s) in the last 30 s: frame p50 61 ms"}')
+        info = '{"ts":"2026-10-15T04:30:00.000Z","level":"Information","message":"hello"}'
+        end = health_filter._unix_ms("2026-10-15T04:26:13.650Z")
+        last = health_filter._unix_ms("2026-10-15T04:30:00.000Z")
+        with tempfile.TemporaryDirectory() as d:
+            h = self._tick_log(d, [warn, info])
+        self.assertIn((end - 31_000, end, 10), h.intervals)  # 30 s truncated from milliseconds: widened by 1 s
+        trimmed = h.build(0, 0, 30)
+        self.assertEqual("keep", trimmed.classify(last - 40_000, 0))
+        self.assertEqual("unverified", trimmed.classify(last - 20_000, 0))  # inside the last 30 s: unreported overruns possible
+        self.assertEqual("keep", h.build(0, 0, 0).classify(last - 20_000, 0))
+        self.assertEqual("drop", trimmed.classify(end - 30_500, 0))  # in the widened part only
+
+    def test_overlapping_health_from_different_files_is_reported_as_mixed(self):
+        def run(records_by_file):
+            h = health_filter.Health()
+            for path, records in records_by_file.items():
+                h.note_file(path)
+                for record in records:
+                    h.add_record(record, path)
+            return h
+
+        mixed = run({"a.jsonl": health_run(0, 300), "b.jsonl": health_run(100, 400)})
+        self.assertEqual([("a.jsonl", "b.jsonl")], mixed.mixed_files())
+        tally = health_filter.Tally()
+        err = io.StringIO()
+        health_filter.describe(mixed, tally, 0, err)
+        self.assertIn("mixed in one directory", err.getvalue())
+        self.assertIn("one server per directory", err.getvalue())
+        rotated = run({"a.jsonl": health_run(0, 300), "b.jsonl": health_run(300, 600)})  # one server, file rotation
+        self.assertEqual([], rotated.mixed_files())
+        err = io.StringIO()
+        health_filter.describe(rotated, tally, 0, err)
+        self.assertNotIn("mixed", err.getvalue())
+
     def test_a_tick_log_adds_overrun_windows_from_real_log_lines(self):
         first = ('{"ts":"2026-10-15T04:25:43.364Z","level":"Warning","category":"ArcaneCore.Kernel.Ops.Watchdog.TickMonitor","eventId":7101,'
                  '"eventName":"TickOverrun","message":"world tick overran its 100 ms budget 32 time(s): frame p50 56 ms, p99 183 ms"}')
@@ -129,10 +188,10 @@ class FilterTests(unittest.TestCase):
             h = health_filter.Health()
             self.assertEqual(2, h.add_tick_log(path))
         end = health_filter._unix_ms("2026-10-15T04:26:13.650Z")
-        self.assertIn((end - 30_000, end, 10), h.intervals)
+        self.assertIn((end - 31_000, end, 10), h.intervals)
         first_end = health_filter._unix_ms("2026-10-15T04:25:43.364Z")
-        self.assertIn((first_end - 30_000, first_end, 32), h.intervals)  # no "in the last": the default 30 s
-        gate = h.build(0)
+        self.assertIn((first_end - 31_000, first_end, 32), h.intervals)  # no "in the last": the default 30 s
+        gate = h.build(0, 0)
         self.assertEqual("drop", gate.classify(end - 10_000, 60))
         # The log spans 04:25:43 to 04:30:00; a quiet stretch inside it is verified clean, one past it is not.
         self.assertEqual("keep", gate.classify(end + 5_000, 60))
@@ -162,6 +221,17 @@ class TrainTests(unittest.TestCase):
         self.assertIn("Quest: dropped 1 of 2", err)
         self.assertIn("Explore: dropped 0 of 1", err)
         self.assertNotIn("WARNING", err)
+
+    def test_a_goal_record_without_t_is_unverified_not_an_error(self):
+        records = health_run(0, 2000, {700: 5}) + [goal(100)]
+        no_t = goal(100)
+        del no_t["t"]
+        with tempfile.TemporaryDirectory() as d:
+            write(d, "policy-00000001.jsonl", records + [no_t])
+            rows, h = self.load(d)
+            kept, err = quiet(train.drop_overrun_decisions, rows, h, args())
+        self.assertEqual(2, len(kept))
+        self.assertIn("1 unverified", err)
 
     def test_max_overruns_and_the_off_switch(self):
         records = health_run(0, 2000, {700: 5}) + [goal(500)]
@@ -226,6 +296,8 @@ class AbReportTests(unittest.TestCase):
             self.assertEqual(1, len(per_arm["policy"]["P1"]))
             self.assertEqual({"L1"}, set(per_arm["ladder"]))
             self.assertIn("dropped 2 decisions", err)
+            self.assertIn("arm policy: dropped 1 of 2", err)
+            self.assertIn("arm ladder: dropped 1 of 2", err)
             (per_arm, _), _ = quiet(ab_report.load, d, args(no_health_filter=True))
             self.assertEqual(2, len(per_arm["policy"]["P1"]))
             self.assertEqual({"L1", "L2"}, set(per_arm["ladder"]))
