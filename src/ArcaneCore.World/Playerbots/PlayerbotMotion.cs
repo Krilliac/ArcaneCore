@@ -277,6 +277,7 @@ internal static class PlayerbotMotion
         if (PlayerbotMovementControl.AcknowledgeTransfer(session, player)) return;
         PlayerbotElevator.Pump(session, player, now);
         PlayerbotTram.Pump(session, player, now);
+        PlayerbotShip.Pump(session, player, now); // a short stop at a port is not missed between thinks (boarding, stepping off)
         if (!States.TryGetValue(player, out MotionState? state) || state.Route is not { } route) return;
         state.World = session.World;
         if (!CanMove(player) || !player.IsInWorld || player.Map is not { } map || !ReferenceEquals(map, state.Map)

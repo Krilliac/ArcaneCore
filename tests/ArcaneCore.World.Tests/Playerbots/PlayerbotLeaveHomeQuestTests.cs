@@ -152,7 +152,7 @@ public sealed class PlayerbotLeaveHomeQuestTests
     }
 
     [Fact]
-    public async Task ACompletedQuestAcrossTheTram_ForABotTooLowForIt_IsAbandonedAfterTheBoundedSetAsides()
+    public async Task ACompletedQuestAcrossTheTram_ForABotTooLowForIt_IsKeptAndNeverAbandoned()
     {
         await RunAsync((session, player, options, _) =>
         {
@@ -161,17 +161,15 @@ public sealed class PlayerbotLeaveHomeQuestTests
             var suspensions = new PlayerbotSuspensions();
             var destinations = new PlayerbotWorldDestinations(session, options) { Suspensions = suspensions };
 
-            for (int i = 1; i < PlayerbotSuspensions.MaxReturnSetAsides; i++)
+            for (int i = 1; i <= PlayerbotSuspensions.MaxReturnSetAsides + 2; i++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.False(destinations.ConfirmTransitBlocked(player, Breadcrumb, Ender, (uint)(i * 700_000)));
                 Assert.Equal(QuestStatus.Complete, StatusOf(player, session, Breadcrumb));
+                Assert.Equal(0, suspensions.QuestSetAsideCount(Breadcrumb)); // the wait for a level is not a set-aside
             }
 
-            session.ManagedBudget = new ManagedActionBudget(1);
-            Assert.True(destinations.ConfirmTransitBlocked(player, Breadcrumb, Ender, 3_000_000));
-            Assert.NotEqual(QuestStatus.Complete, StatusOf(player, session, Breadcrumb));
-            Assert.True(suspensions.IsQuestSuspended(Breadcrumb, 3_000_001)); // and never taken again
+            Assert.False(suspensions.IsQuestUnreachable(Breadcrumb)); // the quest is kept until the bot may ride
         });
     }
 
