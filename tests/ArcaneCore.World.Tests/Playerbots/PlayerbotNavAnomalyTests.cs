@@ -34,7 +34,7 @@ public sealed class PlayerbotNavAnomalyTests
         {
             session.IsInChaosProbe = chaosProbe;
             Player player = session.Player!;
-            using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(host, player);
+            using AnomalyCapture capture = BotAnomalyCapture.For(player);
             await host.OnWorldAsync(() => body(player, session, capture));
         }
         finally

@@ -722,10 +722,10 @@ public sealed class TownProgressionTests
     [Fact]
     public async Task ATownCentreThatCannotBeResolved_FallsBackToNoHome_WithOneAnomaly()
     {
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == PlayerbotAnomalies.Key("population", "town-unresolved") && n.Detail.Contains("stormwind", StringComparison.Ordinal));
         // Nothing resolves: no anchor NPC has a spawn.
         var empty = new CreatureContent([], [], [], [], []);
         await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 3, content: empty);
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(world.Host.World, n => n.Key == PlayerbotAnomalies.Key("population", "town-unresolved") && n.Detail.Contains("stormwind", StringComparison.Ordinal));
         world.Feature.TownContentSource = () => empty;
         world.Population.FreshStartHome = true;
         Guid[] bots = Bots(world);
@@ -739,9 +739,9 @@ public sealed class TownProgressionTests
     [Fact]
     public async Task ATownMissingFromTheData_IsSkipped_AndReportedOnce()
     {
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == PlayerbotAnomalies.Key("population", "town-unresolved") && n.Detail.Contains("thelsamar", StringComparison.Ordinal));
         CreatureContent content = TownContent("thelsamar", "sentinel-hill", "kharanos");
         await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 4, content: content);
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(world.Host.World, n => n.Key == PlayerbotAnomalies.Key("population", "town-unresolved") && n.Detail.Contains("thelsamar", StringComparison.Ordinal));
         world.Population.FreshStartHome = true;
         Guid[] bots = Bots(world);
         foreach (Guid id in bots) await SetLevelAsync(world, id, 12);
@@ -771,10 +771,10 @@ public sealed class TownProgressionTests
     [Fact]
     public async Task WithTheTeleportOff_ATownThatNeedsOneIsNotAssigned_TheBotKeepsItsHome_WithOneInfoAnomaly()
     {
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == PlayerbotAnomalies.Key("population", "town-unreachable"));
         // The travel seam says no town can be reached without a teleport (a boat or a zeppelin is in the way, whatever the reason).
         await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 6, o => o.Population.TownProgressionTeleport = false,
             extra: services => services.AddSingleton<IPlayerbotHomeTravel>(new NothingReachable()));
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(world.Host.World, n => n.Key == PlayerbotAnomalies.Key("population", "town-unreachable"));
         world.Population.FreshStartHome = true;
         Guid[] bots = Bots(world);
         await NextPassAsync(world);                                   // everyone is homed at its start area (level 1)
@@ -849,8 +849,8 @@ public sealed class TownProgressionTests
     [Fact]
     public async Task WithTheTeleportOff_ABotOnTeldrassil_IsNeverParkedAtADarnassusCapitalHome()
     {
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == PlayerbotAnomalies.Key("population", "town-unreachable"));
         await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 3, o => o.Population.TownProgressionTeleport = false);
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(world.Host.World, n => n.Key == PlayerbotAnomalies.Key("population", "town-unreachable"));
         world.Population.FreshStartHome = true;
         Guid[] bots = Bots(world);
         foreach (Guid id in bots)

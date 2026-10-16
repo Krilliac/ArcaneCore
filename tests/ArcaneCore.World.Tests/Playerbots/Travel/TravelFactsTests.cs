@@ -171,7 +171,7 @@ public sealed class TravelFactsTests
         PlayerbotOptions options = TravelJourneyShipTests.Options();
         var travel = new PlayerbotTravel(options);
         Vector3 near = ShipTestWorld.Start + new Vector3(40f, 0f, 0f);
-        using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         await world.OnWorldAsync(() =>
         {
             Assert.True(travel.TryBegin(world.Session, world.Player, 0, near, out string? why), why);

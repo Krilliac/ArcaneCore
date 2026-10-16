@@ -252,7 +252,7 @@ public sealed class PlayerbotAnomalyHistory : IDisposable
         }
 
         DateTimeOffset now = _time.GetUtcNow();
-        var record = new PlayerbotAnomalyRecord(notice, now);
+        var record = new PlayerbotAnomalyRecord(notice.Origin is null ? notice : notice with { Origin = null }, now); // the origin token identifies a world; the history outlives worlds
 
         lock (_gate)
         {

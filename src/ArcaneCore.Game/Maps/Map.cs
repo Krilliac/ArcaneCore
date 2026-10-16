@@ -127,6 +127,9 @@ public sealed class Map
     /// <summary>The owning runtime, for map-local systems that publish world facts.</summary>
     internal WorldRuntime World => _world;
 
+    /// <summary>The owning runtime's identity token (<see cref="WorldRuntime.Identity"/>); holds nothing alive.</summary>
+    public object WorldIdentity => _world.Identity;
+
     /// <summary>The instance this map object simulates: 0 for the shared copy, else a dungeon/raid instance id.</summary>
     public uint InstanceId { get; }
 

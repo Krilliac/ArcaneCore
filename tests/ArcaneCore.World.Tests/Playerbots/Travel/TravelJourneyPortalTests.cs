@@ -26,8 +26,8 @@ public sealed class TravelJourneyPortalTests(ITestOutputHelper output)
         var mageBrain = new PlayerbotBrain(mageSession, options);
         var requesterBrain = new PlayerbotBrain(requesterSession, options);
         var travel = new PlayerbotTravel(options);
-        using AnomalyCapture mageCap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, mage);
-        using AnomalyCapture requesterCap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, requester);
+        using AnomalyCapture mageCap = BotAnomalyCapture.For(mage);
+        using AnomalyCapture requesterCap = BotAnomalyCapture.For(requester);
         try
         {
             await rig.OnWorld(() =>

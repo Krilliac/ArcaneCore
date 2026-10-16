@@ -54,9 +54,9 @@ internal static class PlayerbotGroupAnomalies
     /// Report <paramref name="code"/> against a bot that has no <see cref="Player"/> to read a position from (offline, or gone). The subject
     /// is written as <see cref="PlayerbotAnomalies.SubjectOf"/> writes it, so one bot is one subject whichever way it was reported.
     /// </summary>
-    internal static void ReportNamed(string name, ObjectGuid guid, string code, string detail, AnomalySeverity severity = AnomalySeverity.Warning)
+    internal static void ReportNamed(string name, ObjectGuid guid, string code, string detail, AnomalySeverity severity = AnomalySeverity.Warning, object? origin = null)
         => AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + Area, code,
-            string.Create(CultureInfo.InvariantCulture, $"bot {name} (guid {guid.Value:X})"), detail, severity);
+            string.Create(CultureInfo.InvariantCulture, $"bot {name} (guid {guid.Value:X})"), detail, severity, origin);
 }
 
 /// <summary>What <see cref="PlayerbotGroupWatch.Observe"/> found this tick (flags: several can hold at once).</summary>

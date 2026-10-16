@@ -95,7 +95,7 @@ public sealed class PlayerbotShipSettleTests(ITestOutputHelper output)
         await using ShipTestWorld world = await ShipTestWorld.StartAsync();
         var options = new PlayerbotOptions();
         (ShipRoute route, ShipTrip trip) = await BoardAsync(world, options);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         // Aboard two round trips and more already: the ride is overdue past its last bound at the next think.
         await world.OnWorldAsync(() => trip.BoardedMs = unchecked(world.Host.World.NowMs - ((2 * PlayerbotShip.PeriodMs(route)) + PlayerbotShip.RideGraceMs + 1_000)));
 
@@ -140,7 +140,7 @@ public sealed class PlayerbotShipSettleTests(ITestOutputHelper output)
         var options = new PlayerbotOptions();
         (_, ShipTrip trip) = await BoardAsync(world, options);
         Player bot = world.Player;
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, bot);
+        using AnomalyCapture capture = BotAnomalyCapture.For(bot);
         // The server takes the bot back aboard after its first three steps off (at the arrival port), then lets it go.
         int refused = 0;
         await world.OnWorldAsync(() => world.System.PassengerLeft += (ship, unit) =>
@@ -198,7 +198,7 @@ public sealed class PlayerbotShipSettleTests(ITestOutputHelper output)
         PlayerbotOptions options = TravelJourneyShipTests.Options();
         var brain = new PlayerbotBrain(world.Session, options);
         var travel = new PlayerbotTravel(options);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         try
         {
             Assert.True(await world.OnWorldAsync(() => travel.TryBegin(world.Session, world.Player, 1, TravelJourneyShipTests.Goal, out _)));
@@ -253,7 +253,7 @@ public sealed class PlayerbotShipSettleTests(ITestOutputHelper output)
         PlayerbotOptions options = TravelJourneyShipTests.Options();
         var brain = new PlayerbotBrain(world.Session, options);
         var travel = new PlayerbotTravel(options);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         try
         {
             // Waiting at the dock (a leg under way, not aboard) when the bound passes: the journey ends at once and the leg with it.

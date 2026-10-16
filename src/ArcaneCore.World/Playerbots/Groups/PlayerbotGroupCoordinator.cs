@@ -792,7 +792,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         {
             PlayerbotGroupAnomalies.ReportNamed(group.Find(group.LeaderBotId)?.Name ?? "unknown", group.LeaderGuid, PlayerbotGroupAnomalies.LeaderGone,
                 string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader (not online) in state {group.State}; the group ends"),
-                AnomalySeverity.Info);
+                AnomalySeverity.Info, _world?.Identity);
             Finish(group, success: false, "leader-gone");
             return;
         }
@@ -1003,7 +1003,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 : string.Create(CultureInfo.InvariantCulture, $"invited {unchecked(now - member.InvitedMs) / 1000}s ago, still no answer");
             string detail = string.Create(CultureInfo.InvariantCulture, $"{member.Name}'s invitation to group {group.Id} ({group.Goal}) went unanswered: {reason}");
             if (player is not null) PlayerbotGroupAnomalies.Report(player, PlayerbotGroupAnomalies.InviteUnanswered, detail);
-            else PlayerbotGroupAnomalies.ReportNamed(member.Name, member.Guid, PlayerbotGroupAnomalies.InviteUnanswered, detail);
+            else PlayerbotGroupAnomalies.ReportNamed(member.Name, member.Guid, PlayerbotGroupAnomalies.InviteUnanswered, detail, origin: _world?.Identity);
         }
     }
 
@@ -1368,7 +1368,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         {
             PlayerbotGroupAnomalies.ReportNamed(member.Name, member.Guid, PlayerbotGroupAnomalies.LeaderGone,
                 string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader ({reason}) in state {group.State}; the group ends"),
-                AnomalySeverity.Info);
+                AnomalySeverity.Info, _world?.Identity);
             Finish(group, success: false, "leader-" + reason);
         }
     }

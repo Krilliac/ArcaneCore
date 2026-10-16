@@ -32,7 +32,7 @@ public sealed class HearthstoneLegTests
         (MageTravelRig rig, WorldSession session, Player player) = await StartAsync("Hearthone");
         await using (rig)
         {
-            using AnomalyCapture cap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, player);
+            using AnomalyCapture cap = BotAnomalyCapture.For(player);
             PlayerbotOptions options = MageTravelRig.Options();
             await rig.OnWorld(() =>
             {
@@ -75,7 +75,7 @@ public sealed class HearthstoneLegTests
             await rig.OnWorld(() => PlayerbotHearthstone.TryBegin(session, player, options, out _));
             Assert.Equal(TravelLegStep.Arrived, await rig.ThinkUntilAsync(session, () => PlayerbotHearthstone.Drive(session, player, options, 500, out _)));
 
-            using AnomalyCapture cap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, player);
+            using AnomalyCapture cap = BotAnomalyCapture.For(player);
             await rig.OnWorld(() =>
             {
                 // The hour's cooldown the cast started on the server.
@@ -96,7 +96,7 @@ public sealed class HearthstoneLegTests
         (MageTravelRig rig, WorldSession session, Player player) = await StartAsync("Hearththree");
         await using (rig)
         {
-            using AnomalyCapture cap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, player);
+            using AnomalyCapture cap = BotAnomalyCapture.For(player);
             await rig.OnWorld(() =>
             {
                 PlayerbotOptions off = MageTravelRig.Options(t => t.Hearthstone = false);
@@ -125,7 +125,7 @@ public sealed class HearthstoneLegTests
         (MageTravelRig rig, WorldSession session, Player player) = await StartAsync("Hearthfour");
         await using (rig)
         {
-            using AnomalyCapture cap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, player);
+            using AnomalyCapture cap = BotAnomalyCapture.For(player);
             await rig.OnWorld(() =>
             {
                 PlayerbotOptions options = MageTravelRig.Options();

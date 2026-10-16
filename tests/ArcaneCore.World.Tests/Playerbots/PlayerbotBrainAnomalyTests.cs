@@ -33,7 +33,7 @@ public sealed class PlayerbotBrainAnomalyTests
         var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -49,7 +49,7 @@ public sealed class PlayerbotBrainAnomalyTests
 
             // A bot that really thinks, for 200 s of world time, is never starved.
             var thinker = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
-            using AnomalyCapture thinking = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture thinking = H1AnomalyKit.CaptureFor(session.Player!);
             for (int second = 0; second < 200; second++)
             {
                 await host.OnWorldAsync(() => { session.ManagedBudget = new ManagedActionBudget(4); thinker.Update(1000); return true; });
@@ -70,7 +70,7 @@ public sealed class PlayerbotBrainAnomalyTests
         var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -94,7 +94,7 @@ public sealed class PlayerbotBrainAnomalyTests
         var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, StallSeconds = 10 });
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             // No terrain: every route is refused and nothing changes.
             for (int think = 0; think < 80; think++)
             {
@@ -124,7 +124,7 @@ public sealed class PlayerbotBrainAnomalyTests
         var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             for (int death = 1; death <= 3; death++)
             {
                 await host.OnWorldAsync(() =>
@@ -153,7 +153,7 @@ public sealed class PlayerbotBrainAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -188,7 +188,7 @@ public sealed class PlayerbotBrainAnomalyTests
         try
         {
             Player player = session.Player!;
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, player);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(player);
             WorldSafeLoc? graveyard = null;
             Creature? healer = null;
             PlayerbotRecovery? recovery = null;
@@ -273,7 +273,7 @@ public sealed class PlayerbotBrainAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor());

@@ -142,13 +142,16 @@ public sealed class AnomalyLedger
     /// <summary>
     /// Count one failed check under <c>subsystem/code</c> and log it unless throttled. <paramref name="subject"/>: the stable identity
     /// of what failed (no positions or times); <paramref name="detail"/>: what was expected, what was found, and where.
+    /// <paramref name="origin"/>: an optional identity token of the owner that reported (a world), carried on the notice so a test capture can tell
+    /// two worlds that name a subject alike apart. It must be a small token that retains nothing (never the world or host itself): notices are
+    /// held by long-lived consumers such as the bot anomaly history. The ledger does not log, count or key by it (one reference, no allocation).
     /// Never throws except <see cref="OutOfMemoryException"/>.
     /// </summary>
-    public AnomalyRecording Report(string subsystem, string code, string subject, string detail, AnomalySeverity severity = AnomalySeverity.Warning)
+    public AnomalyRecording Report(string subsystem, string code, string subject, string detail, AnomalySeverity severity = AnomalySeverity.Warning, object? origin = null)
     {
         try
         {
-            return ReportCore(subsystem, code, subject, detail, severity);
+            return ReportCore(subsystem, code, subject, detail, severity, origin);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -285,7 +288,7 @@ public sealed class AnomalyLedger
 
     internal void RemoveReported(Action<AnomalyNotice> handler) => Reported -= handler;
 
-    private AnomalyRecording ReportCore(string subsystem, string code, string subject, string detail, AnomalySeverity severity)
+    private AnomalyRecording ReportCore(string subsystem, string code, string subject, string detail, AnomalySeverity severity, object? origin)
     {
         string sub = Normalise(subsystem);
         string cod = Normalise(code);
@@ -307,7 +310,7 @@ public sealed class AnomalyLedger
         Action<AnomalyNotice>? noticed = recording.ShouldLog ? AnomalyNoticed : null;
         if (reported is null && noticed is null && !recording.ShouldLog) return recording;
 
-        var notice = new AnomalyNotice(key, sub, cod, severity, subj, det, recording.Count, recording.Suppressed) { Timing = recording.Timing };
+        var notice = new AnomalyNotice(key, sub, cod, severity, subj, det, recording.Count, recording.Suppressed) { Timing = recording.Timing, Origin = origin };
         if (reported is not null) Raise(reported, notice);
         if (recording.ShouldLog)
         {
@@ -505,6 +508,9 @@ public sealed record AnomalyNotice(
 {
     /// <summary>The key's timing at this report (rates, inter-arrival); null when the report was not logged.</summary>
     public LedgerTiming? Timing { get; init; }
+
+    /// <summary>The reporter-supplied owner identity token (<see cref="AnomalyLedger.Report"/>'s <c>origin</c>), or null when the reporter gave none. Part of the record's value equality like every other member (reference equality for the token). Consumers that keep notices should drop it (<c>notice with { Origin = null }</c>).</summary>
+    public object? Origin { get; init; }
 }
 
 
