@@ -33,6 +33,7 @@ public sealed class FreshStartHomeTests
             o.Population.Factions = PopulationFactions.Both;
             o.Population.MaxStartsPerInterval = 20;
             o.Population.MaxCreatePerMinute = 60;
+            o.Population.TownProgression = false; // these tests are about the start homes; the town homes have their own tests
             configure?.Invoke(o);
         }, configureServices: services => services.AddSingleton<IManagedPlayerbotHomeStore>(homes), dataStore: () => new FreshLaunchTests.RaceStartDataStore());
 
@@ -221,10 +222,10 @@ public sealed class FreshStartHomeTests
         Assert.StartsWith("start:", world.Bots.HomeOf(bots[1])!.Place); // the other bot is still level 1
 
         // One level under the release level: still widened. At it: no home of the population's.
-        await SetLevelAsync(world, bots[0], 11);
+        await SetLevelAsync(world, bots[0], 9);
         await NextPassAsync(world);
         Assert.StartsWith("zone:", world.Bots.HomeOf(bots[0])!.Place);
-        await SetLevelAsync(world, bots[0], 12);
+        await SetLevelAsync(world, bots[0], 10);
         await NextPassAsync(world);
         Assert.Null(world.Bots.HomeOf(bots[0]));
         Assert.NotNull(world.Bots.HomeOf(bots[1]));
@@ -248,7 +249,7 @@ public sealed class FreshStartHomeTests
         await world.Bots.SetHomesAsync([new ManagedPlayerbotFeature.HomeTarget(bot, 0, centre)], 600f, "Sentinel Hill");
 
         world.Population.FreshStartHome = true;
-        await SetLevelAsync(world, bot, 12);
+        await SetLevelAsync(world, bot, 10);
         await NextPassAsync(world);
         await SetLevelAsync(world, bot, 1);
         await NextPassAsync(world);
@@ -303,6 +304,7 @@ public sealed class FreshStartHomeTests
             o.Population.TargetOnline = bots;
             o.Population.MaxStartsPerInterval = 100;
             o.Population.MaxCreatePerMinute = 60;
+            o.Population.TownProgression = false;
             configure?.Invoke(o);
         }, configureServices: services => services.AddSingleton<IManagedPlayerbotHomeStore>(homes), dataStore: () => data);
 
@@ -524,7 +526,7 @@ public sealed class FreshStartHomeTests
     {
         var options = new PlayerbotPopulationOptions();
         Assert.True(options.FreshStartHome);
-        Assert.Equal((1100, 6, 4500, 12, 40), (options.FreshStartHomeRadius, options.FreshGraduateLevel, options.FreshZoneHomeRadius, options.FreshReleaseLevel, options.FreshStartZoneCap));
+        Assert.Equal((1100, 6, 4500, 10, 40), (options.FreshStartHomeRadius, options.FreshGraduateLevel, options.FreshZoneHomeRadius, options.FreshReleaseLevel, options.FreshStartZoneCap));
         Assert.Equal((0, 10), (options.LeaveHomeLevelMargin, options.TramMinLevel));
         options.Validate();
 

@@ -21,6 +21,8 @@ cold collision loading and full managed-bot/database workloads remain outside th
 
 After the live stress test: the world loop waits on a high-resolution timer (`World:TickTimer`, late only beyond
 `World:TickLateToleranceMs`), `.server info` reports the tick and frame medians, frame p90, allocation per phase and
+
+Latency detail (2026-10-15): game masters see six more `.server info` lines (tick body and frame latency over the last 1 and 15 minutes with p50..p99.9, mean and stddev, the per-phase p50/p99, and the slowest other histograms: character save, SQLite checkpoints, navigation path queries, login to in-world, the three slowest packet handlers); players see only the original ten. `LatencySummaryFeature` logs the same histograms at Information level every 5 minutes (`Latency <metric>, last 15 min: ...` and `Packet handler latency, top N opcodes by p99`). The fault and anomaly ledgers carry first/last seen, the rate per hour over the last 15 minutes and 1 hour, inter-arrival p50/p99, the top subjects or messages and the three most recent distinct details; they appear in the log lines, `.server fault` / `.server anomalies`, the crash report and the QA report (`report.md`, `report.json` and the chat top list also give rate per hour, first/last seen and bots affected).
 feature and the garbage collector, the World runs Server GC with background collections, and the managed-bot and
 per-address connection caps were reworked. Measurements and limits: [lane report](../integration/perf-limits-20261008.md).
 

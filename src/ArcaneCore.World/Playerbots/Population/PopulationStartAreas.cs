@@ -12,6 +12,9 @@ internal enum StartHomeStage : byte
     None,
     Start,
     Zone,
+
+    /// <summary>A graduated bot's town home (<see cref="PopulationTownProgression"/>): its capital or its level-band town.</summary>
+    Town,
 }
 
 /// <summary>
@@ -23,7 +26,7 @@ internal enum StartHomeStage : byte
 /// <b>Graduation.</b> The stage follows the bot's level (<see cref="StageFor"/>): below <c>FreshGraduateLevel</c> a circle of
 /// <c>FreshStartHomeRadius</c> yards round the start position (the valley); from there to <c>FreshReleaseLevel</c> a circle of
 /// <c>FreshZoneHomeRadius</c> yards clipped to the start zone, in which leave-home quests become possible
-/// (<see cref="PlayerbotHomeArea.QuestAllowed"/>); from <c>FreshReleaseLevel</c> no home. Only the start stage counts towards
+/// (<see cref="PlayerbotHomeArea.QuestAllowed"/>); from <c>FreshReleaseLevel</c> a town home (<see cref="PopulationTownProgression"/>; no home when <c>TownProgression</c> is off). Only the start stage counts towards
 /// <c>FreshStartZoneCap</c>, so a graduated bot frees its place in the valley.
 /// </para>
 /// </summary>
@@ -82,12 +85,18 @@ internal static class PopulationStartAreas
     /// <summary>The <c>Place</c> text of the home of <paramref name="stage"/> in <paramref name="area"/>.</summary>
     internal static string PlaceOf(string area, StartHomeStage stage) => (stage == StartHomeStage.Zone ? ZonePrefix : StartPrefix) + area;
 
-    /// <summary>Reads a home's place text: false when it is not one of the population's start homes (an operator's home, or none).</summary>
+    /// <summary>Reads a home's place text: false when it is not one of the population's homes (an operator's home, or none). A town home reads as <see cref="StartHomeStage.Town"/> with the town it is homed in as the area.</summary>
     internal static bool TryParse(string? place, out StartHomeStage stage, out string area)
     {
         stage = StartHomeStage.None;
         area = string.Empty;
         if (place is null) return false;
+        if (PopulationTownProgression.TryParsePlace(place, out TownPlace town))
+        {
+            (stage, area) = (StartHomeStage.Town, town.Active);
+            return true;
+        }
+
         StartHomeStage found = place.StartsWith(StartPrefix, StringComparison.Ordinal) ? StartHomeStage.Start
             : place.StartsWith(ZonePrefix, StringComparison.Ordinal) ? StartHomeStage.Zone : StartHomeStage.None;
         if (found == StartHomeStage.None) return false;
@@ -97,14 +106,15 @@ internal static class PopulationStartAreas
         return true;
     }
 
-    /// <summary>The stage a bot of <paramref name="level"/> belongs in: Start below the graduate level, Zone below the release level, then None.</summary>
+    /// <summary>The stage a bot of <paramref name="level"/> belongs in: Start below the graduate level, Zone below the release level, then Town (None when <c>TownProgression</c> is off).</summary>
     internal static StartHomeStage StageFor(int level, PlayerbotPopulationOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return level < options.FreshGraduateLevel ? StartHomeStage.Start : level < options.FreshReleaseLevel ? StartHomeStage.Zone : StartHomeStage.None;
+        return level < options.FreshGraduateLevel ? StartHomeStage.Start : level < options.FreshReleaseLevel ? StartHomeStage.Zone
+            : options.TownProgression ? StartHomeStage.Town : StartHomeStage.None;
     }
 
     /// <summary>The radius in yards of the home of <paramref name="stage"/>.</summary>
     internal static float RadiusOf(StartHomeStage stage, PlayerbotPopulationOptions options)
-        => stage == StartHomeStage.Zone ? options.FreshZoneHomeRadius : options.FreshStartHomeRadius;
+        => stage == StartHomeStage.Zone ? options.FreshZoneHomeRadius : stage == StartHomeStage.Town ? options.TownHomeRadius : options.FreshStartHomeRadius;
 }

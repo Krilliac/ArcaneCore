@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Commands;
 using Xunit;
 
@@ -132,6 +133,89 @@ public sealed class ServerInfoDiagnosticsTests
         string[] empty = [.. ServerInfoDiagnostics.Format(new(50, 20, null, 0, null, null, null, null, null, null, 0, 1, 2, null, null))];
         Assert.Equal("Tick allocation mean: unavailable", empty[8]);
         Assert.Equal("GC: unavailable", empty[9]);
+    }
+
+    private static LatencyWindows Windows(long micros, int count = 100)
+    {
+        var histogram = new LatencyHistogram();
+        for (int i = 0; i < count; i++) histogram.Record(micros + i);
+        return histogram.Windows();
+    }
+
+    [Fact]
+    public void FormatAppendsTheFullPercentileLines_AfterTheExistingTenLines()
+    {
+        ServerInfoDiagnosticsValues values = new(50, 20, 20, 64, 50_000, 3_000, 9_000, 12_000, 0, 0, 0, 1, 2, 10, 0)
+        {
+            Gc = "workstation concurrent gen0/1/2=5/2/1 pauseTotal=40 ms lastPause=1.5 ms (0)",
+            TickBodyLatency = Windows(4_000),
+            FrameLatency = Windows(50_000),
+            PhaseLatency = [("commands", new LatencyHistogram().Snapshot()), ("maps", Windows(2_000).Last1Min)],
+            OtherLatencies = [("db.character_save", Windows(8_000).Last15Min), ("packet.handler.CMSG_X", Windows(1_000).Last15Min)],
+        };
+
+        string[] lines = [.. ServerInfoDiagnostics.Format(values)];
+
+        Assert.Equal(16, lines.Length);
+        Assert.StartsWith("GC: ", lines[9]); // the first ten lines keep their positions
+        Assert.Matches(@"^Tick body latency, last 1 min: p50 4\.\d ms p75 4\.\d p90 4\.\d p95 4\.\d p99 4\.\d p99\.9 4\.\d max 4\.1 \(n=100, min 4\.0, mean 4\.\d \+/-0\.\d+\)$", lines[10]);
+        Assert.Equal("Tick body latency, last 15 min: " + values.TickBodyLatency!.Value.Last15Min.Format(), lines[11]);
+        Assert.Equal("Tick frame latency, last 1 min: " + values.FrameLatency!.Value.Last1Min.Format(), lines[12]);
+        Assert.Equal("Tick frame latency, last 15 min: " + values.FrameLatency!.Value.Last15Min.Format(), lines[13]);
+        LatencySnapshot maps = values.PhaseLatency[1].Last1Min;
+        Assert.Equal($"Tick phases p50/p99 ms, last 1 min: maps {LatencySnapshot.Millis(maps.P50)}/{LatencySnapshot.Millis(maps.P99)}", lines[14]); // a phase without samples is left out
+        LatencySnapshot save = values.OtherLatencies[0].Last15Min;
+        LatencySnapshot packet = values.OtherLatencies[1].Last15Min;
+        Assert.Equal(
+            "Other latencies, last 15 min (p50/p99/max ms, n): "
+            + $"db.character_save {LatencySnapshot.Millis(save.P50)}/{LatencySnapshot.Millis(save.P99)}/{LatencySnapshot.Millis(save.Max)} (n=100), "
+            + $"packet.handler.CMSG_X {LatencySnapshot.Millis(packet.P50)}/{LatencySnapshot.Millis(packet.P99)}/{LatencySnapshot.Millis(packet.Max)} (n=100)",
+            lines[15]);
+        Assert.All(lines, line => Assert.InRange(line.Length, 1, 240));
+    }
+
+    [Fact]
+    public void FormatWithoutLatencyData_SaysSo()
+    {
+        ServerInfoDiagnosticsValues values = new(50, 20, null, 0, null, null, null, null, null, null, 0, 1, 2, null, null);
+
+        string[] lines = [.. ServerInfoDiagnostics.Format(values)];
+
+        Assert.Equal("Tick body latency, last 1 min: unavailable", lines[10]);
+        Assert.Equal("Tick frame latency, last 15 min: unavailable", lines[13]);
+        Assert.Equal("Tick phases p50/p99 ms, last 1 min: unavailable", lines[14]);
+        Assert.Equal("Other latencies, last 15 min (p50/p99/max ms, n): none recorded", lines[15]);
+        ServerInfoDiagnosticsValues empty = values with { TickBodyLatency = new LatencyHistogram().Windows() };
+        Assert.Equal("Tick body latency, last 1 min: no samples", ServerInfoDiagnostics.Format(empty)[10]);
+    }
+
+    [Fact]
+    public void OtherLatenciesLine_IsBounded_AndCountsWhatItLeavesOut()
+    {
+        LatencySnapshot one = Windows(8_000).Last15Min;
+        ServerInfoDiagnosticsValues values = new(50, 20, null, 0, null, null, null, null, null, null, 0, 1, 2, null, null)
+        {
+            OtherLatencies = [.. Enumerable.Range(0, 40).Select(i => ($"packet.handler.CMSG_LONG_OPCODE_NAME_{i}", one))],
+        };
+
+        string line = ServerInfoDiagnostics.Format(values)[15];
+
+        Assert.InRange(line.Length, 1, 240);
+        Assert.Matches(@" and \d+ more$", line);
+    }
+
+    [Fact]
+    public async Task Capture_FillsTheLatencyFields_AndEveryLineStaysWithinTheBound()
+    {
+        LatencyRegistry.Shared.Record(LatencyNames.CharacterSave, 5_000);
+        LatencyRegistry.Shared.Record(LatencyNames.PacketHandlerPrefix + "CMSG_TEST_ONLY", 9_000);
+        await using WorldTestHost host = WorldTestHost.Start();
+        string[] lines = await host.OnWorldAsync(() => ServerInfoDiagnostics.Format(ServerInfoDiagnostics.Capture(host.World, host.WorldServices)).ToArray());
+
+        Assert.True(lines.Length >= 16);
+        Assert.Contains(lines, l => l.StartsWith("Tick body latency, last 15 min: ", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("Other latencies, last 15 min", StringComparison.Ordinal) && l.Contains(LatencyNames.CharacterSave, StringComparison.Ordinal));
+        Assert.All(lines, line => Assert.InRange(line.Length, 1, 240));
     }
 
     [Fact]

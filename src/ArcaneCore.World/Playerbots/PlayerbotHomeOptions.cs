@@ -114,6 +114,17 @@ internal static class PlayerbotHomeRules
     /// (alive, out of combat, not grouped, the home map allowed) is decided by the caller.
     /// </summary>
     internal static PlayerbotHomeTeleportReason Decide(in PlayerbotHomeFacts facts, PlayerbotHomeOptions options)
+        => Decide(facts, options, options?.TeleportDistanceYards ?? 0f);
+
+    /// <summary>The Auto teleport distance for a home with a walk range (<see cref="PlayerbotHomeArea.WalkRangeYards"/>; 0 = none): the larger of the two.</summary>
+    internal static float TeleportDistanceFor(PlayerbotHomeOptions options, float walkRangeYards)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return walkRangeYards > options.TeleportDistanceYards ? walkRangeYards : options.TeleportDistanceYards;
+    }
+
+    /// <summary><see cref="Decide(in PlayerbotHomeFacts, PlayerbotHomeOptions)"/> with the Auto teleport distance given (<see cref="TeleportDistanceFor"/>).</summary>
+    internal static PlayerbotHomeTeleportReason Decide(in PlayerbotHomeFacts facts, PlayerbotHomeOptions options, float teleportDistanceYards)
     {
         ArgumentNullException.ThrowIfNull(options);
         return options.ReturnMode switch
@@ -121,7 +132,7 @@ internal static class PlayerbotHomeRules
             PlayerbotHomeReturnMode.Teleport => facts.OnHomeMap ? PlayerbotHomeTeleportReason.Mode : PlayerbotHomeTeleportReason.OtherMap,
             PlayerbotHomeReturnMode.Auto => !facts.OnHomeMap ? PlayerbotHomeTeleportReason.OtherMap
                 : facts.WalkBlocked ? PlayerbotHomeTeleportReason.WalkBlocked
-                : !float.IsFinite(facts.Distance) || facts.Distance > options.TeleportDistanceYards ? PlayerbotHomeTeleportReason.Distance
+                : !float.IsFinite(facts.Distance) || facts.Distance > teleportDistanceYards ? PlayerbotHomeTeleportReason.Distance
                 : IsDangerous(facts.HighestAreaLevel, facts.BotLevel, options.DangerLevelMargin) ? PlayerbotHomeTeleportReason.Danger
                 : PlayerbotHomeTeleportReason.None,
             _ => PlayerbotHomeTeleportReason.None,

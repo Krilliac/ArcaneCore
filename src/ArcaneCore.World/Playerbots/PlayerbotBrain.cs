@@ -105,6 +105,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
+    private PlayerbotOpportunities? _opportunities;
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotHomeReturn _homeReturn = new();
     private PlayerbotHomeArea? _home;
@@ -448,7 +449,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _overranReportMs = now;
         PlayerbotAnomalies.Report(player, "brain", "think-overran",
             string.Create(CultureInfo.InvariantCulture,
-                $"one think took {elapsedMs:F0} ms (budget {PlayerbotThinkRotation.TickBudgetMs:F0} ms per tick for every bot; goal {_goal}, last phase {LastThinkPhase})"));
+                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase})"));
     }
 
     internal void Update(uint elapsedMs)
@@ -489,6 +490,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
         finally
         {
+            // A think that ran any goal but Explore (a quest, combat, an errand, rest, a retreat...) broke the walk to the inn; the choke
+            // point for all of them. Explore thinks that skip the town idle decision report it in Explore().
+            if (_goal != PlayerbotGoalKind.Explore) _townIdle.Interrupted();
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
             _trace.ObserveState(this, _session.World.NowMs);
             CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
@@ -516,6 +520,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!_deathIntentRetired)
             {
                 RecordDeath(player);
+                _opportunities?.BotDied();
                 RetireDeathIntent();
                 // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
                 // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
@@ -538,6 +543,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _deathIntentRetired = false;
             _recovery.Reset();
             RememberAttackers(player);
+            // The fight with a find's guards is the brain's, not the goal's: its claim on the find is kept alive meanwhile (and an
+            // episode a higher goal has held for too long, or that ran past its limit, ends here).
+            if (_opportunities?.KeepClaim(player) is { } lapsed) ReleaseOpportunityGuard(player, lapsed);
             // Sickness may begin while a pull route or cast is pending. Retire that intent before a movement-order acknowledgement
             // can defer the ordinary goal decision, and before class upkeep can use PullTarget for an opener.
             if (!player.Combat.IsInCombat && player.Combat.Victim is null && _target is { IsAlive: true }
@@ -1007,11 +1015,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (StandDownWhileSick(player)) return;
             PlayerbotThinkProbe.Phase("crafting");
             _crafting.Suspensions = _suspensions;
+            _crafting.GatherVeto = Opportunities.NodeVeto;
             if (_crafting.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _crafting.Goal; TargetEntry = _crafting.TargetEntry; return; }
             PlayerbotThinkProbe.Phase("economy");
             if (_economy.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
+            PlayerbotThinkProbe.Phase("opportunities");
+            if (TakeOpportunity(player, interval, out bool opportunityPull)) { if (opportunityPull) goto afterGoalLadder; return; }
             bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0
                 && FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is not null;
             PlayerbotThinkProbe.Phase("trainers");
@@ -1076,6 +1087,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
         }
 
+        afterGoalLadder:
         // A mob another player tagged while the bot walked to it is no longer the bot's to take: help its tagger or leave it alone, then
         // choose afresh in this same think (docs/areas/playbots.md, Contention).
         if (_target is { IsAlive: true } held && ReferenceEquals(held.Map, player.Map)) DropIfSomeoneElses(player, held);
@@ -1662,6 +1674,60 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _attacking = false;
     }
 
+    /// <summary>The chest, rare and node-risk goal (<see cref="PlayerbotOpportunities"/>, docs/areas/playbots-opportunities.md; inspection and tests).</summary>
+    internal PlayerbotOpportunities Opportunities => _opportunities ??= new PlayerbotOpportunities(_session, _options, () => Risk, claims,
+        (opcode, payload) => _lootActions.Enqueue((opcode, payload))) { Untakeable = IsUntakeable };
+
+    /// <summary>
+    /// Offers the opportunity goal to the ladder (after the urgent goals, before the optional travel and grinding): true when it took the
+    /// think. <paramref name="pull"/> says it chose a creature to fight: the target is set and the think goes on to the combat path.
+    /// A quest or grind goal is interrupted only for a find that clears the higher bar of <see cref="PlayerbotOpportunities.Update"/>.
+    /// </summary>
+    private bool TakeOpportunity(Player player, uint interval, out bool pull)
+    {
+        pull = false;
+        Opportunities.Home = _quests.Home;
+        OpportunityStep step = Opportunities.Update(player, interval, interrupting: _goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Grind);
+        // An episode that handed over a guard and then ended without the fight (refused, a player at the chest, no way to the guard)
+        // takes the guard back: left as the target, the ordinary combat path below would go on with the pull the goal gave up.
+        if (step.Abandon is { } given) ReleaseOpportunityGuard(player, given);
+
+        if (step.Pull is { } creature)
+        {
+            if (!ReferenceEquals(_target, creature))
+            {
+                _contention.ReleaseClaim();
+                AbandonRoute();
+                _attacking = false;
+                _lootOpened = false;
+            }
+
+            _target = creature;
+            TargetEntry = creature.Entry;
+            _goal = PlayerbotGoalKind.Combat;
+            pull = true;
+            return true;
+        }
+
+        if (!step.Busy) return false;
+        RetireIdleCombatRoute();
+        _goal = step.Goal;
+        TargetEntry = step.TargetEntry;
+        return true;
+    }
+
+    /// <summary>Lets go of a guard the opportunity goal handed over and gave up, unless it is the target and the bot is not yet in combat with it.</summary>
+    private void ReleaseOpportunityGuard(Player player, Creature given)
+    {
+        if (!given.IsAlive || !ReferenceEquals(_target, given)
+            || player.Combat.ThreatenedBy.Contains(given) || ReferenceEquals(given.Combat.Victim, player)) return;
+        _contention.ReleaseClaim();
+        AbandonRoute();
+        _attacking = false;
+        _target = null;
+        TargetEntry = 0;
+    }
+
     private void DropIntent()
     {
         _destinations.CancelPlanning();
@@ -2232,6 +2298,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _attackerEntries.Clear();
         _attackerFacts.Clear();
         _attackers.Clear();
+        // Out of a fight (nearly every think of nearly every bot) there is nothing to walk: skip the Concat iterator it would allocate.
+        if (player.Combat.Attackers.Count == 0 && player.Combat.ThreatenedBy.Count == 0) return;
         foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
         {
             if (unit is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) continue;
@@ -2570,6 +2638,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         if (player.Map is null || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false })
             return;
+        if (_home is { Stay: not Population.TownStay.None } town && (player.Map?.MapId ?? player.MapId) == town.MapId)
+        {
+            // Idle with a town home: back to the inn and wait there rather than roam the wilderness (PlayerbotTownIdle).
+            TownIdleAction idle = _townIdle.Decide(town.Stay, town.DistanceTo(player.X, player.Y), _session.World.NowMs);
+            if (idle == TownIdleAction.Linger) { PlayerbotMovementControl.Stop(_session, player); TryBindAtInn(player, town); return; }
+            if (idle == TownIdleAction.WalkToTown) { WalkTowardTown(player, town, elapsedMs); return; }
+        }
+        else _townIdle.Interrupted(); // no town idle decision this think (another map, another kind of home)
+
         PlayerbotThinkProbe.Phase("explore candidates");
         if (TryExploreSpawns(player, elapsedMs)) return;
         if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
@@ -2592,7 +2669,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 AbandonRoute();
             else
             {
-                _wanderLeg = wanderRoute;
+                MarkLeg(wanderRoute, townWalk: false);
                 ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
             }
         }
@@ -2604,8 +2681,69 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
     }
 
+    private readonly PlayerbotTownIdle _townIdle = new();
+    private uint _bindCheckAt;
+    private bool _bindChecked;
+
+    /// <summary>
+    /// At the inn of the town it stays in, binds its home to that town through the server's own path (CMSG_BINDER_ACTIVATE to the
+    /// innkeeper within interaction distance, <see cref="ArcaneCore.Game.Npc.QuestNpcServices.BinderActivate"/>) when the bind is
+    /// elsewhere. Checked every 30 seconds at most; false when nothing was sent.
+    /// </summary>
+    private bool TryBindAtInn(Player player, PlayerbotHomeArea town)
+    {
+        uint now = _session.World.NowMs;
+        // _bindChecked: the first check runs at once (a zero start would read as a future time on a world up for over 2^31 ms).
+        if ((_bindChecked && unchecked((int)(now - _bindCheckAt)) < 0) || !player.IsAlive || player.Combat.IsInCombat) return false;
+        (_bindChecked, _bindCheckAt) = (true, unchecked(now + 30_000));
+        HomeBind bind = player.Home;
+        if (!PlayerbotTownIdle.NeedsBind(bind.MapId, bind.X, bind.Y, town.MapId, town.Centre.X, town.Centre.Y)) return false;
+        if (_session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services is not { } services) return false;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false } info
+                || (info.NpcFlags & ArcaneCore.Game.Npc.NpcFlags.Innkeeper) == 0
+                || services.InteractableNpc(player, guid, ArcaneCore.Game.Npc.NpcFlags.Innkeeper) is null) continue;
+            var writer = new PacketWriter(8);
+            writer.WriteUInt64(guid.Value);
+            return _session.TryManagedAction(WorldOpcode.CmsgBinderActivate, writer.ToArray());
+        }
+
+        return false;
+    }
+
+    /// <summary>Plans and walks the next leg of an idle bot's way back to the centre of its town home (the wander planner, aimed inward).</summary>
+    private void WalkTowardTown(Player player, PlayerbotHomeArea town, uint elapsedMs)
+    {
+        if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
+        System.Numerics.Vector3 destination = InwardLeg(town, player, _exploreRefusals);
+        PlayerbotThinkProbe.Phase("explore town plan");
+        if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
+        {
+            AbandonRoute();
+            return;
+        }
+
+        if (_route is { } leg && PlayerbotNavigation.TryAdvance(_session, leg, _options, elapsedMs, _session.World.NowMs))
+        {
+            _exploreRefusals = 0;
+            MarkLeg(leg, townWalk: true);
+            return;
+        }
+
+        AbandonRoute();
+        _exploreRefusals++;
+        PlayerbotMovementControl.Stop(_session, player);
+    }
+
     /// <summary>The wandering leg the bot walks now (<see cref="ChainWanderLeg"/> chains only after such a leg, never after one to a spawn).</summary>
     private PlayerbotRoute? _wanderLeg;
+
+    /// <summary>Records the leg the bot walks: only a real explore leg may be chained onward (a town walk ends at the inn, a chained forward leg would carry the bot past it).</summary>
+    internal void MarkLeg(PlayerbotRoute leg, bool townWalk) => _wanderLeg = townWalk ? null : leg;
+
+    /// <summary>Whether <paramref name="route"/> is the explore leg in hand and so may be chained onward (<see cref="ChainWanderLeg"/>).</summary>
+    internal bool CanChain(PlayerbotRoute? route) => route is not null && ReferenceEquals(route, _wanderLeg);
 
     /// <summary>
     /// The end of the next wandering leg from <paramref name="from"/>, facing <paramref name="orientation"/>: roughly that facing (within
@@ -2680,7 +2818,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     private void ChainWanderLeg(Player player, uint elapsedMs)
     {
-        if (_route is not { Complete: false } route || !ReferenceEquals(route, _wanderLeg) || ExploreMovementPaused(player, elapsedMs)
+        if (_route is not { Complete: false } route || !CanChain(route) || ExploreMovementPaused(player, elapsedMs)
             || route.Points.Count < 2 || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
         if (!PlayerbotMotion.TryTimeToEnd(player, route, out uint remainingMs)) return;
         uint gap = PlayerbotMotion.ThinkGapMs(player);

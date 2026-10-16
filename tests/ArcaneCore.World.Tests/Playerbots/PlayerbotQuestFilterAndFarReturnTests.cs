@@ -300,6 +300,9 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                 };
                 Assert.False(redridgeHome.QuestLeavesHome(services.Quests, content, services.Quests.Get(FarReturnFixture.LostDeathstalkersQuest)!));
                 Assert.True(redridgeHome.QuestLeavesHome(services.Quests, content, services.Quests.Get(FarReturnFixture.MessengerToStormwindQuest)!));
+                // The turn-in is a leave-home one only within LeaveTurnInYards of the centre (2,561 yards here): a bound of 2,000 refuses it.
+                var tightHome = new PlayerbotHomeArea(0, new Vector3(StartX, StartY, StartZ), 900f, "zone:redridge") { AllowsLeaveQuests = true, LeaveTurnInYards = 2000f };
+                Assert.False(tightHome.QuestLeavesHome(services.Quests, content, services.Quests.Get(FarReturnFixture.MessengerToStormwindQuest)!));
 
                 // 3. A graduated Redridge home with Quest 120 (Messenger to Stormwind, ender 2,561 yards away > MaxDeliveryYards 1200):
                 //    Kept in the log by AbandonDistantCompletedQuest, and held by CompletedReturnQuest until the bot knows the flight path.

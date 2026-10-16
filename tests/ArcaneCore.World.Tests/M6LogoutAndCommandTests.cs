@@ -221,13 +221,20 @@ public sealed class M6LogoutAndCommandTests
         await gm.CollectAsync();
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".server info");
         var lines = new List<string>();
-        for (int i = 0; i < 14; i++) lines.Add((await gm.ReadChatAsync()).Text);
+        for (int i = 0; i < 21; i++) lines.Add((await gm.ReadChatAsync()).Text); // ten diagnostics, six latency lines, faults and rates
         Assert.Contains(lines, l => l.StartsWith("Server diagnostics: faults: ", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("Server diagnostics: Tick body latency, last 1 min: ", StringComparison.Ordinal));
 
         await using WorldTestClient player = await host.EnterWorldAsync("FAULTPL", "Faultpl");
         await player.CollectAsync();
         await player.SendChatAsync(ChatType.Say, Language.Common, ".server info");
-        for (int i = 0; i < 13; i++) Assert.DoesNotContain("faults:", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
+        for (int i = 0; i < 13; i++)
+        {
+            string text = (await player.ReadChatAsync()).Text;
+            Assert.DoesNotContain("faults:", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("latenc", text, StringComparison.Ordinal); // the latency lines are staff only
+        }
+
         // A stray 14th line would be the first reply to the next command, so the negative check can fail.
         await player.SendChatAsync(ChatType.Say, Language.Common, ".server motd");
         Assert.StartsWith("Current Message of the day", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);

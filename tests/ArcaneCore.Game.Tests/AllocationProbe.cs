@@ -29,13 +29,32 @@ internal static class AllocationProbe
     {
         int clean = 0;
         int discarded = 0;
+        int refused = 0;
+        int broken = 0;
         window(); // unmeasured: first-call runtime work stays out of the windows
+        // One probe at a time per process: GC.TryStartNoGCRegion itself runs a collection to reserve its budget, and a probe that
+        // cannot enter the region (another probe holds the process-wide one) runs unguarded. Concurrent probes therefore dirtied each
+        // other's windows until a probe saw too few clean ones.
+        lock (Gate)
+        {
+            MeasureWindows(window, maxBytes, what, cleanWindows, ref clean, ref discarded, ref refused, ref broken);
+        }
+
+        Assert.True(clean >= cleanWindows, $"{what}: only {clean} of {cleanWindows} GC-free windows in {MaxAttempts} attempts ({discarded} discarded because a collection ran; no-GC region refused {refused}x, ended early {broken}x)");
+    }
+
+    private static readonly object Gate = new();
+
+    private static void MeasureWindows(Action window, long maxBytes, string what, int cleanWindows, ref int clean, ref int discarded, ref int refused, ref int broken)
+    {
+        long budget = NoGcBudget;
         for (int attempt = 0; attempt < MaxAttempts && clean < cleanWindows; attempt++)
         {
             // A no-GC region keeps collections (triggered by any thread) out of the window, so on a busy runner the window is GC-free instead
             // of being discarded. Other threads' allocations count against the budget; if they exhaust it a collection runs, the region ends
             // and the window is treated as dirty below. If the region cannot be entered the window simply runs without it.
-            bool noGc = TryStartNoGcRegion();
+            bool noGc = TryStartNoGcRegion(budget);
+            refused += noGc ? 0 : 1;
             int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
             long before = GC.GetAllocatedBytesForCurrentThread();
             window();
@@ -43,7 +62,10 @@ internal static class AllocationProbe
             bool collected = g0 != GC.CollectionCount(0) || g1 != GC.CollectionCount(1) || g2 != GC.CollectionCount(2);
             if (noGc)
             {
-                collected |= !EndNoGcRegion();
+                bool ended = EndNoGcRegion();
+                broken += ended ? 0 : 1;
+                if (!ended) budget = Math.Min(budget * 2, MaxNoGcBudget); // other threads out-allocated the budget during the window: ask for more room
+                collected |= !ended;
             }
 
             if (collected)
@@ -57,14 +79,14 @@ internal static class AllocationProbe
             Assert.True(allocated <= maxBytes, $"{what}: GC-free window {clean + 1} allocated {allocated} bytes (limit {maxBytes})");
             clean++;
         }
-
-        Assert.True(clean >= cleanWindows, $"{what}: only {clean} of {cleanWindows} GC-free windows in {MaxAttempts} attempts ({discarded} discarded because a collection ran)");
     }
 
     /// <summary>The no-GC budget: room for parallel test threads' allocations during one short window.</summary>
     private const long NoGcBudget = 64L * 1024 * 1024;
 
-    private static bool TryStartNoGcRegion()
+    private const long MaxNoGcBudget = 256L * 1024 * 1024;
+
+    private static bool TryStartNoGcRegion(long budget)
     {
         if (System.Runtime.GCSettings.LatencyMode == System.Runtime.GCLatencyMode.NoGCRegion)
         {
@@ -73,7 +95,7 @@ internal static class AllocationProbe
 
         try
         {
-            return GC.TryStartNoGCRegion(NoGcBudget);
+            return GC.TryStartNoGCRegion(budget);
         }
         catch (InvalidOperationException)
         {
