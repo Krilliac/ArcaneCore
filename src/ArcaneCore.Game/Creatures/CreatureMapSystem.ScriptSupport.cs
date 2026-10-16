@@ -95,8 +95,18 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
-        _forcedDespawns.RemoveAll(d => ReferenceEquals(d.Creature, creature));
-        _forcedDespawns.Add((creature, _clockMs + delayMs));
+        // cmangos queues one delayed event per call (Creature.cpp ForcedDespawn, timeMSToDespawn branch), so the earliest request fires and a
+        // later, longer one cannot postpone it. One pending entry per creature holding the minimum deadline gives the same outcome.
+        long atMs = _clockMs + delayMs;
+        int pending = _forcedDespawns.FindIndex(d => ReferenceEquals(d.Creature, creature));
+        if (pending < 0)
+        {
+            _forcedDespawns.Add((creature, atMs));
+        }
+        else if (atMs < _forcedDespawns[pending].AtMs)
+        {
+            _forcedDespawns[pending] = (creature, atMs);
+        }
     }
 
     private void UpdateForcedDespawns()
