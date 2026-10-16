@@ -3,6 +3,7 @@ using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Skills;
@@ -14,6 +15,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
@@ -47,6 +49,9 @@ internal static class OpportunityWorld
 
     /// <summary>A Pick Lock whose range is 0: the server turns the cast down at once (out of range) and the cast never stays in flight.</summary>
     internal const uint ShortPickSpell = 9202;
+
+    /// <summary>Herb Gathering with the client's own cast bar: Spell.dbc 2366 has CastingTimeIndex 6, SpellCastTimes.dbc row 6 = 5000 ms.</summary>
+    internal const uint SlowHerbSpell = 9203;
     internal const float StartX = -8949.95f, StartY = -132.49f, StartZ = 83.53f;
 
     internal static ulong ChestGuid(ChestSpawn spawn) => ObjectGuid.WithEntry(HighGuid.GameObject, spawn.Entry, spawn.Spawn).Value;
@@ -72,7 +77,8 @@ internal static class OpportunityWorld
         return new LockEntry(id, types, indexes, skills);
     }
 
-    internal static WorldTestHost Start(IEnumerable<ChestSpawn> chests, out GameObjectTestContext context)
+    /// <param name="manualClock">Game time advances only through <see cref="WorldRuntime.AdvanceClockAsync"/> (a deterministic cast bar).</param>
+    internal static WorldTestHost Start(IEnumerable<ChestSpawn> chests, out GameObjectTestContext context, bool manualClock = false)
     {
         var templates = new[]
         {
@@ -113,13 +119,22 @@ internal static class OpportunityWorld
         {
             using (items.Use())
             {
-                return WorldTestHost.Start(configureServices: Configure);
+                return WorldTestHost.Start(configureServices: services =>
+                {
+                    Configure(services);
+                    if (manualClock) services.AddSingleton<IWorldFeature, ManualClockFeature>();
+                });
             }
         }
         finally
         {
             GameObjectTestStore.Current.Value = null;
         }
+    }
+
+    private sealed class ManualClockFeature : IWorldFeature
+    {
+        public void Attach(WorldRuntime world) => world.UseManualClock();
     }
 
     private static void Configure(IServiceCollection services)
@@ -155,8 +170,13 @@ internal static class OpportunityWorld
                     Id = HerbSpell, SpellName = "Herb Gathering", RangeIndex = 12, Targets = 0x4000, CastingTimeIndex = 2,
                     Effect1 = 33, EffectImplicitTargetA1 = 23, EffectMiscValue1 = (int)LockType.Herbalism, EffectBasePoints1 = -1, EffectBaseDice1 = 1, EffectDieSides1 = 1,
                 },
+                new SpellTemplateRow
+                {
+                    Id = SlowHerbSpell, SpellName = "Herb Gathering", RangeIndex = 12, Targets = 0x4000, CastingTimeIndex = 6,
+                    Effect1 = 33, EffectImplicitTargetA1 = 23, EffectMiscValue1 = (int)LockType.Herbalism, EffectBasePoints1 = -1, EffectBaseDice1 = 1, EffectDieSides1 = 1,
+                },
             ],
-            [new SpellCastTimeRow { Id = 2, CastTime = 500, MinCastTime = 500 }], [], [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 12, MaxRange = 5 }], [],
+            [new SpellCastTimeRow { Id = 2, CastTime = 500, MinCastTime = 500 }, new SpellCastTimeRow { Id = 6, CastTime = 5000, MinCastTime = 5000 }], [], [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 12, MaxRange = 5 }], [],
             [new PlayerCreateSpellRow { Race = 1, Class = 4, Spell = PickLockSpell }],
             [])));
     }
