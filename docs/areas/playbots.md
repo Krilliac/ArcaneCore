@@ -1513,6 +1513,33 @@ a provider's moderation step on a busy public server. Tell your players, in your
 processed by a third-party AI service. The screening is a set of word lists and patterns: it will miss some lines and flag a few
 harmless ones, and it says nothing about what a provider will accept.
 
+### Bot speech
+
+Every line a bot says goes through one path (`World:Playerbots:Chat:Speech`, all on by default): `PlayerbotChat.TrySpeak` takes a
+`BotSpeech` (Say, Yell, Party, Raid, RaidWarning for a raid leader, Battleground, Guild, Whisper, a world channel by name, or a text
+emote), screens it with the output filter, and the world thread says it through the bot's own session as a client packet
+(`CMSG_MESSAGECHAT`, `CMSG_TEXT_EMOTE`); the server's own chat handlers deliver it. Nothing is broadcast by the server.
+
+- **Limits** (`PlayerbotSpeechLimiter`): per bot a gap between lines it starts (`BotGapSeconds`) and a per-minute cap
+  (`BotLinesPerMinute`); per target `TargetGapSeconds`; shared per place: a world channel per zone (`ChannelLinesPerMinute`, the
+  minute stretched by the number of bots in it over `ChannelCrowdBots`), the say/yell area (`LocalLinesPerMinute`), a group
+  (`GroupLinesPerMinute`), a guild (`GuildLinesPerMinute`); the same text in the same place once per `DedupeSeconds`.
+- **Listeners**: a line a bot starts on its own is said only when a real player can hear it (`RequireRealListener`); a reply's
+  audience is its addressee.
+- **World channels**: bots join General and LocalDefense of their zone, Trade in capitals and LookingForGroup, and leave the old
+  zone's on a zone change, with real join/leave packets (`WorldChannels`, `ChannelChangesPerPass`, on the social pass).
+- **Answers**: a bot answers whispers, and lines naming it in say, yell, party, raid (in raid chat), battleground, guild and world
+  channels, on the channel the line came on (`Chat:Channels`, all by default). A real player's open question in guild chat ("anyone
+  up for SM?") may be answered without the bot's name, by the built-in only with a group offer, a greeting or thanks.
+- **Bots hearing bots** (`BotToBot`): another bot's line naming the bot is answered with small talk only, at most
+  `BotToBotMaxTurns` turns per exchange (a new exchange after `BotToBotQuietSeconds`), `BotToBotPairLinesPerHour` per pair and
+  `BotToBotLinesPerMinute` in all. Never an order, never the AI disclosure.
+- **Emotes** (`EmoteReplies`): a text emote aimed at a bot is answered in kind (a wave with a wave, a bow with a bow, a hug with a
+  blush), once per emoter per `EmoteReplyGapSeconds`.
+- **Observability**: each said line logs at Debug (`Bot {Bot} says {Channel} ({Topic}, {Length} chars)`) and counts in
+  `arcanecore.playerbot.chat.lines_spoken`; refused ones in `arcanecore.playerbot.chat.lines_dropped` by reason
+  (docs/ops/metrics.md). Lines heard are raised as `PlayerbotChat.LineHeard` for other features to react to.
+
 ## Scenario harness
 
 Namespace `ArcaneCore.World.Playerbots.Scenarios`. A scenario is an `IPlayerbotScenario`

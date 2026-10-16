@@ -17,6 +17,47 @@ public enum PlayerbotChatChannels
 
     /// <summary>A /say line within hearing that names the bot.</summary>
     Say = 4,
+
+    /// <summary>A /yell line within hearing that names the bot (answered by a yell).</summary>
+    Yell = 8,
+
+    /// <summary>A raid or raid warning line that names the bot, answered in raid chat (a raid line is also answered while only <see cref="Party"/> is listed).</summary>
+    Raid = 16,
+
+    /// <summary>A battleground chat line that names the bot, answered in battleground chat.</summary>
+    Battleground = 32,
+
+    /// <summary>A guild chat line that names the bot, or a question put to the whole guild (one bot answers), answered in guild chat.</summary>
+    Guild = 64,
+
+    /// <summary>A world channel line (General, Trade, LocalDefense, LookingForGroup) that names the bot, answered in that channel.</summary>
+    World = 128,
+
+    /// <summary>Every channel.</summary>
+    All = Whisper | Party | Say | Yell | Raid | Battleground | Guild | World,
+}
+
+/// <summary>The zone channels a bot joins (<see cref="PlayerbotSpeechOptions.WorldChannels"/>; a comma-separated list in configuration).</summary>
+[Flags]
+public enum PlayerbotWorldChannels
+{
+    /// <summary>No world channel is joined.</summary>
+    None = 0,
+
+    /// <summary>"General - &lt;zone&gt;" in every open-world zone.</summary>
+    General = 1,
+
+    /// <summary>"Trade - City" while the bot is in a capital (an AreaTable zone with the capital flag), as the 1.12 client joins it.</summary>
+    Trade = 2,
+
+    /// <summary>"LocalDefense - &lt;zone&gt;" in every open-world zone.</summary>
+    LocalDefense = 4,
+
+    /// <summary>"LookingForGroup", one channel for the whole faction.</summary>
+    LookingForGroup = 8,
+
+    /// <summary>All four.</summary>
+    All = General | Trade | LocalDefense | LookingForGroup,
 }
 
 /// <summary>How a <see cref="PlayerbotChatProviderOptions"/> entry produces a reply.</summary>
@@ -74,8 +115,11 @@ public sealed class PlayerbotChatOptions
     /// </summary>
     public PlayerbotChatProviderOptions[] Providers { get; set; } = [];
 
-    /// <summary>The lines a bot answers: <c>Whisper</c>, <c>Party</c> and <c>Say</c> (comma-separated; all three by default).</summary>
-    public PlayerbotChatChannels Channels { get; set; } = PlayerbotChatChannels.Whisper | PlayerbotChatChannels.Party | PlayerbotChatChannels.Say;
+    /// <summary>
+    /// The lines a bot answers: <c>Whisper</c>, <c>Party</c>, <c>Say</c>, <c>Yell</c>, <c>Raid</c>, <c>Battleground</c>, <c>Guild</c> and
+    /// <c>World</c> (comma-separated; all of them by default). A reply goes back on the channel the line came on.
+    /// </summary>
+    public PlayerbotChatChannels Channels { get; set; } = PlayerbotChatChannels.All;
 
     /// <summary>Seconds after a reply before the same player gets another one from any bot (0..3600; lines in between are not answered).</summary>
     public int PerPlayerCooldownSeconds { get; set; } = 8;
@@ -106,6 +150,12 @@ public sealed class PlayerbotChatOptions
     /// is sent to a model provider (docs/areas/playbots.md, Safety and provider policies).
     /// </summary>
     public PlayerbotChatSafetyOptions Safety { get; set; } = new();
+
+    /// <summary>
+    /// <c>Speech</c>: how bots speak on their own and where (world channels, rate limits, bot-to-bot talk, emote replies). Every line a bot
+    /// says goes through the bot chat service, its safety screening and these limits (docs/areas/playbots.md, Bot speech).
+    /// </summary>
+    public PlayerbotSpeechOptions Speech { get; set; } = new();
 
     /// <summary>The providers in the order they are tried: the configured ones, then the built-in templates (the configured entry or a default one).</summary>
     internal IReadOnlyList<PlayerbotChatProviderOptions> EffectiveProviders()
@@ -138,14 +188,16 @@ public sealed class PlayerbotChatOptions
         if (MaxQueuedRequests is < 1 or > 256) throw new InvalidOperationException($"{section}: MaxQueuedRequests must be 1..256.");
         if (Safety is null) throw new InvalidOperationException($"{section}:Safety is missing.");
         Safety.Validate();
+        if (Speech is null) throw new InvalidOperationException($"{section}:Speech is missing.");
+        Speech.Validate();
     }
 
     /// <summary>Whether a model provider (anything but the built-in templates) is configured.</summary>
     internal bool HasModelProvider => (Providers ?? []).Any(provider => provider is { Kind: not PlayerbotChatProviderKind.Builtin });
 
     internal static string? CheckChannels(PlayerbotChatChannels channels)
-        => (channels & ~(PlayerbotChatChannels.Whisper | PlayerbotChatChannels.Party | PlayerbotChatChannels.Say)) == 0 ? null
-            : "must be a combination of Whisper, Party and Say";
+        => (channels & ~PlayerbotChatChannels.All) == 0 ? null
+            : "must be a combination of Whisper, Party, Say, Yell, Raid, Battleground, Guild and World";
 
     internal static string? CheckSpend(double usd) => double.IsFinite(usd) && usd is >= 0 and <= 10_000 ? null : "must be 0..10000";
 

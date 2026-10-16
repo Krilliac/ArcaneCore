@@ -23,4 +23,24 @@ internal static class PlayerbotChatMeters
     {
         if (ScreeningTimeouts.Enabled) ScreeningTimeouts.Add(1, new KeyValuePair<string, object?>("kind", kind));
     }
+
+    /// <summary>Lines bots said, by <c>channel</c> (Say, Party, World, Emote, ...) and <c>topic</c> (reply, greet, lfg, ...).</summary>
+    internal static Counter<long> LinesSpoken { get; } = Meter.CreateCounter<long>(
+        "arcanecore.playerbot.chat.lines_spoken", "{line}", "Chat lines and emotes bots said through their own sessions.");
+
+    /// <summary>Lines bots did not say, by <c>channel</c> and <c>reason</c> (Cooldown, Budget, Duplicate, NoListener, BotToBot, ...).</summary>
+    internal static Counter<long> LinesDropped { get; } = Meter.CreateCounter<long>(
+        "arcanecore.playerbot.chat.lines_dropped", "{line}", "Bot chat lines stopped by the speech limits, the safety screening or the delivery checks.");
+
+    internal static void CountSpoken(BotSpeechChannel channel, string topic)
+    {
+        if (LinesSpoken.Enabled)
+            LinesSpoken.Add(1, new KeyValuePair<string, object?>("channel", channel.ToString()), new KeyValuePair<string, object?>("topic", topic));
+    }
+
+    internal static void CountDropped(BotSpeechChannel channel, BotSpeechAdmission reason)
+    {
+        if (LinesDropped.Enabled)
+            LinesDropped.Add(1, new KeyValuePair<string, object?>("channel", channel.ToString()), new KeyValuePair<string, object?>("reason", reason.ToString()));
+    }
 }

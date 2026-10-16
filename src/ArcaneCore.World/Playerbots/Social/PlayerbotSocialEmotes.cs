@@ -95,6 +95,51 @@ internal sealed class PlayerbotSocialEmotes
         return PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(ChatType.Say, language, text));
     }
 
+    /// <summary>
+    /// The text emote a bot answers <paramref name="textEmote"/> with, as a player would (vmangos TEXTEMOTE_* ids): a wave, hello or greeting
+    /// with a wave or hello, a bow with a bow, a hug or kiss with a blush or a hug, a salute with a salute, a cheer with a cheer, thanks with
+    /// "you're welcome", a dance with a dance, a rude gesture or a chicken with a rude one now and then. Null: no answer (most emotes).
+    /// </summary>
+    internal static uint? ReplyTo(uint textEmote, Random random)
+    {
+        ArgumentNullException.ThrowIfNull(random);
+        uint[]? answers = textEmote switch
+        {
+            TextEmotes.Wave or TextEmotes.Hello or TextEmotes.Greet or TextEmotes.Hail => [TextEmotes.Wave, TextEmotes.Wave, TextEmotes.Hello, TextEmotes.Smile],
+            TextEmotes.Bow or TextEmotes.Curtsey => [TextEmotes.Bow, TextEmotes.Bow, TextEmotes.Curtsey],
+            TextEmotes.Hug => [TextEmotes.Blush, TextEmotes.Hug, TextEmotes.Smile],
+            TextEmotes.Kiss => [TextEmotes.Blush, TextEmotes.Giggle, TextEmotes.Shy],
+            TextEmotes.Wink or TextEmotes.Flirt => [TextEmotes.Blush, TextEmotes.Giggle],
+            TextEmotes.Salute => [TextEmotes.Salute],
+            TextEmotes.Cheer or TextEmotes.Victory or TextEmotes.Congratulate or TextEmotes.Applaud or TextEmotes.Clap
+                => [TextEmotes.Cheer, TextEmotes.Bow, TextEmotes.Thank],
+            TextEmotes.Thank => [TextEmotes.Welcome, TextEmotes.Smile, TextEmotes.Nod],
+            TextEmotes.Dance => [TextEmotes.Dance, TextEmotes.Dance, TextEmotes.Cheer],
+            TextEmotes.Bye => [TextEmotes.Wave, TextEmotes.Bye],
+            TextEmotes.Laugh or TextEmotes.Rofl or TextEmotes.Giggle => [TextEmotes.Grin, TextEmotes.Laugh],
+            TextEmotes.Poke => [TextEmotes.Shrug, TextEmotes.Sigh, TextEmotes.Poke],
+            TextEmotes.Point => [TextEmotes.Shrug],
+            TextEmotes.Flex => [TextEmotes.Applaud, TextEmotes.Laugh],
+            TextEmotes.Threaten => [TextEmotes.Chicken, TextEmotes.Laugh, TextEmotes.Flex],
+            TextEmotes.Rude or TextEmotes.Chicken => [TextEmotes.Rude, TextEmotes.Shrug, TextEmotes.Sigh],
+            TextEmotes.Apologize => [TextEmotes.Nod, TextEmotes.Smile],
+            TextEmotes.Beckon => [TextEmotes.Nod, TextEmotes.No],
+            TextEmotes.Kneel => [TextEmotes.Bow, TextEmotes.Salute],
+            _ => null,
+        };
+        return answers is null ? null : answers[random.Next(answers.Length)];
+    }
+
+    /// <summary>The 1.12 text emote ids used here (EmotesText.dbc; vmangos TextEmotes).</summary>
+    internal static class TextEmotes
+    {
+        internal const uint Agree = 1, Apologize = 4, Applaud = 5, Beckon = 7, Blush = 12, Bow = 17, Bye = 19, Cheer = 21, Chicken = 22,
+            Clap = 24, Congratulate = 26, Curtsey = 33, Dance = 34, Flex = 41, Flirt = 42, Giggle = 45, Greet = 48, Grin = 49, Hail = 53,
+            Hello = 55, Hug = 56, Kiss = 58, Kneel = 59, Laugh = 60, No = 66, Nod = 67, Point = 72, Poke = 73, Rofl = 76, Rude = 77,
+            Salute = 78, Shrug = 83, Shy = 84, Sigh = 85, Thank = 97, Threaten = 98, Victory = 100, Wave = 101, Welcome = 102,
+            Smile = 163, Wink = 363;
+    }
+
     private static float Distance(WorldObject a, WorldObject b)
         => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
 }

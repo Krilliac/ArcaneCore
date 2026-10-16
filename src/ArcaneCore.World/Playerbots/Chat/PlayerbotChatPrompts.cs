@@ -207,6 +207,20 @@ internal static class PlayerbotChatPrompts
         return false;
     }
 
+    /// <summary>
+    /// Whether <paramref name="text"/> is a question put to everybody ("anyone up for deadmines?", "does anybody know where the
+    /// rogue trainer is?"): it ends with a question mark or opens with "anyone"/"anybody"/"any1"/"who"/"lf"/"lfg"/"lfm".
+    /// </summary>
+    internal static bool IsOpenQuestion(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        string line = text.Trim();
+        if (line.EndsWith('?')) return true;
+        int space = line.IndexOf(' ', StringComparison.Ordinal);
+        string first = (space < 0 ? line : line[..space]).TrimEnd(',', '!', '.').ToLowerInvariant();
+        return first is "anyone" or "anybody" or "any1" or "who" or "lf" or "lfg" or "lfm" or "lf1m" or "lf2m";
+    }
+
     /// <summary>What the bot is doing, in words ("working on the quest Wolves Across the Border"), or null when it is idle or unknown.</summary>
     internal static string? DescribeGoal(BotChatPersona p) => p.Goal switch
     {
@@ -242,7 +256,11 @@ internal static class PlayerbotChatPrompts
     {
         ChatType.Whisper => "by whisper",
         ChatType.Say => "out loud nearby",
+        ChatType.Yell => "by yelling across the area",
         ChatType.Guild => "in your guild's chat",
+        ChatType.Raid or ChatType.RaidLeader or ChatType.RaidWarning => "in raid chat",
+        ChatType.Battleground or ChatType.BattlegroundLeader => "in battleground chat",
+        ChatType.Channel => "in a public chat channel everyone in the zone can read",
         _ => "in party chat",
     };
 }

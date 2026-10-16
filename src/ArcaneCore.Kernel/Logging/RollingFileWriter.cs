@@ -63,9 +63,28 @@ public sealed class RollingFileWriter : ILineWriter
         _open = open ?? OpenAppend;
     }
 
-    /// <summary>The production open: append, shared read/write/delete (tail -f and a second daemon on the same file work), 64 KiB buffer.</summary>
+    /// <summary>
+    /// The production open: append, shared read/write/delete (tail -f and a second daemon on the same file work).
+    /// <para>
+    /// On Windows the handle has append-only access (FILE_APPEND_DATA without FILE_WRITE_DATA) and no stream buffer, so every line is
+    /// one WriteFile that the file system puts at the current end of the file. A plain <see cref="FileMode.Append"/> stream only seeks
+    /// to the end once, at open, and then writes at its own remembered offset: with two daemons on one file (the realm and the world
+    /// configured with the same <c>Logging:File:Path</c>) each overwrote the other's lines from the same offsets, which is how the world's
+    /// startup lines (the bot chat provider chain among them) vanished from the live log of 2026-10-16 and lines like
+    /// <c>026-10-16 07:26:31</c> (an overwritten first byte) appeared.
+    /// </para>
+    /// </summary>
     public static FileStream OpenAppend(string path)
-        => new(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, bufferSize: 64 * 1024);
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return System.IO.FileSystemAclExtensions.Create(new FileInfo(path), FileMode.Append,
+                System.Security.AccessControl.FileSystemRights.AppendData, FileShare.ReadWrite | FileShare.Delete, bufferSize: 1,
+                FileOptions.None, fileSecurity: null);
+        }
+
+        return new(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, bufferSize: 64 * 1024);
+    }
 
     /// <summary>Bytes in the active file.</summary>
     public long CurrentSize => _size;
