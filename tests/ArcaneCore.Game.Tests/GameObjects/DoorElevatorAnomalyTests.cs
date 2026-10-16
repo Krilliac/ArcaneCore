@@ -38,6 +38,8 @@ public sealed class DoorElevatorAnomalyTests
     private const uint FiniteCar = 948027;
     private const uint WrapStopTram = 948028;
     private const uint BouncingLift = 948029;
+    private const uint SampledTram = 948030;
+    private const uint SampledShortLift = 948031;
 
     private sealed class Rig : IDisposable
     {
@@ -378,6 +380,36 @@ public sealed class DoorElevatorAnomalyTests
 
         Assert.Equal((3233u, 2), GameObjectMapSystem.ShortestFloorStop(Bouncing(BouncingLift).Nodes(BouncingLift)));
         Assert.Empty(capture.Notices);
+    }
+
+    /// <summary>
+    /// The floor-stop analysis depends only on the entry's animation, so it runs once per entry however often the car is ticked or sampled
+    /// (the playerbot planners call <see cref="GameObjectMapSystem.ElevatorPositionAt"/> every 250 ms over two cycles: ~1,150 samples for the
+    /// 143,333 ms Deeprun Tram), for every spawn of the entry, healthy or already reported.
+    /// </summary>
+    [Fact]
+    public void TheFloorStopAnalysis_RunsOncePerEntry_NotPerTickOrSample()
+    {
+        using var rig = new Rig(
+            [Car(SampledTram), Car(SampledShortLift)],
+            [GoSpawn(1, SampledTram, 3, 0), GoSpawn(2, SampledTram, 6, 0), GoSpawn(3, SampledShortLift, 9, 0)],
+            new TransportAnimationCatalog([.. WrapStop(SampledTram).Nodes(SampledTram).Select(n => (SampledTram, n)), .. Lift(SampledShortLift, 500).Nodes(SampledShortLift).Select(n => (SampledShortLift, n))]));
+        using AnomalyCapture capture = CaptureEntry("elevator-car/stop-too-short", SampledShortLift);
+        rig.Load();
+        rig.Tick(20);
+
+        foreach (GameObject car in rig.System.GameObjects.Where(g => g.Entry is SampledTram or SampledShortLift))
+        {
+            uint cycle = rig.System.ElevatorCycle(car);
+            // Offset 125 ms: progress 0 is the first node's own time, which has no earlier node and so no position (TransportAnimationCatalog.Offset).
+            for (uint progress = 125; progress < 2 * cycle; progress += 250)
+            {
+                Assert.NotNull(rig.System.ElevatorPositionAt(car, progress % cycle));
+            }
+        }
+
+        Assert.Equal(2, rig.System.ElevatorFloorStopAnalyses);
+        Assert.Single(capture.Notices);
     }
 
     /// <summary>Every elevator and tram of the real 5875 TransportAnimation.dbc rests at least <see cref="GameObjectMapSystem.MinElevatorStopMs"/> at each floor.</summary>

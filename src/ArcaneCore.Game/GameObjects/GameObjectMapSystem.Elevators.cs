@@ -37,6 +37,16 @@ public sealed partial class GameObjectMapSystem
     private readonly List<GameObject> _mapWideElevators = [];
     private readonly HashSet<ulong> _reportedNoAnimationSpawns = [];
     private readonly HashSet<ulong> _reportedShortStopSpawns = [];
+
+    /// <summary>
+    /// <see cref="ShortestFloorStop"/> of each entry's animation, computed once: it depends only on the entry's keyframes, and
+    /// <see cref="ValidateElevatorSpawn"/> runs every tick per car and inside the playerbot planners' 250 ms sampling loops.
+    /// Cleared with the animations.
+    /// </summary>
+    private readonly Dictionary<uint, (uint ShortestMs, int FloorCount)> _elevatorFloorStops = [];
+
+    /// <summary>How many times <see cref="ShortestFloorStop"/> ran for a validation (tests: the analysis is memoized per entry).</summary>
+    internal int ElevatorFloorStopAnalyses { get; private set; }
     private readonly HashSet<ulong> _reportedNonFinitePositionSpawns = [];
 
     /// <summary>
@@ -51,6 +61,7 @@ public sealed partial class GameObjectMapSystem
             _elevatorAnimations = value ?? TransportAnimationCatalog.Empty;
             _reportedNoAnimationSpawns.Clear();
             _reportedShortStopSpawns.Clear();
+            _elevatorFloorStops.Clear();
             InstallMapWideElevators();
         }
     }
@@ -291,13 +302,25 @@ public sealed partial class GameObjectMapSystem
             return;
         }
 
+        if (_reportedShortStopSpawns.Contains(key))
+        {
+            return;
+        }
+
         IReadOnlyList<TransportAnimationNode> nodes = _elevatorAnimations.Nodes(entry);
         if (nodes.Count < 2)
         {
             return;
         }
 
-        (uint shortestStopMs, int floorCount) = ShortestFloorStop(nodes);
+        if (!_elevatorFloorStops.TryGetValue(entry, out (uint ShortestMs, int FloorCount) floorStops))
+        {
+            floorStops = ShortestFloorStop(nodes);
+            _elevatorFloorStops[entry] = floorStops;
+            ElevatorFloorStopAnalyses++;
+        }
+
+        (uint shortestStopMs, int floorCount) = floorStops;
         bool tooShort = (floorCount > 0 && shortestStopMs < MinElevatorStopMs)
             || totalTime < (2 * MinElevatorStopMs)
             || (floorCount == 0 && nodes.Count >= 4);
@@ -370,10 +393,19 @@ public sealed partial class GameObjectMapSystem
             stops.RemoveAt(0);
         }
 
-        var floors = new List<(TransportAnimationNode At, uint Dwell)>();
+        var floors = new List<(TransportAnimationNode At, uint Dwell)>(stops.Count);
         foreach ((TransportAnimationNode at, uint duration) in stops)
         {
-            int floor = floors.FindIndex(f => Distance(f.At, at) <= ElevatorFloorToleranceYards);
+            int floor = -1;
+            for (int f = 0; f < floors.Count; f++)
+            {
+                if (Distance(floors[f].At, at) <= ElevatorFloorToleranceYards)
+                {
+                    floor = f;
+                    break;
+                }
+            }
+
             if (floor < 0)
             {
                 floors.Add((at, duration));
@@ -384,7 +416,18 @@ public sealed partial class GameObjectMapSystem
             }
         }
 
-        return floors.Count == 0 ? (0, 0) : (floors.Min(f => f.Dwell), floors.Count);
+        if (floors.Count == 0)
+        {
+            return (0, 0);
+        }
+
+        uint shortest = uint.MaxValue;
+        foreach ((TransportAnimationNode _, uint dwell) in floors)
+        {
+            shortest = Math.Min(shortest, dwell);
+        }
+
+        return (shortest, floors.Count);
 
         static bool IsStationary(TransportAnimationNode a, TransportAnimationNode b)
             => MathF.Abs(b.X - a.X) <= StationaryNodeToleranceYards
