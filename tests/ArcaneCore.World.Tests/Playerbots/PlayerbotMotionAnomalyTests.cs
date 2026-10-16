@@ -56,6 +56,44 @@ public sealed class PlayerbotMotionAnomalyTests
     internal void Classify_JudgesTheGroundUnderTheBot(float z, float floor, UnderMapKind kind, float depth, PlayerbotMotionAnomalies.GroundVerdict expected)
         => Assert.Equal(expected, PlayerbotMotionAnomalies.Classify(z, floor, new UnderMapVerdict(kind, depth)));
 
+    /// <summary>A model-aware query with a fixed terrain depth that honours the margin it is asked with, as the real one does.</summary>
+    private sealed class DepthClassifier(float depth) : IUnderMapClassifier
+    {
+        public List<float> Margins { get; } = [];
+
+        public UnderMapVerdict ClassifyUnderMap(float x, float y, float z, float minDepthYards = 0f)
+        {
+            Margins.Add(minDepthYards);
+            return depth > minDepthYards ? UnderMapVerdict.Under(depth) : UnderMapVerdict.Ok;
+        }
+    }
+
+    [Theory]
+    [InlineData(6f, PlayerbotMotionAnomalies.GroundVerdict.Ok)]        // navmesh-versus-terrain drift: inside the margin
+    [InlineData(10f, PlayerbotMotionAnomalies.GroundVerdict.UnderMap)] // beyond it
+    [InlineData(50f, PlayerbotMotionAnomalies.GroundVerdict.FarUnderMap)]
+    internal void JudgeGround_PassesTheEightYardMargin_ToTheModelAwareQuery(float depth, PlayerbotMotionAnomalies.GroundVerdict expected)
+    {
+        var classifier = new DepthClassifier(depth);
+        var at = new Vector3(0, 0, 80);
+
+        PlayerbotMotionAnomalies.GroundVerdict verdict = PlayerbotMotionAnomalies.JudgeGround(at, -200000f, modelsEnabled: true, classifier, out _);
+
+        Assert.Equal(expected, verdict);
+        Assert.Equal(8f, Assert.Single(classifier.Margins));
+    }
+
+    [Fact]
+    internal void JudgeGround_DoesNotAskTheQuery_WithAFloorUnderTheBot_OrWithoutModelData()
+    {
+        var classifier = new DepthClassifier(90f);
+        var at = new Vector3(0, 0, 80);
+
+        Assert.Equal(PlayerbotMotionAnomalies.GroundVerdict.Ok, PlayerbotMotionAnomalies.JudgeGround(at, 79f, modelsEnabled: true, classifier, out _));
+        Assert.Equal(PlayerbotMotionAnomalies.GroundVerdict.Ok, PlayerbotMotionAnomalies.JudgeGround(at, -200000f, modelsEnabled: false, classifier, out _));
+        Assert.Empty(classifier.Margins);
+    }
+
     // ---- reports through the shared front door ---------------------------------------------------------------------------------
 
     [Fact]

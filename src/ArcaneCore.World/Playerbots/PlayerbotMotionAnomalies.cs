@@ -285,16 +285,25 @@ internal static class PlayerbotMotionAnomalies
         | MovementFlags.OnTransport | MovementFlags.Hover | MovementFlags.WaterWalking | MovementFlags.FallingFar
         | MovementFlags.Jumping | MovementFlags.SplineEnabled;
 
+    /// <summary>
+    /// The ground verdict at <paramref name="at"/> given the floor under it and whether model data backs the map. The model-aware
+    /// under-map query is asked only when there is no floor, and with <see cref="UnderMapYards"/> as its margin.
+    /// </summary>
+    internal static GroundVerdict JudgeGround(Vector3 at, float floor, bool modelsEnabled, IUnderMapClassifier classifier, out UnderMapVerdict underMap)
+    {
+        // Without any model data a cave or a cellar looks like open ground under the terrain, so nothing is convicted.
+        underMap = ValidHeight(floor) || !modelsEnabled
+            ? UnderMapVerdict.Unknown
+            : classifier.ClassifyUnderMap(at.X, at.Y, at.Z, UnderMapYards);
+        return Classify(at.Z, floor, underMap);
+    }
+
     /// <summary>One sampled ground check at <paramref name="at"/>, where a heartbeat just put the bot.</summary>
     internal static void CheckGround(Player player, Map map, MotionWatch watch, Vector3 at, uint now)
     {
         if ((player.Movement.Flags & NotWalking) != 0 || player.Locomotion.ActiveSpline is not null || !Finite(at)) return;
         float floor = map.Collision.GetHeight(at.X, at.Y, at.Z);
-        // Without any model data a cave or a cellar looks like open ground under the terrain, so nothing is convicted.
-        UnderMapVerdict underMap = ValidHeight(floor) || !map.Collision.LineOfSight.Enabled
-            ? UnderMapVerdict.Unknown
-            : map.Collision.ClassifyUnderMap(at.X, at.Y, at.Z, UnderMapYards);
-        GroundVerdict verdict = Classify(at.Z, floor, underMap);
+        GroundVerdict verdict = JudgeGround(at, floor, map.Collision.LineOfSight.Enabled, map.Collision, out UnderMapVerdict underMap);
         if (verdict == GroundVerdict.Ok) return;
         ReportGround(player, map, watch, verdict, at, at.Z + underMap.DepthYards, floor, now);
     }

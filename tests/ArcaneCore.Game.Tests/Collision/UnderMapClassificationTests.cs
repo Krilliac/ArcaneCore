@@ -161,10 +161,17 @@ public sealed class UnderMapClassificationTests(ITestOutputHelper output)
         Assert.Equal(UnderMapKind.Unknown, collision.ClassifyUnderMap(X, Y, Ground - 100f).Kind); // never attempted
 
         Assert.False(vmaps.LoadTile(0, tx, ty)); // nothing to read
+        Assert.False(vmaps.LoadTile(0, tx, ty)); // the same answer every time
+        // Anti-cheat MapAntiCheatTerrain.HasModels asks exactly this: "a model tile was read". An empty tile is not one.
+        Assert.False(vmaps.GetTree(0)!.IsTileLoaded(tx, ty));
         Assert.Equal(ModelCoverage.Loaded, vmaps.CoverageAt(0, tx, ty));
         UnderMapVerdict verdict = collision.ClassifyUnderMap(X, Y, Ground - 100f);
         Assert.Equal(UnderMapKind.UnderMap, verdict.Kind);
         Assert.Equal(100f, verdict.DepthYards, 0.01f);
+
+        // An unload forgets the empty marker, so a reload tries the file again.
+        vmaps.UnloadTile(0, tx, ty);
+        Assert.Equal(ModelCoverage.TileNotLoaded, vmaps.CoverageAt(0, tx, ty));
     }
 
     // ---- the creature check with the real classifier (no stub) --------------------------------------------------------------
