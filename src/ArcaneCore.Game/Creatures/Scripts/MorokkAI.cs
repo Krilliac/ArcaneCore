@@ -98,7 +98,7 @@ public sealed class MorokkAI(Creature creature) : EscortAI(creature), IQuestScri
             SetEscortPaused(false);
             Me.ReactState = CreatureReactState.Passive;
             System?.SayText(Me, SayScared);
-            Me.Motion.Clear(); // "TODO: make whole EscortAI work like this"
+            Me.Motion.Clear(); // source: Clear(false); ours has no such flag and acts like Clear(true) (see the batch 5 doc)
         }
     }
 

@@ -416,9 +416,20 @@ public sealed class ZoneScriptBatch5Tests
         using Rig rig = BearRig();
         var ai = rig.Ai<RabidBearAI>();
         Assert.InRange(ai.RabiesMs, RabidBearAI.RabiesMinMs, RabidBearAI.RabiesMaxMs);
+        // A victim that cannot die: if melee killed it the bear would evade and roll its timer again.
+        rig.Player.MaxHealth = 100_000_000;
+        rig.Player.Health = 100_000_000;
         rig.System.AttackStart(rig.Npc, rig.Player);
 
+        void AssertStillFighting()
+        {
+            Assert.True(rig.Player.IsAlive, "the victim died");
+            Assert.True(rig.Npc.Combat.IsInCombat, "the bear left combat");
+        }
+
+        AssertStillFighting();
         int first = rig.TimeUntil(() => rig.Caster.Casts.Count == 1);
+        AssertStillFighting();
         Assert.InRange(first, 12_000, 18_300);
         (Creature caster, uint spell, Unit? target, bool triggered) = rig.Caster.Casts[0];
         Assert.Same(rig.Npc, caster);
@@ -426,7 +437,9 @@ public sealed class ZoneScriptBatch5Tests
         Assert.Same(rig.Player, target);
         Assert.False(triggered);
 
+        AssertStillFighting();
         int second = rig.TimeUntil(() => rig.Caster.Casts.Count == 2);
+        AssertStillFighting();
         Assert.InRange(second, 12_000, 18_300);
     }
 

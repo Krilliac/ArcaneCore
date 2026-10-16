@@ -27,10 +27,10 @@ public sealed class FeeroIronhandAI(Creature creature) : EscortAI(creature), IQu
         SayFinalAmbushAttack = -1000779, SayQuestEnd = -1000780;
     public const uint AmbushLifetimeMs = 20_000;
 
-    /// <summary>aSummonPositions (:621-625): the distance and the first angle of the two fans.</summary>
+    /// <summary>aSummonPositions (:623-627): the distance and the first angle of the two fans.</summary>
     public static readonly (float Distance, float Angle)[] FanPositions = [(30f, 1.25f), (30f, 0.95f)];
 
-    /// <summary>aEliteSummonPositions (:628-633): Balizar, Aligar and Caedakar.</summary>
+    /// <summary>aEliteSummonPositions (:630-634): Balizar, Aligar and Caedakar.</summary>
     public static readonly (float X, float Y, float Z, float O)[] ElitePositions =
         [(4243.12f, 108.22f, 38.12f, 3.62f), (4240.95f, 114.04f, 38.35f, 3.56f), (4235.78f, 118.09f, 38.08f, 4.12f)];
 
@@ -155,7 +155,7 @@ public sealed class FeeroIronhandAI(Creature creature) : EscortAI(creature), IQu
         ArgumentNullException.ThrowIfNull(summoned);
         if (summoned.Entry == NpcForsakenScout)
         {
-            // Only one of the scouts yells
+            // Of the scouts, only the one that arrives second speaks
             if (_creaturesCount == 1)
             {
                 System?.SayText(summoned, SayScoutSecondAmbush, Me);

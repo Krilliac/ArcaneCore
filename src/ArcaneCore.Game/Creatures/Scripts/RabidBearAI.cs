@@ -132,7 +132,10 @@ public sealed class RabidBearAI(Creature creature) : ScriptedAI(creature)
         }
     }
 
-    /// <summary>SelectAttackingTarget(ATTACKING_TARGET_TOPAGGRO, 0): the living unit with the most threat.</summary>
+    /// <summary>
+    /// SelectAttackingTarget(ATTACKING_TARGET_TOPAGGRO, 0, SPELL_RABIES) (darkshore.cpp:640): the living unit with the most threat. The source also
+    /// skips entries that fail the spell's target checks; the engine has no such check, so the cast itself refuses (batch 5 doc, deviations).
+    /// </summary>
     private Unit? TopThreatTarget()
         => Me.Combat.HasThreatList ? Me.Combat.Threat.Entries.Select(e => e.Target).FirstOrDefault(u => u.IsAlive) ?? Victim : Victim;
 }

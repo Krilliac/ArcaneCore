@@ -6,6 +6,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -13,6 +15,7 @@ using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.GameObjects;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,7 +24,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.GameObjects;
 
 /// <summary>
-/// Zone object scripts, batch 5: go_lightning (mangos-classic azshara.cpp:369-396) and go_covert_ops (stonetalon_mountains.cpp:108-216), against a
+/// Zone object scripts, batch 5: go_lightning (mangos-classic azshara.cpp:368-397) and go_covert_ops (stonetalon_mountains.cpp:104-213), against a
 /// real map with a packet-recording player and the Venture Co. workers as real creatures.
 /// </summary>
 public sealed class ZoneGameObjectScriptBatch5Tests : IDisposable
@@ -382,6 +385,39 @@ public sealed class ZoneGameObjectScriptBatch5Tests : IDisposable
 
         // 8 s of ticks: at least one flash (every 2 to 5 s) and at most four.
         Assert.InRange(Anims().Count, 1, 4);
+    }
+
+    private ServiceProvider QuestServices(out QuestNpcServices quests)
+    {
+        ServiceProvider services = new ServiceCollection()
+            .AddSingleton(sp => new QuestNpcFeature(sp, sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<QuestNpcFeature>.Instance))
+            .BuildServiceProvider();
+        quests = services.GetRequiredService<QuestNpcFeature>().Services;
+        quests.Track(_player);
+        return services;
+    }
+
+    [Theory]
+    [InlineData(QuestStatus.Incomplete, true)]
+    [InlineData(QuestStatus.Complete, false)]
+    [InlineData(QuestStatus.Failed, false)]
+    public async Task AQuestInTheLogIsIncompleteOnlyWhileItsStatusIsIncomplete(QuestStatus status, bool expected)
+    {
+        await using ServiceProvider services = QuestServices(out QuestNpcServices quests);
+        quests.StateOf(_player)!.Quests.GetOrAdd(9364).Status = status;
+
+        Assert.Equal(expected, new ScriptQuestEvents(services).IsQuestIncomplete(_player, 9364));
+    }
+
+    [Fact]
+    public async Task AQuestNotInTheLogIsNotIncomplete_AndAnotherQuestInTheLogDoesNotCount()
+    {
+        await using ServiceProvider services = QuestServices(out QuestNpcServices quests);
+        quests.StateOf(_player)!.Quests.GetOrAdd(1111).Status = QuestStatus.Incomplete;
+        var events = new ScriptQuestEvents(services);
+
+        Assert.False(events.IsQuestIncomplete(_player, 9364));
+        Assert.True(events.IsQuestIncomplete(_player, 1111));
     }
 
     [Fact]

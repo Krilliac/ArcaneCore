@@ -7,7 +7,7 @@ using ArcaneCore.Game.GameObjects;
 namespace ArcaneCore.World.GameObjects;
 
 /// <summary>
-/// go_lightning (mangos-classic kalimdor/azshara.cpp:369-396, registered :518-521): the Theatric Lightning (183356) of Azshara plays its custom
+/// go_lightning (mangos-classic kalimdor/azshara.cpp:368-397, registered :518-521): the Theatric Lightning (183356) of Azshara plays its custom
 /// animation (SMSG_GAMEOBJECT_CUSTOM_ANIM, animation 0) every two to five whole seconds for as long as it is spawned. The timer starts at a
 /// random 2-5 s when the object is first updated (the source's constructor) and is held, not counted down, while the object is not spawned.
 /// One instance serves every object of the entry: the timer is kept by the object. World thread.
@@ -51,7 +51,7 @@ internal sealed class LightningAi(Random random) : IGameObjectAi
 }
 
 /// <summary>
-/// go_covert_ops (mangos-classic kalimdor/stonetalon_mountains.cpp:108-216, registered :236-239): the Venture Co. Wagon Trap (19590, Stonetalon
+/// go_covert_ops (mangos-classic kalimdor/stonetalon_mountains.cpp:104-213, registered :236-239): the Venture Co. Wagon Trap (19590, Stonetalon
 /// Mountains) calls the Venture Co. workers when it has been sprung. As soon as the trap's loot state becomes just-deactivated it collects every
 /// Deforester (3991), Logger (3989), Digger (3999), Overlord (4004) and Operator (3988) within 100 yd. Two seconds later each one that is alive and
 /// not in combat stops, runs to the point 10 yd from the wagon on the side facing it (GetContactPoint) and waits there; 45 s after that each one
@@ -96,7 +96,7 @@ internal sealed class CovertOpsAi : IGameObjectAi
 
     public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
 
-    /// <summary>JustSpawned → Reset (:158-161, :132-137): the object's event starts over.</summary>
+    /// <summary>JustSpawned → Reset (:160-163, Reset :137-142): the object's event starts over.</summary>
     public void OnRespawn(GameObjectMapSystem objects, GameObject go)
     {
         State state = _states.GetValue(go, _ => new State());
@@ -115,7 +115,7 @@ internal sealed class CovertOpsAi : IGameObjectAi
             if (!state.SawDeactivation)
             {
                 state.SawDeactivation = true;
-                state.Phase = Phase.Calling; // OnLootStateChange (:139-156)
+                state.Phase = Phase.Calling; // OnLootStateChange (:144-158)
                 if (creatures is not null)
                 {
                     foreach (uint entry in VentureCoWorkers)
@@ -183,7 +183,7 @@ internal sealed class CovertOpsAi : IGameObjectAi
     }
 
     /// <summary>
-    /// GetContactPoint(worker, x, y, z, 10) (Object.h:921-926): the point 10 yd (plus both bounding radii) from the wagon towards the worker; then
+    /// GetContactPoint(worker, x, y, z, 10) (Object.h:915-919): the point 10 yd (plus both bounding radii) from the wagon towards the worker; then
     /// SetWalk(false), MoveIdle and MovePoint(1, ...).
     /// </summary>
     private static void CallToWagon(CreatureMapSystem creatures, GameObject go, Creature worker)
