@@ -259,6 +259,34 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     }
 
     [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_ConcurrentOpensAllGetWalAndNormal()
+    {
+        // Many connections opening a file that does not exist yet at the same moment: each may see the empty rollback-journal file and try the WAL switch,
+        // which needs an exclusive lock. busy_timeout is set before the switch, so the losers wait instead of failing: no open throws, every connection ends in
+        // WAL on NORMAL, and nothing is logged as refused.
+        string path = Path.Combine(_directory, "fresh-concurrent.db");
+        Assert.False(File.Exists(path));
+        string connection = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
+        var errors = new CapturingLoggerProvider();
+        using ILoggerFactory factory = LoggerFactory.Create(logging => logging.AddProvider(errors));
+        SqliteConnectionPragmaInterceptor pragma = SqliteConnectionPragmaInterceptor.For(5000, 0, SqliteSynchronousMode.Normal, factory.CreateLogger("concurrent-open"));
+        using var start = new Barrier(8);
+
+        long[] synchronous = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+        {
+            await using var db = new DbContext(new DbContextOptionsBuilder<DbContext>().UseSqlite(connection).AddInterceptors(pragma).Options);
+            start.SignalAndWait(TimeSpan.FromSeconds(30));
+            await db.Database.OpenConnectionAsync();
+            Assert.Equal("wal", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
+            return (long)(await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"))!;
+        })));
+
+        Assert.All(synchronous, value => Assert.Equal(1L, value));
+        Assert.Equal(SqliteSynchronousMode.Normal, pragma.EffectiveFor(path));
+        Assert.Empty(errors.Errors);
+    }
+
+    [Fact]
     public void EfCreate_SwitchesANewFileToWal_AfterOpening()
     {
         // Pins the third-party behaviour the interceptor's comment relies on: EF's SqliteDatabaseCreator.Create runs PRAGMA journal_mode = 'wal' after it has
