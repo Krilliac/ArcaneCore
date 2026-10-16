@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.SpawnGroups;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.SpawnGroups;
 using Xunit;
@@ -88,6 +89,42 @@ public sealed class FormationTests
             }
 
             Assert.True(moved, "the creature beside the formation was not updated");
+        }
+    }
+
+    /// <summary>
+    /// A formation leader with waypoint movement (MovementType 2) and no <c>creature_movement</c> rows of its own walks the formation's
+    /// <c>waypoint_path</c>: mangos-classic MotionMaster::Initialize (MotionGenerators/MotionMaster.cpp:83-94) gives slot 0 of a formation
+    /// the path <c>MovementIdOrWander</c> from PATH_FROM_WAYPOINT_PATH. It is neither a waypoint spawn without a path at load nor a
+    /// <c>creature/waypoint-path-missing</c> anomaly (the live world reported classic-db's Magram and Moon Priestess Amara leaders, spawns
+    /// 27113 and 46394, on every start).
+    /// </summary>
+    [Fact]
+    public void AWaypointLeaderWithoutItsOwnRows_WalksTheFormationPath_AndIsNotReportedMissing()
+    {
+        const uint Leader = 6883;
+        var content = new CreatureContent(
+            [.. Spawns.Select(s => Template(s.Entry))],
+            Spawns.Select(s => Spawn(s.Guid, s.Entry, s.X + ShiftX, s.Y + ShiftY, Z, respawnSeconds: 300, movementType: s.Guid == Leader ? (byte)2 : (byte)0)
+                with { Orientation = s.O }),
+            [], [], [],
+            entryWaypoints: PathPoints.Select(p => (CreatureContent.WaypointPathEntry, CreatureContent.WaypointPathBit | 6883u,
+                new CreatureWaypoint(p.Point, p.X + ShiftX, p.Y + ShiftY, Z, p.O, p.WaitMs))))
+        {
+            SpawnGroups = new SpawnGroupCatalog([KargathExpeditionaryForce with { Flags = SpawnGroupFlags.None }]),
+        };
+
+        Assert.DoesNotContain(content.FindWaypointSpawnsWithoutPath(), s => s.Guid == Leader);
+
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "creature/waypoint-path-missing"
+            && n.Subject.StartsWith("creature entry 9086 ", StringComparison.Ordinal));
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content);
+        using (world)
+        {
+            AddPlayer(world, 1, 300, 300);
+            Run(world, 200);
+            Assert.Equal(MovementGeneratorType.Waypoint, Member(system, Leader).Motion.DefaultType);
+            Assert.Empty(capture.Notices);
         }
     }
 

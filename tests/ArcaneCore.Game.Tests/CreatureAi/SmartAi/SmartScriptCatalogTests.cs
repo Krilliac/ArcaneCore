@@ -29,7 +29,7 @@ public sealed class SmartScriptCatalogTests
         { "negative guid, timed action list", [Make(-5, 9, 0, 0, 22, a1: 1)], "negative entryorguid -5" },
         { "creature event AC forbids (area trigger 46)", [Make(Wolf, 0, 0, 46, 22, a1: 1)], "forbids event 46" },
         { "creature event AC forbids (quest 47)", [Make(Wolf, 0, 0, 47, 22, a1: 1)], "forbids event 47" },
-        { "creature event with no hook (3)", [Make(Wolf, 0, 0, 3, 22, a1: 1)], "event 3 has no ArcaneCore hook" },
+        { "creature event with no hook (10)", [Make(Wolf, 0, 0, 10, 22, a1: 1)], "event 10 has no ArcaneCore hook" },
         { "GO event AC forbids (25 RESET)", [Make(Wolf, 1, 0, 25, 22, a1: 1)], "forbids event 25" },
         { "GO event AC forbids (0 UPDATE_IC)", [Make(Wolf, 1, 0, 0, 22, a1: 1)], "forbids event 0" },
         { "GO event valid but unhooked (8 SPELLHIT)", [Make(Wolf, 1, 0, 8, 22, a1: 1)], "event 8 has no ArcaneCore hook for source type 1" },

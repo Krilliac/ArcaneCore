@@ -149,7 +149,8 @@ internal sealed class SmartRig : IDisposable
                 Template(Demetria, t => { t.Faction = 35; t.ExtraFlags = CountSpawnsFlag; }),
             ],
             [Spawn(1, WolfEntry, 5, 0), .. creatureSpawns ?? []], [], [], [],
-            new CreatureAiContent([], [], new BroadcastTextCatalog([new BroadcastText(9001, "Grr, $N!", "", 0, 0, 0, [0, 0, 0], [0, 0, 0])]),
+            new CreatureAiContent([], [], new BroadcastTextCatalog([new BroadcastText(9001, "Grr, $N!", "", 0, 0, 0, [0, 0, 0], [0, 0, 0]),
+                new BroadcastText(1150, "%s attempts to run away in fear!", "", 2, 0, 0, [0, 0, 0], [0, 0, 0])]),
                 [], EventAiDialect.CMangos, [])
             { SmartScripts = catalog });
         var spells = new FakeCaster();
