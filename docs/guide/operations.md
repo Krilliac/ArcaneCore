@@ -15,6 +15,26 @@ restarts on 2 reproduces the vmangos run-mangosd loop; a configuration error exi
 [exit codes](../reference/exit-codes.md). Characters are saved every `World:AutosaveIntervalMs` (default 900000 ms; 0 disables),
 and `.saveall` saves everyone at once.
 
+Only one world process may run on a characters database, and a deployment must stop the old world before it starts the new one. A world on a file-backed SQLite
+characters database takes an exclusive lock on the sidecar file `<characters database>.world.lock` first thing at start, before the schema initializers open, upgrade or
+checkpoint the database, whether or not `Cluster:Fencing:Enabled` is on. The lock belongs to the host container: it is released after every hosted service has stopped (the WAL
+checkpointer's final checkpoint included) or when the process ends, and the operating system also releases it on a crash. A start that fails also ends in the host disposing the container, which releases it. A second world on the
+same file exits with the schema-refusal exit code and `database refused: the characters database is already owned by another world process (could not take the exclusive writer lock '<path>')`,
+having read and written nothing; a lock file that cannot be created at all (permissions, a full disk) is refused the same way with its own message, not as another world. Limits:
+the lock is keyed on the file path (a symlinked database file resolves to its target; a symlinked directory, a bind mount or a second drive letter for the same folder is a different
+path), `DOTNET_SYSTEM_IO_DISABLEFILELOCKING` or a network filesystem that ignores locks disables it, and on Unix deleting the `.world.lock` file while a world runs defeats it (Windows
+holds the file open with `FileShare.None`, so it cannot be deleted). On Windows an antivirus or backup tool that briefly opens the sidecar can make a start look contended; the world then
+refuses to start, and starting it again fixes that.
+Before it restores any playerbot the world also checks that `World:Port` can be bound; that is check-then-bind, which narrows the window and does not close it, and a port that is still
+taken fails the start before a single bot is logged in.
+MariaDB, MySQL and PostgreSQL databases have no file to lock: they rely on the `Cluster:Fencing` claim, which an unfenced world checks at start and then every
+`Cluster:Fencing:ClaimWatchIntervalSeconds`, and that fence (`CharacterWriteFenceInterceptor`) is also the only thing that bounds character autosaves and session-close saves of a
+second writer. If two worlds still end up writing the same playerbot rows, the world that already owned them (the older one, whose checkpoints are refused) logs `Split brain` at Critical,
+stops every bot and stops writing playerbot rows (checkpoints, creates, starts, stops, deletes, homes and the fleet reset), and reports it in `.playerbot status`, `.playerbot splitbrain` and the gauge
+`arcanecore.playerbots.split_brain` ([playerbots](../areas/playbots.md#another-world-on-the-same-database)). Character rows are still saved by the character autosave and when a session closes; split brain does not stop those.
+The older world stands down and the intruder keeps running on purpose: neither world can stop the other, and the one that already lost its rows backing off is the only move that guarantees a single writer
+(the operator then stops the intruder and clears the latch).
+
 Both daemons accept typed commands at their console window (`World:Console:Enabled`, `Realm:Console:Enabled`, both on by default). The world console runs the GM commands with Administrator authority and no character; the realm console has `help`, `info`, `realmlist`, `online`, `account create|set-password|set-gmlevel` and `quit`. Nothing is read when standard input is redirected (a service, a pipe, a deploy script). Commands that need a character or a selection answer that they need a player. See [the server console](../areas/server-console.md). For account, password and ban work without a running daemon use the `arcane-account` tool.
 
 ## Backups and upgrades
@@ -48,6 +68,8 @@ See [operations and performance](../areas/ops-perf.md). Both daemons also run th
 warnings on world-tick overruns with percentiles, a critical line on a hung tick, heap high-water marks and memory-pressure warnings, a
 thread-pool starvation probe, a periodic counter dump and a supervisor heartbeat (systemd `Type=notify` with `WatchdogSec`, a liveness file, or
 stdout) that is withheld while the world thread hangs. See [runtime health watchdogs](../ops/watchdog.md).
+
+Latency and rates: game masters get full percentile lines (p50 to p99.9, mean, stddev) for the tick body and frame over the last 1 and 15 minutes in `.server info`; the world also logs a latency summary at Information level every 5 minutes (character saves, SQLite checkpoints, path queries, login to in-world, slowest packet handlers). The fault and anomaly ledgers report rates per hour (last 15 minutes and last hour), first/last seen and the top subjects; see [operations and performance](../areas/ops-perf.md).
 
 Both daemons log through the `Logging:ArcaneCore` provider: a colour console by default (plain automatically when stdout is a pipe or `NO_COLOR` is set;
 `Logging:ArcaneCore:Console:Mode=Plain` for journald), an optional rolling text file (`Logging:ArcaneCore:File:Enabled`) and an optional JSON-lines file

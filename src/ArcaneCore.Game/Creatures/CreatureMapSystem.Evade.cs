@@ -185,6 +185,20 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
+    /// The aura reset of an evade (cmangos Unit::RemoveAllAurasOnEvade) for a script's own evade: what <see cref="EnterEvadeMode"/> removes, so
+    /// a non-permanent positive aura a player put on the creature survives (all positive ones with KEEP_POSITIVE_AURAS_ON_EVADE). Does nothing
+    /// when the spell caster cannot reset auras.
+    /// </summary>
+    public void ResetAurasOnEvade(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (_ai.Spells is ICreatureAuraReset reset)
+        {
+            reset.ResetAuras(creature, (creature.Template.Behaviour & CreatureBehaviourFlags.KeepPositiveAurasOnEvade) != 0);
+        }
+    }
+
+    /// <summary>
     /// Strip every aura of <paramref name="creature"/> (Unit::RemoveAllAuras), for a script's own evade such as vmangos silithus.cpp
     /// npc_colossusAI::EnterEvadeMode. Does nothing when the spell caster cannot reset auras.
     /// </summary>

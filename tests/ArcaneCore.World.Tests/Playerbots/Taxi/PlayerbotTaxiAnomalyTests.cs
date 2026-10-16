@@ -23,6 +23,7 @@ public sealed partial class PlayerbotTaxiTests
         "master-not-found", "master-missing", "master-unreachable", "activate-refused", "flight-not-started", "session-refused", "budget-starved",
         "node-forgotten", "cannot-pay", "map-changed", "services-unavailable", "repeated-failure", "flight-nonfinite-position", "flight-stalled",
         "flag-without-flight", "flight-overdue", "flight-state-residue", "landed-nonfinite", "landed-wrong-map", "landed-under-map", "landed-off-node",
+        "stop-refused", "node-not-learned",
     ];
 
     private static void AssertNoTaxiAnomaly(AnomalyCapture cap)

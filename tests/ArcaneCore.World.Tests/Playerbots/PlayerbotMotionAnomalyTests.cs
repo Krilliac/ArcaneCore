@@ -16,15 +16,13 @@ namespace ArcaneCore.World.Tests.Playerbots;
 internal static class H1AnomalyKit
 {
     /// <summary>
-    /// The reports of one bot made on this host's world thread. The ledger is process-wide and other tests' bots share the name and
-    /// guid of <see cref="PlayerbotMovementControlTests.EnterAsync"/>'s, so the subject alone would also catch their reports.
+    /// The reports of one bot in this host's world (<see cref="PlayerbotAnomalies.CaptureFor"/>: other tests' bots share the name and guid of
+    /// <see cref="PlayerbotMovementControlTests.EnterAsync"/>'s, but their reports name another world).
     /// </summary>
-    internal static async Task<AnomalyCapture> CaptureAsync(WorldTestHost host, Player player)
+    internal static AnomalyCapture CaptureFor(Player player)
     {
-        int worldThread = await host.OnWorldAsync(() => Environment.CurrentManagedThreadId);
-        string subject = PlayerbotAnomalies.SubjectOf(player);
-        return AnomalyLedger.Shared.Capture(n => string.Equals(n.Subject, subject, StringComparison.Ordinal)
-            && Environment.CurrentManagedThreadId == worldThread);
+        Assert.NotNull(player.Map);
+        return PlayerbotAnomalies.CaptureFor(player);
     }
 
     internal sealed class ManualClock : IWorldFeature
@@ -46,18 +44,55 @@ public sealed class PlayerbotMotionAnomalyTests
     // ---- the pure ground verdict -----------------------------------------------------------------------------------------------
 
     [Theory]
-    [InlineData(100f, -200000f, 90f, true, PlayerbotMotionAnomalies.GroundVerdict.Airwalk)] // 10 yd above its floor
-    [InlineData(90.5f, -200000f, 90f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // standing
-    [InlineData(95.5f, -200000f, 90f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // a mesh leg floating inside the tolerance
-    [InlineData(80f, 90f, -200000f, true, PlayerbotMotionAnomalies.GroundVerdict.UnderMap)] // 10 yd under the terrain, no floor
-    [InlineData(40f, 90f, -200000f, true, PlayerbotMotionAnomalies.GroundVerdict.FarUnderMap)] // 50 yd under
-    [InlineData(88f, 90f, -200000f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // 2 yd under: within the tolerance
-    [InlineData(80f, 90f, -200000f, false, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // no model data: a cave looks the same
-    [InlineData(80f, -200000f, -200000f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // no data at all
-    [InlineData(80f, 90f, 79f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // under the terrain but on a model floor (a cave)
-    [InlineData(float.NaN, 90f, 79f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)]
-    internal void Classify_JudgesTheGroundUnderTheBot(float z, float terrain, float floor, bool models, PlayerbotMotionAnomalies.GroundVerdict expected)
-        => Assert.Equal(expected, PlayerbotMotionAnomalies.Classify(z, terrain, floor, models));
+    [InlineData(100f, 90f, UnderMapKind.Unknown, 0f, PlayerbotMotionAnomalies.GroundVerdict.Airwalk)] // 10 yd above its floor
+    [InlineData(90.5f, 90f, UnderMapKind.Unknown, 0f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // standing
+    [InlineData(95.5f, 90f, UnderMapKind.Unknown, 0f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // a mesh leg floating inside the tolerance
+    [InlineData(80f, -200000f, UnderMapKind.UnderMap, 10f, PlayerbotMotionAnomalies.GroundVerdict.UnderMap)] // 10 yd under the terrain, no floor, no model explains it
+    [InlineData(40f, -200000f, UnderMapKind.UnderMap, 50f, PlayerbotMotionAnomalies.GroundVerdict.FarUnderMap)] // 50 yd under
+    [InlineData(80f, -200000f, UnderMapKind.Ok, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // under the terrain inside a WMO or just below its floor (a cave, a city)
+    [InlineData(80f, -200000f, UnderMapKind.Unknown, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // no data, or the model tile is not loaded
+    [InlineData(80f, 79f, UnderMapKind.UnderMap, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // on a floor: the under-map verdict is not consulted
+    [InlineData(float.NaN, 79f, UnderMapKind.UnderMap, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)]
+    internal void Classify_JudgesTheGroundUnderTheBot(float z, float floor, UnderMapKind kind, float depth, PlayerbotMotionAnomalies.GroundVerdict expected)
+        => Assert.Equal(expected, PlayerbotMotionAnomalies.Classify(z, floor, new UnderMapVerdict(kind, depth)));
+
+    /// <summary>A model-aware query with a fixed terrain depth that honours the margin it is asked with, as the real one does.</summary>
+    private sealed class DepthClassifier(float depth) : IUnderMapClassifier
+    {
+        public List<float> Margins { get; } = [];
+
+        public UnderMapVerdict ClassifyUnderMap(float x, float y, float z, float minDepthYards = 0f)
+        {
+            Margins.Add(minDepthYards);
+            return depth > minDepthYards ? UnderMapVerdict.Under(depth) : UnderMapVerdict.Ok;
+        }
+    }
+
+    [Theory]
+    [InlineData(6f, PlayerbotMotionAnomalies.GroundVerdict.Ok)]        // navmesh-versus-terrain drift: inside the margin
+    [InlineData(10f, PlayerbotMotionAnomalies.GroundVerdict.UnderMap)] // beyond it
+    [InlineData(50f, PlayerbotMotionAnomalies.GroundVerdict.FarUnderMap)]
+    internal void JudgeGround_PassesTheEightYardMargin_ToTheModelAwareQuery(float depth, PlayerbotMotionAnomalies.GroundVerdict expected)
+    {
+        var classifier = new DepthClassifier(depth);
+        var at = new Vector3(0, 0, 80);
+
+        PlayerbotMotionAnomalies.GroundVerdict verdict = PlayerbotMotionAnomalies.JudgeGround(at, -200000f, modelsEnabled: true, classifier, out _);
+
+        Assert.Equal(expected, verdict);
+        Assert.Equal(8f, Assert.Single(classifier.Margins));
+    }
+
+    [Fact]
+    internal void JudgeGround_DoesNotAskTheQuery_WithAFloorUnderTheBot_OrWithoutModelData()
+    {
+        var classifier = new DepthClassifier(90f);
+        var at = new Vector3(0, 0, 80);
+
+        Assert.Equal(PlayerbotMotionAnomalies.GroundVerdict.Ok, PlayerbotMotionAnomalies.JudgeGround(at, 79f, modelsEnabled: true, classifier, out _));
+        Assert.Equal(PlayerbotMotionAnomalies.GroundVerdict.Ok, PlayerbotMotionAnomalies.JudgeGround(at, -200000f, modelsEnabled: false, classifier, out _));
+        Assert.Empty(classifier.Margins);
+    }
 
     // ---- reports through the shared front door ---------------------------------------------------------------------------------
 
@@ -68,7 +103,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -96,7 +131,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -117,7 +152,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -138,7 +173,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -160,7 +195,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 WorldCollision.Of(host.World).Install(lineOfSight: new ScriptedGround());
@@ -184,7 +219,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -413,7 +448,7 @@ public sealed class PlayerbotMotionAnomalyTests
             WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
             var ground = new ScriptedGround { Blocked = blocked };
-            AnomalyCapture capture = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
             (PlayerbotRoute route, float wallX) = await host.OnWorldAsync(() =>
             {
                 WorldCollision.Of(host.World).Install(lineOfSight: ground);

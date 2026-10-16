@@ -30,7 +30,8 @@ internal sealed record PlayerbotPolicyRecord(
     PlayerbotPolicyGoal? Pick, PlayerbotPolicySource Source, bool Explored, PlayerbotPolicyGoal? Goal, PlayerbotGoalKind Kind,
     uint WindowMs, PlayerbotPolicyOutcome Outcome, PlayerbotPolicyArm Arm = PlayerbotPolicyArm.Policy) : IPlayerbotTelemetryRecord
 {
-    internal const int SchemaVersion = 1;
+    /// <summary>2: the Opportunity goal changed the goal list, so a goal record's <c>open</c> bits (and the model layout) moved; version 1 files have the old seven-goal bits.</summary>
+    internal const int SchemaVersion = 2;
 
     /// <summary>The record as one JSON line (with its newline).</summary>
     public void WriteTo(IBufferWriter<byte> output)
@@ -79,6 +80,33 @@ internal sealed record PlayerbotPolicyRecord(
     }
 }
 
+/// <summary>The world tick's overrun state at one moment: the monitor's count of frames over its budget so far, and that budget.</summary>
+internal readonly record struct PlayerbotTickHealth(long Overruns, long BudgetMicros);
+
+/// <summary>
+/// One <c>health</c> record: how the world tick fared over the interval that ended at <c>t</c> (unix ms, the clock the goal records use), so
+/// a trainer can drop decisions made while the world lagged. <c>ms</c> is the interval's length (it started at <c>t - ms</c>), <c>over</c>
+/// the frames over the tick budget within it, <c>budget</c> that budget in ms.
+/// </summary>
+internal sealed record PlayerbotHealthRecord(long UnixMs, long IntervalMs, long Overruns, long BudgetMs) : IPlayerbotTelemetryRecord
+{
+    public void WriteTo(IBufferWriter<byte> output)
+    {
+        using (var json = new Utf8JsonWriter(output))
+        {
+            json.WriteStartObject();
+            json.WriteNumber("v", PlayerbotPolicyRecord.SchemaVersion);
+            json.WriteString("k", "health");
+            json.WriteNumber("t", UnixMs);
+            json.WriteNumber("ms", IntervalMs);
+            json.WriteNumber("over", Overruns);
+            json.WriteNumber("budget", BudgetMs);
+            json.WriteEndObject();
+        }
+        output.Write("\n"u8);
+    }
+}
+
 /// <summary>
 /// Decision telemetry (<c>World:Playerbots:Policy:Telemetry</c>, off by default): for each bot decision the policy made (the first think
 /// that used a snapshot), the features, the open goals, the ladder's and the policy's choice, whether it explored, the goal the think
@@ -109,6 +137,8 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     private readonly ConcurrentDictionary<string, long> _anomalies = new(StringComparer.Ordinal);
     private readonly Action<AnomalyNotice> _onAnomaly;
     private uint _nextSweepMs;
+    private bool _healthArmed;
+    private long _healthLastUnixMs, _healthLastOverruns;
     private long _queued, _dropped, _unfinished, _written;
 
     internal PlayerbotPolicyTelemetry(PlayerbotPolicyTelemetryOptions options, string directory, TimeProvider? time = null, ILogger? logger = null)
@@ -131,6 +161,15 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     internal PlayerbotCombatTelemetry Combat { get; }
 
     internal PlayerbotPolicyTelemetryWriter Writer => _writer;
+
+    /// <summary>
+    /// Where the world tick's overrun count is read (set by the feature; null: no <c>health</c> records). Called on the world thread at most
+    /// every <see cref="HealthIntervalMs"/>; returns null while the tick monitor is not running.
+    /// </summary>
+    internal Func<PlayerbotTickHealth?>? TickHealth { get; set; }
+
+    /// <summary>World ms between two <c>health</c> records.</summary>
+    internal const uint HealthIntervalMs = 10_000;
 
     internal (long Queued, long Dropped, long Unfinished, long Written) Counts
         => (Interlocked.Read(ref _queued), Interlocked.Read(ref _dropped), Interlocked.Read(ref _unfinished), Interlocked.Read(ref _written));
@@ -182,7 +221,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
                 {
                     progress = ProgressOf(brain, player);
                     state.Open.Enqueue(new OpenDecision(nowMs, _time.GetUtcNow().ToUnixTimeMilliseconds(), player.MapId, player.ZoneId, window, verdict,
-                        brain.Goal, progress.Value, brain.StallCount, state.Deaths, AnomaliesOf(state.Subject)));
+                        brain.Goal, progress.Value, brain.StallCount, state.Deaths, AnomaliesOf(state.Subject), brain.OpportunityDriven));
                 }
                 else Interlocked.Increment(ref _dropped);
             }
@@ -204,7 +243,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
                 AnomaliesOf(state.Subject) - open.Anomalies);
             Enqueue(new PlayerbotPolicyRecord(open.UnixMs, player.Guid.Value, open.Map, open.Zone, open.Window.Features, open.Window.Open,
                 open.Window.LadderPick, open.Verdict.Pick, open.Verdict.Source, open.Window.Explore is not null,
-                PlayerbotPolicySchema.GoalOf(open.Kind), open.Kind, WindowMs, outcome, state.Agent?.Arm ?? PlayerbotPolicyArm.Policy));
+                PlayerbotPolicySchema.GoalOf(open.Kind, open.Opportunity), open.Kind, WindowMs, outcome, state.Agent?.Arm ?? PlayerbotPolicyArm.Policy));
         }
     }
 
@@ -215,7 +254,8 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     internal void Sweep(uint nowMs)
     {
         if (unchecked((int)(nowMs - _nextSweepMs)) < 0) return;
-        _nextSweepMs = unchecked(nowMs + 10_000);
+        _nextSweepMs = unchecked(nowMs + HealthIntervalMs);
+        WriteHealth();
         uint gone = WindowMs + 60_000;
         Combat.Sweep(nowMs, Math.Max(gone, PlayerbotCombatTelemetry.DowntimeCapMs + 60_000));
         List<ulong>? remove = null;
@@ -227,6 +267,24 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
             Interlocked.Add(ref _unfinished, _bots[bot].Open.Count);
             _bots.Remove(bot);
         }
+    }
+
+    /// <summary>
+    /// World thread, from <see cref="Sweep"/>: queue the overruns counted since the last call as one <c>health</c> record. The first call
+    /// only takes the baseline, so a record never covers time before telemetry could watch. Two reads and one small record per interval.
+    /// </summary>
+    private void WriteHealth()
+    {
+        if (TickHealth?.Invoke() is not { } health) return;
+        long now = _time.GetUtcNow().ToUnixTimeMilliseconds();
+        if (_healthArmed)
+        {
+            long over = Math.Max(0, health.Overruns - _healthLastOverruns);
+            Enqueue(new PlayerbotHealthRecord(now, Math.Max(0, now - _healthLastUnixMs), over, health.BudgetMicros / 1000));
+        }
+        _healthArmed = true;
+        _healthLastUnixMs = now;
+        _healthLastOverruns = health.Overruns;
     }
 
     /// <summary>Queue a finished record for the writer (tests call it directly).</summary>
@@ -330,7 +388,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     }
 
     private sealed record OpenDecision(uint AtMs, long UnixMs, uint Map, uint Zone, PlayerbotPolicyWindow Window, PlayerbotPolicyVerdict Verdict,
-        PlayerbotGoalKind Kind, PlayerbotPolicyProgress Start, int Stalls, int Deaths, long Anomalies);
+        PlayerbotGoalKind Kind, PlayerbotPolicyProgress Start, int Stalls, int Deaths, long Anomalies, bool Opportunity);
 }
 
 /// <summary>

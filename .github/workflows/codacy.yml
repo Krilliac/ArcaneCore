@@ -1,0 +1,107 @@
+name: Codacy Security Scan
+
+# Codacy Analysis CLI: runs Codacy's bundled security tools over the tree and uploads the findings to code scanning as SARIF. With the
+# CODACY_PROJECT_TOKEN secret it uses the repository's Codacy configuration; without it (a fork PR, or no token set) the tools run with
+# their default configurations. https://github.com/codacy/codacy-analysis-cli-action
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "25 22 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  codacy-security-scan:
+    name: Codacy Security Scan
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read # checkout
+      actions: read # upload-sarif reads the run status
+      security-events: write # upload-sarif
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Generates a SARIF file with the security issues found. The exit code is forced to 0 so the SARIF is always produced; code
+      # scanning decides what blocks a PR.
+      - name: Run Codacy Analysis CLI
+        uses: codacy/codacy-analysis-cli-action@562ee3e92b8e92df8b67e0a5ff8aa8e261919c08 # v4.4.7
+        with:
+          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }} # zizmor: ignore[secrets-outside-env] -- optional analysis token, read-only use
+          verbose: true
+          output: results.sarif
+          format: sarif
+          gh-code-scanning-compat: true
+          max-allowed-issues: 2147483647
+
+      # The CLI writes one SARIF run per bundled tool (31 on 2026-10-16), and code scanning refuses several runs under one category and
+      # more than 20 runs in one upload. Give each run its own category, codacy/<tool>/ (a repeated tool gets -1, -2, ...), so each
+      # tool's alerts keep a stable home across scans, then split the runs, sorted by category, into files of at most 20, one upload
+      # each. The uploads set no category of their own: one would override these. More runs than the three uploads hold fail here.
+      # Code scanning also rejects the whole file when one run holds more than 25,000 results (25,876 on 2026-10-16). Style and
+      # complexity linters (markdownlint, lizard) are not security findings and are dropped; any other run over the cap keeps its
+      # most severe 25,000 results and says so in the log.
+      - name: Give each Codacy tool its own SARIF category
+        run: |
+          python3 - <<'PY'
+          import json, re, sys
+          with open("results.sarif", encoding="utf-8") as f:
+              sarif = json.load(f)
+          NOT_SECURITY = ("markdownlint", "lizard")
+          MAX_RESULTS = 25000
+          SEVERITY = {"error": 0, "warning": 1, "note": 2, "none": 3}
+          seen = {}
+          runs = []
+          for run in sarif.get("runs", []):
+              name = re.sub(r"[^a-z0-9]+", "-", run.get("tool", {}).get("driver", {}).get("name", "unknown").lower()).strip("-") or "unknown"
+              results = run.get("results") or []
+              if name.startswith(NOT_SECURITY):
+                  print(f"dropped {name}: {len(results)} style/complexity result(s)")
+                  continue
+              if len(results) > MAX_RESULTS:
+                  results.sort(key=lambda r: SEVERITY.get(r.get("level", "warning"), 1))
+                  print(f"::warning::{name} has {len(results)} results; uploading its {MAX_RESULTS} most severe")
+                  run["results"] = results[:MAX_RESULTS]
+              runs.append(run)
+              index = seen.get(name, 0)
+              seen[name] = index + 1
+              run["automationDetails"] = {"id": f"codacy/{name}{'' if index == 0 else f'-{index}'}/"}
+          runs.sort(key=lambda run: run["automationDetails"]["id"])
+          chunks = [runs[i:i + 20] for i in range(0, len(runs), 20)]
+          if len(chunks) > 3:
+              sys.exit(f"{len(runs)} SARIF runs need {len(chunks)} uploads; add upload steps to codacy.yml")
+          for number, chunk in enumerate(chunks, 1):
+              with open(f"codacy-results-{number}.sarif", "w", encoding="utf-8") as f:
+                  json.dump({**sarif, "runs": chunk}, f)
+          print(f"{len(runs)} run(s) in {len(chunks)} file(s): {', '.join(sorted(seen))}")
+          PY
+
+      - name: Upload SARIF results (1 of 3)
+        if: hashFiles('codacy-results-1.sarif') != ''
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          sarif_file: codacy-results-1.sarif
+
+      - name: Upload SARIF results (2 of 3)
+        if: hashFiles('codacy-results-2.sarif') != ''
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          sarif_file: codacy-results-2.sarif
+
+      - name: Upload SARIF results (3 of 3)
+        if: hashFiles('codacy-results-3.sarif') != ''
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          sarif_file: codacy-results-3.sarif

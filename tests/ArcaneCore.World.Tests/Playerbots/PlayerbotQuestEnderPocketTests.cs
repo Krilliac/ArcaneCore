@@ -16,7 +16,7 @@ public sealed partial class PlayerbotQuestReturnTests
     /// <summary>Bind point placement for the stranded-quest cases.</summary>
     public enum BindAt { None, BesideEnder, FarFromEnder, BesideBot }
 
-    private sealed record StrandedRun(int Teleports, List<(bool SetAside, QuestStatus Status)> Rounds)
+    private sealed record StrandedRun(int Teleports, int Asks, List<(bool SetAside, QuestStatus Status)> Rounds)
     {
         internal QuestStatus Status => Rounds[^1].Status;
         internal bool SetAside => Rounds[^1].SetAside;
@@ -24,8 +24,8 @@ public sealed partial class PlayerbotQuestReturnTests
 
     /// <summary>
     /// Runs <paramref name="rounds"/> rounds of "every route refused for a strong hazard" for the quest, a set-aside (or the abandon)
-    /// each, counting the bind-point teleports the destinations asked for. The strong pack is verified to be a hazard the return
-    /// walk may not cross in every round.
+    /// each, counting the bind-point trips the destinations asked for (<see cref="StrandedRun.Asks"/>) and the ones the brain made
+    /// (<see cref="StrandedRun.Teleports"/>). The strong pack is verified to be a hazard the return walk may not cross in every round.
     /// </summary>
     private static async Task<StrandedRun> StrandedRoundsAsync(BindAt bindAt, bool complete = true, int rounds = 3,
         int levelUpAfterRound = 0, bool refuseTeleport = false, byte mobLevel = 10)
@@ -36,13 +36,14 @@ public sealed partial class PlayerbotQuestReturnTests
         var options = new PlayerbotOptions { Enabled = true };
         var brain = new PlayerbotBrain(fixture.Session, options);
         brain.QuestGoals.Suspensions = brain.Suspensions;
-        int teleports = 0;
+        int teleports = 0, asks = 0;
         var destinations = new PlayerbotWorldDestinations(fixture.Session, options)
         {
             Suspensions = brain.Suspensions,
             SkipQuest = brain.QuestGoals.IsRefused,
             TeleportToBind = (bot, why) =>
             {
+                asks++;
                 bool sent = !refuseTeleport && brain.TeleportToBindPointForQuest(bot, why);
                 if (sent) teleports++;
                 return sent;
@@ -93,7 +94,7 @@ public sealed partial class PlayerbotQuestReturnTests
                 if (round < rounds)
                     await fixture.Host.World.AdvanceClockAsync(PlayerbotSuspensions.SuspendMs + 100);
             }
-            return new StrandedRun(teleports, log);
+            return new StrandedRun(teleports, asks, log);
         }
         finally
         {
@@ -113,10 +114,14 @@ public sealed partial class PlayerbotQuestReturnTests
     }
 
     [Fact]
-    public async Task CompletedQuest_StrongHazardOnEveryRoute_BindPointBesideEnder_TeleportsKeepsTheQuestAndSetsItAside()
+    public async Task CompletedQuest_StrongHazardOnEveryRoute_BindPointBesideEnder_AsksForTheBindPoint_NoHearthstoneNoTeleport_KeepsTheQuestAndSetsItAside()
     {
+        // The destinations ask for the bind point beside the ender; the brain goes there by the bot's hearthstone only (docs/areas/playbots.md,
+        // Travel): a quest return is no escape for the bot's safety, so without a ready stone the direct teleport is not made
+        // (Travel/TravelBindHearthTests covers the stone).
         StrandedRun run = await StrandedRoundsAsync(BindAt.BesideEnder);
-        Assert.Equal(1, run.Teleports);
+        Assert.Equal(1, run.Asks); // asked once
+        Assert.Equal(0, run.Teleports);
         Assert.All(run.Rounds, round => { Assert.True(round.SetAside); Assert.Equal(QuestStatus.Complete, round.Status); });
     }
 
@@ -286,6 +291,7 @@ public sealed partial class PlayerbotQuestReturnTests
 
     private static async Task AddPocketAsync(ReturnFixture fixture, byte mobLevel)
     {
+        var pack = new List<ArcaneCore.Game.ObjectGuid>();
         await fixture.Host.World.InvokeAsync(() =>
         {
             var player = fixture.Session.Player!;
@@ -305,9 +311,14 @@ public sealed partial class PlayerbotQuestReturnTests
                 }, null, CreatureContent.Empty, new Random((int)i + 1));
                 mob.SetPosition(originX + 128 + (i % 2) * 3, player.Y + ((int)i - 4) * 2, player.Z, 0);
                 player.Map.AddObject(mob);
+                pack.Add(mob.Guid);
             }
             player.SetPosition(originX + 55, player.Y, player.Z, 0);
             return true;
         });
+        // The pack becomes visible only at the next map update, and the hazard scan reads VisibleObjects. A tick drains many posted
+        // commands before it updates the maps, and InvokeAsync resumes the test on another thread, so the next command could land in
+        // the same drain and scan an empty pocket ("no unpassable strong hazard ... visible=1").
+        await fixture.Host.WaitForWorldAsync(() => pack.All(guid => fixture.Session.Player!.VisibleObjects.Contains(guid)), "ender pocket visibility");
     }
 }

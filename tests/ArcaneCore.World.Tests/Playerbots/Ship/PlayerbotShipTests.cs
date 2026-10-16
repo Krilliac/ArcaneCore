@@ -1,0 +1,278 @@
+using System.Numerics;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Transports;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Tests.Transports;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace ArcaneCore.World.Tests.Playerbots.Ship;
+
+/// <summary>
+/// Bots ride ships through the real transport system (<see cref="PlayerbotShip"/>, <see cref="PlayerbotShipNetwork"/>) on the synthetic
+/// crossing of <see cref="TransportWorldContent"/>: a real managed bot session walks to the dock, steps aboard through MSG_MOVE_HEARTBEAT,
+/// is carried to map 1 by the ship's far teleport (acknowledged by its own motion pump) and steps off at the other port.
+/// </summary>
+public sealed class PlayerbotShipTests(ITestOutputHelper output)
+{
+    /// <summary>The synthetic crossing (990601) classified as a Horde zeppelin, and the ferry (990600) as an Alliance boat.</summary>
+    private static readonly Dictionary<uint, ShipClass> s_synthetic = new()
+    {
+        [TransportWorldContent.Crossing] = new(TravelMeans.Zeppelin, TravelAccess.Horde, "synthetic zeppelin"),
+        [TransportWorldContent.Ferry] = new(TravelMeans.Boat, TravelAccess.Alliance, "synthetic ferry"),
+    };
+
+    private static readonly string[] s_allShipCodes =
+    [
+        "ship-missing", "never-docked", "board-refused", "left-ship", "wrong-map", "ride-overdue", "disembark-refused", "dock-unreachable",
+        "route-bad-data",
+    ];
+
+    private static string ShipKey(string code) => PlayerbotAnomalies.Key(PlayerbotShip.AnomalyArea, code);
+
+    private async Task TraceAsync(ShipTestWorld world, TravelLegStep step, string? failure)
+    {
+        string trace = await world.OnWorldAsync(() =>
+        {
+            Player p = world.Player;
+            ShipTrip? trip = PlayerbotShip.TripOf(p);
+            return $"{step} ({failure}) at {world.Host.World.NowMs} ms: map {p.MapId} at ({p.X:F1},{p.Y:F1},{p.Z:F1}); trip stage {trip?.Stage}, "
+                + $"started {trip?.StartedMs}, boarded {trip?.BoardedMs}, dock {trip?.DockSpot}, offset {trip?.Offset}, left at {trip?.LeftAt}";
+        });
+        output.WriteLine(trace);
+    }
+
+    private static void AssertNoShipAnomaly(AnomalyCapture capture)
+    {
+        foreach (string code in s_allShipCodes) Assert.False(capture.Any(ShipKey(code)), $"{code} reported: {capture.Describe()}");
+    }
+
+    [Fact]
+    public async Task TheNetwork_BuildsBothPortsFromTheShipData_AndFiltersByFactionAndSwitch()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        (IReadOnlyList<ShipRoute> classic, IReadOnlyList<ShipRoute> synthetic, uint period, uint ferryPeriod) = await world.OnWorldAsync(() =>
+            (PlayerbotShipNetwork.Routes(world.Host.World), PlayerbotShipNetwork.Routes(world.System, s_synthetic),
+                world.System.FindByEntry(20808)!.Period, world.System.FindByEntry(TransportWorldContent.Ferry)!.Period));
+
+        // Only the classic entry is a classic route: the Booty Bay boat on the crossing path, its ports the two stop rows.
+        ShipRoute boat = Assert.Single(classic);
+        Assert.Equal(20808u, boat.Entry);
+        Assert.Equal((TravelMeans.Boat, TravelAccess.Both), (boat.Means, boat.Access));
+        Assert.Equal(ShipTestWorld.PortOnMap0, boat.PortA);
+        Assert.Equal(ShipTestWorld.PortOnMap1, boat.PortB);
+        Assert.Equal(period / 1000f, boat.PeriodSeconds);
+        Assert.Same(classic, await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World))); // cached per system
+
+        // The injected classification: the crossing as a Horde zeppelin, the ferry's two ports on map 0.
+        Assert.Equal([TransportWorldContent.Ferry, TransportWorldContent.Crossing], synthetic.Select(r => r.Entry));
+        ShipRoute ferry = synthetic[0];
+        Assert.Equal(new TravelPlace(0, new Vector3(TransportWorldContent.StartX, TransportWorldContent.StartY, TransportWorldContent.StartZ)), ferry.PortA);
+        Assert.Equal(new TravelPlace(0, new Vector3(TransportWorldContent.StartX + 300, TransportWorldContent.StartY, TransportWorldContent.StartZ)), ferry.PortB);
+        Assert.Equal(ferryPeriod / 1000f, ferry.PeriodSeconds);
+        ShipRoute zeppelin = synthetic[1];
+        Assert.Equal((ShipTestWorld.PortOnMap0, ShipTestWorld.PortOnMap1), (zeppelin.PortA, zeppelin.PortB));
+
+        var all = new List<ShipRoute>(synthetic) { boat };
+        var options = new PlayerbotOptions();
+        Assert.Equal([TransportWorldContent.Ferry, 20808u], PlayerbotShipNetwork.Filter(all, alliance: true, options).Select(r => r.Entry));
+        Assert.Equal([TransportWorldContent.Crossing, 20808u], PlayerbotShipNetwork.Filter(all, alliance: false, options).Select(r => r.Entry));
+        options.Travel.Boats = false;
+        Assert.Empty(PlayerbotShipNetwork.Filter(all, alliance: true, options));
+        Assert.Equal([TransportWorldContent.Crossing], PlayerbotShipNetwork.Filter(all, alliance: false, options).Select(r => r.Entry));
+        options.Travel.Boats = true;
+        options.Travel.Zeppelins = false;
+        Assert.Equal([20808u], PlayerbotShipNetwork.Filter(all, alliance: false, options).Select(r => r.Entry));
+        Assert.Equal([TransportWorldContent.Ferry, 20808u], PlayerbotShipNetwork.Filter(all, alliance: true, options).Select(r => r.Entry));
+
+        Assert.True(PlayerbotShipNetwork.ConnectsMaps(classic, 0, 1));
+        Assert.True(PlayerbotShipNetwork.ConnectsMaps(classic, 1, 0));
+        Assert.True(PlayerbotShipNetwork.ConnectsMaps([], 0, 0));
+        Assert.False(PlayerbotShipNetwork.ConnectsMaps([ferry], 0, 1));
+        Assert.False(PlayerbotShipNetwork.ConnectsMaps(classic, 0, 530));
+    }
+
+    [Fact]
+    public async Task ABot_BoardsTheBoatAtTheDock_CrossesToMap1Aboard_AndStepsOffAtTheOtherPort()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        string name = await world.OnWorldAsync(() => world.Player.Name);
+        using AnomalyCapture everything = AnomalyLedger.Shared.Capture(n => n.Subject.Contains(name, StringComparison.Ordinal));
+        var options = new PlayerbotOptions();
+        Assert.True(await world.OnWorldAsync(() => (PlayerbotShip.TryBegin(world.Session, world.Player, boat, fromA: true, options, out string? why), why))
+            is (true, null));
+
+        bool aboardOnMap0 = false, aboardOnMap1 = false;
+        (TravelLegStep step, string? failure) = await world.DriveAsync(options, 300_000, observe: p =>
+        {
+            aboardOnMap0 |= p.IsInWorld && p.MapId == 0 && p.Transport?.Entry == 20808 && (p.Movement.Flags & MovementFlags.OnTransport) != 0;
+            aboardOnMap1 |= p.IsInWorld && p.MapId == 1 && p.Transport?.Entry == 20808 && (p.Movement.Flags & MovementFlags.OnTransport) != 0;
+        });
+
+        await TraceAsync(world, step, failure);
+        Assert.True(step == TravelLegStep.Arrived, $"{step}: {failure}");
+        Assert.True(aboardOnMap0, "the bot was never aboard at the map-0 port");
+        Assert.True(aboardOnMap1, "the bot was never aboard on map 1 (carried through the map change)");
+        (uint map, ShipTransport? transport, bool onTransport, float fromPort, ShipStage stage) = await world.OnWorldAsync(() =>
+            (world.Player.MapId, world.Player.Transport, (world.Player.Movement.Flags & MovementFlags.OnTransport) != 0,
+                Vector2.Distance(new(world.Player.X, world.Player.Y), new(ShipTestWorld.PortOnMap1.Position.X, ShipTestWorld.PortOnMap1.Position.Y)),
+                PlayerbotShip.TripOf(world.Player)!.Stage));
+        Assert.Equal(1u, map);
+        Assert.Null(transport);
+        Assert.False(onTransport);
+        Assert.True(fromPort <= PlayerbotShip.BoardReachYards, $"{fromPort:0.0} yd from the port");
+        Assert.Equal(ShipStage.Done, stage);
+        Assert.Equal(TravelLegStep.Idle, await world.OnWorldAsync(() => PlayerbotShip.Drive(world.Session, world.Player, options, 100, out _)));
+        output.WriteLine("every anomaly naming the bot: " + everything.Describe());
+        AssertNoShipAnomaly(capture);
+    }
+
+    [Fact]
+    public async Task AHordeBot_RidesTheZeppelin_ToMap1_WithThePerTickPump()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync(race: 2);
+        ShipRoute zeppelin = (await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.System, s_synthetic)))
+            .Single(r => r.Entry == TransportWorldContent.Crossing);
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        var options = new PlayerbotOptions();
+        Assert.True(await world.OnWorldAsync(() => (PlayerbotShip.TryBegin(world.Session, world.Player, zeppelin, fromA: true, options, out string? why), why))
+            is (true, null));
+
+        bool aboardOnMap1 = false;
+        (TravelLegStep step, string? failure) = await world.DriveAsync(options, 300_000, thinkMs: 1000, pumpShip: true, observe: p =>
+            aboardOnMap1 |= p.IsInWorld && p.MapId == 1 && p.Transport?.Entry == TransportWorldContent.Crossing);
+
+        await TraceAsync(world, step, failure);
+        Assert.True(step == TravelLegStep.Arrived, $"{step}: {failure}");
+        Assert.True(aboardOnMap1, "the bot was never aboard on map 1");
+        (uint map, bool off, float fromPort) = await world.OnWorldAsync(() => (world.Player.MapId, world.Player.Transport is null,
+            Vector2.Distance(new(world.Player.X, world.Player.Y), new(ShipTestWorld.PortOnMap1.Position.X, ShipTestWorld.PortOnMap1.Position.Y))));
+        Assert.Equal((1u, true), (map, off));
+        Assert.True(fromPort <= PlayerbotShip.BoardReachYards, $"{fromPort:0.0} yd from the port");
+        AssertNoShipAnomaly(capture);
+    }
+
+    [Fact]
+    public async Task BoatsOrZeppelinsSwitchedOff_RefuseTheLeg_AndALegNotYetAboardEndsWithoutAnAnomaly()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
+        ShipRoute zeppelin = (await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.System, s_synthetic)))
+            .Single(r => r.Entry == TransportWorldContent.Crossing) with { Access = TravelAccess.Both };
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+
+        var options = new PlayerbotOptions();
+        options.Travel.Boats = false;
+        (bool begun, string? why) = await world.OnWorldAsync(() => (PlayerbotShip.TryBegin(world.Session, world.Player, boat, true, options, out string? w), w));
+        Assert.False(begun);
+        Assert.Contains("boats are switched off", why);
+        Assert.True(await world.OnWorldAsync(() => PlayerbotShip.TryBegin(world.Session, world.Player, zeppelin, true, options, out _)));
+        await world.OnWorldAsync(() => PlayerbotShip.Cancel(world.Player));
+        Assert.False(await world.OnWorldAsync(() => PlayerbotShip.IsActive(world.Player)));
+
+        options.Travel.Boats = true;
+        options.Travel.Zeppelins = false;
+        (begun, why) = await world.OnWorldAsync(() => (PlayerbotShip.TryBegin(world.Session, world.Player, zeppelin, true, options, out string? w), w));
+        Assert.False(begun);
+        Assert.Contains("zeppelins are switched off", why);
+
+        // Begun with boats on, switched off on the way to the dock: the leg ends at the next think, and that is no anomaly.
+        Assert.True(await world.OnWorldAsync(() => PlayerbotShip.TryBegin(world.Session, world.Player, boat, true, options, out _)));
+        Assert.Equal(TravelLegStep.Traveling, await world.OnWorldAsync(() => PlayerbotShip.Drive(world.Session, world.Player, options, 100, out _)));
+        options.Travel.Boats = false;
+        (TravelLegStep step, string? failure) = await world.DriveAsync(options, 1_000);
+        Assert.Equal(TravelLegStep.Failed, step);
+        Assert.Contains("switched off", failure);
+        AssertNoShipAnomaly(capture);
+    }
+
+    [Fact]
+    public async Task FactionAccess_AnAllianceBotMayNotTakeTheHordeZeppelin_NorAHordeBotTheAllianceBoat()
+    {
+        await using (ShipTestWorld alliance = await ShipTestWorld.StartAsync(race: 1))
+        {
+            ShipRoute zeppelin = (await alliance.OnWorldAsync(() => PlayerbotShipNetwork.Routes(alliance.System, s_synthetic)))
+                .Single(r => r.Entry == TransportWorldContent.Crossing);
+            await alliance.PlaceAsync(0, ShipTestWorld.Start);
+            (bool begun, string? why) = await alliance.OnWorldAsync(() =>
+                (PlayerbotShip.TryBegin(alliance.Session, alliance.Player, zeppelin, true, new PlayerbotOptions(), out string? w), w));
+            Assert.False(begun);
+            Assert.Contains("Alliance bot", why);
+            Assert.False(await alliance.OnWorldAsync(() => PlayerbotShip.IsActive(alliance.Player)));
+        }
+
+        await using ShipTestWorld horde = await ShipTestWorld.StartAsync(race: 2);
+        ShipRoute boat = Assert.Single(await horde.OnWorldAsync(() => PlayerbotShipNetwork.Routes(horde.Host.World))) with { Access = TravelAccess.Alliance };
+        await horde.PlaceAsync(0, ShipTestWorld.Start);
+        (bool hordeBegun, string? hordeWhy) = await horde.OnWorldAsync(() =>
+            (PlayerbotShip.TryBegin(horde.Session, horde.Player, boat, true, new PlayerbotOptions(), out string? w), w));
+        Assert.False(hordeBegun);
+        Assert.Contains("Horde bot", hordeWhy);
+
+        // The Booty Bay boat itself takes both.
+        Assert.True(await horde.OnWorldAsync(() =>
+            PlayerbotShip.TryBegin(horde.Session, horde.Player, boat with { Access = TravelAccess.Both }, true, new PlayerbotOptions(), out _)));
+    }
+
+    [Fact]
+    public async Task AShipThatNeverWaitsAtThePort_FailsTheLegNeverDocked_ReportedOnce_AndBacksTheDockOff()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
+        // A port 15 yards off the stop row: the ship waits at its own row, never there.
+        ShipRoute elsewhere = boat with { PortA = boat.PortA with { Position = boat.PortA.Position + new Vector3(15f, 0f, 0f) } };
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        var options = new PlayerbotOptions();
+        Assert.True(await world.OnWorldAsync(() => PlayerbotShip.TryBegin(world.Session, world.Player, elsewhere, true, options, out _)));
+
+        (TravelLegStep step, string? failure) = await world.DriveAsync(options, PlayerbotShip.WaitBoundMs(boat) + 60_000, thinkMs: 500);
+
+        Assert.Equal(TravelLegStep.Failed, step);
+        Assert.Contains("did not wait at the port", failure);
+        Assert.Equal(1, capture.Count(ShipKey("never-docked")));
+        Assert.Equal(TravelLegStep.Idle, await world.OnWorldAsync(() => PlayerbotShip.Drive(world.Session, world.Player, options, 100, out _)));
+        Assert.Equal(1, capture.Count(ShipKey("never-docked")));
+        Assert.Null(await world.OnWorldAsync(() => world.Player.Transport));
+        (bool again, string? why) = await world.OnWorldAsync(() => (PlayerbotShip.TryBegin(world.Session, world.Player, elsewhere, true, options, out string? w), w));
+        Assert.False(again);
+        Assert.Contains("backed off", why);
+    }
+
+    [Fact]
+    public async Task AServerThatDoesNotTakeTheBotAboard_FailsTheLegBoardRefused_ReportedOnce_AndTheBotStandsOnTheDock()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        Player bot = world.Player;
+        // Whatever the bot's movement says, the ship puts it straight off again (the server refusing the passenger).
+        await world.OnWorldAsync(() => world.System.PassengerBoarded += (ship, unit) =>
+        {
+            if (ReferenceEquals(unit, bot)) ship.RemovePassenger(unit);
+        });
+        using AnomalyCapture capture = BotAnomalyCapture.For(bot);
+        var options = new PlayerbotOptions();
+        Assert.True(await world.OnWorldAsync(() => PlayerbotShip.TryBegin(world.Session, bot, boat, true, options, out _)));
+
+        (TravelLegStep step, string? failure) = await world.DriveAsync(options, 120_000);
+
+        Assert.Equal(TravelLegStep.Failed, step);
+        Assert.Contains("did not board it", failure);
+        Assert.Equal(1, capture.Count(ShipKey("board-refused")));
+        Assert.Equal(TravelLegStep.Idle, await world.OnWorldAsync(() => PlayerbotShip.Drive(world.Session, bot, options, 100, out _)));
+        Assert.Equal(1, capture.Count(ShipKey("board-refused")));
+        (bool aboard, bool onTransport, float z, Vector3 dock) = await world.OnWorldAsync(() =>
+            (bot.Transport is not null, (bot.Movement.Flags & MovementFlags.OnTransport) != 0, bot.Z, PlayerbotShip.TripOf(bot)!.DockSpot));
+        Assert.False(aboard);
+        Assert.False(onTransport);
+        Assert.Equal(dock.Z, z, 0.1f); // back on the dock, not hanging between it and the deck
+    }
+}

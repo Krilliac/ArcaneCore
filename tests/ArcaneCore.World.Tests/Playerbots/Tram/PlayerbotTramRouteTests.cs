@@ -189,7 +189,7 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
 
     /// <summary>
     /// No car runs (an animation without the six cars): the trip fails closed at the platform with a stall reason, the bot leaves by the
-    /// exit it came in by, and the tram is not tried again for <see cref="PlayerbotTram.RetryAfterFailureMs"/>.
+    /// exit it came in by, and that entrance is not tried again before its backoff ends (<see cref="PlayerbotTransitBackoff"/>).
     /// </summary>
     [Fact]
     public async Task WithoutACar_TheTripFailsClosed_TheBotGoesBackOut_AndDoesNotRetrySoon()
@@ -204,9 +204,9 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         {
             stall = await world.TickAsync(() =>
             {
-                int before = brain.StallCount;
+                int before = brain.TransitFailureCount;
                 brain.Update(100);
-                return brain.StallCount != before ? brain.StallReport : null;
+                return brain.TransitFailureCount != before ? brain.LastTransitFailure : null;
             });
         }
 
@@ -244,9 +244,9 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         {
             string? report = await world.TickAsync(() =>
             {
-                int before = brain.StallCount;
+                int before = brain.TransitFailureCount;
                 brain.Update(100);
-                return brain.StallCount != before ? brain.StallReport : null;
+                return brain.TransitFailureCount != before ? brain.LastTransitFailure : null;
             });
             if (report is not null) reports.Add(report);
         }

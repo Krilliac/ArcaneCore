@@ -96,7 +96,7 @@ public sealed class PopulationParkedUnexpectedTests
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync();
         await TwoBotsAsync(world);
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == Key);
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(world.Host.World, n => n.Key == Key);
 
         world.Ticks.Set(200, 80); // over the budget: the population parks one itself
         PopulationStatus status = await world.PassAsync();
@@ -115,7 +115,7 @@ public sealed class PopulationParkedUnexpectedTests
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync();
         await TwoBotsAsync(world);
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == Key);
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(world.Host.World, n => n.Key == Key);
 
         for (int i = 0; i < 3; i++)
         {

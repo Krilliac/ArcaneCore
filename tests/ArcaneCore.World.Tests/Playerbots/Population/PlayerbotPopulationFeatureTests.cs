@@ -618,9 +618,11 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Equal(0, world.Ticks.Resets);
 
         // Enabled, the timer starts a pass; too few ticks make it settle, so the world is left alone and the test stays on the clock it controls.
+        // The interval kept counting while disabled, so the first update starts that pass at once. Advance less than one more interval: a
+        // second pass would still be running when the population is turned off below, and its late "on" status would outlive the last update.
         world.Ticks.Set(5, 10);
         world.Population.Enabled = true;
-        await world.Host.World.AdvanceClockAsync(2500);
+        await world.Host.World.AdvanceClockAsync(1000);
         await PollAsync(() => world.Feature.Status.Passes >= 1, "a pass after the population was enabled");
         Assert.True(world.Feature.Status.Enabled);
         Assert.Equal("settling", world.Feature.Status.State);

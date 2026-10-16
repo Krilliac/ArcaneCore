@@ -95,7 +95,7 @@ public sealed class PlayerbotLifecycleAnomalyTests
         try
         {
             Player player = session.Player!;
-            using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(host, player);
+            using AnomalyCapture capture = BotAnomalyCapture.For(player);
             await host.OnWorldAsync(() =>
             {
                 PlayerbotThinkProbe probe = SpentProbe(8);

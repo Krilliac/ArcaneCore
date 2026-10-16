@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Quests;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -23,6 +24,9 @@ public sealed class ScriptQuestEvents(IServiceProvider services) : IScriptQuestE
     public void KilledMonsterCredit(Player player, uint creatureEntry, ObjectGuid source) => Quests?.KilledMonsterCredit(player, creatureEntry, source);
 
     public void GroupEventFailHappens(Player player, uint questId) => Quests?.GroupEventFailHappens(player, questId);
+
+    public bool IsQuestIncomplete(Player player, uint questId)
+        => Quests?.StateOf(player)?.Quests.GetStatus(questId) == QuestStatus.Incomplete;
 
     public IReadOnlyList<Player> GroupMembersOf(Player player) => Quests?.Deps.Party?.MembersOf(player) ?? [];
 }

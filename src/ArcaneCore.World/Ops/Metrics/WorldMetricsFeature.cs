@@ -61,6 +61,8 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
             "Navigation mesh tiles installed on the thread that needed them (on-demand path-query reads and grid tile loads; the world thread makes nearly all).");
         _meter.CreateObservableCounter("arcanecore.nav.tile_install_time", () => SafeObserve(() => PathSearchCounters.ProcessTileReads.Ticks * 1000.0 / Stopwatch.Frequency, 0d), "ms",
             "Time those installations took.");
+        _meter.CreateObservableCounter("arcanecore.nav.bv_trees_rejected", () => SafeObserve(() => PathSearchCounters.BvTreesRejected, 0L), "{tile}",
+            "Navigation tiles read without a usable BV tree (nearest-polygon lookups on them scan every polygon).");
         _meter.CreateObservableCounter("arcanecore.creature.path.straight_fallbacks", () => SafeObserve(() => CreaturePathStats.DirectFallbacks, 0L), "{path}",
             "Authored creature routes (waypoint, point, formation, scripted move) walked along a straight line because the navmesh had no path.");
         _meter.CreateObservableCounter("arcanecore.creature.path.no_path", () => SafeObserve(() => CreaturePathStats.NoPath, 0L), "{path}",
@@ -70,6 +72,8 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
         _meter.CreateObservableCounter("arcanecore.creature.path.home_teleports", () => SafeObserve(() => CreaturePathStats.HomeTeleports, 0L), "{creature}",
             "Evade returns done by teleport because no whole mesh path led home.");
         _meter.CreateObservableGauge("arcanecore.world.sessions", () => SafeObserve(() => sessions?.Count ?? 0, 0), "{session}", "Authenticated world sessions.");
+        _meter.CreateObservableGauge("arcanecore.playerbots.split_brain", () => SafeObserve(() => services.GetService<Playerbots.ManagedPlayerbotFeature>()?.SplitBrain == true ? 1 : 0, 0), "{state}",
+            "1 while this world stopped writing playerbot rows because another world process changed them (split brain), otherwise 0.");
         _meter.CreateObservableGauge("arcanecore.world.players_online", () => SafeObserve(() => world.OnlinePlayerCount, 0), "{player}", "Characters in the world.");
         _meter.CreateObservableGauge("arcanecore.db.save_queue_depth", () => SafeObserve(() => saves?.Pending ?? 0, 0), "{snapshot}", "Character snapshots queued or being written.");
         _meter.CreateObservableGauge("arcanecore.db.save_queue_oldest_age", () => SafeObserve(() => saves is null ? 0d : saves.OldestPendingAge.TotalMilliseconds, 0d), "ms", "How long the longest-waiting character snapshot has been queued or in its write (0 when none).");

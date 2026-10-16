@@ -1,0 +1,60 @@
+name: CodeQL
+
+# Static security analysis (GitHub code scanning). Alerts land in the Security tab and, on a pull request, as annotations on the
+# changed lines with a "CodeQL" check that fails on a new high-severity alert.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    # Weekly, so new queries in a CodeQL release also run over code that has not changed.
+    - cron: "27 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # build-mode none: the C# extractor reads the sources without a build, so the preview .NET 11 SDK is not needed here and the
+        # analysis does not repeat CI's build. tools/terrain/vmap-oracle (the only C++) is a one-file offline tool and is left out.
+        language: [csharp, python, actions]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+          config: |
+            paths-ignore:
+              - "**/bin/**"
+              - "**/obj/**"
+              - "tests/hotmodule-fixtures/**"
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          category: "/language:${{ matrix.language }}"

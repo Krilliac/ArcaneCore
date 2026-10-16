@@ -57,6 +57,8 @@ change of a ship is logged (`Transport 20808 sailed from map 0 to map 1 with 0 p
 ([playbots](playbots.md)) sends a bot across on the Ratchet - Booty Bay boat. Checked on a refreshed copy of the live world
 (`RealTransportContentTests`, env-gated): every ship waits at each of its ports at the port's TaxiPathNode position and the five
 crossings change maps; a bot rides the Booty Bay boat over on the live terrain.
+Autonomous bots ride the boats and zeppelins on their own as legs of a journey (`PlayerbotShip`, `PlayerbotTravel`;
+[playbots](playbots.md), "Travel"): they walk to the dock, board through the movement handler, ride through the map change and step off at the other port.
 
 Routes that cannot be built (no path, zero speed or acceleration, a path too short for a spline, a multi-map route through an
 instanceable map, a map without a `map_template` row) are logged and refused; the server starts without them.

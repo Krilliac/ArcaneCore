@@ -1,5 +1,8 @@
+using System.Net;
+using System.Net.Sockets;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Clustering;
@@ -25,9 +28,15 @@ public sealed class WorldHost(
     ILogger<WorldHost> logger,
     IOptions<CharacterFencingOptions>? fencingOptions = null,
     IHostApplicationLifetime? applicationLifetime = null,
-    CharacterOwnershipContext? ownershipContext = null) : IHostedService
+    CharacterOwnershipContext? ownershipContext = null,
+    WorldWriterGuard? writerGuard = null,
+    IOptions<WorldOptions>? worldOptions = null,
+    IServiceProvider? rootServices = null) : IHostedService
 {
     private readonly CharacterFencingOptions _fencing = fencingOptions?.Value ?? new();
+
+    /// <summary>Whether a listener will bind <c>World:Port</c> after this host (test seam); null looks for a registered <see cref="Net.WorldServer"/>.</summary>
+    internal bool? ListenerExpected { get; init; }
     private readonly IHostApplicationLifetime? _applicationLifetime = applicationLifetime;
     private readonly Guid _incarnation = Guid.NewGuid();
     private CharacterOwnershipToken? _ownership;
@@ -41,7 +50,24 @@ public sealed class WorldHost(
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _fencing.Validate();
-        await AcquireOwnershipAsync(cancellationToken).ConfigureAwait(false);
+        bool acquiredHere = false;
+        try
+        {
+            // Before any database row is read or written: a second world on the same characters file, or on a taken port, must fail here
+            // untouched (the 2026-10 incident restored 863 bots from a process that then failed to bind).
+            // Normally already held since WorldStartup took it before the schema initializers (then this is a no-op and the lock stays Program's to release).
+            acquiredHere = writerGuard?.Acquire() == true;
+            ProbeListenPort();
+            await AcquireOwnershipAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The host never calls StopAsync for a failed start: give back only a lock this start took itself. A lock WorldStartup took stays held
+            // until the container disposes it (after the hosted services stop), which in production is the end of the process.
+            if (acquiredHere) writerGuard?.Dispose();
+            throw;
+        }
+
         saveQueue.FatalFailure += OnFatalSaveFailure;
 
         // Started right after the startup claim check, so a claim that lands while the world is still starting (registry deletes, bot restore)
@@ -206,9 +232,31 @@ public sealed class WorldHost(
             await ReleaseOwnershipAsync(cancellationToken, failures).ConfigureAwait(false);
         }
 
+        // The file lock is not released here: the SQLite checkpointer's final WAL checkpoint runs after this host stops, so the guard is
+        // disposed with the host container (Program) or the process, after every hosted service has stopped.
         if (failures.Count == 0) logger.LogInformation("World saved and stopped");
         else logger.LogError("World stop did not complete; durable ownership was retained");
         if (failures.Count > 0) throw new AggregateException("World feature shutdown failed", failures);
+    }
+
+    /// <summary>
+    /// The listener binds after this host starts (registration order), and the bot restore runs inside this start. A port clash is found here, before any bot is taken over:
+    /// bind and release the configured endpoint. This is check-then-bind: it narrows the window, it does not close it (the real bind is still <see cref="Net.WorldServer"/>'s).
+    /// Skipped without world options, with port 0 (any free port), and when no <see cref="Net.WorldServer"/> is registered (a fixture that owns the sockets itself binds
+    /// before this host starts, so the probe would see its own listener).
+    /// </summary>
+    private void ProbeListenPort()
+    {
+        bool expected = ListenerExpected
+            ?? rootServices?.GetServices<IHostedService>().OfType<Net.WorldServer>().Any() == true;
+        if (!expected || worldOptions?.Value is not { Port: > 0 } options || !IPAddress.TryParse(options.BindAddress, out IPAddress? address)) return;
+        var probe = new TcpListener(address, options.Port);
+        try { probe.Start(); }
+        catch (SocketException ex)
+        {
+            throw new InvalidOperationException($"the world port {address}:{options.Port} is already in use (another world process?); refusing to start before any playerbot is restored", ex);
+        }
+        finally { probe.Stop(); }
     }
 
     private async Task AcquireOwnershipAsync(CancellationToken cancellationToken)

@@ -22,7 +22,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (not flying, swimming, levitating, on a transport, falling or on a spline). Warning. One height query per bot per
 /// <see cref="SampleIntervalMs"/>.</description></item>
 /// <item><term>under-map</term><description>the terrain surface lies more than <see cref="UnderMapYards"/> above the bot and no
-/// model floor is under it (caves and cellars have one); Error beyond <see cref="FarUnderMapYards"/>. Same sample.</description></item>
+/// model explains it (inside a WMO, a model floor under it or a model surface just above it: caves, cellars and cities; unloaded model tiles never convict); Error beyond <see cref="FarUnderMapYards"/>. Same sample.</description></item>
 /// <item><term>wall-crossed</term><description>a leg of a navigation-mesh route the bot walked since the last heartbeat is blocked by a
 /// static model (line of sight at chest height). Warning. One to <see cref="MaxCrossingSegments"/> segment queries per
 /// sample, only for mesh legs (a stepped leg is refused by the motion itself).</description></item>
@@ -58,8 +58,12 @@ internal static class PlayerbotMotionAnomalies
     /// <summary>Height above the floor under a walking bot that is "no ground": mesh legs may float up to 4 yd (<see cref="PlayerbotMotion.MeshFloorToleranceYards"/>).</summary>
     internal const float AirwalkYards = 6f;
 
-    /// <summary>Terrain surface above a bot with no model floor under it by more than this: under the map.</summary>
-    internal const float UnderMapYards = 3f;
+    /// <summary>
+    /// Terrain surface above a bot that no model explains (<see cref="MapCollision.ClassifyUnderMap"/>) by more than this: under the map.
+    /// A stateless margin, not "two samples in a row": the navmesh-versus-terrain drift that made 3 yd fire is a property of the spot, so a
+    /// bot standing there would repeat it on every sample. 8 yd is a judgement call from the reported 3-10 yd drift range, not a value measured against a drift survey.
+    /// </summary>
+    internal const float UnderMapYards = 8f;
 
     /// <summary>Under the map by this much is an Error: the unit is far below the world.</summary>
     internal const float FarUnderMapYards = 40f;
@@ -265,13 +269,13 @@ internal static class PlayerbotMotionAnomalies
     /// The verdict on a bot at height <paramref name="z"/> given the terrain surface and the floor (terrain or model) under it;
     /// heights that are not valid (no data) never convict. Pure.
     /// </summary>
-    internal static GroundVerdict Classify(float z, float terrain, float floor, bool modelsKnown)
+    internal static GroundVerdict Classify(float z, float floor, UnderMapVerdict underMap)
     {
         if (!float.IsFinite(z)) return GroundVerdict.Ok;
         if (ValidHeight(floor)) return z - floor > AirwalkYards ? GroundVerdict.Airwalk : GroundVerdict.Ok;
-        // No floor under the bot. Without model data a cave or a cellar looks the same, so only a known model world convicts.
-        if (!modelsKnown || !ValidHeight(terrain) || terrain - z <= UnderMapYards) return GroundVerdict.Ok;
-        return terrain - z > FarUnderMapYards ? GroundVerdict.FarUnderMap : GroundVerdict.UnderMap;
+        // No floor under the bot. Only the shared model-aware query convicts (caves, cellars and cities are Ok, unloaded data is Unknown).
+        if (underMap.Kind != UnderMapKind.UnderMap) return GroundVerdict.Ok; // the query already applied UnderMapYards as its margin
+        return underMap.DepthYards > FarUnderMapYards ? GroundVerdict.FarUnderMap : GroundVerdict.UnderMap;
     }
 
     private static bool ValidHeight(float height)
@@ -281,15 +285,27 @@ internal static class PlayerbotMotionAnomalies
         | MovementFlags.OnTransport | MovementFlags.Hover | MovementFlags.WaterWalking | MovementFlags.FallingFar
         | MovementFlags.Jumping | MovementFlags.SplineEnabled;
 
+    /// <summary>
+    /// The ground verdict at <paramref name="at"/> given the floor under it and whether model data backs the map. The model-aware
+    /// under-map query is asked only when there is no floor, and with <see cref="UnderMapYards"/> as its margin.
+    /// </summary>
+    internal static GroundVerdict JudgeGround(Vector3 at, float floor, bool modelsEnabled, IUnderMapClassifier classifier, out UnderMapVerdict underMap)
+    {
+        // Without any model data a cave or a cellar looks like open ground under the terrain, so nothing is convicted.
+        underMap = ValidHeight(floor) || !modelsEnabled
+            ? UnderMapVerdict.Unknown
+            : classifier.ClassifyUnderMap(at.X, at.Y, at.Z, UnderMapYards);
+        return Classify(at.Z, floor, underMap);
+    }
+
     /// <summary>One sampled ground check at <paramref name="at"/>, where a heartbeat just put the bot.</summary>
     internal static void CheckGround(Player player, Map map, MotionWatch watch, Vector3 at, uint now)
     {
         if ((player.Movement.Flags & NotWalking) != 0 || player.Locomotion.ActiveSpline is not null || !Finite(at)) return;
-        float terrain = map.Terrain.GetHeight(at.X, at.Y, at.Z);
         float floor = map.Collision.GetHeight(at.X, at.Y, at.Z);
-        GroundVerdict verdict = Classify(at.Z, terrain, floor, map.Collision.LineOfSight.Enabled);
+        GroundVerdict verdict = JudgeGround(at, floor, map.Collision.LineOfSight.Enabled, map.Collision, out UnderMapVerdict underMap);
         if (verdict == GroundVerdict.Ok) return;
-        ReportGround(player, map, watch, verdict, at, terrain, floor, now);
+        ReportGround(player, map, watch, verdict, at, at.Z + underMap.DepthYards, floor, now);
     }
 
     /// <summary>Report a ground verdict other than Ok (a bot in water is not convicted: the floor under a swimmer is the bottom).</summary>

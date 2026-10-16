@@ -228,6 +228,34 @@ public sealed class LogonProtectionTests
         }
     }
 
+    [Fact]
+    public async Task StartAsync_ReturnsOnlyOnceTheListenerIsBound()
+    {
+        // A client may connect as soon as StartAsync returns. BackgroundService runs ExecuteAsync on the thread pool, so a listener bound
+        // there could still be unbound: Linux refuses that connect at once (Windows retries the refused SYN for about a second, hiding it).
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            int port = FreePort();
+            var services = new ServiceCollection();
+            services.AddSingleton<IAccountStore>(new InMemoryAccountStore());
+            services.AddSingleton<IRealmStore>(new InMemoryRealmStore([]));
+            await using ServiceProvider provider = services.BuildServiceProvider();
+            var server = new LogonServer(
+                provider.GetRequiredService<IServiceScopeFactory>(),
+                Options.Create(new AuthOptions { BindAddress = "127.0.0.1", Port = port }),
+                NullLoggerFactory.Instance, NullLogger<LogonServer>.Instance);
+            await server.StartAsync(CancellationToken.None);
+            try
+            {
+                Assert.Contains(System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners(), e => e.Port == port);
+            }
+            finally
+            {
+                await server.StopAsync(CancellationToken.None);
+            }
+        }
+    }
+
     private static int FreePort()
     {
         var l = new TcpListener(IPAddress.Loopback, 0);

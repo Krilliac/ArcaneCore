@@ -445,7 +445,7 @@ public sealed class OpsAnnounceCategoriesTests
     {
         (OpsAnnouncer announcer, RecordingSink sink, _) = Rig();
         var aggregator = new PlayerbotQaAggregator(10, 3, new byte[16]);
-        aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view);
+        aggregator.FindingCreated = view => PlayerbotQaAnnouncements.Announce(announcer, view, new PlayerbotQaRedactor());
 
         aggregator.Ingest(QaData.Stall(QaData.Bot1, -5608.8f, -439.4f), NoQaContentFacts.Instance, QaData.T0);
         aggregator.Ingest(QaData.Stall(QaData.Bot2, -5608.8f, -439.4f), NoQaContentFacts.Instance, QaData.T0); // same finding, another bot

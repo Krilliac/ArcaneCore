@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -627,6 +628,16 @@ public sealed partial class CreatureMapSystem
         CreatureAnomalies.ReportNonFinite(creature, detail);
     }
 
+    /// <summary>
+    /// The height provider only knows the terrain surface, so a creature in a cave or a city sits "below" it. Before a conviction the
+    /// models are asked (<see cref="IUnderMapClassifier"/>): only <see cref="UnderMapKind.UnderMap"/> convicts, Ok and Unknown do not.
+    /// </summary>
+    private bool ConfirmUnderMap(Creature creature)
+    {
+        IUnderMapClassifier classifier = _underMap ?? Map.Collision;
+        return classifier.ClassifyUnderMap(creature.X, creature.Y, creature.Z, CreatureAnomalies.UnderMapMarginYards).Kind == UnderMapKind.UnderMap;
+    }
+
     private void CheckUnderMap(Creature creature)
     {
         if (!creature.ShouldSampleUnderMap(_clockMs))
@@ -656,7 +667,7 @@ public sealed partial class CreatureMapSystem
         float? localFloor = _height.GetHeight(Map.MapId, creature.X, creature.Y, creature.Z + 5f);
         if (localFloor is { } validLocal && float.IsFinite(validLocal))
         {
-            if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards)
+            if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards && ConfirmUnderMap(creature))
             {
                 CreatureAnomalies.ReportUnderMap(
                     creature,
@@ -674,7 +685,8 @@ public sealed partial class CreatureMapSystem
         float probeZ = Math.Max(creature.Z + 100f, creature.Home.Z + 50f);
         float? upperFloor = _height.GetHeight(Map.MapId, creature.X, creature.Y, probeZ);
         if (upperFloor is { } validUpper && float.IsFinite(validUpper)
-            && creature.Z < validUpper - CreatureAnomalies.UnderMapMarginYards)
+            && creature.Z < validUpper - CreatureAnomalies.UnderMapMarginYards
+            && ConfirmUnderMap(creature))
         {
             CreatureAnomalies.ReportUnderMap(
                 creature,

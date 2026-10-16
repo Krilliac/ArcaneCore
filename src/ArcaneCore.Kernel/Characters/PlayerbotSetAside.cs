@@ -9,11 +9,20 @@ public enum PlayerbotSetAsideKind : byte
     Training = 2,
     SharedEntry = 3,
     SharedQuest = 4,
-    /// <summary>Never expires (ExpiresUnixMs = long.MaxValue). A rollback to f67b41a1 drops these rows on its next save.</summary>
+    /// <summary>
+    /// A quest whose ender the bot found unreachable. Expires like the others (60 s, then 10 min, 1 h, 6 h and 24 h with each repeat), and
+    /// RepeatCount carries the strikes. Rows written before that have ExpiresUnixMs = long.MaxValue: the loader restores them with
+    /// a finite, staggered expiry and the next save rewrites them. Append-only: a kind byte is never renumbered or reused. A rollback
+    /// to f67b41a1 drops these rows on its next save.
+    /// </summary>
     UnreachableQuest = 5,
 }
 
-/// <summary>Absolute expiry prevents a restart from extending a world-time suspension.</summary>
+/// <summary>
+/// Absolute expiry prevents a restart from extending a world-time suspension. RepeatCount is the strike count of an
+/// <see cref="PlayerbotSetAsideKind.Entry"/> or <see cref="PlayerbotSetAsideKind.UnreachableQuest"/> (so a restart continues
+/// its escalation), and the repeat count of a shared set-aside; 0 elsewhere.
+/// </summary>
 public sealed record PlayerbotSetAside(Guid BotId, int CharacterId, PlayerbotSetAsideKind Kind,
     uint TargetId, long ExpiresUnixMs, int RepeatCount = 0)
 {

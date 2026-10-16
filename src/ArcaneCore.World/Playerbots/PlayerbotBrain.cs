@@ -37,6 +37,63 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private PlayerbotRoute? _route;
     private bool _routeAbandoned;
 
+    /// <summary>The reason of the latest transit leg given up (a tram trip, a lift ride, a travel leg or journey; <see cref="GiveUpTransitLeg"/>); null: none yet (inspection, tests).</summary>
+    internal string? LastTransitFailure { get; private set; }
+
+    /// <summary>Transit legs given up so far (<see cref="GiveUpTransitLeg"/>).</summary>
+    internal int TransitFailureCount { get; private set; }
+
+    /// <summary>
+    /// A tram trip, lift ride or travel leg (a ship, the hearthstone, a mage leg, a journey) failed (its driver reported the anomaly once and backed the failing point off, <see cref="PlayerbotTransitBackoff"/>):
+    /// only that leg is given up. Logged, the stall watch reset, the route dropped; the quest and its giver stay as they are, and no dead-end
+    /// pin is counted (a failed leg says nothing about the cell the bot stands in). The goal plans again next think and meets the backoff:
+    /// it walks, or waits, instead of re-entering the failed point.
+    /// </summary>
+    private void GiveUpTransitLeg(string why)
+    {
+        LastTransitFailure = why;
+        TransitFailureCount++;
+        _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>()
+            .LogInformation("Playerbot transit leg given up, the goal plans again: {Why}", why);
+        _stall.Reset();
+        _target = null;
+        AbandonRoute();
+        _attacking = false;
+    }
+
+    /// <summary>
+    /// What the brain does with one travel driver's answer this think (<see cref="PlayerbotShip.Drive"/>, <see cref="PlayerbotHearthstone.Drive"/>,
+    /// <see cref="PlayerbotMageService.Drive"/>, <see cref="PlayerbotTravel.Drive"/>): true when the think ends here. Traveling: the leg owns the
+    /// bot (<see cref="HoldForTravel"/>). Failed: only the leg is given up (<see cref="GiveUpTransitLeg"/>; the driver reported it). Arrived: the
+    /// stall watch starts afresh and the think goes on. Idle: the think goes on.
+    /// </summary>
+    private bool TravelOwns(TravelLegStep step, string? failure, string driver)
+    {
+        switch (step)
+        {
+            case TravelLegStep.Traveling:
+                HoldForTravel();
+                return true;
+            case TravelLegStep.Failed:
+                GiveUpTransitLeg(failure ?? $"{driver}: the leg failed (no reason recorded)");
+                return true;
+            case TravelLegStep.Arrived:
+                _stall.Reset();
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>A travel leg owns the bot this think: no stall is judged, no target held, the brain's own route given up.</summary>
+    private void HoldForTravel()
+    {
+        _stall.Reset();
+        _target = null;
+        AbandonRoute();
+        _attacking = false;
+    }
+
     /// <summary>
     /// The brain gives up its route. The motion keeps walking a route for its lease (<see cref="PlayerbotMotion"/>: seconds, as long as
     /// the bot's think gap), so a route given up and not replaced is told to the host (<see cref="TakeRouteAbandoned"/>), which stops
@@ -105,6 +162,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
+    private PlayerbotOpportunities? _opportunities;
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotHomeReturn _homeReturn = new();
     private PlayerbotHomeArea? _home;
@@ -177,8 +235,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>The ghost recovery (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
     private readonly PlayerbotEquipment _equipment = new(session);
-    private readonly PlayerbotStallWatch _stall = new();
-    private readonly PlayerbotSuspensions _suspensions = new() { Shared = shared };
     private readonly PlayerbotTraceLog _trace = new();
 
     /// <summary>Recent decision, route, and loop transitions for QA diagnostics.</summary>
@@ -186,6 +242,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     /// <summary>The last <see cref="PlayerbotThinkProbe"/> phase seen while this brain was updating.</summary>
     internal string LastThinkPhase { get; private set; } = "start";
+
+    /// <summary>
+    /// The opportunity controller drove the latest think (it walked, opened, waited or chose a guard to pull). The brain's goal is
+    /// <see cref="PlayerbotGoalKind.Loot"/> for a chest and for a corpse alike, so the policy telemetry labels a decision
+    /// <see cref="PlayerbotPolicyGoal.Opportunity"/> from this and not from the goal kind.
+    /// </summary>
+    internal bool OpportunityDriven { get; private set; }
 
     /// <summary>Single-line diagnostic snapshot of the bot's state and recent trace history.</summary>
     internal string FormatDiagnosticSnapshot(Player player) => _trace.FormatSnapshot(player, this);
@@ -448,7 +511,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _overranReportMs = now;
         PlayerbotAnomalies.Report(player, "brain", "think-overran",
             string.Create(CultureInfo.InvariantCulture,
-                $"one think took {elapsedMs:F0} ms (budget {PlayerbotThinkRotation.TickBudgetMs:F0} ms per tick for every bot; goal {_goal}, last phase {LastThinkPhase})"));
+                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase})"));
     }
 
     internal void Update(uint elapsedMs)
@@ -458,6 +521,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _thinkClockArmed = false;
             return;
         }
+        OpportunityDriven = false;
         _destinations.SkipQuest ??= _quests.IsRefused;
         _destinations.Untakeable ??= IsUntakeable;
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
@@ -489,6 +553,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
         finally
         {
+            // A think that ran any goal but Explore (a quest, combat, an errand, rest, a retreat...) broke the walk to the inn; the choke
+            // point for all of them. Explore thinks that skip the town idle decision report it in Explore().
+            if (_goal != PlayerbotGoalKind.Explore) _townIdle.Interrupted();
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
             _trace.ObserveState(this, _session.World.NowMs);
             CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
@@ -516,6 +583,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!_deathIntentRetired)
             {
                 RecordDeath(player);
+                _opportunities?.BotDied();
                 RetireDeathIntent();
                 // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
                 // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
@@ -525,6 +593,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 // And a lift ride: the corpse loses the transport. This must run BEFORE the acknowledgements below
                 // (PlayerbotMovementControl.Update): the death root's ack then carries the cleared block, relayed as MSG_MOVE_ROOT.
                 PlayerbotElevator.Cancel(player);
+                // And the journey with its legs: a hearthstone or Teleport cast, a portal request, a mage's service end; a ship leg not
+                // boarded is dropped, while aboard the ship carries the body on to the next port (PlayerbotShip.Cancel).
+                PlayerbotTravel.CancelLegs(_session, player);
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
@@ -538,6 +609,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _deathIntentRetired = false;
             _recovery.Reset();
             RememberAttackers(player);
+            // The fight with a find's guards is the brain's, not the goal's: its claim on the find is kept alive meanwhile (and an
+            // episode a higher goal has held for too long, or that ran past its limit, ends here).
+            if (_opportunities?.KeepClaim(player) is { } lapsed) ReleaseOpportunityGuard(player, lapsed);
             // Sickness may begin while a pull route or cast is pending. Retire that intent before a movement-order acknowledgement
             // can defer the ordinary goal decision, and before class upkeep can use PullTarget for an opener.
             if (!player.Combat.IsInCombat && player.Combat.Victim is null && _target is { IsAlive: true }
@@ -645,12 +719,37 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
         NoteThink(_session.World.NowMs);
+        ObserveDeferWakes(player);
 
         // A tram trip (or a bot found on the Deeprun Tram map) owns the bot until it stands on the continent again (PlayerbotTram): nothing
         // else moves it meanwhile, and the stall watch does not judge a bot waiting for its car. A fight on the way to the entrance ends the
         // trip (the goal that began it begins it again afterwards).
         if (player.IsAlive)
         {
+            // Far travel (docs/areas/playbots.md, Travel): the leg drivers first, each owning the bot while its leg is under way (a ship from the
+            // walk to the dock until the bot stepped off at the other port; the hearthstone and a mage's Teleport through cast and teleport; a
+            // portal asked for until the requester went through; a mage serving a portal request), then the journey, which walks its walk legs
+            // and only begins the others. A fight before the bot is aboard (on the way to the dock, waiting for the ship, stepping up the
+            // gangway) ends that ship leg, and the journey begins it again after the fight; aboard, the ship carries the bot on. A fight
+            // during a hearthstone or Teleport cast cancels that cast (its driver). A failed leg defers only that leg (GiveUpTransitLeg): the
+            // journey replans it once.
+            PlayerbotThinkProbe.Phase("travel legs");
+            // The journey's bound first: it drops the leg under way (not aboard a ship), whose driver would otherwise own this think.
+            PlayerbotTravel.EnforceDeadline(_session, player);
+            if (player.Combat.IsInCombat && player.Transport is null
+                && PlayerbotShip.TripOf(player) is { Stage: ShipStage.ToDock or ShipStage.WaitShip or ShipStage.Board })
+                PlayerbotShip.Cancel(player);
+            if (TravelOwns(PlayerbotShip.Drive(_session, player, _options, interval, out string? shipFailure), shipFailure, "ship")) return;
+            if (TravelOwns(PlayerbotHearthstone.Drive(_session, player, _options, interval, out string? hearthFailure), hearthFailure, "hearth")) return;
+            if (TravelOwns(PlayerbotMageService.Drive(_session, player, _options, interval, out string? mageFailure), mageFailure, "mage")) return;
+            if (PlayerbotMageService.DriveMage(_session, player, _options, interval) == TravelLegStep.Traveling)
+            {
+                HoldForTravel();
+                return;
+            }
+
+            if (TravelOwns(PlayerbotTravel.Drive(_session, player, _options, interval, out string? travelFailure), travelFailure, "travel")) return;
+
             // A taxi trip (PlayerbotTaxi) owns the bot from the walk to the flight master until it has landed. A fight on the way to the
             // master ends it; a failed trip only backs taxi use off, and the goal that asked for it walks.
             if (player.Combat.IsInCombat && PlayerbotTaxi.TripOf(player) is { Stage: TaxiStage.ToMaster }) PlayerbotTaxi.Cancel(player);
@@ -686,8 +785,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
             if (tram == TramStep.Failed)
             {
-                _stall.ReportExternal(tramFailure ?? "tram: the trip failed (no reason recorded)");
-                GiveUpStalledGoal(player, shareable: false);
+                GiveUpTransitLeg(tramFailure ?? "tram: the trip failed (no reason recorded)");
                 return;
             }
 
@@ -706,8 +804,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
             if (lift == ElevatorStep.Failed)
             {
-                _stall.ReportExternal(liftFailure ?? "elevator: the ride failed (no reason recorded)");
-                GiveUpStalledGoal(player, shareable: false);
+                GiveUpTransitLeg(liftFailure ?? "elevator: the ride failed (no reason recorded)");
+                return;
+            }
+
+            // A journey under way owns the bot between its legs too (a tram, lift or taxi trip of a walk leg just ended: the journey walks on
+            // at the next think). In a fight the journey yields and the brain fights. A journey resting between two legs (a bot low on health
+            // or mana, PlayerbotTravel.IsResting) has the brain rest the bot meanwhile.
+            if (!player.Combat.IsInCombat && PlayerbotTravel.IsJourneying(player))
+            {
+                HoldForTravel();
+                if (PlayerbotTravel.IsResting(player)) RestForJourney(player);
                 return;
             }
         }
@@ -995,7 +1102,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _town.BeginThink();
             // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
             PlayerbotThinkProbe.Phase("policy");
-            if (TryPolicyGoal(player, interval)) return;
+            if (TryPolicyGoal(player, interval)) { if (_policyPulled) goto afterGoalLadder; return; }
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
@@ -1007,11 +1114,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (StandDownWhileSick(player)) return;
             PlayerbotThinkProbe.Phase("crafting");
             _crafting.Suspensions = _suspensions;
+            _crafting.GatherVeto = Opportunities.NodeVeto;
             if (_crafting.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _crafting.Goal; TargetEntry = _crafting.TargetEntry; return; }
             PlayerbotThinkProbe.Phase("economy");
             if (_economy.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
+            PlayerbotThinkProbe.Phase("opportunities");
+            if (TakeOpportunity(player, interval, out bool opportunityPull)) { if (opportunityPull) goto afterGoalLadder; return; }
             bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0
                 && FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is not null;
             PlayerbotThinkProbe.Phase("trainers");
@@ -1076,6 +1186,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
         }
 
+        afterGoalLadder:
         // A mob another player tagged while the bot walked to it is no longer the bot's to take: help its tagger or leave it alone, then
         // choose afresh in this same think (docs/areas/playbots.md, Contention).
         if (_target is { IsAlive: true } held && ReferenceEquals(held.Map, player.Map)) DropIfSomeoneElses(player, held);
@@ -1366,6 +1477,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         if (_quests.Busy || _town.HasCandidate(player)
             || _quests.PreferredCreatureEntry == 0 && (_trainers.HasCandidate(player) || _riding.HasCandidate(player))) return false;
+        if (TryTravelHome(player, home, state))
+        {
+            DropIntent();
+            _goal = PlayerbotGoalKind.Home;
+            return true;
+        }
+
         PlayerbotHomeTeleportReason teleport = _homeReturn.Judge(player, home, homeOptions);
         if (teleport != PlayerbotHomeTeleportReason.None)
         {
@@ -1381,6 +1499,53 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _goal = PlayerbotGoalKind.Home;
         return true;
     }
+
+    /// <summary>
+    /// A home on another map, or across water on this one (Teldrassil), is travelled to the way a player would (docs/areas/playbots.md,
+    /// Travel): a journey by boat, zeppelin, flight path, hearthstone or portal (<see cref="IPlayerbotTravel.TryBegin"/>), which the brain
+    /// drives from the next think. Only where the return would otherwise teleport (not <see cref="PlayerbotHomeReturnMode.Walk"/>, whose
+    /// off-map bot is left to the operator); when no journey can begin, the return rules decide as before (the config-gated teleport).
+    /// </summary>
+    private bool TryTravelHome(Player player, PlayerbotHomeArea home, PlayerbotHomeState state)
+    {
+        if (_options.Home.ReturnMode == PlayerbotHomeReturnMode.Walk || !_options.Travel.Enabled) return false;
+        PlayerbotTravel.PublishStaticRoutes(_session.World);
+        uint mapId = player.Map?.MapId ?? player.MapId;
+        bool far = state == PlayerbotHomeState.OffMap
+            || Population.PopulationTownProgression.SeparatedByWater(mapId, player.X, player.Y, home.MapId, home.Centre.X, home.Centre.Y);
+        if (!far || _session.Services.GetService<IPlayerbotTravel>() is not { } travel) return false;
+        if (travel.IsTraveling(player)) return true;
+        uint now = _session.World.NowMs;
+        // A journey home that failed (its anomaly is reported once by the journey) or could not begin waits the transit backoff before
+        // the next one, doubling while it keeps failing; only a journey home that arrived starts the count again. Journeys others began
+        // (.playerbot travel) do not count. The return rules (the teleport fallback) answer meanwhile.
+        if (_travelHomeJourney is { } last && PlayerbotTravel.JourneyOf(player) is { } current && ReferenceEquals(last, current))
+        {
+            if (current.State == JourneyState.Arrived) _travelHomeFailures = 0;
+            else if (current.State != JourneyState.Active)
+                _travelHomeRetryAt = unchecked(now + _options.Travel.BackoffMs(++_travelHomeFailures));
+            _travelHomeJourney = null;
+        }
+        else if (_travelHomeJourney is not null && !ReferenceEquals(_travelHomeJourney, PlayerbotTravel.JourneyOf(player)))
+        {
+            _travelHomeJourney = null; // replaced by a journey another caller began: it neither counts nor clears
+        }
+
+        if (_travelHomeFailures > 0 && unchecked((int)(_travelHomeRetryAt - now)) > 0) return false;
+        if (travel.TryBegin(_session, player, home.MapId, home.Centre, out _))
+        {
+            _travelHomeJourney = PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Active } begun ? begun : null;
+            return true;
+        }
+
+        _travelHomeRetryAt = unchecked(now + _options.Travel.BackoffMs(++_travelHomeFailures));
+        return false;
+    }
+
+    // The journey-home retry wait (TryTravelHome): failures in a row, when the next try may begin, and the journey home under way.
+    private int _travelHomeFailures;
+    private uint _travelHomeRetryAt;
+    private TravelJourney? _travelHomeJourney;
 
     /// <summary>
     /// A new stall (<see cref="PlayerbotStallWatch"/>): set the goal's target aside for <see cref="PlayerbotSuspensions.SuspendMs"/>
@@ -1406,7 +1571,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         uint now = _session.World.NowMs;
         _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
-        int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y);
+        int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y, now);
         bool deadEndPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
         if (deadEndPin)
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
@@ -1425,7 +1590,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 {
                     _suspensions.SuspendEntryEscalating(TargetEntry, now);
                     if (QuestId != 0 && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
-                        _suspensions.MarkUnreachableQuest(QuestId);
+                        _suspensions.MarkUnreachableQuest(QuestId, now);
                 }
                 else
                 {
@@ -1452,7 +1617,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 if (_exploreCandidate is { } explore) BlockExploreCell(explore);
                 else _exploreRefusals = 3;
                 if (_home is null && IsUnderLevelledForArea(player))
-                    TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false);
+                    TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true); // among creatures too strong for it
                 break;
             case PlayerbotGoalKind.Rest:
             case PlayerbotGoalKind.Recover:
@@ -1540,15 +1705,21 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// there, and stalled within two minutes of every login). True when the bot was moved.
     /// </para>
     /// </summary>
-    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false)
+    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null)
     {
         onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
         // A fragment of mesh (the region graph's component of a few regions, PlayerbotNavigation.IsOnMeshFragment) is an island whose
         // one straight hop off (TryPlanToward) found no ground beside it, or was not walkable: the same escape applies.
         // A repeated stall in the same 10-yard dead-end pin cell (deadEndPin) also triggers this escape when local walking did not free the bot.
+        // confinedFrom (EscapeConfinedExplore): where the confinement began. A bot wandering an island ends its 15 seconds anywhere on
+        // it, often at its rim, and from the rim the far side of an island up to twice IslandYards across lies beyond IslandYards; the
+        // walk from that point stayed within IslandYards of it, so the point's ground is the bot's. Asked only when the bot moved off it.
         bool island = PlayerbotHomeArea.IsNullIsland(player.MapId, player.X, player.Y)
             || PlayerbotNavigation.IsOnMeshIsland(player, _options)
+            || (confinedFrom is { } from
+                && System.Numerics.Vector2.DistanceSquared(new(from.X, from.Y), new(player.X, player.Y)) > ConfinedFromMinYards * ConfinedFromMinYards
+                && PlayerbotNavigation.IsOnMeshIsland(player, from, _options))
             || PlayerbotNavigation.IsOnMeshFragment(player);
         if (!island && !deadEndPin) return false;
         onIsland = island;
@@ -1569,7 +1740,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         return TryTeleportToBindPoint(player,
             deadEndPin && !island ? "stalled repeatedly at a dead-end pin" : "stalled on ground no route leaves",
-            urgent: false);
+            urgent: false, safety: true);
     }
 
     /// <summary>What counts as progress for the stall watch besides moving.</summary>
@@ -1662,6 +1833,62 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _attacking = false;
     }
 
+    /// <summary>The chest, rare and node-risk goal (<see cref="PlayerbotOpportunities"/>, docs/areas/playbots-opportunities.md; inspection and tests).</summary>
+    internal PlayerbotOpportunities Opportunities => _opportunities ??= new PlayerbotOpportunities(_session, _options, () => Risk, claims,
+        (opcode, payload) => _lootActions.Enqueue((opcode, payload))) { Untakeable = IsUntakeable };
+
+    /// <summary>
+    /// Offers the opportunity goal to the ladder (after the urgent goals, before the optional travel and grinding): true when it took the
+    /// think. <paramref name="pull"/> says it chose a creature to fight: the target is set and the think goes on to the combat path.
+    /// A quest or grind goal is interrupted only for a find that clears the higher bar of <see cref="PlayerbotOpportunities.Update"/>.
+    /// </summary>
+    private bool TakeOpportunity(Player player, uint interval, out bool pull)
+    {
+        pull = false;
+        Opportunities.Home = _quests.Home;
+        OpportunityStep step = Opportunities.Update(player, interval, interrupting: _goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Grind);
+        // An episode that handed over a guard and then ended without the fight (refused, a player at the chest, no way to the guard)
+        // takes the guard back: left as the target, the ordinary combat path below would go on with the pull the goal gave up.
+        if (step.Abandon is { } given) ReleaseOpportunityGuard(player, given);
+
+        if (step.Pull is { } creature)
+        {
+            if (!ReferenceEquals(_target, creature))
+            {
+                _contention.ReleaseClaim();
+                AbandonRoute();
+                _attacking = false;
+                _lootOpened = false;
+            }
+
+            _target = creature;
+            TargetEntry = creature.Entry;
+            _goal = PlayerbotGoalKind.Combat;
+            pull = true;
+            OpportunityDriven = true;
+            return true;
+        }
+
+        if (!step.Busy) return false;
+        OpportunityDriven = true;
+        RetireIdleCombatRoute();
+        _goal = step.Goal;
+        TargetEntry = step.TargetEntry;
+        return true;
+    }
+
+    /// <summary>Lets go of a guard the opportunity goal handed over and gave up, unless it is the target and the bot is not yet in combat with it.</summary>
+    private void ReleaseOpportunityGuard(Player player, Creature given)
+    {
+        if (!given.IsAlive || !ReferenceEquals(_target, given)
+            || player.Combat.ThreatenedBy.Contains(given) || ReferenceEquals(given.Combat.Victim, player)) return;
+        _contention.ReleaseClaim();
+        AbandonRoute();
+        _attacking = false;
+        _target = null;
+        TargetEntry = 0;
+    }
+
     private void DropIntent()
     {
         _destinations.CancelPlanning();
@@ -1721,6 +1948,24 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _stall.Reset(); // waiting the sickness out is bounded by its duration, not a stall
         if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
         return true;
+    }
+
+    /// <summary>
+    /// The rest a journey takes between two legs (<see cref="PlayerbotTravel.IsResting"/>): food or drink up to
+    /// <see cref="PlayerbotRiskOptions.RecoverHealthPct"/> when the bot carries some, otherwise it stops and sits (as the brain's own wait to
+    /// recover); the journey stands it up when the rest ends.
+    /// </summary>
+    private void RestForJourney(Player player)
+    {
+        _goal = PlayerbotGoalKind.Rest;
+        uint wanted = (uint)Math.Clamp(_options.Risk.RecoverHealthPct, 10f, 100f);
+        SpellFeature? spellFeature = _session.Services.GetService<SpellFeature>();
+        if (spellFeature is not null && PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, wanted, wanted, out _))
+            Rest(player, wanted);
+        else if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
+        else if (player.StandState == StandState.Stand
+                 && _session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes((uint)StandState.Sit)))
+            _satToWait = true;
     }
 
     /// <param name="wantedPct">Eat or drink below this percentage (the ordinary 45/35 when 0).</param>
@@ -2232,6 +2477,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _attackerEntries.Clear();
         _attackerFacts.Clear();
         _attackers.Clear();
+        // Out of a fight (nearly every think of nearly every bot) there is nothing to walk: skip the Concat iterator it would allocate.
+        if (player.Combat.Attackers.Count == 0 && player.Combat.ThreatenedBy.Count == 0) return;
         foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
         {
             if (unit is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) continue;
@@ -2507,11 +2754,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     internal bool TeleportToBindPointForQuest(Player player, string why) => TryTeleportToBindPoint(player, why, urgent: false);
 
     /// <summary>
-    /// Teleport the bot to its bind point (where its hearthstone leads; vmangos <c>Player::TeleportToHomebind</c>) when
-    /// <see cref="BindTeleportRefusal"/> allows it, and log why (<paramref name="why"/>). True when the bot was sent; its intent is dropped
-    /// and it explores from there.
+    /// Send the bot to its bind point when <see cref="BindTeleportRefusal"/> allows it, and log why (<paramref name="why"/>). An urgent escape
+    /// (<paramref name="urgent"/>: the bot must leave now, and a ten second cast a fight or a fall interrupts is no escape) teleports directly
+    /// (vmangos <c>Player::TeleportToHomebind</c>). Any other reason uses the bot's own hearthstone when it is ready
+    /// (<see cref="PlayerbotHearthstone.IsReady"/>: <see cref="PlayerbotTravelOptions.Hearthstone"/> on, the stone carried and off cooldown; the
+    /// leg is driven by the next thinks, PlayerbotHearthstone.Drive), as a 1.12 player does; when it is not ready only a trip made for the bot's
+    /// safety (<paramref name="safety"/>: stranded on ground no route leaves, or among creatures too strong for it) falls back to the direct teleport, and any other reason sends the bot nowhere. True when the
+    /// bot was sent (or its hearthstone cast begun); its intent is dropped, a journey under way with it, and it explores from there.
     /// </summary>
-    private bool TryTeleportToBindPoint(Player player, string why, bool urgent)
+    private bool TryTeleportToBindPoint(Player player, string why, bool urgent) => TryTeleportToBindPoint(player, why, urgent, safety: urgent);
+
+    private bool TryTeleportToBindPoint(Player player, string why, bool urgent, bool safety)
     {
         uint now = _session.World.NowMs;
         TeleportService? teleports = _session.Services.GetService<ArcaneCore.World.Teleport.TeleportFeature>()?.Teleports;
@@ -2529,7 +2782,29 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (!Invariant.Check(float.IsFinite(bind.X) && float.IsFinite(bind.Y) && float.IsFinite(bind.Z),
             "PlayerbotBrain.TryTeleportToBindPoint requires finite bind point coordinates."))
             return false;
+        if (!urgent && PlayerbotHearthstone.IsReady(_session, player, _options)
+            && PlayerbotHearthstone.TryBegin(_session, player, _options, out _))
+        {
+            PlayerbotTravel.Cancel(player);
+            _bindTeleported = true;
+            _bindTeleportAt = now;
+            DropIntent();
+            _goal = PlayerbotGoalKind.Explore;
+            logger?.LogInformation(
+                "Playerbot {Bot} {Why} at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: uses its hearthstone to its bind point ({BX:F1}, {BY:F1}, {BZ:F1}) map {BMap}",
+                player.Name, why, from.X, from.Y, from.Z, player.MapId, bind.X, bind.Y, bind.Z, bind.MapId);
+            return true;
+        }
+
+        if (!safety)
+        {
+            logger?.LogDebug("Playerbot {Bot} {Why} at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: does not go to its bind point (its hearthstone is not ready)",
+                player.Name, why, from.X, from.Y, from.Z, player.MapId);
+            return false;
+        }
+
         if (!teleports.TeleportToHomebind(player)) return false;
+        PlayerbotTravel.Cancel(player);
         _bindTeleported = true;
         _bindTeleportAt = now;
         DropIntent();
@@ -2570,6 +2845,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         if (player.Map is null || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false })
             return;
+        if (_home is { Stay: not Population.TownStay.None } town && (player.Map?.MapId ?? player.MapId) == town.MapId)
+        {
+            // Idle with a town home: back to the inn and wait there rather than roam the wilderness (PlayerbotTownIdle).
+            TownIdleAction idle = _townIdle.Decide(town.Stay, town.DistanceTo(player.X, player.Y), _session.World.NowMs);
+            if (idle == TownIdleAction.Linger) { PlayerbotMovementControl.Stop(_session, player); TryBindAtInn(player, town); return; }
+            if (idle == TownIdleAction.WalkToTown) { WalkTowardTown(player, town, elapsedMs); return; }
+        }
+        else _townIdle.Interrupted(); // no town idle decision this think (another map, another kind of home)
+
         PlayerbotThinkProbe.Phase("explore candidates");
         if (TryExploreSpawns(player, elapsedMs)) return;
         if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
@@ -2592,7 +2876,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 AbandonRoute();
             else
             {
-                _wanderLeg = wanderRoute;
+                MarkLeg(wanderRoute, townWalk: false);
                 ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
             }
         }
@@ -2604,8 +2888,69 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
     }
 
+    private readonly PlayerbotTownIdle _townIdle = new();
+    private uint _bindCheckAt;
+    private bool _bindChecked;
+
+    /// <summary>
+    /// At the inn of the town it stays in, binds its home to that town through the server's own path (CMSG_BINDER_ACTIVATE to the
+    /// innkeeper within interaction distance, <see cref="ArcaneCore.Game.Npc.QuestNpcServices.BinderActivate"/>) when the bind is
+    /// elsewhere. Checked every 30 seconds at most; false when nothing was sent.
+    /// </summary>
+    private bool TryBindAtInn(Player player, PlayerbotHomeArea town)
+    {
+        uint now = _session.World.NowMs;
+        // _bindChecked: the first check runs at once (a zero start would read as a future time on a world up for over 2^31 ms).
+        if ((_bindChecked && unchecked((int)(now - _bindCheckAt)) < 0) || !player.IsAlive || player.Combat.IsInCombat) return false;
+        (_bindChecked, _bindCheckAt) = (true, unchecked(now + 30_000));
+        HomeBind bind = player.Home;
+        if (!PlayerbotTownIdle.NeedsBind(bind.MapId, bind.X, bind.Y, town.MapId, town.Centre.X, town.Centre.Y)) return false;
+        if (_session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services is not { } services) return false;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false } info
+                || (info.NpcFlags & ArcaneCore.Game.Npc.NpcFlags.Innkeeper) == 0
+                || services.InteractableNpc(player, guid, ArcaneCore.Game.Npc.NpcFlags.Innkeeper) is null) continue;
+            var writer = new PacketWriter(8);
+            writer.WriteUInt64(guid.Value);
+            return _session.TryManagedAction(WorldOpcode.CmsgBinderActivate, writer.ToArray());
+        }
+
+        return false;
+    }
+
+    /// <summary>Plans and walks the next leg of an idle bot's way back to the centre of its town home (the wander planner, aimed inward).</summary>
+    private void WalkTowardTown(Player player, PlayerbotHomeArea town, uint elapsedMs)
+    {
+        if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
+        System.Numerics.Vector3 destination = InwardLeg(town, player, _exploreRefusals);
+        PlayerbotThinkProbe.Phase("explore town plan");
+        if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
+        {
+            AbandonRoute();
+            return;
+        }
+
+        if (_route is { } leg && PlayerbotNavigation.TryAdvance(_session, leg, _options, elapsedMs, _session.World.NowMs))
+        {
+            _exploreRefusals = 0;
+            MarkLeg(leg, townWalk: true);
+            return;
+        }
+
+        AbandonRoute();
+        _exploreRefusals++;
+        PlayerbotMovementControl.Stop(_session, player);
+    }
+
     /// <summary>The wandering leg the bot walks now (<see cref="ChainWanderLeg"/> chains only after such a leg, never after one to a spawn).</summary>
     private PlayerbotRoute? _wanderLeg;
+
+    /// <summary>Records the leg the bot walks: only a real explore leg may be chained onward (a town walk ends at the inn, a chained forward leg would carry the bot past it).</summary>
+    internal void MarkLeg(PlayerbotRoute leg, bool townWalk) => _wanderLeg = townWalk ? null : leg;
+
+    /// <summary>Whether <paramref name="route"/> is the explore leg in hand and so may be chained onward (<see cref="ChainWanderLeg"/>).</summary>
+    internal bool CanChain(PlayerbotRoute? route) => route is not null && ReferenceEquals(route, _wanderLeg);
 
     /// <summary>
     /// The end of the next wandering leg from <paramref name="from"/>, facing <paramref name="orientation"/>: roughly that facing (within
@@ -2680,7 +3025,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     private void ChainWanderLeg(Player player, uint elapsedMs)
     {
-        if (_route is not { Complete: false } route || !ReferenceEquals(route, _wanderLeg) || ExploreMovementPaused(player, elapsedMs)
+        if (_route is not { Complete: false } route || !CanChain(route) || ExploreMovementPaused(player, elapsedMs)
             || route.Points.Count < 2 || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
         if (!PlayerbotMotion.TryTimeToEnd(player, route, out uint remainingMs)) return;
         uint gap = PlayerbotMotion.ThinkGapMs(player);
@@ -2707,6 +3052,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
     }
 
+    /// <summary>How far (flat yards) the bot must have moved off the confinement's start before EscapeIsland also judges from there.</summary>
+    private const float ConfinedFromMinYards = 5f;
+
     private bool EscapeConfinedExplore(Player player)
     {
         if (player.Map is null || !player.IsAlive || player.Combat.IsInCombat) return false;
@@ -2730,7 +3078,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (player.Map is not { InstanceId: 0 }) return false;
         // The check's path searches (up to IslandDirections, counted as the think's fallbacks) are this think's work: the caller plans
         // no route of its own after it.
-        if (!EscapeIsland(player, out bool onIsland) && onIsland)
+        if (!EscapeIsland(player, out bool onIsland, confinedFrom: _exploreIslandAnchor) && onIsland)
         {
             // On an island but not moved (the home teleport is on cooldown, say): ask again in 15 seconds.
             _exploreIslandSince = now;

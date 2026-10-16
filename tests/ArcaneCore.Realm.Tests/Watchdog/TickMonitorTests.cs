@@ -189,6 +189,87 @@ public sealed class TickMonitorTests
     }
 
     [Fact]
+    public void Overrun_KeepsTheOldTextAndAppendsTheFullFrameLatencyLine()
+    {
+        TickMonitor monitor = Create();
+        Tick(monitor, 99, 50);
+        Tick(monitor, 1, 150);
+        Tick(monitor, 1, 50);
+        monitor.Check(_clock.NowMicros);
+
+        string message = Assert.Single(_log.Of(WatchdogEvents.TickOverrun)).Message;
+        // The existing placeholders, in their existing order, are untouched ...
+        Assert.StartsWith("world tick overran its 100 ms budget 1 time(s): frame p50 50 ms, p99 50 ms, slowest 150 ms over 100 frames", message, StringComparison.Ordinal);
+        // ... and the new detail follows them: p75, p95, p99.9, min, mean and spread over the last minute.
+        Assert.Contains("; frame latency last 1 min: p50 ", message, StringComparison.Ordinal);
+        Assert.Contains("p99.9 150.0 max 150.0 (n=100, min 50.0, mean 51.0 +/-9.9)", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("last 15 min", message, StringComparison.Ordinal); // the warning carries the minute only; the summary has both windows
+    }
+
+    [Fact]
+    public void Summary_KeepsTheOldTextAndAppendsBothLatencyWindows_AndPublishesTheGauges()
+    {
+        TickMonitor monitor = Create(o => o.SummaryIntervalSeconds = 5);
+        monitor.Check(_clock.NowMicros); // arms the first summary
+        Tick(monitor, 100, 50);
+        _clock.AdvanceMs(10);
+        monitor.Check(_clock.NowMicros);
+
+        string message = Assert.Single(_log.Of(WatchdogEvents.TickSummary)).Message;
+        Assert.StartsWith("world tick frames: p50 50 ms, p90 50 ms, p99 50 ms, slowest 50 ms over 99 frames; 0 overrun(s) of 100 ms, 0 hang(s), ", message, StringComparison.Ordinal);
+        Assert.Contains("; frame latency last 1 min: p50 50.0 ms p75 50.0 p90 50.0 p95 50.0 p99 50.0 p99.9 50.0 max 50.0 (n=99, min 50.0, mean 50.0 +/-0.0); last 15 min: p50 50.0 ms", message, StringComparison.Ordinal);
+
+        // The new percentiles are gauges too, next to the existing frame_p99_us and frame_max_us.
+        foreach (string gauge in new[] { "p50", "p75", "p90", "p95", "p999", "mean" })
+        {
+            Assert.Equal(50_000, _counters.Find($"watchdog.tick.frame_{gauge}_us")!.Value);
+        }
+
+        Assert.Equal(0, _counters.Find("watchdog.tick.frame_stddev_us")!.Value);
+        Assert.Equal(50_000, _counters.Find("watchdog.tick.frame_p99_us")!.Value);
+        Assert.Equal(50_000, _counters.Find("watchdog.tick.frame_max_us")!.Value);
+    }
+
+    [Fact]
+    public void AttachedBodyAndPhaseHistograms_AppearInTheSummaryAndTheGauges()
+    {
+        TickMonitor monitor = Create(o => o.SummaryIntervalSeconds = 5);
+        var body = new ArcaneCore.Kernel.Diagnostics.LatencyHistogram();
+        var maps = new ArcaneCore.Kernel.Diagnostics.LatencyHistogram();
+        var commands = new ArcaneCore.Kernel.Diagnostics.LatencyHistogram();
+        for (int i = 0; i < 50; i++)
+        {
+            body.Record(12_000);
+            maps.Record(8_000);
+        }
+
+        var frame = new ArcaneCore.Kernel.Diagnostics.LatencyHistogram();
+        for (int i = 0; i < 50; i++)
+        {
+            frame.Record(20_000);
+        }
+
+        monitor.AttachLatency(frame, body, [new("commands", commands), new("maps", maps)]);
+        monitor.Check(_clock.NowMicros);
+        Tick(monitor, 100, 50);
+        _clock.AdvanceMs(10);
+        monitor.Check(_clock.NowMicros);
+
+        string message = Assert.Single(_log.Of(WatchdogEvents.TickSummary)).Message;
+        // The attached histogram is the single source of the frame interval: the monitor did not record its own frames next to it.
+        Assert.Same(frame, monitor.FrameLatency);
+        Assert.Equal(50, frame.Count);
+        Assert.Contains("frame latency last 1 min: p50 20.0 ms", message, StringComparison.Ordinal);
+        Assert.Contains("; tick body last 1 min: p50 12.0 ms", message, StringComparison.Ordinal);
+        Assert.Contains("; tick phases p50/p99 ms last 1 min: maps 8.0/8.0", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("commands ", message[message.IndexOf("tick phases", StringComparison.Ordinal)..], StringComparison.Ordinal); // a phase with no samples is not listed
+        Assert.Equal(12_000, _counters.Find("watchdog.tick.body_p99_us")!.Value);
+        Assert.Equal(12_000, _counters.Find("watchdog.tick.body_max_us")!.Value);
+        Assert.Equal(8_000, _counters.Find("watchdog.tick.phase_maps_p99_us")!.Value);
+        Assert.Equal(0, _counters.Find("watchdog.tick.phase_commands_p99_us")!.Value);
+    }
+
+    [Fact]
     public void HangInProgress_IsCriticalOnce_WithholdsLiveness_AndClearsWhenTheNextTickStarts()
     {
         TickMonitor monitor = Create(o => o.HangMs = 2000);
@@ -257,7 +338,7 @@ public sealed class TickMonitorTests
         Assert.EndsWith("since start; slowest tick body 9000 ms: maps 3 ms", done.Message);
         // The completed hang also counts as an overrun, so the same Check logs the overrun warning, which asks after the fact too.
         LogLine overrun = Assert.Single(_log.Of(WatchdogEvents.TickOverrun));
-        Assert.EndsWith("; slowest tick body 9000 ms: maps 3 ms", overrun.Message);
+        Assert.Contains("; slowest tick body 9000 ms: maps 3 ms; frame latency last 1 min: ", overrun.Message);
         Assert.Equal([true, false, false], asked);
     }
 
@@ -312,7 +393,7 @@ public sealed class TickMonitorTests
         Tick(monitor, 1, 50);
         monitor.Check(_clock.NowMicros);
         LogLine warning = Assert.Single(_log.Of(WatchdogEvents.TickOverrun));
-        Assert.EndsWith("; slowest tick body 130 ms: commands 0 ms (0 run), maps 2 ms", warning.Message);
+        Assert.Contains("; slowest tick body 130 ms: commands 0 ms (0 run), maps 2 ms; frame latency last 1 min: ", warning.Message);
         Assert.False(askedInProgress); // an overrun is after the fact
     }
 
@@ -415,14 +496,9 @@ public sealed class TickMonitorTests
     {
         TickMonitor monitor = Create(o => o.SummaryIntervalSeconds = 0);
         Tick(monitor, 10, 50);
-        monitor.Check(_clock.NowMicros);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
-        {
-            monitor.Check(_clock.NowMicros);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        // AllocatedBy warms up, then takes the least of three runs: a one-off runtime allocation on this thread (tiered JIT / OSR
+        // type loading, a few KB once) lands in one run only, a per-call allocation in Check shows in every run.
+        Assert.Equal(0, WatchdogTestSupport.AllocatedBy(() => monitor.Check(_clock.NowMicros), 1000));
     }
 
     private sealed class FakeTickHangActuator : ITickHangActuator

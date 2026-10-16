@@ -191,12 +191,14 @@ public sealed partial class ManagedPlayerbotFeature
         ArgumentNullException.ThrowIfNull(promise);
         ArgumentNullException.ThrowIfNull(progress);
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled", "playerbots are off or stopping");
+        if (_splitBrain) return new(false, "playerbot-split-brain", "another world process is writing the playerbot rows; this world writes none until .playerbot splitbrain clear");
         if (Interlocked.CompareExchange(ref _resetting, 1, 0) != 0) return new(false, "reset-running", "a fleet reset is already running");
         try
         {
             await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                if (_splitBrain) return new(false, "playerbot-split-brain", "another world process is writing the playerbot rows; this world writes none until .playerbot splitbrain clear");
                 FleetResetCensus census = await TakeFleetCensusAsync(cancellationToken).ConfigureAwait(false);
                 if (census.Refusal is { } refusal)
                 {

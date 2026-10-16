@@ -58,7 +58,7 @@ public sealed class PlayerbotPolicyTelemetryTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    [Fact]
+    [WindowsFileLockFact]
     public void AnOldFileHeldOpen_StopsNewFiles_RatherThanBreakTheBound()
     {
         string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
@@ -119,13 +119,13 @@ public sealed class PlayerbotPolicyTelemetryTests
             JsonElement root = document.RootElement;
             Assert.Equal(["v", "k", "t", "bot", "map", "zone", "f", "open", "ladder", "pick", "src", "x", "arm", "goal", "kind", "w", "o"],
                 root.EnumerateObject().Select(p => p.Name));
-            Assert.Equal(1, root.GetProperty("v").GetInt32());
+            Assert.Equal(2, root.GetProperty("v").GetInt32());
             Assert.Equal("goal", root.GetProperty("k").GetString());
             Assert.Equal(42, root.GetProperty("t").GetInt64());
             Assert.Equal("ABC", root.GetProperty("bot").GetString());
             Assert.Equal(PlayerbotPolicySchema.FeatureCount, root.GetProperty("f").GetArrayLength());
             Assert.Equal(0.25, root.GetProperty("f")[0].GetDouble(), 4);
-            Assert.Equal(0b100_0010, root.GetProperty("open").GetInt32());
+            Assert.Equal(0b1000_0010, root.GetProperty("open").GetInt32());
             Assert.Equal("Town", root.GetProperty("ladder").GetString());
             Assert.Equal("Explore", root.GetProperty("pick").GetString());
             Assert.Equal("explored", root.GetProperty("src").GetString());
@@ -187,6 +187,77 @@ public sealed class PlayerbotPolicyTelemetryTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
+    [Fact]
+    public async Task HealthRecords_AreWrittenAtTheInterval_AndCountTheOverrunsOfTheirWindow()
+    {
+        string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            var time = new ManualTime(new DateTimeOffset(2026, 10, 16, 12, 0, 0, TimeSpan.Zero));
+            long overruns = 5; // already counted before telemetry looked: not this interval's
+            await using (var telemetry = new PlayerbotPolicyTelemetry(new PlayerbotPolicyTelemetryOptions { Enabled = true }, directory, time))
+            {
+                telemetry.TickHealth = () => new PlayerbotTickHealth(overruns, 76_000);
+                telemetry.Sweep(1_000); // the baseline only
+                overruns += 3;
+                time.Advance(TimeSpan.FromSeconds(10));
+                telemetry.Sweep(5_000); // the interval is not over in world time
+                telemetry.Sweep(11_000);
+                time.Advance(TimeSpan.FromSeconds(10));
+                telemetry.Sweep(21_000); // a quiet interval
+                await telemetry.FlushAsync();
+                Assert.Equal(2, telemetry.Counts.Written);
+            }
+
+            JsonElement[] records = [.. Directory.GetFiles(directory).SelectMany(File.ReadAllLines).Select(line => JsonDocument.Parse(line).RootElement)];
+            Assert.Equal(2, records.Length);
+            Assert.Equal(["v", "k", "t", "ms", "over", "budget"], records[0].EnumerateObject().Select(p => p.Name));
+            Assert.Equal("health", records[0].GetProperty("k").GetString());
+            Assert.Equal(2, records[0].GetProperty("v").GetInt32());
+            Assert.Equal(time.GetUtcNow().ToUnixTimeMilliseconds() - 10_000, records[0].GetProperty("t").GetInt64());
+            Assert.Equal(10_000, records[0].GetProperty("ms").GetInt64());
+            Assert.Equal(3, records[0].GetProperty("over").GetInt64());
+            Assert.Equal(76, records[0].GetProperty("budget").GetInt64());
+            Assert.Equal(0, records[1].GetProperty("over").GetInt64());
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public async Task Health_CostsNothing_WithoutATickSource_OrBeforeTheMonitorRuns()
+    {
+        string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            await using (var telemetry = new PlayerbotPolicyTelemetry(new PlayerbotPolicyTelemetryOptions { Enabled = true }, directory))
+            {
+                for (uint now = 0; now < 100_000; now += 1_000) telemetry.Sweep(now);
+                int calls = 0;
+                telemetry.TickHealth = () => { calls++; return null; }; // the monitor is not running yet
+                for (uint now = 100_000; now < 200_000; now += 1_000) telemetry.Sweep(now);
+                await telemetry.FlushAsync();
+                Assert.Equal(0, telemetry.Counts.Queued);
+                Assert.InRange(calls, 1, 10); // asked once per interval, never per tick
+            }
+            Assert.Empty(Directory.GetFiles(directory).SelectMany(File.ReadAllLines));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public void WithTelemetryOff_TheEngineHasNoTelemetry_SoNoHealthIsSampled()
+    {
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true });
+        Assert.Null(engine.Telemetry);
+    }
+
+    private sealed class ManualTime(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
     private static PlayerbotPolicyRecord Record(long unixMs)
     {
         float[] features = new float[PlayerbotPolicySchema.FeatureCount];
@@ -195,5 +266,20 @@ public sealed class PlayerbotPolicyTelemetryTests
         return new PlayerbotPolicyRecord(unixMs, 0xABC, 0, 12, features, open, PlayerbotPolicyGoal.Town, PlayerbotPolicyGoal.Explore,
             PlayerbotPolicySource.Explored, Explored: true, PlayerbotPolicyGoal.Explore, PlayerbotGoalKind.Explore, 300_000,
             new PlayerbotPolicyOutcome(0, 0.125, 120, -5, 2, 0, 0, 1, 0));
+    }
+}
+
+/// <summary>
+/// Runs only on Windows: there an open file without delete sharing cannot be deleted, which is the state the test needs. On Linux and
+/// macOS the delete succeeds whatever is held open, so the writer never refuses and the test's premise does not exist.
+/// </summary>
+internal sealed class WindowsFileLockFactAttribute : FactAttribute
+{
+    public WindowsFileLockFactAttribute()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Skip = "needs Windows file locking: elsewhere an open file can still be deleted";
+        }
     }
 }
