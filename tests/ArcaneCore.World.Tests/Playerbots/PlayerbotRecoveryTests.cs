@@ -298,6 +298,142 @@ public sealed class PlayerbotRecoveryTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// Live 2026-10-16 08:24-08:26 (Stiorou, Laeshei, Warsong Gulch map 489): the released ghost stood 0.1 yd from graveyard 769 beside the
+    /// Alliance Spirit Guide, which the recovery did not count as a healer (its flag is SpiritGuide, not SpiritHealer). The "walk" to the
+    /// graveyard it already stood on stalled, the ghost went back toward its body 280 yd away, stalled there too and threw
+    /// <see cref="PlayerbotRecovery.SpiritHealerFailed"/> from PlayerbotBattlegroundAI.Play. A battleground ghost waits within the guide's
+    /// 20-yard wave instead (cmangos battlegrounds.cpp npc_spirit_guideAI), queued for it (CMSG_AREA_SPIRIT_HEALER_QUEUE), for good.
+    /// </summary>
+    [Fact]
+    public async Task BattlegroundGhost_WaitsAtSpiritGuideForTheWave_NeitherRunsToBodyNorFaults()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(
+            configureServices: services => services.AddSingleton<IWorldFeature, ManualClockFeature>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Player player = session.Player!;
+            Creature? guide = null;
+            PlayerbotRecovery? recovery = null;
+            int queued = 0;
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor());
+                player.Health = 0;
+                player.Map!.Combat.KillPlayer(player);
+                Assert.True(player.Map!.Combat.RepopPlayer(player));
+                player.Combat.Corpse!.SetPosition(player.X + 280f, player.Y + 16f, player.Z, 0);
+                var graveyard = new WorldSafeLoc(769, player.MapId, player.X, player.Y, player.Z, 0f, "WSG Alliance graveyard");
+                guide = Dungeon.DungeonBotHost.AddCreature(player.Map!, 13116u, player.X - 8f, player.Y, player.Z,
+                    (uint)NpcFlags.SpiritGuide, host.World.NowMs, faction: 1);
+                player.VisibleObjects.Add(guide.Guid);
+                recovery = new PlayerbotRecovery(session, new PlayerbotOptions { Enabled = true, MaxRouteYards = 400, AllowedMaps = [0, 1] })
+                {
+                    GraveyardLookup = (_, _) => graveyard,
+                    AreaSpiritGuides = _ => true,
+                };
+                session.ManagedDispatchObserver = op => queued += op == WorldOpcode.CmsgAreaSpiritHealerQueue ? 1 : 0;
+                return true;
+            });
+
+            float farthestFromGuide = 0f;
+            Exception? fault = null;
+            for (int think = 0; think < 80 && fault is null; think++)
+            {
+                fault = await host.OnWorldAsync(() =>
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    try
+                    {
+                        recovery!.Update(player, 500);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        return ex;
+                    }
+
+                    PlayerbotMotion.ElapseForTests(player, 500);
+                    farthestFromGuide = MathF.Max(farthestFromGuide,
+                        Vector3.Distance(new(player.X, player.Y, player.Z), new(guide!.X, guide.Y, guide.Z)));
+                    return (Exception?)null;
+                });
+                await host.World.AdvanceClockAsync(2_500);
+            }
+
+            Assert.Null(fault);
+            await host.OnWorldAsync(() =>
+            {
+                Assert.True(player.Flags.HasFlag(PlayerFlags.Ghost));
+                Assert.True(farthestFromGuide <= 20f, $"the ghost left the spirit guide's wave: {farthestFromGuide:F1} yd away at most");
+                Assert.Equal(PlayerbotSpiritHealerStep.AwaitAreaResurrection, recovery!.LastSpiritHealerStep);
+                Assert.True(queued >= 1, "the ghost never queued with the spirit guide (CMSG_AREA_SPIRIT_HEALER_QUEUE)");
+                Assert.Equal(queued, recovery.AreaQueueRequests);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// A battleground ghost with no spirit guide in sight whose every walk stalls (graveyard, body) is reported once and waits for the
+    /// match; it never throws <see cref="PlayerbotRecovery.SpiritHealerFailed"/> (the world's fallback still does, see
+    /// <see cref="TrappedGhost_RelocatesToGraveyardAndSpiritHealer_BeforeFaulting"/>).
+    /// </summary>
+    [Fact]
+    public async Task BattlegroundGhost_WithNoGuideAndEveryWalkStalled_WaitsInsteadOfFaulting()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(
+            configureServices: services => services.AddSingleton<IWorldFeature, ManualClockFeature>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Player player = session.Player!;
+            PlayerbotRecovery? recovery = null;
+            await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new BlockedPathfinder());
+                player.Health = 0;
+                player.Map!.Combat.KillPlayer(player);
+                Assert.True(player.Map!.Combat.RepopPlayer(player));
+                player.Combat.Corpse!.SetPosition(player.X + 280f, player.Y + 16f, player.Z, 0);
+                var graveyard = new WorldSafeLoc(769, player.MapId, player.X + 0.1f, player.Y, player.Z, 0f, "WSG Alliance graveyard");
+                recovery = new PlayerbotRecovery(session, new PlayerbotOptions { Enabled = true, MaxRouteYards = 400, AllowedMaps = [0, 1] })
+                {
+                    GraveyardLookup = (_, _) => graveyard,
+                    AreaSpiritGuides = _ => true,
+                };
+                return true;
+            });
+
+            Exception? fault = null;
+            bool reachedFault = false;
+            for (int think = 0; think < 150 && fault is null; think++)
+            {
+                await host.World.AdvanceClockAsync(2_500);
+                fault = await host.OnWorldAsync(() =>
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    try
+                    {
+                        recovery!.Update(player, 500);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        return ex;
+                    }
+
+                    reachedFault |= recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.Fault;
+                    return (Exception?)null;
+                });
+            }
+
+            Assert.Null(fault);
+            Assert.True(reachedFault, "the stalled battleground ghost never reached the fallback's end, so the test proved nothing");
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     [Fact]
     public async Task SubmergedCorpseNearDryShoreline_ReclaimsOnDryShoreWithoutSpiritHealer()
     {

@@ -30,8 +30,18 @@ public sealed class CreatureSmartAI : AggressorAI
         if (Victim is { } current) System?.SetMelee(Me, current, enabled);
     }
 
-    /// <summary>AzerothCore SmartAI::JustRespawned: OnReset.</summary>
-    public override void OnRespawn() => Script.OnReset();
+    /// <summary>
+    /// AzerothCore SmartAI::InitializeAI and SmartAI::JustRespawned (SmartAI.cpp:861-871, 1104-1109): OnReset, then SMART_EVENT_RESPAWN. ArcaneCore
+    /// calls this both on the first spawn and on every respawn.
+    /// </summary>
+    public override void OnRespawn()
+    {
+        Script.OnReset();
+        Script.ProcessEventsFor(SmartEvent.Respawn);
+    }
+
+    /// <summary>SMART_EVENT_FRIENDLY_HEALTH's search (SmartScript::DoSelectLowestHpFriendly): the in-combat friend missing more than <paramref name="minMissing"/>.</summary>
+    internal Creature? LowestHpFriendly(float range, uint minMissing) => SelectLowestHpFriendly(range, minMissing);
 
     /// <summary>AzerothCore SmartAI::JustEngagedWith: SMART_EVENT_AGGRO with the attacker as invoker.</summary>
     public override void OnAggro(Unit target) => Script.ProcessEventsFor(SmartEvent.Aggro, target);

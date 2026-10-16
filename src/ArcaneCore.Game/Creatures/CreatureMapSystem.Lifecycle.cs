@@ -406,7 +406,13 @@ public sealed partial class CreatureMapSystem
 
             case CreatureMovementType.Waypoint:
                 // The spawn's own creature_movement rows, else the entry's creature_movement_template path (a summon has no spawn row and
-                // takes the entry path): mangos-classic WaypointManager::GetDefaultPath.
+                // takes the entry path): mangos-classic WaypointManager::GetDefaultPath. A formation leader (slot 0) walks the formation's
+                // waypoint_path instead (MotionMaster::Initialize, MotionMaster.cpp:83-94); the formation re-initialises it once assembled.
+                if (_content.GetFormationLeaderPath(creature.Spawn?.Guid ?? 0) is { Count: > 0 } formationPath)
+                {
+                    return new WaypointMovementGenerator(formationPath);
+                }
+
                 CreatureWaypointPath path = _content.ResolveWaypointPath(creature.Spawn?.Guid ?? 0, creature.Template.Entry);
                 if (path.Points.Count == 0)
                 {
