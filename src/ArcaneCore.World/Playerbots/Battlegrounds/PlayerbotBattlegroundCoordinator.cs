@@ -667,7 +667,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 if (_bots.TryGetValue(t.BotId, out PlayerbotBattlegroundBot bot) && bot.Session.Player is { } player)
                     members.Add((player.Guid, t.Healer, t));
             Dictionary<ObjectGuid, PlayerbotBattlegroundRole> roles = PlayerbotBattlegroundRoles.Assign(team.Key.Type, members.Select(m => (m.Guid, m.Healer)));
-            foreach ((ObjectGuid guid, bool _, Tracked t) in members) t.Role = roles[guid];
+            foreach ((ObjectGuid guid, bool _, Tracked t) in members)
+            {
+                t.Role = roles[guid];
+                t.AI?.SetTeamRoles(roles);   // the team plan of the match (Arathi Basin) orders exactly these bots
+            }
         }
     }
 

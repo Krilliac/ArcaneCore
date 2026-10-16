@@ -31,10 +31,8 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// its own returned, the enemy's picked up); defenders hold the flag room and fight intruders; hunters chase and kill the enemy carrier of
 /// the own flag; escorts follow the own carrier (vmangos <c>BattleBotAI::SelectFollowTarget</c>, BattleBotAI.cpp:379-421); the rest take the
 /// enemy flag from its stand (waiting there while it respawns) or hold the middle of the field.</item>
-/// <item><b>Arathi Basin</b> (BattleBotWaypoints.cpp:163-215, <c>AtFlag</c>; BattleGroundAB.cpp:337-458): an attacker walks to the nearest
-/// node its team may click (neutral, or held or contested by the enemy: the server's own rule) and casts the banner spell 21651 at the
-/// node's banner (CMSG_CAST_SPELL at the object), standing still for its ten-second cast; a teammate already casting there is left to it.
-/// A defender holds one of its team's nodes and defends it the same way once the enemy assaulted it.</item>
+/// <item><b>Arathi Basin</b>: the team plan of <see cref="PlayerbotArathiBasinTactics"/>, carried out in PlayerbotBattlegroundAI.ArathiBasin.cs
+/// (assault, defend, retreat, buffs).</item>
 /// <item><b>Alterac Valley</b> (<c>PlayerbotBattlegroundAI.AlteracValley.cs</c>, <see cref="PlayerbotAlteracValleyTactics"/>): the push on the
 /// enemy general through the enemy captain, towers and graveyards along the bot's lane, the own assaulted nodes clicked back and a limited
 /// count of guards.</item>
@@ -279,6 +277,14 @@ internal sealed partial class PlayerbotBattlegroundAI
             return;
         }
 
+        if (match is ArathiBasin arathi)
+        {
+            // Arathi Basin plays its own team plan (PlayerbotBattlegroundAI.ArathiBasin.cs): retreat, defend, assault, buffs.
+            PlayArathiBasin(player, arathi, team, role, interval);
+            ObserveMatchOutcome(player, match, interval);
+            return;
+        }
+
         bool carrier = match is WarsongGulch carrying && carrying.FlagPicker(BattlegroundConstants.OtherTeam(team)) == player.Guid;
         Order = match is WarsongGulch ? order : null;
         Unit? enemy = carrier ? FirstAttackerIfStill(player) : OrderedEnemy(player, match, team) ?? SelectEnemy(player, match, team, chaseThief: Order is null);
@@ -312,9 +318,6 @@ internal sealed partial class PlayerbotBattlegroundAI
         {
             case WarsongGulch wsg:
                 PlayWarsong(player, wsg, team, Order, interval);
-                break;
-            case ArathiBasin ab:
-                PlayArathi(player, ab, team, role, interval);
                 break;
             case AlteracValley av:
                 PlayAlteracValley(player, av, team, role, interval);
@@ -496,79 +499,6 @@ internal sealed partial class PlayerbotBattlegroundAI
     {
         uint id = team == Team.Alliance ? WarsongGulch.AreaTriggerAllianceFlagSpawn : WarsongGulch.AreaTriggerHordeFlagSpawn;
         return Game.Maps.Templates.WorldMaps.Of(_session.World).FindAreaTrigger(id) is { } trigger ? new Vector3(trigger.X, trigger.Y, trigger.Z) : null;
-    }
-
-    // --- Arathi Basin ----------------------------------------------------------------------------------------------------
-
-    private void PlayArathi(Player player, ArathiBasin ab, Team team, PlayerbotBattlegroundRole role, uint interval)
-    {
-        int teamIndex = BattlegroundConstants.TeamIndex(team);
-        List<(int Node, GameObject Banner)> banners = Banners(player, ArathiBasin.NodeCount);
-        if (banners.Count == 0)
-        {
-            Activity = "no-banners";
-            Hold(player);
-            return;
-        }
-
-        // vmangos BattleGroundAB::EventPlayerClickedOnFlag (BattleGroundAB.cpp:351-352): a team clicks a neutral node, or one whose status
-        // belongs to the other team (status % 2 is the other team's index: contested or occupied by it). Statuses 1/2 are contested,
-        // 3/4 occupied (BattleGroundAB.h); an own node the enemy contests is clicked back (defended).
-        bool Clickable(int node) => ab.NodeStatus(node) == ArathiBasin.StatusNeutral || ab.NodeStatus(node) % 2 == teamIndex;
-        bool Ours(int node) => ab.NodeStatus(node) != ArathiBasin.StatusNeutral && ab.NodeStatus(node) % 2 != teamIndex;
-        bool EnemyContested(int node) => ab.NodeStatus(node) is ArathiBasin.StatusAllianceContested or ArathiBasin.StatusHordeContested
-            && ab.NodeStatus(node) % 2 == teamIndex;
-
-        (int Node, GameObject Banner)? goal = null;
-        if (role == PlayerbotBattlegroundRole.Defender)
-        {
-            // The node it guards: its team's or one the enemy contests, chosen by the bot's guid so defenders spread; a contested one is
-            // clicked (defended, or taken back).
-            var held = banners.Where(b => Ours(b.Node) || EnemyContested(b.Node)).GroupBy(b => b.Node).Select(g => g.First()).OrderBy(b => b.Node).ToList();
-            if (held.Count > 0)
-            {
-                (int Node, GameObject Banner) guarded = held[(int)(player.Guid.Low % (uint)held.Count)];
-                if (!Clickable(guarded.Node))
-                {
-                    Activity = "defending";
-                    TargetEntry = guarded.Banner.Entry;
-                    Guard(player, new Vector3(guarded.Banner.X, guarded.Banner.Y, guarded.Banner.Z), interval);
-                    return;
-                }
-
-                goal = guarded;
-            }
-        }
-
-        goal ??= banners.Where(b => Clickable(b.Node) && !TeammateCasting(player, b.Banner))
-            .OrderBy(b => Distance(player, b.Banner)).Select(b => ((int, GameObject)?)b).FirstOrDefault();
-        if (goal is not { } target)
-        {
-            // Nothing to take: guard the nearest own node.
-            (int Node, GameObject Banner)? own = banners.Where(b => Ours(b.Node)).OrderBy(b => Distance(player, b.Banner)).Select(b => ((int, GameObject)?)b).FirstOrDefault();
-            Activity = "defending";
-            if (own is { } node) Guard(player, new Vector3(node.Banner.X, node.Banner.Y, node.Banner.Z), interval);
-            else Hold(player);
-            return;
-        }
-
-        Activity = "assaulting";
-        TargetEntry = target.Banner.Entry;
-        if (Distance(player, target.Banner) > InteractYards)
-        {
-            WalkTo(player, new Vector3(target.Banner.X, target.Banner.Y, target.Banner.Z), interval, toward: false);
-            return;
-        }
-
-        if (!PlayerbotMovementControl.Stop(_session, player)) return;
-        _route = null;
-        if (_session.Services.GetService<SpellFeature>() is not { } feature || feature.System.Store.Get(BannerSpell) is not { } spell)
-        {
-            Activity = "no-banner-spell";
-            return;
-        }
-
-        if (_spells.CastAtObject(player, spell, target.Banner)) BannerCasts++;
     }
 
     /// <summary>

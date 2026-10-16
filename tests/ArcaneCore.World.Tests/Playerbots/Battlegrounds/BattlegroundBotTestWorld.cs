@@ -104,8 +104,8 @@ internal static class BattlegroundBotTestContent
     public const uint AbNeutralBanner = 993301;
     public const uint AbAllianceContestedBanner = 993302;
     public const uint AbAllianceBanner = 993303;
-    public const uint WsgRestorationBuffSpawn = 993401;
-    public const uint WsgBerserkBuffSpawn = 993402;
+    public const uint WsgRestorationBuffSpawn = 993601;
+    public const uint WsgBerserkBuffSpawn = 993602;
 
     /// <summary>Spells of the buff objects (classic-db gameobject_template data3): 179871 Speed, 179904 Restoration, 179905 Berserking.</summary>
     public const uint SpeedBuffSpell = 23451;
@@ -130,6 +130,17 @@ internal static class BattlegroundBotTestContent
         data[5] = BattlegroundConstants.BattlegroundTrapCooldownSeconds;
         return new GameObjectTemplate { Entry = entry, Type = (uint)GameObjectType.Trap, DisplayId = displayId, Name = name, Data = data };
     }
+
+    public const uint AbHordeContestedBanner = 993304;
+    public const uint AbHordeBanner = 993305;
+
+    /// <summary>The trap spell of a buff object entry (<see cref="BattlegroundConstants.BuffEntries"/>).</summary>
+    public static uint BuffSpellOf(uint entry) => entry switch
+    {
+        BattlegroundConstants.SpeedBuffEntry => SpeedBuffSpell,
+        BattlegroundConstants.RegenBuffEntry => RestorationBuffSpell,
+        _ => BerserkBuffSpell,
+    };
 
     /// <summary>Lock.dbc 5875 row 1479 (read 2026-10-10): case 1 is LOCK_KEY_SKILL (2) of lock type 17 (LOCKTYPE_SLOW_OPEN), no skill needed.</summary>
     public static readonly LockEntry BannerLock = new(1479, [0, 2, 0, 0, 0, 0, 0, 0], [0, 17, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]);
@@ -290,6 +301,8 @@ internal static class BattlegroundBotTestContent
                 new BattlegroundEventIndex(AbAllianceBanner, ArathiBasin.NodeStables, ArathiBasin.StatusAllianceOccupied),
                 new BattlegroundEventIndex(AvIcebloodHordeBanner, AlteracValley.NodeIcebloodGrave, 3),
                 new BattlegroundEventIndex(AvIcebloodAssaultedBanner, AlteracValley.NodeIcebloodGrave, 0),
+                new BattlegroundEventIndex(AbHordeContestedBanner, ArathiBasin.NodeStables, ArathiBasin.StatusHordeContested),
+                new BattlegroundEventIndex(AbHordeBanner, ArathiBasin.NodeStables, ArathiBasin.StatusHordeOccupied),
             ],
             [
                 new BattlemasterRecord(AllianceAvMaster, 1), new BattlemasterRecord(HordeAvMaster, 1),
@@ -346,6 +359,7 @@ internal static class BattlegroundBotTestContent
                 BuffTrap(BattlegroundConstants.RegenBuffEntry, RestorationBuffSpell, 5991, "Food Buff"),
                 BuffTrap(BattlegroundConstants.BerserkBuffEntry, BerserkBuffSpell, 5995, "Berserk Buff"),
                 Banner(178364, "Horde Banner"), Banner(179286, "Contested Banner"),
+                Banner(180061, "Contested Banner"), Banner(180060, "Horde Banner"),
             ],
             [
                 .. wsgBuffs
@@ -356,6 +370,7 @@ internal static class BattlegroundBotTestContent
                 BannerSpawn(AbNeutralBanner, 180087), BannerSpawn(AbAllianceContestedBanner, 180085), BannerSpawn(AbAllianceBanner, 180058),
                 new GameObjectSpawn { Guid = AvIcebloodHordeBanner, Entry = 178364, MapId = 30, X = AvIceblood.X, Y = AvIceblood.Y, Z = AvIceblood.Z },
                 new GameObjectSpawn { Guid = AvIcebloodAssaultedBanner, Entry = 179286, MapId = 30, X = AvIceblood.X, Y = AvIceblood.Y, Z = AvIceblood.Z },
+                BannerSpawn(AbHordeContestedBanner, 180061), BannerSpawn(AbHordeBanner, 180060),
             ],
             [BannerLock], [], []));
 
