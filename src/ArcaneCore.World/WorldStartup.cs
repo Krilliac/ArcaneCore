@@ -3,6 +3,7 @@ using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World;
 
@@ -31,16 +32,46 @@ internal static class WorldStartup
     }
 
     /// <summary>
-    /// Program's body after the host is built: the databases, then <see cref="HostingAbstractionsHostExtensions.RunAsync(IHost, CancellationToken)"/>, then the exit code.
-    /// <c>RunAsync</c> disposes the container after the hosted services stop, which releases the <see cref="WorldWriterGuard"/> last; nothing here touches the provider afterwards,
-    /// so a failure of <c>RunAsync</c> surfaces unchanged and the exit code of a clean stop (2 for a restart) is read from <paramref name="exitCode"/>.
+    /// Program's body after the host is built: the databases, then what <see cref="HostingAbstractionsHostExtensions.RunAsync(IHost, CancellationToken)"/> does (start,
+    /// wait for shutdown, dispose), then the exit code. The container is disposed after the hosted services stop, which releases the <see cref="WorldWriterGuard"/> last;
+    /// nothing here touches the provider afterwards, and the exit code of a clean stop (2 for a restart) is read from <paramref name="exitCode"/>.
+    /// <para>
+    /// A stop requested while the host is still starting (Ctrl-C or <see cref="IHostApplicationLifetime.StopApplication"/> during the bot restore) cancels the start: the host
+    /// rethrows that cancellation from <c>StartAsync</c> and, inside <c>RunAsync</c>, would dispose the container without stopping a single hosted service. Out of an async
+    /// <c>Main</c> it is then an unhandled exception, which the crash handler turns into a fail-fast (2026-10-16). Here it is the shutdown it is: every hosted service is
+    /// stopped in order (the world saved, the WAL checkpointed), then the container is disposed and the clean exit code returned. Any other start failure, and a
+    /// cancellation without a stop request (a start timeout), surfaces unchanged.
+    /// </para>
     /// </summary>
     public static async Task<int> RunAsync(IHost host, Func<Task> initialize, TextWriter error, Func<int> exitCode)
     {
         int startup = await PrepareDatabasesAsync(host.Services, initialize, error).ConfigureAwait(false);
         if (startup != 0) return startup;
 
-        await host.RunAsync().ConfigureAwait(false);
+        IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+        try
+        {
+            bool started = false;
+            try
+            {
+                await host.StartAsync().ConfigureAwait(false);
+                started = true;
+            }
+            catch (OperationCanceledException) when (lifetime.ApplicationStopping.IsCancellationRequested)
+            {
+                host.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(WorldStartup).FullName!)
+                    .LogWarning("Shutdown was requested while the world was starting; stopping in order");
+            }
+
+            if (started) await host.WaitForShutdownAsync().ConfigureAwait(false);
+            else await host.StopAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            if (host is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            else host.Dispose();
+        }
+
         return exitCode();
     }
 }

@@ -23,7 +23,7 @@ namespace ArcaneCore.World.Persistence;
 /// snapshot, so the priority lane cannot starve them. Ordering is per character only, as before.
 /// Thread-safe; all state is guarded by one lock that is never held across an await or a store call.
 /// </summary>
-public sealed class CharacterSaveQueue : ICharacterSaveQueue
+public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
 {
     private const int MaxAttempts = 3;
 
@@ -61,6 +61,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
     private int _pending;
     private int _priorityRun;
     private bool _stopped;
+    private bool _disposed; // under _gate: Dispose reported (or had nothing to report) once
     private long _busyUntil; // Stopwatch ticks before which the consumer starts no write (a lock holder was just seen); 0 = none
     private int _busyStreak; // consecutive "database is locked" failures since the last successful write
     private int _sinceRetained; // picks since a retained busy failure was last retried
@@ -336,6 +337,41 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue
 
         _signal.Release();
         await consumer.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The container disposes the queue (a singleton) after the hosted services stop, and <see cref="StopAsync"/> must have written every snapshot by then: one
+    /// still waiting, in flight or retained here can no longer be written (its store would come from the container being disposed), so it is reported as an
+    /// error instead of being lost silently (2026-10-16: a stop during start disposed the provider under a running queue). A queue that was stopped has
+    /// reported what it could not drain already (<c>undrained-on-stop</c>). Reports once (the container disposes the instance once per registration
+    /// that resolved it); never waits, writes or throws.
+    /// </summary>
+    public void Dispose()
+    {
+        int pending;
+        int[] retained;
+        lock (_gate)
+        {
+            bool report = !_disposed && !_stopped;
+            _disposed = true;
+            if (!report)
+            {
+                return;
+            }
+
+            pending = _pending;
+            retained = [.. _failed.Keys.Order()];
+        }
+
+        if (pending == 0 && retained.Length == 0)
+        {
+            return;
+        }
+
+        string characters = retained.Length > 0 ? string.Join(", ", retained) : "none";
+        AnomalyLedger.Shared.Report("persist", "write-dropped-on-shutdown", "queue CharacterSaveQueue",
+            $"queue=CharacterSaveQueue reason=disposed-before-drain pending={pending} retained={characters}", AnomalySeverity.Error);
+        _logger.LogCritical("Character save queue disposed with {Pending} snapshot(s) not written (retained: {Retained}); that character progress is lost", pending, characters);
     }
 
     private async Task ConsumeAsync()
