@@ -61,6 +61,8 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
             "Navigation mesh tiles installed on the thread that needed them (on-demand path-query reads and grid tile loads; the world thread makes nearly all).");
         _meter.CreateObservableCounter("arcanecore.nav.tile_install_time", () => SafeObserve(() => PathSearchCounters.ProcessTileReads.Ticks * 1000.0 / Stopwatch.Frequency, 0d), "ms",
             "Time those installations took.");
+        _meter.CreateObservableCounter("arcanecore.nav.bv_trees_rejected", () => SafeObserve(() => PathSearchCounters.BvTreesRejected, 0L), "{tile}",
+            "Navigation tiles read without a usable BV tree (nearest-polygon lookups on them scan every polygon).");
         _meter.CreateObservableCounter("arcanecore.creature.path.straight_fallbacks", () => SafeObserve(() => CreaturePathStats.DirectFallbacks, 0L), "{path}",
             "Authored creature routes (waypoint, point, formation, scripted move) walked along a straight line because the navmesh had no path.");
         _meter.CreateObservableCounter("arcanecore.creature.path.no_path", () => SafeObserve(() => CreaturePathStats.NoPath, 0L), "{path}",

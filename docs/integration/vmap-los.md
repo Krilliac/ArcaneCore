@@ -118,8 +118,9 @@ models with liquid were rejected) and NUL-terminated doodad names (1298 models n
 * No dynamic (game object) line of sight; static models only. Terrain does not block line of sight
   (only static models are checked).
 * Eye height is a fixed 2 yd above each unit's position (no per-model collision height).
-* Off-mesh connections are skipped; diagonal tile sides are ignored (Recast emits none); the BV
-  tree is not used (linear polygon scan per loaded tile).
+* Off-mesh connections are skipped; diagonal tile sides are ignored (Recast emits none). The BV
+  tree drives the nearest-polygon lookup (verified at load, widened by the measured quantization slack; a tile whose tree fails
+  verification scans linearly and is counted in `PathSearchCounters.BvTreesRejected`). Cross-tile edge portals are computed once per edge and cached.
 * No vmangos `findSmoothPath` stepping: the path is the string-pulled corner list.
 * No terrain-grid A* fallback; without mmaps paths are straight lines.
 
@@ -138,4 +139,4 @@ None.
 
 Creature chase/follow generator using `CreaturePathing` (creature AI area); combat
 `IsWithinLineOfSight` checks for melee/ranged; WMO liquid and `WMOAreaTable` lookups; game-object
-LOS; BV-tree polygon lookup and `findSmoothPath` stepping.
+LOS; `findSmoothPath` stepping.
