@@ -267,15 +267,25 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     [Fact]
     public async Task AFreshDatabaseFile_ConfiguredNormal_ConcurrentOpensRepeatedly_NeverLoseWal()
     {
-        // The race is a few microseconds wide (a loser reads the empty file, the winner then writes page 1, the loser's page_count sees 1 and gives up), so one round
-        // rarely hits it; many rounds make a regression fail reliably instead of once in a full-suite run.
+        // The race: a loser reads the empty file, the winner then writes page 1, the loser's page_count sees 1 and gives up. One round does not always hit it;
+        // many rounds make a regression fail reliably instead of once in a full-suite run.
         for (int round = 0; round < 40; round++)
         {
             await ConcurrentFreshOpens($"fresh-concurrent-{round}.db");
         }
     }
 
-    private async Task ConcurrentFreshOpens(string fileName)
+    [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_ConcurrentSyncOpensRepeatedly_NeverLoseWal()
+    {
+        // Same race through the synchronous open (ConnectionOpened -> WalIfEmpty), which the async rounds above do not exercise.
+        for (int round = 0; round < 40; round++)
+        {
+            await ConcurrentFreshOpens($"fresh-concurrent-sync-{round}.db", useSyncOpen: true);
+        }
+    }
+
+    private async Task ConcurrentFreshOpens(string fileName, bool useSyncOpen = false)
     {
         // Many connections opening a file that does not exist yet at the same moment: each may see the empty rollback-journal file and try the WAL switch,
         // which needs an exclusive lock. busy_timeout is set before the switch, so the losers wait instead of failing: no open throws, every connection ends in
@@ -292,8 +302,16 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         long[] synchronous = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
         {
             await using var db = new DbContext(new DbContextOptionsBuilder<DbContext>().UseSqlite(connection).AddInterceptors(pragma).Options);
-            start.SignalAndWait(TimeSpan.FromSeconds(30));
-            await db.Database.OpenConnectionAsync();
+            Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(30)), "barrier timed out: the opens were not concurrent");
+            if (useSyncOpen)
+            {
+                db.Database.OpenConnection();
+            }
+            else
+            {
+                await db.Database.OpenConnectionAsync();
+            }
+
             Assert.Equal("wal", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
             return (long)(await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"))!;
         })));
