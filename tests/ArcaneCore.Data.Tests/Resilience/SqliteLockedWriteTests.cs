@@ -175,6 +175,7 @@ public sealed class SqliteLockedWriteTests : IDisposable
     public async Task NormalIsRefusedOnADatabaseNotInWalMode_FallsBackToFull_AndLogsAnError()
     {
         // A file left in rollback-journal mode (the WAL switch failed or never ran): NORMAL there can corrupt the database on power loss, so it must not apply.
+        // It holds a table: an EMPTY file is a fresh install, which the interceptor puts into WAL itself (SqliteConnectionPragmaTests.AFreshDatabaseFile_...).
         var logs = new CaptureProvider();
         string path = Path.Combine(_directory, Guid.NewGuid().ToString("N") + ".db");
         string connection = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
@@ -182,6 +183,7 @@ public sealed class SqliteLockedWriteTests : IDisposable
         {
             await raw.OpenAsync();
             Assert.Equal("delete", await ScalarAsync(raw, "PRAGMA journal_mode=DELETE"));
+            await ScalarAsync(raw, "CREATE TABLE populated(id INTEGER)");
         }
 
         await using ServiceProvider provider = Build(logs, ("Database:Provider", "Sqlite"), ("Database:ConnectionString", connection), ("Database:SqliteSynchronous", "NORMAL"));

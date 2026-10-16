@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests.Resilience;
@@ -180,6 +181,50 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
             Assert.Equal(2000L, await BusyTimeoutAsync(provider, DatabaseComponent.Auth));
             Assert.Equal(1L, await SynchronousAsync(provider, DatabaseComponent.Auth));
         }
+    }
+
+    [Fact]
+    public async Task AFreshDatabaseFile_ConfiguredNormal_StartsInWalWithNormalAndNoRefusal()
+    {
+        // A brand-new install: characters.db does not exist yet and Database:SqliteSynchronous=NORMAL. The very first connection
+        // (EF's create) used to find the new file in journal mode 'delete' and log NORMAL as refused at ERROR ("FAIL" on the console).
+        string path = Path.Combine(_directory, "fresh-characters.db");
+        Assert.False(File.Exists(path));
+        string characters = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
+        var errors = new CapturingLoggerProvider();
+        await using ServiceProvider provider = Build(false, [("Database:Provider", "Sqlite"), ("Database:ConnectionString", characters), ("Database:SqliteSynchronous", "Normal")], errors);
+        int exit = await DatabaseStartup.InitializeAsync(() => provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync(), provider, new StringWriter());
+        Assert.Equal(0, exit);
+
+        await using AsyncServiceScope scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        await db.Database.OpenConnectionAsync();
+        Assert.Equal("wal", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
+        Assert.Equal(1L, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
+        SqliteConnectionPragmaInterceptor pragma = Assert.Single(
+            db.GetService<IDbContextOptions>().FindExtension<CoreOptionsExtension>()!.Interceptors!.OfType<SqliteConnectionPragmaInterceptor>());
+        Assert.Equal(SqliteSynchronousMode.Normal, pragma.EffectiveFor(db.Database.GetDbConnection().DataSource));
+        Assert.DoesNotContain(errors.Errors, line => line.Contains("SqliteSynchronous", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnExistingRollbackJournalDatabase_ConfiguredNormal_IsLeftAloneAndStaysOnFull()
+    {
+        // Fail closed is unchanged for a file that already has content: the interceptor never rewrites a populated database's journal mode
+        // (the schema bootstrap does that, only once it has accepted the schema), so a bare open of a 'delete'-mode file stays on FULL.
+        string connection = Connection("rollback.db");
+        await using (var raw = new SqliteConnection(connection))
+        {
+            await raw.OpenAsync();
+            await ScalarAsync(raw, "CREATE TABLE t(id INTEGER)");
+            Assert.Equal("delete", await ScalarAsync(raw, "PRAGMA journal_mode"));
+        }
+
+        var builder = new DbContextOptionsBuilder<DbContext>().UseSqlite(connection).AddInterceptors(SqliteConnectionPragmaInterceptor.For(300, 0, SqliteSynchronousMode.Normal));
+        await using var db = new DbContext(builder.Options);
+        await db.Database.OpenConnectionAsync();
+        Assert.Equal("delete", await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA journal_mode"));
+        Assert.Equal(2L, await ScalarAsync(db.Database.GetDbConnection(), "PRAGMA synchronous"));
     }
 
     [Fact]
@@ -387,11 +432,17 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
 
     private static ServiceProvider Build(params (string Key, string? Value)[] values) => Build(false, values);
 
-    private static ServiceProvider Build(bool withGuard, (string Key, string? Value)[] values)
+    private static ServiceProvider Build(bool withGuard, (string Key, string? Value)[] values, ILoggerProvider? logs = null)
     {
         IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(values.ToDictionary(v => v.Key, v => v.Value)).Build();
         var services = new ServiceCollection();
-        services.AddLogging();
+        services.AddLogging(logging =>
+        {
+            if (logs is not null)
+            {
+                logging.AddProvider(logs);
+            }
+        });
         services.AddAuthDatabase(config);
         services.AddCharacterDatabase(config);
         services.AddWorldDatabase(config);
@@ -401,5 +452,29 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         }
 
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>Collects every Error-or-worse line (the console's "FAIL") from any category.</summary>
+    private sealed class CapturingLoggerProvider : ILoggerProvider, ILogger
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Errors { get; } = new();
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (IsEnabled(logLevel))
+            {
+                Errors.Enqueue(formatter(state, exception));
+            }
+        }
+
+        public void Dispose()
+        {
+        }
     }
 }
