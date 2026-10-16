@@ -39,10 +39,13 @@ public interface IUnderMapClassifier
 /// <summary>How much of the model world is loaded around a point.</summary>
 public enum ModelCoverage
 {
-    /// <summary>The map has no model tree (or model heights are off): terrain is all there is.</summary>
+    /// <summary>The map has no model tree: terrain is all there is.</summary>
     None,
 
-    /// <summary>The map has a tiled model tree but the tile of this point is not loaded: models may exist and be unseen.</summary>
+    /// <summary>Model height queries are switched off while the service is on: models cannot explain a position, so the answer is unknown.</summary>
+    Unavailable,
+
+    /// <summary>The map has a tiled model tree but the tile of this point was never loaded: models may exist and be unseen. A tile with no vmtile file counts as loaded (and empty) once its load was attempted.</summary>
     TileNotLoaded,
 
     /// <summary>Models around this point are loaded (or the tree is not tiled).</summary>
@@ -52,5 +55,6 @@ public enum ModelCoverage
 /// <summary>Optional on an <see cref="ILineOfSight"/>: whether the model tile of a terrain tile is loaded.</summary>
 public interface IModelCoverage
 {
+    /// <summary>May read the map's model tree from disk on first use.</summary>
     ModelCoverage CoverageAt(uint mapId, int tileX, int tileY);
 }

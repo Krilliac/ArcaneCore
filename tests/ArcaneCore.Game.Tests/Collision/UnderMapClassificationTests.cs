@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
@@ -7,6 +8,7 @@ using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Tests.Locomotion;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
 using Xunit.Abstractions;
@@ -119,11 +121,82 @@ public sealed class UnderMapClassificationTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void AModelSurfaceJustAbove_IsOk_SearchedUpwardFiveYards()
+    public void AModelSurfaceAboveAUnitInOpenSpace_DoesNotExcuseIt()
     {
-        var models = new ScriptedModels(ModelCoverage.Loaded) { SurfaceAbove = Ground - 98f };
-        Assert.Equal(UnderMapKind.Ok, Classify(models, Ground - 100f).Kind);
-        Assert.Contains(-MapCollision.UnderMapCeilingSearch, models.SearchDistances);
+        // Triangle hits are double-sided: the underside of a floor the unit fell through must not count as an explanation.
+        var models = new ScriptedModels(ModelCoverage.Loaded) { SurfaceAbove = Ground - 96f };
+        UnderMapVerdict verdict = Classify(models, Ground - 100f);
+
+        Assert.Equal(UnderMapKind.UnderMap, verdict.Kind);
+        Assert.DoesNotContain(models.SearchDistances, d => d < 0f); // no upward search at all
+    }
+
+    [Fact]
+    public void ModelHeightsSwitchedOff_IsUnknown_NotATerrainOnlyConviction()
+    {
+        using var fixture = new VMapFixture();
+        fixture.Place("box", VMapFixture.Box(new Vector3(-5, -5, 0), new Vector3(5, 5, 5)), new Vector3(1000f, 1000f, 50f));
+        fixture.Write(0);
+        var vmaps = new VMapManager(fixture.Directory, enableLineOfSight: true, enableHeight: false);
+
+        Assert.Equal(UnderMapKind.Unknown, Classify(vmaps, Ground - 100f).Kind);
+    }
+
+    [Fact]
+    public void ATileWithNoVmtileFile_IsLoadedAndEmptyOnceAttempted_SoTheTerrainDecides()
+    {
+        // The tree knows a box in another tile; the tile under (X, Y) has no vmtile file (ocean, coast, empty land).
+        using var fixture = new VMapFixture();
+        fixture.Place("box", VMapFixture.Box(new Vector3(-5, -5, 0), new Vector3(5, 5, 5)), new Vector3(1000f, 1000f, 50f));
+        fixture.Write(0);
+        var vmaps = new VMapManager(fixture.Directory);
+        (int tx, int ty) = TerrainTile.TileOf(X, Y)!.Value;
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, VMapFormat.TileFileName(0, tx, ty))));
+
+        using var kit = new HazardKit(liquid: null);
+        WorldCollision.Of(kit.Kit.World).Install(lineOfSight: vmaps);
+        MapCollision collision = kit.Map.Collision;
+
+        Assert.Equal(ModelCoverage.TileNotLoaded, vmaps.CoverageAt(0, tx, ty));
+        Assert.Equal(UnderMapKind.Unknown, collision.ClassifyUnderMap(X, Y, Ground - 100f).Kind); // never attempted
+
+        Assert.False(vmaps.LoadTile(0, tx, ty)); // nothing to read
+        Assert.Equal(ModelCoverage.Loaded, vmaps.CoverageAt(0, tx, ty));
+        UnderMapVerdict verdict = collision.ClassifyUnderMap(X, Y, Ground - 100f);
+        Assert.Equal(UnderMapKind.UnderMap, verdict.Kind);
+        Assert.Equal(100f, verdict.DepthYards, 0.01f);
+    }
+
+    // ---- the creature check with the real classifier (no stub) --------------------------------------------------------------
+
+    private static int CreatureReports(ILineOfSight models, uint entry)
+    {
+        using var kit = new HazardKit(liquid: null);
+        WorldCollision.Of(kit.Kit.World).Install(lineOfSight: models);
+        CreatureContent content = CreatureTestSupport.Content(
+            [CreatureTestSupport.Template(entry)], [CreatureTestSupport.Spawn(1, entry, X, Y, Ground - 30f)]);
+        var system = new CreatureMapSystem(kit.Map, content, random: new Random(1));
+        kit.Map.AddUpdater(system);
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(
+            n => n.Key == "creature/under-map" && n.Subject.StartsWith($"creature entry {entry} ", StringComparison.Ordinal));
+
+        kit.AddPlayer(entry, 20f, out _);
+        for (int i = 0; i < 30; i++)
+        {
+            kit.Tick(100);
+        }
+
+        Assert.Single(system.Creatures);
+        return capture.Notices.Count;
+    }
+
+    [Fact]
+    public void TheCreatureCheck_UsesTheRealClassifier_OverRealTerrainAndScriptedModels()
+    {
+        Assert.Equal(1, CreatureReports(new ScriptedModels(ModelCoverage.Loaded), 949201));                    // 30 yd under the ground, no model
+        Assert.Equal(0, CreatureReports(new ScriptedModels(ModelCoverage.Loaded) { Area = true }, 949202));    // inside a WMO group
+        Assert.Equal(0, CreatureReports(new ScriptedModels(ModelCoverage.Loaded) { FloorBelow = Ground - 40f }, 949203)); // a model floor below
+        Assert.Equal(0, CreatureReports(new ScriptedModels(ModelCoverage.TileNotLoaded), 949204));             // unloaded tile: unknown
     }
 
     [Fact]

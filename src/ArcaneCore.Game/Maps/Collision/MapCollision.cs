@@ -183,23 +183,26 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     /// <summary>How far below the point a model floor still explains a position under the terrain surface.</summary>
     public const float UnderMapFloorSearch = 60.0f;
 
-    /// <summary>How far above the point a model surface (the underside of a floor the point sank a little through) still explains it.</summary>
-    public const float UnderMapCeilingSearch = 5.0f;
-
     /// <summary>
     /// Whether a point is under the map: below the terrain surface by more than <paramref name="minDepthYards"/> with no static model to
-    /// explain it (a cave, a city or a cellar lies under the terrain on purpose). Re-expresses the ideas of vmangos
-    /// <c>HandleMoverRelocation</c> (MovementHandler.cpp:1115-1131, a vmap-aware ground height with a margin) and
-    /// <c>TerrainInfo::GetHeightStatic</c> (GridMap.cpp:815-870, its upward and near-terrain passes).
+    /// explain it (a cave, a city or a cellar lies under the terrain on purpose). Same intent as vmangos <c>HandleMoverRelocation</c>
+    /// (MovementHandler.cpp:1115-1131: a vmap-aware ground height compared with a margin), with these departures: vmangos asks
+    /// <c>TerrainInfo::GetHeightStatic</c> (GridMap.cpp:815-870) for one blended floor, including its upward pass and its near-terrain
+    /// pass; this query implements neither. It asks the three model questions below and compares the raw terrain height itself, and it
+    /// has an Unknown answer that vmangos does not (no data is "no floor" there). There is deliberately no upward probe: model triangles
+    /// are double-sided, so a unit a few yards under a floor it fell through would be excused by the underside of that floor.
     /// <list type="number">
     /// <item>No terrain data at the point: <see cref="UnderMapKind.Unknown"/>.</item>
     /// <item>The terrain is not more than the margin above the point: <see cref="UnderMapKind.Ok"/>.</item>
     /// <item>No usable model data for the map (open line of sight, or no tree): the terrain comparison decides.</item>
-    /// <item>A tiled model tree whose tile here is not loaded: <see cref="UnderMapKind.Unknown"/> (models may exist and be unseen).</item>
-    /// <item>Inside a WMO group, a model floor within <see cref="UnderMapFloorSearch"/> below, or a model surface within
-    /// <see cref="UnderMapCeilingSearch"/> above: <see cref="UnderMapKind.Ok"/>.</item>
+    /// <item>Model heights are off, or a tiled model tree whose tile here was never loaded: <see cref="UnderMapKind.Unknown"/>
+    /// (models may exist and be unseen). A tile whose vmtile file does not exist counts as loaded and empty (vmangos
+    /// <c>StaticMapTree::LoadMapTile</c>), so the terrain decides there.</item>
+    /// <item>Inside a WMO group, or a model floor within <see cref="UnderMapFloorSearch"/> below <c>z + 2</c>:
+    /// <see cref="UnderMapKind.Ok"/>.</item>
     /// <item>Otherwise <see cref="UnderMapKind.UnderMap"/> with depth = terrain height - z.</item>
     /// </list>
+    /// Reading the coverage may read the map's vmtree from disk the first time (<see cref="VMapManager.GetTree"/>).
     /// </summary>
     public UnderMapVerdict ClassifyUnderMap(float x, float y, float z, float minDepthYards = 0f)
     {
@@ -238,14 +241,13 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
             return UnderMapVerdict.Under(depth);
         }
 
-        if (coverage == ModelCoverage.TileNotLoaded)
+        if (coverage is ModelCoverage.TileNotLoaded or ModelCoverage.Unavailable)
         {
             return UnderMapVerdict.Unknown;
         }
 
         if (models.TryGetAreaInfo(Map.MapId, x, y, z, out _)
-            || models.GetModelHeight(Map.MapId, x, y, z + FloorProbeOffset, UnderMapFloorSearch) is not null
-            || models.GetModelHeight(Map.MapId, x, y, z, -UnderMapCeilingSearch) is not null)
+            || models.GetModelHeight(Map.MapId, x, y, z + FloorProbeOffset, UnderMapFloorSearch) is not null)
         {
             return UnderMapVerdict.Ok;
         }

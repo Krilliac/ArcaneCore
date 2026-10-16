@@ -84,6 +84,12 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
             byte[]? bytes = ReadFile(path, missingIsNormal: true);
             if (bytes is null)
             {
+                if (!File.Exists(path))
+                {
+                    // vmangos StaticMapTree::LoadMapTile: a missing tile file is a tile without models, loaded and empty.
+                    tree.AddTile((tileX, tileY), []);
+                }
+
                 return false;
             }
 
@@ -199,9 +205,15 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
         return true;
     }
 
+    /// <summary>Coverage of a terrain tile. Reads the map's vmtree from disk on first use (<see cref="GetTree"/>).</summary>
     public ModelCoverage CoverageAt(uint mapId, int tileX, int tileY)
     {
-        if (!HeightEnabled || GetTree(mapId) is not { } tree)
+        if (!HeightEnabled)
+        {
+            return ModelCoverage.Unavailable;
+        }
+
+        if (GetTree(mapId) is not { } tree)
         {
             return ModelCoverage.None;
         }

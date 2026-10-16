@@ -61,7 +61,7 @@ internal static class PlayerbotMotionAnomalies
     /// <summary>
     /// Terrain surface above a bot that no model explains (<see cref="MapCollision.ClassifyUnderMap"/>) by more than this: under the map.
     /// A stateless margin, not "two samples in a row": the navmesh-versus-terrain drift that made 3 yd fire is a property of the spot, so a
-    /// bot standing there would repeat it on every sample, while 8 yd clears the 3-8 yd drift and a real fall-through still shows.
+    /// bot standing there would repeat it on every sample. 8 yd is a judgement call from the reported 3-10 yd drift range, not a value measured against a drift survey.
     /// </summary>
     internal const float UnderMapYards = 8f;
 
@@ -274,7 +274,7 @@ internal static class PlayerbotMotionAnomalies
         if (!float.IsFinite(z)) return GroundVerdict.Ok;
         if (ValidHeight(floor)) return z - floor > AirwalkYards ? GroundVerdict.Airwalk : GroundVerdict.Ok;
         // No floor under the bot. Only the shared model-aware query convicts (caves, cellars and cities are Ok, unloaded data is Unknown).
-        if (underMap.Kind != UnderMapKind.UnderMap || underMap.DepthYards <= UnderMapYards) return GroundVerdict.Ok;
+        if (underMap.Kind != UnderMapKind.UnderMap) return GroundVerdict.Ok; // the query already applied UnderMapYards as its margin
         return underMap.DepthYards > FarUnderMapYards ? GroundVerdict.FarUnderMap : GroundVerdict.UnderMap;
     }
 

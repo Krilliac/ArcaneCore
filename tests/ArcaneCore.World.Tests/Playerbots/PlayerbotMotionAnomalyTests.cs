@@ -49,8 +49,6 @@ public sealed class PlayerbotMotionAnomalyTests
     [InlineData(95.5f, 90f, UnderMapKind.Unknown, 0f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // a mesh leg floating inside the tolerance
     [InlineData(80f, -200000f, UnderMapKind.UnderMap, 10f, PlayerbotMotionAnomalies.GroundVerdict.UnderMap)] // 10 yd under the terrain, no floor, no model explains it
     [InlineData(40f, -200000f, UnderMapKind.UnderMap, 50f, PlayerbotMotionAnomalies.GroundVerdict.FarUnderMap)] // 50 yd under
-    [InlineData(80f, -200000f, UnderMapKind.UnderMap, 8f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // 8 yd under: the navmesh-versus-terrain drift margin
-    [InlineData(80f, -200000f, UnderMapKind.UnderMap, 5f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // 5 yd under: drift, not a fall
     [InlineData(80f, -200000f, UnderMapKind.Ok, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // under the terrain inside a WMO or just below its floor (a cave, a city)
     [InlineData(80f, -200000f, UnderMapKind.Unknown, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // no data, or the model tile is not loaded
     [InlineData(80f, 79f, UnderMapKind.UnderMap, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // on a floor: the under-map verdict is not consulted
