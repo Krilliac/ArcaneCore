@@ -110,7 +110,7 @@ class FilterTests(unittest.TestCase):
 
     def test_malformed_health_records_are_counted_and_ignored(self):
         h = health_filter.Health()
-        for record in ({"v": 1, "k": "health", "t": "x", "ms": 1, "over": 0}, {"v": 2, "k": "health", "t": 1, "ms": 1, "over": 0},
+        for record in ({"v": 1, "k": "health", "t": "x", "ms": 1, "over": 0}, {"v": 3, "k": "health", "t": 1, "ms": 1, "over": 0},
                        {"v": 1, "k": "health", "t": 1, "ms": 1, "over": -1}):
             h.add_record(record, "f")
         self.assertEqual(3, h.bad)

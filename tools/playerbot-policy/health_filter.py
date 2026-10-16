@@ -36,6 +36,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 HEALTH_VERSION = 1
+# The server's record version covers every record kind; version 2 (the Opportunity goal changed the `open` bits) left the health record's
+# keys as they were.
+HEALTH_VERSIONS = (1, 2)
 # Health intervals are contiguous by construction; a few ms of rounding must not read as a gap.
 GAP_SLACK_MS = 1000
 DEFAULT_LOG_WINDOW_S = 30
@@ -98,7 +101,7 @@ class Health:
     def add_record(self, record: dict, path: str) -> None:
         """A "k":"health" record; counts it as unusable when malformed."""
         t, ms, over = record.get("t"), record.get("ms"), record.get("over")
-        if record.get("v") != HEALTH_VERSION or not all(isinstance(v, int) and not isinstance(v, bool) for v in (t, ms, over)) or ms < 0 or over < 0:
+        if record.get("v") not in HEALTH_VERSIONS or not all(isinstance(v, int) and not isinstance(v, bool) for v in (t, ms, over)) or ms < 0 or over < 0:
             self.bad += 1
             return
         self.files_with_health.add(path)

@@ -55,8 +55,34 @@ VERSION = 1
 # The server's vocabulary (PlayerbotPolicySchema); the server refuses a file whose names differ.
 FEATURES = ["level", "money", "free_bag_slots", "quest_log", "quests_complete", "set_asides", "stalls",
             "zone", "map", "nearby_targets", "health", "in_home"]
-GOALS = ["Quest", "Town", "Train", "Mount", "QuestTravel", "Grind", "Explore"]
-RECORD_VERSION = 1
+GOALS = ["Quest", "Town", "Opportunity", "Train", "Mount", "QuestTravel", "Grind", "Explore"]
+# Record version 2 added the Opportunity goal: the `open` bitmask is `1 << goal` in GOALS order, so every bit from Train up moved one
+# place. Version 1 records (written by a server without the goal) are read by remapping their bits through the old 7-goal order.
+RECORD_VERSION = 2
+GOALS_V1 = ["Quest", "Town", "Train", "Mount", "QuestTravel", "Grind", "Explore"]
+
+
+def remap_open_v1(bits: int) -> int:
+    """A version 1 `open` bitmask in the version 2 layout (each old goal's bit moved to its place in GOALS)."""
+    out = 0
+    for old, name in enumerate(GOALS_V1):
+        if bits & (1 << old):
+            out |= 1 << GOALS.index(name)
+    return out
+
+
+def upgrade_record(record: dict) -> dict | None:
+    """The record in the current layout, or None for a version this trainer does not read. Version 1 keeps its data."""
+    version = record.get("v")
+    if version == RECORD_VERSION:
+        return record
+    if version == 1:
+        upgraded = dict(record)
+        upgraded["v"] = RECORD_VERSION
+        if isinstance(record.get("open"), int) and not isinstance(record.get("open"), bool):
+            upgraded["open"] = remap_open_v1(record["open"])
+        return upgraded
+    return None
 
 
 def load(directory: str):
@@ -85,7 +111,8 @@ def load(directory: str):
                 if record.get("k", "goal") != "goal":
                     other += 1  # a combat record (fight, skip): another decision's data
                     continue
-                if record.get("v") != RECORD_VERSION or len(record.get("f", [])) != len(FEATURES):
+                record = upgrade_record(record)
+                if record is None or len(record.get("f", [])) != len(FEATURES):
                     bad += 1
                     continue
                 rows.append(record)
