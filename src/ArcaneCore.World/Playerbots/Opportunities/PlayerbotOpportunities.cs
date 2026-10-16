@@ -172,12 +172,40 @@ internal sealed class PlayerbotOpportunities
     }
 
     /// <summary>
-    /// Keeps the claim on the find alive while the brain is in a fight and does not ask for a think (a claim lapses
-    /// <see cref="PlayerbotClaims.ClaimLifeMs"/> after its last refresh, and a fight with the guards outlasts that).
+    /// Called by the brain at every think. Keeps the claim on the find alive only while the bot is in combat with a guard of the episode
+    /// (the brain's combat path does not ask for a think, and a fight outlasts <see cref="PlayerbotClaims.ClaimLifeMs"/>), and only
+    /// within <see cref="EpisodeMaxMs"/>: past that the episode ends as a timeout, with the backoff. An episode the goal has not
+    /// stepped for <see cref="PlayerbotClaims.ClaimLifeMs"/> outside such a fight (a higher goal holds the think) is ended and its claim
+    /// left to lapse, so other bots are not kept off the find. Returns the guard the brain was handed and must now let go of, or null.
     /// </summary>
-    internal void KeepClaim()
+    internal Creature? KeepClaim(Player player)
     {
-        if (_episode is { } episode) _claims.Refresh(episode.Key, episode.ClaimEpoch, Now);
+        if (_episode is not { } episode) return null;
+        uint now = Now;
+        if (unchecked(now - episode.StartedMs) > EpisodeMaxMs)
+        {
+            _ledger.Defer(episode.Key, now);
+            LastVerdict = new OpportunityVerdict(OpportunityDecision.Refuse, "timeout", 0f, 0f, 0f);
+            return Release();
+        }
+
+        bool fighting = episode.Pull is { IsAlive: true } guard
+            && (player.Combat.ThreatenedBy.Contains(guard) || ReferenceEquals(guard.Combat.Victim, player));
+        if (fighting)
+        {
+            _claims.Refresh(episode.Key, episode.ClaimEpoch, now);
+            return null;
+        }
+
+        return unchecked(now - episode.LastStepMs) > PlayerbotClaims.ClaimLifeMs ? Release() : null;
+    }
+
+    private Creature? Release()
+    {
+        EndEpisode();
+        Creature? released = _released;
+        _released = null;
+        return released;
     }
 
     /// <summary>The bot died: the find it was on is set aside with the failure backoff (the fight went as badly as it can).</summary>
@@ -187,6 +215,7 @@ internal sealed class PlayerbotOpportunities
         _ledger.Defer(episode.Key, Now);
         LastVerdict = new OpportunityVerdict(OpportunityDecision.Refuse, "died", 0f, 0f, 0f);
         EndEpisode();
+        _released = null; // a dead bot has no target to take back
     }
 
     private OpportunityStep Think(Player player, uint elapsedMs, bool interrupting)
@@ -260,7 +289,7 @@ internal sealed class PlayerbotOpportunities
         }
 
         LastVerdict = bestVerdict;
-        _episode = new Episode { Origin = chosen, StartedMs = now, MemoryMark = _risk().Memory.Count, ClaimEpoch = epoch };
+        _episode = new Episode { Origin = chosen, StartedMs = now, MemoryMark = _risk().Memory.Count, ClaimEpoch = epoch, LastStepMs = now };
     }
 
     private void CollectFinds(Player player, Map map, uint now, PlayerbotOpportunityOptions options, List<Find> finds)
@@ -535,6 +564,7 @@ internal sealed class PlayerbotOpportunities
         public SpellInfo? PickLock => Origin.PickLock;
         public uint RespawnMs => Origin.RespawnMs;
         public uint StartedMs;
+        public uint LastStepMs;
         public int MemoryMark;
         public uint ClaimEpoch;
         public EpisodePhase Phase;
@@ -549,6 +579,7 @@ internal sealed class PlayerbotOpportunities
     private OpportunityStep Step(Player player, Map map, uint elapsedMs, uint now)
     {
         Episode episode = _episode!;
+        episode.LastStepMs = now;
         ulong self = player.Guid.Value;
         PlayerbotRisk risk = _risk();
 

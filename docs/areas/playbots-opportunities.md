@@ -101,12 +101,13 @@ at most three minutes:
 | Someone else opened it, or it is gone | Dropped at once, nothing recorded (if it respawns the scan finds it again). |
 | Another bot holds the claim, or a real player stands within 12 yards of the chest | Left alone for 30 seconds, no strike. |
 | A retreat or death during the episode (danger memory grew; a death also at once, `BotDied`), the verdict turns to refuse, no route to the chest, no loot window, the walk stops, timeout, or the next guard to pull is one the brain would not take as a target (unreachable, set aside as someone else's, outside the home area: the brain's `IsUntakeable`, anomaly `unreachable`) | Set aside, keyed by guid, for 60 s, doubling to 120 s, 240 s and at most 300 s (`PlayerbotOpportunityLedger.Defer`). |
+| At the scan, the first guard to pull is one the brain would not take as a target (unreachable, set aside, someone else's, outside the home area) | The find is not started: set aside for 20 s, no strike, no anomaly. |
 | The find was taken | Not looked at again until it respawns, and never sooner than 60 s. |
 | The bot is recovering | The goal becomes `Rest` (the health wait), no strike. |
 
 A find set aside is not even weighed until its time is up, so a stuck chest never costs a scan. A find that is weighed and refused is set aside for 20 seconds (no strike), so the scan does not weigh it again every 2 seconds; a wait is looked at again at once.
 
-A guard the controller handed to the brain as its target is taken back when the episode ends without a fight (refused, a player at the chest, no way to the guard): the brain drops it unless the bot is already in combat with it. While the bot fights the guards the brain keeps the claim on the find alive (`KeepClaim`).
+A guard the controller handed to the brain as its target is taken back when the episode ends without a fight (refused, a player at the chest, no way to the guard): the brain drops it unless the bot is already in combat with it. The brain calls `KeepClaim` at every think: it renews the claim on the find only while the bot is in combat with a guard of the episode (the guard is on its threat list, or is fighting the bot), and only within the three-minute limit (past it the episode is a timeout, with the backoff). An episode the goal has not stepped for a claim's life (8 seconds) while the bot is not in such a fight, because a higher goal holds the think (rest, town, quests, home, crafting), is ended and its claim left to lapse, so other bots are not kept off the find.
 
 ## Anomalies
 

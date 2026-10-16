@@ -855,19 +855,97 @@ public sealed class PlayerbotOpportunityTests
         Assert.InRange(rig.Bot.Controller.Ledger.DeferredUntil(KeyOf(Free), rig.Clock) - rig.Clock, 59_000u, 60_000u);
     }
 
+    private static Task FightAsync(Rig rig, Creature guard) => rig.World(() =>
+    {
+        rig.Player.Map!.Combat.DealDamage(rig.Player, guard, 1);
+        Assert.True(rig.Player.Combat.ThreatenedBy.Contains(guard) || ReferenceEquals(guard.Combat.Victim, rig.Player), "the bot is not in combat with the guard");
+        return true;
+    });
+
     [Fact]
-    public async Task TheClaimOnAFind_IsKeptAlive_ThroughAFightTheGoalIsNotAskedToThinkDuring()
+    public async Task TheClaimOnAFind_IsKeptAlive_WhileTheBotFightsAGuard_ButOnlyUntilTheEpisodeLimit()
     {
         await using Rig rig = await Rig.StartAsync([Free]);
-        await AddGuardAsync(rig, 96444, 5f, 2f);
+        Creature guard = await AddGuardAsync(rig, 96444, 5f, 2f);
         Assert.NotNull((await rig.World(() => rig.Bot.Step())).Pull);
+        await FightAsync(rig, guard);
         for (int i = 0; i < 6; i++)
         {
             rig.Clock += PlayerbotClaims.ClaimLifeMs / 2; // far longer than a claim lives, in all
-            await rig.World(() => { rig.Bot.Controller.KeepClaim(); return true; });
+            Assert.Null(await rig.World(() => rig.Bot.Controller.KeepClaim(rig.Player)));
         }
 
         Assert.Equal(rig.Player.Guid.Value, rig.Claims.OwnerOf(KeyOf(Free), rig.Clock));
+
+        // A fight that never ends is bounded too: past the limit the episode is a timeout, with the backoff.
+        rig.Clock += PlayerbotOpportunities.EpisodeMaxMs;
+        await rig.World(() => rig.Bot.Controller.KeepClaim(rig.Player));
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.Equal("timeout", rig.Bot.Controller.LastVerdict!.Value.Reason);
+        Assert.InRange(rig.Bot.Controller.Ledger.DeferredUntil(KeyOf(Free), rig.Clock) - rig.Clock, 59_000u, 60_000u);
+    }
+
+    [Fact]
+    public async Task TheClaimOnAFind_IsNotKept_WhenTheBotIsNotFightingAGuard_AndTheEpisodeEnds()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        Creature guard = await AddGuardAsync(rig, 96445, 5f, 2f);
+        Assert.Same(guard, (await rig.World(() => rig.Bot.Step())).Pull);
+        Creature? given = null;
+        for (int i = 0; i < 4; i++)
+        {
+            rig.Clock += PlayerbotClaims.ClaimLifeMs / 2;
+            given = await rig.World(() => rig.Bot.Controller.KeepClaim(rig.Player)) ?? given;
+        }
+
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.Same(guard, given);
+        Assert.Equal(0ul, rig.Claims.OwnerOf(KeyOf(Free), rig.Clock));
+    }
+
+    [Fact]
+    public async Task TheBrain_LetsTheClaimLapse_AndEndsTheEpisode_WhenAHigherGoalHoldsTheThink()
+    {
+        await using Rig rig = await Rig.StartAsync([Free], tweak: BoldButNotAGrinder);
+        await rig.World(() => { InstallOpenGround(rig.Host); return true; });
+        PlayerbotOpportunities controller = rig.Bot.Brain.Opportunities;
+        controller.Clock = () => rig.Clock;
+        Creature guard = await AddGuardAsync(rig, 96413, 5f, 2f, 3, 0, 200);
+        Assert.True(await RunBrainAsync(rig, () => ReferenceEquals(rig.Bot.Brain.InspectionTarget, guard), steps: 60), "the brain never went for the guard: " + controller.Report);
+        Assert.Equal(KeyOf(Free), controller.ActiveKey);
+
+        // The bot is hurt and rests: the urgent goals hold every think, so the episode is never stepped.
+        await rig.World(() => { rig.Player.Health = 20; rig.Bot.Brain.Risk.BeginWait(rig.Player); return true; });
+        for (int i = 0; i < 6; i++)
+        {
+            rig.Clock += PlayerbotClaims.ClaimLifeMs / 2;
+            await rig.World(() => { rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5); rig.Bot.Brain.Update(500); return true; });
+            Assert.Equal(PlayerbotGoalKind.Rest, rig.Bot.Brain.Goal);
+        }
+
+        Assert.Null(controller.ActiveKey);
+        Assert.Equal(0ul, rig.Claims.OwnerOf(KeyOf(Free), rig.Clock));
+        Assert.NotEqual(0u, rig.Claims.Join(KeyOf(Free), 777, rig.Clock)); // another bot can take the find
+        Assert.Equal(777ul, rig.Claims.OwnerOf(KeyOf(Free), rig.Clock));
+        Assert.False(ReferenceEquals(rig.Bot.Brain.InspectionTarget, guard));
+    }
+
+    [Fact]
+    public async Task ASecondGuardTheBrainWillNotTake_EndsTheEpisodeAsUnreachable_WithTheBackoff()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        Creature near = await AddGuardAsync(rig, 96446, 5f, 2f);
+        Creature far = await AddGuardAsync(rig, 96447, 8f, -2f);
+        rig.Bot.Controller.Untakeable = (_, creature) => ReferenceEquals(creature, far);
+
+        Assert.Same(near, (await rig.World(() => rig.Bot.Step())).Pull); // the first guard is fine
+        await Kill(rig, near);
+        OpportunityStep next = await rig.World(() => rig.Bot.Step()); // the second is the one it cannot take
+        Assert.Null(next.Pull);
+        Assert.Null(rig.Bot.Controller.ActiveKey);
+        Assert.Equal(1, capture.Count(Key("unreachable")));
+        Assert.InRange(rig.Bot.Controller.Ledger.DeferredUntil(KeyOf(Free), rig.Clock) - rig.Clock, 59_000u, 60_000u);
     }
 
     // --- Pick Lock: the cast cap ----------------------------------------------------------------------------------------

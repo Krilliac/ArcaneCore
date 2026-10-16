@@ -547,8 +547,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _deathIntentRetired = false;
             _recovery.Reset();
             RememberAttackers(player);
-            // The fight with a find's guards is the brain's, not the goal's: its claim on the find is kept alive meanwhile.
-            _opportunities?.KeepClaim();
+            // The fight with a find's guards is the brain's, not the goal's: its claim on the find is kept alive meanwhile (and an
+            // episode a higher goal has held for too long, or that ran past its limit, ends here).
+            if (_opportunities?.KeepClaim(player) is { } lapsed) ReleaseOpportunityGuard(player, lapsed);
             // Sickness may begin while a pull route or cast is pending. Retire that intent before a movement-order acknowledgement
             // can defer the ordinary goal decision, and before class upkeep can use PullTarget for an opener.
             if (!player.Combat.IsInCombat && player.Combat.Victim is null && _target is { IsAlive: true }
@@ -1696,15 +1697,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         OpportunityStep step = Opportunities.Update(player, interval, interrupting: _goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Grind);
         // An episode that handed over a guard and then ended without the fight (refused, a player at the chest, no way to the guard)
         // takes the guard back: left as the target, the ordinary combat path below would go on with the pull the goal gave up.
-        if (step.Abandon is { IsAlive: true } given && ReferenceEquals(_target, given)
-            && !player.Combat.ThreatenedBy.Contains(given) && !ReferenceEquals(given.Combat.Victim, player))
-        {
-            _contention.ReleaseClaim();
-            AbandonRoute();
-            _attacking = false;
-            _target = null;
-            TargetEntry = 0;
-        }
+        if (step.Abandon is { } given) ReleaseOpportunityGuard(player, given);
 
         if (step.Pull is { } creature)
         {
@@ -1728,6 +1721,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _goal = step.Goal;
         TargetEntry = step.TargetEntry;
         return true;
+    }
+
+    /// <summary>Lets go of a guard the opportunity goal handed over and gave up, unless it is the target and the bot is not yet in combat with it.</summary>
+    private void ReleaseOpportunityGuard(Player player, Creature given)
+    {
+        if (!given.IsAlive || !ReferenceEquals(_target, given)
+            || player.Combat.ThreatenedBy.Contains(given) || ReferenceEquals(given.Combat.Victim, player)) return;
+        _contention.ReleaseClaim();
+        AbandonRoute();
+        _attacking = false;
+        _target = null;
+        TargetEntry = 0;
     }
 
     private void DropIntent()
