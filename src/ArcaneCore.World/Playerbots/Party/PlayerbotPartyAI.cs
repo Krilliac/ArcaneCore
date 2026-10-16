@@ -180,6 +180,13 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     internal Func<Player, uint, RollVote?>? GroupLootVote { get; set; }
 
+    /// <summary>
+    /// A bot-led group that owns the bot after its master handed the lead to a bot (PlayerbotGroupCoordinator.OwnsAgainst): asked first with
+    /// the master's order (null: no order), true while it keeps driving the bot, so the party AI does not engage (and stop) it. An order
+    /// that moves or fights takes the lead back, and the party AI then carries it out.
+    /// </summary>
+    internal Func<Player, Player, PlayerbotPartyCommand?, bool>? GroupOwns { get; set; }
+
     /// <summary>Whether the party AI drives the bot now (it has a master, or is waiting out a departed one).</summary>
     internal bool IsEngaged => _engaged;
 
@@ -350,16 +357,19 @@ internal sealed class PlayerbotPartyAI
         switch (PlayerbotChatCommands.Classify(line, player.Guid, master, senderIsBot))
         {
             case PlayerbotChatSource.Master when sender is not null:
+            {
                 // The master's order counts from the moment the group has a master, before the bot's first budgeted turn: engaging
                 // here keeps that turn from resetting the order (Drives engages only a master it is not engaged to yet).
-                if (!_engaged || master != _master) Engage(player, master);
+                bool parsed = PlayerbotChatCommands.TryParse(line.Text, out PlayerbotPartyCommand command);
+                if (GroupOwns?.Invoke(player, sender, parsed ? command : null) != true && (!_engaged || master != _master)) Engage(player, master);
                 _masterLostMs = -1;
-                if (PlayerbotChatCommands.TryParse(line.Text, out PlayerbotPartyCommand command)) Execute(player, sender, command);
+                if (parsed) Execute(player, sender, command);
                 else if (isGm && PlayerbotChatCommands.IsDebugQuestion(line.Text)) Tell(player, sender.Name, DebugLine(player));
                 else if (PlayerbotChatCommands.IsHelpQuestion(line.Text)) Tell(player, sender.Name, PlayerbotChatCommands.HelpFor(isGm));
                 else if (Converse(player, line, sender, master)) { }
                 else if (line.Type == ChatType.Whisper && _replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.HelpFor(isGm));
                 break;
+            }
             case PlayerbotChatSource.Stranger when sender is not null:
                 if (isGm && PlayerbotChatCommands.TryParse(line.Text, out PlayerbotPartyCommand gmCmd) && PlayerbotChatCommands.IsGmInspectCommand(gmCmd))
                     Execute(player, sender, gmCmd);
@@ -504,7 +514,7 @@ internal sealed class PlayerbotPartyAI
         {
             ObjectGuid master = ResolveMaster(player);
             if (master.IsEmpty || master != reply.SenderGuid || _session.World.FindOnlinePlayer(master) is not { } current) return;
-            if (!_engaged || master != _master) Engage(player, master);
+            if (GroupOwns?.Invoke(player, current, command) != true && (!_engaged || master != _master)) Engage(player, master);
             _masterLostMs = -1;
             Execute(player, current, command, acknowledge: reply.AcknowledgeCommand);
         }
