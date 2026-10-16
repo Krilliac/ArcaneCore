@@ -28,9 +28,8 @@ namespace ArcaneCore.World.Playerbots;
 /// A deterministic, world-thread autonomous player. The feature/host owns scheduling and
 /// persistence; this controller owns only bounded ordinary gameplay decisions for one session.
 /// </summary>
-internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
-    PlayerbotLocalPlanner? planner = null, CancellationToken lifetime = default, PlayerbotSharedSetAsides? shared = null,
-    PlayerbotClaims? claims = null, PlayerbotNavigationExecutor? navigationExecutor = null)
+internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOptions options,
+    PlayerbotSharedSetAsides? shared = null, PlayerbotClaims? claims = null, PlayerbotNavigationExecutor? navigationExecutor = null)
 {
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -227,10 +226,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private (PlayerbotGoalKind Goal, uint Entry, uint Quest, uint AtMs) _errand;
     // The creatures attacking the bot at its last living update (guid and entry): the risk's danger memory of its killers.
     private readonly List<(ObjectGuid Guid, uint Entry)> _attackers = [];
-    private readonly CancellationTokenSource _planningStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
-    private Task<string?>? _planTask;
-    private string? _modelChoice;
-    private long _nextPlanMs;
     private bool _needsRest;
 
     /// <summary>The bot sat down to wait for health without food (<see cref="PlayerbotRisk.KeepWaiting"/>); it stands up when the wait ends.</summary>
@@ -265,9 +260,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (world.IsWorldThread) _contention.ReleaseClaim();
             else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); return true; });
         }
-        _planningStop.Cancel();
         _destinations.Dispose();
-        _planningStop.Dispose();
     }
 
     internal PlayerbotGoalKind Goal => _goal;
@@ -456,7 +449,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _overranReportMs = now;
         PlayerbotAnomalies.Report(player, "brain", "think-overran",
             string.Create(CultureInfo.InvariantCulture,
-                $"one think took {elapsedMs:F0} ms (budget {PlayerbotThinkRotation.TickBudgetMs:F0} ms per tick for every bot; goal {_goal}, last phase {LastThinkPhase})"));
+                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase})"));
     }
 
     internal void Update(uint elapsedMs)
@@ -497,6 +490,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         finally
         {
+            // A think that ran any goal but Explore (a quest, combat, an errand, rest, a retreat...) broke the walk to the inn; the choke
+            // point for all of them. Explore thinks that skip the town idle decision report it in Explore().
+            if (_goal != PlayerbotGoalKind.Explore) _townIdle.Interrupted();
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
             _trace.ObserveState(this, _session.World.NowMs);
             CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
@@ -1001,15 +997,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             PlayerbotThinkProbe.Phase("class upkeep");
             _combatSpells.PullTarget = _target is { IsAlive: true } pull && ReferenceEquals(pull.Map, player.Map) ? pull : null;
             if (_combatSpells.UpdateOutOfCombat(player, interval)) return;
-            PlayerbotThinkProbe.Phase("local plan");
-            UpdateLocalPlan(player);
             PlayerbotThinkProbe.Phase("home");
             if (_home is { } home && TryReturnHome(player, home, interval)) return;
             PlayerbotThinkProbe.Phase("town");
             _town.BeginThink();
-            // A returned ID is only a proposal; each controller rechecks the live gameplay rules.
-            if (_modelChoice == "town" && _town.Update(player, interval))
-            { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
+            PlayerbotThinkProbe.Phase("policy");
+            if (TryPolicyGoal(player, interval)) return;
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
@@ -1091,7 +1085,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 }
                 if (_destinations.WaitingForTiles) return; // the route's tiles are being read: keep the goal, plan again next think
             }
-            if (_modelChoice == "explore") { _target = null; PlayerbotThinkProbe.Phase("explore"); Explore(player, interval); return; }
         }
 
         afterGoalLadder:
@@ -2146,44 +2139,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .FirstOrDefault();
     }
 
-    private void UpdateLocalPlan(Player player)
-    {
-        if (planner is null || !_options.AllowLocalLlm || _planningStop.IsCancellationRequested) return;
-        if (_planTask?.IsCompleted == true)
-        {
-            _modelChoice = _planTask.IsCompletedSuccessfully ? _planTask.Result : null;
-            _planTask = null;
-        }
-        long now = (long)_session.World.Uptime.TotalMilliseconds;
-        if (_planTask is not null || now < _nextPlanMs) return;
-        _nextPlanMs = now + 5000;
-        var candidates = new List<PlayerbotPlanCandidate>();
-        if (_quests.HasCandidate(player)) candidates.Add(new("quest", PlayerbotGoalKind.Quest, _quests.TargetEntry, _quests.QuestId));
-        if (_town.HasCandidate(player)) candidates.Add(new("town", PlayerbotGoalKind.Vendor, _town.TargetEntry, 0));
-        if (FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is { } target) candidates.Add(new("grind", PlayerbotGoalKind.Grind, target.Entry, QuestId));
-        candidates.Add(new("explore", PlayerbotGoalKind.Explore, 0, 0));
-        var facts = new PlayerbotPlannerFacts(player.Level, player.Health, player.MaxHealth, player.Combat.IsInCombat,
-            player.MapId, (uint)(_session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0),
-            player.Inventory.GetItemCount(117));
-        CancellationToken token = _planningStop.Token;
-        _planTask = Task.Run(async () =>
-        {
-            try
-            {
-                return await planner.SelectAsync(facts, candidates, token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                return null;
-            }
-            catch (Exception ex)
-            {
-                FaultLedger.Shared.Record("playerbot.local-plan", ex);
-                return null;
-            }
-        }, token);
-    }
-
     private void MarkUnreachable(Creature creature)
     {
         uint now = _session.World.NowMs;
@@ -2343,6 +2298,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _attackerEntries.Clear();
         _attackerFacts.Clear();
         _attackers.Clear();
+        // Out of a fight (nearly every think of nearly every bot) there is nothing to walk: skip the Concat iterator it would allocate.
+        if (player.Combat.Attackers.Count == 0 && player.Combat.ThreatenedBy.Count == 0) return;
         foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
         {
             if (unit is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) continue;
@@ -2681,6 +2638,15 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         if (player.Map is null || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false })
             return;
+        if (_home is { Stay: not Population.TownStay.None } town && (player.Map?.MapId ?? player.MapId) == town.MapId)
+        {
+            // Idle with a town home: back to the inn and wait there rather than roam the wilderness (PlayerbotTownIdle).
+            TownIdleAction idle = _townIdle.Decide(town.Stay, town.DistanceTo(player.X, player.Y), _session.World.NowMs);
+            if (idle == TownIdleAction.Linger) { PlayerbotMovementControl.Stop(_session, player); TryBindAtInn(player, town); return; }
+            if (idle == TownIdleAction.WalkToTown) { WalkTowardTown(player, town, elapsedMs); return; }
+        }
+        else _townIdle.Interrupted(); // no town idle decision this think (another map, another kind of home)
+
         PlayerbotThinkProbe.Phase("explore candidates");
         if (TryExploreSpawns(player, elapsedMs)) return;
         if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
@@ -2703,7 +2669,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 AbandonRoute();
             else
             {
-                _wanderLeg = wanderRoute;
+                MarkLeg(wanderRoute, townWalk: false);
                 ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
             }
         }
@@ -2715,8 +2681,69 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
     }
 
+    private readonly PlayerbotTownIdle _townIdle = new();
+    private uint _bindCheckAt;
+    private bool _bindChecked;
+
+    /// <summary>
+    /// At the inn of the town it stays in, binds its home to that town through the server's own path (CMSG_BINDER_ACTIVATE to the
+    /// innkeeper within interaction distance, <see cref="ArcaneCore.Game.Npc.QuestNpcServices.BinderActivate"/>) when the bind is
+    /// elsewhere. Checked every 30 seconds at most; false when nothing was sent.
+    /// </summary>
+    private bool TryBindAtInn(Player player, PlayerbotHomeArea town)
+    {
+        uint now = _session.World.NowMs;
+        // _bindChecked: the first check runs at once (a zero start would read as a future time on a world up for over 2^31 ms).
+        if ((_bindChecked && unchecked((int)(now - _bindCheckAt)) < 0) || !player.IsAlive || player.Combat.IsInCombat) return false;
+        (_bindChecked, _bindCheckAt) = (true, unchecked(now + 30_000));
+        HomeBind bind = player.Home;
+        if (!PlayerbotTownIdle.NeedsBind(bind.MapId, bind.X, bind.Y, town.MapId, town.Centre.X, town.Centre.Y)) return false;
+        if (_session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services is not { } services) return false;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (services.Deps.Creatures?.Find(player, guid) is not { IsAlive: true, IsHostile: false } info
+                || (info.NpcFlags & ArcaneCore.Game.Npc.NpcFlags.Innkeeper) == 0
+                || services.InteractableNpc(player, guid, ArcaneCore.Game.Npc.NpcFlags.Innkeeper) is null) continue;
+            var writer = new PacketWriter(8);
+            writer.WriteUInt64(guid.Value);
+            return _session.TryManagedAction(WorldOpcode.CmsgBinderActivate, writer.ToArray());
+        }
+
+        return false;
+    }
+
+    /// <summary>Plans and walks the next leg of an idle bot's way back to the centre of its town home (the wander planner, aimed inward).</summary>
+    private void WalkTowardTown(Player player, PlayerbotHomeArea town, uint elapsedMs)
+    {
+        if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
+        System.Numerics.Vector3 destination = InwardLeg(town, player, _exploreRefusals);
+        PlayerbotThinkProbe.Phase("explore town plan");
+        if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
+        {
+            AbandonRoute();
+            return;
+        }
+
+        if (_route is { } leg && PlayerbotNavigation.TryAdvance(_session, leg, _options, elapsedMs, _session.World.NowMs))
+        {
+            _exploreRefusals = 0;
+            MarkLeg(leg, townWalk: true);
+            return;
+        }
+
+        AbandonRoute();
+        _exploreRefusals++;
+        PlayerbotMovementControl.Stop(_session, player);
+    }
+
     /// <summary>The wandering leg the bot walks now (<see cref="ChainWanderLeg"/> chains only after such a leg, never after one to a spawn).</summary>
     private PlayerbotRoute? _wanderLeg;
+
+    /// <summary>Records the leg the bot walks: only a real explore leg may be chained onward (a town walk ends at the inn, a chained forward leg would carry the bot past it).</summary>
+    internal void MarkLeg(PlayerbotRoute leg, bool townWalk) => _wanderLeg = townWalk ? null : leg;
+
+    /// <summary>Whether <paramref name="route"/> is the explore leg in hand and so may be chained onward (<see cref="ChainWanderLeg"/>).</summary>
+    internal bool CanChain(PlayerbotRoute? route) => route is not null && ReferenceEquals(route, _wanderLeg);
 
     /// <summary>
     /// The end of the next wandering leg from <paramref name="from"/>, facing <paramref name="orientation"/>: roughly that facing (within
@@ -2791,7 +2818,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// </summary>
     private void ChainWanderLeg(Player player, uint elapsedMs)
     {
-        if (_route is not { Complete: false } route || !ReferenceEquals(route, _wanderLeg) || ExploreMovementPaused(player, elapsedMs)
+        if (_route is not { Complete: false } route || !CanChain(route) || ExploreMovementPaused(player, elapsedMs)
             || route.Points.Count < 2 || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
         if (!PlayerbotMotion.TryTimeToEnd(player, route, out uint remainingMs)) return;
         uint gap = PlayerbotMotion.ThinkGapMs(player);

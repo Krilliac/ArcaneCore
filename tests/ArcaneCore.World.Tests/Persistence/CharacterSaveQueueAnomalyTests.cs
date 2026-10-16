@@ -46,12 +46,13 @@ public sealed class CharacterSaveQueueAnomalyTests
     {
         private readonly ServiceProvider _services;
 
-        public Rig(WorldRuntimeOptions? options = null, TimeSpan? slowThreshold = null)
+        public Rig(WorldRuntimeOptions? options = null, TimeSpan? slowThreshold = null, LatencyRegistry? latency = null)
         {
             _services = new ServiceCollection().AddSingleton<ICharacterStore>(Store).BuildServiceProvider();
             Queue = new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance, Options.Create(options ?? new WorldRuntimeOptions()))
             {
                 SlowSaveThreshold = slowThreshold ?? TimeSpan.FromSeconds(1),
+                Latency = latency ?? LatencyRegistry.Shared,
             };
         }
 
@@ -77,6 +78,27 @@ public sealed class CharacterSaveQueueAnomalyTests
 
             await _services.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task EverySuccessfulWrite_AddsOneSampleToTheSaveLatencyHistogram_AndAFailedOneAddsNone()
+    {
+        var latency = new LatencyRegistry();
+        await using var rig = new Rig(latency: latency);
+        rig.Queue.Start();
+
+        rig.Queue.Enqueue(State(61, 1));
+        await rig.Queue.FlushCharacterAsync(61).WaitAsync(Wait);
+        Assert.Equal(1, latency.Get(LatencyNames.CharacterSave).Count);
+
+        rig.Queue.Enqueue(State(62, 1));
+        await rig.Queue.FlushCharacterAsync(62).WaitAsync(Wait);
+        Assert.Equal(2, latency.Get(LatencyNames.CharacterSave).Count);
+
+        rig.Store.OnSave = (_, _) => throw new IOException("disk gone");
+        rig.Queue.Enqueue(State(63, 1));
+        await Assert.ThrowsAsync<IOException>(() => rig.Queue.FlushCharacterAsync(63).WaitAsync(Wait));
+        Assert.Equal(2, latency.Get(LatencyNames.CharacterSave).Count);
     }
 
     [Fact]

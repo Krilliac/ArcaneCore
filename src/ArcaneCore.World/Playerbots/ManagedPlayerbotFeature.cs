@@ -72,6 +72,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
     private readonly PlayerbotCadenceStats _cadence = new();
+    private readonly PlayerbotThinkBudget _thinkBudget = new();
+    private double _lastOwnMs;
+    private double _lastBudgetMs = PlayerbotThinkRotation.TickBudgetMs;
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
     private readonly PlayerbotThinkProbe _probe = new();
     private PlayerbotSlowThinkLog? _slowThinks;
@@ -83,10 +86,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal Action<Guid, PlayerbotThinkProbe>? ThinkObserver { get; set; }
 
     /// <summary>
-    /// The wall time a tick spends on the bots' thinks (<see cref="PlayerbotThinkRotation.TickBudgetMs"/> in production). A test world on a
-    /// manual clock sets it to infinity: with a real-time budget the bots visited per simulated tick depend on how loaded the machine is.
+    /// A fixed wall time (ms) a tick spends on the bots' thinks, instead of the adaptive budget of <see cref="PlayerbotThinkBudget"/> (null in
+    /// production). A test world on a manual clock sets it to infinity: with a real-time budget the bots visited per simulated tick depend
+    /// on how loaded the machine is.
     /// </summary>
-    internal double ThinkBudgetMs { get; set; } = PlayerbotThinkRotation.TickBudgetMs;
+    internal double? ThinkBudgetMs { get; set; }
+
+    /// <summary>The action budgets the last tick gave the combat lane and the main lane (tests).</summary>
+    internal (int Combat, int Main) LastLaneActions { get; private set; }
+
+    /// <summary>The inputs of the last tick's think budget: tick interval, smoothed non-bot tick time and the time the bots already used (tests).</summary>
+    internal (double TickIntervalMs, double NonBotMs, double SpentMs) LastThinkBudgetInputs { get; private set; }
+
+    /// <summary>The think budget (ms) the last tick used (<c>.playerbot cadence</c>).</summary>
+    internal double LastThinkBudgetMs => _lastBudgetMs;
+
+    /// <summary>The cadence of the last finished 60 s window (null before the first one).</summary>
+    internal PlayerbotCadenceReport? LastCadence => _cadence.Last;
 
     /// <summary>The slow-think log (null before the first think).</summary>
     internal PlayerbotSlowThinkLog? SlowThinks => _slowThinks;
@@ -98,8 +114,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// one tick at a time and let each checkpoint finish before game time moves on.
     /// </summary>
     internal Task LastCheckpoint => _checkpoint;
-    private PlayerbotLocalPlanner? _planner;
-    private readonly CancellationTokenSource _planningStop = new();
     private readonly ConcurrentDictionary<Guid, Quarantine> _quarantine = new();
     private long _clockMs;
     private Chat.PlayerbotChat? _chat;
@@ -113,8 +127,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private Chat.HttpBotChatClient? _chatClient;
     private PlayerbotNavigationExecutor? _navigationExecutor;
     private Chaos.PlayerbotChaosEngine? _chaos;
-    private AI.Inference.PlayerbotInferenceEngine? _inferenceEngine;
-    private AI.Inference.PlayerbotBatchCoordinator? _batchCoordinator;
+    private Policy.PlayerbotPolicyEngine? _policy;
+    private uint _policyReportMs;
+    private bool _policyReportArmed;
 
     /// <summary>World time this feature has seen, in ms (the fault backoff and window run on it).</summary>
     private long ClockMs => Interlocked.Read(ref _clockMs);
@@ -131,11 +146,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Adversarial server-breaker chaos engine (<c>.playerbot chaos</c>).</summary>
     internal Chaos.PlayerbotChaosEngine Chaos => _chaos ??= new Chaos.PlayerbotChaosEngine(_options, opcodes, logger, _setAsideTime);
 
-    /// <summary>Zero-allocation batched ONNX / SIMD inference engine (null when <c>World:Playerbots:Inference:Enabled</c> is false).</summary>
-    internal AI.Inference.PlayerbotInferenceEngine? InferenceEngine => _inferenceEngine;
-
-    /// <summary>Zero-allocation batched inference coordinator (null when <c>World:Playerbots:Inference:Enabled</c> is false).</summary>
-    internal AI.Inference.PlayerbotBatchCoordinator? BatchCoordinator => _batchCoordinator;
+    /// <summary>The goal policy engine (null when <c>World:Playerbots:Policy:Enabled</c> is false; docs/areas/playbots.md, Goal policy).</summary>
+    internal Policy.PlayerbotPolicyEngine? PolicyEngine => _policy;
 
     internal bool TryResolveBotId(string idOrName, out Guid botId, out string botName)
     {
@@ -214,16 +226,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     public void Attach(WorldRuntime world)
     {
         _options.Validate();
-        if (_options.AllowLocalLlm) _planner = new PlayerbotLocalPlanner(_options);
-        if (_options.Inference.Enabled)
-        {
-            _inferenceEngine = new AI.Inference.PlayerbotInferenceEngine(
-                _options.Inference.ModelPath,
-                _options.Inference.GpuDeviceId,
-                _options.Inference.EnableTensorRt,
-                _options.Inference.TensorRtCachePath);
-            _batchCoordinator = new AI.Inference.PlayerbotBatchCoordinator();
-        }
+        if (_options.Policy.Enabled) StartPolicy();
         _chat = new Chat.PlayerbotChat(_options,
             services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()),
             services.GetService<Chat.IBotChatEnvironment>() ?? new Chat.ProcessBotChatEnvironment(),
@@ -1053,7 +1056,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     public async Task ShutdownBeforeWorldStopAsync()
     {
         _stopping = true;
-        await _planningStop.CancelAsync().ConfigureAwait(false);
         if (_world is not null) _world.Updated -= Update;
         await _checkpoint.ConfigureAwait(false);
         await _operations.WaitAsync().ConfigureAwait(false);
@@ -1084,8 +1086,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
         finally { _operations.Release(); }
-        if (_planner is { } planner) { _planner = null; await planner.DisposeAsync().ConfigureAwait(false); }
-        if (_inferenceEngine is { } inferenceEngine) { _inferenceEngine = null; _batchCoordinator = null; inferenceEngine.Dispose(); }
+        if (_policy is { } policy) { _policy = null; await policy.DisposeAsync().ConfigureAwait(false); }
         if (_navigationExecutor is { } navigationExecutor) { _navigationExecutor = null; await navigationExecutor.DisposeAsync().ConfigureAwait(false); }
         if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
         _chatClient?.Dispose();
@@ -1095,9 +1096,78 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     public Task StopAsync() => ShutdownBeforeWorldStopAsync();
 
+    /// <summary>
+    /// Start the goal policy engine (<see cref="Attach"/>). Never throws for a bad model (one anomaly, then the rule ladder scores); a
+    /// telemetry folder that cannot be made is a fault and a warning, and the policy runs without telemetry.
+    /// </summary>
+    private void StartPolicy()
+    {
+        string contentRoot = services.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory;
+        var policy = new Policy.PlayerbotPolicyEngine(_options.Policy, logger, contentRoot);
+        if (_options.Policy.Telemetry.Enabled)
+        {
+            try
+            {
+                policy.Telemetry = new Policy.PlayerbotPolicyTelemetry(_options.Policy.Telemetry,
+                    Path.Combine(contentRoot, _options.Policy.Telemetry.Directory), _setAsideTime, logger);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                // The host's disk or folder: an environment site (PlayerbotQaFaultFeed.EnvironmentSites).
+                FaultLedger.Shared.Record("playerbot.policy-telemetry-io", ex);
+                logger.LogWarning(ex, "Playerbot goal policy telemetry could not start ({Type}: {Message}); the policy runs without it", ex.GetType().Name, ex.Message);
+            }
+            catch (ArgumentException ex)
+            {
+                // A bad folder name, or a limit the writer refuses: possibly a defect, so not the environment site.
+                FaultLedger.Shared.Record("playerbot.policy-telemetry", ex);
+                logger.LogWarning(ex, "Playerbot goal policy telemetry could not start ({Type}: {Message}); the policy runs without it", ex.GetType().Name, ex.Message);
+            }
+        }
+        logger.LogInformation(
+            "Playerbot goal policy on: {Policy}, a snapshot every {IntervalMs} ms, stale after {StaleMs} ms, {BudgetMs} ms per map batch, exploration {Rate}, telemetry {Telemetry}",
+            policy.Policy.Name, _options.Policy.IntervalMs, _options.Policy.StaleAfterMs, _options.Policy.TickBudgetMs, _options.Policy.ExplorationRate,
+            policy.Telemetry is null ? "off" : "on");
+        _policy = policy;
+    }
+
+    /// <summary>
+    /// End of tick (world thread): hand each map's policy snapshots to the worker, sweep the telemetry, and every five minutes log what the
+    /// policy did (one Info line, no bot named).
+    /// </summary>
+    private void UpdatePolicy(Policy.PlayerbotPolicyEngine policy)
+    {
+        try
+        {
+            policy.Dispatch();
+            if (_world is not { } world) return;
+            policy.Telemetry?.Sweep(world.NowMs);
+            bool first = !_policyReportArmed;
+            if (!first && unchecked((int)(world.NowMs - _policyReportMs)) < 0) return;
+            _policyReportArmed = true;
+            _policyReportMs = unchecked(world.NowMs + 300_000);
+            if (first) return;
+            Policy.PlayerbotPolicyStats stats = policy.Stats;
+            (long Queued, long Dropped, long Unfinished, long Written) telemetryCounts = policy.Telemetry?.Counts ?? default;
+            logger.LogInformation(
+                "Playerbot goal policy {Policy}: {Submitted} snapshots, {Scored} scored, {Dropped} dropped, {Unscored} unscored over {Overruns} budget overruns, {Errors} errors; "
+                + "thinks {Applied} applied, {Agreed} agreed, {Floor} floor, {Explored} explored, {Missing} missing, {Stale} stale, {NonFinite} non-finite, {Refused} refused; telemetry {Written} written, {TelemetryDropped} dropped, {Unfinished} unfinished, {TelemetryRefused} refused",
+                stats.Policy, stats.Submitted, stats.Scored, stats.Dropped, stats.Unscored, stats.Overruns, stats.Errors,
+                stats.Applied, stats.Agreed, stats.Floor, stats.Explored, stats.Missing, stats.Stale, stats.NonFinite, stats.Refused,
+                telemetryCounts.Written, telemetryCounts.Dropped, telemetryCounts.Unfinished, policy.Telemetry?.Refused ?? 0);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.policy", ex);
+            logger.LogWarning(ex, "Playerbot goal policy tick failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+        }
+    }
+
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId)
     {
-        var brain = new PlayerbotBrain(session, _options, _planner, _planningStop.Token, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId) };
+        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy };
+        // The combat telemetry hears the risk model from the brain's first think (its first pull).
+        if (_policy?.Telemetry is { } telemetry) brain.Risk.CombatSink = telemetry.Combat;
         if (session.Player is { IsInWorld: true } player) brain.ObserveKillingBlows(player);
         if (_loadedSetAsides.TryGetValue(botId, out PlayerbotSetAside[]? rows))
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
@@ -1117,7 +1187,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     botId, area.MapId, area.Centre.X, area.Centre.Y))
             {
                 AreaLevels = AreaLevelLookupOf(home.MapId),
-                AllowsLeaveQuests = Population.PopulationStartAreas.StageOfPlace(home.Place) == Population.StartHomeStage.Zone,
+                // Leave-home quests (the next band's town) only from a zone home and the band town, never from a capital.
+                AllowsLeaveQuests = Population.PopulationStartAreas.StageOfPlace(home.Place) == Population.StartHomeStage.Zone
+                    || Population.PopulationTownProgression.StayOf(home.Place) == Population.TownStay.Secondary,
+                Stay = Population.PopulationTownProgression.StayOf(home.Place),
+                WalkRangeYards = Population.PopulationTownProgression.StayOf(home.Place) == Population.TownStay.None ? 0f
+                    : _options.Population.TownProgressionTeleport ? _options.Population.TownWalkYards : 20000f,
+                TownTeleports = Population.PopulationTownProgression.StayOf(home.Place) != Population.TownStay.None && _options.Population.TownProgressionTeleport,
                 ValleyRadius = Population.PopulationStartAreas.ValleyRadiusOfPlace(home.Place),
                 LeavePolicy = _options.Population,
             }
@@ -1249,6 +1325,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private void Update(uint elapsedMs)
     {
         if (_stopping || !_options.Enabled || _world is not { } world) return;
+        long updateStarted = Stopwatch.GetTimestamp();
+        // What the world spent on everything but the bots in the last tick, smoothed: the think budget is a share of what is left.
+        TickPhases lastTick = world.LastTickPhases;
+        _thinkBudget.Observe((lastTick.CommandsMicros + lastTick.MapsMicros + lastTick.FeaturesMicros) / 1000.0, _lastOwnMs);
         Interlocked.Add(ref _clockMs, elapsedMs);
         int version = Volatile.Read(ref _activeVersion);
         if (version != _orderedVersion)
@@ -1322,49 +1402,59 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
-        if (_options.Inference.Enabled && _inferenceEngine is { } inferenceEngine && _batchCoordinator is { } batchCoordinator && bots.Length > 0)
-        {
-            Span<AI.Inference.PlayerbotBatchSlot> slots = stackalloc AI.Inference.PlayerbotBatchSlot[AI.Inference.PlayerbotInferenceEngine.MaxBatchSize];
-            int slotCount = 0;
-            for (int i = 0; i < bots.Length && slotCount < slots.Length; i++)
-            {
-                ActiveBot active = bots[i];
-                if (active.Paused || active.Session.State != SessionState.InWorld || active.Session.Player is not { IsInWorld: true } botPlayer)
-                    continue;
-                slots[slotCount++] = AI.Inference.PlayerbotBatchSlot.FromPlayer(botPlayer);
-            }
-            if (slotCount > 0)
-            {
-                try { _ = batchCoordinator.UpdatePlayerbotsTick(slots[..slotCount], inferenceEngine); }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    FaultLedger.Shared.Record("playerbot.feature", ex);
-                    logger.LogWarning(ex, "Playerbot batch inference pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
-                }
-            }
-        }
-
-        var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
-        // A fair rotation (PlayerbotThinkRotation): the next tick starts after the last bot this one thought for, and a tick thinks
-        // for no more bots once PlayerbotThinkRotation.TickBudgetMs went by (one think itself is bounded by MaxThinkSearchNodes).
+        // Hard per-lane action budgets (PlayerbotThinkRotation.PriorityActions / ActionReserve): the combat lane draws from its own; the main
+        // lane's is the reserve plus what the combat lane left, created at its first visit, so no fight's think can empty it.
+        int reserve = PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        int combatActions = PlayerbotThinkRotation.PriorityActions(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        var combatBudget = new ManagedActionBudget(combatActions);
+        ManagedActionBudget? mainBudget = null;
+        int mainActions = -1;
+        // A fair rotation in two lanes (PlayerbotThinkRotation.TickLanes): bots in combat, dead or ghosts that are due are thought for first, then
+        // every bot from the main cursor, until the think time budget (PlayerbotThinkBudget; one think itself is bounded by MaxThinkSearchNodes).
+        long thinkStarted = Stopwatch.GetTimestamp();
+        double spentMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
+        LastThinkBudgetInputs = (world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs);
+        double budgetMs = ThinkBudgetMs ?? PlayerbotThinkBudget.Compute(world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs,
+            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare);
+        _lastBudgetMs = budgetMs;
+        uint now = world.NowMs;
+        uint combatIntervalMs = (uint)_options.CombatThinkIntervalMs;
         int thinks = 0;
         bool actionLimited = false;
-        _rotation.TickWithin(bots.Length, ThinkBudgetMs, index =>
-        {
-            if (budget.Remaining <= 0) { actionLimited = true; return false; }
-            Think(bots[index], budget, index);
-            thinks++;
-            return true;
-        });
+        _rotation.TickLanes(bots.Length, budgetMs, _options.CombatLaneShare,
+            index => IsCombatLane(bots[index]) && unchecked(now - bots[index].LastUpdateMs) >= combatIntervalMs
+                ? PlayerbotThinkRotation.ThinkLane.Priority
+                : PlayerbotThinkRotation.ThinkLane.Normal,
+            (index, lane) =>
+            {
+                ManagedActionBudget budget = lane == PlayerbotThinkRotation.ThinkLane.Priority
+                    ? combatBudget
+                    : mainBudget ??= new ManagedActionBudget(mainActions = reserve + combatBudget.Remaining);
+                if (budget.Remaining <= 0)
+                {
+                    if (lane == PlayerbotThinkRotation.ThinkLane.Normal) actionLimited = true;
+                    return false;
+                }
+
+                Think(bots[index], budget, index);
+                thinks++;
+                return true;
+            },
+            () => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds);
+        LastLaneActions = (combatActions, mainActions >= 0 ? mainActions : reserve + combatBudget.Remaining);
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
-        _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited);
+        _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited, budgetMs);
+        ReportStarvedBots(bots, now);
+        if (_policy is { } policy) UpdatePolicy(policy);
         if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
             logger.LogInformation(
-                "Playerbot cadence over the last minute: {Bots} bots, think gap p50 {GapP50Ms} ms, p95 {GapP95Ms} ms, max {GapMaxMs} ms; "
-                + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
-                cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapMaxMs, cadence.ThinksPerTick, cadence.Ticks,
-                cadence.TimeLimitedPct, cadence.ActionLimitedPct);
+                "Playerbot cadence over the last minute: {Bots} bots, think gap p50 {GapP50Ms} ms, p95 {GapP95Ms} ms, p99 {GapP99Ms} ms, max {GapMaxMs} ms "
+                + "(combat/dead lane: {CombatThinks} thinks, p50 {CombatP50Ms} ms, p95 {CombatP95Ms} ms); "
+                + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks, budget {AvgBudgetMs:F1} ms; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
+                cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapP99Ms, cadence.GapMaxMs, cadence.CombatThinks, cadence.CombatGapP50Ms, cadence.CombatGapP95Ms,
+                cadence.ThinksPerTick, cadence.Ticks, cadence.AvgBudgetMs, cadence.TimeLimitedPct, cadence.ActionLimitedPct);
         PublishSnapshot(bots, elapsedMs);
+        _lastOwnMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
         {
@@ -1372,6 +1462,30 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 FaultLedger.Shared.Record("playerbot.checkpoint", checkpointEx.GetBaseException());
             _checkpointMs = 0;
             _checkpoint = Task.Run(CheckpointAsync);
+        }
+    }
+
+    /// <summary>Whether the bot is in the first think lane: alive and fighting, or dead or a ghost (world thread).</summary>
+    private static bool IsCombatLane(ActiveBot active)
+        => !active.Paused && active.Session.State == SessionState.InWorld
+           && active.Session.Player is { } player && (!player.IsAlive || player.Combat.IsInCombat);
+
+    /// <summary>
+    /// Reports each bot that has gone longer than <see cref="PlayerbotOptions.ThinkStarvedGapMs"/> without a think, once per episode
+    /// (<see cref="PlayerbotThinkStarvation"/>; the episode ends at its next think). One compare per bot per tick.
+    /// </summary>
+    private void ReportStarvedBots(ActiveBot[] bots, uint now)
+    {
+        uint bound = (uint)_options.ThinkStarvedGapMs;
+        if (bound == 0) return;
+        foreach (ActiveBot active in bots)
+        {
+            if (active.Paused || !active.GapPrimed || active.Session.State != SessionState.InWorld) continue;
+            if (!PlayerbotThinkStarvation.ShouldReport(now, active.LastUpdateMs, bound, ref active.StarvedReported)) continue;
+            if (active.Session.Player is not { } player || active.Session.IsInChaosProbe) continue;
+            PlayerbotAnomalies.Report(player, "cadence", "think-starved",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $"no think for {unchecked(now - active.LastUpdateMs)} ms (bound {bound} ms; {bots.Length} bots, think budget {_lastBudgetMs:F1} ms per tick)"));
         }
     }
 
@@ -1388,6 +1502,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         string driver;
         try { driver = ThinkCore(active, budget, botOrdinal); }
         finally { _probe.End(); }
+        // The decision telemetry, outside the think's probe: what it costs is not the brain's.
+        if (driver == "brain" && _policy?.Telemetry is { } telemetry && active.Session.Player is { } thinker && _world is { } thinkWorld)
+        {
+            try { telemetry.AfterThink(active.Brain, thinker, thinkWorld.NowMs); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.policy-telemetry", ex); }
+        }
         double slowMs = _options.SlowThinkLogMs;
         bool slow = slowMs > 0 && _probe.ElapsedMs >= slowMs;
         if (!slow) _slowThinks?.EndEpisode(active.Record.BotId);
@@ -1420,11 +1540,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // The first think after login or unpause measures the time since the record was made (or the pause), not a think gap.
             if (active.GapPrimed)
             {
-                _cadence.RecordGap(sinceLast);
+                _cadence.RecordGap(sinceLast, IsCombatLane(active));
                 if (active.Session.Player is { } measured) PlayerbotMotion.NoteThinkGap(measured, sinceLast);
             }
 
             active.GapPrimed = true;
+            active.StarvedReported = false;
             try
             {
                 if (active.Session.Player is { IsInWorld: true } observed) active.Brain.ObserveKillingBlows(observed);
@@ -2373,6 +2494,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public uint LastUpdateMs = session.World.NowMs;
         /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>
         public bool GapPrimed;
+        /// <summary>Whether the current silence of this bot was reported as a starved think gap (cleared by its next think).</summary>
+        public bool StarvedReported;
         public volatile bool Paused;
         public IPlayerbotController? Controller;
         public string? FaultCode;

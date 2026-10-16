@@ -1,6 +1,7 @@
 using System.Globalization;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -56,13 +57,24 @@ internal sealed record ServerInfoDiagnosticsValues(
     public long LeanRingPacketsSkipped { get; init; }
     public long LeanRingBytesSkipped { get; init; }
 
+    /// <summary>The tick body and the frame interval: p50..p99.9, mean and spread over the last minute, the last 15 minutes and since start (null: not captured).</summary>
+    public LatencyWindows? TickBodyLatency { get; init; }
+    public LatencyWindows? FrameLatency { get; init; }
+
+    /// <summary>Each tick phase over the last minute, in tick order (commands, world_tick, features, maps, autosave).</summary>
+    public IReadOnlyList<(string Name, LatencySnapshot Last1Min)> PhaseLatency { get; init; } = [];
+
+    /// <summary>The named latency histograms (database saves, checkpoint, path queries, login) and the three slowest packet handlers by p99, over the last 15 minutes.</summary>
+    public IReadOnlyList<(string Name, LatencySnapshot Last15Min)> OtherLatencies { get; init; } = [];
+
     /// <summary>The garbage collector: server or workstation, concurrent, collections per generation, total pause.</summary>
     public string? Gc { get; init; }
 }
 
 internal static class ServerInfoDiagnostics
 {
-    internal static ServerInfoDiagnosticsValues Capture(WorldRuntime world, IServiceProvider services)
+    /// <summary>The values for <c>.server info</c>. With <paramref name="includeLatency"/> false (a player asked) the latency values stay empty and the registry is not touched.</summary>
+    internal static ServerInfoDiagnosticsValues Capture(WorldRuntime world, IServiceProvider services, bool includeLatency = true)
     {
         TickStatsSnapshot stats = world.Stats.Snapshot();
         int targetMs = Math.Max(1, world.Options.TickIntervalMs);
@@ -100,11 +112,39 @@ internal static class ServerInfoDiagnostics
             PhaseAllocations = stats.Samples > 0 ? (stats.CommandsMeanBytes, stats.MapsMeanBytes, stats.FeaturesMeanBytes) : null,
             TopAllocatingFeatures = stats.FeatureAllocations.Take(3).ToArray(),
             Gc = GcLine(),
+            TickBodyLatency = includeLatency ? stats.BodyLatency : null,
+            FrameLatency = includeLatency ? stats.FrameLatency : null,
+            PhaseLatency = includeLatency ? stats.PhaseLatency : [],
+            OtherLatencies = includeLatency ? OtherLatencies() : [],
             LeanUpdateBlocksSkipped = ArcaneCore.Game.Updates.BotLeanStats.UpdateBlocks,
             LeanRingPacketsSkipped = ArcaneCore.Game.Updates.BotLeanStats.RingPackets,
             LeanRingBytesSkipped = ArcaneCore.Game.Updates.BotLeanStats.RingBytes,
         };
     }
+
+    /// <summary>The registry's named metrics and the top three packet handlers by p99, 15 minute window (bounded work: one window merge per packet histogram, 3 shown).</summary>
+    private static (string Name, LatencySnapshot Last15Min)[] OtherLatencies()
+    {
+        TimeSpan window = TimeSpan.FromMinutes(15);
+        var list = new List<(string Name, LatencySnapshot Last15Min)>();
+        foreach (KeyValuePair<string, LatencyHistogram> pair in LatencyRegistry.Shared.Histograms())
+        {
+            if (!pair.Key.StartsWith(PacketPrefix, StringComparison.Ordinal))
+            {
+                list.Add((pair.Key, pair.Value.Snapshot(window)));
+            }
+        }
+
+        foreach ((string name, _, LatencySnapshot recent) in LatencyRegistry.Shared.TopByP99(PacketPrefix, 3, window))
+        {
+            list.Add((name, recent));
+        }
+
+        return [.. list.Where(entry => !entry.Last15Min.IsEmpty)];
+    }
+
+    /// <summary>The registry name prefix of the per-opcode packet handler histograms.</summary>
+    internal const string PacketPrefix = LatencyNames.PacketHandlerPrefix;
 
     private static string GcLine()
     {
@@ -113,9 +153,41 @@ internal static class ServerInfoDiagnostics
             $"{(System.Runtime.GCSettings.IsServerGC ? "server" : "workstation")} {(System.Runtime.GCSettings.LatencyMode == System.Runtime.GCLatencyMode.Batch ? "non-concurrent" : "concurrent")} gen0/1/2={GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2)} pauseTotal={GC.GetTotalPauseDuration().TotalMilliseconds:F0} ms lastPause={info.PauseDurations[0].TotalMilliseconds:F1} ms ({info.Generation}{(info.Concurrent ? " background" : string.Empty)})");
     }
 
+    private static string Latency(LatencySnapshot? snapshot) => snapshot is { } s ? s.Format() : "unavailable";
+
+    private static string Phases(IReadOnlyList<(string Name, LatencySnapshot Last1Min)> phases)
+    {
+        string[] shown = [.. phases.Where(p => !p.Last1Min.IsEmpty).Select(p => string.Create(CultureInfo.InvariantCulture, $"{p.Name} {LatencySnapshot.Millis(p.Last1Min.P50)}/{LatencySnapshot.Millis(p.Last1Min.P99)}"))];
+        return shown.Length == 0 ? "unavailable" : string.Join(", ", shown);
+    }
+
+    /// <summary>The named latencies on one line of at most 200 characters (the rest are counted, not listed).</summary>
+    private static string Others(IReadOnlyList<(string Name, LatencySnapshot Last15Min)> others)
+    {
+        if (others.Count == 0)
+        {
+            return "none recorded";
+        }
+
+        var text = new System.Text.StringBuilder();
+        int listed = 0;
+        foreach ((string name, LatencySnapshot s) in others)
+        {
+            string item = string.Create(CultureInfo.InvariantCulture, $"{name} {LatencySnapshot.Millis(s.P50)}/{LatencySnapshot.Millis(s.P99)}/{LatencySnapshot.Millis(s.Max)} (n={s.Count})");
+            if (listed > 0 && text.Length + item.Length + 2 > 170)
+            {
+                break;
+            }
+
+            text.Append(listed++ > 0 ? ", " : string.Empty).Append(item);
+        }
+
+        return listed < others.Count ? text.Append(CultureInfo.InvariantCulture, $" and {others.Count - listed} more").ToString() : text.ToString();
+    }
+
     private static double? Finite(double? value) => value is { } number && double.IsFinite(number) ? number : null;
 
-    internal static IReadOnlyList<string> Format(ServerInfoDiagnosticsValues value)
+    internal static IReadOnlyList<string> Format(ServerInfoDiagnosticsValues value, bool includeLatency = true)
     {
         string Rate(double? number) => number is { } value && double.IsFinite(value)
             ? value.ToString("F2", CultureInfo.InvariantCulture) + " ticks/s" : "unavailable";
@@ -130,7 +202,7 @@ internal static class ServerInfoDiagnostics
         string Active(int? number) => number?.ToString(CultureInfo.InvariantCulture) ?? "unavailable";
         string Phase(TickPhaseSummary? phase) => phase is { } p ? $"{Millis(p.MeanMicros)}/{Millis(p.MaxMicros)}" : "unavailable";
         static string Name(string name) => name.Length <= 40 ? name : name[..40];
-        return
+        string[] lines =
         [
             string.Create(CultureInfo.InvariantCulture,
                 $"Tick target: {value.TargetTickMs} ms ({Rate(value.TargetTicksPerSecond)}); observed: {Rate(value.ObservedTicksPerSecond)}"),
@@ -151,6 +223,21 @@ internal static class ServerInfoDiagnostics
                         : "; top: " + string.Join(", ", value.TopAllocatingFeatures.Select(feature => $"{Name(feature.Name)} {Allocated(feature.MeanBytes)}")))
                 : "unavailable"),
             "GC: " + (value.Gc ?? "unavailable"),
+        ];
+        if (!includeLatency)
+        {
+            return lines;
+        }
+
+        return
+        [
+            .. lines,
+            "Tick body latency, last 1 min: " + Latency(value.TickBodyLatency?.Last1Min),
+            "Tick body latency, last 15 min: " + Latency(value.TickBodyLatency?.Last15Min),
+            "Tick frame latency, last 1 min: " + Latency(value.FrameLatency?.Last1Min),
+            "Tick frame latency, last 15 min: " + Latency(value.FrameLatency?.Last15Min),
+            "Tick phases p50/p99 ms, last 1 min: " + Phases(value.PhaseLatency),
+            "Other latencies, last 15 min (p50/p99/max ms, n): " + Others(value.OtherLatencies),
         ];
     }
 }

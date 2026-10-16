@@ -67,6 +67,7 @@ public static class CrashReport
         AppendMemory(sb);
         AppendInvariants(sb);
         AppendFaults(sb);
+        AppendLatencies(sb);
         foreach (ICrashContextProvider provider in providers)
         {
             AppendProvider(sb, provider);
@@ -208,6 +209,48 @@ public static class CrashReport
                 sb.Append("  ").Append(fault.Id).Append(' ').Append(fault.Count.ToString(CultureInfo.InvariantCulture))
                     .Append("x ").Append(fault.Site).Append(' ').Append(fault.ExceptionType)
                     .Append(" [stack: ").Append(stack).Append("]: ").Append(fault.SampleMessage).Append('\n');
+                sb.Append("    ").Append(fault.Timing.Describe());
+                if (fault.FirstSeen != default)
+                {
+                    sb.Append("; first ").Append(fault.FirstSeen.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).Append(" UTC, last ")
+                        .Append(fault.LastSeen.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).Append(" UTC");
+                }
+
+                sb.Append('\n');
+                if (fault.TopMessages.Count > 1)
+                {
+                    sb.Append("    top messages: ").Append(string.Join("; ", fault.TopMessages.Select(m => m.Subject + " x" + m.Count.ToString(CultureInfo.InvariantCulture)))).Append('\n');
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            sb.Append("  (unavailable: ").Append(ex.GetType().Name).Append(")\n");
+        }
+    }
+
+    private static void AppendLatencies(StringBuilder sb)
+    {
+        sb.Append("[latency]\n");
+        try
+        {
+            IReadOnlyList<KeyValuePair<string, LatencyHistogram>> all = LatencyRegistry.Shared.Histograms();
+            if (all.Count == 0)
+            {
+                sb.Append("  (nothing recorded)\n");
+                return;
+            }
+
+            int shown = 0;
+            foreach (KeyValuePair<string, LatencyHistogram> pair in all)
+            {
+                if (shown++ == 20)
+                {
+                    sb.Append("  ... more histograms omitted\n");
+                    break;
+                }
+
+                sb.Append("  ").Append(pair.Key).Append(" last 15 min: ").Append(pair.Value.Snapshot(TimeSpan.FromMinutes(15)).Format()).Append('\n');
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)

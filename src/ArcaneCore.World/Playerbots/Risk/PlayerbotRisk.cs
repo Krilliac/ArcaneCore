@@ -138,6 +138,12 @@ internal sealed class PlayerbotRisk
     /// <summary>The last pre-engagement verdict (the target taken, or the best one passed over).</summary>
     internal PlayerbotEngagement? LastEngagement { get; private set; }
 
+    /// <summary>Told each pull candidate assessed and each in-fight verdict (the goal policy's combat telemetry; null: off).</summary>
+    internal Policy.IPlayerbotCombatSink? CombatSink { get; set; }
+
+    /// <summary>A telemetry fault never changes a decision: it is counted and the choice goes on.</summary>
+    private static void SinkFault(Exception error) => FaultLedger.Shared.Record("playerbot.policy-telemetry", error);
+
     /// <summary>A route round the creatures on the way to the target just chosen (taken once by the brain).</summary>
     internal PlayerbotRoute? Detour { get; set; }
 
@@ -296,6 +302,12 @@ internal sealed class PlayerbotRisk
                 if (index > 0 && PlayerbotThinkProbe.Active is { Refused: > 0 }) break;
                 Creature candidate = _candidates[index].Creature!;
                 PlayerbotEngagement verdict = Assess(player, candidate, questObjective && candidate.Entry == preferredEntry, out PlayerbotRoute? detour);
+                if (CombatSink is { } sink)
+                {
+                    bool taken = verdict.Decision == PlayerbotEngageDecision.Engage || verdict.Decision == PlayerbotEngageDecision.Detour && detour is not null;
+                    try { sink.Assessed(player, candidate, verdict, taken, _session.World.NowMs); }
+                    catch (Exception error) when (error is not OutOfMemoryException) { SinkFault(error); }
+                }
                 first ??= verdict;
                 switch (verdict.Decision)
                 {
@@ -1099,6 +1111,8 @@ internal sealed class PlayerbotRisk
         }
 
         Tracker.Record(verdict);
+        try { CombatSink?.Judged(player, facts, verdict, _session.World.NowMs); }
+        catch (Exception error) when (error is not OutOfMemoryException) { SinkFault(error); }
         if (!verdict.Retreat) return false;
         StartRetreat(player, enemies, verdict.Reason);
         return true;
