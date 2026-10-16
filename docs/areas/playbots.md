@@ -58,7 +58,8 @@ all stops in the current group settle. The world thread and final save queue sto
 
 Before a pull the brain weighs each candidate's risk against its reward, and in a fight it retreats past the creatures' leash when
 it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. The risk decision ends each `.playerbot status`
-line and has its own `BOTINSPECT` line.
+line and has its own `BOTINSPECT` line. Chests, locked chests it can open, rares and the guards of gathering nodes are weighed the same
+way (`World:Playerbots:Opportunities`, live): `docs/areas/playbots-opportunities.md`.
 
 Bots also use the faction auction house and the mailbox: they list loot they have no use for, buy one gear upgrade within a budget
 and collect what sold, expired or was won (`World:Playerbots:Economy`, live): `docs/areas/playbots-economy.md`.

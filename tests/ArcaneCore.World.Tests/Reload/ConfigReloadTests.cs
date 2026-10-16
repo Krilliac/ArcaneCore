@@ -673,6 +673,12 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Home)}:{property.Name}");
         }
 
+        // Chests, nodes and rares weighed against their guards are live key by key (docs/areas/playbots-opportunities.md).
+        foreach (PropertyInfo property in typeof(PlayerbotOpportunityOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Opportunities)}:{property.Name}");
+        }
+
         // How bots share the mobs of one place is live key by key (docs/areas/playbots.md, Contention).
         foreach (PropertyInfo property in typeof(PlayerbotContentionOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

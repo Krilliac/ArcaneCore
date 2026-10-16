@@ -172,6 +172,9 @@ public sealed class PlayerbotOptions
     /// <summary>Risk against reward before a pull, and retreat from a lost fight (<c>World:Playerbots:Risk</c>; live).</summary>
     public PlayerbotRiskOptions Risk { get; set; } = new();
 
+    /// <summary>Chests, gathering nodes and rare creatures a bot weighs against their guards and goes for when worth it (<c>World:Playerbots:Opportunities</c>; live; docs/areas/playbots-opportunities.md).</summary>
+    public PlayerbotOpportunityOptions Opportunities { get; set; } = new();
+
     /// <summary>
     /// Bots answer players who talk to them (<c>World:Playerbots:Chat</c>; live): built-in template replies by default, with optional
     /// model providers (Anthropic, OpenAI-compatible, local servers) in front of them (docs/areas/playbots.md, Bot chat).
@@ -281,6 +284,8 @@ public sealed class PlayerbotOptions
         Party.Validate();
         if (Risk is null) throw new InvalidOperationException($"{SectionName}:Risk is missing.");
         Risk.Validate();
+        if (Opportunities is null) throw new InvalidOperationException($"{SectionName}:Opportunities is missing.");
+        Opportunities.Validate();
         if (Chat is null) throw new InvalidOperationException($"{SectionName}:Chat is missing.");
         Chat.Validate();
         if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");

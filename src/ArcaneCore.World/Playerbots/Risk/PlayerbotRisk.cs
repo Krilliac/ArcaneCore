@@ -499,7 +499,29 @@ internal sealed class PlayerbotRisk
         };
     }
 
-    private RiskEnemy Enemy(Creature creature, RiskJoin join, Player bot) => Enemy(creature, join, bot.MaxHealth, SpellThreat(creature));
+    /// <summary>
+    /// The bot's own half of a pull's facts for <paramref name="enemies"/> (<see cref="PlayerbotOpportunities"/> weighs a whole guard pack
+    /// as one pull): level, health, mana, observed damage, ready escapes. Quest, loot and danger memory are the caller's.
+    /// </summary>
+    internal PlayerbotEngagementFacts BotFacts(Player player, IReadOnlyList<RiskEnemy> enemies)
+    {
+        float? mana = null;
+        uint maxMana = player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana);
+        if (player.PowerType == PowerType.Mana && maxMana > 0) mana = SpellSystem.GetPower(player, PowerType.Mana) * 100f / maxMana;
+        return new PlayerbotEngagementFacts
+        {
+            BotLevel = player.Level,
+            BotHealth = player.Health,
+            BotMaxHealth = player.MaxHealth,
+            BotManaPct = mana,
+            ManaDependence = ManaDependence(player.Class),
+            BotDps = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level),
+            ReadyEscapes = ReadyEscapes(player),
+            Enemies = enemies,
+        };
+    }
+
+    internal RiskEnemy Enemy(Creature creature, RiskJoin join, Player bot) => Enemy(creature, join, bot.MaxHealth, SpellThreat(creature));
 
     private static RiskEnemy Enemy(Creature creature, RiskJoin join, uint botMaxHealth, CreatureSpellThreat spells)
     {

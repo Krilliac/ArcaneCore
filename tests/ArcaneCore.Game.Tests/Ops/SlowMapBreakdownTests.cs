@@ -79,7 +79,8 @@ public sealed class SlowMapBreakdownTests
         var log = new Capture();
         using WorldRuntime world = Create(log, 1);
         Map map = world.GetMap(1, 4);
-        map.AddUpdater(new Sleeper(2));
+        // The only updater, so it is the slowest by construction. A second, faster updater would make "slowest" a wall-clock race
+        // (a descheduled 2 ms sleeper can out-time a 25 ms one on a loaded box); the ranking is covered with injected times below.
         map.AddUpdater(new Explaining(25));
 
         world.RunTick(50);
@@ -87,7 +88,28 @@ public sealed class SlowMapBreakdownTests
         string line = Assert.Single(log.Messages, m => m.StartsWith("Slow map update", StringComparison.Ordinal));
         Assert.Contains("Explaining ", line);
         Assert.Contains("(inner stage alpha 1.0 ms)", line);
-        Assert.True(line.IndexOf("Explaining ", StringComparison.Ordinal) < line.IndexOf("Sleeper ", StringComparison.Ordinal), "slowest first");
+    }
+
+    [Fact]
+    public void Describe_RanksUpdatersSlowestFirst_AndOnlyTheSlowestExplainsItself()
+    {
+        var diagnostics = new MapUpdateDiagnostics();
+        diagnostics.Updaters.Add((new Sleeper(0), 30_000));
+        diagnostics.Updaters.Add((new Explaining(0), 90_000));
+
+        string text = diagnostics.Describe();
+
+        Assert.Contains("(inner stage alpha 1.0 ms)", text);
+        Assert.True(text.IndexOf("Explaining ", StringComparison.Ordinal) < text.IndexOf("Sleeper ", StringComparison.Ordinal), "slowest first");
+
+        var reversed = new MapUpdateDiagnostics();
+        reversed.Updaters.Add((new Explaining(0), 30_000));
+        reversed.Updaters.Add((new Sleeper(0), 90_000));
+
+        string other = reversed.Describe();
+
+        Assert.DoesNotContain("inner stage alpha", other); // the slowest (Sleeper) gives no breakdown, and the runner-up is not asked
+        Assert.True(other.IndexOf("Sleeper ", StringComparison.Ordinal) < other.IndexOf("Explaining ", StringComparison.Ordinal));
     }
 
     [Fact]

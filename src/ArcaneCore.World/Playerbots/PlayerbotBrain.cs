@@ -162,6 +162,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
+    private PlayerbotOpportunities? _opportunities;
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotHomeReturn _homeReturn = new();
     private PlayerbotHomeArea? _home;
@@ -576,6 +577,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!_deathIntentRetired)
             {
                 RecordDeath(player);
+                _opportunities?.BotDied();
                 RetireDeathIntent();
                 // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
                 // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
@@ -601,6 +603,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _deathIntentRetired = false;
             _recovery.Reset();
             RememberAttackers(player);
+            // The fight with a find's guards is the brain's, not the goal's: its claim on the find is kept alive meanwhile (and an
+            // episode a higher goal has held for too long, or that ran past its limit, ends here).
+            if (_opportunities?.KeepClaim(player) is { } lapsed) ReleaseOpportunityGuard(player, lapsed);
             // Sickness may begin while a pull route or cast is pending. Retire that intent before a movement-order acknowledgement
             // can defer the ordinary goal decision, and before class upkeep can use PullTarget for an opener.
             if (!player.Combat.IsInCombat && player.Combat.Victim is null && _target is { IsAlive: true }
@@ -1102,11 +1107,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (StandDownWhileSick(player)) return;
             PlayerbotThinkProbe.Phase("crafting");
             _crafting.Suspensions = _suspensions;
+            _crafting.GatherVeto = Opportunities.NodeVeto;
             if (_crafting.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _crafting.Goal; TargetEntry = _crafting.TargetEntry; return; }
             PlayerbotThinkProbe.Phase("economy");
             if (_economy.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _economy.Goal; TargetEntry = _economy.TargetEntry; return; }
+            PlayerbotThinkProbe.Phase("opportunities");
+            if (TakeOpportunity(player, interval, out bool opportunityPull)) { if (opportunityPull) goto afterGoalLadder; return; }
             bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0
                 && FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is not null;
             PlayerbotThinkProbe.Phase("trainers");
@@ -1171,6 +1179,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
         }
 
+        afterGoalLadder:
         // A mob another player tagged while the bot walked to it is no longer the bot's to take: help its tagger or leave it alone, then
         // choose afresh in this same think (docs/areas/playbots.md, Contention).
         if (_target is { IsAlive: true } held && ReferenceEquals(held.Map, player.Map)) DropIfSomeoneElses(player, held);
@@ -1809,6 +1818,60 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _exploreCandidate = null;
         _exploreHasPosition = false;
         _attacking = false;
+    }
+
+    /// <summary>The chest, rare and node-risk goal (<see cref="PlayerbotOpportunities"/>, docs/areas/playbots-opportunities.md; inspection and tests).</summary>
+    internal PlayerbotOpportunities Opportunities => _opportunities ??= new PlayerbotOpportunities(_session, _options, () => Risk, claims,
+        (opcode, payload) => _lootActions.Enqueue((opcode, payload))) { Untakeable = IsUntakeable };
+
+    /// <summary>
+    /// Offers the opportunity goal to the ladder (after the urgent goals, before the optional travel and grinding): true when it took the
+    /// think. <paramref name="pull"/> says it chose a creature to fight: the target is set and the think goes on to the combat path.
+    /// A quest or grind goal is interrupted only for a find that clears the higher bar of <see cref="PlayerbotOpportunities.Update"/>.
+    /// </summary>
+    private bool TakeOpportunity(Player player, uint interval, out bool pull)
+    {
+        pull = false;
+        Opportunities.Home = _quests.Home;
+        OpportunityStep step = Opportunities.Update(player, interval, interrupting: _goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Grind);
+        // An episode that handed over a guard and then ended without the fight (refused, a player at the chest, no way to the guard)
+        // takes the guard back: left as the target, the ordinary combat path below would go on with the pull the goal gave up.
+        if (step.Abandon is { } given) ReleaseOpportunityGuard(player, given);
+
+        if (step.Pull is { } creature)
+        {
+            if (!ReferenceEquals(_target, creature))
+            {
+                _contention.ReleaseClaim();
+                AbandonRoute();
+                _attacking = false;
+                _lootOpened = false;
+            }
+
+            _target = creature;
+            TargetEntry = creature.Entry;
+            _goal = PlayerbotGoalKind.Combat;
+            pull = true;
+            return true;
+        }
+
+        if (!step.Busy) return false;
+        RetireIdleCombatRoute();
+        _goal = step.Goal;
+        TargetEntry = step.TargetEntry;
+        return true;
+    }
+
+    /// <summary>Lets go of a guard the opportunity goal handed over and gave up, unless it is the target and the bot is not yet in combat with it.</summary>
+    private void ReleaseOpportunityGuard(Player player, Creature given)
+    {
+        if (!given.IsAlive || !ReferenceEquals(_target, given)
+            || player.Combat.ThreatenedBy.Contains(given) || ReferenceEquals(given.Combat.Victim, player)) return;
+        _contention.ReleaseClaim();
+        AbandonRoute();
+        _attacking = false;
+        _target = null;
+        TargetEntry = 0;
     }
 
     private void DropIntent()

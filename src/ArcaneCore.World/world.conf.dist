@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       493 keys
+#   WORLD                       494 keys
 #
 ###############################################################################
 
@@ -12143,6 +12143,143 @@ World.Playerbots.MoveSpeed = 7
 World.Playerbots.MovementPackets = true
 
 #
+#    World.Playerbots.Opportunities.Chests
+#        Description: Seek unlocked treasure chests, battered and solid chests and footlockers (on
+#                     by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.Chests = true
+
+#
+#    World.Playerbots.Opportunities.Enabled
+#        Description: Let bots seek chests, nodes and rares (on by default). Off: bots ignore them,
+#                     and gather nodes with no regard for guards.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.Enabled = true
+
+#
+#    World.Playerbots.Opportunities.LockedChests
+#        Description: Seek locked chests the bot can open: a rogue with Pick Lock at the skill the
+#                     lock needs, or a bot that carries the key (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.LockedChests = true
+
+#
+#    World.Playerbots.Opportunities.MaxDeathProbability
+#        Description: The highest chance of dying (0.01..0.5; default 0.15) a bot accepts for a
+#                     find, whatever the reward: the fight's risk run through a logistic curve (risk
+#                     0.95 is an even chance, 0.7 about 15%). A hard refusal.
+#        Type: float
+#        Default: 0.15
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.MaxDeathProbability = 0.15
+
+#
+#    World.Playerbots.Opportunities.MaxGuards
+#        Description: The most guards a find may have (0..12; default 4): a larger pack is refused
+#                     whatever it holds. 0 takes unguarded finds only.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.MaxGuards = 4
+
+#
+#    World.Playerbots.Opportunities.MinValue
+#        Description: The least net reward worth a trip (0..20; default 0.75), in same-level kills:
+#                     the find's loot and its guards' experience less the time to walk and fight. 1
+#                     is about what a same-level kill gives.
+#        Type: float
+#        Default: 0.75
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.MinValue = 0.75
+
+#
+#    World.Playerbots.Opportunities.Nodes
+#        Description: Weigh the guards of the herb and mining nodes the bot gathers and leave the
+#                     guarded ones it could not take (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.Nodes = true
+
+#
+#    World.Playerbots.Opportunities.PersonalityVariance
+#        Description: How far a bot's own temperament moves RiskAppetite (0..0.5; default 0.15):
+#                     each bot gets a stable factor from its guid between 1 minus and 1 plus this,
+#                     so a crowd of bots does not take the same finds.
+#        Type: float
+#        Default: 0.15
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.PersonalityVariance = 0.15
+
+#
+#    World.Playerbots.Opportunities.Rares
+#        Description: Hunt rare creatures with loot worth the fight (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.Rares = true
+
+#
+#    World.Playerbots.Opportunities.RiskAppetite
+#        Description: The aggressiveness knob for opportunities alone (0.25..4; default 1), applied
+#                     on top of Risk:Tolerance: it scales the risk a bot accepts for the reward, as
+#                     Tolerance does for a pull. 2 takes finds twice as dangerous, 0.5 only half.
+#                     The cap on the death probability (MaxDeathProbability) holds whatever this
+#                     says.
+#        Type: float
+#        Default: 1
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.RiskAppetite = 1
+
+#
+#    World.Playerbots.Opportunities.ScanRadiusYards
+#        Description: How far (yards, 10..150; default 45) from the bot an opportunity may lie to be
+#                     considered.
+#        Type: float
+#        Default: 45
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Opportunities.ScanRadiusYards = 45
+
+#
 #    World.Playerbots.Party.Allowlist
 #        Description: Character names whose invitations a bot always accepts, whatever InvitePolicy
 #                     says (case-insensitive).
@@ -12991,18 +13128,17 @@ World.Playerbots.Population.TownProgression = true
 #        Description: The teleport of a town home (on by default): a bot whose new town lies on
 #                     another continent, across the water of Teldrassil or farther than
 #                     TownWalkYards takes the one return teleport (the Home teleport rules and
-#                     cooldown) when it is homed there. Off: bots reach a town by their own means
-#                     only (on foot, by taxi, and, with World:Playerbots:Travel on and a return mode
-#                     other than Walk, by boat, zeppelin or mage portal: docs/areas/playbots.md,
-#                     Travel); a town they cannot reach so is not assigned to that bot (it takes a
-#                     town it can walk to; with none it keeps a home that is not a town home, or has
-#                     none, and explores) and one Info anomaly per reason says so. The progression's
-#                     own moves (the town cycle, a new band town, the Danger rule on the way to a
-#                     town) then never teleport. The Home options' returns of a displaced bot still
-#                     do, as for any home: from another map (OtherMap), a walk set aside as blocked
-#                     (WalkBlocked), the Teleport return mode, an unsafe spirit-healer landing, and
-#                     stalled ground. A bot on Teldrassil, whose only way off is a boat, therefore
-#                     has no town secondary unless it may take the boat (or this option is on).
+#                     cooldown) when it is homed there. Off: bots reach a town on foot or by taxi
+#                     only; a town that would need a boat, a zeppelin or a teleport is not assigned
+#                     to that bot (it takes a town it can walk to; with none it keeps a home that is
+#                     not a town home, or has none, and explores) and one Info anomaly per reason
+#                     says so. The progression's own moves (the town cycle, a new band town, the
+#                     Danger rule on the way to a town) then never teleport. The Home options'
+#                     returns of a displaced bot still do, as for any home: from another map
+#                     (OtherMap), a walk set aside as blocked (WalkBlocked), the Teleport return
+#                     mode, an unsafe spirit-healer landing, and stalled ground. A bot on
+#                     Teldrassil, whose only way off is a boat, therefore has no town secondary
+#                     until a boat (or this option) exists.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -13016,10 +13152,8 @@ World.Playerbots.Population.TownProgressionTeleport = true
 #        Description: The longest trip in yards (100..20000) a bot with a town home walks to it on
 #                     the same continent; farther, or across the water of Teldrassil, or to another
 #                     continent, it takes the one return teleport (the Home teleport rules and
-#                     cooldown). 4500 yards is about 11 minutes on foot. With
-#                     World:Playerbots:Travel on (and a return mode other than Walk), a home across
-#                     the sea is travelled to by boat, zeppelin or portal first, and the teleport is
-#                     the fallback when no journey can begin.
+#                     cooldown). 4500 yards is about 11 minutes on foot. Bots never take boats,
+#                     zeppelins or trams themselves.
 #        Type: int
 #        Default: 4500
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -13369,12 +13503,9 @@ World.Playerbots.StallSeconds = 120
 
 #
 #    World.Playerbots.Taxi.BackoffMinutes
-#        Description: The longest, in minutes, a flight node is backed off after trips from it
-#                     failed (the server refused the flight, the flight master could not be reached,
-#                     or none stood where the node is): the per-node cap on the schedule of
-#                     World:Playerbots:Travel (TransitBackoffSeconds doubling to
-#                     TransitBackoffMaxSeconds). Only the failing node waits; the bot walks, or
-#                     flies from another known node, meanwhile (1..1440; default 10).
+#        Description: Minutes a bot does not try to fly after a flight attempt failed (the server
+#                     refused the flight, the flight master could not be reached, or none stood
+#                     where the node is): it walks meanwhile (1..1440; default 10).
 #        Type: int
 #        Default: 10
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -13486,133 +13617,6 @@ World.Playerbots.ThinkIntervalMs = 500
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ThinkStarvedGapMs = 10000
-
-#
-#    World.Playerbots.Travel.Boats
-#        Description: Let bots ride the boats (Menethil - Auberdine, Menethil - Theramore, Auberdine
-#                     - Rut'theran, Booty Bay - Ratchet; on by default).
-#        Type: bool
-#        Default: true
-#        Allowed: true | false
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.Boats = true
-
-#
-#    World.Playerbots.Travel.Enabled
-#        Description: Let bots plan multi-leg trips to far places (on by default). Off: no trip is
-#                     planned and a far goal stays where its caller leaves it.
-#        Type: bool
-#        Default: true
-#        Allowed: true | false
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.Enabled = true
-
-#
-#    World.Playerbots.Travel.Hearthstone
-#        Description: Let bots use their hearthstone (item 6948) as a leg when it is off cooldown
-#                     and the bind point is on the way (on by default).
-#        Type: bool
-#        Default: true
-#        Allowed: true | false
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.Hearthstone = true
-
-#
-#    World.Playerbots.Travel.MageService
-#        Description: Let mage bots offer their Teleport and Portal spells as a service (on by
-#                     default): a mage teleports itself, and opens a portal for a bot of its faction
-#                     that asks on the in-world request board. Off: no mage teleports for travel and
-#                     no portal is asked for or opened.
-#        Type: bool
-#        Default: true
-#        Allowed: true | false
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.MageService = true
-
-#
-#    World.Playerbots.Travel.MageServiceFeeCopper
-#        Description: Copper a requester pays the mage for a portal, by a real trade of money
-#                     (0..100000; default 0: the service is free). The portal is planned only when
-#                     the bot can pay it inside MaxTravelSpendCopper.
-#        Type: uint
-#        Default: 0
-#        Allowed: a whole number, 0 to 4294967295
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.MageServiceFeeCopper = 0
-
-#
-#    World.Playerbots.Travel.MageServiceRadiusYards
-#        Description: A bot asks for a portal only from a mage within this many yards of it, on its
-#                     map (10..1000; default 150).
-#        Type: float
-#        Default: 150
-#        Allowed: a number, '.' is the decimal point
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.MageServiceRadiusYards = 150
-
-#
-#    World.Playerbots.Travel.MaxTravelSpendCopper
-#        Description: The most copper one trip may spend on fares, fees and reagents together
-#                     (0..10000000; default 10000, one gold). 0: only free means (walking, boats,
-#                     zeppelins, the tram, lifts, the hearthstone, a free portal, the bot's own
-#                     teleport when it has the rune).
-#        Type: uint
-#        Default: 10000
-#        Allowed: a whole number, 0 to 4294967295
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.MaxTravelSpendCopper = 10000
-
-#
-#    World.Playerbots.Travel.TransitBackoffMaxSeconds
-#        Description: The longest wait (seconds) before a failed transit point is tried again
-#                     (10..86400; default 300). Must not be below TransitBackoffSeconds.
-#        Type: int
-#        Default: 300
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.TransitBackoffMaxSeconds = 300
-
-#
-#    World.Playerbots.Travel.TransitBackoffSeconds
-#        Description: The first wait (seconds) before a bot tries a transit point again (one flight
-#                     master's node, tram platform, lift, dock) that just failed it; each further
-#                     failure of the same point doubles the wait up to TransitBackoffMaxSeconds
-#                     (10..3600; default 60).
-#        Type: int
-#        Default: 60
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.TransitBackoffSeconds = 60
-
-#
-#    World.Playerbots.Travel.Zeppelins
-#        Description: Let Horde bots ride the zeppelins (Orgrimmar - Undercity, Orgrimmar -
-#                     Grom'gol, Undercity - Grom'gol; on by default).
-#        Type: bool
-#        Default: true
-#        Allowed: true | false
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Travel.Zeppelins = true
 
 #----------------------------------------------------------------------------
 # World:Playerbots:Qa
