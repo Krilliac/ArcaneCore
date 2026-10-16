@@ -130,6 +130,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Whether this process stopped writing playerbot rows because another world process owns them (see <see cref="SplitBrainConflictThreshold"/>).</summary>
     internal bool SplitBrain => _splitBrain;
 
+    /// <summary>Whether <see cref="ShutdownBeforeWorldStopAsync"/> has begun: bots stopping now are stopped by the shutdown itself, not by an operator or a fault. Any thread.</summary>
+    internal bool IsStopping => Volatile.Read(ref _stopping);
+
     /// <summary>
     /// Thrown by a home change refused because split brain is latched. <see cref="Done"/> is how many bots it had already stored or cleared before the latch was seen
     /// (those are real and stay). The message is the refusal code.
@@ -1125,7 +1128,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     public async Task ShutdownBeforeWorldStopAsync()
     {
-        _stopping = true;
+        Volatile.Write(ref _stopping, true);
+        coordinator?.BeginShutdown();
         if (_world is not null) _world.Updated -= Update;
         await _checkpoint.ConfigureAwait(false);
         await _operations.WaitAsync().ConfigureAwait(false);

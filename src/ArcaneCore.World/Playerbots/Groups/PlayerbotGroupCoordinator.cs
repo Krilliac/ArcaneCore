@@ -134,6 +134,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private readonly Dictionary<Guid, Waiting> _waiting = [];
     private readonly List<BotGroup> _groups = [];
     private readonly Dictionary<Guid, BotGroup> _memberOf = [];
+    private volatile bool _shuttingDown; // set once by BeginShutdown from the stopping thread; read on the world thread
     private readonly Dictionary<(Guid Bot, (PlayerbotGroupGoalKind, uint) Key), uint> _setAside = [];
     private readonly Dictionary<ObjectGuid, uint> _declinedPlayers = [];
     private readonly Dictionary<Guid, PlayerbotGroupBot> _bots = [];
@@ -260,6 +261,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(bot.Class, bot.Guid.Low).Weights;
         return PlayerbotItemScore.UpgradeGain(bot, template, weights) is > 0f ? RollVote.Need : RollVote.Greed;
     }
+
+    /// <summary>The host began stopping its bots: groups still end and release their members, but a leader or member stopped by the shutdown is not a finding. Any thread; never reset.</summary>
+    internal void BeginShutdown() => _shuttingDown = true;
 
     /// <summary>A bot stopped, became scripted or left the world: it leaves its group (or its wait).</summary>
     internal void Forget(Guid botId)
@@ -790,9 +794,10 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (!_groups.Contains(group)) return;
         if (group.LeaderPlayer(world) is not { } leader)
         {
-            PlayerbotGroupAnomalies.ReportNamed(group.Find(group.LeaderBotId)?.Name ?? "unknown", group.LeaderGuid, PlayerbotGroupAnomalies.LeaderGone,
-                string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader (not online) in state {group.State}; the group ends"),
-                AnomalySeverity.Info, _world?.Identity);
+            if (!_shuttingDown)
+                PlayerbotGroupAnomalies.ReportNamed(group.Find(group.LeaderBotId)?.Name ?? "unknown", group.LeaderGuid, PlayerbotGroupAnomalies.LeaderGone,
+                    string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader (not online) in state {group.State}; the group ends"),
+                    AnomalySeverity.Info, _world?.Identity);
             Finish(group, success: false, "leader-gone");
             return;
         }
@@ -1350,7 +1355,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             bool ran = Act(bot.Session, groupManager.GetInvite(player.Guid) is not null && groupManager.GetGroup(player.Guid) is null
                 ? WorldOpcode.CmsgGroupDecline : WorldOpcode.CmsgGroupDisband, [], budgeted: false);
             // Outcome: the bot released from the group is out of the server's group, or no brain and no matching can have it again.
-            if ((ran || player.IsInWorld) && (groupManager.GetGroup(player.Guid) is { } still && still.IsMember(player.Guid) || groupManager.GetInvite(player.Guid) is not null))
+            // Not reported during the shutdown (BeginShutdown): the bots are being stopped, so the leave may legitimately not complete, and the bot may genuinely
+            // still be in a persisted server group. That is cleaned up on the next boot only if every other member of that group is an online bot.
+            if (!_shuttingDown && (ran || player.IsInWorld) && (groupManager.GetGroup(player.Guid) is { } still && still.IsMember(player.Guid) || groupManager.GetInvite(player.Guid) is not null))
                 PlayerbotGroupAnomalies.Report(player, PlayerbotGroupAnomalies.MemberStillGrouped, string.Create(CultureInfo.InvariantCulture,
                     $"released from group {group.Id} ({group.Reason ?? "no reason"}) but still in the server's group or invited to one (leave dispatched {ran})"));
         }
@@ -1366,9 +1373,10 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         Note($"group {group.Id}: {member.Name} {reason}");
         if (member.BotId == group.LeaderBotId && !member.Real)
         {
-            PlayerbotGroupAnomalies.ReportNamed(member.Name, member.Guid, PlayerbotGroupAnomalies.LeaderGone,
-                string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader ({reason}) in state {group.State}; the group ends"),
-                AnomalySeverity.Info, _world?.Identity);
+            if (!_shuttingDown)
+                PlayerbotGroupAnomalies.ReportNamed(member.Name, member.Guid, PlayerbotGroupAnomalies.LeaderGone,
+                    string.Create(CultureInfo.InvariantCulture, $"group {group.Id} ({group.Goal}) lost its leader ({reason}) in state {group.State}; the group ends"),
+                    AnomalySeverity.Info, _world?.Identity);
             Finish(group, success: false, "leader-" + reason);
         }
     }
