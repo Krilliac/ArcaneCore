@@ -112,10 +112,14 @@ public sealed class FencingLifecycleTests
         await using SyntheticArcaneServer first = await SyntheticArcaneServer.StartAsync(
             new SyntheticServerOptions { EnableFencing = true }, configureServices: null, token);
 
-        InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        // The writer file lock refuses it first, before the durable claim is even read. The durable-claim refusal is not reachable end to end here: a second
+        // harness on another characters.db shares no claim row, and the same file is stopped by the lock above; WorldHostCharacterFencingTests
+        // (ExistingOwnerBlocksStartupBeforeFeaturesAttachEvenWhenFencingIsDisabled) covers the claim itself.
+        InvalidOperationException failure = await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
             SyntheticArcaneServer.StartAsync(
                 new SyntheticServerOptions { EnableFencing = true, CharactersDatabasePath = first.CharactersDatabasePath }, null, token));
-        Assert.Contains("already owned by another world authority", failure.Message);
+        Assert.Contains("already owned by another world process", failure.Message);
+        Assert.Contains(".world.lock", failure.Message);
 
         // The refused start did not disturb the owner.
         Assert.True(await IsClaimedAsync(first, token));

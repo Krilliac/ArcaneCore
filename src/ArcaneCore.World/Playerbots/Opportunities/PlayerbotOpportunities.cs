@@ -9,6 +9,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
@@ -140,6 +141,32 @@ internal sealed class PlayerbotOpportunities
     /// <summary>What the bot sets aside (tests).</summary>
     internal PlayerbotOpportunityLedger Ledger => _ledger;
 
+    /// <summary>
+    /// Where each opportunity decision and its outcome are reported for the policy telemetry (world thread, inside a think). Null unless the
+    /// telemetry is on. Calls are guarded: a sink fault never changes a decision.
+    /// </summary>
+    internal Policy.IPlayerbotOpportunitySink? Sink { get; set; }
+
+    private readonly List<Find> _probe = new(MaxCandidates);
+
+    /// <summary>
+    /// Whether a find is in reach for the goal policy's open-goal probe (world thread, once per policy snapshot): the bot is on one, or
+    /// the scan sees a find that is not set aside. It does not weigh the find (the controller does that when it takes the goal, and sets a
+    /// refused find aside, so the next probe skips it). Reuses one list, so the probe allocates no list (the scan itself runs over the bot's visible objects).
+    /// </summary>
+    internal bool HasCandidate(Player player)
+    {
+        PlayerbotOpportunityOptions options = _options.Opportunities;
+        if (!options.Enabled || !player.IsInWorld || !player.IsAlive || player.Map is not { } map) return false;
+        if (_episode is not null) return true;
+        if (_session.ManagedBudget is not { Remaining: > 0 } || PlayerbotTownGoals.FreeBagSlots(player) <= 0) return false;
+        _probe.Clear();
+        CollectFinds(player, map, Now, options, _probe);
+        bool any = _probe.Count > 0;
+        _probe.Clear();
+        return any;
+    }
+
     /// <summary>The find in progress, or the last verdict (tests and debugging).</summary>
     internal string Report => _episode is { } e
         ? $"opportunity={e.Kind.ToString().ToLowerInvariant()} entry={e.Entry} phase={e.Phase.ToString().ToLowerInvariant()}"
@@ -214,6 +241,7 @@ internal sealed class PlayerbotOpportunities
         if (_episode is not { } episode) return;
         _ledger.Defer(episode.Key, Now);
         LastVerdict = new OpportunityVerdict(OpportunityDecision.Refuse, "died", 0f, 0f, 0f);
+        episode.Died = true;
         EndEpisode();
         _released = null; // a dead bot has no target to take back
     }
@@ -261,22 +289,36 @@ internal sealed class PlayerbotOpportunities
         List<PlayerbotThreat> threats = PlayerbotRecovery.Threats(player);
         Find? best = null;
         OpportunityVerdict bestVerdict = default;
+        int bestGuards = 0;
         foreach (Find find in finds)
         {
             OpportunityVerdict verdict = Evaluate(player, map, find, interrupting, committed: false, now, threats, out List<Creature> pack);
             LastVerdict = verdict;
+            int guards = GuardsOf(find, pack);
             // A refused find is not weighed again at the next scan: its numbers move slowly. A wait (hurt, recovering) is looked at again at once.
-            if (verdict.Decision == OpportunityDecision.Refuse) _ledger.SetAside(find.Key, now, RefusedRecheckMs);
+            if (verdict.Decision == OpportunityDecision.Refuse)
+            {
+                _ledger.SetAside(find.Key, now, RefusedRecheckMs);
+                ReportDecision(player, find, verdict, guards, engaged: false, now);
+            }
+
             if (verdict.Decision != OpportunityDecision.Engage) continue;
             // The first guard to pull is one the brain would never take as a target (unreachable, someone else's, outside the home): leave the find.
             if (pack.Count > 0 && Untakeable?.Invoke(player, pack[0]) == true)
             {
                 _ledger.SetAside(find.Key, now, RefusedRecheckMs);
+                ReportDecision(player, find, verdict with { Decision = OpportunityDecision.Refuse, Reason = "untakeable" }, guards, engaged: false, now);
                 continue;
             }
 
             if (_claims.OwnerOf(find.Key, now) is var owner and not 0 && owner != player.Guid.Value) continue; // another bot is on it
-            if (best is null || verdict.Net > bestVerdict.Net) (best, bestVerdict) = (find, verdict);
+            if (best is null || verdict.Net > bestVerdict.Net)
+            {
+                // The find this one displaces was worth going for but not the best: a decision not to engage.
+                if (best is { } displaced) ReportDecision(player, displaced, bestVerdict with { Reason = "passed-over" }, bestGuards, engaged: false, now);
+                (best, bestVerdict, bestGuards) = (find, verdict, guards);
+            }
+            else ReportDecision(player, find, verdict with { Reason = "passed-over" }, guards, engaged: false, now);
         }
 
         if (best is not { } chosen) return;
@@ -289,14 +331,30 @@ internal sealed class PlayerbotOpportunities
         }
 
         LastVerdict = bestVerdict;
-        _episode = new Episode { Origin = chosen, StartedMs = now, MemoryMark = _risk().Memory.Count, ClaimEpoch = epoch, LastStepMs = now };
+        _episode = new Episode { Origin = chosen, StartedMs = now, MemoryMark = _risk().Memory.Count, ClaimEpoch = epoch, LastStepMs = now, Bot = player.Guid.Value };
+        ReportDecision(player, chosen, bestVerdict, bestGuards, engaged: true, now);
+    }
+
+    /// <summary>The guards at a find: the pack less the rare itself (it is the prize, not a guard).</summary>
+    private static int GuardsOf(Find find, List<Creature> pack) => pack.Count - (find.Kind == OpportunityKind.Rare && pack.Count > 0 ? 1 : 0);
+
+    /// <summary>Tell the sink about one decision (a verdict of engage or refuse; a wait is no decision). A sink fault never changes it.</summary>
+    private void ReportDecision(Player player, in Find find, in OpportunityVerdict verdict, int guards, bool engaged, uint now)
+    {
+        if (Sink is not { } sink) return;
+        try
+        {
+            sink.Decided(player, new Policy.OpportunityDecisionInfo(find.Key, find.Kind, find.Entry, find.Distance, guards, verdict.Net, verdict.Risk, verdict.Reason),
+                engaged, now);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.policy-telemetry", error); }
     }
 
     private void CollectFinds(Player player, Map map, uint now, PlayerbotOpportunityOptions options, List<Find> finds)
     {
         float radiusSq = options.ScanRadiusYards * options.ScanRadiusYards;
         GameObjectLootFeature? objects = _session.Services.GetService<GameObjectLootFeature>();
-        GroupManager? groups = GroupsOf(player);
+        GroupManager? groups = GroupsOf(player); // one lookup per scan, not per object
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (_ledger.IsDeferred(guid.Value, now)) continue;
@@ -572,6 +630,25 @@ internal sealed class PlayerbotOpportunities
         public bool Reported;
         public int PickCasts;
         public Creature? Pull;
+
+        /// <summary>The bot's guid (the telemetry's outcome is filed under it when the episode ends).</summary>
+        public ulong Bot;
+
+        /// <summary>The bot died during the episode.</summary>
+        public bool Died;
+
+        /// <summary>Copper looted from the chest (coins plus the vendor price of the items stored); meaningful when <see cref="LootMeasured"/>.</summary>
+        public ulong LootCopper;
+
+        /// <summary>The episode ended in success and the loot is known (a chest's window was read). A success whose loot is not seen
+        /// (a rare's corpse is the brain's to loot, a chest taken before its window was read) leaves it false.</summary>
+        public bool LootMeasured;
+
+        /// <summary>The episode ended in success (the loot was taken, or the rare was killed).</summary>
+        public bool Succeeded;
+
+        /// <summary>A rare the bot went for was killed by another player (or group): not a success.</summary>
+        public bool Lost;
     }
 
     private OpportunityStep Busy(Episode episode, PlayerbotGoalKind goal) => new(true, null, goal, episode.Entry);
@@ -662,7 +739,19 @@ internal sealed class PlayerbotOpportunities
         if (rare is null || !rare.IsInWorld || !visible || !rare.IsAlive)
         {
             // Dead (the brain loots the corpse) or gone: the find is over. A rare that vanished unseen is dropped at once.
-            if (rare is { IsAlive: false }) _ledger.Complete(episode.Key, now, RareRecheckMs);
+            if (rare is { IsAlive: false })
+            {
+                _ledger.Complete(episode.Key, now, RareRecheckMs);
+                // Killed by someone else (the corpse is tapped by another): the bot lost it, whatever it was worth.
+                // The server's own tap rule (the viewer's tapped flags: LootService.Filter, which knows groups and pets): a kill that earned the
+                // bot or its group the corpse is a success; one another player tapped is lost; one that earned nobody credit (SettleKillCredit,
+                // an NPC did most of the damage) is neither.
+                if (rare.KillCreditAllowed)
+                {
+                    if (PlayerbotBrain.HasLootRights(player, rare)) episode.Succeeded = true;
+                    else episode.Lost = true;
+                }
+            }
             else _ledger.Forget(episode.Key);
             EndEpisode();
             return OpportunityStep.None;
@@ -778,6 +867,19 @@ internal sealed class PlayerbotOpportunities
             }
 
             _lootSink(WorldOpcode.CmsgLootRelease, PlayerbotNavigation.GuidPayload(episode.Guid.Value));
+            if (Sink is not null && window.Type == 1)
+            {
+                // The worth of what the window held that the bot can take: its coins and the vendor price of the items it stores.
+                ulong copper = window.Coins;
+                // Only as many items as the bags have room for (one slot each; a stack that joins another would add a few the count misses).
+                int room = PlayerbotTownGoals.FreeBagSlots(player);
+                if (hasSpace && window.Items is { } items)
+                    foreach ((uint item, uint count) in items)
+                        if (player.Inventory.Templates.Find(item) is { } template && room-- > 0) copper += (ulong)template.SellPrice * Math.Max(1u, count);
+                episode.LootCopper = copper;
+                episode.LootMeasured = true;
+            }
+
             if (window.Slots.Count == 0 && window.Coins == 0) ReportAnomaly(player, episode, "chest-empty", $"chest {episode.Entry} ({episode.Guid.Value:X}) opened and held no loot");
             return Complete(episode, now);
         }
@@ -793,6 +895,7 @@ internal sealed class PlayerbotOpportunities
 
     private OpportunityStep Complete(Episode episode, uint now)
     {
+        episode.Succeeded = true;
         _ledger.Complete(episode.Key, now, episode.RespawnMs);
         OpportunityStep step = Busy(episode, PlayerbotGoalKind.Loot);
         EndEpisode();
@@ -833,6 +936,7 @@ internal sealed class PlayerbotOpportunities
     {
         if (_episode is { } episode)
         {
+            ReportEnd(episode);
             _claims.Leave(episode.Key, episode.ClaimEpoch);
             // A live guard handed to the brain as its target is let go of with the episode (a dead one is the brain's to loot).
             if (episode.Pull is { IsAlive: true } pulled) _released = pulled;
@@ -841,6 +945,19 @@ internal sealed class PlayerbotOpportunities
         _episode = null;
         _route = null;
         _routeTarget = default;
+    }
+
+    /// <summary>
+    /// Tell the sink how the episode came out: the copper looted (0 for an abandoned find; unknown, null, for a success whose loot the
+    /// controller did not see), whether the bot died, and the seconds from the decision to now.
+    /// </summary>
+    private void ReportEnd(Episode episode)
+    {
+        if (Sink is not { } sink) return;
+        uint now = Now;
+        ulong? loot = episode.LootMeasured ? episode.LootCopper : episode.Succeeded ? null : 0UL;
+        try { sink.Ended(episode.Bot, episode.Key, new Policy.OpportunityOutcome(loot, episode.Died, unchecked(now - episode.StartedMs), episode.Lost), now); }
+        catch (Exception error) when (error is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.policy-telemetry", error); }
     }
 
     /// <summary>A real player within reach of the chest (other bots settle it through the shared claims).</summary>
@@ -856,8 +973,8 @@ internal sealed class PlayerbotOpportunities
 
     // --- the loot window --------------------------------------------------------------------------------------------
 
-    /// <summary>One SMSG_LOOT_RESPONSE: the source, the loot type (1 = a corpse or chest), the coins and the slots of the items (slot type 0 only).</summary>
-    internal readonly record struct LootWindow(ulong Source, byte Type, uint Coins, List<byte> Slots);
+    /// <summary>One SMSG_LOOT_RESPONSE: the source, the loot type (1 = a corpse or chest), the coins and the slots of the items (slot type 0 only) and the item ids with their counts.</summary>
+    internal readonly record struct LootWindow(ulong Source, byte Type, uint Coins, List<byte> Slots, List<(uint Item, uint Count)>? Items = null);
 
     /// <summary>Read an SMSG_LOOT_RESPONSE the way the brain does (<c>PlayerbotBrain.LootManagedPackets</c>): guid, type, coins, count, then 22 bytes an item.</summary>
     internal static bool TryParseLoot(byte[] payload, out LootWindow window)
@@ -868,6 +985,7 @@ internal sealed class PlayerbotOpportunities
         ulong source = reader.ReadUInt64();
         byte type = reader.ReadByte();
         var slots = new List<byte>();
+        List<(uint Item, uint Count)>? items = null;
         uint coins = 0;
         if (type == 1 && payload.Length >= 14)
         {
@@ -876,17 +994,21 @@ internal sealed class PlayerbotOpportunities
             for (int index = 0; index < count && reader.Remaining >= 22; index++)
             {
                 byte slot = reader.ReadByte();
-                _ = reader.ReadUInt32();
-                _ = reader.ReadUInt32();
+                uint itemId = reader.ReadUInt32();
+                uint itemCount = reader.ReadUInt32();
                 _ = reader.ReadUInt32();
                 _ = reader.ReadUInt32();
                 _ = reader.ReadInt32();
                 byte slotType = reader.ReadByte();
-                if (slotType == 0) slots.Add(slot);
+                if (slotType == 0)
+                {
+                    slots.Add(slot);
+                    (items ??= []).Add((itemId, itemCount));
+                }
             }
         }
 
-        window = new LootWindow(source, type, coins, slots);
+        window = new LootWindow(source, type, coins, slots, items);
         return true;
     }
 }

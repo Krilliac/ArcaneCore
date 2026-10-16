@@ -202,7 +202,8 @@ internal static class PlayerbotNavigation
     }
 
     internal static bool IsDeadEndPin(Player player, Vector3 point)
-        => StallWatches.TryGetValue(player, out PlayerbotStallWatch? watch) && watch.IsDeadEndPin(player.MapId, point.X, point.Y);
+        => StallWatches.TryGetValue(player, out PlayerbotStallWatch? watch) && watch.World is { } world
+            && watch.IsDeadEndPin(player.MapId, point.X, point.Y, world.NowMs);
 
     /// <summary>The detour offsets tried past a hazard on the way, on either side (yards beyond its radius).</summary>
     private static readonly float[] HazardDetourYards = [5f, 15f];
@@ -977,8 +978,8 @@ internal static class PlayerbotNavigation
     /// never detected: its bots still stall, and are given up goal by goal as before. At most
     /// <see cref="IslandDirections"/> queries, all through <see cref="PlayerbotThinkProbe.Find"/> as fallbacks (counted, and held to the
     /// think's node budget: a query the budget cut short or refused proves nothing and answers no). The brain asks once a stall gives
-    /// a goal up and once when exploring stays confined (PlayerbotBrain.EscapeIsland, EscapeConfinedExplore), and does nothing else
-    /// in that think.
+    /// a goal up and once when exploring stays confined (PlayerbotBrain.EscapeIsland, EscapeConfinedExplore; that one also from where
+    /// the confinement began when the bot said no and has moved off it), and does nothing else in that think.
     /// <para>
     /// Live 2026-10-11 (bot QA #180, live-w23-r1, main 85023136): the ground inside the round wall of the Molsen Farm in Westfall
     /// (x -10305..-10274, y 1355..1385, the wall 1.7 to 3 yards high) is such an island, closed by the collision data too (no floor
@@ -991,9 +992,15 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     internal static bool IsOnMeshIsland(Player player, PlayerbotOptions options)
+        => IsOnMeshIsland(player, PlayerbotMotion.CurrentPosition(player), options);
+
+    /// <summary>
+    /// <see cref="IsOnMeshIsland(Player, PlayerbotOptions)"/> judged from <paramref name="start"/> on the bot's map instead of from where
+    /// the bot stands: the confined-explore check asks it from the point the confinement began (PlayerbotBrain.EscapeConfinedExplore).
+    /// </summary>
+    internal static bool IsOnMeshIsland(Player player, Vector3 start, PlayerbotOptions options)
     {
         if (player.Map is not { } map) return false;
-        Vector3 start = PlayerbotMotion.CurrentPosition(player);
         if (!Finite(start)) return false;
         using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
         for (int direction = 0; direction < IslandDirections; direction++)

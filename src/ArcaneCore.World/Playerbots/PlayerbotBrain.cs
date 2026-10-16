@@ -235,8 +235,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>The ghost recovery (inspection and tests).</summary>
     internal PlayerbotRecovery Recovery => _recovery;
     private readonly PlayerbotEquipment _equipment = new(session);
-    private readonly PlayerbotStallWatch _stall = new();
-    private readonly PlayerbotSuspensions _suspensions = new() { Shared = shared };
     private readonly PlayerbotTraceLog _trace = new();
 
     /// <summary>Recent decision, route, and loop transitions for QA diagnostics.</summary>
@@ -244,6 +242,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     /// <summary>The last <see cref="PlayerbotThinkProbe"/> phase seen while this brain was updating.</summary>
     internal string LastThinkPhase { get; private set; } = "start";
+
+    /// <summary>
+    /// The opportunity controller drove the latest think (it walked, opened, waited or chose a guard to pull). The brain's goal is
+    /// <see cref="PlayerbotGoalKind.Loot"/> for a chest and for a corpse alike, so the policy telemetry labels a decision
+    /// <see cref="PlayerbotPolicyGoal.Opportunity"/> from this and not from the goal kind.
+    /// </summary>
+    internal bool OpportunityDriven { get; private set; }
 
     /// <summary>Single-line diagnostic snapshot of the bot's state and recent trace history.</summary>
     internal string FormatDiagnosticSnapshot(Player player) => _trace.FormatSnapshot(player, this);
@@ -516,6 +521,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _thinkClockArmed = false;
             return;
         }
+        OpportunityDriven = false;
         _destinations.SkipQuest ??= _quests.IsRefused;
         _destinations.Untakeable ??= IsUntakeable;
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
@@ -713,6 +719,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
         NoteThink(_session.World.NowMs);
+        ObserveDeferWakes(player);
 
         // A tram trip (or a bot found on the Deeprun Tram map) owns the bot until it stands on the continent again (PlayerbotTram): nothing
         // else moves it meanwhile, and the stall watch does not judge a bot waiting for its car. A fight on the way to the entrance ends the
@@ -1095,7 +1102,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _town.BeginThink();
             // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
             PlayerbotThinkProbe.Phase("policy");
-            if (TryPolicyGoal(player, interval)) return;
+            if (TryPolicyGoal(player, interval)) { if (_policyPulled) goto afterGoalLadder; return; }
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
@@ -1564,7 +1571,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         uint now = _session.World.NowMs;
         _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
-        int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y);
+        int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y, now);
         bool deadEndPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
         if (deadEndPin)
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
@@ -1583,7 +1590,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 {
                     _suspensions.SuspendEntryEscalating(TargetEntry, now);
                     if (QuestId != 0 && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
-                        _suspensions.MarkUnreachableQuest(QuestId);
+                        _suspensions.MarkUnreachableQuest(QuestId, now);
                 }
                 else
                 {
@@ -1698,15 +1705,21 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// there, and stalled within two minutes of every login). True when the bot was moved.
     /// </para>
     /// </summary>
-    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false)
+    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null)
     {
         onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
         // A fragment of mesh (the region graph's component of a few regions, PlayerbotNavigation.IsOnMeshFragment) is an island whose
         // one straight hop off (TryPlanToward) found no ground beside it, or was not walkable: the same escape applies.
         // A repeated stall in the same 10-yard dead-end pin cell (deadEndPin) also triggers this escape when local walking did not free the bot.
+        // confinedFrom (EscapeConfinedExplore): where the confinement began. A bot wandering an island ends its 15 seconds anywhere on
+        // it, often at its rim, and from the rim the far side of an island up to twice IslandYards across lies beyond IslandYards; the
+        // walk from that point stayed within IslandYards of it, so the point's ground is the bot's. Asked only when the bot moved off it.
         bool island = PlayerbotHomeArea.IsNullIsland(player.MapId, player.X, player.Y)
             || PlayerbotNavigation.IsOnMeshIsland(player, _options)
+            || (confinedFrom is { } from
+                && System.Numerics.Vector2.DistanceSquared(new(from.X, from.Y), new(player.X, player.Y)) > ConfinedFromMinYards * ConfinedFromMinYards
+                && PlayerbotNavigation.IsOnMeshIsland(player, from, _options))
             || PlayerbotNavigation.IsOnMeshFragment(player);
         if (!island && !deadEndPin) return false;
         onIsland = island;
@@ -1852,10 +1865,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             TargetEntry = creature.Entry;
             _goal = PlayerbotGoalKind.Combat;
             pull = true;
+            OpportunityDriven = true;
             return true;
         }
 
         if (!step.Busy) return false;
+        OpportunityDriven = true;
         RetireIdleCombatRoute();
         _goal = step.Goal;
         TargetEntry = step.TargetEntry;
@@ -3037,6 +3052,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
     }
 
+    /// <summary>How far (flat yards) the bot must have moved off the confinement's start before EscapeIsland also judges from there.</summary>
+    private const float ConfinedFromMinYards = 5f;
+
     private bool EscapeConfinedExplore(Player player)
     {
         if (player.Map is null || !player.IsAlive || player.Combat.IsInCombat) return false;
@@ -3060,7 +3078,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (player.Map is not { InstanceId: 0 }) return false;
         // The check's path searches (up to IslandDirections, counted as the think's fallbacks) are this think's work: the caller plans
         // no route of its own after it.
-        if (!EscapeIsland(player, out bool onIsland) && onIsland)
+        if (!EscapeIsland(player, out bool onIsland, confinedFrom: _exploreIslandAnchor) && onIsland)
         {
             // On an island but not moved (the home teleport is on cooldown, say): ask again in 15 seconds.
             _exploreIslandSince = now;

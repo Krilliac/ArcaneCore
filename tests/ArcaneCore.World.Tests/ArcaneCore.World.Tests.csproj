@@ -33,6 +33,11 @@
     <Compile Include="..\ArcaneCore.Game.Tests\Collision\NavMeshFixture.cs" Link="Playerbots\NavMeshFixture.cs" />
   </ItemGroup>
 
+  <!-- The original loot generator: the oracle of the loot plan equivalence tests on the real world.db, shared with ArcaneCore.Game.Tests. -->
+  <ItemGroup>
+    <Compile Include="..\ArcaneCore.Game.Tests\Memo\ReferenceLootGenerator.cs" Link="Memo\ReferenceLootGenerator.cs" />
+  </ItemGroup>
+
   <!-- Steady-state allocation assertions that retry a window a cross-thread collection ran in, shared with ArcaneCore.Game.Tests. -->
   <ItemGroup>
     <Compile Include="..\ArcaneCore.Game.Tests\AllocationProbe.cs" Link="AllocationProbe.cs" />

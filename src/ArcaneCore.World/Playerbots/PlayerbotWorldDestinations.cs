@@ -937,7 +937,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         {
             _setAsides.Remove(questId);
             _heldAtLevel.Remove(questId);
-            suspensions.MarkUnreachableQuest(questId);
+            suspensions.MarkUnreachableQuest(questId, now);
             log?.LogWarning(
                 "Playerbot {Bot} abandons completed quest {Quest} (ender {Entry}) after {Times} set-asides: no walkable route from {X:F1},{Y:F1},{Z:F1} map {Map}; {Reason}",
                 player.Name, questId, entry, times, player.X, player.Y, player.Z, player.MapId, reason);
@@ -1004,10 +1004,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private void ReleaseTransitHeld(Player player)
     {
         if (!TransitAllowed(Home, player.Level, _options.Population)) return;
+        uint now = _session.World.NowMs;
         foreach ((uint quest, uint entry) in _transitHeld)
         {
-            Suspensions?.ReleaseQuest(quest);
-            Suspensions?.ReleaseEntry(entry);
+            Suspensions?.ReleaseQuest(quest, now);
+            Suspensions?.ReleaseEntry(entry, now);
         }
 
         // The far plans refused while the bot could not ride blocked the enders for a while: they are tried afresh.

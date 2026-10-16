@@ -97,6 +97,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private long _clockMs;
     private long _sinceMs;
     private long _passes;
+    private long _passesStarted;
+
+    /// <summary>How many passes were started (every call that reached the start of a pass, even one that then could not capture the world), whether or not they finished (tests).</summary>
+    internal long PassesStarted => Interlocked.Read(ref _passesStarted);
     // Pass-thread-only (one pass at a time): placements refused in a row after a bot was created, and the pass the pause began at.
     private int _placementRefusals;
     private long _pausedAtPass;
@@ -161,6 +165,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         if (!_options.Enabled) return "playerbots are off (World:Playerbots:Enabled)";
         if (Managed is null) return "the managed playerbot feature is not available";
         if (Managed.ResetInProgress) return "a fleet reset is running";
+        if (Managed.SplitBrain) return "another world process is writing the playerbot rows (split brain; see .playerbot splitbrain)";
         if (_rush.Active) return "a rush is already running; stop it first";
         _rush.Begin(count, perSecond, ClockMs);
         logger.LogInformation("Playerbot population rush started: {Count} new bots at {PerSecond} per second (fresh launch {Fresh}, brake {Brake} ms in {Windows} windows of {Seconds} s)",
@@ -257,6 +262,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             return;
         }
 
+        // Split brain: another world owns the playerbot rows and this world writes none, so the population starts, parks and stores nothing until an operator clears it.
+        if (Managed is { SplitBrain: true })
+        {
+            StopRush("split brain: another world process is writing the playerbot rows");
+            return;
+        }
+
         PlayerbotPopulationOptions pop = _options.Population;
         if (_rush.Active && !_options.Enabled) StopRush("playerbots were turned off");
         if (_rush.Active)
@@ -340,6 +352,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     /// <summary>World thread: capture the facts and start the pass task.</summary>
     private Task StartPass(int rushCount = 0, bool shedOnly = false)
     {
+        Interlocked.Increment(ref _passesStarted);
         PassInput? input;
         try { input = Capture(rushCount, shedOnly); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -666,7 +679,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         try
         {
             await using AsyncServiceScope scope = services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
-            IPlayerbotPopulationStore store = scope.ServiceProvider.GetRequiredService<IPlayerbotPopulationStore>();
+            IPlayerbotPopulationStore store = new SplitBrainGuardedStore(scope.ServiceProvider.GetRequiredService<IPlayerbotPopulationStore>(), input.Managed);
             IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
                 .LoadAllAsync(ct).ConfigureAwait(false);
             var known = registered.ToDictionary(b => b.BotId);
@@ -817,6 +830,11 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             logger.LogInformation("Playerbot population pass canceled during shutdown ({Type})", ex.GetType().Name);
             return;
         }
+        catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException)
+        {
+            // Split brain was latched while the pass ran: it writes nothing more and ends quietly (no fault, no warning, no status of its own).
+            return;
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             logger.LogFault("playerbot-population", ex, "Playerbot population pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
@@ -960,7 +978,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         foreach ((PlayerbotPopulationMember member, int band) in restart)
         {
             if (remaining == 0 || failures >= 3) break;
-            PlayerbotOperationResult result = await managed.StartAsync(member.BotId.ToString(), ct).ConfigureAwait(false);
+            PlayerbotOperationResult result = Checked(await managed.StartAsync(member.BotId.ToString(), ct).ConfigureAwait(false));
             if (result.Success)
             {
                 started++;
@@ -1077,7 +1095,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             PlayerbotOperationResult? made = null;
             for (int attempt = 0; attempt < 5; attempt++)
             {
-                made = await managed.CreateAsync(_names.Next(), planRace, planClass, ct).ConfigureAwait(false);
+                made = Checked(await managed.CreateAsync(_names.Next(), planRace, planClass, ct).ConfigureAwait(false));
                 if (made.Success || !(made.Code == "name-in-use" || made.Code.StartsWith("character-create-refused", StringComparison.Ordinal))) break;
             }
 
@@ -1108,7 +1126,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 if (PopulationStartAreas.AreaOf(planRace) is { } startArea) startCounts[startArea] = startCounts.GetValueOrDefault(startArea) + 1;
             }
 
-            PlayerbotOperationResult start = await managed.StartAsync(botId.ToString(), ct).ConfigureAwait(false);
+            PlayerbotOperationResult start = Checked(await managed.StartAsync(botId.ToString(), ct).ConfigureAwait(false));
             if (!start.Success)
             {
                 Fail($"start of new bot {made.Name} refused: {start.Code}");
@@ -1207,12 +1225,25 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _optOutToPersist.Clear();
         }
 
-        foreach (Guid id in pending)
+        // An id leaves the queue only once its row is stored (or needs no row): whatever was not reached, or whose write threw, is queued again.
+        int done = 0;
+        try
         {
-            if (!ctx.Members.TryGetValue(id, out PlayerbotPopulationMember? member) || member.Band == HomeOptOutBand) continue;
-            member = member with { Band = HomeOptOutBand, UpdatedUnix = NowUnix() };
-            await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
-            ctx.Members[id] = member;
+            for (; done < pending.Length; done++)
+            {
+                Guid id = pending[done];
+                if (ctx.Input.Managed.SplitBrain) return; // another world owns the rows: no member row is written
+                if (!ctx.Members.TryGetValue(id, out PlayerbotPopulationMember? member) || member.Band == HomeOptOutBand) continue;
+                member = member with { Band = HomeOptOutBand, UpdatedUnix = NowUnix() };
+                await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
+                ctx.Members[id] = member;
+            }
+        }
+        finally
+        {
+            if (done < pending.Length)
+                lock (_optOutGate)
+                    for (int i = done; i < pending.Length; i++) _optOutToPersist.Add(pending[i]);
         }
     }
 
@@ -1268,7 +1299,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                 radius, place, ct, zoneClipped: zone != 0, logFailures: false).ConfigureAwait(false);
             return outcome.Set == 1 ? null : "the home was not stored";
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        catch (Exception ex) when ((ex is InvalidOperationException or ArgumentException) && ex is not ManagedPlayerbotFeature.PlayerbotSplitBrainException)
         {
             return $"{ex.GetType().Name}: {ex.Message}";
         }
@@ -1681,7 +1712,15 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _homeRetrySweep[bot.BotId] = sweep + HomeRetrySweeps;
         }
 
-        if (cleared.Count > 0) changes += await managed.ClearHomesAsync(cleared, ct, byOperator: false).ConfigureAwait(false);
+        if (cleared.Count > 0)
+        {
+            if (managed.SplitBrain) adoptIncomplete = true; // nothing cleared: the adoption is retried after a clear
+            else
+            {
+                try { changes += await managed.ClearHomesAsync(cleared, ct, byOperator: false).ConfigureAwait(false); }
+                catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException) { adoptIncomplete = true; } // latched since the check: skip quietly, retry after a clear
+            }
+        }
         // Every operator home of the population is taken over: retire the generation this sweep began with (and no later one).
         if (completed && failed == 0 && !adoptIncomplete) Interlocked.Exchange(ref _adoptDoneGeneration, adoptGeneration);
         ForgetDeletedBots(ctx.Members.Keys.ToHashSet());
@@ -1707,8 +1746,8 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         try
         {
             // Not cancellable: a stop that a shutdown interrupts would leave a desired-enabled bot for the next start to restore.
-            await managed.StopAsync(botId.ToString(), CancellationToken.None).ConfigureAwait(false);
-            PlayerbotOperationResult deleted = await managed.DeleteAsync(botId.ToString(), ct).ConfigureAwait(false);
+            Checked(await managed.StopAsync(botId.ToString(), CancellationToken.None).ConfigureAwait(false));
+            PlayerbotOperationResult deleted = Checked(await managed.DeleteAsync(botId.ToString(), ct).ConfigureAwait(false));
             // "bot-not-found" means the registry row is already gone (a deletion that finished before a crash).
             if (!deleted.Success && deleted.Code != "bot-not-found")
             {
@@ -1722,6 +1761,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _pendingRetryAt.Remove(botId);
             return true;
         }
+        catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException)
+        {
+            throw; // not a delete failure: the pass ends quietly
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Backoff(botId);
@@ -1729,6 +1772,25 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried later");
             return false;
         }
+    }
+
+    /// <summary>Ends the pass quietly when a managed operation was refused because split brain is latched.</summary>
+    private static PlayerbotOperationResult Checked(PlayerbotOperationResult result)
+        => result.Code == "playerbot-split-brain" ? throw new ManagedPlayerbotFeature.PlayerbotSplitBrainException(0) : result;
+
+    /// <summary>
+    /// The pass's member store: every write first checks that split brain is not latched (another world owns the playerbot rows), and ends the pass quietly if it is.
+    /// One store call already in flight when the latch is set can still land.
+    /// </summary>
+    private sealed class SplitBrainGuardedStore(IPlayerbotPopulationStore inner, ManagedPlayerbotFeature managed) : IPlayerbotPopulationStore
+    {
+        public Task<IReadOnlyList<PlayerbotPopulationMember>> LoadAllAsync(CancellationToken cancellationToken = default) => inner.LoadAllAsync(cancellationToken);
+
+        public Task UpsertAsync(PlayerbotPopulationMember member, CancellationToken cancellationToken = default)
+            => managed.SplitBrain ? throw new ManagedPlayerbotFeature.PlayerbotSplitBrainException(0) : inner.UpsertAsync(member, cancellationToken);
+
+        public Task<bool> DeleteAsync(Guid botId, CancellationToken cancellationToken = default)
+            => managed.SplitBrain ? throw new ManagedPlayerbotFeature.PlayerbotSplitBrainException(0) : inner.DeleteAsync(botId, cancellationToken);
     }
 
     private void Backoff(Guid botId)
@@ -1759,7 +1821,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             // The facts are seconds old: look again, on the world thread, right before stopping.
             bool stillParkable = await world.InvokeAsync(() => IsParkableNow(managed, bot.BotId), ct).ConfigureAwait(false);
             if (!stillParkable) continue;
-            PlayerbotOperationResult result = await managed.StopAsync(bot.BotId.ToString(), ct).ConfigureAwait(false);
+            PlayerbotOperationResult result = Checked(await managed.StopAsync(bot.BotId.ToString(), ct).ConfigureAwait(false));
             if (!result.Success) { Fail($"park of {bot.BotId} refused: {result.Code}"); continue; }
             parked.Add(pick.Reason);
             ctx.RunningNow.Remove(bot.BotId);

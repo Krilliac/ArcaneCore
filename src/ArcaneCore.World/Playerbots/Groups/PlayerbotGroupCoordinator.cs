@@ -1406,7 +1406,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         _setAside[(botId, goal.Key)] = unchecked(Now + ms);
-        if (!suspendInBrain || !_bots.TryGetValue(botId, out PlayerbotGroupBot bot)) return;
+        if (!suspendInBrain || _world is null || !_bots.TryGetValue(botId, out PlayerbotGroupBot bot)) return;
         if (goal.QuestId != 0) bot.Brain.Suspensions.SuspendQuest(goal.QuestId, Now);
         bot.Brain.Suspensions.SuspendEntry(goal.ObjectiveEntry, Now);
     }

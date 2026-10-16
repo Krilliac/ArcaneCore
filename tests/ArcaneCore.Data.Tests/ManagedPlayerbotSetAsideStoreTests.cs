@@ -62,4 +62,25 @@ public sealed class ManagedPlayerbotSetAsideStoreTests
         await store.ReplaceAsync(bot, [row]);
         Assert.Equal([row], await store.LoadAllAsync());
     }
+
+    [Fact]
+    public async Task RoundTrip_FiniteUnreachableQuest_WithRepeatCount()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        DbContextOptions<CharacterDbContext> options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(connection).Options;
+        await using var db = new CharacterDbContext(options);
+        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+        CharacterRecord character = await new EfCharacterStore(db).CreateAsync(new CharacterRecord
+            { AccountId = 9, Name = "Finitebot", Race = 1, Class = 1, Level = 1 });
+        var store = new EfManagedPlayerbotSetAsideStore(db);
+        Guid bot = Guid.NewGuid();
+        PlayerbotSetAside[] rows =
+        [
+            new(bot, character.Id, PlayerbotSetAsideKind.UnreachableQuest, 1361, 1_760_000_120_000, 3),
+            new(bot, character.Id, PlayerbotSetAsideKind.Entry, 266, 1_760_001_200_000, 2),
+        ];
+        await store.ReplaceAsync(bot, rows);
+        Assert.Equal(rows.OrderBy(row => row.TargetId), (await store.LoadAllAsync()).OrderBy(row => row.TargetId));
+    }
 }

@@ -92,21 +92,15 @@ if (hotCode.Enabled)
 
 // Bring every schema this daemon touches to the current version (fail closed on mismatch). Database:Upgrade:Policy
 // decides whether an existing database may be upgraded here; a refusal is one line and an exit code, not a crash.
-int startup = await DatabaseStartup.InitializeAsync(
+// The single-writer lock on the characters database is taken first (WorldStartup), before any initializer opens, upgrades or checkpoints the file; RunAsync disposes
+// the container after the hosted services stop, and that releases the lock last. 0 normal stop, 2 restart request (.server restart), see ExitCodes.
+return await WorldStartup.RunAsync(
+    host,
     async () =>
     {
         await host.Services.GetRequiredService<AuthDbInitializer>().InitializeAsync().ConfigureAwait(false);
         await host.Services.GetRequiredService<CharacterDbInitializer>().InitializeAsync().ConfigureAwait(false);
         await host.Services.GetRequiredService<WorldDbInitializer>().InitializeAsync().ConfigureAwait(false);
     },
-    host.Services,
-    Console.Error).ConfigureAwait(false);
-if (startup != 0)
-{
-    return startup;
-}
-
-await host.RunAsync().ConfigureAwait(false);
-
-// 0 normal stop, 2 restart request (.server restart), see ExitCodes.
-return ExitCodes.Current;
+    Console.Error,
+    () => ExitCodes.Current).ConfigureAwait(false);

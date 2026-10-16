@@ -13,7 +13,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|home|chat|groups|battlegrounds|travel|scenario|summon|send|follow|stay|dismiss|near|revive|fleet|population|qa|chaos>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|splitbrain|list|inspect|invite|home|chat|groups|battlegrounds|travel|scenario|summon|send|follow|stay|dismiss|near|revive|fleet|population|qa|chaos>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
@@ -24,6 +24,8 @@ public sealed class PlayerbotCommands : ICommandGroup
                     "Syntax: .playerbot stop $id|$name|$prefix*|all [force]\nStop a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force).", Stop),
                 new ChatCommand("status", AccountSecurity.GameMaster,
                     "Syntax: .playerbot status [$id|$name]\nShow bot lifecycle status.", Status),
+                new ChatCommand("splitbrain", AccountSecurity.Administrator,
+                    "Syntax: .playerbot splitbrain [clear]\nShow whether this world stopped writing playerbot rows because another world process changed them. Stop the other world first, then clear: it re-reads the stored rows, reports them and lifts the latch so playerbot writes resume. The population manager (if enabled) then restarts its members over its next passes; every other bot stays stopped until you start it, and quarantined bots stay Faulted until you start them.", SplitBrainCommand),
                 new ChatCommand("list", AccountSecurity.GameMaster,
                     "Syntax: .playerbot list\nList managed bots.", List),
                 new ChatCommand("inspect", AccountSecurity.GameMaster,
@@ -184,6 +186,8 @@ public sealed class PlayerbotCommands : ICommandGroup
 
     private static bool Status(CommandContext context, string text)
     {
+        if (string.IsNullOrWhiteSpace(text) && context.Session.Services.GetService<ManagedPlayerbotFeature>()?.SplitBrain == true)
+            context.Reply("WARNING: split brain - another world process is writing the playerbot rows; this world writes none (.playerbot splitbrain).");
         IPlayerbotService? service = context.Session.Services.GetService<IPlayerbotService>();
         if (service is null)
         {
@@ -208,6 +212,44 @@ public sealed class PlayerbotCommands : ICommandGroup
         else if (status is { } found)
         {
             context.Reply(Format(found));
+        }
+
+        return true;
+    }
+
+    /// <summary><c>.playerbot splitbrain [clear]</c>: the split-brain latch of <see cref="ManagedPlayerbotFeature"/>.</summary>
+    private static bool SplitBrainCommand(CommandContext context, string text)
+    {
+        string argument = text.Trim();
+        if (argument.Length != 0 && !argument.Equals("clear", StringComparison.OrdinalIgnoreCase)) return false;
+        if (context.Session.Services.GetService<ManagedPlayerbotFeature>() is not { } feature)
+        {
+            context.Reply("Playerbot service is unavailable.");
+            return true;
+        }
+
+        if (argument.Length == 0)
+            context.Reply(feature.SplitBrain
+                ? "Split brain: another world process is writing the playerbot rows; this world writes none. Stop the other world, then .playerbot splitbrain clear."
+                : "No split brain: this world is writing the playerbot rows.");
+        else
+        {
+            context.Reply("Split brain clear accepted (re-reading the stored rows).");
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    ManagedPlayerbotFeature.SplitBrainClear cleared = await feature.ClearSplitBrainAsync().ConfigureAwait(false);
+                    context.Reply(cleared.WasSet
+                        ? $"Split brain cleared; playerbot writes resume. Stored rows re-read: {cleared.Rows} bots, {cleared.Enabled} wanted running, {cleared.Faulted} faulted. All are stopped here; the population manager (if enabled) restarts its members over its next passes, any other bot stays stopped until you start it."
+                        : "No split brain was set.");
+                }
+                catch (Exception error) when (error is not OutOfMemoryException)
+                {
+                    feature.ReportCommandFault("splitbrain-clear", error);
+                    context.Reply($"Split brain clear failed: {error.GetType().Name}.");
+                }
+            });
         }
 
         return true;
@@ -362,6 +404,7 @@ public sealed class PlayerbotCommands : ICommandGroup
             _ = Task.Run(async () =>
             {
                 try { context.Reply($"Playerbot home: {await service.ClearHomesAsync(ids).ConfigureAwait(false)} cleared."); }
+                catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException error) { context.Reply($"Playerbot home refused: split brain is latched (see .playerbot splitbrain); {error.Done} cleared before it."); }
                 catch (Exception error) when (error is not OutOfMemoryException)
                 {
                     service.ReportCommandFault("home clear", error);
@@ -475,6 +518,7 @@ public sealed class PlayerbotCommands : ICommandGroup
                 context.Reply($"Playerbot home: {outcome.Set} set ({description}), {skipped} skipped (not running)"
                     + Unzoned(unzoned) + (outcome.Failed != 0 ? $", {outcome.Failed} failed." : "."));
             }
+            catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException error) { context.Reply($"Playerbot home refused: split brain is latched (see .playerbot splitbrain); {error.Done} set before it."); }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
                 service.ReportCommandFault("home set", error);

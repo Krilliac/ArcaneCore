@@ -33,6 +33,13 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
     public const int DefaultMaxProcessCallsPerRoll = 4096;
 
     private readonly Random _random = random ?? new Random();
+
+    /// <summary>
+    /// The groups of each template rolled so far (<see cref="PlanOf"/>), built on its first roll: the per-roll Where/GroupBy/OrderBy and the
+    /// group copies were the cost of every kill, chest and reference visit. The content is read-only and fixed for this generator (a reload
+    /// builds a new generator), so a plan never goes stale; one per template of the content at most, empty templates are not kept.
+    /// </summary>
+    private readonly Dictionary<(LootTableKind Kind, uint Entry), LootPlan> _plans = [];
     private int _processCalls;
 
     /// <summary>
@@ -72,13 +79,12 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
             return;
         }
 
-        IReadOnlyList<LootStoreRow> rows = Content.GetRows(kind, entry);
+        LootPlan plan = PlanOf(kind, entry);
         if (groupFilter != 0)
         {
             // Group reference: only that group of this template (vmangos: Groups[groupId - 1].Process).
             // Built by group id, never by row order or adjacency.
-            List<LootStoreRow> members = [.. rows.Where(r => r.GroupId == groupFilter && r.MinCountOrRef > 0)];
-            if (members.Count > 0 && PickFromGroup(members) is { } picked)
+            if (plan.Find(groupFilter) is { } members && PickFromGroup(members) is { } picked)
             {
                 Emit(picked, result, depth, inheritedConditions);
             }
@@ -86,7 +92,7 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
             return;
         }
 
-        foreach (LootStoreRow row in rows)
+        foreach (LootStoreRow row in plan.Rows)
         {
             if ((row.GroupId > 0 && row.MinCountOrRef > 0) || !RollRated(row))
             {
@@ -96,13 +102,35 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
             Emit(row, result, depth, inheritedConditions);
         }
 
-        foreach (IGrouping<byte, LootStoreRow> group in rows.Where(r => r.GroupId > 0 && r.MinCountOrRef > 0).GroupBy(r => r.GroupId).OrderBy(g => g.Key))
+        foreach (LootGroup group in plan.Groups)
         {
-            if (PickFromGroup([.. group]) is { } picked)
+            if (PickFromGroup(group) is { } picked)
             {
                 Emit(picked, result, depth, inheritedConditions);
             }
         }
+    }
+
+    /// <summary>The rows of a template and its groups (groupid &gt; 0 and mincountOrRef &gt; 0), by ascending group id, rows in table order.</summary>
+    private LootPlan PlanOf(LootTableKind kind, uint entry)
+    {
+        if (_plans.TryGetValue((kind, entry), out LootPlan? plan))
+        {
+            return plan;
+        }
+
+        IReadOnlyList<LootStoreRow> rows = Content.GetRows(kind, entry);
+        if (rows.Count == 0)
+        {
+            return LootPlan.Empty;
+        }
+
+        LootGroup[] groups = [.. rows.Where(r => r.GroupId > 0 && r.MinCountOrRef > 0).GroupBy(r => r.GroupId).OrderBy(g => g.Key)
+            .Select(g => new LootGroup(g.Key,
+                [.. g.Where(r => Math.Abs(r.ChanceOrQuestChance) != 0)], [.. g.Where(r => Math.Abs(r.ChanceOrQuestChance) == 0)]))];
+        plan = new LootPlan(rows, groups);
+        _plans[(kind, entry)] = plan;
+        return plan;
     }
 
     private void Emit(LootStoreRow row, List<RolledLoot> result, int depth, IReadOnlyList<uint>? inheritedConditions)
@@ -133,21 +161,16 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
             ReferenceConditions = inheritedConditions ?? [],
         });
     }
-    /// <summary>vmangos LootGroup::Roll: explicit chances against one shrinking roll, then the equal-chance pool.</summary>
-    private LootStoreRow? PickFromGroup(IReadOnlyList<LootStoreRow> rows)
+    /// <summary>
+    /// vmangos LootGroup::Roll: explicit chances, in table order, against one shrinking roll, then the equal-chance (zero) pool. The roll is
+    /// drawn even for a group with no explicit chance, and the pool pick only when no explicit row hit, as before the plans.
+    /// </summary>
+    private LootStoreRow? PickFromGroup(LootGroup group)
     {
         double roll = _random.NextDouble() * 100.0;
-        List<LootStoreRow>? equal = null;
-        for (int r = 0; r < rows.Count; r++)
+        foreach (LootStoreRow row in group.Explicit)
         {
-            LootStoreRow row = rows[r];
             float chance = Math.Abs(row.ChanceOrQuestChance);
-            if (chance == 0)
-            {
-                (equal ??= []).Add(row);
-                continue;
-            }
-
             if (chance >= 100.0f)
             {
                 return row;
@@ -160,7 +183,7 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
             }
         }
 
-        return equal is { Count: > 0 } ? equal[_random.Next(equal.Count)] : null;
+        return group.Equal.Length > 0 ? group.Equal[_random.Next(group.Equal.Length)] : null;
     }
 
     private bool RollChance(float chance) => chance >= 100.0f || (chance > 0 && _random.NextDouble() * 100.0 < chance);
@@ -170,6 +193,32 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
     {
         float chance = Math.Abs(row.ChanceOrQuestChance);
         return chance >= 100.0f || RollChance(chance * (ChanceRate?.Invoke(row) ?? 1.0f));
+    }
+
+    /// <summary>One group of a template: the rows with a chance and the equal-chance rows, each in table order.</summary>
+    private sealed record LootGroup(byte Id, LootStoreRow[] Explicit, LootStoreRow[] Equal);
+
+    /// <summary>A template's rows as the content holds them, and its groups by ascending id.</summary>
+    private sealed class LootPlan(IReadOnlyList<LootStoreRow> rows, LootGroup[] groups)
+    {
+        public static readonly LootPlan Empty = new([], []);
+
+        public IReadOnlyList<LootStoreRow> Rows { get; } = rows;
+
+        public LootGroup[] Groups { get; } = groups;
+
+        public LootGroup? Find(byte id)
+        {
+            foreach (LootGroup group in Groups)
+            {
+                if (group.Id == id)
+                {
+                    return group;
+                }
+            }
+
+            return null;
+        }
     }
 }
 

@@ -370,7 +370,7 @@ public sealed class PlayerbotTransitDefectTests
             {
                 PlayerQuestLog log = world.Session.Services.GetRequiredService<QuestNpcFeature>().Services.StateOf(world.Player)!.Quests;
                 Assert.Equal(QuestStatus.Complete, log.Get(QuestId)?.Status); // not abandoned
-                Assert.False(suspensions.IsQuestUnreachable(QuestId));
+                Assert.Equal(0, suspensions.Ledger.Strikes(new DeferKey(DeferKind.UnreachableQuest, QuestId)));
                 Assert.Equal(0, suspensions.QuestSetAsideCount(QuestId)); // no growing count from this cause
             });
 

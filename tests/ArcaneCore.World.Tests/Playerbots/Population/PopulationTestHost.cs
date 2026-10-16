@@ -64,6 +64,8 @@ internal sealed class MemoryPopulationStore : IPlayerbotPopulationStore
 
     public void CancelHeldLoad() => _loadRelease.TrySetCanceled();
 
+    public void ReleaseHeldLoad() => _loadRelease.TrySetResult();
+
     public async Task<IReadOnlyList<PlayerbotPopulationMember>> LoadAllAsync(CancellationToken cancellationToken = default)
     {
         if (Interlocked.Exchange(ref _loadHeld, null) is { } held)
