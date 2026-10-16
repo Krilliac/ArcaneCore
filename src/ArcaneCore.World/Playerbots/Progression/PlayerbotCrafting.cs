@@ -44,7 +44,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     /// <summary>SpellFocusObject.dbc id 4, the cooking fire (gameobject_template 29784 Basic Campfire carries data0 = 4, data1 = 10 yards).</summary>
     private const uint CookingFireFocus = 4;
 
-    /// <summary>Basic Campfire (a Cooking spell; reagent Simple Wood, summons gameobject 29784 for five minutes).</summary>
+    /// <summary>Basic Campfire (a Cooking spell, Spell.dbc: effect TRANS_DOOR of gameobject 29784, tool Flint and Tinder 4471, reagent Simple Wood 4470).</summary>
     private const uint BasicCampfireSpell = 818;
 
     private const uint SimpleWoodItem = 4470;
@@ -352,9 +352,14 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 // The walk is over: when it ended in reach of the focus the recipe is cast now, else the bot gives up on it for a while.
                 if (!HasNearbySpellFocus(player, bestSpell.RequiresSpellFocus, out _))
                 {
+                    // A route that ran to its end and still leaves the bot outside the focus's reach is a planner or range fault; a hazard
+                    // abort or a stale route ends the walk early and says nothing about the fire.
+                    bool walkedToTheEnd = _route?.Complete == true;
                     _route = null;
                     _routeTarget = default;
                     _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + FocusBackoffMs);
+                    if (walkedToTheEnd && !_session.IsInChaosProbe)
+                        PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"craft spell {bestSpell.Id} walked to spell focus {bestSpell.RequiresSpellFocus} but is still out of its range");
                     return false;
                 }
             }
@@ -779,7 +784,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
 
     /// <summary>
     /// Lights a Basic Campfire (spell 818) for a cooking recipe when no cooking fire is around, as a retail player does: the bot must know
-    /// the spell (Cooking teaches it) and carry its reagent (Simple Wood 4470), and the store's spell must really summon a game object.
+    /// the spell (Cooking teaches it) and carry its reagent (Simple Wood 4470) and its tool (the totem slot: Flint and Tinder 4471), and the spell must really put down a cooking fire (<see cref="ProvidesSpellFocus"/>).
     /// Returns false when the bot cannot light one (the caller then sets the recipe aside); otherwise <paramref name="handled"/> is
     /// this think's result. A cast the server rejects with the wood still in the bags sets the campfire aside for <see cref="FocusBackoffMs"/>.
     /// </summary>
@@ -789,7 +794,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (_refusedUntil.ContainsKey(SpellKey(BasicCampfireSpell))
             || !spellbook.HasSpell(player, BasicCampfireSpell)
             || store.Get(BasicCampfireSpell) is not { } campfire
-            || !SummonsGameObject(campfire)
+            || !ProvidesSpellFocus(player, campfire, CookingFireFocus)
             || !HasReagentsAndTools(player, campfire))
             return false;
 
@@ -817,25 +822,38 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is null
             && player.Inventory.GetItemCount(SimpleWoodItem) >= woodBefore)
         {
+            // Retail refuses a campfire in several ordinary places (indoors, in a city, on a transport, swimming): not a fault, so the
+            // bot backs off in silence.
             _refusedUntil[SpellKey(BasicCampfireSpell)] = unchecked(now + FocusBackoffMs);
-            if (!_session.IsInChaosProbe)
-                PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"campfire spell {BasicCampfireSpell} rejected with wood present");
         }
 
         return true;
     }
 
-    private static bool SummonsGameObject(SpellInfo spell)
+    /// <summary>
+    /// Whether <paramref name="spell"/> puts down a spell focus object of <paramref name="focusId"/>: some effect summons (vmangos
+    /// Spell::EffectTransmitted: SPELL_EFFECT_TRANS_DOOR, the effect Basic Campfire uses, or SummonObjectWild) a game object of the map that is a
+    /// <see cref="GameObjectType.SpellFocus"/> with that focus id. A fishing node or an unknown template does not count.
+    /// </summary>
+    internal static bool ProvidesSpellFocus(Player player, SpellInfo spell, uint focusId)
     {
+        GameObjectMapSystem? objects = player.Map?.FindUpdater<GameObjectMapSystem>();
+        if (objects is null)
+            return false;
+
         for (int i = 0; i < spell.Effects.Count; i++)
         {
-            if (spell.Effects[i].Effect == SpellEffectName.SummonObjectWild && spell.Effects[i].MiscValue > 0)
+            SpellEffectInfo eff = spell.Effects[i];
+            if (eff.Effect is not (SpellEffectName.TransDoor or SpellEffectName.SummonObjectWild) || eff.MiscValue <= 0)
+                continue;
+            if (objects.FindTemplate((uint)eff.MiscValue) is { } template
+                && (GameObjectType)template.Type == GameObjectType.SpellFocus
+                && template.GetData(0) == focusId)
                 return true;
         }
 
         return false;
     }
-
     private bool TryGatherNode(Player player, SpellStore store, SpellbookCache spellbook, uint elapsedMs, uint now)
     {
         if (player.Map is not { } map || PlayerbotTownGoals.FreeBagSlots(player) <= 0)

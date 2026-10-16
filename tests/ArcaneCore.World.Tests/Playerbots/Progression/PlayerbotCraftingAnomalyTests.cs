@@ -18,6 +18,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Progression;
 /// cast the server rejected although the reagents are in the bags. The recipe is a synthetic consumable the bot wants (a consumable it carries
 /// fewer than five of), made from one reagent.
 /// </summary>
+[Collection(PlayerbotCraftingCollection.Name)]
 public sealed class PlayerbotCraftingAnomalyTests
 {
     private const uint Reagent = 99501;
