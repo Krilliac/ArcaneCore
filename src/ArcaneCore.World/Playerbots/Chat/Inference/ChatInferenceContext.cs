@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Numerics.Tensors;
 using System.Runtime.InteropServices;
+using ArcaneCore.World.Playerbots.Chat.Inference.Serving;
 
 namespace ArcaneCore.World.Playerbots.Chat.Inference;
 
@@ -18,9 +19,20 @@ internal enum ChatGenerationStatus
 
     /// <summary>The prompt and the reply do not fit the context window.</summary>
     ContextFull,
+
+    /// <summary>Droppable (ambient) work that waited past its queue deadline: stale chatter is not worth writing.</summary>
+    Dropped,
+
+    /// <summary>The scheduler gave up on it (preempted too many times) or the step failed.</summary>
+    Failed,
 }
 
-/// <summary>A generation's outcome and its timings (the counters and the probe).</summary>
+/// <summary>
+/// A generation's outcome and its timings (the counters and the probe). Under the scheduler (<see cref="InProcessChatEngine"/>),
+/// <paramref name="QueueMs"/> is the wait for a slot, <paramref name="TtftMs"/> the time from the request to the first token,
+/// <paramref name="InterTokenMs"/> the mean gap between tokens after it and <paramref name="Preemptions"/> how often a more urgent
+/// reply took the slot.
+/// </summary>
 internal sealed record ChatGenerationResult(
     ChatGenerationStatus Status,
     string Text,
@@ -30,7 +42,11 @@ internal sealed record ChatGenerationResult(
     double PrefillMs,
     double DecodeMs,
     string StopReason,
-    IReadOnlyList<int> Tokens);
+    IReadOnlyList<int> Tokens,
+    double QueueMs = 0,
+    double TtftMs = 0,
+    double InterTokenMs = 0,
+    int Preemptions = 0);
 
 /// <summary>
 /// One generation slot: the key/value cache, the activation buffers and the worker team, all allocated once. A generation runs
@@ -58,10 +74,8 @@ internal sealed class ChatInferenceContext : IDisposable
     private readonly float[][] _rowScratch;
     private readonly MatMulJob _matMul;
     private readonly AttentionJob _attention;
-    private readonly ChatSampler _sampler = new();
+    private ChatReplyDecoder? _decoder;
     private readonly List<int> _cached = [];
-    private readonly List<byte> _bytes = [];
-    private readonly int[] _recent;
 
     public ChatInferenceContext(ChatModel model, int contextTokens, int threads, string name = "bot-chat")
     {
@@ -94,7 +108,6 @@ internal sealed class ChatInferenceContext : IDisposable
         for (int i = 0; i < _rowScratch.Length; i++) _rowScratch[i] = new float[maxColumns];
         _matMul = new MatMulJob(model.File, _rowScratch);
         _attention = new AttentionJob(this);
-        _recent = new int[ContextTokens];
     }
 
     /// <summary>Positions the cache holds (the prompt plus the reply must fit).</summary>
@@ -149,39 +162,29 @@ internal sealed class ChatInferenceContext : IDisposable
 
         double prefillMs = Ms(started);
         long decodeStarted = Stopwatch.GetTimestamp();
-        Random random = settings.Seed is { } seed ? new Random(seed) : Random.Shared;
-        int recentCount = 0;
-        int penaltyFrom = Math.Max(0, prompt.Count - settings.PenaltyWindow);
-        for (int i = penaltyFrom; i < prompt.Count; i++) _recent[recentCount++] = prompt[i];
+        var promptIds = new int[prompt.Count];
+        for (int i = 0; i < promptIds.Length; i++) promptIds[i] = prompt[i];
+        ChatReplyDecoder decoder = Decoder;
+        decoder.Begin(settings, promptIds, []);
         var generated = new List<int>(settings.MaxNewTokens);
-        _bytes.Clear();
         string reason = "length";
-        BpeTokenizer tokenizer = _model.Tokenizer;
         while (generated.Count < settings.MaxNewTokens)
         {
-            int window = Math.Min(recentCount, settings.PenaltyWindow);
-            int next = _sampler.Sample(_logits, _recent.AsSpan(recentCount - window, window), settings, random);
-            if (next == tokenizer.Eos || next == tokenizer.ImEnd || next == tokenizer.EndOfText || tokenizer.IsControl(next))
+            int next = decoder.Choose(_logits, out ChatStopReason stopReason);
+            if (stopReason != ChatStopReason.None)
             {
-                reason = "stop";
-                break;
-            }
-
-            if (settings.StopAtNewline && tokenizer.HasNewline(next))
-            {
-                // Keep what came before the break on this token, then stop.
-                var piece = new List<byte>();
-                tokenizer.AppendBytes(next, piece);
-                int cut = piece.FindIndex(b => b is (byte)'\n' or (byte)'\r');
-                _bytes.AddRange(piece.Take(cut < 0 ? piece.Count : cut));
-                generated.Add(next);
-                reason = "newline";
+                reason = StopText(stopReason);
                 break;
             }
 
             generated.Add(next);
-            tokenizer.AppendBytes(next, _bytes);
-            if (recentCount < _recent.Length) _recent[recentCount++] = next;
+            stopReason = decoder.Commit(next);
+            if (stopReason != ChatStopReason.None)
+            {
+                reason = StopText(stopReason);
+                break;
+            }
+
             if (generated.Count >= settings.MaxNewTokens) break;
             if (Over(started, settings, cancellationToken) is { } stop)
                 return new ChatGenerationResult(stop, string.Empty, prompt.Count, reuse, generated.Count, prefillMs, Ms(decodeStarted), "budget", generated);
@@ -191,8 +194,103 @@ internal sealed class ChatInferenceContext : IDisposable
             _cached.Add(next);
         }
 
-        string text = System.Text.Encoding.UTF8.GetString(CollectionsMarshal.AsSpan(_bytes));
-        return new ChatGenerationResult(ChatGenerationStatus.Completed, text, prompt.Count, reuse, generated.Count, prefillMs, Ms(decodeStarted), reason, generated);
+        return new ChatGenerationResult(ChatGenerationStatus.Completed, decoder.Text(), prompt.Count, reuse, generated.Count, prefillMs, Ms(decodeStarted), reason, generated);
+    }
+
+    /// <summary>The stop reason as the counters and the probe print it.</summary>
+    internal static string StopText(ChatStopReason reason) => reason switch
+    {
+        ChatStopReason.StopToken => "stop",
+        ChatStopReason.StopSequence => "stop-sequence",
+        ChatStopReason.Newline => "newline",
+        ChatStopReason.NoCandidate => "no-candidate",
+        _ => "length",
+    };
+
+    /// <summary>This slot's token selection (the ported sampler chain, the chat-line constraint and the stops), built on first use.</summary>
+    internal ChatReplyDecoder Decoder => _decoder ??= new ChatReplyDecoder(_model);
+
+    // --- step API (the scheduled engine drives prefill chunks and single decode passes itself) ------------------------------
+
+    /// <summary>Tokens whose keys and values the cache holds, from position 0.</summary>
+    internal int CachedCount => _cached.Count;
+
+    internal int Layers => _c.Layers;
+
+    internal int KvDim => _c.KvDim;
+
+    /// <summary>
+    /// Keep the cached prefix <paramref name="tokens"/> shares with what the cache holds (never its last token, whose logits are
+    /// needed) and forget the rest. Returns the tokens kept.
+    /// </summary>
+    internal int KeepCommonPrefix(List<int> tokens)
+    {
+        int reuse = 0;
+        int limit = Math.Min(_cached.Count, tokens.Count - 1);
+        while (reuse < limit && _cached[reuse] == tokens[reuse]) reuse++;
+        if (_cached.Count > reuse) _cached.RemoveRange(reuse, _cached.Count - reuse);
+        return reuse;
+    }
+
+    /// <summary>
+    /// Compute positions [<paramref name="from"/>, <paramref name="to"/>) of <paramref name="tokens"/> (the cache must hold exactly
+    /// <paramref name="from"/> tokens); with <paramref name="wantLogits"/>, the logits of the last one land in <see cref="Logits"/>.
+    /// </summary>
+    internal void Prefill(List<int> tokens, int from, int to, bool wantLogits)
+    {
+        if (from != _cached.Count) throw new InvalidOperationException($"the cache holds {_cached.Count} tokens, not {from}");
+        if (to > tokens.Count || from >= to) throw new ArgumentOutOfRangeException(nameof(to));
+        ReadOnlySpan<int> all = CollectionsMarshal.AsSpan(tokens);
+        for (int position = from; position < to;)
+        {
+            int count = Math.Min(MaxBatch, to - position);
+            Forward(all.Slice(position, count), position, wantLogits: wantLogits && position + count == to);
+            _cached.AddRange(all.Slice(position, count));
+            position += count;
+        }
+    }
+
+    /// <summary>One decode pass: <paramref name="token"/> at the next position; its logits land in <see cref="Logits"/>.</summary>
+    internal void Decode(int token)
+    {
+        Span<int> one = [token];
+        Forward(one, _cached.Count, wantLogits: true);
+        _cached.Add(token);
+    }
+
+    /// <summary>After <see cref="ImportKv"/>: the cache now holds <paramref name="tokens"/> from position 0.</summary>
+    internal void SetCachedTokens(ReadOnlySpan<int> tokens)
+    {
+        _cached.Clear();
+        _cached.AddRange(tokens);
+    }
+
+    /// <summary>
+    /// Copy the keys and values of <paramref name="count"/> positions from <paramref name="sourcePosition"/> of the per-layer arrays
+    /// <paramref name="keys"/>/<paramref name="values"/> (the same row layout as this cache: position x <see cref="KvDim"/>) to
+    /// <paramref name="position"/> here.
+    /// </summary>
+    internal void ImportKv(float[][] keys, float[][] values, int sourcePosition, int position, int count)
+    {
+        if (position < 0 || position + count > ContextTokens) throw new ArgumentOutOfRangeException(nameof(position));
+        int kv = _c.KvDim;
+        for (int l = 0; l < _c.Layers; l++)
+        {
+            keys[l].AsSpan(sourcePosition * kv, count * kv).CopyTo(_keyCache[l].AsSpan(position * kv, count * kv));
+            values[l].AsSpan(sourcePosition * kv, count * kv).CopyTo(_valueCache[l].AsSpan(position * kv, count * kv));
+        }
+    }
+
+    /// <summary>The reverse of <see cref="ImportKv"/>: <paramref name="count"/> positions from <paramref name="position"/> here to <paramref name="targetPosition"/> there.</summary>
+    internal void ExportKv(int position, int count, float[][] keys, float[][] values, int targetPosition)
+    {
+        if (position < 0 || position + count > ContextTokens) throw new ArgumentOutOfRangeException(nameof(position));
+        int kv = _c.KvDim;
+        for (int l = 0; l < _c.Layers; l++)
+        {
+            _keyCache[l].AsSpan(position * kv, count * kv).CopyTo(keys[l].AsSpan(targetPosition * kv, count * kv));
+            _valueCache[l].AsSpan(position * kv, count * kv).CopyTo(values[l].AsSpan(targetPosition * kv, count * kv));
+        }
     }
 
     private static ChatGenerationStatus? Over(long started, ChatGenerationSettings settings, CancellationToken cancellationToken)

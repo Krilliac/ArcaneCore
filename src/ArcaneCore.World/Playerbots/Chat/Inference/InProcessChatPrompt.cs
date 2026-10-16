@@ -53,6 +53,22 @@ internal static class InProcessChatPrompt
         return null;
     }
 
+    /// <summary>
+    /// The token ids every <see cref="Build"/> prompt starts with: the system turn's opening and <see cref="Rules"/> (the engine computes
+    /// them once at load and keeps them in its prefix cache). The rules end in a full stop and a blank line, which the pre-tokenizer
+    /// keeps as one piece, so these ids are an exact prefix of every prompt whatever facts follow.
+    /// </summary>
+    internal static List<int> SharedPrefix(BpeTokenizer tokenizer)
+    {
+        ArgumentNullException.ThrowIfNull(tokenizer);
+        int imStart = tokenizer.ImStart ?? throw new InvalidOperationException("the vocabulary has no <|im_start|>");
+        var ids = new List<int>(128);
+        if (tokenizer.AddBos && tokenizer.Bos is { } bos && bos != imStart) ids.Add(bos);
+        ids.Add(imStart);
+        tokenizer.EncodeInto("system\n" + Rules + "\n\n", ids);
+        return ids;
+    }
+
     private static void Turn(List<int> ids, BpeTokenizer tokenizer, int imStart, int imEnd, string role, string text)
     {
         ids.Add(imStart);

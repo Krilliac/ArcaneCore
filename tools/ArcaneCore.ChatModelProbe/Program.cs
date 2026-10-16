@@ -63,19 +63,33 @@ using (engine)
     List<int> tokens = InProcessChatPrompt.Build(prompt, tokenizer, engine.ContextTokens - greedy.MaxNewTokens)
         ?? throw new InvalidOperationException("the sample prompt does not fit the context");
     Console.WriteLine();
+    var warm = Stopwatch.StartNew();
+    int warmed = await engine.WarmPrefixAsync(InProcessChatPrompt.SharedPrefix(tokenizer));
+    Console.WriteLine(string.Create(c, $"Shared prefix (system rules): {warmed} tokens prefilled once into the prefix cache in {warm.ElapsedMilliseconds} ms"));
     Console.WriteLine(string.Create(c, $"Sample prompt: {tokens.Count} tokens"));
-    for (int run = 1; run <= 2; run++)
+    // The server's own sampling: the ported chain (penalties, top-k, top-p, min-p, temperature, seeded draw) behind the one-line constraint.
+    var sampled = new ChatGenerationSettings(MaxNewTokens: 48, BudgetMs: 600_000, Temperature: 0.7f, TopK: 40, TopP: 0.9f, RepetitionPenalty: 1.15f, Seed: 7,
+        MinP: 0.05f);
+    (string Label, ChatGenerationSettings Settings)[] runs =
+    [
+        ("greedy, first reply", greedy),
+        ("greedy, same prompt again", greedy),
+        ("sampled t=0.7 k=40 p=0.9 min_p=0.05 seed=7", sampled),
+    ];
+    foreach ((string label, ChatGenerationSettings settings) in runs)
     {
-        ChatGenerationResult result = await engine.GenerateAsync(tokens, greedy, CancellationToken.None);
+        ChatGenerationResult result = await engine.GenerateAsync(tokens, settings, CancellationToken.None);
         int computed = result.PromptTokens - result.ReusedTokens;
         double promptRate = result.PrefillMs > 0 ? computed / (result.PrefillMs / 1000) : 0;
         double rate = result.DecodeMs > 0 ? result.GeneratedTokens / (result.DecodeMs / 1000) : 0;
         Console.WriteLine(string.Create(c,
-            $"Run {run} ({(run == 1 ? "cold" : "prompt cache warm")}): {result.Status}, stop={result.StopReason}, prompt {computed} computed + {result.ReusedTokens} reused in {result.PrefillMs:0} ms ({promptRate:0.0} tok/s), {result.GeneratedTokens} generated in {result.DecodeMs:0} ms ({rate:0.0} tok/s)"));
+            $"Run ({label}): {result.Status}, stop={result.StopReason}, prompt {computed} computed + {result.ReusedTokens} reused in {result.PrefillMs:0} ms ({promptRate:0.0} tok/s), {result.GeneratedTokens} generated in {result.DecodeMs:0} ms ({rate:0.0} tok/s), TTFT {result.TtftMs:0} ms, ITL {result.InterTokenMs:0.0} ms, queue {result.QueueMs:0} ms"));
         Console.WriteLine("  raw      " + result.Text);
         string? said = InProcessChatPrompt.Screen(result.Text, persona.Name, 160, truncated: result.StopReason == "length");
         Console.WriteLine("  screened " + (said ?? "(dropped: the templates would answer)"));
     }
+
+    Console.WriteLine("Scheduler: " + engine.ServingStats.Describe());
 
     Console.WriteLine();
     Console.WriteLine("A reply must finish inside World:Playerbots:Chat:InProcess:BudgetMs (default 6000) on the live server's CPU, with the live load.");

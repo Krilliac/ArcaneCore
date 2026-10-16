@@ -2,7 +2,12 @@ using System.Numerics.Tensors;
 
 namespace ArcaneCore.World.Playerbots.Chat.Inference;
 
-/// <summary>What a generation may do: its length, its hard time budget and its sampling.</summary>
+/// <summary>
+/// What a generation may do: its length, its hard time budget and its sampling. Tokens are chosen by the ported sampler chain
+/// (<see cref="Serving.ChatReplyDecoder"/>: penalties over the last <paramref name="PenaltyWindow"/> tokens, top-k, top-p,
+/// <paramref name="MinP"/>, temperature, a seeded draw or greedy at temperature 0); <paramref name="StopAtNewline"/> also installs the
+/// one-chat-line constraint; <paramref name="StopSequences"/> end the reply at a text match (the match itself is not said).
+/// </summary>
 internal sealed record ChatGenerationSettings(
     int MaxNewTokens,
     double BudgetMs,
@@ -12,10 +17,13 @@ internal sealed record ChatGenerationSettings(
     float RepetitionPenalty,
     int? Seed,
     bool StopAtNewline = true,
-    int PenaltyWindow = 64);
+    int PenaltyWindow = 64,
+    float MinP = 0f,
+    IReadOnlyList<string>? StopSequences = null);
 
 /// <summary>
-/// Picks the next token from the logits: the repetition penalty on the recent tokens (llama.cpp's rule: a positive logit is divided
+/// The engine's original compact sampler, kept as the reference the tests pin (generation itself now runs the ported
+/// <see cref="Sampling.SamplerChain"/>). Picks the next token from the logits: the repetition penalty on the recent tokens (llama.cpp's rule: a positive logit is divided
 /// by the penalty, a negative one multiplied), then greedy when the temperature is 0, else top-k, temperature, top-p and a draw.
 /// The candidate scan only keeps logits within <see cref="Margin"/>/T of the best (a token further below has a probability under
 /// e^-16 of the best one), so a 150k vocabulary costs one pass and a handful of heap inserts. Preallocated: no allocation per token.

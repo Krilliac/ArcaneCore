@@ -42,8 +42,32 @@ public sealed class PlayerbotChatInProcessOptions
     /// <summary>The penalty on tokens already in the recent text (1..2; 1 = none).</summary>
     public double RepetitionPenalty { get; set; } = 1.15;
 
+    /// <summary>Drop tokens less likely than this fraction of the most likely one (0..1; 0 = off).</summary>
+    public double MinP { get; set; } = 0.05;
+
+    /// <summary>How many of the latest tokens (prompt and reply) <see cref="RepetitionPenalty"/> looks at (0..1024; 0 = none).</summary>
+    public int RepetitionWindow { get; set; } = 64;
+
+    /// <summary>Text that ends a reply where it appears (the text itself is not said), e.g. <c>"User:"</c>; at most 8, each 1..32 characters.</summary>
+    public List<string> StopSequences { get; set; } = [];
+
     /// <summary>A fixed seed makes the same prompt give the same reply (unset: a fresh draw each time).</summary>
     public int? Seed { get; set; }
+
+    /// <summary>
+    /// How long a line no one is waiting on (guild chatter, announcements) may wait for a free slot before it is dropped (250..60000 ms):
+    /// stale small talk is not worth writing. A player's line is never dropped this way.
+    /// </summary>
+    public int AmbientQueueMs { get; set; } = 4000;
+
+    /// <summary>
+    /// Prompt tokens kept in the shared prefix cache (0..16384; 0 = off): the keys and values of the fixed system rules every bot
+    /// prompt starts with (and recent conversations) are computed once and copied into whichever slot a reply runs on.
+    /// </summary>
+    public int PrefixCacheTokens { get; set; } = 1024;
+
+    /// <summary>Prompt tokens one reply computes per scheduler step (32..512): smaller lets a player's line overtake a long prompt sooner.</summary>
+    public int PrefillChunkTokens { get; set; } = 64;
 
     /// <summary>The longest reply said (40..255 characters); a longer one is dropped and the templates answer.</summary>
     public int MaxReplyCharacters { get; set; } = 160;
@@ -71,6 +95,13 @@ public sealed class PlayerbotChatInProcessOptions
         if (TopK is < 1 or > Inference.ChatSampler.MaxTopK) throw new InvalidOperationException($"{section}: TopK must be 1..{Inference.ChatSampler.MaxTopK}.");
         if (!double.IsFinite(TopP) || TopP is < 0.05 or > 1) throw new InvalidOperationException($"{section}: TopP must be 0.05..1.");
         if (!double.IsFinite(RepetitionPenalty) || RepetitionPenalty is < 1 or > 2) throw new InvalidOperationException($"{section}: RepetitionPenalty must be 1..2.");
+        if (!double.IsFinite(MinP) || MinP is < 0 or > 1) throw new InvalidOperationException($"{section}: MinP must be 0..1.");
+        if (RepetitionWindow is < 0 or > 1024) throw new InvalidOperationException($"{section}: RepetitionWindow must be 0..1024.");
+        if (StopSequences is null || StopSequences.Count > 8 || StopSequences.Any(s => string.IsNullOrEmpty(s) || s.Length > 32 || s.Any(char.IsControl)))
+            throw new InvalidOperationException($"{section}: StopSequences takes at most 8 entries of 1..32 characters without control characters.");
+        if (AmbientQueueMs is < 250 or > 60_000) throw new InvalidOperationException($"{section}: AmbientQueueMs must be 250..60000.");
+        if (PrefixCacheTokens is < 0 or > 16_384) throw new InvalidOperationException($"{section}: PrefixCacheTokens must be 0..16384.");
+        if (PrefillChunkTokens is < 32 or > 512) throw new InvalidOperationException($"{section}: PrefillChunkTokens must be 32..512.");
         if (MaxReplyCharacters is < 40 or > PlayerbotChatPrompts.MaxReplyLength) throw new InvalidOperationException($"{section}: MaxReplyCharacters must be 40..{PlayerbotChatPrompts.MaxReplyLength}.");
         if (CircuitBreakerOverruns is < 1 or > 100) throw new InvalidOperationException($"{section}: CircuitBreakerOverruns must be 1..100.");
         if (CircuitBreakerSeconds is < 10 or > 3600) throw new InvalidOperationException($"{section}: CircuitBreakerSeconds must be 10..3600.");

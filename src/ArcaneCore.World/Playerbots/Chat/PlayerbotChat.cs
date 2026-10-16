@@ -71,6 +71,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, ProviderState> _providers = new(StringComparer.Ordinal);
     private readonly Dictionary<ulong, DateTimeOffset> _lastReplyTo = [];
+    private readonly Dictionary<Guid, List<InFlight>> _inFlight = [];
     private readonly Dictionary<(Guid Bot, ulong Player), Conversation> _conversations = [];
     private readonly ConcurrentQueue<BotChatReply> _replies = new();
     private readonly Random _random = new();
@@ -427,9 +428,124 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         if (_queue is { } existing) return existing;
         var queue = Channel.CreateBounded<BotChatAsk>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropWrite });
         _queue = queue;
-        _workers = [.. Enumerable.Range(0, Workers).Select(_ => Task.Run(() => WorkAsync(queue.Reader)))];
+        _workers = [.. Enumerable.Range(0, WorkerCount(Options)).Select(_ => Task.Run(() => WorkAsync(queue.Reader)))];
         return queue;
     }
+
+    /// <summary>
+    /// <see cref="Workers"/>, plus, with an in-process model provider, enough to keep its slots and its queue fed: its scheduler can
+    /// only put a player's line ahead of ambient chatter if both have reached it.
+    /// </summary>
+    internal static int WorkerCount(PlayerbotChatOptions options)
+    {
+        if (!(options.Providers ?? []).Any(p => p?.Kind == PlayerbotChatProviderKind.InProcess)) return Workers;
+        PlayerbotChatInProcessOptions local = options.InProcess;
+        return Math.Clamp(Workers + local.MaxConcurrent + local.MaxQueued, Workers, 16);
+    }
+
+    // --- in-flight requests (cancelled when the bot leaves or a newer line supersedes them) -----------------------------------
+
+    /// <summary>One model request on its way: its deadline source, cancelled by <see cref="Abandon"/> or a superseding line.</summary>
+    private sealed class InFlight(CancellationTokenSource cancellation, BotChatWorkload workload)
+    {
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+
+        public BotChatWorkload Workload { get; } = workload;
+
+        /// <summary>Nobody wants the answer any more: whatever comes back is not said and counts against no provider.</summary>
+        public volatile bool Abandoned;
+    }
+
+    private InFlight Track(Guid botId, CancellationTokenSource cancellation, BotChatWorkload workload)
+    {
+        var flight = new InFlight(cancellation, workload);
+        lock (_gate)
+        {
+            if (!_inFlight.TryGetValue(botId, out List<InFlight>? list)) _inFlight[botId] = list = [];
+            if (workload == BotChatWorkload.Interactive)
+            {
+                // A player now talks to this bot: chatter it was still composing is no longer wanted (and would only hold a slot).
+                foreach (InFlight other in list)
+                {
+                    if (other.Workload != BotChatWorkload.Ambient || other.Abandoned) continue;
+                    other.Abandoned = true;
+                    other.Cancellation.Cancel();
+                }
+            }
+
+            list.Add(flight);
+        }
+
+        return flight;
+    }
+
+    private void Untrack(Guid botId, InFlight flight)
+    {
+        lock (_gate)
+        {
+            if (!_inFlight.TryGetValue(botId, out List<InFlight>? list)) return;
+            list.Remove(flight);
+            if (list.Count == 0) _inFlight.Remove(botId);
+        }
+    }
+
+    /// <summary>
+    /// The bot <paramref name="botId"/> stopped (logged out, removed): cancel every model request still being written for it (any
+    /// thread). Its answers are not said and count against no provider. Returns how many were cancelled.
+    /// </summary>
+    internal int Abandon(Guid botId)
+    {
+        lock (_gate)
+        {
+            if (!_inFlight.TryGetValue(botId, out List<InFlight>? list)) return 0;
+            int cancelled = 0;
+            foreach (InFlight flight in list)
+            {
+                if (flight.Abandoned) continue;
+                flight.Abandoned = true;
+                flight.Cancellation.Cancel();
+                cancelled++;
+            }
+
+            return cancelled;
+        }
+    }
+
+    /// <summary>
+    /// One model request with the chat's deadline, tracked so <see cref="Abandon"/> can cancel it. Null when it was abandoned (the bot
+    /// left, or a player's line superseded it): nothing is said and nothing is recorded against the provider.
+    /// </summary>
+    private async Task<BotChatResult?> RequestAsync(PlayerbotChatProviderOptions provider, string? key, BotChatPrompt prompt, Guid botId, PlayerbotChatOptions options)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 1, 60)));
+        InFlight flight = Track(botId, deadline, prompt.Workload);
+        BotChatResult result;
+        try
+        {
+            result = await _client.CompleteAsync(provider, key, prompt, deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!_stop.IsCancellationRequested)
+        {
+            result = BotChatResult.Fail(BotChatOutcome.Timeout);
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException)
+        {
+            result = BotChatResult.Fail(BotChatOutcome.NetworkError);
+        }
+        finally
+        {
+            Untrack(botId, flight);
+        }
+
+        return flight.Abandoned ? null : result;
+    }
+
+    /// <summary>How urgent an answer to <paramref name="ask"/> is: a player who named the bot (or whispered) first, another bot next, the rest ambient.</summary>
+    internal static BotChatWorkload WorkloadOf(BotChatAsk ask)
+        => ask.Topic is not null || !ask.Addressed ? BotChatWorkload.Ambient
+            : ask.SenderIsBot ? BotChatWorkload.BotToBot
+            : BotChatWorkload.Interactive;
 
     private async Task WorkAsync(ChannelReader<BotChatAsk> reader)
     {
@@ -530,25 +646,8 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                 }
             }
 
-            BotChatResult result;
-            BotChatPrompt prompt = PlayerbotChatPrompts.Build(Outgoing(ask, options), Outgoing(Memory(ask), options));
-            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token))
-            {
-                deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 1, 60)));
-                try
-                {
-                    result = await _client.CompleteAsync(provider, key, prompt, deadline.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (!_stop.IsCancellationRequested)
-                {
-                    result = BotChatResult.Fail(BotChatOutcome.Timeout);
-                }
-                catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException)
-                {
-                    result = BotChatResult.Fail(BotChatOutcome.NetworkError);
-                }
-            }
-
+            BotChatPrompt prompt = PlayerbotChatPrompts.Build(Outgoing(ask, options), Outgoing(Memory(ask), options)) with { Workload = WorkloadOf(ask) };
+            if (await RequestAsync(provider, key, prompt, ask.BotId, options).ConfigureAwait(false) is not { } result) return null; // abandoned: the bot left or a newer line took over
             Record(provider, index, result);
             if (result.Outcome != BotChatOutcome.Ok) continue;
             (string? text, Party.PlayerbotPartyCommand? command) = PlayerbotChatPrompts.ReadAnswer(result.Text);
@@ -629,25 +728,8 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                 }
             }
 
-            BotChatResult result;
-            BotChatPrompt prompt = PlayerbotChatPrompts.Announcement(Outgoing(ask, options), topic);
-            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token))
-            {
-                deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 1, 60)));
-                try
-                {
-                    result = await _client.CompleteAsync(provider, key, prompt, deadline.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (!_stop.IsCancellationRequested)
-                {
-                    result = BotChatResult.Fail(BotChatOutcome.Timeout);
-                }
-                catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException)
-                {
-                    result = BotChatResult.Fail(BotChatOutcome.NetworkError);
-                }
-            }
-
+            BotChatPrompt prompt = PlayerbotChatPrompts.Announcement(Outgoing(ask, options), topic) with { Workload = BotChatWorkload.Ambient };
+            if (await RequestAsync(provider, key, prompt, ask.BotId, options).ConfigureAwait(false) is not { } result) return null; // abandoned: the bot left or a player's line took over
             Record(provider, index, result);
             if (result.Outcome != BotChatOutcome.Ok) continue;
             string? text = PlayerbotChatPrompts.ReadAnswer(result.Text).Reply;
