@@ -24,6 +24,10 @@ Models (both one dense format the server evaluates with SIMD on the CPU):
   mlp     a shared ReLU hidden layer and one output per goal, trained with Adam on the
           squared error of the taken goal's output only.
 
+Decisions made while the world tick was overrunning (a concurrent build, a stall) describe a
+lagging world and are dropped before training: see health_filter.py, --max-overruns,
+--no-health-filter and --tick-log.
+
 Usage:
   python -I tools/playerbot-policy/train.py TELEMETRY_DIR -o policy-model.json [--model mlp]
 """
@@ -37,6 +41,9 @@ import math
 import os
 import random
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python -I leaves the script's folder off the path
+import health_filter  # noqa: E402
 
 try:
     import numpy as np
@@ -52,13 +59,16 @@ GOALS = ["Quest", "Town", "Train", "Mount", "QuestTravel", "Grind", "Explore"]
 RECORD_VERSION = 1
 
 
-def load(directory: str) -> list[dict]:
+def load(directory: str):
+    """The goal records, and the tick-health intervals found beside them (a health_filter.Health)."""
     rows = []
+    health = health_filter.Health()
     files = sorted(glob.glob(os.path.join(directory, "policy-*.jsonl")))
     if not files:
         sys.exit(f"no policy-*.jsonl telemetry files in {directory}")
     bad = other = 0
     for path in files:
+        health.note_file(path)
         with open(path, encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
@@ -69,6 +79,9 @@ def load(directory: str) -> list[dict]:
                 except json.JSONDecodeError:
                     bad += 1  # a line cut by a crash mid-write
                     continue
+                if record.get("k") == "health":
+                    health.add_record(record, path)
+                    continue
                 if record.get("k", "goal") != "goal":
                     other += 1  # a combat record (fight, skip): another decision's data
                     continue
@@ -77,7 +90,25 @@ def load(directory: str) -> list[dict]:
                     continue
                 rows.append(record)
     print(f"read {len(rows)} goal records from {len(files)} files ({other} combat records left out, {bad} unusable lines)", file=sys.stderr)
-    return rows
+    return rows, health
+
+
+def drop_overrun_decisions(rows: list[dict], health, args) -> list[dict]:
+    """The rows whose [t, t + w] did not overlap a tick-overrun window (all of them with --no-health-filter)."""
+    if args.no_health_filter:
+        print("health filter off (--no-health-filter): every decision kept", file=sys.stderr)
+        return rows
+    health_filter.read_tick_logs(health, args.tick_log)
+    gate = health.build(args.max_overruns)
+    tally = health_filter.Tally()
+    kept = []
+    for record in rows:
+        verdict = gate.classify(record["t"], record.get("w", 0))
+        tally.add(record.get("goal") or "(none)", verdict)
+        if verdict != "drop":
+            kept.append(record)
+    health_filter.describe(health, tally, args.max_overruns)
+    return kept
 
 
 def label(record: dict, args) -> float:
@@ -207,11 +238,13 @@ def main(argv=None) -> int:
     parser.add_argument("--holdout", type=float, default=0.2)
     parser.add_argument("--min-rows", type=int, default=1000, help="refuse to write a model trained on fewer rows")
     parser.add_argument("--seed", type=int, default=7)
+    health_filter.add_arguments(parser)
     args = parser.parse_args(argv)
     if not 1 <= args.hidden <= 256:
         parser.error("--hidden must be 1..256")
 
-    x, goal, y, explored = dataset(load(args.telemetry), args)
+    rows, health = load(args.telemetry)
+    x, goal, y, explored = dataset(drop_overrun_decisions(rows, health, args), args)
     counts = {GOALS[k]: int((goal == k).sum()) for k in range(len(GOALS))}
     print(f"rows per goal {counts}; explored {int(explored.sum())}", file=sys.stderr)
     if len(y) < args.min_rows:

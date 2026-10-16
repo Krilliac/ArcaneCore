@@ -13,6 +13,9 @@ interval, and the policy-minus-ladder difference with its interval.
 The verdict line only says whether the difference is distinguishable from zero; whether that
 is enough to ship is a person's call, made on this report.
 
+Decisions made while the world tick was overrunning are left out of both arms (health_filter.py:
+--max-overruns, --no-health-filter, --tick-log), as train.py does.
+
 Usage:
   python -I tools/playerbot-policy/ab_report.py TELEMETRY_DIR [--json report.json]
 """
@@ -27,15 +30,22 @@ import random
 import sys
 from collections import defaultdict
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python -I leaves the script's folder off the path
+import health_filter  # noqa: E402
+
 METRICS = [("levels", "lp"), ("quests", "quests"), ("stalls", "stalls"), ("deaths", "deaths"), ("anomalies", "anomalies")]
 # Higher is better for the first two, lower for the rest.
 BETTER_HIGH = {"levels", "quests"}
 
 
-def load(directory: str):
+def load(directory: str, args=None):
+    """Per arm and bot, the decisions' per-minute outcomes; with args, minus the decisions made while the tick overran."""
     per_arm = {"policy": defaultdict(list), "ladder": defaultdict(list)}
     skipped = 0
+    health = health_filter.Health()
+    decisions = []
     for path in sorted(glob.glob(os.path.join(directory, "policy-*.jsonl"))):
+        health.note_file(path)
         with open(path, encoding="utf-8") as handle:
             for line in handle:
                 try:
@@ -43,14 +53,33 @@ def load(directory: str):
                 except json.JSONDecodeError:
                     skipped += 1
                     continue
+                if record.get("k") == "health":
+                    health.add_record(record, path)
+                    continue
                 if record.get("k", "goal") != "goal":
                     continue  # combat records (fight, skip) are not goal decisions
                 arm = record.get("arm")
                 if arm not in per_arm or record.get("w", 0) <= 0:
                     skipped += 1
                     continue
-                minutes = record["w"] / 60.0
-                per_arm[arm][record["bot"]].append({name: record["o"][key] / minutes for name, key in METRICS})
+                decisions.append((arm, record))
+    gate = None
+    tally = health_filter.Tally()
+    if args is not None and not args.no_health_filter:
+        health_filter.read_tick_logs(health, args.tick_log)
+        gate = health.build(args.max_overruns)
+    for arm, record in decisions:
+        if gate is not None:
+            verdict = gate.classify(record.get("t", 0), record["w"])
+            tally.add(record.get("goal") or "(none)", verdict)
+            if verdict == "drop":
+                continue
+        minutes = record["w"] / 60.0
+        per_arm[arm][record["bot"]].append({name: record["o"][key] / minutes for name, key in METRICS})
+    if gate is not None:
+        health_filter.describe(health, tally, args.max_overruns)
+    elif args is not None:
+        print("health filter off (--no-health-filter): every decision kept", file=sys.stderr)
     return per_arm, skipped
 
 
@@ -87,9 +116,10 @@ def main(argv=None) -> int:
     parser.add_argument("--rounds", type=int, default=2000)
     parser.add_argument("--min-bots", type=int, default=10, help="per arm, below which no verdict is given")
     parser.add_argument("--seed", type=int, default=11)
+    health_filter.add_arguments(parser)
     args = parser.parse_args(argv)
 
-    per_arm, skipped = load(args.telemetry)
+    per_arm, skipped = load(args.telemetry, args)
     rng = random.Random(args.seed)
     rates = {arm: bot_rates(bots) for arm, bots in per_arm.items()}
     bots = {arm: len(b) for arm, b in per_arm.items()}

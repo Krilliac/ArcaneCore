@@ -34,6 +34,25 @@ rewards or examples produced by Claude or any other LLM (Anthropic's terms prohi
    file's `mean` and `scale`. It prints train and holdout error, refuses to write from fewer than `--min-rows` (1000) usable rows,
    and refuses a fit with a non-finite weight.
 
+   **Tick-overrun filter.** A decision made while the world tick was overrunning (a concurrent engine build, a stall) describes a
+   lagging world, not what the policy chose, so both `train.py` and `ab_report.py` drop it. The server writes a `"k":"health"`
+   record about every 10 s (`t` the unix ms at the end, `ms` the length, `over` the frames over the tick budget; docs/areas/playbots.md,
+   Tick health). A decision is dropped when its window `[t, t + w]` overlaps a health interval with more than `--max-overruns`
+   (default 0) overruns. The tools print how many decisions were dropped per goal.
+
+   - `--no-health-filter` keeps everything.
+   - A decision whose window is not entirely inside health coverage (the start of a run, a restart, or a file from a build that writes
+     no health records, such as the Node1 fleet build `ea054aaa`) cannot be checked: it is kept and counted as *unverified*, with a
+     warning. With no health records at all the tools say loudly that the filter could not apply.
+   - `--tick-log WORLD.jsonl` (repeatable) adds windows from the world's JSON-lines log (`Logging:Json`), so old telemetry can still
+     be filtered: each `TickOverrun` warning gives `[ts - S s, ts]` ("in the last S s"; the first warning after a start has no such
+     part and 30 s, the default `WarnIntervalSeconds`, is assumed). These windows are coarser than health records, because the
+     warning is rate limited, and the log's own time span counts as covered. The log and the telemetry must come from the same run
+     and the same clock (the log's `ts` is UTC or carries an offset; telemetry `t` is unix ms).
+
+   Test the filter with `python -I tools/playerbot-policy/test_health_filter.py` (run from outside the folder; stdlib `unittest`
+   plus numpy).
+
 3. **Compare.** Put the model on the server for half the bots and run with telemetry on (exploration off, so both arms are clean):
 
    ```
