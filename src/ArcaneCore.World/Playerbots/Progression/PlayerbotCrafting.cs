@@ -151,9 +151,33 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     }
 
     /// <summary>
+    /// The common gathering and crafting tools (Mining Pick 2901, Blacksmith Hammer 5956, Skinning Knife 7005, Arclight Spanner 6219):
+    /// false when one is carried (<paramref name="have"/>), true when it is missing and its skill is known, null for any other item or a
+    /// missing tool of an unknown skill (the recipes decide). Shared by <see cref="NeedsVendorSupply"/> and <see cref="PlayerbotVendorSupplyNeeds"/>.
+    /// </summary>
+    internal static bool? CommonToolNeed(Player player, uint itemId, uint have)
+    {
+        if (itemId is not (2901 or 5956 or 7005 or 6219))
+            return null;
+        if (have > 0)
+            return false;
+        if (player.Skills is { } skills
+            && ((itemId == 2901 && skills.GetValueBase(SkillIds.Mining) > 0)
+                || (itemId == 5956 && skills.GetValueBase(SkillIds.Blacksmithing) > 0)
+                || (itemId == 7005 && skills.GetValueBase(SkillIds.Skinning) > 0)
+                || (itemId == 6219 && skills.GetValueBase(SkillIds.Engineering) > 0)))
+        {
+            return true;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Whether the bot needs <paramref name="itemId"/> from a vendor to craft or gather: a profession tool (<c>SpellInfo.Totems</c>,
     /// Mining Pick 2901, Blacksmith Hammer 5956, Skinning Knife 7005) not yet in the bags, or a reagent required by a known recipe
-    /// that would craft an equipment upgrade, bag upgrade, or needed supply.
+    /// that would craft an equipment upgrade, bag upgrade, or needed supply. Walks the whole spellbook per call; for many items at
+    /// once use <see cref="PlayerbotVendorSupplyNeeds"/>, which gives the same answers.
     /// </summary>
     internal static bool NeedsVendorSupply(Player player, uint itemId, SpellStore? store, SpellbookCache? spellbook)
     {
@@ -161,20 +185,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return false;
 
         uint have = player.Inventory.GetItemCount(itemId);
-        // Common gathering/crafting tools (Mining Pick 2901, Blacksmith Hammer 5956, Skinning Knife 7005, Arclight Spanner 6219).
-        if (itemId is 2901 or 5956 or 7005 or 6219)
-        {
-            if (have > 0)
-                return false;
-            if (player.Skills is { } skills
-                && ((itemId == 2901 && skills.GetValueBase(SkillIds.Mining) > 0)
-                    || (itemId == 5956 && skills.GetValueBase(SkillIds.Blacksmithing) > 0)
-                    || (itemId == 7005 && skills.GetValueBase(SkillIds.Skinning) > 0)
-                    || (itemId == 6219 && skills.GetValueBase(SkillIds.Engineering) > 0)))
-            {
-                return true;
-            }
-        }
+        if (CommonToolNeed(player, itemId, have) is { } tool)
+            return tool;
 
         if (store is null || spellbook is null)
             return false;
@@ -426,7 +438,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return true;
     }
 
-    private static bool WantsToCraftSpell(Player player, SpellInfo spell, PlayerbotStatWeights weights, SpellStore store, SpellbookCache spellbook)
+    internal static bool WantsToCraftSpell(Player player, SpellInfo spell, PlayerbotStatWeights weights, SpellStore store, SpellbookCache spellbook)
         => CraftPriority(player, spell, weights, store, spellbook) > 0f;
 
     private static float CraftPriority(Player player, SpellInfo spell, PlayerbotStatWeights weights, SpellStore store, SpellbookCache spellbook)
@@ -532,7 +544,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return anyReagent;
     }
 
-    private static bool WantsToEnchantSpell(Player player, SpellInfo spell)
+    internal static bool WantsToEnchantSpell(Player player, SpellInfo spell)
     {
         uint enchantId = 0;
         for (int i = 0; i < spell.Effects.Count; i++)

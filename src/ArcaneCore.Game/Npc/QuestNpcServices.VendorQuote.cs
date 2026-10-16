@@ -19,7 +19,7 @@ public sealed partial class QuestNpcServices
             || Deps.Items is not { } items || items.GetItem(itemId) is not { } proto)
             return null;
 
-        VendorItem? row = VisibleVendorItems(player, npc).FirstOrDefault(item => item.Row.Item == itemId).Row;
+        VendorItem? row = VisibleVendorRow(player, npc, itemId);
         if (row is null
             || proto.BuyCount == 0 || proto.RequiredHonorRank != 0
             || (row.MaxCount != 0 && CurrentStock(npc.Guid, row, proto) < proto.BuyCount))

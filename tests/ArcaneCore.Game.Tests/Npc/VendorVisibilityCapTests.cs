@@ -100,6 +100,25 @@ public sealed class VendorVisibilityCapTests
         Assert.Equal(1u, kit.Player.Inventory.GetItemCount(NewlyVisibleAfterFiltering));
     }
 
+    /// <summary>
+    /// The price checks find their row without walking the visible rows before it (QuestNpcServices.VisibleVendorRow); the packet still
+    /// walks the full view. For every item the vendor lists, before and past the 128-row cap, with rows filtered out ahead of it or
+    /// not, a price is quoted exactly when the item is in the packet.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PriceQuotesAgreeWithThePacketForEveryRow(bool hideFirstTen)
+    {
+        using var kit = Kit(hideFirstTen);
+        kit.Services.ListInventory(kit.Player, kit.Npc.Guid);
+        byte[] packet = kit.Single(WorldOpcode.SmsgListInventory);
+        var listed = Enumerable.Range(0, packet[8]).Select(index => BitConverter.ToUInt32(packet, 9 + (index * 28) + 4)).ToHashSet();
+        for (uint item = FirstItem; item < FirstItem + 160; item++)
+            Assert.True(listed.Contains(item) == (kit.Services.QuoteVendorPrice(kit.Player, kit.Npc, item) is not null), $"item {item}");
+        Assert.Equal(128, listed.Count);
+    }
+
     private sealed class RefusingCondition : IConditionEvaluator
     {
         public bool IsSatisfied(uint conditionId, Player player, NpcInfo? source) => false;

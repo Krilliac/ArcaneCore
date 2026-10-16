@@ -114,7 +114,7 @@ public sealed partial class QuestNpcServices
             return null;
         }
 
-        VendorItem? row = VisibleVendorItems(player, npc).FirstOrDefault(item => item.Row.Item == itemId).Row;
+        VendorItem? row = VisibleVendorRow(player, npc, itemId);
         if (row is null || proto.BuyCount == 0 || proto.RequiredHonorRank != 0)
         {
             return null;

@@ -890,8 +890,15 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// </summary>
     private struct ServiceNeeds
     {
-        private byte _repair, _consumables, _ammo, _grays, _junk;
+        private byte _repair, _consumables, _ammo, _grays, _junk, _supply;
         private bool _food, _drink;
+
+        /// <summary>The bot's crafting supply needs (<see cref="PlayerbotVendorSupplyNeeds"/>), read from its spellbook once per call.</summary>
+        internal PlayerbotVendorSupplyNeeds? Supply(PlayerbotTownGoals goals, Player player)
+        {
+            if (_supply == 0) _supply = (byte)(goals.SupplyNeeds(player) is not null ? 2 : 1);
+            return _supply == 2 ? goals._supplyNeeds : null;
+        }
 
         internal bool Repair(PlayerbotTownGoals goals, Player player)
         {
@@ -1066,15 +1073,30 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         return bought;
     }
 
-    private VendorItem? FindCraftingSupplyRow(Player player, QuestNpcServices services, NpcInfo npc)
-    {
-        if (player.Money == 0 || FreeBagSlots(player) <= 0)
-            return null;
+    /// <summary>The bot's crafting supply needs, read once per <see cref="FindNpc"/> call or per purchase (<see cref="SupplyNeeds"/>).</summary>
+    private readonly PlayerbotVendorSupplyNeeds _supplyNeeds = new();
 
+    /// <summary>
+    /// <see cref="_supplyNeeds"/> read from the bot's spellbook as of now; null without a spell store or spellbook (no supply is
+    /// needed then, as <see cref="FindCraftingSupplyRow"/> always had it).
+    /// </summary>
+    private PlayerbotVendorSupplyNeeds? SupplyNeeds(Player player)
+    {
         SpellFeature? spellFeature = session.Services.GetService<SpellFeature>();
         SpellStore? store = spellFeature?.System.Store;
         SpellbookCache? spellbook = spellFeature?.Spellbook;
         if (store is null || spellbook is null)
+            return null;
+        _supplyNeeds.Refresh(player, store, spellbook);
+        return _supplyNeeds;
+    }
+
+    private VendorItem? FindCraftingSupplyRow(Player player, QuestNpcServices services, NpcInfo npc, PlayerbotVendorSupplyNeeds? supply)
+    {
+        if (player.Money == 0 || FreeBagSlots(player) <= 0)
+            return null;
+
+        if (supply is null)
             return null;
 
         IReadOnlyList<VendorItem> items = services.Npcs.VendorItems(npc.Entry);
@@ -1083,7 +1105,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         {
             VendorItem row = items[i];
             if (Refused(_refusedPurchases, (npc.Entry, row.Item))
-                || !PlayerbotCrafting.NeedsVendorSupply(player, row.Item, store, spellbook)
+                || !supply.Needs(player, row.Item)
                 || services.GetVendorPurchasePrice(player, npc, row.Item) is not { } price
                 || price > player.Money
                 || (Budget is not null && !Budget.MayAfford(PlayerbotSpendKind.Discretionary, price, player)))
@@ -1099,7 +1121,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private bool TryBuyCraftingSupplies(Player player, QuestNpcServices services, NpcInfo npc)
     {
-        if (FindCraftingSupplyRow(player, services, npc) is not { } row)
+        if (player.Money == 0 || FreeBagSlots(player) <= 0
+            || FindCraftingSupplyRow(player, services, npc, SupplyNeeds(player)) is not { } row)
             return false;
         Goal = PlayerbotGoalKind.Vendor;
         bool bought = Buy(player, npc, row.Item);
@@ -1148,7 +1171,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             if (needs.Ammo(player) && FindAmmoRowOf(player, services, npc) is not null) return true;
             if (FindMountRow(player, services, npc) is not null) return true;
             if (FindEquipmentUpgradeRow(player, services, npc) is not null) return true;
-            if (FindCraftingSupplyRow(player, services, npc) is not null) return true;
+            if (player.Money != 0 && FreeBagSlots(player) > 0
+                && FindCraftingSupplyRow(player, services, npc, needs.Supply(this, player)) is not null) return true;
             if (needs.Grays(this, player, services)) return true;
             if (needs.Junk(this, player, services)) return true;
         }
