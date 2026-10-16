@@ -252,6 +252,11 @@ blanket absence labels without claiming complete vanilla fidelity.
 - **Script hooks:** addon chat. (DuelReset pet cooldowns are done: `DuelResetScript.ResetPetCooldowns`.)
 - **Multi-version:** S1 after #81 (build info on sessions, expansion columns, the gate, build-column migrations); S2 movement codec and typed serializers. Still undecided: which TBC/WotLK content DBs to use, and cross-version characters (decisions 4 and 6 on #61).
 - **Autopatcher:** done (off by default).
+- **Multithreading and parallel performance (later: after the playerbot policy model training, Phase 3 of `docs/design/playerbot-policy-phases.md`):** added 2026-10-15 at Nate's request.
+  - **Today:** one world process runs the whole simulation on its single world thread ([§1](#1-threading-authoritative-world-tick)). The thread pool only takes side work: saves and write queues, policy telemetry, policy scoring, tile prefetch and the region-graph build. So one process uses about one core: the Node1 training pilot ran 240 bots on about 0.6 core. The bot training fleet scales out by running more instances.
+  - **To do:** design and implement multithreaded world updates and the related techniques. That means parallel map/instance updates, keeping one writer per map, and moving bot think and pathfinding work off the world thread, with results applied on the tick. It also covers batched nav queries and an allocation/GC pass. Verify the per-map update-thread model against the references before writing code.
+  - **Not included:** live switching to Release and server GC is a separate pass for Nate to call. Live stays on Debug, and Debug is never built with optimization.
+  - Needs its own design and an explicit go, and it interacts with M15 clustering.
 - Nate has approved Warden module bytes in the repo and the bot-stall pathing change.
 
 ### Known flakes
