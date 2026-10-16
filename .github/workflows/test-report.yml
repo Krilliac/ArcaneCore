@@ -1,0 +1,43 @@
+name: Test report
+
+# Posts the CI test results (the .trx files ci.yml uploads) as a check run and a PR comment: totals, failures with their messages, and
+# the change since the base commit. It runs on workflow_run, in the base repository's context, so it can comment on a fork PR without
+# ever checking out or running the PR's code: it only reads the uploaded result files.
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] -- reads artifacts only, never checks out or runs PR code
+    workflows: ["CI"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  report:
+    if: github.event.workflow_run.conclusion != 'skipped' && github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read # download the CI run's artifacts
+      checks: write
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          pattern: test-results-*
+          path: results
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@7622c5bf3d112a72ab4fa3951c2aa5723d8ab92d # v2.25.0
+        with:
+          commit: ${{ github.event.workflow_run.head_sha }}
+          event_file: ${{ github.event_path }}
+          event_name: workflow_run
+          files: results/**/*.trx
+          check_name: Test results
+          comment_mode: always
+          # 211 tests skip in CI by design (no world dump or DBC files); list them only in the check, not the comment.
+          report_individual_runs: false
+          json_suite_details: false

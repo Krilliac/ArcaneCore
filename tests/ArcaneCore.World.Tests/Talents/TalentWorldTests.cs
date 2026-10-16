@@ -478,6 +478,10 @@ public sealed class TalentWorldTests
         await client.ReadUntilAsync(WorldOpcode.SmsgLearnedSpell);
         await client.SendAsync(WorldOpcode.MsgTalentWipeConfirm, GuidBody(Trainer));
         await client.ReadUntilAsync(WorldOpcode.SmsgRemovedSpell);
+        // The removal packet is sent before the respec is charged and queued (vmangos Player::ResetTalents removes the spells,
+        // Player.cpp:4116-4126, then updates money, multiplier and time, :4131-4142). Wait until that world-thread handler
+        // returns, or Flush runs before the respec write exists and the store has no row yet.
+        await host.OnWorldAsync(() => { });
         await Talents(host).Persistence.FlushAsync();
 
         CharacterTalentSnapshot stored = Snapshot(fixture, record.Id);

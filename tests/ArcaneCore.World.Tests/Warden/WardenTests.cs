@@ -60,7 +60,7 @@ public sealed class WardenTests
     /// A seeded Random that pins only the rotation start to the first check, so a test reads the checks in table order.
     /// The rotation start is the first <c>Next(int)</c> call, made in the WardenSession constructor. Every later call goes to the
     /// seeded base. That matters because a derived Random routes <c>NextInt64</c> through <c>Next(int)</c>, so pinning every call
-    /// would also pin the scan seeds, the scan gap and the first-scan offset.
+    /// would also pin the scan gap and the first-scan offset. (The scan seeds come from the cryptographic generator, not this Random.)
     /// </summary>
     private sealed class RotationStartsAtFirst(int seed) : Random(seed)
     {
@@ -266,6 +266,26 @@ public sealed class WardenTests
         ScansPerRequest = 8,
         Checks = [.. checks],
     };
+
+    [Fact]
+    public void TheScanSeeds_DoNotFollowTheSessionsRandom()
+    {
+        // Two sessions on identically seeded Randoms: everything Random drives (rotation, gaps) matches, but the page scan's seed must
+        // not, or the seeds already sent would predict the next ones. One 32-bit collision in 1 in 2^32 is the only false failure.
+        WardenOptions options = Scans(new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.PageA, Address = 0x20, Pattern = "DEADBEEF" });
+        uint SeedOf(Rig rig)
+        {
+            rig.Handshake();
+            rig.Warden.Update(10_000);
+            byte[] request = rig.Next();
+            Assert.Equal((byte)WardenServerCommand.CheatChecksRequest, request[0]);
+            Assert.Equal(0, request[1]);
+            Assert.Equal(WardenModuleProfile.OpPageA ^ WardenModuleProfile.XorByte, request[2]);
+            return BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(3));
+        }
+
+        Assert.NotEqual(SeedOf(new Rig(options, new Random(7))), SeedOf(new Rig(options, new Random(7))));
+    }
 
     [Fact]
     public void TheScanRequest_CarriesMemoryPageAndDriverScans_InTheModulesFormat()
