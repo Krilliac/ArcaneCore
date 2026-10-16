@@ -448,7 +448,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _overranReportMs = now;
         PlayerbotAnomalies.Report(player, "brain", "think-overran",
             string.Create(CultureInfo.InvariantCulture,
-                $"one think took {elapsedMs:F0} ms (budget {PlayerbotThinkRotation.TickBudgetMs:F0} ms per tick for every bot; goal {_goal}, last phase {LastThinkPhase})"));
+                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase})"));
     }
 
     internal void Update(uint elapsedMs)
@@ -2235,6 +2235,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _attackerEntries.Clear();
         _attackerFacts.Clear();
         _attackers.Clear();
+        // Out of a fight (nearly every think of nearly every bot) there is nothing to walk: skip the Concat iterator it would allocate.
+        if (player.Combat.Attackers.Count == 0 && player.Combat.ThreatenedBy.Count == 0) return;
         foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
         {
             if (unit is not Creature creature || creature.CharmerOrOwnerGuid.IsPlayer) continue;

@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 235 |
-| `Administrator` | 6 | 346 |
+| `GameMaster` | 3 | 237 |
+| `Administrator` | 6 | 348 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -203,6 +203,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.bot status` | 3 | GameMaster | stored level through the map | Syntax: .bot status [$id\|$name] Show bot lifecycle status. |
 | `.bot list` | 3 | GameMaster | stored level through the map | Syntax: .bot list List managed bots. |
 | `.bot debug` | 3 | GameMaster | stored level through the map | Syntax: .bot debug [$id\|$name] Show internal brain, motion, route, stall, risk and trace diagnostics for a running bot. |
+| `.bot cadence` | 3 | GameMaster | stored level through the map | Syntax: .bot cadence Show how often the bots think (think gap percentiles, thinks per tick, think budget) for the last minute. |
 | `.bot anomalies` | 3 | GameMaster | stored level through the map | Syntax: .bot anomalies $name Show the recent anomaly history recorded for a bot. |
 | `.bot gear` | 3 | GameMaster | stored level through the map | Syntax: .bot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
 | `.bot summon` | 3 | GameMaster | stored level through the map | Syntax: .bot summon $id\|$name Teleport a party bot (or fleet selection for GMs) to you. |
@@ -372,6 +373,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot chaos clear` | 6 | Administrator | stored level through the map | Syntax: .playerbot chaos clear [all] Reset chaos probe counters and recent fault history ('all' also clears explicit bot assignments). |
 | `.playerbot commands` | 3 | GameMaster | stored level through the map | Syntax: .playerbot commands List available playerbot chat/whisper commands and .bot subcommands. |
 | `.playerbot debug` | 3 | GameMaster | stored level through the map | Syntax: .playerbot debug [$id\|$name] Show internal brain, motion, route, stall, risk and trace diagnostics for a running bot. |
+| `.playerbot cadence` | 3 | GameMaster | stored level through the map | Syntax: .playerbot cadence Show how often the bots think: the think gap percentiles (all bots and the combat/dead lane), thinks per tick, the think time budget and the share of ticks that ended on a budget, for the last minute. |
 | `.playerbot anomalies` | 3 | GameMaster | stored level through the map | Syntax: .playerbot anomalies $name Show the recent anomaly history recorded for a bot. |
 | `.playerbot gear` | 3 | GameMaster | stored level through the map | Syntax: .playerbot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
 | `.playerbot party` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |
