@@ -155,6 +155,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private int _savedSharedSetAsideVersion;
     private bool _homeStore;
     private Chat.HttpBotChatClient? _chatClient;
+    private Chat.Inference.InProcessBotChatClient? _chatInProcess;
     private PlayerbotNavigationExecutor? _navigationExecutor;
     private Chaos.PlayerbotChaosEngine? _chaos;
     private Policy.PlayerbotPolicyEngine? _policy;
@@ -166,6 +167,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>The bots' chat service (null before <see cref="Attach"/> and after shutdown; <c>.playerbot chat status</c>).</summary>
     internal Chat.PlayerbotChat? Chat => _chat;
+
+    /// <summary>The in-process chat model provider (null before <see cref="Attach"/> and after shutdown; its <c>.playerbot chat status</c> line).</summary>
+    internal Chat.Inference.InProcessBotChatClient? ChatInProcess => _chatInProcess;
 
     /// <summary>The live playerbot configuration options.</summary>
     internal PlayerbotOptions BotOptions => _options;
@@ -257,8 +261,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         _options.Validate();
         if (_options.Policy.Enabled) StartPolicy();
-        _chat = new Chat.PlayerbotChat(_options,
-            services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()),
+        // The in-process model provider (Chat:InProcess) sits in front of the transport; every other provider kind passes through.
+        _chatInProcess = new Chat.Inference.InProcessBotChatClient(
+            services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()), _options,
+            services.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory, logger);
+        _chat = new Chat.PlayerbotChat(_options, _chatInProcess,
             services.GetService<Chat.IBotChatEnvironment>() ?? new Chat.ProcessBotChatEnvironment(),
             services.GetService<TimeProvider>() ?? TimeProvider.System, logger);
         if (_options.Enabled) _chat.LogConfiguration();
@@ -1163,6 +1170,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (_policy is { } policy) { _policy = null; await policy.DisposeAsync().ConfigureAwait(false); }
         if (_navigationExecutor is { } navigationExecutor) { _navigationExecutor = null; await navigationExecutor.DisposeAsync().ConfigureAwait(false); }
         if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
+        _chatInProcess?.Dispose();
+        _chatInProcess = null;
         _chatClient?.Dispose();
         _chatClient = null;
         if (failures.Count > 0) throw new AggregateException("Managed playerbot shutdown failed", failures);
