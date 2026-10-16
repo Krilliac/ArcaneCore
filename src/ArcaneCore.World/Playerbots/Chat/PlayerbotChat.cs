@@ -111,6 +111,9 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     /// <summary>The speech options (<c>World:Playerbots:Chat:Speech</c>, live).</summary>
     internal PlayerbotSpeechOptions SpeechOptions => Options.Speech;
 
+    /// <summary>The bot-to-bot conversations and world-channel reactions (<see cref="PlayerbotChatOptions.Conversation"/>).</summary>
+    internal PlayerbotConversationOptions ConversationOptions => Options.Conversation;
+
     /// <summary>The central rate limiter of bot speech (world thread; tests).</summary>
     internal PlayerbotSpeechLimiter Limiter => _limiter;
 
@@ -211,6 +214,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         PlayerbotChatMeters.CountSpoken(speech.Channel, speech.Topic);
         _logger.LogDebug("Bot {Bot} says {Channel}{Where} ({Topic}, {Length} chars)", bot, speech.Channel,
             speech.ChannelName is { } name ? " in " + name : string.Empty, speech.Topic, length);
+        Settle(speech, BotSpeechAdmission.Queued);
     }
 
     /// <summary>Count a line that was not said, by reason (<see cref="PlayerbotChatMeters.CountDropped"/>).</summary>
@@ -218,6 +222,28 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     {
         Interlocked.Increment(ref _speechDropped);
         PlayerbotChatMeters.CountDropped(speech.Channel, why);
+        Settle(speech, why);
+    }
+
+    /// <summary>
+    /// World thread: a line's fate, once known: said (<see cref="BotSpeechAdmission.Queued"/>) or not, and why. Raised for a line refused
+    /// by <see cref="TrySpeak"/> (before it returns) and for one said or stopped at delivery; the speech is the line as said (equal by value
+    /// to the one handed in). The conversation director follows its lines with it.
+    /// </summary>
+    internal event Action<BotSpeech, BotSpeechAdmission>? SpeechSettled;
+
+    private void Settle(BotSpeech speech, BotSpeechAdmission outcome)
+    {
+        if (SpeechSettled is not { } handlers) return;
+        try
+        {
+            handlers(speech, outcome);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot-chat", error);
+            _logger.LogWarning(error, "Bot chat: a speech-settled handler failed");
+        }
     }
 
     /// <summary>
@@ -551,8 +577,10 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             }
 
             if (!ask.FromMaster || !options.NaturalLanguageCommands) command = null;
+            BotChatAction action = SocialAction(ask, PlayerbotChatPrompts.ReadAction(result.Text));
             Remember(ask, text);
-            return new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, text, command, AcknowledgeCommand: false, provider.Label);
+            return new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, text, command, AcknowledgeCommand: false, provider.Label,
+                Action: action);
         }
 
         return null;
@@ -680,15 +708,72 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         BuiltinChatAnswer answer;
         lock (_gate)
         {
-            string? last = _conversations.TryGetValue((ask.BotId, ask.SenderGuid.Value), out Conversation? conversation) ? conversation.LastReply : null;
-            answer = PlayerbotBuiltinChat.Answer(ask, last, options.NaturalLanguageCommands, _random);
+            DateTimeOffset now = _time.GetUtcNow();
+            string? last = null;
+            BuiltinChatIntent? lastIntent = null;
+            if (_conversations.TryGetValue((ask.BotId, ask.SenderGuid.Value), out Conversation? conversation))
+            {
+                last = conversation.LastReply;
+                if (now - conversation.Touched <= TimeSpan.FromMilliseconds(PlayerbotBuiltinChat.FollowUpMs)) lastIntent = conversation.LastIntent;
+            }
+
+            answer = PlayerbotBuiltinChat.Answer(ask, last, lastIntent, options.NaturalLanguageCommands, _random);
             if (answer.Text is null && answer.Command is null) return null;
-            StateOf(provider).Succeed(_time.GetUtcNow());
+            StateOf(provider).Succeed(now);
         }
 
-        if (answer.Text is { } text) Remember(ask, text);
-        return new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, answer.Text, answer.Command, AcknowledgeCommand: true, provider.Label);
+        if (answer.Text is { } text) Remember(ask, text, answer.Intent);
+        return new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, answer.Text, answer.Command, AcknowledgeCommand: true, provider.Label,
+            Action: SocialAction(ask, answer.Action));
     }
+
+    /// <summary>
+    /// The social act a reply may carry: never for another bot's line; a quest share only for the party master; an order word is the
+    /// party command's business (<see cref="BotChatReply.Command"/>), not an action.
+    /// </summary>
+    internal static BotChatAction SocialAction(BotChatAsk ask, BotChatAction action)
+    {
+        if (ask.SenderIsBot || ask.Topic is not null) return BotChatAction.None;
+        return action switch
+        {
+            BotChatAction.Invite or BotChatAction.OpenTrade or BotChatAction.JoinLfg => action,
+            BotChatAction.ShareQuest when ask.FromMaster => action,
+            _ => BotChatAction.None,
+        };
+    }
+
+    // --- directed conversations -----------------------------------------------------------------------------------------
+
+    private readonly Dictionary<(ulong A, ulong B), long> _directed = [];
+
+    /// <summary>
+    /// World thread: the conversation director runs an exchange between <paramref name="a"/> and <paramref name="b"/> until
+    /// <paramref name="untilMs"/> (chat clock): while it does, neither bot answers the other's lines on its own (the director writes both
+    /// sides), so an exchange never doubles. <see cref="ReleaseExchange"/> ends it early.
+    /// </summary>
+    internal void ClaimExchange(ObjectGuid a, ObjectGuid b, long untilMs)
+    {
+        lock (_directed)
+        {
+            if (_directed.Count > 256)
+                foreach (KeyValuePair<(ulong, ulong), long> stale in _directed.Where(pair => pair.Value < NowMs).ToArray()) _directed.Remove(stale.Key);
+            _directed[PairOf(a, b)] = untilMs;
+        }
+    }
+
+    /// <summary>End a directed exchange (the director finished or dropped it).</summary>
+    internal void ReleaseExchange(ObjectGuid a, ObjectGuid b)
+    {
+        lock (_directed) _directed.Remove(PairOf(a, b));
+    }
+
+    /// <summary>Whether the director runs an exchange between these two bots now (their own answers to each other are held).</summary>
+    internal bool IsDirected(ObjectGuid speaker, ObjectGuid listener)
+    {
+        lock (_directed) return _directed.TryGetValue(PairOf(speaker, listener), out long until) && until >= NowMs;
+    }
+
+    private static (ulong, ulong) PairOf(ObjectGuid a, ObjectGuid b) => a.Value <= b.Value ? (a.Value, b.Value) : (b.Value, a.Value);
 
     // --- safety -----------------------------------------------------------------------------------------------------------
 
@@ -893,7 +978,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         }
     }
 
-    private void Remember(BotChatAsk ask, string reply)
+    private void Remember(BotChatAsk ask, string reply, BuiltinChatIntent? intent = null)
     {
         lock (_gate)
         {
@@ -907,6 +992,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
 
             conversation.Touched = _time.GetUtcNow();
             conversation.LastReply = reply;
+            conversation.LastIntent = intent;
             conversation.Turns.Add(new BotChatTurn(true, PlayerbotChatPrompts.Clean(ask.Text, PlayerbotChatPrompts.MaxLineLength)));
             conversation.Turns.Add(new BotChatTurn(false, reply));
             int keep = 2 * 16;
@@ -961,6 +1047,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     {
         public List<BotChatTurn> Turns { get; } = [];
         public string? LastReply;
+        public BuiltinChatIntent? LastIntent;
         public DateTimeOffset Touched;
     }
 

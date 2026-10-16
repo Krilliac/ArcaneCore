@@ -157,6 +157,12 @@ public sealed class PlayerbotChatOptions
     /// </summary>
     public PlayerbotSpeechOptions Speech { get; set; } = new();
 
+    /// <summary>
+    /// <c>Conversation</c>: bots talking with each other (the conversation director), their reactions to world channel chatter (LFM, WTB)
+    /// and their own LFG / WTS posts. Every line goes through the speech limits of <see cref="Speech"/> (docs/areas/playbots.md, Bot conversations).
+    /// </summary>
+    public PlayerbotConversationOptions Conversation { get; set; } = new();
+
     /// <summary>The providers in the order they are tried: the configured ones, then the built-in templates (the configured entry or a default one).</summary>
     internal IReadOnlyList<PlayerbotChatProviderOptions> EffectiveProviders()
     {
@@ -190,6 +196,8 @@ public sealed class PlayerbotChatOptions
         Safety.Validate();
         if (Speech is null) throw new InvalidOperationException($"{section}:Speech is missing.");
         Speech.Validate();
+        if (Conversation is null) throw new InvalidOperationException($"{section}:Conversation is missing.");
+        Conversation.Validate();
     }
 
     /// <summary>Whether a model provider (anything but the built-in templates) is configured.</summary>

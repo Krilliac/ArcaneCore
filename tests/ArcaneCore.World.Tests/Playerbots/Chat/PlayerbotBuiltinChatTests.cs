@@ -148,8 +148,21 @@ public sealed class PlayerbotBuiltinChatTests
     [Fact]
     public void EveryTemplate_UsesOnlyKnownPlaceholders_AndFitsAChatLine()
     {
-        var known = new HashSet<string> { "{player}", "{name}", "{level}", "{race}", "{class}", "{zone}", "{subzone}", "{goal}", "{Goal}", "{quest}", "{master}" };
-        BotChatAsk full = ChatSamples.Ask("x", ChatSamples.Persona(master: "Leader", inGroup: true));
+        var known = new HashSet<string>
+        {
+            "{player}", "{name}", "{level}", "{race}", "{class}", "{zone}", "{subzone}", "{goal}", "{Goal}", "{quest}", "{master}",
+            // the bot's facts
+            "{hp}", "{mana}", "{ilvl}", "{item}", "{spec}", "{role}", "{guild}", "{objective}", "{need}", "{surplus}", "{surpluscount}", "{gold}",
+            "{bagfree}", "{instance}", "{mob}", "{dungeon}", "{otherquest}", "{place}", "{placezone}", "{placemap}",
+            // topic values (conversations, world reactions, quest help)
+            "{askedquest}", "{who}", "{boss}", "{count}", "{loot}", "{newlevel}", "{price}", "{wanted}",
+        };
+        var topic = new BotChatTopic("t", string.Empty, new Dictionary<string, string>
+        {
+            ["askedquest"] = "The Fargodeep Mine", ["who"] = "Nathan", ["boss"] = "Edwin VanCleef", ["count"] = "5", ["loot"] = "Cruel Barb",
+            ["newlevel"] = "12", ["price"] = "1 silver", ["wanted"] = "water",
+        }, string.Empty);
+        BotChatAsk full = ChatSamples.Ask("x", ChatSamples.Persona(master: "Leader", inGroup: true) with { Facts = ChatSamples.FullFacts() }) with { Topic = topic };
         foreach ((string key, string[] lines) in PlayerbotChatTemplates.Lines)
         {
             Assert.True(lines.Length >= 1, key);

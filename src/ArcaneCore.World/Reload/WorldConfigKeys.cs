@@ -235,6 +235,26 @@ public static class WorldConfigKeys
         LivePlayerbots("Chat:Speech:EmoteReplies", o => o.Chat.Speech.EmoteReplies, (o, v) => o.Chat.Speech.EmoteReplies = v),
         LivePlayerbotsValue("Chat:Speech:EmoteReplyGapSeconds", o => o.Chat.Speech.EmoteReplyGapSeconds, (o, v) => o.Chat.Speech.EmoteReplyGapSeconds = v, v => v is >= 0 and <= 3600 ? null : "must be 0..3600"),
         LivePlayerbotsValue("Chat:Speech:MaxQueuedLines", o => o.Chat.Speech.MaxQueuedLines, (o, v) => o.Chat.Speech.MaxQueuedLines = v, v => v is >= 16 and <= 4096 ? null : "must be 16..4096"),
+        // Not vmangos keys: bot-to-bot conversations and world channel reactions (docs/areas/playbots.md, Conversations). The social
+        // pass reads the shared PlayerbotOptions.Chat.Conversation at every pass.
+        LivePlayerbots("Chat:Conversation:Enabled", o => o.Chat.Conversation.Enabled, (o, v) => o.Chat.Conversation.Enabled = v),
+        LivePlayerbotsValue("Chat:Conversation:ConversationsPerHour", o => o.Chat.Conversation.ConversationsPerHour, (o, v) => o.Chat.Conversation.ConversationsPerHour = v, v => v is >= 0 and <= 600 ? null : "must be 0..600"),
+        LivePlayerbotsValue("Chat:Conversation:MaxActive", o => o.Chat.Conversation.MaxActive, (o, v) => o.Chat.Conversation.MaxActive = v, v => v is >= 1 and <= 64 ? null : "must be 1..64"),
+        LivePlayerbotsValue("Chat:Conversation:MaxLines", o => o.Chat.Conversation.MaxLines, (o, v) => o.Chat.Conversation.MaxLines = v, v => v is >= 2 and <= 6 ? null : "must be 2..6"),
+        LivePlayerbotsValue("Chat:Conversation:PairCooldownMinutes", o => o.Chat.Conversation.PairCooldownMinutes, (o, v) => o.Chat.Conversation.PairCooldownMinutes = v, v => v is >= 1 and <= 1440 ? null : "must be 1..1440"),
+        LivePlayerbotsValue("Chat:Conversation:BotCooldownMinutes", o => o.Chat.Conversation.BotCooldownMinutes, (o, v) => o.Chat.Conversation.BotCooldownMinutes = v, v => v is >= 1 and <= 1440 ? null : "must be 1..1440"),
+        LivePlayerbotsValue("Chat:Conversation:LineGapSeconds", o => o.Chat.Conversation.LineGapSeconds, (o, v) => o.Chat.Conversation.LineGapSeconds = v, v => v is >= 2 and <= 120 ? null : "must be 2..120"),
+        LivePlayerbotsValue("Chat:Conversation:LineJitterSeconds", o => o.Chat.Conversation.LineJitterSeconds, (o, v) => o.Chat.Conversation.LineJitterSeconds = v, v => v is >= 0 and <= 120 ? null : "must be 0..120"),
+        LivePlayerbotsValue("Chat:Conversation:LineDeadlineSeconds", o => o.Chat.Conversation.LineDeadlineSeconds, (o, v) => o.Chat.Conversation.LineDeadlineSeconds = v, v => v is >= 10 and <= 600 ? null : "must be 10..600"),
+        LivePlayerbotsValue("Chat:Conversation:CandidatesPerPass", o => o.Chat.Conversation.CandidatesPerPass, (o, v) => o.Chat.Conversation.CandidatesPerPass = v, v => v is >= 1 and <= 256 ? null : "must be 1..256"),
+        LivePlayerbotsValue("Chat:Conversation:NearYards", o => o.Chat.Conversation.NearYards, (o, v) => o.Chat.Conversation.NearYards = v, v => v is >= 5 and <= 100 ? null : "must be 5..100"),
+        LivePlayerbots("Chat:Conversation:WorldReactions", o => o.Chat.Conversation.WorldReactions, (o, v) => o.Chat.Conversation.WorldReactions = v),
+        LivePlayerbotsValue("Chat:Conversation:WorldReactionsPerMinute", o => o.Chat.Conversation.WorldReactionsPerMinute, (o, v) => o.Chat.Conversation.WorldReactionsPerMinute = v, v => v is >= 0 and <= 60 ? null : "must be 0..60"),
+        LivePlayerbotsValue("Chat:Conversation:ReactionsPerLine", o => o.Chat.Conversation.ReactionsPerLine, (o, v) => o.Chat.Conversation.ReactionsPerLine = v, v => v is >= 1 and <= 5 ? null : "must be 1..5"),
+        LivePlayerbotsValue("Chat:Conversation:ReactionPlayerCooldownMinutes", o => o.Chat.Conversation.ReactionPlayerCooldownMinutes, (o, v) => o.Chat.Conversation.ReactionPlayerCooldownMinutes = v, v => v is >= 1 and <= 1440 ? null : "must be 1..1440"),
+        LivePlayerbotsValue("Chat:Conversation:MaxHeardQueue", o => o.Chat.Conversation.MaxHeardQueue, (o, v) => o.Chat.Conversation.MaxHeardQueue = v, v => v is >= 8 and <= 1024 ? null : "must be 8..1024"),
+        LivePlayerbots("Chat:Conversation:WorldPosts", o => o.Chat.Conversation.WorldPosts, (o, v) => o.Chat.Conversation.WorldPosts = v),
+        LivePlayerbotsValue("Chat:Conversation:WorldPostsPerHour", o => o.Chat.Conversation.WorldPostsPerHour, (o, v) => o.Chat.Conversation.WorldPostsPerHour = v, v => v is >= 0 and <= 120 ? null : "must be 0..120"),
         // Not vmangos keys: bots grouping up for group content (docs/areas/playbots-groups.md). PlayerbotGroupCoordinator reads the
         // shared PlayerbotOptions.Groups at every decision.
         LivePlayerbots("Groups:Enabled", o => o.Groups.Enabled, (o, v) => o.Groups.Enabled = v),

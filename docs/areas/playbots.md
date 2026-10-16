@@ -1572,6 +1572,30 @@ emote), screens it with the output filter, and the world thread says it through 
   `arcanecore.playerbot.chat.lines_spoken`; refused ones in `arcanecore.playerbot.chat.lines_dropped` by reason
   (docs/ops/metrics.md). Lines heard are raised as `PlayerbotChat.LineHeard` for other features to react to.
 
+#### Conversations
+
+Bots talk with each other and with the world channels (`World:Playerbots:Chat:Conversation`, all on by default, live key by key).
+Every line still goes through `TrySpeak`, the limiter and the real-listener check above, and is filled from the bot's real state
+(`PlayerbotPersonaFacts`: health and mana, gear, bags, money, needs, spare goods, quest progress, role and spec, guild, group,
+nearby players and creatures, the dungeon that suits its level); a line with a slot that has no real value is never said. The
+built-in lines read like 2005 chat (LFG/LFM, WTB/WTS, inc, oom, ty, gz) and need no model; a configured model may enrich replies.
+
+- **Conversations** (`PlayerbotConversations`, on the social pass): about `ConversationsPerHour` times an hour two bots talk for
+  2..`MaxLines` lines (never past `1 + BotToBotMaxTurns`): a ding, a boss the group killed, loot, a death, food or water one lacks
+  and the other carries, a quest both are on, a dungeon, what each is doing, a guild hello. Groupmates use party chat, bots within
+  `NearYards` say, guildmates guild chat; only where a real player hears it. Lines are `LineGapSeconds` + up to
+  `LineJitterSeconds` apart; a line refused for a moment is retried until `LineDeadlineSeconds`. At most `MaxActive` at once,
+  `PairCooldownMinutes` per pair, `BotCooldownMinutes` per bot, `CandidatesPerPass` bots looked at per start. A real player
+  speaking to either bot ends the conversation at once, so the player is answered first.
+- **World channel reactions** (`WorldReactions`): a real player's LFM line for a dungeon that fits a free bot (and the role it asks
+  for) gets a whisper ("inv", "lvl 24 priest here, inv?"); a WTB line naming goods a bot carries spare gets an offer priced at twice
+  the vendor value. At most `ReactionsPerLine` bots per line, `WorldReactionsPerMinute` lines a minute, one player per
+  `ReactionPlayerCooldownMinutes`; heard lines wait in a queue of `MaxHeardQueue`.
+- **Own posts** (`WorldPosts`): up to `WorldPostsPerHour` LFG lines in LookingForGroup (a free bot, the dungeon of its level) or
+  WTS lines in Trade - City (a bot in a capital with spare goods).
+- **Social acts from chat**: asked to invite, trade, share a quest (the master only) or look for a group, a bot does it with its own
+  client packets (`CMSG_GROUP_INVITE`, `CMSG_INITIATE_TRADE`, quest sharing, an LFG post), checked again on the world thread.
+
 ## Scenario harness
 
 Namespace `ArcaneCore.World.Playerbots.Scenarios`. A scenario is an `IPlayerbotScenario`
