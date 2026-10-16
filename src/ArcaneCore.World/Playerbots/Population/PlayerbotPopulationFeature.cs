@@ -935,7 +935,9 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private void Fail(string error)
     {
         // The managed feature stops first at shutdown and refuses every start and creation with playerbots-disabled: that is the shutdown, not a failure.
-        if (Managed is { IsStopping: true }) return;
+        // Only those refusals are muted; any other fault during shutdown (registry, start home, delete) is still recorded and logged.
+        if (Managed is { IsStopping: true } && (error.EndsWith(": playerbots-disabled", StringComparison.Ordinal) || error.EndsWith(": playerbots-stopping", StringComparison.Ordinal)
+            || error.EndsWith(": playerbot-stopping", StringComparison.Ordinal))) return;
         _lastError = error;
         logger.LogWarning("Playerbot population: {Error}", error);
     }

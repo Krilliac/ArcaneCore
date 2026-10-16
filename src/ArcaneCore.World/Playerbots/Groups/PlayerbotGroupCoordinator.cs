@@ -133,8 +133,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private readonly Dictionary<Guid, Waiting> _waiting = [];
     private readonly List<BotGroup> _groups = [];
-    private volatile bool _shuttingDown;
     private readonly Dictionary<Guid, BotGroup> _memberOf = [];
+    private volatile bool _shuttingDown; // set once by BeginShutdown from the stopping thread; read on the world thread
     private readonly Dictionary<(Guid Bot, (PlayerbotGroupGoalKind, uint) Key), uint> _setAside = [];
     private readonly Dictionary<ObjectGuid, uint> _declinedPlayers = [];
     private readonly Dictionary<Guid, PlayerbotGroupBot> _bots = [];
@@ -1355,6 +1355,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             bool ran = Act(bot.Session, groupManager.GetInvite(player.Guid) is not null && groupManager.GetGroup(player.Guid) is null
                 ? WorldOpcode.CmsgGroupDecline : WorldOpcode.CmsgGroupDisband, [], budgeted: false);
             // Outcome: the bot released from the group is out of the server's group, or no brain and no matching can have it again.
+            // Not reported during the shutdown (BeginShutdown): the bots are being stopped, so the leave may legitimately not complete, and the bot may genuinely
+            // still be in a persisted server group. That is cleaned up on the next boot only if every other member of that group is an online bot.
             if (!_shuttingDown && (ran || player.IsInWorld) && (groupManager.GetGroup(player.Guid) is { } still && still.IsMember(player.Guid) || groupManager.GetInvite(player.Guid) is not null))
                 PlayerbotGroupAnomalies.Report(player, PlayerbotGroupAnomalies.MemberStillGrouped, string.Create(CultureInfo.InvariantCulture,
                     $"released from group {group.Id} ({group.Reason ?? "no reason"}) but still in the server's group or invited to one (leave dispatched {ran})"));
