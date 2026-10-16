@@ -1,9 +1,11 @@
+using System.Runtime.InteropServices;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.World;
 
@@ -42,13 +44,52 @@ internal static class WorldStartup
     /// stopped in order (the world saved, the WAL checkpointed), then the container is disposed and the clean exit code returned. Any other start failure, and a
     /// cancellation without a stop request (a start timeout), surfaces unchanged.
     /// </para>
+    /// <para>
+    /// The host's console lifetime listens for Ctrl-C, Ctrl-Break and SIGTERM only once the host starts, so <paramref name="listenForStop"/> covers the database
+    /// step before it. Without it a Ctrl-C there ended the process at once with STATUS_CONTROL_C_EXIT (0xC000013A) and no line anywhere (2026-10-16 22:44: the
+    /// log stopped at the writer-lock line; no exception, no crash report, no event log entry, nothing on the console). Now the request is logged, the database
+    /// step runs to its end (an upgrade is never cut in half), the world does not start, and the container is disposed (lock released, log queue drained) before
+    /// the clean exit code is returned. A refusal of the database step is logged as well as written to <paramref name="error"/>.
+    /// </para>
     /// </summary>
-    public static async Task<int> RunAsync(IHost host, Func<Task> initialize, TextWriter error, Func<int> exitCode)
+    /// <param name="listenForStop">Starts listening for stop requests and calls back with the request's name; disposing stops listening. Default: <see cref="ListenForStopSignals"/>.</param>
+    public static async Task<int> RunAsync(IHost host, Func<Task> initialize, TextWriter error, Func<int> exitCode, Func<Action<string>, IDisposable>? listenForStop = null)
     {
-        int startup = await PrepareDatabasesAsync(host.Services, initialize, error).ConfigureAwait(false);
-        if (startup != 0) return startup;
-
+        ILogger logger = host.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(WorldStartup).FullName!) ?? NullLogger.Instance;
         IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+        string? stopRequest = null;
+        var refusal = new StringWriter();
+        int startup;
+        using (IDisposable listening = (listenForStop ?? ListenForStopSignals)(request =>
+               {
+                   if (Interlocked.CompareExchange(ref stopRequest, request, null) is not null) return;
+                   logger.LogWarning("Stop requested ({Request}) during start-up, in the database step: the step runs to its end and the world does not start", request);
+                   lifetime.StopApplication();
+               }))
+        {
+            startup = await PrepareDatabasesAsync(host.Services, initialize, refusal).ConfigureAwait(false);
+        }
+
+        if (refusal.ToString() is { Length: > 0 } refused)
+        {
+            await error.WriteAsync(refused).ConfigureAwait(false);
+            logger.LogError("World start-up refused by the database step (exit code {ExitCode}): {Reason}", startup, refused.Trim());
+        }
+
+        if (startup != 0)
+        {
+            await DisposeAsync(host).ConfigureAwait(false);
+            return startup;
+        }
+
+        if (Volatile.Read(ref stopRequest) is { } stopped)
+        {
+            int code = exitCode();
+            logger.LogWarning("World start-up stopped on request ({Request}) before the world started; exit code {ExitCode}", stopped, code);
+            await DisposeAsync(host).ConfigureAwait(false);
+            return code;
+        }
+
         try
         {
             bool started = false;
@@ -68,10 +109,47 @@ internal static class WorldStartup
         }
         finally
         {
-            if (host is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-            else host.Dispose();
+            await DisposeAsync(host).ConfigureAwait(false);
         }
 
         return exitCode();
+    }
+
+    /// <summary>
+    /// Listens for the stop requests the host's console lifetime handles once it starts (SIGINT = Ctrl-C, SIGQUIT = Ctrl-Break, SIGTERM; on Windows the
+    /// console control events) and turns each into a call of <paramref name="onStop"/> instead of the runtime's immediate termination.
+    /// </summary>
+    public static IDisposable ListenForStopSignals(Action<string> onStop)
+    {
+        ArgumentNullException.ThrowIfNull(onStop);
+        void Handle(PosixSignalContext context)
+        {
+            context.Cancel = true;
+            onStop(context.Signal.ToString());
+        }
+
+        return new SignalRegistrations(
+        [
+            PosixSignalRegistration.Create(PosixSignal.SIGINT, Handle),
+            PosixSignalRegistration.Create(PosixSignal.SIGQUIT, Handle),
+            PosixSignalRegistration.Create(PosixSignal.SIGTERM, Handle),
+        ]);
+    }
+
+    private static async Task DisposeAsync(IHost host)
+    {
+        if (host is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+        else host.Dispose();
+    }
+
+    private sealed class SignalRegistrations(PosixSignalRegistration[] registrations) : IDisposable
+    {
+        public void Dispose()
+        {
+            foreach (PosixSignalRegistration registration in registrations)
+            {
+                registration.Dispose();
+            }
+        }
     }
 }
