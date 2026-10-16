@@ -31,6 +31,9 @@ public sealed class WorldRuntime : IDisposable
     private int _worldThreadId = -1;
     private uint _sinceAutosaveMs;
 
+    /// <summary>A token that is this runtime and nothing else: stamped on reports (<c>AnomalyLedger.Report</c>'s <c>origin</c>) so a test capture can tell two worlds apart without anything holding the runtime itself alive.</summary>
+    public object Identity { get; } = new();
+
     // The world thread's position and the slowest features of the tick in progress (docs/ops/watchdog.md). Written by the
     // world thread only; the position is read by the watchdog thread, so it is published with volatile stores.
     private volatile int _phase;

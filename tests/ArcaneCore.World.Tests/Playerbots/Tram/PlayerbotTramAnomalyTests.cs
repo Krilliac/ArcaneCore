@@ -70,7 +70,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     public async Task HealthyRide_ReportsNoTramAnomaly()
     {
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         await DriveUntilAsync(world, Options(), () => Stage(world) is TramStage.Done or TramStage.Failed);
         Assert.Equal(TramStage.Done, await world.OnWorldAsync(() => Stage(world)));
         Assert.Empty(capture.OfSubsystem(PlayerbotAnomalies.Subsystem("tram")));
@@ -104,7 +104,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     public async Task TripFailed_Fires_WhenTheTramMapHasNoPlatforms_AndLaterThinksAddNothing()
     {
         await using TramTestWorld world = await StartOnTramWithoutDataAsync(bindWorks: false);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         PlayerbotOptions options = Options();
         await world.TickAsync(() => Drive(world, options));
         int afterFirstThink = capture.Count(Key("trip-failed"));
@@ -122,7 +122,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     {
         await using TramTestWorld world = await StartOnTramWithoutDataAsync(bindWorks: false);
         world.Session.IsInChaosProbe = true;
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         TramStep first = await world.OnWorldAsync(() => Drive(world, Options()));
         Assert.Equal(TramStep.Failed, first);
         Assert.Empty(capture.OfSubsystem(PlayerbotAnomalies.Subsystem("tram")));
@@ -132,7 +132,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     public async Task TeleportOut_Fires_WhenTheBindPointTeleportIsSent_AndTripFailedFollows()
     {
         await using TramTestWorld world = await StartOnTramWithoutDataAsync(bindWorks: true);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         PlayerbotOptions options = Options();
         for (int i = 0; i < 100; i++) await world.TickAsync(() => Drive(world, options));
 
@@ -145,7 +145,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     public async Task TeleportOut_StaysSilent_WhenTheBindPointTeleportIsRefused()
     {
         await using TramTestWorld world = await StartOnTramWithoutDataAsync(bindWorks: false);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         PlayerbotOptions options = Options();
         for (int i = 0; i < 100; i++) await world.TickAsync(() => Drive(world, options));
 
@@ -166,7 +166,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     {
         await using TramTestWorld world = await TramTestWorld.StartAsync(pathfinder: new NoWay());
         await world.PlaceAsync(TramTestData.Tram, TramTestData.StormwindPlatform with { X = 40f });
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         PlayerbotOptions options = Options();
         // No progress for PlayerbotTram.NoProgressMs (60 s) ends the walk; the trigger's own teleport follows.
         await DriveUntilAsync(world, options, () => world.Player.MapId == 0, maxSteps: 1_500);
@@ -180,7 +180,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     {
         await using TramTestWorld world = await TramTestWorld.StartAsync();
         await world.PlaceAsync(TramTestData.Tram, TramTestData.StormwindPlatform with { X = 40f });
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         await DriveUntilAsync(world, Options(), () => world.Player.MapId == 0, maxSteps: 1_500);
 
         Assert.False(capture.Any(Key("teleport-out")), capture.Describe());
@@ -195,7 +195,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => world.Player.MapId == TramTestData.Tram);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
 
         await world.AdvanceAsync(PlayerbotTram.SlowTramMapMs + 10_000);
         await world.OnWorldAsync(() => Drive(world, options));
@@ -214,7 +214,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => world.Player.MapId == TramTestData.Tram);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         uint sinceMs = await world.OnWorldAsync(() => world.Host.World.NowMs - PlayerbotTram.TripOf(world.Player)!.PlatformSinceMs);
 
         await world.AdvanceAsync(PlayerbotTram.SlowTramMapMs - sinceMs - 2_000);
@@ -230,7 +230,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => OnTramWaiting(world));
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         uint departMs = await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.Dock.DepartMs);
 
         await world.AdvanceAsync(departMs + 5_000);
@@ -249,7 +249,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => OnTramWaiting(world));
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         uint departMs = await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.Dock.DepartMs);
         output.WriteLine("departMs=" + departMs);
         Assert.True(departMs > 3_000, "the fixture's dock leaves too soon for the boundary to be tested");
@@ -269,7 +269,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => Stage(world) == TramStage.Aboard);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         await world.OnWorldAsync(() => ReplaceMovement(world, m =>
         {
             if (clearFlag)
@@ -298,7 +298,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => Stage(world) == TramStage.Aboard);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         for (int i = 0; i < 30; i++) await world.TickAsync(() => Drive(world, options));
 
         Assert.False(capture.Any(Key("detached-mid-ride")), capture.Describe());
@@ -312,7 +312,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => Stage(world) == TramStage.Aboard);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         await world.OnWorldAsync(() => ReplaceMovement(world, m => { m.X += PlayerbotTram.LeftBehindYards + 50f; return m; }));
 
         await world.OnWorldAsync(() => Drive(world, options));
@@ -329,7 +329,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => Stage(world) == TramStage.Aboard);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         await world.OnWorldAsync(() => ReplaceMovement(world, m => { m.X += PlayerbotTram.LeftBehindYards - 50f; return m; }));
 
         await world.OnWorldAsync(() => Drive(world, options));
@@ -344,7 +344,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => Stage(world) == TramStage.Aboard);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
 
         // No thinks for more than a cycle and 30 s: the car went to the far platform and back unseen. Look when it is mid-tunnel, so it is
         // not standing at the destination at that think (which would step off instead).
@@ -369,7 +369,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => Stage(world) == TramStage.Aboard);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         await DriveUntilAsync(world, options, () => Stage(world) is TramStage.ToExit or TramStage.Done or TramStage.Failed);
 
         Assert.NotEqual(TramStage.Failed, await world.OnWorldAsync(() => Stage(world)));
@@ -391,7 +391,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => OnTramWaiting(world));
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.Stage = TramStage.ToExit);
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding); // the trip meant Ironforge
 
@@ -409,7 +409,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => OnTramWaiting(world));
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.Stage = TramStage.ToExit);
         await world.PlaceAsync(0, TramTestData.IronforgeExitLanding);
 
@@ -429,7 +429,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     public async Task WithThinksTwelveSecondsApart_ThePumpBoardsTheCar_AndTheBotArrivesAtIronforge()
     {
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         PlayerbotOptions options = Options();
         // Up to the platform at the brain's normal cadence: the walk to the entrance and the car choice are the brain's.
         await DriveUntilAsync(world, options, () => OnTramWaiting(world));

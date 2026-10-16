@@ -56,7 +56,7 @@ public sealed class TravelCastBoundTests
         (MageTravelRig rig, WorldSession session, Player player) = await StartAsync(hearth ? "Boundstand" : "Boundtele");
         await using (rig)
         {
-            using AnomalyCapture cap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, player);
+            using AnomalyCapture cap = BotAnomalyCapture.For(player);
             PlayerbotOptions options = MageTravelRig.Options();
             await rig.OnWorld(() =>
             {
@@ -90,7 +90,7 @@ public sealed class TravelCastBoundTests
         (MageTravelRig rig, WorldSession session, Player player) = await StartAsync(hearth ? "Boundtime" : "Boundtelet");
         await using (rig)
         {
-            using AnomalyCapture cap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, player);
+            using AnomalyCapture cap = BotAnomalyCapture.For(player);
             PlayerbotOptions options = MageTravelRig.Options();
             await rig.OnWorld(() =>
             {
@@ -116,7 +116,7 @@ public sealed class TravelCastBoundTests
         (MageTravelRig rig, WorldSession session, Player player) = await StartAsync(hearth ? "Hitcast" : "Hittele");
         await using (rig)
         {
-            using AnomalyCapture cap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, player);
+            using AnomalyCapture cap = BotAnomalyCapture.For(player);
             PlayerbotOptions options = MageTravelRig.Options();
             uint spell = hearth ? MageTravelFixture.HearthSpell : MageTravelFixture.TeleportSpell;
             await rig.OnWorld(() =>

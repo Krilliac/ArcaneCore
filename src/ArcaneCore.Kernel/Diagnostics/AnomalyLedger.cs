@@ -142,8 +142,9 @@ public sealed class AnomalyLedger
     /// <summary>
     /// Count one failed check under <c>subsystem/code</c> and log it unless throttled. <paramref name="subject"/>: the stable identity
     /// of what failed (no positions or times); <paramref name="detail"/>: what was expected, what was found, and where.
-    /// <paramref name="origin"/>: an optional identity of the owner that reported (a world, a host), carried on the notice only so a test capture can tell
-    /// two worlds that name a subject alike apart; it is never stored, logged or counted (one reference, no allocation).
+    /// <paramref name="origin"/>: an optional identity token of the owner that reported (a world), carried on the notice so a test capture can tell
+    /// two worlds that name a subject alike apart. It must be a small token that retains nothing (never the world or host itself): notices are
+    /// held by long-lived consumers such as the bot anomaly history. The ledger does not log, count or key by it (one reference, no allocation).
     /// Never throws except <see cref="OutOfMemoryException"/>.
     /// </summary>
     public AnomalyRecording Report(string subsystem, string code, string subject, string detail, AnomalySeverity severity = AnomalySeverity.Warning, object? origin = null)
@@ -508,7 +509,7 @@ public sealed record AnomalyNotice(
     /// <summary>The key's timing at this report (rates, inter-arrival); null when the report was not logged.</summary>
     public LedgerTiming? Timing { get; init; }
 
-    /// <summary>The reporter-supplied owner identity (<see cref="AnomalyLedger.Report"/>'s <c>origin</c>), or null when the reporter gave none. Not part of the record equality contract beyond reference equality; read by test captures.</summary>
+    /// <summary>The reporter-supplied owner identity token (<see cref="AnomalyLedger.Report"/>'s <c>origin</c>), or null when the reporter gave none. Part of the record's value equality like every other member (reference equality for the token). Consumers that keep notices should drop it (<c>notice with { Origin = null }</c>).</summary>
     public object? Origin { get; init; }
 }
 

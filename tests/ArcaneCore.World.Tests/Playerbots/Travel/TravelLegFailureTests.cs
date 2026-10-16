@@ -49,8 +49,8 @@ public sealed class TravelLegFailureTests(ITestOutputHelper output)
         var mageBrain = new PlayerbotBrain(mageSession, options);
         var brain = new PlayerbotBrain(requesterSession, options);
         var travel = new PlayerbotTravel(options);
-        using AnomalyCapture mageCap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, mage);
-        using AnomalyCapture requesterCap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, requester);
+        using AnomalyCapture mageCap = BotAnomalyCapture.For(mage);
+        using AnomalyCapture requesterCap = BotAnomalyCapture.For(requester);
         try
         {
             await rig.OnWorld(() =>
@@ -117,7 +117,7 @@ public sealed class TravelLegFailureTests(ITestOutputHelper output)
         PlayerbotOptions options = TravelJourneyShipTests.Options();
         var brain = new PlayerbotBrain(world.Session, options);
         var travel = new PlayerbotTravel(options);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         try
         {
             await world.OnWorldAsync(() =>

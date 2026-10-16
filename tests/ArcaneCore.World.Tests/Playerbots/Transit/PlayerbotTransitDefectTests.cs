@@ -74,7 +74,7 @@ public sealed class PlayerbotTransitDefectTests
         await using TramTestWorld world = await TramTestWorld.StartAsync(pathfinder: new NoWay());
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
         Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)));
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         PlayerbotOptions options = Options();
         uint began = await world.OnWorldAsync(() => world.Host.World.NowMs);
         TramStep step = TramStep.Traveling;
@@ -107,7 +107,7 @@ public sealed class PlayerbotTransitDefectTests
         ElevatorLift lift = await world.GreatLiftAsync();
         PlayerbotOptions options = Options();
         await world.OnWorldAsync(() => PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.High, ElevatorTestWorld.CanyonStart));
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         uint began = await world.OnWorldAsync(() => world.Host.World.NowMs);
         ElevatorStep step = ElevatorStep.Traveling;
         string? failure = null;
@@ -136,7 +136,7 @@ public sealed class PlayerbotTransitDefectTests
         await using TramTestWorld world = await GatedWorldAsync(2173);
         await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
         Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)));
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         PlayerbotOptions options = Options();
         uint began = await world.OnWorldAsync(() => world.Host.World.NowMs);
         TramStep step = TramStep.Traveling;
@@ -246,7 +246,7 @@ public sealed class PlayerbotTransitDefectTests
         var brain = new PlayerbotBrain(world.Session, Options());
         Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)));
         await world.OnWorldAsync(() => brain.HoldGoalForTests(PlayerbotGoalKind.Quest, EnderEntry, QuestId));
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         for (int i = 0; i < 400 && await world.OnWorldAsync(() => brain.TransitFailureCount) == 0; i++)
             await world.TickAsync(() => { brain.Update(100); return 0; });
 
@@ -272,7 +272,7 @@ public sealed class PlayerbotTransitDefectTests
             PlayerbotElevator.Begin(world.Session, world.Player, lift, ElevatorLevel.High, ElevatorTestWorld.CanyonStart);
             brain.HoldGoalForTests(PlayerbotGoalKind.Quest, EnderEntry, QuestId);
         });
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         for (int i = 0; i < 400 && await world.OnWorldAsync(() => brain.TransitFailureCount) == 0; i++)
             await world.TickAsync(() => { brain.Update(100); return 0; });
 

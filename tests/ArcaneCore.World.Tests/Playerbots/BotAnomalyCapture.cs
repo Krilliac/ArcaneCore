@@ -12,12 +12,8 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// </summary>
 internal static class BotAnomalyCapture
 {
-    /// <summary>Reports about <paramref name="player"/> in its own world (<paramref name="host"/> is kept for the callers' signature).</summary>
-    public static Task<AnomalyCapture> OnWorldThreadAsync(WorldTestHost host, Player player)
-    {
-        ArgumentNullException.ThrowIfNull(host);
-        return Task.FromResult(PlayerbotAnomalies.CaptureFor(player));
-    }
+    /// <summary>Reports about <paramref name="player"/> in the world it is in now (it must be on a map: <see cref="PlayerbotAnomalies.CaptureFor"/>).</summary>
+    public static AnomalyCapture For(Player player) => PlayerbotAnomalies.CaptureFor(player);
 
     /// <summary>Reports made on the calling thread only (synchronous code under test).</summary>
     public static AnomalyCapture OnThisThread(Func<AnomalyNotice, bool>? also = null)

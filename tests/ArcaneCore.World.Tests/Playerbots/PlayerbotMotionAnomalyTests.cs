@@ -19,11 +19,7 @@ internal static class H1AnomalyKit
     /// The reports of one bot in this host's world (<see cref="PlayerbotAnomalies.CaptureFor"/>: other tests' bots share the name and guid of
     /// <see cref="PlayerbotMovementControlTests.EnterAsync"/>'s, but their reports name another world).
     /// </summary>
-    internal static Task<AnomalyCapture> CaptureAsync(WorldTestHost host, Player player)
-    {
-        ArgumentNullException.ThrowIfNull(host);
-        return Task.FromResult(PlayerbotAnomalies.CaptureFor(player));
-    }
+    internal static AnomalyCapture CaptureFor(Player player) => PlayerbotAnomalies.CaptureFor(player);
 
     internal sealed class ManualClock : IWorldFeature
     {
@@ -66,7 +62,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -94,7 +90,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -115,7 +111,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -136,7 +132,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -158,7 +154,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 WorldCollision.Of(host.World).Install(lineOfSight: new ScriptedGround());
@@ -182,7 +178,7 @@ public sealed class PlayerbotMotionAnomalyTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
-            using AnomalyCapture cap = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -411,7 +407,7 @@ public sealed class PlayerbotMotionAnomalyTests
             WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
             var ground = new ScriptedGround { Blocked = blocked };
-            AnomalyCapture capture = await H1AnomalyKit.CaptureAsync(host, session.Player!);
+            AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
             (PlayerbotRoute route, float wallX) = await host.OnWorldAsync(() =>
             {
                 WorldCollision.Of(host.World).Install(lineOfSight: ground);

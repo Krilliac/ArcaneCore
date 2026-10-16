@@ -2266,7 +2266,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 "session-lost",
                 active.AnomalySubject,
                 $"{detail} | map {active.MapId}",
-                AnomalySeverity.Warning);
+                AnomalySeverity.Warning,
+                origin: _world?.Identity);
         }
     }
 
@@ -2332,7 +2333,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 "think-fault",
                 active.AnomalySubject,
                 $"{thinkDetail} | map {active.MapId}",
-                AnomalySeverity.Warning);
+                AnomalySeverity.Warning,
+                origin: _world?.Identity);
         }
 
         Quarantine quarantine = _quarantine.GetOrAdd(active.Record.BotId, static _ => new Quarantine());
@@ -2391,7 +2393,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         "disabled",
                         subject,
                         $"{disabledDetail} | map {quarantine.MapId}",
-                        AnomalySeverity.Error);
+                        AnomalySeverity.Error,
+                        origin: _world?.Identity);
                 }
                 return (false, Code($"disabled after {count} faults: {fault}"));
             }
@@ -2412,7 +2415,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     "quarantined",
                     subject,
                     $"{quarantineDetail} | map {quarantine.MapId}",
-                    AnomalySeverity.Warning);
+                    AnomalySeverity.Warning,
+                    origin: _world?.Identity);
             }
             return (true, Code($"quarantined (fault {count}/{_options.MaxFaults}): {fault}"));
         }

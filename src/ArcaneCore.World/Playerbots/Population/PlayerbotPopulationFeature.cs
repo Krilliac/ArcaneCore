@@ -723,7 +723,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                             botLabel,
                             $"population-owned bot transitioned to {memberState} outside population park pass (zone={member.ZoneId}, band={member.Band})",
                             AnomalySeverity.Warning,
-                            origin: _world);
+                            origin: _world?.Identity);
                     }
                 }
             }
@@ -879,7 +879,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
                     $"band {band.MinLevel}-{band.MaxLevel}",
                     $"band {band.MinLevel}-{band.MaxLevel} below target for {elapsedMs}ms across {passes} passes (want={want}, have={current}, note={ctxNote ?? "none"})",
                     AnomalySeverity.Info,
-                    origin: _world);
+                    origin: _world?.Identity);
             }
 
             _bandDeficits[i] = (state.SinceMs, passes, current, reported);
@@ -1013,7 +1013,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             subject,
             $"population {stage} failed to bring bot online: code={result.Code}",
             AnomalySeverity.Warning,
-            origin: _world);
+            origin: _world?.Identity);
     }
 
     /// <summary>
@@ -1384,7 +1384,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             "population towns",
             $"the centre of {fresh.Length} town(s) could not be found (no spawn of their anchor NPC on the map): {string.Join(',', fresh)}; bots fall back to the towns that did resolve, or to no home",
             AnomalySeverity.Warning,
-            origin: _world);
+            origin: _world?.Identity);
     }
 
     /// <summary>One anomaly per town (per process) whose map the server does not allow for playerbot homes, so a capital or town that vanishes from the progression is explained.</summary>
@@ -1397,7 +1397,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             $"town {key}",
             $"the town {key} is on map {mapId}, which World:Playerbots:AllowedMaps does not allow for homes: no bot is homed there",
             AnomalySeverity.Warning,
-            origin: _world);
+            origin: _world?.Identity);
     }
 
     /// <summary>
@@ -1527,7 +1527,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             $"bot {bot.BotId:D}",
             detail,
             AnomalySeverity.Info,
-            origin: _world);
+            origin: _world?.Identity);
     }
 
     /// <summary>Bots holding town state (stay clock, fit count): tests.</summary>

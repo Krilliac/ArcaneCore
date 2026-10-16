@@ -100,7 +100,7 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
         await using ShipTestWorld world = await ShipTestWorld.StartAsync();
         ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
         await world.PlaceAsync(0, ShipTestWorld.Start);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         string name = await world.OnWorldAsync(() => world.Player.Name);
         using AnomalyCapture everything = AnomalyLedger.Shared.Capture(n => n.Subject.Contains(name, StringComparison.Ordinal));
         var options = new PlayerbotOptions();
@@ -139,7 +139,7 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
         ShipRoute zeppelin = (await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.System, s_synthetic)))
             .Single(r => r.Entry == TransportWorldContent.Crossing);
         await world.PlaceAsync(0, ShipTestWorld.Start);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         var options = new PlayerbotOptions();
         Assert.True(await world.OnWorldAsync(() => (PlayerbotShip.TryBegin(world.Session, world.Player, zeppelin, fromA: true, options, out string? why), why))
             is (true, null));
@@ -166,7 +166,7 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
         ShipRoute zeppelin = (await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.System, s_synthetic)))
             .Single(r => r.Entry == TransportWorldContent.Crossing) with { Access = TravelAccess.Both };
         await world.PlaceAsync(0, ShipTestWorld.Start);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
 
         var options = new PlayerbotOptions();
         options.Travel.Boats = false;
@@ -229,7 +229,7 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
         // A port 15 yards off the stop row: the ship waits at its own row, never there.
         ShipRoute elsewhere = boat with { PortA = boat.PortA with { Position = boat.PortA.Position + new Vector3(15f, 0f, 0f) } };
         await world.PlaceAsync(0, ShipTestWorld.Start);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         var options = new PlayerbotOptions();
         Assert.True(await world.OnWorldAsync(() => PlayerbotShip.TryBegin(world.Session, world.Player, elsewhere, true, options, out _)));
 
@@ -258,7 +258,7 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
         {
             if (ReferenceEquals(unit, bot)) ship.RemovePassenger(unit);
         });
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, bot);
+        using AnomalyCapture capture = BotAnomalyCapture.For(bot);
         var options = new PlayerbotOptions();
         Assert.True(await world.OnWorldAsync(() => PlayerbotShip.TryBegin(world.Session, bot, boat, true, options, out _)));
 

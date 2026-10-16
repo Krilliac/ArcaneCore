@@ -78,7 +78,7 @@ public sealed class TravelHomeJourneyTests(ITestOutputHelper output)
         await world.PlaceAsync(0, ShipTestWorld.Start);
         var home = new PlayerbotHomeArea(1, TravelJourneyShipTests.Goal, 30f, "Porthome");
         var brain = new PlayerbotBrain(world.Session, options);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         try
         {
             await world.OnWorldAsync(() => brain.Home = home);

@@ -42,33 +42,37 @@ internal static class PlayerbotAnomalies
     }
 
     /// <summary>
-    /// The world <paramref name="player"/> is in, carried on its reports as <see cref="AnomalyNotice.Origin"/> so a capture can tell two worlds
-    /// apart that name a bot alike (null while the player is on no map).
+    /// The identity token of the world <paramref name="player"/> is in (<see cref="WorldRuntime.Identity"/>: a token that retains nothing),
+    /// carried on its reports as <see cref="AnomalyNotice.Origin"/> so a capture can tell two worlds apart that name a bot alike. Null while
+    /// the player is on no map.
     /// </summary>
-    internal static object? OriginOf(Player player) => player.Map?.World;
+    internal static object? OriginOf(Player player) => player.Map?.WorldIdentity;
 
     /// <summary>
     /// A capture of one bot's reports (tests): every report whose subject is <paramref name="player"/>'s, from the shared ledger that
-    /// other tests also write to. A report that names its origin world (every <see cref="Report"/>) counts only when that world is the one
-    /// <paramref name="player"/> is in, so test worlds that name their bot alike (every one names it "Controlone", guid 1) do not see each
-    /// other's reports however their classes are scheduled. A report with no origin matches on the subject alone.
+    /// other tests also write to. The bot's world is resolved once, here, never again on the reporting thread, so the bot leaving its map
+    /// later (teardown, transfer) changes nothing. A bot on a map hears its own world's reports and unstamped ones (a bot that was on no map
+    /// when it reported). A bot on no map when this is called (a unit test's bare <see cref="Player"/>) hears only unstamped reports, never a
+    /// stamped one from any world.
     /// </summary>
     internal static AnomalyCapture CaptureFor(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
+        object? world = OriginOf(player);
         string subject = SubjectOf(player);
         return AnomalyLedger.Shared.Capture(n => string.Equals(n.Subject, subject, StringComparison.Ordinal)
-            && (n.Origin is null || OriginOf(player) is not { } mine || ReferenceEquals(n.Origin, mine)));
+            && (n.Origin is null || (world is not null && ReferenceEquals(n.Origin, world))));
     }
 
     /// <summary>
-    /// A capture of the reports that <paramref name="world"/> itself made (tests): those the reporter stamped with this world as their
-    /// <see cref="AnomalyNotice.Origin"/> (the bot front door and the population feature do), narrowed by <paramref name="filter"/>.
-    /// Reports with no origin or another world's never match, so concurrently running test worlds cannot see each other.
+    /// A capture of the reports that <paramref name="world"/> itself made (tests): those the reporter stamped with this world's
+    /// <see cref="WorldRuntime.Identity"/> (the bot front door, the group coordinator, the lifecycle feature and the population feature do),
+    /// narrowed by <paramref name="filter"/>. Reports with no origin or another world's never match.
     /// </summary>
     internal static AnomalyCapture CaptureIn(WorldRuntime world, Func<AnomalyNotice, bool>? filter = null)
     {
         ArgumentNullException.ThrowIfNull(world);
-        return AnomalyLedger.Shared.Capture(n => ReferenceEquals(n.Origin, world) && (filter is null || filter(n)));
+        object identity = world.Identity;
+        return AnomalyLedger.Shared.Capture(n => ReferenceEquals(n.Origin, identity) && (filter is null || filter(n)));
     }
 }

@@ -76,7 +76,7 @@ public sealed class TravelJourneyShipTests(ITestOutputHelper output)
         PlayerbotOptions options = Options();
         var brain = new PlayerbotBrain(world.Session, options);
         var travel = new PlayerbotTravel(options);
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         try
         {
             TravelRoute route = await world.OnWorldAsync(() =>
@@ -121,7 +121,7 @@ public sealed class TravelJourneyShipTests(ITestOutputHelper output)
         PlayerbotOptions options = Options();
         var brain = new PlayerbotBrain(world.Session, options);
         var travel = new PlayerbotTravel(options) { ShipRoutes = _ => PlayerbotShipNetwork.Routes(world.System, s_zeppelin) };
-        using AnomalyCapture capture = await BotAnomalyCapture.OnWorldThreadAsync(world.Host, world.Player);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         try
         {
             TravelRoute route = await world.OnWorldAsync(() =>

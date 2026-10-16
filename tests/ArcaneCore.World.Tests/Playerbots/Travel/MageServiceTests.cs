@@ -64,7 +64,7 @@ public sealed class MageServiceTests
         await using MageTravelRig rig = await MageTravelRig.StartAsync();
         WorldSession session = await rig.EnterAsync("Magetele");
         Player mage = session.Player!;
-        using AnomalyCapture cap = await BotAnomalyCapture.OnWorldThreadAsync(rig.Host, mage);
+        using AnomalyCapture cap = BotAnomalyCapture.For(mage);
         PlayerbotOptions options = MageTravelRig.Options();
         await rig.OnWorld(() =>
         {
@@ -99,8 +99,8 @@ public sealed class MageServiceTests
     public async Task APortalRequest_IsMatched_Cast_Clicked_AndTheRequesterArrives_ThroughTheMagesParty()
     {
         await using Pair pair = await StartPairAsync("Mageport", "Travelport");
-        using AnomalyCapture mageCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Mage);
-        using AnomalyCapture requesterCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Requester);
+        using AnomalyCapture mageCap = BotAnomalyCapture.For(pair.Mage);
+        using AnomalyCapture requesterCap = BotAnomalyCapture.For(pair.Requester);
         PlayerbotOptions options = MageTravelRig.Options();
         await pair.Rig.OnWorld(() =>
         {
@@ -141,8 +141,8 @@ public sealed class MageServiceTests
     public async Task ARequesterAwayFromTheMage_WalksToIt_PaysTheFeeByATrade_AndGoesThrough()
     {
         await using Pair pair = await StartPairAsync("Magefee", "Travelfee");
-        using AnomalyCapture mageCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Mage);
-        using AnomalyCapture requesterCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Requester);
+        using AnomalyCapture mageCap = BotAnomalyCapture.For(pair.Mage);
+        using AnomalyCapture requesterCap = BotAnomalyCapture.For(pair.Requester);
         PlayerbotOptions options = MageTravelRig.Options(t => t.MageServiceFeeCopper = 100);
         await pair.Rig.OnWorld(() =>
         {
@@ -173,7 +173,7 @@ public sealed class MageServiceTests
     public async Task AMageThatDoesNotKnowThePortal_IsNotListed_AndARequestFindsNoMatch()
     {
         await using Pair pair = await StartPairAsync("Magenone", "Travelnone", knowsPortal: false);
-        using AnomalyCapture mageCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Mage);
+        using AnomalyCapture mageCap = BotAnomalyCapture.For(pair.Mage);
         PlayerbotOptions options = MageTravelRig.Options();
         await pair.Rig.OnWorld(() =>
         {
@@ -201,8 +201,8 @@ public sealed class MageServiceTests
     public async Task AMageWithoutTheRune_BuysItFromAVendorThatStocksIt_ThenOpensThePortal()
     {
         await using Pair pair = await StartPairAsync("Magebuy", "Travelbuy", new MageTravelFixture { Vendor = true }, rune: false);
-        using AnomalyCapture mageCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Mage);
-        using AnomalyCapture requesterCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Requester);
+        using AnomalyCapture mageCap = BotAnomalyCapture.For(pair.Mage);
+        using AnomalyCapture requesterCap = BotAnomalyCapture.For(pair.Requester);
         await pair.Rig.Host.WaitForWorldAsync(() => pair.Mage.VisibleObjects.Any(g => g.Entry == MageTravelFixture.VendorEntry), "the vendor is in sight");
         PlayerbotOptions options = MageTravelRig.Options();
         await pair.Rig.OnWorld(() =>
@@ -233,8 +233,8 @@ public sealed class MageServiceTests
     public async Task AMageWithoutTheRuneAndNoVendor_IsNotMatched_AndOneThatLostItAfterTheMatch_FailsOnce()
     {
         await using Pair pair = await StartPairAsync("Magenorune", "Travelnorune", rune: false);
-        using AnomalyCapture mageCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Mage);
-        using AnomalyCapture requesterCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Requester);
+        using AnomalyCapture mageCap = BotAnomalyCapture.For(pair.Mage);
+        using AnomalyCapture requesterCap = BotAnomalyCapture.For(pair.Requester);
         PlayerbotOptions options = MageTravelRig.Options();
         await pair.Rig.OnWorld(() =>
         {
@@ -269,8 +269,8 @@ public sealed class MageServiceTests
     public async Task APortalCastTheServerRefuses_FailsTheServiceOnce_AndTheRequesterLegWithoutASecondReport()
     {
         await using Pair pair = await StartPairAsync("Magerefuse", "Travelrefuse", new MageTravelFixture { PortalNeedsMana = true });
-        using AnomalyCapture mageCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Mage);
-        using AnomalyCapture requesterCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Requester);
+        using AnomalyCapture mageCap = BotAnomalyCapture.For(pair.Mage);
+        using AnomalyCapture requesterCap = BotAnomalyCapture.For(pair.Requester);
         PlayerbotOptions options = MageTravelRig.Options();
         await pair.Rig.OnWorld(() =>
         {
@@ -298,7 +298,7 @@ public sealed class MageServiceTests
     public async Task WithTheMageServiceOff_NothingIsOffered_ListedOrBegun()
     {
         await using Pair pair = await StartPairAsync("Mageoff", "Traveloff");
-        using AnomalyCapture mageCap = await BotAnomalyCapture.OnWorldThreadAsync(pair.Rig.Host, pair.Mage);
+        using AnomalyCapture mageCap = BotAnomalyCapture.For(pair.Mage);
         PlayerbotOptions off = MageTravelRig.Options(t => t.MageService = false);
         await pair.Rig.OnWorld(() =>
         {
