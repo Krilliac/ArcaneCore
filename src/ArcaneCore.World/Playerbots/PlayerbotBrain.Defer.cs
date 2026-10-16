@@ -101,15 +101,38 @@ internal sealed partial class PlayerbotBrain
 
 /// <summary>
 /// The ledger's clock (<see cref="PlayerbotDeferLedger"/>): the world's 64-bit uptime in milliseconds, which does not wrap. Callers hold the
-/// 32-bit <c>NowMs</c>, which does; <see cref="Ms"/> places such a time on the uptime clock relative to the world's present, so a time
-/// within 24 days of it (any a bot reads or sets) is placed exactly, whatever the bot did or did not do in between.
+/// 32-bit <c>NowMs</c>, which does. An instance places such a time on the uptime clock: it reads the world once to anchor the pairing of
+/// the two clocks and decodes every time within 12 days of the anchor by arithmetic alone (no clock read per query); a time farther away
+/// anchors again. A time within 24 days of the world's present is placed exactly, whatever the bot did or did not do in between.
+/// World thread (the anchor is plain fields).
 /// </summary>
-internal static class PlayerbotWorldClock
+internal sealed class PlayerbotWorldClock(ArcaneCore.Game.Maps.WorldRuntime world)
 {
+    private const int Reach = 1 << 30;
+    private long _anchorUptime;
+    private uint _anchorNow;
+    private bool _anchored;
+
     /// <summary>Milliseconds since the world was created.</summary>
     internal static long UptimeMs(ArcaneCore.Game.Maps.WorldRuntime world) => (long)world.Uptime.TotalMilliseconds;
 
-    /// <summary>The uptime-clock time of the world time <paramref name="nowMs"/> (earlier or later than the world's present by less than 2^31 ms).</summary>
+    /// <summary>The uptime-clock time of the world time <paramref name="nowMs"/>.</summary>
+    internal long Ms(uint nowMs)
+    {
+        if (_anchored)
+        {
+            int delta = unchecked((int)(nowMs - _anchorNow));
+            if (delta is > -Reach and < Reach) return _anchorUptime + delta;
+        }
+
+        long uptime = UptimeMs(world);
+        _anchorUptime = uptime;
+        _anchorNow = unchecked((uint)uptime);
+        _anchored = true;
+        return uptime + unchecked((int)(nowMs - _anchorNow));
+    }
+
+    /// <summary>The uptime-clock time of the world time <paramref name="nowMs"/>, read against the world's present (no anchor).</summary>
     internal static long Ms(ArcaneCore.Game.Maps.WorldRuntime world, uint nowMs)
     {
         long uptime = UptimeMs(world);

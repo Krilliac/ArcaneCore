@@ -656,7 +656,7 @@ counted (`applied`, `agreed`, `floor`, `explored`, `missing`, `stale`, `non-fini
 `PlayerbotModelPolicy` is the built-in model: optional per-feature standardisation (`mean`, `scale`), then 1..3 dense layers (ReLU between,
 linear last; one layer is a linear model), evaluated with `TensorPrimitives` SIMD dot products on the CPU. A bot costs at most a few thousand
 multiply-adds (12 features x 64 hidden + 64 x 7 goals is about 1.2k), so there is no GPU path: moving a batch to a GPU would cost more than
-scoring it, and deployed servers have none.
+scoring it, and deployed servers have none. Feature 5 (`set_asides`) counts the bot's set-asides that still have time left; since the defer ledger it no longer counts an unreachable quest whose set-aside ended but whose strikes are kept, so a model trained earlier sees that input shifted (lower) for such bots.
 
 **Weights file** (`ModelPath`, JSON, at most 4 MiB, relative to the profile folder): `{"format":"arcanecore.playerbot-policy","version":1,
 "features":[...],"goals":[...],"mean":[...],"scale":[...],"layers":[{"inputs":I,"outputs":O,"activation":"relu"|"linear","weights":[O*I],

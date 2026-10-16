@@ -266,6 +266,9 @@ internal sealed class PlayerbotDeferLedger
             }
             else
             {
+                // A fleet-wide change frees the deferral after this bot's stagger, not before: the deadline moves only if that is sooner
+                // than the one it has. The deferral stops waiting for causes (ClearWake) either way, so a second swap during the stagger
+                // neither restarts nor extends it; it ends at the stagger or its own deadline, whichever is first.
                 bool shortened = jitter < slot.UntilMs - now;
                 if (shortened) slot.UntilMs = now + jitter;
                 ClearWake(slot);

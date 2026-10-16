@@ -210,7 +210,10 @@ internal sealed class PlayerbotStallWatch
     }
 
     /// <summary>The ledger's time for the world time <paramref name="nowMs"/> (<see cref="PlayerbotWorldClock.Ms"/>; as it is when the watch has no world).</summary>
-    private long LedgerTime(uint nowMs) => World is { } world ? PlayerbotWorldClock.Ms(world, nowMs) : nowMs;
+    private long LedgerTime(uint nowMs)
+        => World is { } world ? (_clock ??= new PlayerbotWorldClock(world)).Ms(nowMs) : nowMs;
+
+    private PlayerbotWorldClock? _clock;
 
     /// <summary>The pin cell of <c>(x, y)</c> on <paramref name="mapId"/>: map in bits 48-63, cell X in 24-47, cell Y in 0-23.</summary>
     internal static DeferKey PinKey(uint mapId, float x, float y)
@@ -301,7 +304,9 @@ internal sealed class PlayerbotSuspensions(PlayerbotDeferLedger? ledger = null, 
     internal PlayerbotDeferLedger Ledger { get; } = ledger ?? new PlayerbotDeferLedger();
 
     /// <summary>The ledger's time for the world time <paramref name="nowMs"/>: against the world's 64-bit uptime, so the 32-bit clock's wrap never reaches the ledger (without a world, as given).</summary>
-    private long T(uint nowMs) => world is null ? nowMs : PlayerbotWorldClock.Ms(world, nowMs);
+    private long T(uint nowMs) => _clock is null ? nowMs : _clock.Ms(nowMs);
+
+    private readonly PlayerbotWorldClock? _clock = world is null ? null : new PlayerbotWorldClock(world);
 
     /// <summary>How many times this bot has set the quest aside (kept in memory; a restart starts the count again).</summary>
     internal int QuestSetAsideCount(uint quest) => _questSetAsides.GetValueOrDefault(quest);
@@ -319,8 +324,9 @@ internal sealed class PlayerbotSuspensions(PlayerbotDeferLedger? ledger = null, 
 
     internal bool IsQuestSuspended(uint quest, uint nowMs)
     {
-        return quest != 0 && (Ledger.IsDeferred(new(DeferKind.UnreachableQuest, quest), T(nowMs))
-            || Ledger.IsDeferred(new(DeferKind.Quest, quest), T(nowMs)) || Shared?.IsQuestSetAside(quest, nowMs) == true);
+        long now = T(nowMs);
+        return quest != 0 && (Ledger.IsDeferred(new(DeferKind.UnreachableQuest, quest), now)
+            || Ledger.IsDeferred(new(DeferKind.Quest, quest), now) || Shared?.IsQuestSetAside(quest, nowMs) == true);
     }
 
     /// <summary>Whether the quest's ender was diagnosed unreachable and the diagnosis has not expired.</summary>

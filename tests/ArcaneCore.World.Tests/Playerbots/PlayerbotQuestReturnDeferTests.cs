@@ -29,7 +29,8 @@ public sealed partial class PlayerbotQuestReturnTests
         PlayerbotBrain brain = await StartAsync(fixture, new ScriptedRoute(climb: 23.5f));
         await fixture.Host.World.InvokeAsync(() =>
         {
-            brain.Suspensions.Ledger.Defer(UnreachableKey(777), fixture.Host.World.NowMs, untilMs: fixture.Host.World.NowMs + 3_600_000);
+            long now = PlayerbotWorldClock.UptimeMs(fixture.Host.World);
+            brain.Suspensions.Ledger.Defer(UnreachableKey(777), now, untilMs: now + 3_600_000);
             return true;
         });
         await ThinkAsync(fixture, brain, 1); // the first probe only records what the bot is
@@ -96,7 +97,8 @@ public sealed partial class PlayerbotQuestReturnTests
             await ThinkAsync(fixture, brain, 1); // the brain has seen the world, and nothing is deferred yet
             await fixture.Host.World.InvokeAsync(() =>
             {
-                brain.Suspensions.Ledger.Defer(UnreachableKey(777), fixture.Host.World.NowMs, untilMs: fixture.Host.World.NowMs + 3_600_000);
+                long now = PlayerbotWorldClock.UptimeMs(fixture.Host.World);
+            brain.Suspensions.Ledger.Defer(UnreachableKey(777), now, untilMs: now + 3_600_000);
                 WorldCollision.Of(fixture.Host.World).Install(lineOfSight: new FlatFloor(fixture.Session.Player!.Z), pathfinder: new ScriptedRoute(climb: 1f));
                 return true;
             });
@@ -161,6 +163,30 @@ public sealed partial class PlayerbotQuestReturnTests
             suspensions.SuspendEntry(5, world.NowMs); // set aside again, at the wrapped clock
             Assert.True(suspensions.IsEntrySuspended(5, world.NowMs + 599_999));
             Assert.False(suspensions.IsEntrySuspended(5, world.NowMs + 600_000));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ASetAsideMadeJustBeforeNowMsWraps_StaysInForceAcrossTheWrap_AndEndsAtItsDeadline()
+    {
+        await using var fixture = await ReturnFixture.CreateAsync(farGiver: true, manualClock: true);
+        await fixture.Host.World.InvokeAsync(() =>
+        {
+            var world = fixture.Host.World;
+            var suspensions = new PlayerbotSuspensions(world: world);
+            const uint Hour = 3_600_000;
+            while (world.NowMs < uint.MaxValue - Hour - 300_000u) world.RunTick(Hour);
+            world.RunTick(uint.MaxValue - 300_000u - world.NowMs); // NowMs is now 300 s short of the wrap
+            Assert.Equal(uint.MaxValue - 300_000u, world.NowMs);
+            suspensions.SuspendEntry(5, world.NowMs); // ten minutes: ends 300 s after the wrap
+            world.RunTick(400_000); // NowMs wrapped
+            Assert.True(world.NowMs < 200_000u);
+            Assert.True(suspensions.IsEntrySuspended(5, world.NowMs)); // 200 s left
+            world.RunTick(199_000);
+            Assert.True(suspensions.IsEntrySuspended(5, world.NowMs));
+            world.RunTick(2_000);
+            Assert.False(suspensions.IsEntrySuspended(5, world.NowMs));
             return true;
         });
     }

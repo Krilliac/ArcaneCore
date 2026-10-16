@@ -147,11 +147,11 @@ public sealed class ManagedPlayerbotSetAsideRestartTests
             await first.World.InvokeAsync(() =>
             {
                 PlayerbotSuspensions suspensions = feature.FindBrain(id)!.Suspensions;
-                uint now = first.World.NowMs;
+                long now = PlayerbotWorldClock.UptimeMs(first.World);
                 var key = new DeferKey(DeferKind.UnreachableQuest, 1361);
                 suspensions.Ledger.Defer(key, now, untilMs: now); // two diagnoses, each over at once
                 suspensions.Ledger.Defer(key, now, untilMs: now);
-                Assert.False(suspensions.IsQuestSuspended(1361, now));
+                Assert.False(suspensions.IsQuestSuspended(1361, first.World.NowMs));
                 return true;
             });
             await feature.ShutdownBeforeWorldStopAsync();
