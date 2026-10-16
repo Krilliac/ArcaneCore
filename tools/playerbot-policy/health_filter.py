@@ -1,9 +1,9 @@
 """Drop decisions recorded while the world tick was overrunning (shared by train.py and ab_report.py).
 
 The server writes a "k":"health" record about every 10 s next to the goal records
-(docs/areas/playbots.md, Tick health):
+(docs/areas/playbots.md, Tick health; "v" is the server record version: 2 now, 1 before the Opportunity goal, both read):
 
-    {"v":1,"k":"health","t":<unix ms at the interval's end>,"ms":<interval length>,"over":<frames over the tick budget>,"budget":<ms>}
+    {"v":2,"k":"health","t":<unix ms at the interval's end>,"ms":<interval length>,"over":<frames over the tick budget>,"budget":<ms>}
 
 so the interval it describes is [t - ms, t]. A goal record's decision ran over [t, t + w*1000 + slack] (t unix ms of the
 decision, w the outcome window in seconds). The server closes an outcome on the first think after the window has
@@ -35,7 +35,6 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 
-HEALTH_VERSION = 1
 # The server's record version covers every record kind; version 2 (the Opportunity goal changed the `open` bits) left the health record's
 # keys as they were.
 HEALTH_VERSIONS = (1, 2)
