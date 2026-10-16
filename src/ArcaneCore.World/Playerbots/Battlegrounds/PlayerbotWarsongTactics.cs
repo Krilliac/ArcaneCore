@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Entities;
 
 namespace ArcaneCore.World.Playerbots.Battlegrounds;
 
@@ -63,6 +64,9 @@ internal sealed class PlayerbotWsgPicture
 
     /// <summary>The enemy flag is on its stand and may be taken now (its spawn event is active).</summary>
     public bool EnemyFlagReady { get; init; }
+
+    /// <summary>The enemy flag stand object to click while the flag is ready (empty: not on the map).</summary>
+    public ObjectGuid EnemyStandObject { get; init; }
 
     /// <summary>Where the enemy flag lies when it is on the ground.</summary>
     public Vector3? EnemyFlagDropped { get; init; }
@@ -196,7 +200,8 @@ internal static class PlayerbotWarsongTactics
             }
             else if (toFlag > 0 && picture.EnemyFlag is WsgFlagState.OnBase or WsgFlagState.WaitRespawn)
             {
-                Give(Nearest(pool, picture.EnemyStand)!.Value, PlayerbotWsgDuty.TakeEnemyFlag, default, picture.EnemyStand);
+                Give(Nearest(pool, picture.EnemyStand)!.Value, PlayerbotWsgDuty.TakeEnemyFlag, picture.EnemyFlagReady ? picture.EnemyStandObject : default,
+                    picture.EnemyStand);
                 toFlag--;
             }
             else

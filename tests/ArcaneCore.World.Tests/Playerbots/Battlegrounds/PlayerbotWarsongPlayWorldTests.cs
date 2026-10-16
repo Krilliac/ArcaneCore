@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
@@ -211,6 +212,50 @@ public sealed class PlayerbotWarsongPlayWorldTests
             await context.IdleAsync(TimeSpan.FromMilliseconds(PlayerbotBattlegroundCoordinator.SetAsideMs + 60_000));
             ScenarioContext.ExpectEqual(1, Walks(), string.Join(" | ", coordinator.Events));
             ScenarioContext.Expect(capture.Count(ObjectiveUnreachable) <= 2, capture.Describe());
+        });
+    }
+
+    /// <summary>
+    /// Four Alliance bots against a Horde player: every bot has a duty every think (the carrier, defenders, the rest at the enemy flag or the
+    /// middle), the defender fights the Horde player once it stands in the Alliance flag room, nobody is idle, and the flag goes across.
+    /// </summary>
+    [Fact]
+    public async Task FourBots_EachHasADuty_TheDefenderFightsTheIntruder_AndTheFlagGoesAcross()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await RunAsync(world, "bg-wsg-four", async context =>
+        {
+            ScenarioBot[] allies = new ScenarioBot[4];
+            for (int i = 0; i < allies.Length; i++)
+            {
+                allies[i] = await context.LoginAsync("Bgfour" + (char)('a' + i), 1, 1);
+                await context.AutonomousAsync(allies[i]);
+            }
+
+            ScenarioBot horde = await ScriptedHordeQueuesAsync(context, "Bgfourh", BattlegroundType.WarsongGulch, Content.HordeWsgMaster);
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            await PortScriptedAsync(context, horde, 489, (Content.HordeParking.X, Content.HordeParking.Y, Content.HordeParking.Z));
+            await context.StepAsync("the four bots are in the match", () => WaitExplainedAsync(context, "in the match",
+                () => allies.All(a => coordinator.Find(a.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch), TimeSpan.FromMinutes(2), allies));
+            var wsg = (WarsongGulch)(await context.BattlegroundOfAsync(allies[0]))!;
+            coordinator.Options.QueueChancePerMinute = 0f;
+            await context.StepAsync("the gates open", () => context.WaitUntilAsync("in progress", () => wsg.Status == BattlegroundStatus.InProgress, StartWait));
+
+            await context.StepAsync("every bot has an order", () => context.WaitUntilAsync("orders", () => allies.All(a => coordinator.Find(a.BotId)?.AI?.Order is not null), TimeSpan.FromSeconds(5)));
+            PlayerbotWsgDuty[] duties = await context.ReadAsync(() => allies.Select(a => coordinator.Find(a.BotId)!.AI!.Order!.Value.Duty).ToArray());
+            ScenarioContext.ExpectEqual(1, duties.Count(d => d == PlayerbotWsgDuty.DefendFlagRoom), "defenders: " + string.Join(",", duties));
+
+            await context.StepAsync("the Horde player walks into the Alliance flag room: a defender fights it", async () =>
+            {
+                await context.PlaceAsync(horde, 489, Content.AllianceFlag.X + 6f, Content.AllianceFlag.Y + 6f, Content.WsgFloor);
+                await WaitExplainedAsync(context, "a bot attacks the intruder", () => allies.Any(a => ReferenceEquals(a.RequirePlayer().Combat.Victim, horde.RequirePlayer())),
+                    TimeSpan.FromSeconds(20), allies);
+                await context.PlaceAsync(horde, 489, Content.HordeParking.X, Content.HordeParking.Y, Content.HordeParking.Z);
+            });
+
+            await context.StepAsync("the flag goes across", () => WaitExplainedAsync(context, "captured", () => wsg.TeamScore(Team.Alliance) >= 1, TimeSpan.FromSeconds(120), allies));
+            int idle = await context.ReadAsync(() => allies.Sum(a => coordinator.Find(a.BotId)?.AI?.IdleThinks ?? 0));
+            ScenarioContext.ExpectEqual(0, idle, "idle thinks: " + string.Join(" | ", allies.Select(a => coordinator.Describe(a.BotId))));
         });
     }
 

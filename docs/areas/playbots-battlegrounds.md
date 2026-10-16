@@ -24,7 +24,8 @@ server's own rules (below).
 | `PlayerbotBattlegroundQueueMachine.cs` | One bot's queue-to-leave life as a pure state machine (phases and the packet of each transition). Unit tested. |
 | `PlayerbotBattlegroundRoles.cs` | Who attacks, escorts and defends in a match. Unit tested. |
 | `PlayerbotBattlegroundCoordinator.cs` | The world feature: scans free bots, runs every followed bot's queue machine from the server's own state, sends the client packets, rebuilds the demand and the roles, the GM report. |
-| `PlayerbotBattlegroundAI.cs` | One per followed bot: the walk to the battlemaster, and the match (fighting enemy players, the objective, the corpse run). |
+| `PlayerbotBattlegroundAI.cs` | One per followed bot: the walk to the battlemaster, and the match (fighting enemy players, the objective, the wait for the spirit guide). |
+| `PlayerbotWarsongTactics.cs` | The Warsong Gulch plan: every living bot's duty each think, and the idle check. Unit tested. |
 
 Changes outside the folder: `ManagedPlayerbotFeature` calls the coordinator every tick after the group coordinator and lets it drive a
 bot before the group AI, the party AI and the brain (`BattlegroundDriven`); a bot the coordinator holds is not free for bot groups and a
@@ -47,7 +48,7 @@ The types it may join (`PlayerbotBattlegroundBrackets.Eligible`), each refusal l
 | a `battleground_template` row for the type | `NoTemplate` |
 | the bot's level within the template's minimum and maximum; the bracket is the manager's (`BracketOfLevel`, vmangos `Player::GetBattleGroundBracketIdFromLevel`) | `LevelOutOfRange` (not logged) |
 | the objective content, decided once per content load: Warsong Gulch both flag stands (179830, 179831) on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects with a `gameobject_battleground` node event and a lock) where every node's neutral banner is one the match routes to the node click (`MatchRuntime.RoutesBannerUse`, the server's own rule), and the banner spell 21651 in the spell store, known by the bot (`playercreateinfo_spell` teaches every character "Opening" 21651) | `MissingContent` |
-| a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
+| a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, whose spawn no game event holds back (the Warsong Emissary of "Call to Arms" while it is off), whose route was not refused from the bot's zone in the last hour, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
 
 Then the pick (`PlayerbotBattlegroundDemand.Pick`): a (type, bracket) a real player waits in, whose team still needs bots to reach the
 template's minimum per team, is taken at once (`PreferFillingRealPlayerQueues`); otherwise the bot rolls its per-minute chance
@@ -99,21 +100,28 @@ taken on where it stands. A bot taken by a controller is forgotten where it stan
 * **Before the gates open and after the end** the bot stands still (the start countdown, the frozen end).
 * **Fighting.** The enemy is a living participant of the other team on the bot's map; teammates never (the match's teams decide, not the
   faction templates). In order: the enemy carrying the bot's own flag within 80 yards (Warsong Gulch), an enemy attacking the bot, the
-  enemy it already fights, the nearest enemy within 30 yards. The fight is the brain's and the group AI's: the class rotation
-  (`PlayerbotCombatSpells`), the position (`PlayerbotBrain.DecidePosition`), facing the victim, the melee swing. A flag carrier does not
-  stop to fight.
-* **Death.** The bot releases and runs back to its body (`PlayerbotRecovery`, as the brain and the group AI do); the server casts
-  Waiting to Resurrect on release and puts the ghost at the match's graveyard. There is no spirit-guide resurrection wave in this
-  server (docs/areas/battlegrounds.md, Resurrection): the corpse run is the way back, and it waits while the match is not in progress.
+  enemy it already fights, the nearest enemy within 30 yards (in Warsong Gulch the enemy its order names comes first: the enemy carrier for
+  a hunter wherever it is, an intruder of the flag room for a defender). The fight is the brain's and the group AI's: the class rotation
+  (`PlayerbotCombatSpells`), the position (`PlayerbotBrain.DecidePosition`), facing the victim, the melee swing. A ranged bot with nothing
+  to cast for 8 s (`RangedIdleLimitMs`), or below 10% mana, closes in and swings (vmangos `CombatBotBaseAI::BeginChasing`). A flag
+  carrier does not stop to fight.
+* **Death.** The bot releases (`PlayerbotRecovery`); on a battleground map the ghost waits beside the graveyard's spirit guide for its
+  area resurrection wave (CMSG_AREA_SPIRIT_HEALER_QUEUE) instead of running to its body.
+* **Off the match's map** (bound to it but elsewhere) the bot stands: the objectives are coordinates of the battleground map.
+* **Idle.** A living bot out of combat that stood still for 15 s although its Warsong Gulch order sends it somewhere, or an enemy its
+  order names is near, is idle: `bot-bg/idle-in-match`, once per match (`PlayerbotWarsongTactics.IsIdle`).
 * **Roles** (`PlayerbotBattlegroundRoles`, per match and team over the coordinator's bots, healers escort first): Warsong Gulch 40%
   attackers, 30% escorts, 30% defenders; Arathi Basin 70% attackers, 30% defenders. These shares are this server's design.
 
-**Warsong Gulch.** The carrier walks into its own flag room trigger (3646 Alliance, 3647 Horde; its motion reports CMSG_AREATRIGGER like
-a client, and the match captures when the carrier's own flag is home) and waits there while its own flag is away. Anyone within 60 yards
-of its own dropped flag, and a defender from anywhere, returns it (CMSG_GAMEOBJ_USE on the dropped flag). An attacker takes the enemy
-flag from its stand when the stand is up (CMSG_GAMEOBJ_USE within 4 yards), or from the ground, escorts a teammate carrying it, and
-otherwise waits at the enemy stand. An escort follows its own carrier at 3-5 yards (vmangos `SelectFollowTarget`) and attacks when
-there is none. A defender holds within 8 yards of its own flag room.
+**Warsong Gulch.** The static roles are not used: every think the coordinator plans the team once (`PlayerbotWarsongTactics.Plan`, per
+match, team and tick, after mangosbot's `BGTactics::selectObjective` and `atFlag`, cmangos/playerbots BattleGroundTactics.cpp) and each
+living bot gets a duty. In order: the carrier walks into its own flag room trigger (3646 Alliance, 3647 Horde; its motion reports
+CMSG_AREATRIGGER like a client, and the match captures when the carrier's own flag is home) and waits there while its own flag is away;
+the nearest bot to the own dropped flag returns it and the nearest to the enemy dropped flag picks it up (CMSG_GAMEOBJ_USE); while the
+own flag is home, defenders hold the flag room (none below three bots, one, two from eight; at least as many as enemies in the room,
+which they fight); half of the rest hunt the enemy carrier of the own flag; escorts follow the own carrier (healers first, vmangos
+`SelectFollowTarget`); the rest hunt too while there is an enemy carrier, else take the enemy flag from its stand (CMSG_GAMEOBJ_USE within
+4 yards; waiting at the stand's spawn while the flag is away or respawning) or hold the middle of the field.
 
 **Arathi Basin.** A node may be clicked by a team when it is neutral or its status belongs to the other team (vmangos
 `EventPlayerClickedOnFlag`: `status == 0 || teamIndex == status % 2`). An attacker walks to the nearest such node's banner, stops within
@@ -188,11 +196,15 @@ without it the 21651 cast went through and nothing was claimed, which is how the
   catalog (`Skills:*DbcPath`, docs/areas/skills.md); without one the cast completes and nothing opens, for bots and players alike.
 * **Navigation needs the battleground maps' mmaps** (489, 529; 30 for Alterac Valley would be needed if it were in scope). Without a
   navigation mesh the bot's routes fall back to the terrain stepper, which refuses steep and unknown ground: the bots stand at the start.
-* **No spirit-guide wave** (above): a dead bot runs back to its body.
-* **The battlemaster walk is on one map**, a straight-line `MaxTravelYards` check: no flight paths, boats or portals to a battlemaster.
+* **The battlemaster walk is on one map**, a straight-line `MaxTravelYards` check: no flight paths, boats, elevators or portals to a
+  battlemaster. The server's join needs the battlemaster in interaction reach (vmangos HandleBattlemasterJoinOpcode through
+  GetNPCIfCanInteractWith; cmangos/mangosbot queue with the guid from anywhere, which this server refuses), so a bot walks. The Undercity's
+  battlemasters are reached by its elevators, which the navigation mesh does not join: the route is refused, and that battlemaster is
+  left alone from the bot's zone for an hour (live: Gitrol in Silverpine Forest, 62 refusals before).
 * No premade groups: every bot queues alone (CMSG_BATTLEMASTER_JOIN with the group flag off).
 * **A real player's party bot in a group queue.** A real player who queues as a group (CMSG_BATTLEMASTER_JOIN with the group flag) queues
   the party bot with it (the server's rule). That bot is not free, so the coordinator neither follows nor ports it: its invitation lapses after
   the server's two minutes and it leaves the queue then. The party AI has no battleground behaviour of its own.
-* The shares of the roles and the engagement distances (30 yards, 80 for the flag thief, 60 to return a flag) are this server's design,
+* The shares of the roles, the Warsong Gulch defender counts and the engagement distances (30 yards, 80 for the flag thief without an
+  order, 40 for the flag room) are this server's design,
   not vmangos values; vmangos battle bots follow recorded waypoint paths instead.
