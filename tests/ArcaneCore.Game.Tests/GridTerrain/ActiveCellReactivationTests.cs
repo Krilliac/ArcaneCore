@@ -65,8 +65,19 @@ public sealed class ActiveCellReactivationTests(ITestOutputHelper output)
                 world.AddPlayer(player);
             }
 
-            world.RunTick(50);
+            // Every patrol must be mid-leg before the players leave. On a real mesh the per-update path budget
+            // (CreaturePathBudget.Default, 64 A* searches) defers the rest of the 512 first legs to later updates;
+            // only straight-line "searches" cost nothing. Tick until the deferred legs have all started.
+            int warmupTicks = 0;
+            do
+            {
+                world.RunTick(50);
+                warmupTicks++;
+            }
+            while (warmupTicks < 64 && system.Creatures.Any(c => c.Spline is null));
+            output.WriteLine($"warm-up: {warmupTicks} tick(s), deferred first legs={system.DeferredPathSearches}");
             Assert.Equal(hubs * perHub, system.Creatures.Count);
+            Assert.All(system.Creatures, c => Assert.NotNull(c.Spline));
             var positions = system.Creatures.ToDictionary(c => c.Guid, c => c.X);
             var splines = system.Creatures.ToDictionary(c => c.Guid, c => c.Spline!.Id);
             foreach (Player player in players) player.Relocate(player.X, origin.Y - 300, player.Z, 0, 0);
