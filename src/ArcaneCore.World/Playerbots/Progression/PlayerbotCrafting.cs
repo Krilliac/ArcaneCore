@@ -854,6 +854,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
 
         return false;
     }
+
     private bool TryGatherNode(Player player, SpellStore store, SpellbookCache spellbook, uint elapsedMs, uint now)
     {
         if (player.Map is not { } map || PlayerbotTownGoals.FreeBagSlots(player) <= 0)
