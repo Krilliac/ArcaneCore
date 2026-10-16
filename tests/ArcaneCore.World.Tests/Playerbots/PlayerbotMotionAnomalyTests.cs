@@ -19,7 +19,11 @@ internal static class H1AnomalyKit
     /// The reports of one bot in this host's world (<see cref="PlayerbotAnomalies.CaptureFor"/>: other tests' bots share the name and guid of
     /// <see cref="PlayerbotMovementControlTests.EnterAsync"/>'s, but their reports name another world).
     /// </summary>
-    internal static AnomalyCapture CaptureFor(Player player) => PlayerbotAnomalies.CaptureFor(player);
+    internal static AnomalyCapture CaptureFor(Player player)
+    {
+        Assert.NotNull(player.Map);
+        return PlayerbotAnomalies.CaptureFor(player);
+    }
 
     internal sealed class ManualClock : IWorldFeature
     {

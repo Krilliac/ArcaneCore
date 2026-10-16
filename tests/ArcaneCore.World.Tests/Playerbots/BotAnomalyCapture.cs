@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots;
+using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
@@ -13,7 +14,11 @@ namespace ArcaneCore.World.Tests.Playerbots;
 internal static class BotAnomalyCapture
 {
     /// <summary>Reports about <paramref name="player"/> in the world it is in now (it must be on a map: <see cref="PlayerbotAnomalies.CaptureFor"/>).</summary>
-    public static AnomalyCapture For(Player player) => PlayerbotAnomalies.CaptureFor(player);
+    public static AnomalyCapture For(Player player)
+    {
+        Assert.NotNull(player.Map);
+        return PlayerbotAnomalies.CaptureFor(player);
+    }
 
     /// <summary>Reports made on the calling thread only (synchronous code under test).</summary>
     public static AnomalyCapture OnThisThread(Func<AnomalyNotice, bool>? also = null)

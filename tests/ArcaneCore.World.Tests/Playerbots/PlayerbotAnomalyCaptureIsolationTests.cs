@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
@@ -82,9 +83,10 @@ public sealed class PlayerbotAnomalyCaptureIsolationTests
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         await using WorldTestHost hostTwin = WorldTestHost.Start();
         WorldSession sessionTwin = await PlayerbotMovementControlTests.EnterAsync(hostTwin);
+        Player bot = session.Player!;
+        Map? savedMap = bot.Map;
         try
         {
-            Player bot = session.Player!;
             await host.World.InvokeAsync(() => { bot.Map = null; return true; });
             Assert.Null(PlayerbotAnomalies.OriginOf(bot));
             using AnomalyCapture mapless = PlayerbotAnomalies.CaptureFor(bot); // resolved with no world: it must not fall back to the name alone
@@ -94,6 +96,7 @@ public sealed class PlayerbotAnomalyCaptureIsolationTests
         }
         finally
         {
+            await host.World.InvokeAsync(() => { bot.Map = savedMap; return true; });
             session.Kick();
             sessionTwin.Kick();
             await session.ManagedClosed;
@@ -108,9 +111,10 @@ public sealed class PlayerbotAnomalyCaptureIsolationTests
         await using WorldTestHost hostB = WorldTestHost.Start();
         WorldSession sessionA = await PlayerbotMovementControlTests.EnterAsync(hostA);
         WorldSession sessionB = await PlayerbotMovementControlTests.EnterAsync(hostB);
+        Player botA = sessionA.Player!;
+        Map? savedMap = botA.Map;
         try
         {
-            Player botA = sessionA.Player!;
             using AnomalyCapture seenByA = PlayerbotAnomalies.CaptureFor(botA); // the world is resolved here, once
 
             await hostA.World.InvokeAsync(() => { botA.Map = null; return true; }); // teardown: a live Map read would now be null
@@ -120,6 +124,7 @@ public sealed class PlayerbotAnomalyCaptureIsolationTests
         }
         finally
         {
+            await hostA.World.InvokeAsync(() => { botA.Map = savedMap; return true; });
             sessionA.Kick();
             sessionB.Kick();
             await sessionA.ManagedClosed;
@@ -128,23 +133,13 @@ public sealed class PlayerbotAnomalyCaptureIsolationTests
     }
 
     [Fact]
-    public async Task TheAnomalyHistory_DoesNotKeepTheOriginToken()
+    public void TheAnomalyHistory_DoesNotKeepTheOriginToken()
     {
-        await using WorldTestHost host = WorldTestHost.Start();
-        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         var ledger = new AnomalyLedger();
         using var history = new PlayerbotAnomalyHistory(ledger);
-        try
-        {
-            string subject = PlayerbotAnomalies.SubjectOf(session.Player!);
-            ledger.Report(PlayerbotAnomalies.Prefix + Area, "kept", subject, "detail", AnomalySeverity.Warning, new object());
-            PlayerbotAnomalyRecord record = Assert.Single(history.ForSubject(subject));
-            Assert.Null(record.Notice.Origin);
-        }
-        finally
-        {
-            session.Kick();
-            await session.ManagedClosed;
-        }
+        const string subject = "bot Historyone (guid 1)";
+        ledger.Report(PlayerbotAnomalies.Prefix + Area, "kept", subject, "detail", AnomalySeverity.Warning, new object());
+        PlayerbotAnomalyRecord record = Assert.Single(history.ForSubject(subject));
+        Assert.Null(record.Notice.Origin);
     }
 }
