@@ -51,7 +51,7 @@ public sealed class ScourgeCauldronAI(Creature creature) : ScriptedAI(creature)
         }
 
         // SummonCreature(lord, 0, 0, 0, 0, ...): all-zero coordinates put the summon at contact distance in front of the summoner, facing 0
-        // (Object.cpp:2050-2054).
+        // (Object.cpp:2049-2053).
         float reach = Me.BoundingRadius + ContactDistance;
         float x = Me.X + (reach * MathF.Cos(Me.Orientation)), y = Me.Y + (reach * MathF.Sin(Me.Orientation));
         system.SummonAt(Me, area.Lord, x, y, system.GroundZ(x, y, Me.Z) ?? Me.Z, 0f, null, LordDespawnMs);

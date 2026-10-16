@@ -76,7 +76,11 @@ public sealed class ZoneScriptBatch6Tests
         {
         }
 
+        public List<(Player Player, uint Entry, ObjectGuid Source)> Talks { get; } = [];
+
         public void KilledMonsterCredit(Player player, uint creatureEntry, ObjectGuid source) => Credits.Add((player, creatureEntry, source));
+
+        public void TalkedToCreature(Player player, uint creatureEntry, ObjectGuid source) => Talks.Add((player, creatureEntry, source));
 
         public void GroupEventFailHappens(Player player, uint questId)
         {
@@ -270,6 +274,25 @@ public sealed class ZoneScriptBatch6Tests
         Assert.False(rig.Npc.IsAlive);
         Assert.Equal(ScourgeCauldronAI.MinRespawnDelaySeconds, rig.Npc.RespawnDelayOverrideSeconds);
         Assert.Equal(315_000L, rig.Npc.RespawnAtMs - rig.System.ClockMs); // cmangos draws this death's delay at JUST_DIED, before DoDie's SetRespawnDelay
+    }
+
+    [Fact]
+    public void Cauldron_TheTenMinuteRespawnSurvivesTheRespawn_AndIsTheNextDeathsDelay()
+    {
+        using Rig rig = CauldronRig(ScourgeCauldronAI.AreaFelstone, respawnSeconds: 315);
+        rig.Quest.Incomplete.Add(ScourgeCauldronAI.QuestFelstoneA);
+        var ai = rig.Ai<ScourgeCauldronAI>();
+        ai.MoveInLineOfSight(rig.Player);
+        Assert.False(rig.Npc.IsAlive);
+
+        rig.System.ForceRespawn(rig.Npc);
+        Assert.True(rig.Npc.IsAlive);
+        Assert.Equal(ScourgeCauldronAI.MinRespawnDelaySeconds, rig.Npc.RespawnDelayOverrideSeconds);
+        rig.Ai<ScourgeCauldronAI>().MoveInLineOfSight(rig.Player);
+
+        Assert.False(rig.Npc.IsAlive);
+        Assert.Equal(600_000L, rig.Npc.RespawnAtMs - rig.System.ClockMs);
+        Assert.Equal(2, rig.System.Creatures.Count(c => c.Entry == ScourgeCauldronAI.NpcBilemaw));
     }
 
     [Theory]
@@ -897,7 +920,8 @@ public sealed class ZoneScriptBatch6Tests
 
         Assert.Null(new AgedDyingAncientKodoGossip().Hello(rig.Player, InfoOf(rig.Npc, NpcFlags.Gossip)));
 
-        Assert.Equal([(rig.Player, AgedDyingAncientKodoAI.NpcTamedKodo, rig.Npc.Guid)], rig.Quest.Credits);
+        Assert.Equal([(rig.Player, AgedDyingAncientKodoAI.NpcTamedKodo, rig.Npc.Guid)], rig.Quest.Talks); // Player::TalkedToCreature
+        Assert.Empty(rig.Quest.Credits);
         Assert.DoesNotContain((rig.Player.Guid, AgedDyingAncientKodoAI.SpellKodoKomboPlayerBuff), rig.Caster.Auras);
         Run(rig.World, 9_500);
         Assert.True(rig.Npc.IsAlive);
@@ -924,6 +948,7 @@ public sealed class ZoneScriptBatch6Tests
 
         Assert.Null(new AgedDyingAncientKodoGossip().Hello(rig.Player, InfoOf(rig.Npc, NpcFlags.Gossip)));
 
+        Assert.Empty(rig.Quest.Talks);
         Assert.Empty(rig.Quest.Credits);
         Assert.Equal(playerBuff, rig.Caster.Auras.Contains((rig.Player.Guid, AgedDyingAncientKodoAI.SpellKodoKomboPlayerBuff)));
         Run(rig.World, 11_000);
@@ -933,7 +958,9 @@ public sealed class ZoneScriptBatch6Tests
     // --- the Kodo Kombobulator (real spell system) ------------------------------------------------------------
 
     /// <summary>
-    /// The three kodo spells with the effects of build 5875's Spell.dbc that the scripts use. Simplified for the test: 18153 and 18172 target any
+    /// The three kodo spells with the effects of build 5875's Spell.dbc that the scripts use: all three as the DBC has them instant to the
+    /// script (18172 and 18377 CastingTimeIndex 1 = 0 ms, no reagents, no power cost, no start-recovery category; 18153's 5 s cast time is the
+    /// item use's and is not under test, its cast is triggered here), 18172 and 18377 lasting DurationIndex 5 = 300 s. Simplified for the test: 18153 and 18172 target any
     /// unit (the DBC's TARGET_CHAIN_DAMAGE at a neutral kodo and TARGET_UNIT_FRIEND from a still-neutral kodo, so the engine's own target checks
     /// cannot answer for the script's), and 18377's aura is a dummy (the DBC's periodic trigger of 18269); the scripts read neither.
     /// </summary>
@@ -941,7 +968,7 @@ public sealed class ZoneScriptBatch6Tests
     {
         static SpellInfo Instant(SpellInfo s) => s with
         {
-            StartRecoveryCategory = 0, StartRecoveryTime = 0, RangeIndex = 4, Range = new SpellRange(0, 30), Duration = new SpellDuration(600_000, 0, 600_000),
+            StartRecoveryCategory = 0, StartRecoveryTime = 0, RangeIndex = 4, Range = new SpellRange(0, 30), Duration = new SpellDuration(300_000, 0, 300_000),
         };
 
         return
@@ -1051,7 +1078,7 @@ public sealed class ZoneScriptBatch6Tests
         gossip.Hello(rig.Player, InfoOf(rig.Kodo, NpcFlags.Gossip));
         gossip.Hello(rig.Player, InfoOf(rig.Kodo, NpcFlags.Gossip)); // the player's buff is gone
 
-        Assert.Equal([(rig.Player, AgedDyingAncientKodoAI.NpcTamedKodo, rig.Kodo.Guid)], rig.Quest.Credits);
+        Assert.Equal([(rig.Player, AgedDyingAncientKodoAI.NpcTamedKodo, rig.Kodo.Guid)], rig.Quest.Talks);
         Assert.False(rig.Kit.System.HasAura(rig.Player, AgedDyingAncientKodoAI.SpellKodoKomboPlayerBuff));
     }
 

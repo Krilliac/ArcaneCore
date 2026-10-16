@@ -24,7 +24,8 @@ the data we import. Line numbers below are of the mangos-classic file named in t
 The quest checks are the existing seams: the creature scripts use `CreatureMapSystem.QuestIncomplete` (`IScriptQuestEvents.IsQuestIncomplete`,
 batch 5), and the two gossip scripts registered in `QuestNpcFeature` are given `ScriptQuestEvents.IsQuestIncomplete`, the same helper, built on
 the feature's service provider and read at gossip time. Group credit (Ringo) is `CreatureMapSystem.RewardGroupEventExplored`; the kodo credit is
-`KilledMonsterCredit`; Katrana's event is `QuestNpcServices.AreaExploredOrEventHappens`. Ringo (4491) and Katrana (4185) are listed in
+`TalkedToCreature`, as the source's `Player::TalkedToCreature` (a new default member of `IScriptQuestEvents`, carried by `CreatureMapSystem`
+and `ScriptQuestEvents` to `QuestNpcServices.TalkedToCreature`); Katrana's event is `QuestNpcServices.AreaExploredOrEventHappens`. Ringo (4491) and Katrana (4185) are listed in
 `_entryScriptQuests` so the quest service offers those event quests.
 
 ### Documented deviations
@@ -51,8 +52,6 @@ the feature's service provider and read at gossip time. Group credit (Ringo) is 
 - **Cauldron: the sight range is the engine's** `MoveInLineOfSight` range; the source relies on cmangos's.
 - **Kodo: a despawn timer at 0 stays off.** The source runs `m_uiDespawnTimer -= diff` even at 0 (an unsigned wrap to about 49.7 days); the port
   counts only while it is set.
-- **Kodo: the hand-in credit is `KilledMonsterCredit(entry, guid)`.** The source calls `Player::TalkedToCreature`; 5561's creature objective is
-  11627 with the quest's speak-to/cast flags, which our kill-credit path counts the same way.
 - **Kodo: the death and respawn after the minute are `KillCreature` then `ForceRespawn`**, our pair for `SetDeathState(JUST_DIED)` plus
   `Respawn()`; the respawn restores the original template entry.
 - **Kodo: the spell script is bound by spell id 18153.** mangos-classic registers it by the name `spell_kodo_kombobulator` (:712); z2815 has no
@@ -60,6 +59,10 @@ the feature's service provider and read at gossip time. Group credit (Ringo) is 
 - **Kodo (observation, faithful): a tamed kodo never makes Smeed speak.** z2815's `creature_template` 11627 already has npcflag 1 (gossip), so
   the `!HasFlag(UNIT_NPC_FLAG_GOSSIP)` check (:77) is false for every tamed kodo; the Smeed lines and the 18362 cast happen only for a wild kodo
   without the flag. Pinned by `Kodo_TheTamedKodoTemplateAlreadyHasTheGossipFlag_SoSmeedNeverSpeaksToIt`.
+- **Kodo: the spell data as the 5875 client `Spell.dbc` has it** (read from `client-dbc-5875`): 18153 CastingTimeIndex 6 (5000 ms), effect 3
+  (dummy) on target 6, range 3; 18172 CastingTimeIndex 1 (0 ms), DurationIndex 5 (300 s), APPLY_AURA 4 on target 21, range 6, attributes
+  0x4000100 (the tests' row leaves out 0x4000000, the debuff bit, which the hand-in does not read); 18377 CastingTimeIndex 1 (0 ms),
+  DurationIndex 5 (300 s), APPLY_AURA 23 (periodic trigger, amplitude 300000) on target 1, range 1. None of the three has reagents or a power cost.
 - **Ringo: the dead stand state is set only in the constructor**, as in the source (:158-162), so a respawned Ringo is not laid down again.
 - **Katrana: the option texts come from `sql/scriptdev2/scriptdev2.sql`** (`gossip_texts` -3000120..-3000123); z2815 has no such rows, so they are
   constants in the script.

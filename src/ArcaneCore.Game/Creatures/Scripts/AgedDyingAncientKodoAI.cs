@@ -142,7 +142,7 @@ public sealed class KodoKombobulatorScript : ISpellScript
 
 /// <summary>
 /// GossipHello_npc_aged_dying_ancient_kodo (desolace.cpp:163-177): a player with Kodo Kombo Player Buff (18172) talking to a kodo with Kodo Kombo
-/// Despawn Buff (18377) gets the quest's credit for the kodo's entry (Player::TalkedToCreature: the creature objective of 5561 is 11627), loses
+/// Despawn Buff (18377) gets the speak-to credit for the kodo's entry (Player::TalkedToCreature; the creature objective of 5561 is 11627), loses
 /// the buff, and the kodo goes 10 s later. The kodo's own gossip menu is shown either way (the script answers no menu of its own).
 /// </summary>
 public sealed class AgedDyingAncientKodoGossip : INpcGossipScript
@@ -155,7 +155,7 @@ public sealed class AgedDyingAncientKodoGossip : INpcGossipScript
             && creatures.HasAura(player, AgedDyingAncientKodoAI.SpellKodoKomboPlayerBuff)
             && creatures.HasAura(kodo, AgedDyingAncientKodoAI.SpellKodoKomboDespawnBuff))
         {
-            creatures.KilledMonsterCredit(player, kodo.Entry, kodo.Guid);
+            creatures.TalkedToCreature(player, kodo.Entry, kodo.Guid);
             creatures.RemoveAuras(player, AgedDyingAncientKodoAI.SpellKodoKomboPlayerBuff);
             creatures.ForcedDespawn(kodo, AgedDyingAncientKodoAI.HandInDespawnMs);
         }
