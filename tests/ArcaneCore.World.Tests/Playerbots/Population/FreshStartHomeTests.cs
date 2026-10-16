@@ -231,6 +231,47 @@ public sealed class FreshStartHomeTests
         Assert.NotNull(world.Bots.HomeOf(bots[1]));
     }
 
+    /// <summary>
+    /// A pass that captured the world before the shutdown began (held reading the membership while the managed feature stops every bot)
+    /// must not run its start-home sweep: the graduation it would make is the shutdown's to skip (SweepStartHomesAsync's stopping guard).
+    /// Without a shutdown the same held pass widens the home, so the sweep is due and the guard is what keeps it.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AGraduationSweepInFlightWhenTheShutdownBegins_ChangesNoHome(bool shutdown)
+    {
+        var homes = new MemoryHomeStore();
+        await using PopulationTestHost world = WithZone(await StartAsync(homes, o =>
+        {
+            o.Population.Factions = PopulationFactions.Alliance;
+            o.Population.TargetOnline = 1;
+        }));
+        world.Ticks.Set(200, 10);
+        Assert.Contains("created 1", (await world.PassAsync()).Reason);
+        await world.WaitForSettledAsync(1);
+        Guid bot = Assert.Single(world.Bots.Snapshot()).BotId;
+        Assert.StartsWith("start:", world.Bots.HomeOf(bot)!.Place);
+
+        // At the graduate level the next sweep widens the home to the start zone.
+        await SetLevelAsync(world, bot, 6);
+        world.Feature.ClockMs += (world.Population.IntervalSeconds * 1000L) + 1000;
+        TaskCompletionSource held = world.Members.HoldNextLoad();
+        world.Ticks.Set(200, 10);
+        Task pass = world.Feature.RunPassNowAsync();
+        await held.Task.WaitAsync(TimeSpan.FromSeconds(30)); // the pass has captured the bot at level 6 and is blocked before its sweep
+
+        if (shutdown) await world.Bots.ShutdownBeforeWorldStopAsync();
+        world.Members.ReleaseHeldLoad();
+        await pass.WaitAsync(TimeSpan.FromSeconds(30));
+
+        PlayerbotHome home = world.Bots.HomeOf(bot)!;
+        Assert.StartsWith(shutdown ? "start:" : "zone:", home.Place);
+        Assert.Equal(shutdown ? 1100f : 4500f, home.Radius);
+        Assert.Equal(home.Place, homes.Get(bot)!.Place); // the stored row too
+        if (shutdown) Assert.Null(world.Feature.Status.LastError);
+    }
+
     [Fact]
     public async Task AnOperatorsHome_IsNeverTouchedByTheGraduationSweep()
     {
