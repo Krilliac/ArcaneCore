@@ -1,6 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
@@ -76,8 +76,9 @@ public sealed class UndermapObserver : IClientMovementObserver
                 if (state.LastUndermapSampleMs is null || unchecked(nowMs - state.LastUndermapSampleMs.Value) >= TerrainSampleIntervalMs)
                 {
                     state.LastUndermapSampleMs = nowMs;
-                    float floor = map.GetHeight(player.X, player.Y, player.Movement.Z + 2.0f);
-                    if (floor > TerrainTile.InvalidHeight && float.IsFinite(floor) && player.Movement.Z < floor - UnderTerrainThresholdYards)
+                    // Terrain alone convicts a player in a cave or a city; the models decide (MapCollision.ClassifyUnderMap; Unknown never convicts).
+                    UnderMapVerdict verdict = map.Collision.ClassifyUnderMap(player.X, player.Y, player.Movement.Z, UnderTerrainThresholdYards);
+                    if (verdict.Kind == UnderMapKind.UnderMap)
                     {
                         if (!state.UndermapReportedInEpisode)
                         {
@@ -86,7 +87,7 @@ public sealed class UndermapObserver : IClientMovementObserver
                                 "move",
                                 "under-map",
                                 $"player {player.Name} (guid {player.Guid.Low})",
-                                $"reason=below-terrain map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) floor={floor:F2}",
+                                $"reason=below-terrain map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) floor={player.Movement.Z + verdict.DepthYards:F2}",
                                 AnomalySeverity.Error);
                         }
                     }

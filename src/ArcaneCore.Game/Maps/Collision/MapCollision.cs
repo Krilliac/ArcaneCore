@@ -17,7 +17,7 @@ namespace ArcaneCore.Game.Maps.Collision;
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
 [DefaultMapUpdater(Order = 1000)]
-public sealed class MapCollision : IMapUpdater
+public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
 {
     /// <summary>vmangos <c>DEFAULT_HEIGHT_SEARCH</c>: how far below a point a floor is searched.</summary>
     public const float DefaultHeightSearch = 50.0f;
@@ -178,6 +178,79 @@ public sealed class MapCollision : IMapUpdater
         }
 
         return mapHeight;
+    }
+
+    /// <summary>How far below the point a model floor still explains a position under the terrain surface.</summary>
+    public const float UnderMapFloorSearch = 60.0f;
+
+    /// <summary>How far above the point a model surface (the underside of a floor the point sank a little through) still explains it.</summary>
+    public const float UnderMapCeilingSearch = 5.0f;
+
+    /// <summary>
+    /// Whether a point is under the map: below the terrain surface by more than <paramref name="minDepthYards"/> with no static model to
+    /// explain it (a cave, a city or a cellar lies under the terrain on purpose). Re-expresses the ideas of vmangos
+    /// <c>HandleMoverRelocation</c> (MovementHandler.cpp:1115-1131, a vmap-aware ground height with a margin) and
+    /// <c>TerrainInfo::GetHeightStatic</c> (GridMap.cpp:815-870, its upward and near-terrain passes).
+    /// <list type="number">
+    /// <item>No terrain data at the point: <see cref="UnderMapKind.Unknown"/>.</item>
+    /// <item>The terrain is not more than the margin above the point: <see cref="UnderMapKind.Ok"/>.</item>
+    /// <item>No usable model data for the map (open line of sight, or no tree): the terrain comparison decides.</item>
+    /// <item>A tiled model tree whose tile here is not loaded: <see cref="UnderMapKind.Unknown"/> (models may exist and be unseen).</item>
+    /// <item>Inside a WMO group, a model floor within <see cref="UnderMapFloorSearch"/> below, or a model surface within
+    /// <see cref="UnderMapCeilingSearch"/> above: <see cref="UnderMapKind.Ok"/>.</item>
+    /// <item>Otherwise <see cref="UnderMapKind.UnderMap"/> with depth = terrain height - z.</item>
+    /// </list>
+    /// </summary>
+    public UnderMapVerdict ClassifyUnderMap(float x, float y, float z, float minDepthYards = 0f)
+    {
+        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z) || TerrainTile.TileOf(x, y) is not { } tile)
+        {
+            return UnderMapVerdict.Unknown;
+        }
+
+        TerrainTile terrainTile = Map.Terrain.GetTile(tile.X, tile.Y);
+        if (!terrainTile.HasData)
+        {
+            return UnderMapVerdict.Unknown;
+        }
+
+        float terrain = terrainTile.GetHeight(x, y);
+        if (!float.IsFinite(terrain) || terrain <= TerrainTile.InvalidHeight)
+        {
+            return UnderMapVerdict.Unknown;
+        }
+
+        float depth = terrain - z;
+        if (depth <= minDepthYards)
+        {
+            return UnderMapVerdict.Ok;
+        }
+
+        ILineOfSight models = _services.LineOfSight;
+        if (!models.Enabled)
+        {
+            return UnderMapVerdict.Under(depth);
+        }
+
+        ModelCoverage coverage = models is IModelCoverage known ? known.CoverageAt(Map.MapId, tile.X, tile.Y) : ModelCoverage.Loaded;
+        if (coverage == ModelCoverage.None)
+        {
+            return UnderMapVerdict.Under(depth);
+        }
+
+        if (coverage == ModelCoverage.TileNotLoaded)
+        {
+            return UnderMapVerdict.Unknown;
+        }
+
+        if (models.TryGetAreaInfo(Map.MapId, x, y, z, out _)
+            || models.GetModelHeight(Map.MapId, x, y, z + FloorProbeOffset, UnderMapFloorSearch) is not null
+            || models.GetModelHeight(Map.MapId, x, y, z, -UnderMapCeilingSearch) is not null)
+        {
+            return UnderMapVerdict.Ok;
+        }
+
+        return UnderMapVerdict.Under(depth);
     }
 
     /// <summary>

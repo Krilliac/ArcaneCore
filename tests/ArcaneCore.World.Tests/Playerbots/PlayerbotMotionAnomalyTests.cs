@@ -44,18 +44,19 @@ public sealed class PlayerbotMotionAnomalyTests
     // ---- the pure ground verdict -----------------------------------------------------------------------------------------------
 
     [Theory]
-    [InlineData(100f, -200000f, 90f, true, PlayerbotMotionAnomalies.GroundVerdict.Airwalk)] // 10 yd above its floor
-    [InlineData(90.5f, -200000f, 90f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // standing
-    [InlineData(95.5f, -200000f, 90f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // a mesh leg floating inside the tolerance
-    [InlineData(80f, 90f, -200000f, true, PlayerbotMotionAnomalies.GroundVerdict.UnderMap)] // 10 yd under the terrain, no floor
-    [InlineData(40f, 90f, -200000f, true, PlayerbotMotionAnomalies.GroundVerdict.FarUnderMap)] // 50 yd under
-    [InlineData(88f, 90f, -200000f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // 2 yd under: within the tolerance
-    [InlineData(80f, 90f, -200000f, false, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // no model data: a cave looks the same
-    [InlineData(80f, -200000f, -200000f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // no data at all
-    [InlineData(80f, 90f, 79f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // under the terrain but on a model floor (a cave)
-    [InlineData(float.NaN, 90f, 79f, true, PlayerbotMotionAnomalies.GroundVerdict.Ok)]
-    internal void Classify_JudgesTheGroundUnderTheBot(float z, float terrain, float floor, bool models, PlayerbotMotionAnomalies.GroundVerdict expected)
-        => Assert.Equal(expected, PlayerbotMotionAnomalies.Classify(z, terrain, floor, models));
+    [InlineData(100f, 90f, UnderMapKind.Unknown, 0f, PlayerbotMotionAnomalies.GroundVerdict.Airwalk)] // 10 yd above its floor
+    [InlineData(90.5f, 90f, UnderMapKind.Unknown, 0f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // standing
+    [InlineData(95.5f, 90f, UnderMapKind.Unknown, 0f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // a mesh leg floating inside the tolerance
+    [InlineData(80f, -200000f, UnderMapKind.UnderMap, 10f, PlayerbotMotionAnomalies.GroundVerdict.UnderMap)] // 10 yd under the terrain, no floor, no model explains it
+    [InlineData(40f, -200000f, UnderMapKind.UnderMap, 50f, PlayerbotMotionAnomalies.GroundVerdict.FarUnderMap)] // 50 yd under
+    [InlineData(80f, -200000f, UnderMapKind.UnderMap, 8f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // 8 yd under: the navmesh-versus-terrain drift margin
+    [InlineData(80f, -200000f, UnderMapKind.UnderMap, 5f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // 5 yd under: drift, not a fall
+    [InlineData(80f, -200000f, UnderMapKind.Ok, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // under the terrain inside a WMO or just below its floor (a cave, a city)
+    [InlineData(80f, -200000f, UnderMapKind.Unknown, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // no data, or the model tile is not loaded
+    [InlineData(80f, 79f, UnderMapKind.UnderMap, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)] // on a floor: the under-map verdict is not consulted
+    [InlineData(float.NaN, 79f, UnderMapKind.UnderMap, 90f, PlayerbotMotionAnomalies.GroundVerdict.Ok)]
+    internal void Classify_JudgesTheGroundUnderTheBot(float z, float floor, UnderMapKind kind, float depth, PlayerbotMotionAnomalies.GroundVerdict expected)
+        => Assert.Equal(expected, PlayerbotMotionAnomalies.Classify(z, floor, new UnderMapVerdict(kind, depth)));
 
     // ---- reports through the shared front door ---------------------------------------------------------------------------------
 

@@ -48,6 +48,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     private readonly CreatureContent _content;
     private readonly CreatureOptions _options;
     private readonly ICreatureHeightProvider _height;
+    private readonly IUnderMapClassifier? _underMap;
     private readonly Random _random;
     private readonly Func<uint> _serverTime;
     private readonly ILogger _logger;
@@ -77,7 +78,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         Map map, CreatureContent content, CreatureOptions? options = null, ICreatureHeightProvider? height = null,
         Random? random = null, Func<uint>? serverTime = null, ILogger? logger = null, CreatureAiServices? aiServices = null,
         ICreatureRespawnPersistence? respawnPersistence = null, IRespawnClock? respawnClock = null,
-        Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null)
+        Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null, IUnderMapClassifier? underMap = null)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(content);
@@ -85,6 +86,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         _content = content;
         _options = options ?? new CreatureOptions();
         _height = height ?? new MapCreatureHeightProvider(map);
+        _underMap = underMap;
         _random = random ?? new Random();
         _serverTime = serverTime ?? (() => unchecked((uint)_clockMs));
         _logger = logger ?? NullLogger.Instance;

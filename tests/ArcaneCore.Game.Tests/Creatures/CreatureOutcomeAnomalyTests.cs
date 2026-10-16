@@ -55,6 +55,18 @@ public sealed class CreatureOutcomeAnomalyTests
         public float? GetHeight(uint mapId, float x, float y, float z) => height;
     }
 
+    /// <summary>The model-aware under-map query with one fixed answer; records the margin it was asked with.</summary>
+    private sealed class FixedUnderMap(UnderMapVerdict verdict) : IUnderMapClassifier
+    {
+        public List<float> Margins { get; } = [];
+
+        public UnderMapVerdict ClassifyUnderMap(float x, float y, float z, float minDepthYards = 0f)
+        {
+            Margins.Add(minDepthYards);
+            return verdict;
+        }
+    }
+
     /// <summary>A pathfinder with one fixed answer: no route, or the straight two-point route.</summary>
     private sealed class FixedPathfinder(bool route) : IPathfinder
     {
@@ -72,7 +84,8 @@ public sealed class CreatureOutcomeAnomalyTests
     }
 
     private static Scene Start(uint entry, Func<CreatureTemplate, CreatureTemplate>? shape = null, float z = 83.5f, byte movementType = 0,
-        float wander = 0, ICreatureHeightProvider? height = null, IPathfinder? pathfinder = null, CreatureOptions? options = null)
+        float wander = 0, ICreatureHeightProvider? height = null, IPathfinder? pathfinder = null, CreatureOptions? options = null,
+        IUnderMapClassifier? underMap = null)
     {
         CreatureTemplate template = Template(entry);
         if (shape is not null)
@@ -83,7 +96,7 @@ public sealed class CreatureOutcomeAnomalyTests
         CreatureContent content = Content([template], [Spawn(1, entry, WolfX, 0, z, movementType: movementType, wander: wander)]);
         WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(0);
-        var system = new CreatureMapSystem(map, content, options, height, random: new Random(1));
+        var system = new CreatureMapSystem(map, content, options, height, random: new Random(1), underMap: underMap ?? new FixedUnderMap(UnderMapVerdict.Under(100f)));
         map.AddUpdater(system);
         if (pathfinder is not null)
         {
@@ -127,6 +140,35 @@ public sealed class CreatureOutcomeAnomalyTests
 
         AnomalyNotice notice = Assert.Single(capture.Notices);
         Assert.Contains("below terrain/mesh floor", notice.Detail);
+    }
+
+    [Theory]
+    [InlineData(949007u, UnderMapKind.Ok)]      // a cave or a city: a model explains the position
+    [InlineData(949008u, UnderMapKind.Unknown)] // the model tile is not loaded: no data, no report
+    public void ACreatureBelowTheTerrain_IsNotReported_WhenTheModelsExplainItOrAreNotLoaded(uint entry, UnderMapKind kind)
+    {
+        var classifier = new FixedUnderMap(new UnderMapVerdict(kind, 0f));
+        using Scene s = Start(entry, z: 100f - CreatureAnomalies.UnderMapMarginYards - 30f, height: new FixedHeight(100f), underMap: classifier);
+        using AnomalyCapture capture = CaptureAny(entry);
+
+        s.Run(5_000);
+
+        Assert.NotEmpty(classifier.Margins);
+        Assert.All(classifier.Margins, margin => Assert.Equal(CreatureAnomalies.UnderMapMarginYards, margin));
+        Assert.Empty(capture.Notices);
+    }
+
+    [Fact]
+    public void ACreatureBelowTheTerrain_IsReported_WhenTheModelAwareQueryConvicts()
+    {
+        const uint entry = 949009;
+        using AnomalyCapture capture = CaptureFor("creature/under-map", entry);
+        using Scene s = Start(entry, z: 100f - CreatureAnomalies.UnderMapMarginYards - 30f, height: new FixedHeight(100f),
+            underMap: new FixedUnderMap(UnderMapVerdict.Under(45f)));
+
+        s.Run(3_000);
+
+        Assert.Single(capture.Notices);
     }
 
     [Fact]

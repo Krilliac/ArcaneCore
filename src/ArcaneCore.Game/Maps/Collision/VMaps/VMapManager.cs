@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Maps.Collision.VMaps;
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollisionTilePrefetch
+public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLifecycle, ICollisionTilePrefetch
 {
     private readonly string _directory;
     private readonly ILogger _logger;
@@ -197,6 +197,16 @@ public sealed class VMapManager : ILineOfSight, ICollisionTileLifecycle, ICollis
 
         hit = VMapFormat.ToWorld(internalHit);
         return true;
+    }
+
+    public ModelCoverage CoverageAt(uint mapId, int tileX, int tileY)
+    {
+        if (!HeightEnabled || GetTree(mapId) is not { } tree)
+        {
+            return ModelCoverage.None;
+        }
+
+        return !tree.IsTiled || tree.IsTileLoaded(tileX, tileY) ? ModelCoverage.Loaded : ModelCoverage.TileNotLoaded;
     }
 
     public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
