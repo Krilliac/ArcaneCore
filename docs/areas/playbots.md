@@ -1167,6 +1167,10 @@ where the master goes.
   party AI instead of `PlayerbotBrain` (a scripted controller still wins). Out of the group the brain drives it again, a fresh
   one (the old one's routes and targets belong to another place). When every real player of the group is offline or gone, the
   bot waits `MasterTimeoutSeconds` (60, 1..3600), then leaves the group (CMSG_GROUP_DISBAND, vmangos `requestRemoval`).
+- **Leader handoff.** Inside a dungeon or raid, pass the lead to one of your bots (Promote to leader) and the bots clear the
+  instance on their own; the new leader says `I'll lead the clear of <instance>.`. When it is done it says so and passes the lead
+  back; say `follow` (or any order) to take it back sooner. Outside an instance passing the lead changes nothing. Details:
+  [Leader handoff](playbots-groups.md#leader-handoff).
 - **Out of combat** the bot follows at 2-5 yards at a random angle (`PlayerbotNavigation.TryPlan`/`TryAdvance`), eats and drinks
   through `PlayerbotConsumables` while its master is within 30 yards, and catches up with a master it cannot simply walk to as
   [Following and catch-up](#following-and-catch-up) describes: by default it teleports (vmangos `.goname`) to a master more than 100
