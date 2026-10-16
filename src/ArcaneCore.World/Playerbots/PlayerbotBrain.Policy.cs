@@ -18,6 +18,9 @@ internal sealed partial class PlayerbotBrain
     private readonly float[] _policyFeatures = new float[PlayerbotPolicySchema.FeatureCount];
     private readonly PlayerbotWeighedTarget[] _policyTargets = new PlayerbotWeighedTarget[8];
 
+    /// <summary>The promoted opportunity goal chose a guard to fight, so the think goes on to the combat path (set by <see cref="TryPromotedGoal"/>, read once by the ladder).</summary>
+    private bool _policyPulled;
+
     /// <summary>The goal policy engine (set by the feature before the first think; null: no policy, the ladder alone decides).</summary>
     internal PlayerbotPolicyEngine? PolicyEngine { get; set; }
 
@@ -37,6 +40,7 @@ internal sealed partial class PlayerbotBrain
     /// </summary>
     private bool TryPolicyGoal(Player player, uint interval)
     {
+        _policyPulled = false;
         if (PolicyEngine is not { } engine) return false;
         PlayerbotPolicyAgent agent = _policyAgent ??= engine.CreateAgent(player.Guid.Value);
         uint now = _session.World.NowMs;
@@ -64,6 +68,8 @@ internal sealed partial class PlayerbotBrain
         PlayerbotPolicyGoalMask open = default(PlayerbotPolicyGoalMask).With(PlayerbotPolicyGoal.Explore);
         if (_quests.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Quest);
         if (_town.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Town);
+        Opportunities.Home = _quests.Home;
+        if (Opportunities.HasCandidate(player)) open = open.With(PlayerbotPolicyGoal.Opportunity);
         Creature? seen = FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped);
         // The ladder's own guards, as of now: the verdict is applied on later thinks, where the promotion rechecks them.
         bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0 && seen is not null;
@@ -118,6 +124,15 @@ internal sealed partial class PlayerbotBrain
                 RetireIdleCombatRoute();
                 _goal = _town.Goal;
                 TargetEntry = _town.TargetEntry;
+                return true;
+
+            case PlayerbotPolicyGoal.Opportunity:
+                // The ladder's rung sits after the town, crafting and auction errands and the sickness stand-down, and before the trainer
+                // trip. Like the trainer trip it starts only from a standing start under the optional budget, and only for a find in reach.
+                if (!optionalBudget || _attacking || player.Combat.Victim is not null || !Opportunities.HasCandidate(player)) return false;
+                if (!TakeOpportunity(player, interval, out bool opportunityPull)) return false;
+                // A guard to pull: the think goes on to the combat path, as the ladder's own rung does (the caller reads this once).
+                _policyPulled = opportunityPull;
                 return true;
 
             case PlayerbotPolicyGoal.Train:
@@ -181,6 +196,7 @@ internal sealed partial class PlayerbotBrain
         PlayerbotPolicyGoal.Mount => "policy riding",
         PlayerbotPolicyGoal.QuestTravel => "policy quest destinations",
         PlayerbotPolicyGoal.Explore => "policy explore",
+        PlayerbotPolicyGoal.Opportunity => "policy opportunities",
         _ => "policy",
     };
 }

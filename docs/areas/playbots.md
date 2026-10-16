@@ -614,9 +614,15 @@ sickness stands every promotion but `Town` down (as the ladder stands every rung
 a bot off a `Train` or `Mount` trip. A promotion its controller refuses leaves the ladder in charge for the rest of that snapshot
 (counted `refused`), so it is not retried every think. Chat (`World:Playerbots:Chat`) is separate and unaffected.
 
-**Goals.** `PlayerbotPolicyGoal`, in ladder order: `Quest` (a giver or ender in sight), `Town` (vendor, trainer list, repair), `Train`,
+**Goals.** `PlayerbotPolicyGoal`, in ladder order: `Quest` (a giver or ender in sight), `Town` (vendor, trainer list, repair),
+`Opportunity` (a chest, locked chest or rare in reach, [playbots-opportunities.md](playbots-opportunities.md)), `Train`,
 `Mount`, `QuestTravel` (a giver or ender out of sight), `Grind` (a creature in sight), `Explore` (always open). The first open goal is the
-ladder's choice. Crafting and auction errands keep their rungs but have no cheap probe, so no policy moves them; `Quest` is the first rung (never
+ladder's choice. `Opportunity` is open when the opportunity controller has a find in reach that is not set aside (`PlayerbotOpportunities.HasCandidate`:
+one scan of the visible objects into a reused list, no weighing); a promotion goes through the controller's own think, which weighs the find and refuses it as
+the ladder's rung would (a refusal is counted `refused`). A promotion that chooses a guard to pull hands the think to the combat path, as the rung does. The goal record's `goal`
+label is `Opportunity` only when the opportunity controller drove the think at which the decision was taken (`PlayerbotBrain.OpportunityDriven`:
+it walked, opened, waited or chose a guard to pull). The brain's `Loot` goal covers a chest and a corpse alike, so it is not mapped by `kind`
+alone: looting a corpse after a fight has no policy goal (`goal` null), as before. Crafting and auction errands keep their rungs but have no cheap probe, so no policy moves them; `Quest` is the first rung (never
 a promotion) and `Grind` is the floor (a policy that picks it leaves the ladder in charge, counted `floor`).
 
 **Hook.** One call at the top of the ladder (`PlayerbotBrain.Policy.cs`, `TryPolicyGoal`, after rest, equipment, class upkeep and the walk
@@ -641,12 +647,13 @@ counted (`applied`, `agreed`, `floor`, `explored`, `missing`, `stale`, `non-fini
 `RuleBasedPolicy` scores each goal by its ladder rank, so its best open goal is always the ladder's own choice (the default, and the fallback).
 `PlayerbotModelPolicy` is the built-in model: optional per-feature standardisation (`mean`, `scale`), then 1..3 dense layers (ReLU between,
 linear last; one layer is a linear model), evaluated with `TensorPrimitives` SIMD dot products on the CPU. A bot costs at most a few thousand
-multiply-adds (12 features x 64 hidden + 64 x 7 goals is about 1.2k), so there is no GPU path: moving a batch to a GPU would cost more than
+multiply-adds (12 features x 64 hidden + 64 x 8 goals is about 1.3k), so there is no GPU path: moving a batch to a GPU would cost more than
 scoring it, and deployed servers have none.
 
 **Weights file** (`ModelPath`, JSON, at most 4 MiB, relative to the profile folder): `{"format":"arcanecore.playerbot-policy","version":1,
 "features":[...],"goals":[...],"mean":[...],"scale":[...],"layers":[{"inputs":I,"outputs":O,"activation":"relu"|"linear","weights":[O*I],
-"bias":[O]}]}`. The feature and goal names must equal the server's, in order (a model trained on another layout is refused). A file that is
+"bias":[O]}]}`. The feature and goal names must equal the server's, in order (a model trained on another layout is refused: adding
+`Opportunity` changed the goal list, so a model trained before it, with seven goals, no longer loads and the ladder scores until one is retrained; telemetry written before the change has `v` 1 with the old `open` bit order, so a reader reindexes it: every bit from `Train` (old bit 2) up moves one place). A file that is
 missing, unreadable, malformed, of the wrong layout or with a non-finite number **never stops the server**: it is reported once
 (anomaly `bot-policy/model-load-failed`, with the reason), logged as a warning, and the ladder scores instead.
 Training is described below.
@@ -661,8 +668,8 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 
 | Key | Meaning |
 |---|---|
-| `v` | Record version (1). |
-| `k` | `goal` (this table); `fight` and `skip` are the combat records below; `health` is the tick-health record below. |
+| `v` | Record version (2). Version 2 added the `Opportunity` goal, which moved every goal after `Town` up one bit in `open` (`Explore` went from bit 6 to bit 7); a version 1 file has the old seven-goal bits. The trainer (`tools/playerbot-policy/train.py`) reads both, remapping version 1 bits. |
+| `k` | `goal` (this table); `fight`, `skip` and `opportunity` are the combat records below; `health` is the tick-health record below. |
 | `t` | Unix ms of the decision. |
 | `bot` | The bot's player guid (hex). |
 | `map`, `zone` | Where it decided. |
@@ -671,7 +678,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 | `ladder`, `pick` | The ladder's choice; the policy's (or exploration's) choice, null when there were no scores. |
 | `src` | `agreed`, `applied`, `explored`, `nonfinite`, `floor` or `refused` (the promoted goal's controller did not act). |
 | `x` | 1 when the choice was exploration. |
-| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. |
+| `goal`, `kind` | The goal the think ended on, as a policy goal (null for one no policy chooses) and as the brain's goal. `Opportunity` is the label only when the opportunity controller drove that think (the brain's `Loot` goal alone is also a corpse, so `kind` `Loot` with `goal` null is a corpse). |
 | `w` | The outcome window in seconds. |
 | `o` | The outcome over the window, in this order: `lvl`, `lp` (levels gained with their fractions: experience over the next level's, so it compares across levels and level-ups), `xp`, `money`, `items`, `quests` (with `lvl`, the stall-watch fingerprint delta: levels, experience, copper, item count, quests handed in), `stalls`, `deaths`, `anomalies` (the bot's anomaly-ledger reports). |
 
@@ -718,6 +725,19 @@ record comes from a build without it, or from a host with the tick monitor disab
     health) and `downtime` (seconds to the next fight; null past ten minutes, or when the bot left first).
 - `skip`, a pull candidate the choice did not take (`decision` `avoid`, `rest`, or a `detour` with no route; once a minute per
   creature, at most eight waiting per bot), with the same `f`, `reason` and `entry`, and `o.wait` (seconds until the bot's next fight, null past ten minutes).
+- `opportunity`, one per opportunity decision the controller took (`PlayerbotOpportunities.Sink`, the same pattern as `CombatSink`; a sink
+  fault is counted and never reaches the decision). A verdict of engage or refuse is a decision; a wait (hurt, recovering) is not. Keys, in order:
+  `v`, `k`, `t`, `bot`, `map`, `zone`, `f` (`level`, `health`, `mana` (1 without mana), `distance` (yards, capped at 100, over 50), `kind`
+  (the find's kind, 0 chest, 1 locked chest, 2 node, 3 rare, over 3)), `kind` (`chest`, `lockedchest`, `node`, `rare`), `entry`, `reward` (the
+  net reward in same-level kills, `PlayerbotOpportunityModel`), `risk` (the predicted damage as a share of the bot's health; a hard refusal's
+  infinity is written as 10), `guards` (the guard count; a rare is not one), `reason`, `engaged` (1 when the bot went for it) and `o`.
+  A find the bot went for is written when its episode ends, with `o`: `loot` (copper: the coins plus the vendor price of the items the bot
+  stored from the chest's loot window, counting at most one item per free bag slot (a stack that joins another is missed); 0 for a find given up;
+  null when it succeeded but the loot was not seen, as for a rare, whose corpse the brain loots, or a chest taken before its window was read),
+  `died` (0 or 1), `seconds` (from the decision to the loot, the abandonment, the kill or the death) and `lost` (1 when a rare was tapped and
+  killed by another player, by the server's own tap rule (`PlayerbotBrain.HasLootRights`: groups and pets count as the bot's); a kill that earned nobody the corpse (creatures did most of the damage) is neither a success nor `lost`: `loot` 0, `lost` 0). A find refused or passed over has `engaged` 0 and nulls in `o` (there is no outcome to learn from), once a minute per
+  find per bot; its `reason` is the model's, or `untakeable` (the first guard is one the brain would not take as a target) or `passed-over`
+  (another find was better). An episode whose bot leaves before it ends is not written.
 
 **Training (phase 3, staged separately).** An offline trainer and an A/B report (for `tools/playerbot-policy/`) are staged on their own
 branch, to land once the server has run with telemetry on. They fit

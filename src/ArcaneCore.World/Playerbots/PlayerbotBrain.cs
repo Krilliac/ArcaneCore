@@ -245,6 +245,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>The last <see cref="PlayerbotThinkProbe"/> phase seen while this brain was updating.</summary>
     internal string LastThinkPhase { get; private set; } = "start";
 
+    /// <summary>
+    /// The opportunity controller drove the latest think (it walked, opened, waited or chose a guard to pull). The brain's goal is
+    /// <see cref="PlayerbotGoalKind.Loot"/> for a chest and for a corpse alike, so the policy telemetry labels a decision
+    /// <see cref="PlayerbotPolicyGoal.Opportunity"/> from this and not from the goal kind.
+    /// </summary>
+    internal bool OpportunityDriven { get; private set; }
+
     /// <summary>Single-line diagnostic snapshot of the bot's state and recent trace history.</summary>
     internal string FormatDiagnosticSnapshot(Player player) => _trace.FormatSnapshot(player, this);
 
@@ -516,6 +523,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _thinkClockArmed = false;
             return;
         }
+        OpportunityDriven = false;
         _destinations.SkipQuest ??= _quests.IsRefused;
         _destinations.Untakeable ??= IsUntakeable;
         _destinations.GiverHasCandidate ??= _quests.HasCandidate;
@@ -1095,7 +1103,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _town.BeginThink();
             // The goal policy may put another open rung ahead of the ladder's choice (PlayerbotBrain.Policy.cs); its controller rechecks the live rules.
             PlayerbotThinkProbe.Phase("policy");
-            if (TryPolicyGoal(player, interval)) return;
+            if (TryPolicyGoal(player, interval)) { if (_policyPulled) goto afterGoalLadder; return; }
             PlayerbotThinkProbe.Phase("quests");
             if (_quests.Update(player, interval))
             { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
@@ -1858,10 +1866,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             TargetEntry = creature.Entry;
             _goal = PlayerbotGoalKind.Combat;
             pull = true;
+            OpportunityDriven = true;
             return true;
         }
 
         if (!step.Busy) return false;
+        OpportunityDriven = true;
         RetireIdleCombatRoute();
         _goal = step.Goal;
         TargetEntry = step.TargetEntry;
