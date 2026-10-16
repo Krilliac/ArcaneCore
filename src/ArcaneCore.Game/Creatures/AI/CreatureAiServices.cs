@@ -269,6 +269,10 @@ public sealed class CreatureAiFactory
         [Scripts.GallywixAI.Entry] = E(static c => new Scripts.GallywixAI(c)),
         [Scripts.ForemanSilixizAI.Entry] = E(static c => new Scripts.ForemanSilixizAI(c)),
         [Scripts.VentureCoLookoutAI.Entry] = E(static c => new Scripts.VentureCoLookoutAI(c)),
+        [Scripts.CalvinMontagueAI.Entry] = E(static c => new Scripts.CalvinMontagueAI(c)),
+        [Scripts.TaskmasterFizzuleAI.Entry] = E(static c => new Scripts.TaskmasterFizzuleAI(c)),
+        [Scripts.AquementasAI.Entry] = E(static c => new Scripts.AquementasAI(c)),
+        [Scripts.DeathstalkerFaerleiaAI.Entry] = E(static c => new Scripts.DeathstalkerFaerleiaAI(c)),
     };
 
     /// <summary>A world-wide script AI for one creature entry, with the name of the implementing type for <see cref="ScriptCatalog"/>.</summary>
@@ -301,6 +305,8 @@ public sealed class CreatureAiFactory
         Scripts.KanatiAI.QuestProtectKanati,
         Scripts.Oox09AI.QuestRescueOox09,
         Scripts.ProspectorRemtravelAI.QuestAbsentMindedPt2,
+        Scripts.CalvinMontagueAI.QuestCalvin,
+        Scripts.DeathstalkerFaerleiaAI.QuestPyrewoodAmbush,
         Instances.Scripts.BlackrockDepths.MarshalWindsorAI.QuestJailBreak];
 
     /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
