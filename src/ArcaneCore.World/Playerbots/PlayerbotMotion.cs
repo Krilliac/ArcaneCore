@@ -660,7 +660,9 @@ internal static class PlayerbotMotion
     /// mesh's corners; the floor under a leg (stairs, the lip of a ramp) can lie a few yards off, and a probe from 2 yards above
     /// then finds the storey below or nothing. Two positions on either side of a corner see each other through the obstacle the
     /// corner goes around. Both refused every start out of the Deathknell crypt and, in the Goldshire inn, every start towards
-    /// William Pestle (a pillar on the line), and those bots stood still for good. The bot stands on the floor nearest to the
+    /// William Pestle (a pillar on the line), and those bots stood still for good. The leg's height is first moved onto the mesh's
+    /// detail surface straight under or over it within <see cref="MeshFloorToleranceYards"/> (<see cref="MapCollision.TryGetMeshFloor"/>),
+    /// when the mesh has one there. The bot then stands on the floor nearest to the
     /// leg's height among the probes from 2 and 6 yards above within <see cref="MeshFloorToleranceYards"/>, else at the leg's
     /// own height.</description></item>
     /// </list>
@@ -670,8 +672,18 @@ internal static class PlayerbotMotion
     private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
     {
         if (!Finite(candidate)) return null;
+        bool navigated = route.LegsNavigated(fromPoint, toPoint);
+        if (navigated && map.Collision.TryGetMeshFloor(candidate.X, candidate.Y, candidate.Z, MeshFloorToleranceYards,
+                MeshFloorToleranceYards, out float surface))
+        {
+            // The leg runs between polygon corners at the coarse polygons' heights; the mesh's detail surface under it is where the
+            // floor is. Without this a leg dipping under a WMO floor (the Loch Modan tunnel, the Ironforge commons: 2-5 yd under) stays
+            // there, because the floor over the leg is above the ceiling the probes below accept.
+            candidate = candidate with { Z = surface };
+        }
+
         float maxCeilingZ = MathF.Max(from.Z, candidate.Z) + 1.25f;
-        if (route.LegsNavigated(fromPoint, toPoint))
+        if (navigated)
         {
             float best = float.NaN;
             foreach (float raise in MeshFloorProbes)

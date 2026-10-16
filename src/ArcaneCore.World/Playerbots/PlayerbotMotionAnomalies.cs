@@ -298,11 +298,30 @@ internal static class PlayerbotMotionAnomalies
         return Classify(at.Z, floor, underMap);
     }
 
+    /// <summary>
+    /// The floor a walking bot at <paramref name="at"/> is judged against: <see cref="MapCollision.GetHeight"/>, unless that lies more
+    /// than <see cref="AirwalkYards"/> below and the navigation mesh has a floor within that distance under the bot
+    /// (<see cref="MapCollision.TryGetMeshFloorUnder"/>, the rule the under-map query shares: searched from 2 yards above, never
+    /// higher). Inside a WMO the model query can miss the storey a bot walks on and answer the one below it (Ironforge: 21 yd "above
+    /// the floor" at -4599.4,-902.4,523.9).
+    /// </summary>
+    internal static float FloorUnder(MapCollision collision, Vector3 at)
+    {
+        float floor = collision.GetHeight(at.X, at.Y, at.Z);
+        if (ValidHeight(floor) && at.Z - floor > AirwalkYards
+            && collision.TryGetMeshFloorUnder(at.X, at.Y, at.Z, AirwalkYards, out float mesh) && mesh > floor)
+        {
+            return mesh;
+        }
+
+        return floor;
+    }
+
     /// <summary>One sampled ground check at <paramref name="at"/>, where a heartbeat just put the bot.</summary>
     internal static void CheckGround(Player player, Map map, MotionWatch watch, Vector3 at, uint now)
     {
         if ((player.Movement.Flags & NotWalking) != 0 || player.Locomotion.ActiveSpline is not null || !Finite(at)) return;
-        float floor = map.Collision.GetHeight(at.X, at.Y, at.Z);
+        float floor = FloorUnder(map.Collision, at);
         GroundVerdict verdict = JudgeGround(at, floor, map.Collision.LineOfSight.Enabled, map.Collision, out UnderMapVerdict underMap);
         if (verdict == GroundVerdict.Ok) return;
         ReportGround(player, map, watch, verdict, at, at.Z + underMap.DepthYards, floor, now);

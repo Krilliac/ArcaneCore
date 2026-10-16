@@ -23,7 +23,7 @@ public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Id
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, ICollisionTileLifecycle, ICollisionTilePrefetch
+public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch
 {
     /// <summary>vmangos <c>PathFinder</c> search box half-extents (Recast x, y, z) for the nearest polygon.</summary>
     public static readonly Vector3 NearExtents = new(3, 5, 3);
@@ -510,6 +510,35 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IC
         }
 
         point = NavMeshFormat.ToWorld(found);
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="IMeshFloorQuery.TryGetMeshFloor"/> over the loaded tiles (no tile is read): Detour <c>findNearestPoly</c> with a box
+    /// <see cref="IMeshFloorQuery.MeshFloorHorizontalYards"/> wide spanning the vertical window, accepted only when the polygon's surface
+    /// point is that close sideways and inside the window. Default filter (ground and water polygons).
+    /// </summary>
+    public bool TryGetMeshFloor(uint mapId, float x, float y, float z, float below, float above, out float height)
+    {
+        height = 0f;
+        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z) || !float.IsFinite(below) || !float.IsFinite(above)
+            || below < 0f || above < 0f || GetNavMesh(mapId) is not { } mesh)
+        {
+            return false;
+        }
+
+        const float side = IMeshFloorQuery.MeshFloorHorizontalYards;
+        float half = (below + above) * 0.5f;
+        Vector3 center = NavMeshFormat.ToRecast(new Vector3(x, y, z + ((above - below) * 0.5f)));
+        if (!mesh.HaveTileAt(center)
+            || !mesh.TryFindNearestPoly(center, new Vector3(side, half, side), PathOptions.Default, out _, out Vector3 onMesh)
+            || NavMeshTile.DistanceXzSquared(onMesh, center) > side * side
+            || onMesh.Y < z - below || onMesh.Y > z + above)
+        {
+            return false;
+        }
+
+        height = onMesh.Y;
         return true;
     }
 
