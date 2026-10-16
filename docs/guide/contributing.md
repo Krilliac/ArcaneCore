@@ -35,7 +35,7 @@ CI runs exactly these commands (`.github/workflows/ci.yml`; a test compares this
 ```
 dotnet restore ArcaneCore.slnx
 dotnet build ArcaneCore.slnx -c Release --no-restore
-dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal
+dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal --logger trx --results-directory TestResults
 dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
 ```
 
@@ -44,7 +44,24 @@ line on one solution filter of `ArcaneCore.slnx` (`tests/ci/<suite>.slnf`), and 
 (a test checks this, so a new test project must be added to one of them). The mock-client self-test runs in the `Rest` job.
 
 Warnings are errors, but through `Directory.Build.props` (`TreatWarningsAsErrors`), not a command-line flag, so a warning anywhere fails the build locally and in CI. Test projects run serially
-(`-m:1`) because first-time database fixture start-up has a bounded deadline. A count of 0 tests, or a run that prints no summary line, means the check did not run.
+(`-m:1`) because first-time database fixture start-up has a bounded deadline. The `.trx` files land in `TestResults/` (ignored by git); CI uploads them and `test-report.yml` posts the summary on the PR. A count of 0 tests, or a run that prints no summary line, means the check did not run.
+
+### Other checks on a pull request
+
+Besides the build and tests, these run on their own and report on the PR:
+
+| Workflow | What it reports |
+|---|---|
+| `codeql.yml` | CodeQL code scanning (C#, Python, the workflows; `security-extended` queries). New alerts are annotated on the changed lines; the alert list is in the Security tab. Also weekly on `main`. |
+| `test-report.yml` | A **Test results** check and PR comment built from CI's `.trx` files: totals, each failure with its message, and the change against the base commit. |
+| `dependency-review.yml` | New or changed package references and their known advisories; a new dependency with a high or critical advisory fails the check, with a summary comment. |
+| `workflow-security.yml` | zizmor over `.github/` (template injection, token permissions, unpinned actions), when a PR touches workflows. |
+| `scorecard.yml` | OpenSSF Scorecard of the repository's supply-chain posture, on `main` and weekly. |
+| `claude-code-review.yml` | A Claude code review of each non-draft PR from this repository, as inline comments on the changed lines (skipped for a fork PR, which gets no secrets). |
+| `claude.yml` | `@claude` in an issue, PR comment or review asks Claude to answer or make the change; only someone with write access can summon it. |
+
+Third-party actions are pinned to a commit SHA with the version in a comment; `.github/dependabot.yml` bumps them, and the NuGet
+packages, weekly in grouped PRs (EF Core and Microsoft.Extensions majors are held back: see `Directory.Build.props`).
 
 ## Seams: how a feature plugs in
 
