@@ -1165,24 +1165,78 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// vmangos Unit::Update combat timer: every 1.2 s check, a player (UsesPvPCombatTimer) in
-    /// combat that no creature holds on its threat list leaves combat.
+    /// vmangos Unit::Update combat timer (Objects/Unit.cpp:256-287): every 1.2 s check, a unit that uses the PvP combat timer
+    /// (<see cref="UsesPvpCombatTimer"/>: a player, a player's pet, a unit a player charms, a NO_THREAT_LIST creature) leaves combat once no
+    /// creature holds it on its threat list and its own pet is not held on one either. A NO_THREAT_LIST creature nobody controls leaves through
+    /// its AI's evade (Creature::OnLeaveCombat, Creature.cpp:3632-3645); everything else just clears the flag (Unit::ClearInCombat).
+    /// Before this ran for players only, so a pet whose fight ended (its victim died, or it was called back) stayed flagged in combat for
+    /// good: nothing else clears a pet's flag, it has no threat list of its own to empty (vmangos Unit::CanHaveThreatList).
+    /// Limits: the SPELL_AURA_INTERRUPT_REGEN hold and the feign-death exemption from the pet check are not modelled (feign death runs
+    /// CombatStop itself, SpellSystem.Feign.cs).
     /// </summary>
-    private static void UpdateCombatTimer(Unit unit, uint diff)
+    private void UpdateCombatTimer(Unit unit, uint diff)
     {
         UnitCombat c = unit.Combat;
         if (c.CombatTimer <= diff)
         {
             uint interval = CombatConstants.CombatCheckIntervalMs;
             c.CombatTimer = interval - Math.Min(diff - c.CombatTimer, interval);
-            if (c.IsInCombat && unit is Player && c.ThreatenedByInternal.Count == 0)
+            if (c.IsInCombat && c.ThreatenedByInternal.Count == 0 && UsesPvpCombatTimer(unit) && !IsOwnPetThreatened(unit))
             {
-                ClearInCombat(unit);
+                LeaveCombatOnTimer(unit);
             }
         }
         else
         {
             c.CombatTimer -= diff;
         }
+    }
+
+    /// <summary>
+    /// vmangos Unit::UsesPvPCombatTimer (Objects/Unit.cpp:368-385): a player, a pet owned by a player, a unit charmed by a player, or a
+    /// NO_THREAT_LIST creature: the units that hold no threat list of their own, so the timer is what ends their combat.
+    /// </summary>
+    internal static bool UsesPvpCombatTimer(Unit unit)
+    {
+        if (unit is Player)
+        {
+            return true;
+        }
+
+        if (unit is Creatures.Creature creature)
+        {
+            return (creature.IsPet && creature.OwnerGuid.IsPlayer)
+                || creature.CharmerGuid.IsPlayer
+                || (creature.Template.Behaviour & Kernel.WorldData.Creatures.CreatureBehaviourFlags.NoThreatList) != 0;
+        }
+
+        return unit.CharmerGuid.IsPlayer;
+    }
+
+    /// <summary>vmangos Unit::Update "Pet in combat ?" (Unit.cpp:264-266): the unit's own pet is still held on a creature's threat list.</summary>
+    private bool IsOwnPetThreatened(Unit unit)
+        => unit.PetGuid is { IsEmpty: false } petGuid
+            && _map.FindObject(petGuid) is Unit { IsInWorld: true } pet
+            && ReferenceEquals(pet.Map, _map)
+            && pet.Combat.ThreatenedByInternal.Count > 0;
+
+    /// <summary>
+    /// The combat timer ran out (vmangos Unit.cpp:268-283): a NO_THREAT_LIST creature that no player charms or owns evades through its AI
+    /// (Creature::OnLeaveCombat); every other unit clears the flag. An evade that left the flag set (a creature already walking home) still
+    /// clears it, so the timer always ends the combat it owns.
+    /// </summary>
+    private static void LeaveCombatOnTimer(Unit unit)
+    {
+        if (unit is Creatures.Creature { AI: { } ai } creature && !creature.CharmerOrOwnerGuid.IsPlayer
+            && (creature.Template.Behaviour & Kernel.WorldData.Creatures.CreatureBehaviourFlags.NoThreatList) != 0)
+        {
+            ai.EnterEvadeMode();
+            if (!unit.Combat.IsInCombat)
+            {
+                return;
+            }
+        }
+
+        ClearInCombat(unit);
     }
 }
