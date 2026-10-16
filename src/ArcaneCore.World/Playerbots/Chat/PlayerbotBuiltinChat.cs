@@ -154,6 +154,7 @@ internal static partial class PlayerbotBuiltinChat
             // The chat templates, then the social ones (guild and greeting lines, BotSocial.PlayerbotSocialTemplates).
             if (PlayerbotChatTemplates.Lines.TryGetValue(variant, out string[]? lines)) AddFilled(candidates, lines, ask);
             if (BotSocial.PlayerbotSocialTemplates.Lines.TryGetValue(variant, out string[]? social)) AddFilled(candidates, social, ask);
+            if (PlayerbotVoiceTemplates.Lines.TryGetValue(variant, out string[]? voice)) AddFilled(candidates, voice, ask);
         }
 
         if (candidates.Count == 0) return null;
@@ -196,15 +197,27 @@ internal static partial class PlayerbotBuiltinChat
             result = result.Replace(name, value, StringComparison.Ordinal);
         }
 
-        // An announcement's placeholders (BotChatTopic.Values): a phrasing that names one the topic has no value for is not used.
-        foreach (string name in TopicPlaceholders)
-        {
-            if (!result.Contains(name, StringComparison.Ordinal)) continue;
-            if (ask.Topic?.Values.GetValueOrDefault(name[1..^1]) is not { Length: > 0 } value) return null;
-            result = result.Replace(name, value, StringComparison.Ordinal);
-        }
+        // An announcement's placeholders (BotChatTopic.Values, any name: the guild's {guild}, {who}, ..., the voice's {dungeon}, {item},
+        // {price}, ...): a phrasing that names one the topic has no value for is not used, and neither is one left with any placeholder.
+        if (ask.Topic is { } topic)
+            foreach ((string key, string value) in topic.Values)
+            {
+                string name = "{" + key + "}";
+                if (!result.Contains(name, StringComparison.Ordinal)) continue;
+                if (string.IsNullOrWhiteSpace(value)) return null;
+                result = result.Replace(name, value, StringComparison.Ordinal);
+            }
 
-        return result;
+        foreach (string name in TopicPlaceholders)
+            if (result.Contains(name, StringComparison.Ordinal)) return null;
+        return HasPlaceholder(result) ? null : result;
+    }
+
+    /// <summary>Whether <paramref name="text"/> still holds a <c>{name}</c> placeholder.</summary>
+    private static bool HasPlaceholder(string text)
+    {
+        int open = text.IndexOf('{', StringComparison.Ordinal);
+        return open >= 0 && text.IndexOf('}', open + 1) > open + 1;
     }
 
     private static readonly string[] TopicPlaceholders = ["{guild}", "{who}", "{newlevel}", "{boss}", "{battleground}", "{instance}"];

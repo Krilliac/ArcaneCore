@@ -1572,6 +1572,40 @@ emote), screens it with the output filter, and the world thread says it through 
   `arcanecore.playerbot.chat.lines_spoken`; refused ones in `arcanecore.playerbot.chat.lines_dropped` by reason
   (docs/ops/metrics.md). Lines heard are raised as `PlayerbotChat.LineHeard` for other features to react to.
 
+### Bot voice
+
+Bots say what they want and need (`World:Playerbots:Chat:Voice`, all on by default; `PlayerbotNeedsVoice`, run on the social pass).
+Every line is read from the bot's real state, written by the built-in lines (`PlayerbotVoiceTemplates`, 1.12 chat slang, many
+variants each) or the configured model, screened by the chat safety filter and said through the bot's own session within the speech
+limits above. A phrasing is used only when every value in it is real; nothing is invented. Work per pass is bounded: the pass-wide topics
+read the group coordinator and the running battlegrounds, then at most `BotsPerPass` bots are looked at (those grouped with a real
+player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
+
+- **LFG / LFM** (`LookingForGroup`): for each group goal bots wait on (by goal and team), the one waiting longest posts in
+  LookingForGroup (outside a capital `GeneralSharePercent` of the time in General) "LFG SFK, 24 mage" alone or "LF2M SFK, need tank and
+  heals" with the roles still missing, once per `LookingForGroupRepeatSeconds`. A real player's whisper to the poster asking for an
+  invite ("inv", "can i join", "i can heal") within `PostLifeSeconds` puts the player into that group's matching
+  (`PlayerbotGroupCoordinator.Volunteer`): the group forms with the player when enough bots wait, and the leader invites through the
+  normal group path. Too low, already grouped or no longer looking is answered so.
+- **Quest help** (`QuestHelp`): a bot waiting for partners on an elite quest asks General "anyone for <quest>?" once per
+  `QuestHelpRepeatSeconds`.
+- **Trade** (`Trade`): once per `TradeRepeatSeconds`, in Trade in a capital (General `GeneralSharePercent` of the time, and only then
+  outside one): WTS for the best real surplus in the bags (a green or better weapon, armour or recipe that is not bound, bind on
+  pickup, a quest item or an upgrade; a stack of five or more trade goods the bot's recipes do not need; worth `MinSellCopper` or more)
+  at `PriceMultiplier` times the vendor price; else WTB for a reagent its wanted recipes lack; else "WTB water" for a mana user with
+  nothing to drink. A whisper asking about the item gets the price and where the bot is, or "sold it". The sale itself is not made:
+  a bot only trades with its group or master.
+- **Party needs** (`GroupCalls`, a bot in a group with a real player): "oom" (under 10% mana), "need heals" (under 30% health with a
+  healer there), a tank's "inc 3" on a pull, "<mob> on me" to the tank, "rez pls" once per death with a resurrecting class alive,
+  "ty <name>" after a resurrection or a long buff, "brb drinking/vendor/training" when its brain stops it, "ding" after a level up,
+  "share <quest> pls" in a bot group on a quest it lacks, "first time in <zone>" for a zone none of whose areas it had explored. A real
+  player's "ding" in party or guild chat gets one bot's "gz".
+- **Run plan** (`RunCalls`): the bot leading a dungeon or raid run says "everyone in?", "pulling <boss>", "<boss> down", "wait for
+  mana", "wipe, run back" and "gg" as the run moves on.
+- **Battleground callouts** (`BattlegroundCalls`): from the match's real state, one bot of the team says each event in battleground
+  chat (the same callout not again within `BattlegroundCallSeconds`): Warsong Gulch "flag taken", "EFC mid", "flag returned"; Arathi
+  Basin "inc BS", "lost farm", "LM capped", "capping ST"; Alterac Valley "IB tower under attack", "TP burned", "SH GY assaulted".
+
 ## Scenario harness
 
 Namespace `ArcaneCore.World.Playerbots.Scenarios`. A scenario is an `IPlayerbotScenario`

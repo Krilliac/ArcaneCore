@@ -71,9 +71,32 @@ internal static class PlayerbotChatPrompts
         if (p.Zone is { } zone)
             text.Append(c, $" You are in {zone}{(p.Subzone is { } sub ? $" ({sub})" : string.Empty)}.");
         if (DescribeGoal(p) is { } goal) text.Append(c, $" Right now you are {goal}.");
-        text.Append(c, $" You are a member of the guild {topic.GuildName} and you are writing one short line in your guild's chat. Nobody spoke to you.");
+        if (ask.Speech is { Channel: not BotSpeechChannel.Guild } speech)
+        {
+            // A bot voice line (Chat/PlayerbotNeedsVoice): where it is said, and the 1.12 chat style it is said in.
+            text.Append(speech.IsReply ? $" You are answering {ask.SenderName} {SpeechWords(speech)}." : $" You are writing one short line {SpeechWords(speech)}. Nobody spoke to you.");
+            text.Append(" Write it the way players typed in 2005: short, lower case is fine, the usual abbreviations (LFG, LFM, WTS, WTB, inc, oom, rez, ty, gz, brb). Use only the names given to you.");
+        }
+        else
+        {
+            text.Append(c, $" You are a member of the guild {topic.GuildName} and you are writing one short line in your guild's chat. Nobody spoke to you.");
+        }
+
         return new BotChatPrompt(StaticSystem, text.ToString(), [new BotChatTurn(true, Clean(topic.Instruction, MaxLineLength))]);
     }
+
+    /// <summary>Where a <see cref="BotSpeech"/> is said, in words for the model.</summary>
+    private static string SpeechWords(BotSpeech speech) => speech.Channel switch
+    {
+        BotSpeechChannel.Whisper => "in a private whisper",
+        BotSpeechChannel.Say => "out loud to the people near you",
+        BotSpeechChannel.Yell => "by yelling across the area",
+        BotSpeechChannel.Party => "in your party's chat",
+        BotSpeechChannel.Raid or BotSpeechChannel.RaidWarning => "in your raid's chat",
+        BotSpeechChannel.Battleground => "in your battleground team's chat",
+        BotSpeechChannel.World => $"in the public channel {speech.ChannelName}",
+        _ => "in chat",
+    };
 
     /// <summary>The model prompt: the static rules, the bot's facts, the remembered exchanges and the player's line.</summary>
     internal static BotChatPrompt Build(BotChatAsk ask, IReadOnlyList<BotChatTurn> memory)

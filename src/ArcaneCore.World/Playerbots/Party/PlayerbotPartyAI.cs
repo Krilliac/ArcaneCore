@@ -357,9 +357,13 @@ internal sealed class PlayerbotPartyAI
         bool isGm = sender is not null && IsGm(sender);
         ObjectGuid master = ResolveMaster(player);
         // Every line heard is input for the chat service's listeners (later lanes react to channel talk, needs, LFG calls), bots' lines too.
-        if (_chat is { IsActive: true, HasHearers: true } hearer && sender is not null && line.Sender != player.Guid)
-            hearer.Hear(new Chat.BotHeardLine(_botId, player.Guid, player.Name, line.Type, line.ChannelName, line.Sender, sender.Name, senderIsBot,
-                line.Text, line.Type == ChatType.Whisper || Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name), FirstHearing: false));
+        // A line the bot voice answered itself (an "inv" to its LFG call, a price question to its WTS call) gets no other reply; the
+        // master's lines are never taken from the orders.
+        if (_chat is { IsActive: true, HasHearers: true } hearer && sender is not null && line.Sender != player.Guid
+            && hearer.Hear(new Chat.BotHeardLine(_botId, player.Guid, player.Name, line.Type, line.ChannelName, line.Sender, sender.Name, senderIsBot,
+                line.Text, line.Type == ChatType.Whisper || Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name), FirstHearing: false))
+            && sender.Guid != master)
+            return;
         bool botsHeard = _chat is { IsActive: true } listening && listening.SpeechOptions is { Enabled: true, BotToBot: true };
         switch (PlayerbotChatCommands.Classify(line, player.Guid, master, senderIsBot, botsHeard))
         {
@@ -595,6 +599,7 @@ internal sealed class PlayerbotPartyAI
         response.WriteUInt64(caster.Value);
         response.WriteByte(member ? (byte)1 : (byte)0);
         Act(WorldOpcode.CmsgResurrectResponse, response.ToArray(), budgeted: false);
+        if (member) _chat?.Voice.NoteResurrection(_botId, caster, _chat.NowMs); // the bot voice thanks the caster once alive ("ty")
     }
 
     /// <summary>

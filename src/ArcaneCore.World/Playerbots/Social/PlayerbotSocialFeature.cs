@@ -165,6 +165,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
     private readonly PlayerbotChannelMembership _channels = new();
+    private readonly ArcaneCore.World.Playerbots.Chat.PlayerbotNeedsVoice _voice = new(services, logger);
     private readonly HashSet<Map> _maps = [];
     private WorldRuntime? _world;
     private long _clockMs;
@@ -196,6 +197,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     /// <summary>The bots' world channel membership (General, Trade, LocalDefense, LookingForGroup).</summary>
     internal PlayerbotChannelMembership Channels => _channels;
 
+    /// <summary>The bot voice: wants and needs said in world, party and battleground chat (<see cref="ArcaneCore.World.Playerbots.Chat.PlayerbotNeedsVoice"/>).</summary>
+    internal ArcaneCore.World.Playerbots.Chat.PlayerbotNeedsVoice Voice => _voice;
+
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
@@ -219,6 +223,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _maps.Clear();
         if (_subscribedGuilds is { } guilds) guilds.MemberJoined -= OnMemberJoined;
         if (_subscribed && services.GetService<ProgressionFeature>() is { } progression) progression.Progression.LevelChanged -= OnLevelChanged;
+        _voice.Unhook();
         _subscribedGuilds = null;
         _subscribed = false;
         return Task.CompletedTask;
@@ -280,6 +285,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _chat.Speak(pass);
         _emotes.Run(pass);
         RunChannels(pass);
+        _voice.Run(pass);
         _membership.Prune(pass);
         Passes++;
     }
@@ -391,6 +397,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     private void OnLevelChanged(Player player)
     {
+        if (_options.Enabled) _voice.OnLevelChanged(player);
         if (ChatTopicsWanted && NewPass(0, gatherBots: false) is { } pass) _chat.OnLevelChanged(pass, player);
     }
 

@@ -57,6 +57,23 @@ internal sealed class PlayerbotVendorSupplyNeeds
         }
     }
 
+    /// <summary>
+    /// The reagents of the recipes the bot wants (as of the last <see cref="Refresh"/>) it carries fewer of than one craft uses, with how
+    /// many it lacks (its inventory as of now), at most <paramref name="max"/>; the bot voice's WTB lines (Chat/PlayerbotNeedsVoice).
+    /// </summary>
+    internal List<(uint ItemId, uint Missing)> Shortfalls(Player player, int max)
+    {
+        var missing = new List<(uint, uint)>();
+        foreach ((uint itemId, uint most) in _reagents)
+        {
+            if (missing.Count >= max) break;
+            uint have = player.Inventory.GetItemCount(itemId);
+            if (have < most) missing.Add((itemId, most - have));
+        }
+
+        return missing;
+    }
+
     /// <summary>Whether the bot needs <paramref name="itemId"/> from a vendor, as of the last <see cref="Refresh"/> (its inventory as of now).</summary>
     internal bool Needs(Player player, uint itemId)
     {

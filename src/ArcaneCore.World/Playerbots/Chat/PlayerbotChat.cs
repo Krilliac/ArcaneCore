@@ -111,6 +111,9 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     /// <summary>The speech options (<c>World:Playerbots:Chat:Speech</c>, live).</summary>
     internal PlayerbotSpeechOptions SpeechOptions => Options.Speech;
 
+    /// <summary>The bot voice options (<c>World:Playerbots:Chat:Voice</c>, live).</summary>
+    internal PlayerbotVoiceOptions VoiceOptions => Options.Voice;
+
     /// <summary>The central rate limiter of bot speech (world thread; tests).</summary>
     internal PlayerbotSpeechLimiter Limiter => _limiter;
 
@@ -226,17 +229,29 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     /// </summary>
     internal event Action<BotHeardLine>? LineHeard;
 
-    /// <summary>Whether anything listens to <see cref="LineHeard"/> (the party AI skips building the line otherwise).</summary>
-    internal bool HasHearers => LineHeard is not null;
+    /// <summary>Whether anything listens to <see cref="LineHeard"/> or answers through <see cref="Responder"/> (the party AI skips building the line otherwise).</summary>
+    internal bool HasHearers => LineHeard is not null || Responder is not null;
 
     /// <summary>
-    /// World thread: hand a heard line to <see cref="LineHeard"/>. <see cref="BotHeardLine.FirstHearing"/> is set here: true for the first
-    /// bot reporting this sender's line on this channel within ten seconds (a channel line reaches every bot in the channel).
+    /// World thread: the one feature that may answer a heard line itself (the bot voice, <see cref="PlayerbotNeedsVoice"/>: an "inv" to an
+    /// LFG call, a price question to a WTS call). True means it answered: the party AI then gives the line no reply of its own.
     /// </summary>
-    internal void Hear(BotHeardLine line)
+    internal Func<BotHeardLine, bool>? Responder { get; set; }
+
+    /// <summary>What bots have called out lately (their LFG, LFM, WTS and WTB calls) and the resurrections they owe thanks for (world thread).</summary>
+    internal PlayerbotVoiceBoard Voice { get; } = new();
+
+    /// <summary>
+    /// World thread: hand a heard line to <see cref="LineHeard"/>, then to <see cref="Responder"/>; true when the responder answered it.
+    /// <see cref="BotHeardLine.FirstHearing"/> is set here: true for the first bot reporting this sender's line on this channel within ten
+    /// seconds (a channel line reaches every bot in the channel).
+    /// </summary>
+    internal bool Hear(BotHeardLine line)
     {
         ArgumentNullException.ThrowIfNull(line);
-        if (LineHeard is not { } handlers) return;
+        Action<BotHeardLine>? handlers = LineHeard;
+        Func<BotHeardLine, bool>? responder = Responder;
+        if (handlers is null && responder is null) return false;
         long now = NowMs;
         string key = string.Concat(((byte)line.Type).ToString(CultureInfo.InvariantCulture), "|", line.ChannelName, "|",
             line.SenderGuid.Value.ToString("X", CultureInfo.InvariantCulture), "|", line.Text);
@@ -250,14 +265,17 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             if (first) _heard[key] = now;
         }
 
+        BotHeardLine heard = line with { FirstHearing = first };
         try
         {
-            handlers(line with { FirstHearing = first });
+            handlers?.Invoke(heard);
+            return responder?.Invoke(heard) == true;
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("playerbot-chat", error);
             _logger.LogWarning(error, "Bot chat: a heard-line handler failed");
+            return false;
         }
     }
 
