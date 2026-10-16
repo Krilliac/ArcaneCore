@@ -48,13 +48,22 @@ public sealed class PlayerbotOpportunityPolicyTests
     }
 
     [Fact]
-    public void TheLootGoal_IsLabelledOpportunity()
+    public void TheLootGoal_IsLabelledOpportunity_OnlyWhenTheOpportunityControllerDroveTheThink()
     {
-        Assert.Equal(PlayerbotPolicyGoal.Opportunity, PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Loot));
+        // The brain's Loot goal covers a chest and a corpse: by itself it has no policy goal, as before.
+        Assert.Null(PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Loot));
+        Assert.Null(PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Loot, opportunityDriven: false));
+        Assert.Equal(PlayerbotPolicyGoal.Opportunity, PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Loot, opportunityDriven: true));
         // The others keep their rungs.
-        Assert.Equal(PlayerbotPolicyGoal.Grind, PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Grind));
+        Assert.Equal(PlayerbotPolicyGoal.Grind, PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Grind, opportunityDriven: false));
         Assert.Equal(PlayerbotPolicyGoal.Town, PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Vendor));
         Assert.Null(PlayerbotPolicySchema.GoalOf(PlayerbotGoalKind.Combat));
+    }
+
+    [Fact]
+    public void TheRecordVersion_IsTwo_BecauseTheOpenBitsMoved()
+    {
+        Assert.Equal(2, PlayerbotPolicyRecord.SchemaVersion);
     }
 
     [Fact]
@@ -139,6 +148,114 @@ public sealed class PlayerbotOpportunityPolicyTests
         await engine.DisposeAsync();
     }
 
+    [Fact]
+    public async Task APromotedOpportunityWithAGuard_HandsTheThinkToTheCombatPath_SoTheGuardIsTheTarget()
+    {
+        await using Rig rig = await Rig.StartAsync([Free], tweak: options => options.Opportunities.Enabled = false);
+        await rig.World(() => { InstallOpenGround(rig.Host); return true; });
+        (PlayerbotPolicyEngine engine, PlayerbotPolicyAgent agent) = await rig.StartPolicyAsync();
+        // The guard appears after the bot's first think, so the bot stands idle with no target when the promotion comes.
+        Creature guard = await rig.AddGuardAsync(96901, 5f, 2f);
+        Assert.Null(await rig.World(() => rig.Bot.Brain.InspectionTarget));
+        PlayerbotPolicyGoalMask open = default(PlayerbotPolicyGoalMask).With(PlayerbotPolicyGoal.Town).With(PlayerbotPolicyGoal.Opportunity)
+            .With(PlayerbotPolicyGoal.Explore);
+        await rig.InjectAsync(engine, agent, open);
+        var sent = new List<WorldOpcode>();
+        await rig.World(() => { rig.Bot.Session.ManagedDispatchObserver = sent.Add; return true; });
+
+        await rig.ThinkBrainAsync();
+
+        PlayerbotPolicyVerdict? verdict = await rig.World(() => agent.LastVerdict);
+        Assert.True(verdict is { Source: PlayerbotPolicySource.Applied, Promote: PlayerbotPolicyGoal.Opportunity }, $"source {verdict?.Source}");
+        Assert.Equal(ChestGuid(Free), rig.Bot.Brain.Opportunities.ActiveKey);
+        // One think: the promoted goal chose the guard and the same think went on to the combat path, which made it the target.
+        Assert.Same(guard, await rig.World(() => rig.Bot.Brain.InspectionTarget));
+        // And the combat path ran in that same think: it began to close on the guard (a promotion that returned at once would send nothing).
+        Assert.NotEmpty(sent);
+        Assert.True(await rig.World(() => rig.Bot.Brain.OpportunityDriven));
+        await engine.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task UnderResurrectionSickness_APromotedOpportunityIsRefusedOnce_AndTheChestIsLeftAlone()
+    {
+        await using Rig rig = await Rig.StartAsync([Free], tweak: options => options.Opportunities.Enabled = false);
+        (PlayerbotPolicyEngine engine, PlayerbotPolicyAgent agent) = await rig.StartPolicyAsync();
+        await rig.World(() => { PlayerbotSicknessTestKit.Apply(rig.Host.WorldServices, rig.Player); return true; });
+        PlayerbotPolicyGoalMask open = default(PlayerbotPolicyGoalMask).With(PlayerbotPolicyGoal.Town).With(PlayerbotPolicyGoal.Opportunity)
+            .With(PlayerbotPolicyGoal.Explore);
+        await rig.InjectAsync(engine, agent, open);
+
+        await rig.ThinkBrainAsync();
+
+        Assert.Equal(1, engine.Stats.Refused);
+        Assert.Equal(PlayerbotPolicySource.Refused, (await rig.World(() => agent.LastVerdict))?.Source);
+        Assert.Null(rig.Bot.Brain.Opportunities.ActiveKey);
+        Assert.False(await rig.World(() => rig.Bot.Brain.OpportunityDriven));
+        await engine.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ARareAnotherPlayerKilled_IsLost_NotASuccess()
+    {
+        await using Rig rig = await Rig.StartAsync([]);
+        var records = new List<IPlayerbotTelemetryRecord>();
+        rig.Bot.Controller.Sink = new PlayerbotCombatTelemetry(records.Add, () => 5L);
+        Creature rare = await rig.World(() => AddCreature(rig.Host, rig.Player, RareEntry, 5f, 2f, 1, 4, 20));
+        await rig.Host.WaitForWorldAsync(() => rig.Player.VisibleObjects.Contains(rare.Guid), "rare visible");
+        Assert.Same(rare, (await rig.World(() => rig.Bot.Step())).Pull);
+
+        await rig.World(() =>
+        {
+            rare.LootTapPlayerGuid = new ObjectGuid(0x7777); // another player's tap
+            rig.Player.Map!.Combat.DealDamage(rig.Player, rare, 100_000);
+            Assert.False(rare.IsAlive);
+            rig.Bot.Step();
+            return true;
+        });
+
+        JsonElement outcome = Parse(Assert.IsType<PlayerbotOpportunityRecord>(Assert.Single(records))).GetProperty("o");
+        Assert.Equal(1, outcome.GetProperty("lost").GetInt32());
+        Assert.Equal(0, outcome.GetProperty("loot").GetInt32());
+        Assert.Equal(0, outcome.GetProperty("died").GetInt32());
+    }
+
+    [Fact]
+    public async Task ARareTheBotKilled_IsASuccess_WithNoLootSeen_AndNotLost()
+    {
+        await using Rig rig = await Rig.StartAsync([]);
+        var records = new List<IPlayerbotTelemetryRecord>();
+        rig.Bot.Controller.Sink = new PlayerbotCombatTelemetry(records.Add, () => 5L);
+        Creature rare = await rig.World(() => AddCreature(rig.Host, rig.Player, RareEntry, 5f, 2f, 1, 4, 20));
+        await rig.Host.WaitForWorldAsync(() => rig.Player.VisibleObjects.Contains(rare.Guid), "rare visible");
+        Assert.Same(rare, (await rig.World(() => rig.Bot.Step())).Pull);
+        await rig.World(() =>
+        {
+            rig.Player.Map!.Combat.DealDamage(rig.Player, rare, 100_000);
+            rig.Bot.Step();
+            return true;
+        });
+
+        JsonElement outcome = Parse(Assert.IsType<PlayerbotOpportunityRecord>(Assert.Single(records))).GetProperty("o");
+        Assert.Equal(0, outcome.GetProperty("lost").GetInt32());
+        Assert.Equal(JsonValueKind.Null, outcome.GetProperty("loot").ValueKind); // the brain loots the corpse
+    }
+
+    [Fact]
+    public async Task AFindWhoseFirstGuardTheBrainWillNotTake_IsWrittenWithItsOwnReason()
+    {
+        await using Rig rig = await Rig.StartAsync([Free]);
+        var records = new List<IPlayerbotTelemetryRecord>();
+        rig.Bot.Controller.Sink = new PlayerbotCombatTelemetry(records.Add, () => 5L);
+        rig.Bot.Controller.Untakeable = (_, _) => true;
+        await rig.AddGuardAsync(96902, 5f, 2f);
+
+        Assert.True(await rig.RunClockAsync(() => records.Count > 0, steps: 20));
+        JsonElement json = Parse(Assert.IsType<PlayerbotOpportunityRecord>(records[0]));
+        Assert.Equal(0, json.GetProperty("engaged").GetInt32());
+        Assert.Equal("untakeable", json.GetProperty("reason").GetString());
+    }
+
     // --- the records ----------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -177,7 +294,7 @@ public sealed class PlayerbotOpportunityPolicyTests
         // The loot is what the window held that the bot stored: the green item, and the blue one half the time.
         uint blue = await rig.World(() => rig.Player.Inventory.GetItemCount(BlueItem));
         JsonElement outcome = json.GetProperty("o");
-        Assert.Equal(["loot", "died", "seconds"], outcome.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["loot", "died", "seconds", "lost"], outcome.EnumerateObject().Select(p => p.Name));
         Assert.Equal(60 + (200 * blue), outcome.GetProperty("loot").GetUInt64());
         Assert.Equal(0, outcome.GetProperty("died").GetInt32());
         Assert.True(outcome.GetProperty("seconds").GetDouble() >= 0);
@@ -297,6 +414,29 @@ public sealed class PlayerbotOpportunityPolicyTests
         }
 
         public Task<T> World<T>(Func<T> action) => Host.OnWorldAsync(action);
+
+        /// <summary>Gives the bot its policy agent: an engine whose model prefers the opportunity, and one think with the goal off.</summary>
+        public async Task<(PlayerbotPolicyEngine Engine, PlayerbotPolicyAgent Agent)> StartPolicyAsync()
+        {
+            var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true },
+                policy: new PlayerbotPolicyEngineTests.StubPolicy(PlayerbotPolicyGoal.Opportunity));
+            await World(() => { Bot.Brain.PolicyEngine = engine; return true; });
+            await ThinkBrainAsync();
+            return (engine, (await World(() => Bot.Brain.PolicyAgent))!);
+        }
+
+        /// <summary>Turns the goal on and puts a snapshot with the given open goals in front of the bot, scored and ready for its next think.</summary>
+        public async Task InjectAsync(PlayerbotPolicyEngine engine, PlayerbotPolicyAgent agent, PlayerbotPolicyGoalMask open)
+        {
+            await World(() =>
+            {
+                Options.Opportunities.Enabled = true;
+                agent.Request(Player.MapId, new float[PlayerbotPolicySchema.FeatureCount], open, Host.World.NowMs);
+                engine.Dispatch();
+                return true;
+            });
+            await engine.WhenIdleAsync();
+        }
 
         /// <summary>One think of the whole brain (its ladder, with the policy hook) with a fresh action budget.</summary>
         public Task ThinkBrainAsync() => World(() =>

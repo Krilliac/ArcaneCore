@@ -40,7 +40,7 @@ internal readonly record struct OpportunityDecisionInfo(ulong Key, OpportunityKi
 
 /// <summary>How an opportunity the bot went for came out. <paramref name="LootCopper"/> is 0 for a find given up, and null when the bot
 /// succeeded but the controller did not see the loot (a rare's corpse is the brain's to loot).</summary>
-internal readonly record struct OpportunityOutcome(ulong? LootCopper, bool Died, uint ElapsedMs);
+internal readonly record struct OpportunityOutcome(ulong? LootCopper, bool Died, uint ElapsedMs, bool Lost = false);
 
 /// <summary>
 /// Where the opportunity controller tells the telemetry what it decided and how it came out (world thread, inside a think).
@@ -414,8 +414,8 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
 
 /// <summary>
 /// One opportunity decision (<c>"k":"opportunity"</c>): the features, the estimated reward and risk, the guard count, whether the bot
-/// went for it, and for one it went for the outcome <c>o</c> (<c>loot</c> in copper, <c>died</c> 0/1, <c>seconds</c> from the decision).
-/// A decision not taken has no outcome: <c>o</c> holds nulls. Loot is null too when the bot succeeded but the loot was not seen (a rare).
+/// went for it, and for one it went for the outcome <c>o</c> (<c>loot</c> in copper, <c>died</c> 0/1, <c>seconds</c> from the decision, <c>lost</c> 1 when another player killed the rare).
+/// A decision not taken has no outcome: <c>o</c> holds nulls. Loot is null too when the bot succeeded but the loot was not seen (a rare). <c>lost</c> is 1 for a rare another player tapped and killed: not a success, no loot.
 /// </summary>
 internal sealed record PlayerbotOpportunityRecord(
     long UnixMs, ulong Bot, uint Map, uint Zone, ulong Key, OpportunityKind Kind, uint Entry, float Level, float Health, float Mana, float Distance,
@@ -454,12 +454,14 @@ internal sealed record PlayerbotOpportunityRecord(
                 else json.WriteNull("loot");
                 json.WriteNumber("died", outcome.Died ? 1 : 0);
                 json.WriteNumber("seconds", Math.Round(outcome.ElapsedMs / 1000.0, 1));
+                json.WriteNumber("lost", outcome.Lost ? 1 : 0);
             }
             else
             {
                 json.WriteNull("loot");
                 json.WriteNull("died");
                 json.WriteNull("seconds");
+                json.WriteNull("lost");
             }
 
             json.WriteEndObject();

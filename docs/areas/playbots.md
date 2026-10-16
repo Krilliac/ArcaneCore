@@ -618,10 +618,11 @@ a bot off a `Train` or `Mount` trip. A promotion its controller refuses leaves t
 `Opportunity` (a chest, locked chest or rare in reach, [playbots-opportunities.md](playbots-opportunities.md)), `Train`,
 `Mount`, `QuestTravel` (a giver or ender out of sight), `Grind` (a creature in sight), `Explore` (always open). The first open goal is the
 ladder's choice. `Opportunity` is open when the opportunity controller has a find in reach that is not set aside (`PlayerbotOpportunities.HasCandidate`:
-one scan of the visible objects, no weighing); a promotion goes through the controller's own think, which weighs the find and refuses it as
+one scan of the visible objects into a reused list, no weighing); a promotion goes through the controller's own think, which weighs the find and refuses it as
 the ladder's rung would (a refusal is counted `refused`). A promotion that chooses a guard to pull hands the think to the combat path, as the rung does. The goal record's `goal`
-label for the brain's `Loot` goal is `Opportunity`, which also covers looting a corpse after a fight (there is no separate brain goal for the
-chest), so read `goal` with `kind` and the `opportunity` records. Crafting and auction errands keep their rungs but have no cheap probe, so no policy moves them; `Quest` is the first rung (never
+label is `Opportunity` only when the opportunity controller drove the think at which the decision was taken (`PlayerbotBrain.OpportunityDriven`:
+it walked, opened, waited or chose a guard to pull). The brain's `Loot` goal covers a chest and a corpse alike, so it is not mapped by `kind`
+alone: looting a corpse after a fight has no policy goal (`goal` null), as before. Crafting and auction errands keep their rungs but have no cheap probe, so no policy moves them; `Quest` is the first rung (never
 a promotion) and `Grind` is the floor (a policy that picks it leaves the ladder in charge, counted `floor`).
 
 **Hook.** One call at the top of the ladder (`PlayerbotBrain.Policy.cs`, `TryPolicyGoal`, after rest, equipment, class upkeep and the walk
@@ -652,7 +653,7 @@ scoring it, and deployed servers have none.
 **Weights file** (`ModelPath`, JSON, at most 4 MiB, relative to the profile folder): `{"format":"arcanecore.playerbot-policy","version":1,
 "features":[...],"goals":[...],"mean":[...],"scale":[...],"layers":[{"inputs":I,"outputs":O,"activation":"relu"|"linear","weights":[O*I],
 "bias":[O]}]}`. The feature and goal names must equal the server's, in order (a model trained on another layout is refused: adding
-`Opportunity` changed the goal list, so a model trained before it, with seven goals, no longer loads and the ladder scores until one is retrained). A file that is
+`Opportunity` changed the goal list, so a model trained before it, with seven goals, no longer loads and the ladder scores until one is retrained; telemetry written before the change has `v` 1 with the old `open` bit order, so a reader reindexes it: every bit from `Train` (old bit 2) up moves one place). A file that is
 missing, unreadable, malformed, of the wrong layout or with a non-finite number **never stops the server**: it is reported once
 (anomaly `bot-policy/model-load-failed`, with the reason), logged as a warning, and the ladder scores instead.
 Training is described below.
@@ -667,7 +668,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 
 | Key | Meaning |
 |---|---|
-| `v` | Record version (1). |
+| `v` | Record version (2). Version 2 added the `Opportunity` goal, which moved every goal after `Town` up one bit in `open` (`Explore` went from bit 6 to bit 7); a version 1 file has the old seven-goal bits. The trainer (`tools/playerbot-policy/train.py`) reads both, remapping version 1 bits. |
 | `k` | `goal` (this table); `fight`, `skip` and `opportunity` are the combat records below; `health` is the tick-health record below. |
 | `t` | Unix ms of the decision. |
 | `bot` | The bot's player guid (hex). |
@@ -731,10 +732,12 @@ record comes from a build without it, or from a host with the tick monitor disab
   net reward in same-level kills, `PlayerbotOpportunityModel`), `risk` (the predicted damage as a share of the bot's health; a hard refusal's
   infinity is written as 10), `guards` (the guard count; a rare is not one), `reason`, `engaged` (1 when the bot went for it) and `o`.
   A find the bot went for is written when its episode ends, with `o`: `loot` (copper: the coins plus the vendor price of the items the bot
-  stored from the chest's loot window; 0 for a find given up; null when it succeeded but the loot was not seen, as for a rare, whose corpse the
-  brain loots, or a chest taken before its window was read), `died` (0 or 1) and `seconds` (from the decision to the loot, the abandonment, the
-  kill or the death). A find refused or passed over has `engaged` 0 and nulls in `o` (there is no outcome to learn from), once a minute per
-  find per bot. An episode whose bot leaves before it ends is not written.
+  stored from the chest's loot window, counting at most one item per free bag slot (a stack that joins another is missed); 0 for a find given up;
+  null when it succeeded but the loot was not seen, as for a rare, whose corpse the brain loots, or a chest taken before its window was read),
+  `died` (0 or 1), `seconds` (from the decision to the loot, the abandonment, the kill or the death) and `lost` (1 when a rare was tapped and
+  killed by another player: not a success, `loot` 0). A find refused or passed over has `engaged` 0 and nulls in `o` (there is no outcome to learn from), once a minute per
+  find per bot; its `reason` is the model's, or `untakeable` (the first guard is one the brain would not take as a target) or `passed-over`
+  (another find was better). An episode whose bot leaves before it ends is not written.
 
 **Training (phase 3, staged separately).** An offline trainer and an A/B report (for `tools/playerbot-policy/`) are staged on their own
 branch, to land once the server has run with telemetry on. They fit

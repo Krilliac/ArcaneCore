@@ -83,13 +83,20 @@ public static class PlayerbotPolicySchema
     {
         PlayerbotGoalKind.Quest => PlayerbotPolicyGoal.Quest,
         PlayerbotGoalKind.Vendor => PlayerbotPolicyGoal.Town,
-        PlayerbotGoalKind.Loot => PlayerbotPolicyGoal.Opportunity,
         PlayerbotGoalKind.Train => PlayerbotPolicyGoal.Train,
         PlayerbotGoalKind.Mount => PlayerbotPolicyGoal.Mount,
         PlayerbotGoalKind.Grind => PlayerbotPolicyGoal.Grind,
         PlayerbotGoalKind.Explore => PlayerbotPolicyGoal.Explore,
         _ => null,
     };
+
+    /// <summary>
+    /// The label of a think that ended on <paramref name="kind"/>. The opportunity goal has no goal kind of its own: its chest goal is
+    /// <see cref="PlayerbotGoalKind.Loot"/>, which also covers looting a corpse, so a think the opportunity controller drove
+    /// (<paramref name="opportunityDriven"/>) is labelled <see cref="PlayerbotPolicyGoal.Opportunity"/> and the kind decides otherwise.
+    /// </summary>
+    public static PlayerbotPolicyGoal? GoalOf(PlayerbotGoalKind kind, bool opportunityDriven)
+        => opportunityDriven ? PlayerbotPolicyGoal.Opportunity : GoalOf(kind);
 }
 
 /// <summary>

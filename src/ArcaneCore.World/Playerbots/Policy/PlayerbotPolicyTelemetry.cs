@@ -30,7 +30,8 @@ internal sealed record PlayerbotPolicyRecord(
     PlayerbotPolicyGoal? Pick, PlayerbotPolicySource Source, bool Explored, PlayerbotPolicyGoal? Goal, PlayerbotGoalKind Kind,
     uint WindowMs, PlayerbotPolicyOutcome Outcome) : IPlayerbotTelemetryRecord
 {
-    internal const int SchemaVersion = 1;
+    /// <summary>2: the Opportunity goal changed the goal list, so a goal record's <c>open</c> bits (and the model layout) moved; version 1 files have the old seven-goal bits.</summary>
+    internal const int SchemaVersion = 2;
 
     /// <summary>The record as one JSON line (with its newline).</summary>
     public void WriteTo(IBufferWriter<byte> output)
@@ -219,7 +220,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
                 {
                     progress = ProgressOf(brain, player);
                     state.Open.Enqueue(new OpenDecision(nowMs, _time.GetUtcNow().ToUnixTimeMilliseconds(), player.MapId, player.ZoneId, window, verdict,
-                        brain.Goal, progress.Value, brain.StallCount, state.Deaths, AnomaliesOf(state.Subject)));
+                        brain.Goal, progress.Value, brain.StallCount, state.Deaths, AnomaliesOf(state.Subject), brain.OpportunityDriven));
                 }
                 else Interlocked.Increment(ref _dropped);
             }
@@ -241,7 +242,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
                 AnomaliesOf(state.Subject) - open.Anomalies);
             Enqueue(new PlayerbotPolicyRecord(open.UnixMs, player.Guid.Value, open.Map, open.Zone, open.Window.Features, open.Window.Open,
                 open.Window.LadderPick, open.Verdict.Pick, open.Verdict.Source, open.Window.Explore is not null,
-                PlayerbotPolicySchema.GoalOf(open.Kind), open.Kind, WindowMs, outcome));
+                PlayerbotPolicySchema.GoalOf(open.Kind, open.Opportunity), open.Kind, WindowMs, outcome));
         }
     }
 
@@ -386,7 +387,7 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
     }
 
     private sealed record OpenDecision(uint AtMs, long UnixMs, uint Map, uint Zone, PlayerbotPolicyWindow Window, PlayerbotPolicyVerdict Verdict,
-        PlayerbotGoalKind Kind, PlayerbotPolicyProgress Start, int Stalls, int Deaths, long Anomalies);
+        PlayerbotGoalKind Kind, PlayerbotPolicyProgress Start, int Stalls, int Deaths, long Anomalies, bool Opportunity);
 }
 
 /// <summary>

@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
@@ -152,7 +153,7 @@ internal sealed class PlayerbotOpportunities
     /// <summary>
     /// Whether a find is in reach for the goal policy's open-goal probe (world thread, once per policy snapshot): the bot is on one, or
     /// the scan sees a find that is not set aside. It does not weigh the find (the controller does that when it takes the goal, and sets a
-    /// refused find aside, so the next probe skips it). Reuses one list: no allocation.
+    /// refused find aside, so the next probe skips it). Reuses one list, so the probe allocates no list (the scan itself runs over the bot's visible objects).
     /// </summary>
     internal bool HasCandidate(Player player)
     {
@@ -307,7 +308,7 @@ internal sealed class PlayerbotOpportunities
             if (pack.Count > 0 && Untakeable?.Invoke(player, pack[0]) == true)
             {
                 _ledger.SetAside(find.Key, now, RefusedRecheckMs);
-                ReportDecision(player, find, verdict, guards, engaged: false, now);
+                ReportDecision(player, find, verdict with { Decision = OpportunityDecision.Refuse, Reason = "untakeable" }, guards, engaged: false, now);
                 continue;
             }
 
@@ -315,10 +316,10 @@ internal sealed class PlayerbotOpportunities
             if (best is null || verdict.Net > bestVerdict.Net)
             {
                 // The find this one displaces was worth going for but not the best: a decision not to engage.
-                if (best is { } displaced) ReportDecision(player, displaced, bestVerdict, bestGuards, engaged: false, now);
+                if (best is { } displaced) ReportDecision(player, displaced, bestVerdict with { Reason = "passed-over" }, bestGuards, engaged: false, now);
                 (best, bestVerdict, bestGuards) = (find, verdict, guards);
             }
-            else ReportDecision(player, find, verdict, guards, engaged: false, now);
+            else ReportDecision(player, find, verdict with { Reason = "passed-over" }, guards, engaged: false, now);
         }
 
         if (best is not { } chosen) return;
@@ -354,7 +355,7 @@ internal sealed class PlayerbotOpportunities
     {
         float radiusSq = options.ScanRadiusYards * options.ScanRadiusYards;
         GameObjectLootFeature? objects = _session.Services.GetService<GameObjectLootFeature>();
-        GroupManager? groups = GroupsOf(player);
+        GroupManager? groups = GroupsOf(player); // one lookup per scan, not per object
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (_ledger.IsDeferred(guid.Value, now)) continue;
@@ -646,6 +647,9 @@ internal sealed class PlayerbotOpportunities
 
         /// <summary>The episode ended in success (the loot was taken, or the rare was killed).</summary>
         public bool Succeeded;
+
+        /// <summary>A rare the bot went for was killed by another player (or group): not a success.</summary>
+        public bool Lost;
     }
 
     private OpportunityStep Busy(Episode episode, PlayerbotGoalKind goal) => new(true, null, goal, episode.Entry);
@@ -739,7 +743,9 @@ internal sealed class PlayerbotOpportunities
             if (rare is { IsAlive: false })
             {
                 _ledger.Complete(episode.Key, now, RareRecheckMs);
-                episode.Succeeded = true;
+                // Killed by someone else (the corpse is tapped by another): the bot lost it, whatever it was worth.
+                if (KilledBySomeoneElse(player, rare)) episode.Lost = true;
+                else episode.Succeeded = true;
             }
             else _ledger.Forget(episode.Key);
             EndEpisode();
@@ -758,6 +764,18 @@ internal sealed class PlayerbotOpportunities
         }
 
         return Pull(player, episode, pack, now);
+    }
+
+    /// <summary>
+    /// The rare's loot tap (<see cref="Creature.LootTapper"/>) is another player's: neither the bot, its pet nor anyone in its group (a pet is
+    /// resolved to its owner). A tapper no longer on the map counts as another player.
+    /// </summary>
+    private static bool KilledBySomeoneElse(Player player, Creature rare)
+    {
+        ObjectGuid tap = rare.LootTapper;
+        if (tap.IsEmpty || tap == player.Guid || tap == player.PetGuid) return false;
+        Player? owner = PlayerbotBrain.TaggerOf(player, rare, GroupsOf(player));
+        return owner is null || (owner.Guid != player.Guid && GroupsOf(player)?.AreInSameGroup(player.Guid, owner.Guid) != true);
     }
 
     /// <summary>A rare killed is looked at again after this (its respawn is long; the brain loots the corpse).</summary>
@@ -860,9 +878,11 @@ internal sealed class PlayerbotOpportunities
             {
                 // The worth of what the window held that the bot can take: its coins and the vendor price of the items it stores.
                 ulong copper = window.Coins;
+                // Only as many items as the bags have room for (one slot each; a stack that joins another would add a few the count misses).
+                int room = PlayerbotTownGoals.FreeBagSlots(player);
                 if (hasSpace && window.Items is { } items)
                     foreach ((uint item, uint count) in items)
-                        if (player.Inventory.Templates.Find(item) is { } template) copper += (ulong)template.SellPrice * Math.Max(1u, count);
+                        if (room-- > 0 && player.Inventory.Templates.Find(item) is { } template) copper += (ulong)template.SellPrice * Math.Max(1u, count);
                 episode.LootCopper = copper;
                 episode.LootMeasured = true;
             }
@@ -943,7 +963,7 @@ internal sealed class PlayerbotOpportunities
         if (Sink is not { } sink) return;
         uint now = Now;
         ulong? loot = episode.LootMeasured ? episode.LootCopper : episode.Succeeded ? null : 0UL;
-        try { sink.Ended(episode.Bot, episode.Key, new Policy.OpportunityOutcome(loot, episode.Died, unchecked(now - episode.StartedMs)), now); }
+        try { sink.Ended(episode.Bot, episode.Key, new Policy.OpportunityOutcome(loot, episode.Died, unchecked(now - episode.StartedMs), episode.Lost), now); }
         catch (Exception error) when (error is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.policy-telemetry", error); }
     }
 
