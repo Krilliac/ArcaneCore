@@ -72,6 +72,8 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
         _meter.CreateObservableCounter("arcanecore.creature.path.home_teleports", () => SafeObserve(() => CreaturePathStats.HomeTeleports, 0L), "{creature}",
             "Evade returns done by teleport because no whole mesh path led home.");
         _meter.CreateObservableGauge("arcanecore.world.sessions", () => SafeObserve(() => sessions?.Count ?? 0, 0), "{session}", "Authenticated world sessions.");
+        _meter.CreateObservableGauge("arcanecore.playerbots.split_brain", () => SafeObserve(() => services.GetService<Playerbots.ManagedPlayerbotFeature>()?.SplitBrain == true ? 1 : 0, 0), "{state}",
+            "1 while this world stopped writing playerbot rows because another world process changed them (split brain), otherwise 0.");
         _meter.CreateObservableGauge("arcanecore.world.players_online", () => SafeObserve(() => world.OnlinePlayerCount, 0), "{player}", "Characters in the world.");
         _meter.CreateObservableGauge("arcanecore.db.save_queue_depth", () => SafeObserve(() => saves?.Pending ?? 0, 0), "{snapshot}", "Character snapshots queued or being written.");
         _meter.CreateObservableGauge("arcanecore.db.save_queue_oldest_age", () => SafeObserve(() => saves is null ? 0d : saves.OldestPendingAge.TotalMilliseconds, 0d), "ms", "How long the longest-waiting character snapshot has been queued or in its write (0 when none).");

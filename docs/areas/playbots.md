@@ -931,6 +931,38 @@ single transient bug removed a bot until an operator noticed:
 `docs/integration/playerbot-faults-20261007.md`. Ordinary session closes that are not faults
 (a GM kick) still stop the bot and clear `DesiredEnabled`, as before.
 
+### Another world on the same database
+
+Every `managed_playerbot` write is checked against the row's `Revision`. A refused write (`managed-revision-conflict`) means **another writer owns the row**, usually a second world
+process on the same characters database; it is not a bot fault, so a checkpoint, a start or a stop never counts it toward `MaxFaults`:
+
+- A bot whose checkpoint is refused leaves this process's active set. This process writes no `managed_playerbot` row, no set-aside row and no home for it, so the row keeps
+  everything the owner wrote (`DesiredEnabled` included); one Warning is logged per bot. It is published as stopped here whatever the row says.
+- A restore or `.playerbot start` that is refused answers `managed-revision-conflict` and leaves the row alone.
+- A stop writes the `Stopping` row first and saves the bot's set-aside rows only after that write succeeded. If the write is refused it adopts the stored row, drops the bot and writes
+  nothing: the other writer's state, goal, error code and set-aside rows survive.
+- A row that differs from ours **only in `DesiredEnabled`** is an operator edit (a SQL `UPDATE`): the bot is dropped as above but does not count toward a split brain.
+- More than 3 other refusals in one checkpoint are a **split brain**. The process that owned the rows (usually the older, legitimate world, whose checkpoints are now stale) logs `Split brain` at Critical
+  with the last conflicting row's revision, state and update time, **stops every active bot** without a managed-row or set-aside write and stops driving their brains, and stops issuing playerbot
+  writes: checkpoints, creates, starts, stops, deletes, home changes, the fleet reset and the world's shutdown write nothing (each refuses with `playerbot-split-brain`, including a start or create that was
+  already queued behind the checkpoint that latched it; a bot stop in this state waits up to 10 s for that bot's session to close). Home changes (`.playerbot home`) do not take the operation lock, so a
+  bulk home change cannot block starts: they are checked at entry and before each bot, and a single store write already in flight when the latch is set can still land. The population manager
+  stands still while it is set (no pass, no start, create, park or member-row write, and a rush is stopped), quarantined bots are released from quarantine, and only an operator `.playerbot start` restarts a bot. It shows as a `WARNING` line in `.playerbot status`, in `.playerbot splitbrain` and in the gauge `arcanecore.playerbots.split_brain` (1 while set).
+- **Character rows are not covered.** The kicked sessions still save their characters when they close, and the ordinary character autosave continues: there is no clean way to discard a
+  session's save, and this change does not add a bypass of the save pipeline. On a file-backed SQLite database the writer lock keeps a second world out in the first place; on MariaDB,
+  MySQL and PostgreSQL only `Cluster:Fencing` (`CharacterWriteFenceInterceptor`) bounds the second writer's character writes.
+
+The older world stands down and the intruder keeps running on purpose: neither world can stop the other, and standing down is the only move that guarantees one writer. On MariaDB, MySQL and
+PostgreSQL there is no file lock to keep the intruder out in the first place; `Cluster:Fencing` is what bounds it there.
+
+Recovery: stop the other world first. `.playerbot splitbrain clear` (Administrator) re-reads the stored registry rows, reports how many there are, how many are wanted running and how many are
+faulted, and lifts the latch so playerbot writes resume. No bot is active at that point, so nothing in memory needs reconciling: every bot stays stopped until you start it, and each start reads
+its stored row afresh. Clearing while the other world still runs reopens the writes and the conflicts will latch it again. A restart also clears it.
+
+The incident behind this: a deploy started a second world on the live `characters.db`; it restored 863 bots, failed to bind the port and exited, while the refused checkpoints
+counted as faults and disabled 512 bots. A world on a file-backed SQLite characters database now refuses to start while another holds the database
+(`<characters database>.world.lock`, taken before the schema initializers) and checks that its port is free before it restores any bot ([operating a realm](../guide/operations.md)).
+
 ### Party bots (a real player's group)
 
 `Playerbots/Party/` (vmangos `src/game/PlayerBots/PartyBotAI.cpp`; the player-facing actions of mangoszero's

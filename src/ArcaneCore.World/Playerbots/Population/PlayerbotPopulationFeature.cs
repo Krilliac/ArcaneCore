@@ -161,6 +161,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         if (!_options.Enabled) return "playerbots are off (World:Playerbots:Enabled)";
         if (Managed is null) return "the managed playerbot feature is not available";
         if (Managed.ResetInProgress) return "a fleet reset is running";
+        if (Managed.SplitBrain) return "another world process is writing the playerbot rows (split brain; see .playerbot splitbrain)";
         if (_rush.Active) return "a rush is already running; stop it first";
         _rush.Begin(count, perSecond, ClockMs);
         logger.LogInformation("Playerbot population rush started: {Count} new bots at {PerSecond} per second (fresh launch {Fresh}, brake {Brake} ms in {Windows} windows of {Seconds} s)",
@@ -254,6 +255,13 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         if (Managed is { ResetInProgress: true })
         {
             StopRush("a fleet reset started");
+            return;
+        }
+
+        // Split brain: another world owns the playerbot rows and this world writes none, so the population starts, parks and stores nothing until an operator clears it.
+        if (Managed is { SplitBrain: true })
+        {
+            StopRush("split brain: another world process is writing the playerbot rows");
             return;
         }
 
@@ -998,7 +1006,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
     private static void ReportLoginFailed(IReadOnlyDictionary<Guid, ManagedPlayerbot> known, Guid botId, int characterId, string? fallbackName,
         PlayerbotOperationResult result, string stage)
     {
-        if (result.Code is "playerbot-capacity" or "playerbot-stopping" or "playerbots-disabled" or "playerbots-reset")
+        if (result.Code is "playerbot-capacity" or "playerbot-stopping" or "playerbots-disabled" or "playerbots-reset" or "playerbot-split-brain")
         {
             return;
         }
@@ -1209,6 +1217,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
 
         foreach (Guid id in pending)
         {
+            if (ctx.Input.Managed.SplitBrain) return; // another world owns the rows: no member row is written
             if (!ctx.Members.TryGetValue(id, out PlayerbotPopulationMember? member) || member.Band == HomeOptOutBand) continue;
             member = member with { Band = HomeOptOutBand, UpdatedUnix = NowUnix() };
             await ctx.Store.UpsertAsync(member, ct).ConfigureAwait(false);
@@ -1681,7 +1690,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             _homeRetrySweep[bot.BotId] = sweep + HomeRetrySweeps;
         }
 
-        if (cleared.Count > 0) changes += await managed.ClearHomesAsync(cleared, ct, byOperator: false).ConfigureAwait(false);
+        if (cleared.Count > 0 && !managed.SplitBrain) changes += await managed.ClearHomesAsync(cleared, ct, byOperator: false).ConfigureAwait(false);
         // Every operator home of the population is taken over: retire the generation this sweep began with (and no later one).
         if (completed && failed == 0 && !adoptIncomplete) Interlocked.Exchange(ref _adoptDoneGeneration, adoptGeneration);
         ForgetDeletedBots(ctx.Members.Keys.ToHashSet());

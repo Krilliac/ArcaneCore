@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Diagnostics;
 using ArcaneCore.Cryptography;
@@ -115,6 +116,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     internal Task LastCheckpoint => _checkpoint;
     private readonly ConcurrentDictionary<Guid, Quarantine> _quarantine = new();
+
+    /// <summary>
+    /// A refused revision-checked write means another writer owns the bot's row (a second world process on the same characters database), not that the bot is faulty:
+    /// the bot leaves the active set without a fault. More than this many such refusals in one checkpoint is a split brain.
+    /// </summary>
+    internal const int SplitBrainConflictThreshold = 3;
+
+    /// <summary>Set when a checkpoint saw more than <see cref="SplitBrainConflictThreshold"/> conflicts: no further playerbot writes are issued by this process until an operator clears it (<see cref="ClearSplitBrainAsync"/>) or the process restarts.</summary>
+    private volatile bool _splitBrain;
+    private readonly ConcurrentDictionary<Guid, byte> _conflictLogged = new();
+
+    /// <summary>Whether this process stopped writing playerbot rows because another world process owns them (see <see cref="SplitBrainConflictThreshold"/>).</summary>
+    internal bool SplitBrain => _splitBrain;
+
+    /// <summary>Bots currently in fault quarantine (tests).</summary>
+    internal int QuarantineCount => _quarantine.Count;
+
     private long _clockMs;
     private Chat.PlayerbotChat? _chat;
 
@@ -321,12 +339,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
         if (ResetInProgress) return new(false, "fleet-reset-running");
+        if (_splitBrain) return new(false, "playerbot-split-brain");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         Account? spare = null;
         try
         {
             if (_stopping) return new(false, "playerbots-stopping");
             if (ResetInProgress) return new(false, "fleet-reset-running");
+            if (_splitBrain) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
             IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
@@ -719,6 +739,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         CancellationToken cancellationToken = default, bool zoneClipped = true, bool logFailures = true)
     {
         ArgumentNullException.ThrowIfNull(targets);
+        if (_splitBrain) throw new InvalidOperationException("playerbot-split-brain");
         if (_world is not { } world) throw new InvalidOperationException("playerbot-home-unavailable");
         if (!float.IsFinite(radius) || radius < PlayerbotHomeBounds.MinRadius || radius > PlayerbotHomeBounds.MaxRadius)
             throw new ArgumentOutOfRangeException(nameof(radius));
@@ -729,8 +750,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         IManagedPlayerbotStore bots = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
         var saved = new List<PlayerbotHome>(targets.Count);
         int failed = 0;
+        bool refused = false;
         foreach (HomeTarget target in targets)
         {
+            if (_splitBrain) { refused = true; break; } // latched while this call ran: store nothing more (the homes already stored below are still applied)
             try
             {
                 ManagedPlayerbot? bot = await bots.FindAsync(target.BotId, cancellationToken).ConfigureAwait(false);
@@ -760,6 +783,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }).ConfigureAwait(false);
         }
 
+        if (refused) throw new InvalidOperationException("playerbot-split-brain");
         return new(saved.Count, failed);
     }
 
@@ -773,6 +797,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal async Task<int> ClearHomesAsync(IReadOnlyList<Guid> botIds, CancellationToken cancellationToken = default, bool byOperator = true)
     {
         ArgumentNullException.ThrowIfNull(botIds);
+        if (_splitBrain) throw new InvalidOperationException("playerbot-split-brain");
         if (byOperator && HomesClearedByOperator is { } handler)
         {
             Guid[] start = [.. botIds.Where(id => _homes.TryGetValue(id, out PlayerbotHome? h) && Population.PopulationStartAreas.TryParse(h.Place, out _, out _))];
@@ -789,6 +814,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             foreach (Guid botId in botIds)
             {
+                if (_splitBrain) throw new InvalidOperationException("playerbot-split-brain"); // latched while this call ran: clear nothing more
                 bool stored = await store.ClearAsync(botId, cancellationToken).ConfigureAwait(false);
                 done.Add(botId);
                 if (_homes.TryRemove(botId, out _) || stored) cleared++;
@@ -877,6 +903,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         bool quarantineRetry = kind != StartKind.Operator;
         if (!_options.Enabled || _stopping || _world is not { } world) return new(false, "playerbots-disabled");
         if (ResetInProgress) return new(false, "fleet-reset-running");
+        if (_splitBrain) return new(false, "playerbot-split-brain");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         AsyncServiceScope scope = scopes.CreateAsyncScope();
         WorldSession? session = null;
@@ -886,6 +913,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             if (_stopping) return new(false, "playerbots-stopping");
             if (ResetInProgress) return new(false, "fleet-reset-running");
+            if (_splitBrain) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
             bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
             if (bot is null) return new(false, "bot-not-found");
             if (kind == StartKind.Operator) _quarantine.TryRemove(bot.BotId, out _);
@@ -932,6 +960,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            if (ex is ManagedRevisionConflictException)
+            {
+                // Another writer owns the row: no fault, no quarantine and no write of ours on top of theirs. The finally kicks the half-started session.
+                WarnConflictOnce(bot?.BotId ?? Guid.Empty, "start");
+                return new(false, "managed-revision-conflict", bot?.BotId);
+            }
+
             if (ex is not OperationCanceledException)
                 FaultLedger.Shared.Record("playerbot.feature", ex);
             logger.LogWarning(ex, "Managed playerbot start failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
@@ -1005,10 +1040,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     public async Task<PlayerbotOperationResult> DeleteAsync(string idOrName, CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
+        if (_splitBrain) return new(false, "playerbot-split-brain");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (_stopping) return new(false, "playerbots-disabled");
+            if (_splitBrain) return new(false, "playerbot-split-brain");
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             ManagedPlayerbot? bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
             if (bot is null) return new(false, "bot-not-found");
@@ -1078,7 +1115,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         failures.Add(new TaskCanceledException(stop));
                 }
             }
-            try { await SaveSharedSetAsidesAsync().ConfigureAwait(false); }
+            try { if (!_splitBrain) await SaveSharedSetAsidesAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("playerbot.feature", ex);
@@ -1264,19 +1301,39 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (_active.TryGetValue(bot.BotId, out ActiveBot? active))
         {
             active.Paused = true;
-            try { await SaveBotSetAsidesAsync(active, force: true).ConfigureAwait(false); }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+            // Split brain: another process owns the rows, so this stop leaves the active set without a single managed-row or set-aside write.
+            // The character's own session-close save still runs (there is no clean way to discard it); wait, bounded, for the session to close.
+            if (_splitBrain)
             {
-                FaultLedger.Shared.Record("playerbot.feature", ex);
-                logger.LogWarning(ex, "Managed playerbot {BotId} set-aside stop save failed ({Type})", bot.BotId, ex.GetType().Name);
+                await DropFromActiveAsync(active, active.Record, writeSetAsides: false, announce: false).ConfigureAwait(false);
+                try { await active.Session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false); }
+                catch (TimeoutException) { logger.LogWarning("Playerbot {BotId} session did not close within 10 s of the split-brain stop", bot.BotId); }
+                await FlushBoundedAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
+                return;
             }
-            if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
-            active.Brain.Stop();
-            if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
+
+            void Quiesce()
+            {
+                if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
+                active.Brain.Stop();
+                if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
+            }
+
+            bool stoppingWritten = false;
             try
             {
+                // The revision-checked write comes first: on a conflict another writer owns the row (and its set-aside rows), and nothing of ours is written.
                 active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
                 { State = ManagedPlayerbotState.Stopping, DesiredEnabled = preserveDesired && active.Record.DesiredEnabled }, cancellationToken).ConfigureAwait(false);
+                stoppingWritten = true;
+                try { await SaveBotSetAsidesAsync(active, force: true).ConfigureAwait(false); }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("playerbot.feature", ex);
+                    logger.LogWarning(ex, "Managed playerbot {BotId} set-aside stop save failed ({Type})", bot.BotId, ex.GetType().Name);
+                }
+
+                Quiesce();
                 active.Session.Kick();
                 await active.Session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
                 await FlushBoundedAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
@@ -1294,8 +1351,22 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 PublishStopped(bot, active.Name, active.MapId);
                 await active.Scope.DisposeAsync().ConfigureAwait(false);
             }
+            catch (ManagedRevisionConflictException)
+            {
+                // Another writer moved the row on. Their values win: adopt the stored row and leave the active set, with no write of ours on top of it.
+                ManagedPlayerbot? stored = null;
+                try { stored = await FindStoredAsync(active.Scope.ServiceProvider, bot.BotId).ConfigureAwait(false); }
+                catch (Exception failure) when (failure is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("playerbot.feature", failure);
+                    logger.LogWarning(failure, "Playerbot {BotId} conflicting row could not be read during its stop ({Type})", bot.BotId, failure.GetType().Name);
+                }
+
+                await DropFromActiveAsync(active, stored, writeSetAsides: false).ConfigureAwait(false);
+            }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                if (!stoppingWritten) Quiesce();
                 if (ex is not OperationCanceledException)
                     FaultLedger.Shared.Record("playerbot.feature", ex);
                 try
@@ -1315,8 +1386,18 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         else
         {
+            if (_splitBrain) return; // no managed-row write while another process owns the rows
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-            bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = preserveDesired && bot.DesiredEnabled, State = ManagedPlayerbotState.Stopped }, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = preserveDesired && bot.DesiredEnabled, State = ManagedPlayerbotState.Stopped }, cancellationToken).ConfigureAwait(false);
+            }
+            catch (ManagedRevisionConflictException)
+            {
+                WarnConflictOnce(bot.BotId, "stop"); // not running here; the other writer's row stays as it is
+                return;
+            }
+
             CharacterRecord? character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, cancellationToken).ConfigureAwait(false);
             PublishStopped(bot, character?.Name ?? bot.BotId.ToString(), character?.MapId ?? 0);
         }
@@ -1878,6 +1959,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private async Task CheckpointAsync()
     {
+        if (_splitBrain) return; // another world process owns the rows: this one issues no playerbot writes
         if (!await _operations.WaitAsync(0).ConfigureAwait(false)) return;
         try
         {
@@ -1918,6 +2000,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
 
             var conflicted = new HashSet<ActiveBot>();
+            int foreignRows = 0;
+            ManagedPlayerbot? lastForeign = null;
             var changed = live.Where(item => GoalFieldsDiffer(item.Active.Record, item.Next)).ToList();
             if (changed.Count > 0)
             {
@@ -1952,9 +2036,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
                         foreach (ActiveBot active in refused)
                         {
-                            // Someone else changed or removed the row (in-process paths run under _operations and never do). Fault only this bot.
+                            // Someone else changed or removed the row (in-process paths run under _operations and never do). This is not the bot's fault.
                             conflicted.Add(active);
-                            logger.LogWarning("Playerbot {BotId} checkpoint refused: managed-revision-conflict", active.Record.BotId);
                             ManagedPlayerbot? stored;
                             try { stored = await store.FindAsync(active.Record.BotId, CancellationToken.None).ConfigureAwait(false); }
                             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -1964,14 +2047,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                                 continue; // not faulted: the next checkpoint finds the same conflict and looks again
                             }
 
-                            if (stored is null || stored.State == ManagedPlayerbotState.Faulted) { await DropFromActiveAsync(active, stored).ConfigureAwait(false); continue; }
-                            // Adopt the other writer's whole record, so the stop (a revision-checked write) changes only what it means to
-                            // on top of its values (a manual DesiredEnabled = false survives) and can leave _active cleanly.
-                            active.Record = stored;
-                            Interlocked.CompareExchange(ref active.FaultCode, "checkpoint: managed-revision-conflict", null);
-                            active.Session.Kick();
+                            // Another writer owns the row (a second world process on this characters database, or an operator): the bot leaves the active set
+                            // without a fault, a quarantine or a write, so its row keeps what the owner wrote (DesiredEnabled included) and the owner keeps running it.
+                            // A row that differs from ours only in DesiredEnabled is an operator edit (a SQL UPDATE), not a second process: it drops the bot but
+                            // does not count toward a split brain. Any other difference (state, goal, error code) or none at all counts.
+                            if (stored is not null && stored.State != ManagedPlayerbotState.Faulted && !IsOperatorEdit(active.Record, stored))
+                            {
+                                foreignRows++;
+                                lastForeign = stored;
+                            }
+
+                            await DropFromActiveAsync(active, stored, writeSetAsides: stored is null || stored.State == ManagedPlayerbotState.Faulted).ConfigureAwait(false);
                         }
                     }
+
+                    if (foreignRows > SplitBrainConflictThreshold) await EnterSplitBrainAsync(foreignRows, lastForeign).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
@@ -1980,6 +2070,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
             }
 
+            if (_splitBrain) return;
             foreach ((ActiveBot active, _) in live)
                 if (!conflicted.Contains(active)) await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
             await SaveSharedSetAsidesAsync().ConfigureAwait(false);
@@ -2002,18 +2093,86 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     }
 
     /// <summary>
+    /// More than <see cref="SplitBrainConflictThreshold"/> bots had their rows moved on by another writer in one checkpoint: a second world process is running this fleet.
+    /// Like the claim watch's terminal path it latches until restart or an operator's <see cref="ClearSplitBrainAsync"/>: checkpoints, starts and stops stop issuing managed-row and set-aside writes,
+    /// and every bot still active is stopped without one and no longer driven, so it makes no further progress. Their characters still save (autosave and the session close); only
+    /// <c>Cluster:Fencing</c> bounds those on a server database. Runs under <c>_operations</c> (the checkpoint holds it).
+    /// </summary>
+    private async Task EnterSplitBrainAsync(int conflicts, ManagedPlayerbot? lastRow)
+    {
+        _splitBrain = true;
+        _quarantine.Clear(); // a quarantined bot would otherwise be retried on its timer once the latch clears: only an operator start restarts a bot after a split brain
+        string row = lastRow is null ? "no row read" : string.Create(CultureInfo.InvariantCulture,
+            $"last conflicting row bot {lastRow.BotId:D}: revision {lastRow.Revision}, state {lastRow.State}, updated {DateTimeOffset.FromUnixTimeSeconds(lastRow.UpdatedUnix):u}");
+        logger.LogCritical("Split brain: {Conflicts} managed playerbot rows were changed by another writer in one checkpoint (threshold {Threshold}); another world process is writing this characters database ({Row}). This process, the one whose rows were taken over, stops issuing playerbot writes. Stop the other world, then clear it with .playerbot splitbrain clear", conflicts, SplitBrainConflictThreshold, row);
+        // Every bot still active leaves without a managed-row or set-aside write and stops being driven, so none makes further progress on rows that are not ours.
+        foreach (ActiveBot active in _active.Values.ToArray())
+        {
+            try { await DropFromActiveAsync(active, active.Record, writeSetAsides: false, announce: false).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("playerbot.checkpoint", ex);
+                logger.LogWarning(ex, "Playerbot {BotId} split-brain stop failed ({Type})", active.Record.BotId, ex.GetType().Name);
+            }
+        }
+    }
+
+    /// <summary>Latches the split brain as a checkpoint would (tests only).</summary>
+    internal async Task ForceSplitBrainForTests()
+    {
+        await _operations.WaitAsync().ConfigureAwait(false);
+        try { await EnterSplitBrainAsync(0, null).ConfigureAwait(false); }
+        finally { _operations.Release(); }
+    }
+
+    /// <summary>Whether <paramref name="stored"/> differs from <paramref name="ours"/> only in <see cref="ManagedPlayerbot.DesiredEnabled"/> (and the revision stamps): an operator's edit.</summary>
+    private static bool IsOperatorEdit(ManagedPlayerbot ours, ManagedPlayerbot stored)
+        => stored.DesiredEnabled != ours.DesiredEnabled
+            && stored with { DesiredEnabled = ours.DesiredEnabled, Revision = ours.Revision, UpdatedUnix = ours.UpdatedUnix } == ours;
+
+    /// <summary>What <see cref="ClearSplitBrainAsync"/> found: whether the latch was set, and the stored rows it re-read (all bots, those wanted running, those faulted).</summary>
+    public readonly record struct SplitBrainClear(bool WasSet, int Rows, int Enabled, int Faulted);
+
+    /// <summary>
+    /// Clears the split-brain latch (<c>.playerbot splitbrain clear</c>); the operator must have stopped the other world first. It re-reads the stored registry rows and reports them, then
+    /// un-latches. No bot is active at that point (entering the latch stopped them all and every start is refused while it is set), so there is no in-memory row to reconcile:
+    /// each start reads the stored row afresh. If the read fails the latch stays set and the exception propagates.
+    /// </summary>
+    public async Task<SplitBrainClear> ClearSplitBrainAsync()
+    {
+        await _operations.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!_splitBrain) return new(false, 0, 0, 0);
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            IReadOnlyList<ManagedPlayerbot> stored = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
+                .LoadAllAsync(CancellationToken.None).ConfigureAwait(false);
+            var result = new SplitBrainClear(true, stored.Count, stored.Count(r => r.DesiredEnabled), stored.Count(r => r.State == ManagedPlayerbotState.Faulted));
+            _conflictLogged.Clear();
+            _splitBrain = false;
+            logger.LogWarning("Playerbot split-brain latch cleared by an operator; playerbot writes resume ({Rows} stored rows re-read, {Enabled} wanted running, {Faulted} faulted)",
+                result.Rows, result.Enabled, result.Faulted);
+            return result;
+        }
+        finally { _operations.Release(); }
+    }
+
+    /// <summary>
     /// A running bot whose registry row no longer exists (<paramref name="row"/> null, deleted out of band) or was faulted out of band
     /// (the checkpoint skips Faulted records, so it could never stop): it leaves <see cref="_active"/> without a revision-checked
     /// write instead of failing or lingering every checkpoint. Logged once. The faulted row is published as stopped.
     /// </summary>
-    private async Task DropFromActiveAsync(ActiveBot active, ManagedPlayerbot? row)
+    private async Task DropFromActiveAsync(ActiveBot active, ManagedPlayerbot? row, bool writeSetAsides = true, bool announce = true)
     {
         Guid botId = active.Record.BotId;
-        if (row is null) logger.LogWarning("Playerbot {BotId} has no registry row any more; dropping it from the active set", botId);
-        else logger.LogWarning("Playerbot {BotId} was faulted out of band ({Code}); dropping it from the active set", botId, row.ErrorCode);
+        if (!announce) { }
+        else if (row is null) logger.LogWarning("Playerbot {BotId} has no registry row any more; dropping it from the active set", botId);
+        else if (row.State == ManagedPlayerbotState.Faulted) logger.LogWarning("Playerbot {BotId} was faulted out of band ({Code}); dropping it from the active set", botId, row.ErrorCode);
+        else WarnConflictOnce(botId, "write (dropped from the active set)");
         active.Paused = true;
         // A row that exists keeps the bot's suspensions across a restart, as a stop does.
-        if (row is not null)
+        // (not when another writer owns the row: then the set-aside rows are theirs too, and this process writes none).
+        if (row is not null && writeSetAsides)
         {
             try { await SaveBotSetAsidesAsync(active, force: true).ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -2033,7 +2192,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         active.Session.Kick();
         if (_active.TryRemove(new KeyValuePair<Guid, ActiveBot>(botId, active))) Interlocked.Increment(ref _activeVersion);
-        if (row is not null) { active.Record = row; PublishStopped(row, active.Name, active.MapId); }
+        if (row is not null)
+        {
+            active.Record = row;
+            // Not running here, whatever the row says: published as stopped (a faulted row stays faulted).
+            PublishStopped(row.State == ManagedPlayerbotState.Faulted ? row : row with { State = ManagedPlayerbotState.Stopped }, active.Name, active.MapId);
+        }
         else
         {
             // The same cleanup as an in-process delete: no status line, quarantine or home is kept for a bot with no row.
@@ -2459,8 +2623,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         ManagedPlayerbot updated = next with { Revision = next.Revision + 1, UpdatedUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds() };
         if (!await services.GetRequiredService<IManagedPlayerbotStore>().UpdateAsync(updated, next.Revision, cancellationToken).ConfigureAwait(false))
-            throw new InvalidOperationException("managed-revision-conflict");
+            throw new ManagedRevisionConflictException();
         return updated;
+    }
+
+    /// <summary>The store refused a revision-checked write: someone else changed or removed the row since this process read it.</summary>
+    private sealed class ManagedRevisionConflictException() : InvalidOperationException("managed-revision-conflict");
+
+    private static Task<ManagedPlayerbot?> FindStoredAsync(IServiceProvider services, Guid botId)
+        => services.GetRequiredService<IManagedPlayerbotStore>().FindAsync(botId, CancellationToken.None);
+
+    /// <summary>Logs, once per bot for the life of the process, that another writer owns the bot's row.</summary>
+    private void WarnConflictOnce(Guid botId, string during)
+    {
+        if (_conflictLogged.TryAdd(botId, 0))
+            logger.LogWarning("Playerbot {BotId} {During} refused: managed-revision-conflict (another world process owns its registry row?)", botId, during);
     }
 
     private void PublishStopped(ManagedPlayerbot bot, string name, uint mapId)

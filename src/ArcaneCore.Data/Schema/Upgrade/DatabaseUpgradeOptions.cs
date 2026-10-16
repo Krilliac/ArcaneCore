@@ -103,7 +103,7 @@ public static class DatabaseStartup
     }
 
     /// <summary>One line with every configured connection string's secrets removed.</summary>
-    private static string Scrub(string text, IServiceProvider? services)
+    public static string Scrub(string text, IServiceProvider? services)
     {
         string message = text.ReplaceLineEndings(" ");
         DatabaseOptions? options = (services?.GetService(typeof(IOptions<DatabaseOptions>)) as IOptions<DatabaseOptions>)?.Value;
