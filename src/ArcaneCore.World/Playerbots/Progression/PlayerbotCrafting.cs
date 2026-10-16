@@ -48,6 +48,22 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     private const uint BasicCampfireSpell = 818;
 
     private const uint SimpleWoodItem = 4470;
+
+    /// <summary>
+    /// How long past its cast bar a gather, skin or disenchant may go without its loot window before the wait counts as failed. The
+    /// window opens in the tick the cast lands (vmangos Spell::EffectOpenLock / EffectSkinning / EffectDisenchant all end in
+    /// Player::SendLoot), so this only covers the reply's queueing; the deadline used to be a fixed 6 s from the cast packet, shorter
+    /// than a 5 s Herb Gathering (Spell.dbc 2366, CastingTimeIndex 6) plus one think.
+    /// </summary>
+    internal const uint LootReplyGraceMs = 2_000;
+
+    /// <summary>
+    /// Casts on one node, corpse or item that may fail in a row (no loot window: the orange-skill TRY_AGAIN roll, an interrupt, a refusal)
+    /// before the bot leaves it for <see cref="RefusalBackoffMs"/> and reports it. A player clicks the node again after "Try again"; at the
+    /// lowest skill the roll fails about 40% of the time (vmangos Spell::CheckCast, Spell.cpp:6050-6057, <see cref="GatheringRules.OrangeGatherFails"/>).
+    /// </summary>
+    internal const int MaxGatherCasts = 5;
+
     private const int MaxDropperCandidates = 32;
 
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
@@ -61,6 +77,9 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     private ObjectGuid _gatheringTarget;
     private bool _waitingForGatherLoot;
     private uint _gatherWaitUntilMs;
+    private SpellCast? _lootCast;
+    private uint _lootSpellId;
+    private readonly Dictionary<ulong, int> _failedLootCasts = [];
 
     internal PlayerbotGoalKind Goal { get; private set; } = PlayerbotGoalKind.Vendor;
     internal uint TargetEntry { get; private set; }
@@ -679,9 +698,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!_session.TryManagedAction(WorldOpcode.CmsgCastSpell, writer.ToArray()))
             return false;
 
-        _gatheringTarget = candidate.Guid;
-        _waitingForGatherLoot = true;
-        _gatherWaitUntilMs = unchecked(now + 6_000);
+        BeginLootWait(player, candidate.Guid, disenchantSpell, now);
         _refusedUntil[candidate.Guid.Value] = unchecked(now + RefusalBackoffMs);
         return true;
     }
@@ -987,9 +1004,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!_session.TryManagedAction(WorldOpcode.CmsgCastSpell, writer.ToArray()))
             return false;
 
-        _gatheringTarget = bestNode.Guid;
-        _waitingForGatherLoot = true;
-        _gatherWaitUntilMs = unchecked(now + 6_000);
+        BeginLootWait(player, bestNode.Guid, bestGatherSpell, now);
         _refusedUntil[bestNode.Guid.Value] = unchecked(now + RefusalBackoffMs);
         return true;
     }
@@ -1098,11 +1113,69 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!_session.TryManagedAction(WorldOpcode.CmsgCastSpell, writer.ToArray()))
             return false;
 
-        _gatheringTarget = bestCorpse.Guid;
-        _waitingForGatherLoot = true;
-        _gatherWaitUntilMs = unchecked(now + 6_000);
+        BeginLootWait(player, bestCorpse.Guid, skinSpell, now);
         _refusedUntil[bestCorpse.Guid.Value] = unchecked(now + RefusalBackoffMs);
         return true;
+    }
+
+    /// <summary>
+    /// Waits for the loot window of <paramref name="target"/>: the cast bar of <paramref name="spell"/> plus <see cref="LootReplyGraceMs"/>.
+    /// The cast the server started for it (null when it refused the cast outright) tells a failed cast from a missing window.
+    /// </summary>
+    private void BeginLootWait(Player player, ObjectGuid target, SpellInfo spell, uint now)
+    {
+        _gatheringTarget = target;
+        _waitingForGatherLoot = true;
+        _lootSpellId = spell.Id;
+        _lootCast = _session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is { } cast && cast.Spell.Id == spell.Id
+            ? cast
+            : null;
+        uint castMs = (uint)Math.Max(0, Math.Max(spell.CastTime.Base, spell.CastTime.Minimum));
+        _gatherWaitUntilMs = unchecked(now + castMs + LootReplyGraceMs);
+    }
+
+    private void EndLootWait()
+    {
+        _waitingForGatherLoot = false;
+        _gatheringTarget = default;
+        _lootCast = null;
+        _lootSpellId = 0;
+    }
+
+    /// <summary>
+    /// The cast waited on is over without reaching its effects (<see cref="SpellCast.Completed"/> false), or the server never started it:
+    /// no loot window is coming.
+    /// </summary>
+    private bool LootCastFailed(Player player)
+    {
+        if (_lootCast is not { } cast)
+            return true;
+        return !cast.Completed
+            && !ReferenceEquals(_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast, cast);
+    }
+
+    /// <summary>
+    /// A cast with no window: the target is free again for the next think (a player casts again after "Try again"), up to
+    /// <see cref="MaxGatherCasts"/> failures in a row; then it is left for <see cref="RefusalBackoffMs"/> and reported.
+    /// </summary>
+    private void OnLootCastFailed(Player player)
+    {
+        ObjectGuid target = _gatheringTarget;
+        uint spellId = _lootSpellId;
+        EndLootWait();
+        int failures = _failedLootCasts.GetValueOrDefault(target.Value) + 1;
+        if (failures < MaxGatherCasts)
+        {
+            if (_failedLootCasts.Count >= 64)
+                _failedLootCasts.Clear();
+            _failedLootCasts[target.Value] = failures;
+            _refusedUntil.Remove(target.Value);
+            return;
+        }
+
+        _failedLootCasts.Remove(target.Value);
+        if (!_session.IsInChaosProbe)
+            PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"gather or disenchant cast {spellId} on {target} failed {failures} times in a row (no loot window)");
     }
 
     private bool DrainGatherLoot(Player player, uint now)
@@ -1119,16 +1192,32 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!_waitingForGatherLoot)
             return false;
 
-        if (unchecked((int)(_gatherWaitUntilMs - now)) <= 0)
+        // The reply is read before the deadline is: a bot thinks seconds apart under load (live think gap p95 13-16 s outside
+        // combat), so a window that opened while it was not thinking is waiting in its ring, not late.
+        if (TakeGatherLoot(player))
+            return _pendingLoot.Count > 0;
+
+        // No window and none coming: the cast failed (TRY_AGAIN, interrupted, refused), which is not a loot timeout.
+        if (LootCastFailed(player))
         {
-            ObjectGuid timedOutTarget = _gatheringTarget;
-            _waitingForGatherLoot = false;
-            _gatheringTarget = default;
-            if (!_session.IsInChaosProbe)
-                PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"gather or disenchant loot timed out for target {timedOutTarget}");
+            OnLootCastFailed(player);
             return false;
         }
 
+        if (unchecked((int)(_gatherWaitUntilMs - now)) <= 0)
+        {
+            ObjectGuid timedOutTarget = _gatheringTarget;
+            EndLootWait();
+            if (!_session.IsInChaosProbe)
+                PlayerbotAnomalies.Report(player, "progression", "craft-failed", $"gather or disenchant loot timed out for target {timedOutTarget}");
+        }
+
+        return false;
+    }
+
+    /// <summary>Reads the SMSG_LOOT_RESPONSE of the target waited on, if it came, and queues the takes and the release; true once it came.</summary>
+    private bool TakeGatherLoot(Player player)
+    {
         foreach (ManagedSessionPacket packet in _session.DrainManagedPackets(WorldOpcode.SmsgLootResponse))
         {
             if (packet.Payload.Length < 9)
@@ -1138,8 +1227,11 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             if (sourceGuid != _gatheringTarget.Value)
                 continue;
 
-            _waitingForGatherLoot = false;
-            if (reader.ReadByte() != 1 || packet.Payload.Length < 14)
+            _failedLootCasts.Remove(sourceGuid);
+            EndLootWait();
+            // Any loot type is a window: herb and mining nodes go out as 1, skinning as 2, disenchanting as 4 (LootTypes.ToWire, vmangos
+            // Player::SendLoot, Player.cpp:7980-7995). Only 0 (LOOT_NONE) is the refusal reply, followed by its LootError byte.
+            if (reader.ReadByte() == 0 || packet.Payload.Length < 14)
                 continue;
             uint coins = reader.ReadUInt32();
             byte count = reader.ReadByte();
@@ -1159,10 +1251,10 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             if (coins > 0)
                 _pendingLoot.Enqueue((WorldOpcode.CmsgLootMoney, []));
             _pendingLoot.Enqueue((WorldOpcode.CmsgLootRelease, PlayerbotNavigation.GuidPayload(sourceGuid)));
-            return _pendingLoot.Count > 0;
+            return true;
         }
 
-        return false;
+        return !_waitingForGatherLoot;
     }
 
     private void ForgetExpiredRefusals(uint now)
