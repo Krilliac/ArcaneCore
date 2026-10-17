@@ -42,7 +42,38 @@ The realm has no world thread; commands run on the reader thread and open their 
 
 A password typed at the console is visible while typed; `arcane-account` prompts without echo. Passwords are never echoed back and are redacted from the log line.
 
+## Control pipe
+
+The same console commands, sent by a local tool instead of typed in the window: `tools/ops/live/redeploy.ps1` applies a hot redeploy
+through it ([Redeploy prefers hot reload](../ops/redeploy.md)). Windows only; off by default.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `World:Control:Pipe:Enabled` | `false` | Create the pipe. Needs a restart to change. |
+| `World:Control:Pipe:Name` | `arcanecore-world-{pid}` | The pipe name (`\\.\pipe\<name>`); `{pid}` is the world process id. Letters, digits, `.`, `_`, `-`. |
+| `World:Control:Pipe:IdleTimeoutSeconds` | `120` | A connected client that sends nothing for this long is disconnected. |
+| `World:Control:Pipe:MaxLineLength` | `4096` | A longer line closes the connection; nothing is run. |
+
+Security:
+
+- **Who may connect.** The pipe's security descriptor is protected (nothing inherited), owned by the account the World runs as, and has
+  three entries: deny NETWORK, allow that account full control, allow SYSTEM read and write. Administrators, other users and everyone else
+  have no entry. The runtime also rejects remote clients. Whoever can open it can already run code as that account.
+- **No squatting.** One pipe instance for the life of the process, created as the first instance of its name: if another process created
+  the name first, the World refuses it (an error is logged and the pipe stays off) instead of joining it. The client in
+  `tools/ops/live/RedeployPlan.ps1` checks that the process serving the pipe is the live World's PID before it sends a command.
+- **Authority and audit.** A line runs through the same executor as a typed console line: Administrator authority, account 0, no
+  character; GM audit entries under the name `Console`; secrets redacted. Each line is also logged under the category
+  `ArcaneCore.Control` as `Control pipe command: <line> (client pid <pid> <process>)`, redacted the same way, with the connect and
+  disconnect of each client.
+- **The world thread is never blocked by a client.** Replies are queued and written by a per-connection pump; a client that stops reading
+  loses lines (counted in the disconnect log line), it cannot stall a tick.
+
+Protocol (UTF-8, newline-terminated lines): send a command line; the World answers with the reply lines (prefixed `[console] `) and then
+`#done` once the world thread has run the command. A command that finishes later (`.reload`, `.hotmodule`) sends its result after `#done`
+while the connection stays open. One client at a time; the next one is served after it disconnects.
+
 ## Limits
 
 - A blocked read cannot be interrupted, so stopping the daemon does not wait for the reader; it is a background thread and cannot keep the process alive.
-- The console is local to the window: there is no remote access, which keeps the authority tied to whoever can already operate the machine.
+- The console is local to the window: there is no remote access, which keeps the authority tied to whoever can already operate the machine. The control pipe keeps that rule: local only, and only the World's own account (and SYSTEM).

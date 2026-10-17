@@ -10,6 +10,7 @@ architecture test, section 4.5) is **built** on `claude/hr2-bots`; the rest of T
 assembly, 2b to 2d) are planned. Tier 3 phase 3a (gateway passthrough) is **built and mock-client tested** on
 `claude/hr2-gateway` (section 5.4, [gateway.md](../areas/gateway.md)); real-client acceptance and phases 3b/3c are open.
 All three lanes are merged on `claude/hr2-integrate`.
+"Redeploy prefers hot reload" (section 9.1) is **built and tested, not run on the live server** on `claude/hr3-redeploy-hot`.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
 
 Goal: a hard restart only when it cannot be avoided. Content, configuration and code change on a running server, and
@@ -524,6 +525,33 @@ into a production path. It remains the fastest loop for a developer, gated by `H
 | Spike | Same-map `SMSG_NEW_WORLD` result on a real 1.12.1 client, written down |
 | 3a | Real client and mock client play through the gateway; per-IP guards see the client address; `Combined` unchanged |
 | 3b | Handoff of a populated dev server with fencing on: no disconnect, freeze time measured and bounded, abort tested at every stage before the epoch bump, roll-forward tested after it |
+
+### 9.1 Redeploy prefers hot reload (built on `claude/hr3-redeploy-hot`)
+
+`tools/ops/live/redeploy.ps1` plans before it acts ([runbook](../ops/redeploy.md)). It compares the built worktree with the deploy
+record the previous redeploy wrote (`<LiveHome>\bin\arcanecore-deploy.json`: deployed SHA, paths dirty at the time, a SHA-256
+configuration fingerprint, module hashes) and classifies the change: `None` (nothing the daemons are built from), `Hot` (only `live`
+World configuration keys from the conf catalog, content tables `.reload` supports, allowlisted hot modules), `Restart` (server code,
+any other key, no baseline, `-WorldDbSwap`, `-ForceRestart`), or `Blocked` (a changed module not built or not on the allowlist).
+`-Plan` / `-WhatIf` print the plan and stop. A hot plan is applied through a new **local-only World control pipe**
+(`World:Control:Pipe:*`, off by default; [server console](../areas/server-console.md#control-pipe)): a Windows named pipe with a
+protected DACL (deny NETWORK, allow the World's account and SYSTEM), created as the first instance of its name, whose lines run through
+the console executor (Administrator, GM audit `Console`, redacted `Control pipe command:` log with the client PID). The client refuses a
+pipe served by any process other than the live World. An unavailable hot path falls back to the hard restart; a change the World
+rejects stops with exit 3 and no restart.
+
+Evidence (built): `dotnet build ArcaneCore.slnx -c Debug` 0 warnings, 0 errors; the lane filter
+(`WorldControlPipeTests|RedeployPlanTests|WiringAuditTests|WorldConsoleTests|LiveLogPathTests|Docs`) 196 passed, 0 failed, 0 skipped
+(trx: `WorldControlPipeTests` 15, `RedeployPlanTests` 42 of which 34 planner fixtures, `WiringAuditTests` 17). RED run (one build with
+six mutations): dropping the deny-NETWORK entry fails both descriptor tests; dropping the `Control pipe command:` log line fails the
+command test; treating `restart`/`start` keys as `live` fails the two fixtures for them; dropping the recorded dirty paths fails the
+changed-paths test; dropping the client's server-PID check fails the hot-step test at its refusal assertion. Dropping
+`PipeOptions.FirstPipeInstance` failed nothing: the squatter test still passes, likely because a pipe created with one maximum instance cannot
+join a name another process holds anyway (reasoning, not tested; the flag is kept as defence in depth; not load-bearing in this configuration).
+
+Planned, not built: a Realm-only restart (a restart is still World and Realm); detecting content changes (tables are declared with
+`-ContentTables`); applying `Logging:LogLevel:*` without a restart (planned as a restart today); checking that the core build matches the
+worktree (only module builds are checked); a run against the live server.
 
 ## 10. Open risks
 

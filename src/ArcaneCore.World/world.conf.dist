@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       583 keys
+#   WORLD                       587 keys
 #
 ###############################################################################
 
@@ -9592,6 +9592,63 @@ World.Collision.VMapDirectory = ""
 #        Docs: docs/reference/configuration.md#worldconsole
 #
 World.Console.Enabled = true
+
+#----------------------------------------------------------------------------
+# World:Control:Pipe
+#----------------------------------------------------------------------------
+
+#
+#    World.Control.Pipe.Enabled
+#        Description: Accept console commands on a local Windows named pipe. Each line runs exactly
+#                     like a line typed at the console: on the world thread, Administrator
+#                     authority, no character, logged and GM-audited as the console. The pipe admits
+#                     only the account the daemon runs as and SYSTEM, refuses network clients, and
+#                     is not created on other operating systems. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolpipe
+#
+World.Control.Pipe.Enabled = false
+
+#
+#    World.Control.Pipe.IdleTimeoutSeconds
+#        Description: Seconds a connected client may stay silent before the daemon closes the
+#                     connection (frees the single pipe instance).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolpipe
+#
+World.Control.Pipe.IdleTimeoutSeconds = 120
+
+#
+#    World.Control.Pipe.MaxLineLength
+#        Description: The longest command line in bytes; a longer line closes the connection without
+#                     running anything.
+#        Type: int
+#        Default: 4096
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolpipe
+#
+World.Control.Pipe.MaxLineLength = 4096
+
+#
+#    World.Control.Pipe.Name
+#        Description: The pipe name (without \\.\pipe\); {pid} is replaced by the world process id,
+#                     so two daemons on one machine never share a name. The daemon refuses to serve
+#                     a name another process already created. Letters, digits, '.', '_', '-' and the
+#                     token only.
+#        Type: string
+#        Default: "arcanecore-world-{pid}"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolpipe
+#
+World.Control.Pipe.Name = "arcanecore-world-{pid}"
 
 #----------------------------------------------------------------------------
 # World:Death
