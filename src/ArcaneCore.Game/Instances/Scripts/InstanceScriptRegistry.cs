@@ -34,7 +34,7 @@ public sealed class InstanceScriptAttribute(uint mapId) : Attribute
 public sealed class InstanceScriptRegistry
 {
     // One registered script. Reference identity is the version: a replacement is a new Script, so data created by the old one is retired.
-    private sealed record Script(uint MapId, Func<Map, InstanceData> Factory, bool BuiltIn);
+    internal sealed record Script(uint MapId, Func<Map, InstanceData> Factory, bool BuiltIn);
 
     private readonly Lock _writeLock = new();
 
@@ -152,6 +152,42 @@ public sealed class InstanceScriptRegistry
 
             Publish(next);
         }
+    }
+
+    /// <summary>The registry's current table, to put back with <see cref="Restore"/> (the hot module lane's undo step when a later part of a swap fails).</summary>
+    public Checkpoint Save() => new(this, _scripts);
+
+    /// <summary>
+    /// Put back the table <paramref name="checkpoint"/> saved, exactly: the same script entries, so instance data created before the undone swap
+    /// counts as running its map's current script again (<see cref="RunsCurrentScript"/>). Bumps <see cref="Generation"/>. World thread at a tick
+    /// boundary.
+    /// </summary>
+    public void Restore(Checkpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (!ReferenceEquals(checkpoint.Owner, this))
+        {
+            throw new ArgumentException("the checkpoint was saved by another instance script registry", nameof(checkpoint));
+        }
+
+        lock (_writeLock)
+        {
+            Publish(checkpoint.State);
+        }
+    }
+
+    /// <summary>A saved table of one registry (<see cref="Save"/>); opaque to everyone else.</summary>
+    public sealed class Checkpoint
+    {
+        internal Checkpoint(InstanceScriptRegistry owner, Dictionary<uint, Script> state)
+        {
+            Owner = owner;
+            State = state;
+        }
+
+        internal InstanceScriptRegistry Owner { get; }
+
+        internal Dictionary<uint, Script> State { get; }
     }
 
     /// <summary>A registry of the scripts declared in <paramref name="assembly"/>.</summary>

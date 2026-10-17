@@ -146,7 +146,9 @@ public sealed class SpellScriptRegistry
     /// <see cref="ValidateSwap"/>). The new snapshot is built completely and then published by one reference write, and
     /// <see cref="ExecuteEffects"/> is recomputed from the scripts that remain; afterwards the removed scripts are referenced by nothing here. A swap
     /// that <see cref="ValidateSwap"/> would refuse throws <see cref="InvalidOperationException"/> and changes nothing. Raises
-    /// <see cref="ScriptsChanged"/> after publishing so an installed <see cref="SpellScriptDispatcher"/> chains a newly declared execute effect.
+    /// <see cref="ScriptsChanged"/> after publishing so an installed <see cref="SpellScriptDispatcher"/> chains a newly declared execute effect; when a
+    /// handler throws, the previous snapshot is put back (and <see cref="ScriptsChanged"/> raised again so the subscribers follow it) and the swap
+    /// throws <see cref="InvalidOperationException"/>: a new script whose execute effect could not be chained must not go live half wired.
     /// </summary>
     public void CommitSwap(IReadOnlyCollection<ISpellScript> removed, IReadOnlyCollection<ISpellScript> added)
     {
@@ -159,22 +161,50 @@ public sealed class SpellScriptRegistry
         }
 
         _snapshot = next!;
-        RaiseScriptsChanged();
+        if (RaiseScriptsChanged() is { } failure)
+        {
+            _snapshot = current;
+            _ = RaiseScriptsChanged();
+            throw new InvalidOperationException(
+                $"a {nameof(ScriptsChanged)} handler failed ({failure.GetType().Name}: {failure.Message}); the spell script swap was undone", failure);
+        }
+    }
+
+    /// <summary>The registry's current state, to put back with <see cref="Restore"/> (the hot module lane's undo step when a later part of a swap fails).</summary>
+    public Checkpoint Save() => new(this, _snapshot);
+
+    /// <summary>
+    /// Put back the state <paramref name="checkpoint"/> saved, exactly (the same script objects and order), and raise <see cref="ScriptsChanged"/>
+    /// so the subscribers follow it. World thread at a tick boundary. A handler that throws here is only recorded in the fault ledger: an undo must
+    /// not fail half way.
+    /// </summary>
+    public void Restore(Checkpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (!ReferenceEquals(checkpoint.Owner, this))
+        {
+            throw new ArgumentException("the checkpoint was saved by another spell script registry", nameof(checkpoint));
+        }
+
+        _snapshot = checkpoint.State;
+        _ = RaiseScriptsChanged();
     }
 
     /// <summary>
-    /// Raised at the end of <see cref="CommitSwap"/> (world thread, tick boundary). A handler that throws is recorded in the fault ledger and does
-    /// not undo the swap or stop the other handlers.
+    /// Raised at the end of <see cref="CommitSwap"/> and <see cref="Restore"/> (world thread, tick boundary). Every handler runs; one that throws is
+    /// recorded in the fault ledger, and on a commit it makes the commit undo itself and throw.
     /// </summary>
     public event Action? ScriptsChanged;
 
-    private void RaiseScriptsChanged()
+    /// <summary>Run every handler; the first failure (each one is also recorded in the fault ledger), or null.</summary>
+    private Exception? RaiseScriptsChanged()
     {
         if (ScriptsChanged is not { } handlers)
         {
-            return;
+            return null;
         }
 
+        Exception? first = null;
         foreach (Action handler in handlers.GetInvocationList().Cast<Action>())
         {
             try
@@ -184,8 +214,11 @@ public sealed class SpellScriptRegistry
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("spell-script", ex);
+                first ??= ex;
             }
         }
+
+        return first;
     }
 
     private static string? Plan(Snapshot current, IReadOnlyCollection<ISpellScript> removed, IReadOnlyCollection<ISpellScript> added, out Snapshot? next)
@@ -271,8 +304,22 @@ public sealed class SpellScriptRegistry
         return error is null ? attribute : null;
     }
 
+    /// <summary>A saved state of one registry (<see cref="Save"/>); opaque to everyone else.</summary>
+    public sealed class Checkpoint
+    {
+        internal Checkpoint(SpellScriptRegistry owner, Snapshot state)
+        {
+            Owner = owner;
+            State = state;
+        }
+
+        internal SpellScriptRegistry Owner { get; }
+
+        internal Snapshot State { get; }
+    }
+
     /// <summary>One immutable state of the registry; replaced as a whole, never mutated.</summary>
-    private sealed record Snapshot(
+    internal sealed record Snapshot(
         FrozenDictionary<uint, ISpellScript> ById,
         FrozenSet<SpellEffectName> ExecuteEffects,
         FrozenSet<uint> BuiltInIds,

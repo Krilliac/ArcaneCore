@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Scripting;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.HotCode;
@@ -247,7 +248,8 @@ public sealed class ModuleScriptSwapTests : IDisposable
                 _instances.Register(MapId, map => new BuiltInClashInstance(map));
                 break;
             default:
-                _eventAi = EventAiRegistry.Discover([typeof(EventAiRegistry).Assembly, typeof(BuiltInClashEventHandler).Assembly]);
+                EventAiHandlerSet builtIns = EventAiRegistry.DiscoverHandlers([typeof(EventAiRegistry).Assembly]);
+                _eventAi = EventAiRegistry.FromHandlers([.. builtIns.Events, new BuiltInClashEventHandler(EventType)], builtIns.Actions);
                 break;
         }
 
@@ -298,6 +300,109 @@ public sealed class ModuleScriptSwapTests : IDisposable
         Assert.Contains("1 instance maps until they unload", HotModuleCommands.Format(host));
     }
 
+    private const uint EventAiEntry = 990301;
+
+    /// <summary>A real creature in a loaded map whose EventAI (on this test's registry) has one row of the module's event type, bound now.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private Creature SpawnEventAiCreature()
+    {
+        var template = new CreatureTemplate { Entry = EventAiEntry, Name = "EventAI creature", MinLevelHealth = 50, MaxLevelHealth = 50 };
+        Map map = _runtime.GetMap(0);
+        var system = new CreatureMapSystem(map, new CreatureContent([template], [], [], [], []), random: new Random(1), aiServices: new CreatureAiServices { Factory = _ai });
+        map.AddUpdater(system);
+        Creature creature = system.SpawnTemporary(template, 1, 0, 83.5f, 0);
+        var rows = new CreatureAiContent([new CreatureAiEvent { Id = 1, CreatureId = EventAiEntry, EventType = EventType }], []);
+        var ai = new CreatureEventAI(creature, rows, _eventAi);
+        creature.AI = ai;
+        Assert.NotNull(Assert.Single(ai.Engine.Holders).Handler); // bound to the module's handler
+        return creature;
+    }
+
+    /// <summary>A weak reference to the load context the module's spell script came from (nothing of the module stays in this frame).</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private WeakReference ModuleContext()
+        => new(AssemblyLoadContext.GetLoadContext((_spells.Find(SpellId) ?? throw new Xunit.Sdk.XunitException("no module spell script")).GetType().Assembly)
+            ?? throw new Xunit.Sdk.XunitException("no load context"));
+
+    private static async Task<bool> WaitForCollected(WeakReference context)
+    {
+        for (int i = 0; i < 80 && context.IsAlive; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            await Task.Delay(25);
+        }
+
+        return !context.IsAlive;
+    }
+
+    [Fact]
+    public async Task Unload_TheModulesLoadContextIsCollected()
+    {
+        Install(1);
+        ModuleHost host = NewHost();
+        Assert.True((await host.LoadAsync("HotScripts")).Ok);
+        WeakReference context = ModuleContext();
+        Assert.True(context.IsAlive);
+
+        Assert.True((await host.UnloadAsync("HotScripts")).Ok);
+
+        Assert.True(await WaitForCollected(context), "the unloaded module's load context must be collected");
+        Assert.Equal(0, host.RetiredStillReferenced);
+    }
+
+    [Fact]
+    public async Task AnEventAiCreatureStillBoundToAnUnloadedHandler_IsCounted_KeepsTheModuleAlive_UntilItRespawns()
+    {
+        Install(1);
+        ModuleHost host = NewHost();
+        Assert.True((await host.LoadAsync("HotScripts")).Ok);
+        Creature creature = SpawnEventAiCreature();
+        WeakReference context = ModuleContext();
+        Assert.Equal(new ModuleRetiredGame(0, 0), host.RetiredGameReferences());
+
+        Assert.True((await host.UnloadAsync("HotScripts")).Ok);
+
+        // The creature's row still holds the version 1 handler: counted, and it keeps the module loaded.
+        Assert.Equal(new ModuleRetiredGame(0, 1), host.RetiredGameReferences());
+        Assert.False(await WaitForCollected(context), "the creature's bound handler must keep the unloaded module alive");
+        Assert.Equal(1, host.RetiredStillReferenced);
+        Assert.Contains("1 EventAI creatures", HotModuleCommands.Format(host));
+
+        // A respawn rebuilds the rows against the current table (no handler for type 200 any more): nothing references the module now.
+        ((CreatureEventAI)creature.AI!).OnRespawn();
+
+        Assert.Equal(new ModuleRetiredGame(0, 0), host.RetiredGameReferences());
+        Assert.True(await WaitForCollected(context), "after the respawn the unloaded module must be collected");
+        Assert.Equal(0, host.RetiredStillReferenced);
+    }
+
+    [Fact]
+    public async Task AnInstanceStillRunningAnUnloadedScript_IsCounted_AndKeepsTheModuleAlive()
+    {
+        Install(1);
+        ModuleHost host = NewHost();
+        Assert.True((await host.LoadAsync("HotScripts")).Ok);
+        OpenInstance(1);
+        WeakReference context = ModuleContext();
+
+        Assert.True((await host.UnloadAsync("HotScripts")).Ok);
+
+        Assert.Equal(new ModuleRetiredGame(1, 0), host.RetiredGameReferences());
+        Assert.False(await WaitForCollected(context), "the loaded instance's data must keep the unloaded module alive");
+        Assert.Equal(1, host.RetiredStillReferenced);
+    }
+
+    [Fact]
+    public void NoDiscoveryScanOfThisAssembly_FindsTheBuiltInClashHandler()
+    {
+        EventAiHandlerSet found = EventAiRegistry.DiscoverHandlers([typeof(ModuleScriptSwapTests).Assembly]);
+
+        Assert.DoesNotContain(found.Events, h => h is BuiltInClashEventHandler);
+        Assert.DoesNotContain(found.Events, h => h.EventType == EventType);
+    }
+
     [Fact]
     public async Task AServerWhoseSeamsLackTheScriptRegistries_RefusesTheModule()
     {
@@ -329,10 +434,13 @@ public sealed class ModuleScriptSwapTests : IDisposable
 
     private sealed class BuiltInClashInstance(Map instance) : InstanceData(instance);
 
-    /// <summary>A built-in event handler for the fixture's event type (found by <see cref="EventAiRegistry.Discover(IEnumerable{System.Reflection.Assembly})"/> over this assembly).</summary>
-    private sealed class BuiltInClashEventHandler : EventAiEventHandler
+    /// <summary>
+    /// A built-in event handler for the fixture's event type, handed to <see cref="EventAiRegistry.FromHandlers"/>. The constructor argument keeps
+    /// it out of every discovery scan of this assembly (<see cref="EventAiRegistry.DiscoverHandlers"/> only takes parameterless handlers).
+    /// </summary>
+    private sealed class BuiltInClashEventHandler(byte type) : EventAiEventHandler
     {
-        public override byte EventType => ModuleScriptSwapTests.EventType;
+        public override byte EventType => type;
 
         public override bool Check(EventAiContext context, EventAiHolder holder, Unit? invoker) => false;
     }

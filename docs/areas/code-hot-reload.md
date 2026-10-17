@@ -414,12 +414,24 @@ module already registered, a hook class that overrides nothing) rejects the whol
   arrival relays the old AI had queued stay queued) and does not call `OnRespawn` on the new AI of a living creature (a dead one hears it
   when it respawns). A map-specific entry AI (and the built-in dungeon boss scripts) is consulted before the module's registration, so
   a module cannot shadow those entries.
-* If applying the creature AI, script hooks, spell scripts, instance scripts or EventAI handlers fails after validation (not
-  expected), the reply is a failure ("only partly applied": the opcode and command tables had already changed), the announcement is
-  `Failed` and the audit log gets `module-failed`.
-  **A module whose commit Failed stays recorded as loaded** (its opcode handlers and commands are live and `.hotmodule list`
-  shows it), even though its game content may not be. There is no automatic clean-up: restart the server to clear
-  it.
+* **A failure after validation is rolled back.** Every slot (opcodes, creature AI, script hooks, spell scripts, instance scripts,
+  EventAI, commands) is validated before any changes. The commit records an undo step for each slot it changes (`SwapUndo`, the
+  content lane's `ReloadTransaction` pattern), and a failure in any slot puts every slot back exactly as it was: the same handler,
+  command, hook and script objects in the same order. Spell, instance and EventAI registries restore their saved table
+  (`Save()` / `Restore(Checkpoint)`), so instance data and bound EventAI handlers from before the swap count as current again.
+  Live creatures get the new AI only after every slot is in. Then the owner policy: a failed version is never left in place.
+  * A failed **load** leaves nothing registered.
+  * A failed **unload** leaves the module loaded as before.
+  * A failed **replace** also unloads the previous version in the same tick. The last good version is then rebuilt from the
+    assembly bytes kept when it was loaded (the file on disk may have changed), checked against the allowlist again, and loaded.
+    If that restore fails too, the module stays fully unloaded and both errors are reported.
+
+  Each step is audited (`module-failed`, then `module-unload`, then `module-restore` or another `module-failed`) and announced in order: failed, then unloaded,
+  then restored. The reply and the announcement say `Failed`. If an undo step itself throws, the reply says `ROLLBACK
+  INCOMPLETE` and names the slots that could not be put back; only a restart restores a known state then.
+* A `SpellScriptRegistry.ScriptsChanged` handler that throws (for example, chaining a newly declared execute effect fails) undoes the
+  spell script swap and throws, so the module swap fails and is rolled back as above. Before this, the failure only reached the
+  fault ledger.
 * Not available to modules yet: map-specific entry AI, `IWorldFeature`s and tables.
 
 ### Spell scripts, instance scripts and EventAI handlers in a module
@@ -436,11 +448,21 @@ set (`CodeAssemblies`, today the Game assembly; no pack is configured at startup
 | Spell script (`[SpellScript(ids)]`) | `SpellScriptFeature.Registry` (the one the spell script dispatcher uses) | The next hook of any cast, including a cast already under way: nothing caches a script. A newly declared `ExecuteEffects` effect is chained on commit; the chain stays after unload but then only calls the handler it wraps, and `SpellSystem.HasBuiltInEffectHandler` looks through it again (so quest reward preflight refuses TeleportUnits/Summon rewards only while a loaded script declares that effect, as after a restart). A spell script that schedules its own work (timer, event, closure) keeps running the old code until that work ends. |
 | Instance script (`[InstanceScript(mapId)]`) | The instance manager's `Scripts` (`InstanceScriptRegistry.Default`) | Instance maps created afterwards. A loaded instance keeps its `InstanceData` (it holds the instance's progress) until it unloads. |
 | EventAI action handler | `EventAiRegistry.Default` | The next action run (looked up per action). |
-| EventAI event handler | `EventAiRegistry.Default` | Creatures whose EventAI is built afterwards (spawn, respawn). A creature built before keeps the old handler until it respawns. |
+| EventAI event handler | `EventAiRegistry.Default` | Creatures whose EventAI is built afterwards (spawn, respawn). Database creatures built before are respawned in staggered batches (below); a temporary creature keeps the old handler until it goes. |
 
 A server without one of these registries (the spell script feature, the instance feature or the creature systems not running)
-rejects a module that contributes that kind ("... are not available on this server"); a host built without game seams rejects it
-before anything is committed.
+rejects a module that **adds** that kind ("... are not available on this server"); a host built without game seams rejects it
+before anything is committed. A provider can also return null later, for example when a feature is detached. If the module then
+only **removes** that kind (an unload, or a replace whose new version no longer has it), the removal is a no-op and the unload
+succeeds, so a module never gets stuck loaded. Additions stay rejected. A registry that went away is not touched, and whatever it
+still holds is its owner's to drop.
+
+**EventAI event handlers reach live creatures.** After a swap that changes an event type, the database creatures whose EventAI rows use
+that type and are still bound to a handler that is no longer current are respawned through the map's own `ForcedDespawn` /
+`ForceRespawn` path. This runs in batches (`EventAiRespawnPolicy`, default 4 creatures per second, at most one batch per world tick).
+Creatures in combat are deferred and retried, and given up on after 10 minutes. Temporary creatures are left alone. The reply and the
+announcement carry `eventai_respawns_queued`. The policy is a `ModuleGameSeams` constructor argument only; no configuration key
+sets it yet, so production uses the default.
 
 **Retired code still running.** A loaded instance created from a replaced or removed instance script, and a creature whose EventAI
 still has a row bound to a replaced or removed event handler, keep the old module version alive. `.hotmodule list` names them after
@@ -515,8 +537,21 @@ load makes all of them active from the module's collectible context; reload repl
 collected; unload removes them and the module is collected; a clash with a built-in spell script, instance script or EventAI
 event handler rejects the whole module with every registry unchanged; an instance still holding a replaced instance script is
 reported as retired code and keeps the old version loaded; a server without the registries or without game seams refuses the
-module. Not covered by a test: the EventAI retired-creature count (it needs an EventAI creature with a row of the module's event
-type) and the production wiring in `AddHotModules` (read, not run).
+module. It also checks that the unloaded module's load context is collected, through a `WeakReference` and a GC loop. A real
+EventAI creature bound to the module's event handler is counted as retired code after unload and keeps the context alive until it
+respawns, after which the context is collected. An instance still running an unloaded script is counted and keeps the context alive.
+No discovery scan of the test assembly finds the built-in clash handler: the test builds that registry with `EventAiRegistry.FromHandlers`.
+`ModuleRollbackTests` injects a fault (`ModuleHost.FaultInjection`) after each slot, on a replace of each of three fixture modules
+(HotFixture: opcodes and commands; HotGame: creature AI and hooks; HotScripts: spell, instance and EventAI scripts). In every case
+version 1 is restored with its registrations live, and both old contexts are collected. The class also covers a restore that fails
+too (fully unloaded), a first load and an unload that fail, a throwing `ScriptsChanged` handler, and a registry that went away
+(removals succeed, additions are rejected). `ModuleEventAiRespawnTests` covers the EventAI respawn batches: the cap per tick, combat
+deferral, and that unaffected creatures are not touched. RED proofs: each seam was broken in turn and the tests above failed. The
+seams were a rollback that does nothing, a `ScriptsChanged` failure that is ignored, a vanished registry that refuses removals, a
+retired-creature count that never counts, an `InstanceScriptRegistry` that lets a module remove or override a built-in script, an
+`EventAiRegistry` that lets a module remove or override a built-in handler, a discoverable clash handler, a replace that skips the
+restore, a respawn sweep that ignores the per-tick cap, and one that respawns creatures in combat. Each was then restored and the tests were green again. Not covered by a test: the
+production wiring in `AddHotModules` (read, not run).
 `ModuleAllowlistTests` covers the allowlist logic (empty setting, case, comments and labels, unlisted hash, missing, empty, malformed, oversize and directory files, edit without restart) and `ModuleHostTests` proves a refusal changes nothing and is audited and that approving a new build lets the reload through. `ModuleLaneConfigTests` proves it is off by default (no service registered) and fails closed (including: a Production opt-in needs an allowlist). Not covered
 by a test: the `.hotmodule` handlers themselves (they need a logged-in session) and a real `WorldRuntime`
 tick loop; the swap is exercised through the same `IHotCodeWorld` seam the registry refresh tests use.
@@ -552,7 +587,7 @@ The plan for removing these limits (multi-assembly discovery, swappable spell, i
   server first. (`CodeAssemblies` can already discover those kinds over built-ins plus pack assemblies, but nothing swaps their live
   registries.)
 * **Moving a loaded instance or an existing EventAI creature onto a replaced script.** An instance keeps the instance script it was
-  created with until it unloads, and a creature keeps its bound EventAI event handlers until it respawns: their state belongs to
+  created with until it unloads, and a creature keeps its bound EventAI event handlers until it respawns (the module lane forces that respawn for database creatures, losing their state): their state belongs to
   the old code, and nothing migrates it.
 * **Startup packs.** The startup discovery of spell scripts, instance scripts and EventAI handlers runs over a `CodeAssemblies`
   set, but no configuration adds a pack assembly to it; extra code arrives only through the module lane.

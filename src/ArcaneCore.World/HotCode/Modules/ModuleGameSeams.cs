@@ -96,8 +96,9 @@ internal sealed class CollectingAiRegistry : ICreatureAiRegistry
 /// (<see cref="WorldCommit"/>), before any map updates, so no creature is being updated while it changes.
 /// <list type="bullet">
 /// <item><b>All or nothing.</b> <see cref="Validate"/> checks every part (creature AI, hooks, spell scripts, instance scripts, EventAI) before
-/// anything live changes; <see cref="Commit"/> only does what it proved possible. A part whose system this server does not run (a null provider)
-/// rejects the module.</item>
+/// anything live changes; <see cref="CommitSlots"/> records an undo step for every slot it changes, so a failure after validation (in any slot,
+/// or later in the host's command table) is rolled back to exactly the state before the swap. A part that adds to a system this server does not
+/// run (a null provider) rejects the module; a part that only removes from one is a no-op, so a module can always be unloaded.</item>
 /// <item><b>Built-ins are never overridden.</b> A spell id, map id or EventAI type id that has a built-in script or handler rejects the module;
 /// a module replaces only what its previous version registered.</item>
 /// <item><b>Spell scripts</b> are looked up per hook, so the next hook of any cast runs the new script (<see cref="SpellScriptRegistry"/>).
@@ -130,6 +131,18 @@ public sealed class ModuleGameSeams
     private readonly Func<SpellScriptRegistry?> _spellScripts;
     private readonly Func<InstanceScriptRegistry?> _instanceScripts;
     private readonly Func<EventAiRegistry?> _eventAi;
+    private readonly EventAiRespawnPolicy _eventAiRespawn;
+    private readonly Func<Task>? _waitBetweenEventAiBatches;
+    private readonly Lock _eventAiGate = new();
+    private readonly HashSet<byte> _eventAiTypes = [];
+    private readonly HashSet<ObjectGuid> _eventAiRespawned = [];
+    private bool _eventAiSweepRunning;
+
+    /// <summary>How long the EventAI respawn sweep waits for creatures in combat before it leaves them to their own respawn.</summary>
+    private static readonly TimeSpan EventAiCombatPatience = TimeSpan.FromMinutes(10);
+
+    /// <summary>Tests: raised on the world thread after each EventAI respawn batch with how many respawned and how many still wait.</summary>
+    internal event Action<int, int>? EventAiRespawnBatchRan;
 
     /// <param name="creatureAi">The live creature AI factory (null: not running).</param>
     /// <param name="hooks">The live script hook registry (null: not running).</param>
@@ -141,6 +154,8 @@ public sealed class ModuleGameSeams
     /// <param name="spellScripts">The live spell script registry; omitted or returning null, a module with a spell script is rejected.</param>
     /// <param name="instanceScripts">The instance script registry the instance manager creates instance data from; omitted or null rejects a module with an instance script.</param>
     /// <param name="eventAi">The EventAI handler registry running creatures use; omitted or null rejects a module with an EventAI handler.</param>
+    /// <param name="eventAiRespawn">How fast creatures bound to a changed EventAI event handler are respawned (default <see cref="EventAiRespawnPolicy.Default"/>).</param>
+    /// <param name="waitBetweenEventAiBatches">Replaces the delay between EventAI respawn batches (tests).</param>
     public ModuleGameSeams(
         Func<CreatureAiFactory?> creatureAi,
         Func<ScriptHookRegistry?> hooks,
@@ -151,8 +166,12 @@ public sealed class ModuleGameSeams
         Func<Task>? waitBetweenAttempts = null,
         Func<SpellScriptRegistry?>? spellScripts = null,
         Func<InstanceScriptRegistry?>? instanceScripts = null,
-        Func<EventAiRegistry?>? eventAi = null)
+        Func<EventAiRegistry?>? eventAi = null,
+        EventAiRespawnPolicy? eventAiRespawn = null,
+        Func<Task>? waitBetweenEventAiBatches = null)
     {
+        _eventAiRespawn = eventAiRespawn ?? EventAiRespawnPolicy.Default;
+        _waitBetweenEventAiBatches = waitBetweenEventAiBatches;
         _spellScripts = spellScripts ?? (static () => null);
         _instanceScripts = instanceScripts ?? (static () => null);
         _eventAi = eventAi ?? (static () => null);
@@ -174,15 +193,19 @@ public sealed class ModuleGameSeams
             return null;
         }
 
+        // A system the server no longer runs (its provider answers null, e.g. a detached feature) cannot take additions, but the removals meant
+        // for it are no-ops: there is nothing left to remove them from, and refusing them would leave the module impossible to unload.
         if (old.HasCreatureAi || added.HasCreatureAi)
         {
             CreatureAiFactory? factory = _creatureAi();
             if (factory is null)
             {
-                return "the creature AI system is not running on this server";
+                if (added.HasCreatureAi)
+                {
+                    return "the creature AI system is not running on this server";
+                }
             }
-
-            if (factory.ValidateSwap([.. old.AiEntries.Keys], [.. old.AiNames.Keys], added.AiEntries.Keys, added.AiNames.Keys) is { } aiError)
+            else if (factory.ValidateSwap([.. old.AiEntries.Keys], [.. old.AiNames.Keys], added.AiEntries.Keys, added.AiNames.Keys) is { } aiError)
             {
                 return aiError;
             }
@@ -193,10 +216,12 @@ public sealed class ModuleGameSeams
             ScriptHookRegistry? hooks = _hooks();
             if (hooks is null)
             {
-                return "script hooks are not available on this server";
+                if (added.Hooks.Count != 0)
+                {
+                    return "script hooks are not available on this server";
+                }
             }
-
-            if (hooks.ValidateSwap(old.Hooks, added.Hooks) is { } hookError)
+            else if (hooks.ValidateSwap(old.Hooks, added.Hooks) is { } hookError)
             {
                 return hookError;
             }
@@ -207,10 +232,12 @@ public sealed class ModuleGameSeams
             SpellScriptRegistry? spells = _spellScripts();
             if (spells is null)
             {
-                return "spell scripts are not available on this server";
+                if (added.SpellScripts.Count != 0)
+                {
+                    return "spell scripts are not available on this server";
+                }
             }
-
-            if (spells.ValidateSwap(old.SpellScripts, added.SpellScripts) is { } spellError)
+            else if (spells.ValidateSwap(old.SpellScripts, added.SpellScripts) is { } spellError)
             {
                 return spellError;
             }
@@ -221,10 +248,12 @@ public sealed class ModuleGameSeams
             InstanceScriptRegistry? instances = _instanceScripts();
             if (instances is null)
             {
-                return "instance scripts are not available on this server";
+                if (added.InstanceScripts.Count != 0)
+                {
+                    return "instance scripts are not available on this server";
+                }
             }
-
-            if (instances.ValidateSwap([.. old.InstanceScripts.Keys], added.InstanceScripts.Keys) is { } instanceError)
+            else if (instances.ValidateSwap([.. old.InstanceScripts.Keys], added.InstanceScripts.Keys) is { } instanceError)
             {
                 return instanceError;
             }
@@ -235,10 +264,12 @@ public sealed class ModuleGameSeams
             EventAiRegistry? eventAi = _eventAi();
             if (eventAi is null)
             {
-                return "EventAI handlers are not available on this server";
+                if (added.HasEventAi)
+                {
+                    return "EventAI handlers are not available on this server";
+                }
             }
-
-            if (eventAi.ValidateSwap(
+            else if (eventAi.ValidateSwap(
                     [.. old.EventAiEvents.Select(h => h.EventType)],
                     [.. old.EventAiActions.Select(h => h.ActionType)],
                     added.EventAiEvents.Select(h => h.EventType),
@@ -251,8 +282,82 @@ public sealed class ModuleGameSeams
         return null;
     }
 
-    /// <summary>Apply what <see cref="Validate"/> accepted. Never throws.</summary>
-    internal ModuleGameCommit Commit(ModuleGameParts? old, ModuleGameParts? added, AssemblyLoadContext? oldContext)
+    /// <summary>
+    /// Apply the registry part of what <see cref="Validate"/> accepted, slot by slot (creature AI, script hooks, spell scripts, instance scripts,
+    /// EventAI), recording in <paramref name="undo"/> how to put each changed slot back exactly as it was. Throws on the first failure; the caller
+    /// rolls back <paramref name="undo"/>. A slot whose system is gone and that only removes is skipped; one that adds throws. Live creatures are
+    /// not touched here (<see cref="Complete"/> does that once every slot of the module, opcodes and commands included, is in).
+    /// <paramref name="inject"/> (tests) is called with each slot's name right after that slot changed.
+    /// </summary>
+    internal void CommitSlots(ModuleGameParts? old, ModuleGameParts? added, SwapUndo undo, Action<string>? inject = null)
+    {
+        ArgumentNullException.ThrowIfNull(undo);
+        old ??= ModuleGameParts.Empty;
+        added ??= ModuleGameParts.Empty;
+
+        if ((old.HasCreatureAi || added.HasCreatureAi) && Required(_creatureAi(), added.HasCreatureAi, "the creature AI system") is { } factory)
+        {
+            factory.CommitSwap([.. old.AiEntries.Keys], [.. old.AiNames.Keys], added.AiEntries, added.AiNames);
+            undo.Add(SwapSlots.CreatureAi, () => factory.CommitSwap([.. added.AiEntries.Keys], [.. added.AiNames.Keys], old.AiEntries, old.AiNames));
+        }
+
+        inject?.Invoke(SwapSlots.CreatureAi);
+
+        if ((old.Hooks.Count != 0 || added.Hooks.Count != 0) && Required(_hooks(), added.Hooks.Count != 0, "the script hook registry") is { } hooks)
+        {
+            IScriptHooks[] before = [.. hooks.Registered];
+            hooks.CommitSwap(old.Hooks, added.Hooks);
+
+            // Every hook object out, the saved list back in: the same objects in the same registration order as before the swap.
+            undo.Add(SwapSlots.ScriptHooks, () => hooks.CommitSwap([.. hooks.Registered], before));
+        }
+
+        inject?.Invoke(SwapSlots.ScriptHooks);
+
+        if ((old.SpellScripts.Count != 0 || added.SpellScripts.Count != 0)
+            && Required(_spellScripts(), added.SpellScripts.Count != 0, "the spell script registry") is { } spells)
+        {
+            SpellScriptRegistry.Checkpoint saved = spells.Save();
+            spells.CommitSwap(old.SpellScripts, added.SpellScripts); // undoes itself and throws when a ScriptsChanged handler fails
+            undo.Add(SwapSlots.SpellScripts, () => spells.Restore(saved));
+        }
+
+        inject?.Invoke(SwapSlots.SpellScripts);
+
+        if ((old.InstanceScripts.Count != 0 || added.InstanceScripts.Count != 0)
+            && Required(_instanceScripts(), added.InstanceScripts.Count != 0, "the instance script registry") is { } instances)
+        {
+            InstanceScriptRegistry.Checkpoint saved = instances.Save();
+            instances.CommitSwap([.. old.InstanceScripts.Keys], added.InstanceScripts);
+            undo.Add(SwapSlots.InstanceScripts, () => instances.Restore(saved));
+        }
+
+        inject?.Invoke(SwapSlots.InstanceScripts);
+
+        if ((old.HasEventAi || added.HasEventAi) && Required(_eventAi(), added.HasEventAi, "the EventAI registry") is { } eventAi)
+        {
+            EventAiRegistry.Checkpoint saved = eventAi.Save();
+            eventAi.CommitSwap(
+                [.. old.EventAiEvents.Select(h => h.EventType)],
+                [.. old.EventAiActions.Select(h => h.ActionType)],
+                added.EventAiEvents,
+                added.EventAiActions);
+            undo.Add(SwapSlots.EventAi, () => eventAi.Restore(saved));
+        }
+
+        inject?.Invoke(SwapSlots.EventAi);
+    }
+
+    /// <summary>The registry, or null when it is gone and the slot only removes; throws when it is gone and the slot adds.</summary>
+    private static T? Required<T>(T? registry, bool adds, string what)
+        where T : class
+        => registry is null && adds ? throw new InvalidOperationException($"{what} is no longer available on this server") : registry;
+
+    /// <summary>
+    /// After every slot of the swap committed: give live creatures the new AI (or the retry sweep for those in combat). Never throws; a failure is
+    /// logged and only means some creatures keep their previous AI until they are rebuilt.
+    /// </summary>
+    internal ModuleGameCommit Complete(ModuleGameParts? old, ModuleGameParts? added, AssemblyLoadContext? oldContext)
     {
         old ??= ModuleGameParts.Empty;
         added ??= ModuleGameParts.Empty;
@@ -261,43 +366,25 @@ public sealed class ModuleGameSeams
             return default;
         }
 
-        try
+        ModuleGameCommit result = RefreshCreatureAi(old, added, oldContext);
+        HashSet<byte> eventTypes = [.. old.EventAiEvents.Select(h => h.EventType), .. added.EventAiEvents.Select(h => h.EventType)];
+        if (eventTypes.Count != 0)
         {
-            if (old.HasCreatureAi || added.HasCreatureAi)
+            try
             {
-                _creatureAi()!.CommitSwap([.. old.AiEntries.Keys], [.. old.AiNames.Keys], added.AiEntries, added.AiNames);
+                result = result with { EventAiRespawnsQueued = QueueEventAiRespawns(eventTypes) };
             }
-
-            if (old.Hooks.Count != 0 || added.Hooks.Count != 0)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                _hooks()!.CommitSwap(old.Hooks, added.Hooks);
-            }
-
-            if (old.SpellScripts.Count != 0 || added.SpellScripts.Count != 0)
-            {
-                _spellScripts()!.CommitSwap(old.SpellScripts, added.SpellScripts);
-            }
-
-            if (old.InstanceScripts.Count != 0 || added.InstanceScripts.Count != 0)
-            {
-                _instanceScripts()!.CommitSwap([.. old.InstanceScripts.Keys], added.InstanceScripts);
-            }
-
-            if (old.HasEventAi || added.HasEventAi)
-            {
-                _eventAi()!.CommitSwap(
-                    [.. old.EventAiEvents.Select(h => h.EventType)],
-                    [.. old.EventAiActions.Select(h => h.ActionType)],
-                    added.EventAiEvents,
-                    added.EventAiActions);
+                _logger.LogError(ex, "queuing the EventAI respawns for changed event handlers failed; those creatures pick the new handlers up at their next respawn");
             }
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            _logger.LogError(ex, "applying a module's game content failed after validation");
-            return new ModuleGameCommit(0, 0, 0, $"applying creature AI / script hooks / spell scripts / instance scripts / EventAI failed: {ex.GetType().Name}: {ex.Message}");
-        }
 
+        return result;
+    }
+
+    private ModuleGameCommit RefreshCreatureAi(ModuleGameParts old, ModuleGameParts added, AssemblyLoadContext? oldContext)
+    {
         HashSet<uint> entries = [.. old.AiEntries.Keys, .. added.AiEntries.Keys];
         HashSet<string> names = new([.. old.AiNames.Keys, .. added.AiNames.Keys], StringComparer.OrdinalIgnoreCase);
         var retired = oldContext is null ? null : new WeakReference<AssemblyLoadContext>(oldContext);
@@ -306,14 +393,229 @@ public sealed class ModuleGameSeams
             return new ModuleGameCommit(0, 0, old.Hooks.Count + added.Hooks.Count);
         }
 
-        HashSet<ObjectGuid> pending = [];
-        (int changed, int deferred) = Refresh(entries, names, retired, null, pending);
-        if (deferred > 0)
+        try
         {
-            _ = SweepAsync(entries, names, retired, pending);
+            HashSet<ObjectGuid> pending = [];
+            (int changed, int deferred) = Refresh(entries, names, retired, null, pending);
+            if (deferred > 0)
+            {
+                _ = SweepAsync(entries, names, retired, pending);
+            }
+
+            return new ModuleGameCommit(changed, deferred, old.Hooks.Count + added.Hooks.Count);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "giving live creatures the swapped module AI failed; creatures not yet switched keep their previous AI until rebuilt");
+            return new ModuleGameCommit(0, 0, old.Hooks.Count + added.Hooks.Count);
+        }
+    }
+
+    /// <summary>
+    /// World thread, from <see cref="Complete"/>: queue the EventAI creatures whose rows use one of <paramref name="eventTypes"/> and are still bound
+    /// to a handler that is not the current one, for a staggered respawn (<see cref="EventAiRespawnSweepAsync"/>). Returns how many are waiting now.
+    /// One sweep runs at a time; a swap while one runs adds its types to it.
+    /// </summary>
+    private int QueueEventAiRespawns(IEnumerable<byte> eventTypes)
+    {
+        if (_eventAi() is not { } registry)
+        {
+            return 0;
         }
 
-        return new ModuleGameCommit(changed, deferred, old.Hooks.Count + added.Hooks.Count);
+        HashSet<byte> types;
+        bool start;
+        lock (_eventAiGate)
+        {
+            _eventAiTypes.UnionWith(eventTypes);
+            _eventAiRespawned.Clear();
+            types = [.. _eventAiTypes];
+            start = !_eventAiSweepRunning;
+            _eventAiSweepRunning = true;
+        }
+
+        int waiting = 0;
+        foreach (Map map in _maps())
+        {
+            if (map.FindUpdater<CreatureMapSystem>() is { } system)
+            {
+                waiting += system.Creatures.Count(c => NeedsEventAiRespawn(c, registry, types, _eventAiRespawned));
+            }
+        }
+
+        if (start)
+        {
+            if (waiting == 0)
+            {
+                EndEventAiSweep();
+            }
+            else
+            {
+                _ = EventAiRespawnSweepAsync();
+            }
+        }
+
+        return waiting;
+    }
+
+    /// <summary>
+    /// A live database creature running EventAI with a row of a changed event type whose bound handler is not the registry's current handler for
+    /// that type (replaced, removed, or a type that had none when the creature was built). A temporary creature (no spawn) cannot go through the
+    /// respawn path and keeps its handler until it is gone; a creature this sweep already respawned is never respawned again.
+    /// </summary>
+    private static bool NeedsEventAiRespawn(Creature creature, EventAiRegistry registry, HashSet<byte> types, HashSet<ObjectGuid> respawned)
+        => creature is { Spawn: not null, DeathState: CreatureDeathState.Alive, AI: CreatureEventAI ai }
+            && !respawned.Contains(creature.Guid)
+            && ai.Engine.Holders.Any(h => types.Contains(h.Event.EventType) && !ReferenceEquals(h.Handler, registry.FindEvent(h.Event.EventType)));
+
+    /// <summary>
+    /// World thread: one batch. Respawns at most <see cref="EventAiRespawnPolicy.BatchSize"/> affected creatures that are out of combat through the
+    /// map's own despawn/respawn path (<see cref="CreatureMapSystem.ForcedDespawn"/> then <see cref="CreatureMapSystem.ForceRespawn"/>, what the GM
+    /// <c>.respawn</c> and EventAI FORCE_DESPAWN use: no loot, the corpse goes, a persisted respawn row is written then deleted, a pooled spawn comes
+    /// back through its group). The respawn rebuilds the creature's EventAI rows against the current handlers.
+    /// </summary>
+    private (int Respawned, int Waiting, int InCombat) RespawnEventAiBatch()
+    {
+        if (_eventAi() is not { } registry)
+        {
+            return (0, 0, 0);
+        }
+
+        HashSet<byte> types;
+        lock (_eventAiGate)
+        {
+            types = [.. _eventAiTypes];
+        }
+
+        int respawned = 0;
+        int waiting = 0;
+        int inCombat = 0;
+        foreach (Map map in _maps())
+        {
+            if (map.FindUpdater<CreatureMapSystem>() is not { } system)
+            {
+                continue;
+            }
+
+            foreach (Creature creature in system.Creatures.ToArray())
+            {
+                if (!NeedsEventAiRespawn(creature, registry, types, _eventAiRespawned))
+                {
+                    continue;
+                }
+
+                if (creature.Combat.IsInCombat)
+                {
+                    inCombat++;
+                    continue;
+                }
+
+                if (respawned >= _eventAiRespawn.BatchSize)
+                {
+                    waiting++;
+                    continue;
+                }
+
+                try
+                {
+                    _eventAiRespawned.Add(creature.Guid);
+                    system.ForcedDespawn(creature, 0);
+                    system.ForceRespawn(creature);
+                    respawned++;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogError(ex, "respawning EventAI creature {Entry} for a changed event handler failed; it keeps its handler until it respawns", creature.Template.Entry);
+                }
+            }
+        }
+
+        return (respawned, waiting, inCombat);
+    }
+
+    private void EndEventAiSweep()
+    {
+        lock (_eventAiGate)
+        {
+            _eventAiTypes.Clear();
+            _eventAiRespawned.Clear();
+            _eventAiSweepRunning = false;
+        }
+    }
+
+    /// <summary>
+    /// The staggered EventAI respawn: every <see cref="EventAiRespawnPolicy.Interval"/> one batch is posted to the world thread, so at most
+    /// <see cref="EventAiRespawnPolicy.BatchSize"/> creatures respawn per tick. Creatures in combat are skipped and retried by later batches (the
+    /// creature AI sweep's rule); when only those are left and none has left combat for <see cref="EventAiCombatPatience"/>, the sweep gives up and
+    /// they keep their handler until they respawn on their own. Gives up when the world thread stops answering.
+    /// </summary>
+    private async Task EventAiRespawnSweepAsync()
+    {
+        try
+        {
+            int idleBatches = 0;
+            int patience = Math.Max(1, (int)(EventAiCombatPatience / _eventAiRespawn.Interval));
+            while (true)
+            {
+                await (_waitBetweenEventAiBatches is { } wait ? wait() : Task.Delay(_eventAiRespawn.Interval)).ConfigureAwait(false);
+                var done = new TaskCompletionSource<(int Respawned, int Waiting, int InCombat)>(TaskCreationOptions.RunContinuationsAsynchronously);
+                int phase = 0; // 0 queued, 1 running, 2 abandoned
+                _post(() =>
+                {
+                    if (Interlocked.CompareExchange(ref phase, 1, 0) != 0)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        (int respawned, int waiting, int inCombat) = RespawnEventAiBatch();
+                        if (waiting == 0 && inCombat == 0)
+                        {
+                            EndEventAiSweep(); // on the world thread, so a swap committing later starts a new sweep
+                        }
+
+                        EventAiRespawnBatchRan?.Invoke(respawned, waiting + inCombat);
+                        done.SetResult((respawned, waiting, inCombat));
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        _logger.LogError(ex, "the EventAI respawn batch failed");
+                        EndEventAiSweep();
+                        done.SetResult((0, 0, 0));
+                    }
+                });
+
+                using var cancelTimer = new CancellationTokenSource();
+                Task finished = await Task.WhenAny(done.Task, Task.Delay(SweepStepTimeout, cancelTimer.Token)).ConfigureAwait(false);
+                if (finished != done.Task && Interlocked.CompareExchange(ref phase, 2, 0) == 0)
+                {
+                    _logger.LogWarning("The world thread did not run the EventAI respawn batch within {Seconds}s (world stopped?); giving up", SweepStepTimeout.TotalSeconds);
+                    EndEventAiSweep();
+                    return;
+                }
+
+                await cancelTimer.CancelAsync().ConfigureAwait(false);
+                (int doneRespawned, int doneWaiting, int doneInCombat) = await done.Task.ConfigureAwait(false);
+                if (doneWaiting == 0 && doneInCombat == 0)
+                {
+                    return;
+                }
+
+                idleBatches = doneRespawned == 0 && doneWaiting == 0 ? idleBatches + 1 : 0;
+                if (idleBatches >= patience)
+                {
+                    _logger.LogWarning("{Count} EventAI creatures stayed in combat for {Minutes} minutes; they keep their previous event handler until they respawn", doneInCombat, EventAiCombatPatience.TotalMinutes);
+                    _post(EndEventAiSweep);
+                    return;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "the EventAI respawn sweep stopped");
+            EndEventAiSweep();
+        }
     }
 
     /// <summary>
@@ -450,5 +752,20 @@ public readonly record struct ModuleRetiredGame(int InstanceMaps, int EventAiCre
 /// <param name="CreaturesSwitched">Creatures that got a new AI object now.</param>
 /// <param name="CreaturesDeferred">Creatures in combat that keep the old AI for now.</param>
 /// <param name="HookObjects">Script hook objects removed plus added.</param>
-/// <param name="Error">Set when applying the creature AI or script hook changes failed (the opcode and command tables had already changed).</param>
-internal readonly record struct ModuleGameCommit(int CreaturesSwitched, int CreaturesDeferred, int HookObjects, string? Error = null);
+/// <param name="EventAiRespawnsQueued">EventAI creatures bound to a changed event handler, queued for a staggered respawn.</param>
+internal readonly record struct ModuleGameCommit(int CreaturesSwitched, int CreaturesDeferred, int HookObjects, int EventAiRespawnsQueued = 0);
+
+/// <summary>
+/// How a module swap that changes EventAI event handlers reaches the creatures already built with the old ones: they are respawned, at most
+/// <paramref name="BatchSize"/> per batch, one batch every <paramref name="Interval"/> (each batch runs in one world tick), so a swap never respawns a
+/// whole zone in one tick.
+/// </summary>
+public sealed record EventAiRespawnPolicy(int BatchSize, TimeSpan Interval)
+{
+    /// <summary>4 creatures every second.</summary>
+    public static EventAiRespawnPolicy Default { get; } = new(4, TimeSpan.FromSeconds(1));
+
+    public int BatchSize { get; } = BatchSize > 0 ? BatchSize : throw new ArgumentOutOfRangeException(nameof(BatchSize), "at least one creature per batch");
+
+    public TimeSpan Interval { get; } = Interval > TimeSpan.Zero ? Interval : throw new ArgumentOutOfRangeException(nameof(Interval), "a positive interval");
+}
