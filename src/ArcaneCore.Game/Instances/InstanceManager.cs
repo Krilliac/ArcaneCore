@@ -80,8 +80,20 @@ public sealed partial class InstanceManager : IMapResolver
     /// <summary>Sends a player to its bind point (default: does nothing; the world feature wires <see cref="TeleportService.TeleportToHomebind"/>).</summary>
     public Func<Player, bool> TeleportToHomebind { get; set; } = static _ => false;
 
-    /// <summary>Which maps have an instance script (vmangos <c>map_template.ScriptName</c>); the scripts of the Game assembly by default.</summary>
+    /// <summary>
+    /// Which maps have an instance script (vmangos <c>map_template.ScriptName</c>); the scripts of the Game assembly by default. Read on every
+    /// instance map creation, so a module swap committed on this registry (<see cref="InstanceScriptRegistry.CommitSwap"/>) applies to the next
+    /// instance created; loaded instances keep the <see cref="InstanceData"/> they were created with (its state is their progress).
+    /// </summary>
     public InstanceScriptRegistry Scripts { get; set; } = InstanceScriptRegistry.Default;
+
+    /// <summary>
+    /// How many loaded instance maps still run script code that is no longer the current script of their map in <see cref="Scripts"/> (replaced
+    /// or removed by a swap, or created by a registry since replaced): what the module host reports as retired code still live. Such an instance
+    /// keeps its script until it unloads or resets. World thread.
+    /// </summary>
+    public int RetiredScriptInstanceCount
+        => _mapStates.Keys.Count(map => map.FindUpdater<InstanceData>() is { } data && !Scripts.RunsCurrentScript(data));
 
     /// <summary>Quest journal check for ScriptDev2's quest-only instance chests.</summary>
     public Func<Player, uint, bool> QuestCompleteUnrewarded { get; set; } = static (_, _) => false;
