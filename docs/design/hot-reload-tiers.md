@@ -516,7 +516,8 @@ forbids ("never serialize a socket ... or cipher state into a handoff"), is Wind
   gateway restart still drops clients, a World restart still drops them too.
 - **Spike first (one day):** does the 1.12.1 client accept `SMSG_NEW_WORLD` to the **same** map? The codebase never
   sends it (`TeleportService.TeleportTo` routes same-map moves to the near path). The answer decides 3b's design. The
-  server half (`.worldport far` / `readd`, timed step log) is built (section 5.5); the real-client run is open.
+  server half (`.worldport far` / `readd`, timed step log) is built (section 5.5) and the real-client run is **done**: the
+  1.12.1 client accepts a same-map `SMSG_NEW_WORLD` (loading screen, back in place, controllable).
 - **3b, save-and-reload handoff with a loading screen (about 4 to 8 weeks after 3a):** World **standby mode** (load
   content, maps and nav; skip the writer lock, ownership claim, save queue, bot restore and schema DDL; internal port
   only); production transfer workers at whole-World granularity; a durable decision store in the characters database;
@@ -578,7 +579,7 @@ Differences from 5.2 and what is left of 3a:
 - The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, the transfer
   coordinator is still test-only.
 
-### 5.5 Same-map world-port spike (`.worldport`, built on `claude/hr3-spike`; real-client run still open)
+### 5.5 Same-map world-port spike (`.worldport`; real-client run done 2026-10-17: the client accepts it)
 
 The spike of 5.3 needs a real 1.12.1 client; what is built is the server half, so a human or an agent driving a client gets a
 clean, timed record of what the server sent and what came back. Operator page:
@@ -605,14 +606,23 @@ transfer packet, the login sequence, same map; no ack: `ack-timeout` then `clien
 GameMaster refused; registered only with `World:HotCode:Enabled`); with them `CommandReferenceTests`, `GridTerrain.TeleportTests`
 and `HotCodeWiringTests` 28/28, the `Docs` filter 98/98, `TeleportServiceTests` (Game) 10/10. RED runs, each restored and green
 again: the `ForceFar` condition removed (4 far tests fail), `FarStageReached` not raised (the far step test fails), the gate
-removed (the registration test fails), the re-add without its login packets (the readd test fails). Nothing was run against a
-real client.
+removed (the registration test fails), the re-add without its login packets (the readd test fails). These are test results
+only; the real-client run follows.
 
-Still open: **the real-client run itself** (the Spike exit criterion in section 9 is not met). How to run it: a Development world
-with `World__HotCode__Enabled=true`, an Administrator character in an open-world zone, `.worldport far`, then `.worldport readd`;
-record per run whether the client showed a loading screen, came back controllable, saw its surroundings, and any client error;
-paste `.worldport status` next to it. Not covered by the spike: instance maps (it runs, but the instance resolver path for a
-same-map entry is untested), ships, battlegrounds (refused).
+**Real-client result (2026-10-17, live Development world at main `9ffcc2dd`, a real 1.12.1 client, an Administrator
+character level 12 in Orgrimmar, map 1 at 1616.3, -4411.8, 13.6; commands from the World console over the control pipe):**
+
+| Run | Server steps (`.worldport status`) | Client (observed by the person at the client) |
+|---|---|---|
+| `#1 far` | `transfer-sent` +44 ms, `worldport-ack` +932 ms, `re-added` +1003 ms, `observed` +16014 ms: **ok** | Loading screen, then back in place and controllable; no client error |
+| `#2 readd` | `removed` +65 ms, `re-added` +66 ms, `observed` +15138 ms: **ok** | No loading screen, stayed controllable, surroundings fine; no client error |
+
+So the client accepts `SMSG_TRANSFER_PENDING` + `SMSG_NEW_WORLD` to the map it is already on and answers with
+`MSG_MOVE_WORLDPORT_ACK` (the loading screen took about 0.9 s here), which is the reroute 3b needs for a seamless
+handoff. The in-place re-add also worked without a loading screen. The Spike exit criterion in section 9 is met. Not
+covered: instance maps (it runs, but the instance resolver path for a same-map entry is untested), ships, battlegrounds
+(refused), and a client with other players or many creatures in view during the port.
+
 ### 5.6 Phase 3b groundwork as built
 
 Built and covered by committed tests; everything runs in process (two synthetic Worlds on one set of SQLite databases,
@@ -721,7 +731,7 @@ into a production path. It remains the fastest loop for a developer, gated by `H
 | 2a | Bot features detach and re-attach in process with bots online; no Playerbots type referenced from core (architecture test) |
 | 2b | Playerbots in its own project, default context, soaked with the usual bot population and no behavioural regression in the playerbot QA reports |
 | 2c | CI unload test green (old context collected after swap), cold swap on a dev server with hundreds of bots and no player disconnect |
-| Spike (server side **built**, `.worldport`, section 5.5) | Same-map `SMSG_NEW_WORLD` result on a real 1.12.1 client, written down |
+| Spike (**met** 2026-10-17, section 5.5: the client accepts it) | Same-map `SMSG_NEW_WORLD` result on a real 1.12.1 client, written down |
 | 3a | Real client and mock client play through the gateway; per-IP guards see the client address; `Combined` unchanged |
 | 3b | Handoff of a populated dev server with fencing on: no disconnect, freeze time measured and bounded, abort tested at every stage before the epoch bump, roll-forward tested after it (abort at every stage and roll-forward are **met in process** on `claude/hr3-standby`; no-disconnect, freeze time and the dev-server run are not) |
 
