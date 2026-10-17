@@ -1492,16 +1492,16 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// </summary>
     internal const float BodyThreatYards = CombatConstants.CorpseReclaimRadius + 50f;
     /// <summary>
-    /// Whether <paramref name="route"/> (a partial route: the mesh ended before the goal) ends where the goal cannot be closed on foot: the
+    /// Whether <paramref name="route"/> (the mesh's partial answer to a query toward the goal, <see cref="PlayerbotRoute.PartialToGoal"/>; never a region leg, a chunk the mesh answered whole or a hop, which end short on purpose) ends where the goal cannot be closed on foot: the
     /// goal is farther than <see cref="CombatConstants.CorpseReclaimRadius"/> from its end, more than that above or below it (a ghost
     /// reclaims within that radius, and no stretch of it is walkable straight up), and the route did not narrow that vertical gap. On the
     /// real Teldrassil mesh the corpse run from Rut'theran graveyard to a body 438 yards up over the sea planned a route 230 yards out to
     /// sea, flat-closing on the body, and the ghost walked it for 35 s before the no-progress bound ended it. A route that narrows the
     /// gap (a climb, a descent) stays a route. Such a plan is refused, and <see cref="MaxRefusedPlans"/> of them give the body up.
     /// </summary>
-    private static bool LeavesGoalOutOfVerticalReach(Player player, PlayerbotRoute route, Vector3 goal)
+    internal static bool LeavesGoalOutOfVerticalReach(PlayerbotRoute route, Vector3 goal)
     {
-        if (route.Points.Count < 2) return false;
+        if (!route.PartialToGoal || route.Points.Count < 2) return false;
         Vector3 end = route.Points[^1];
         float gap = MathF.Abs(end.Z - goal.Z);
         if (gap <= CombatConstants.CorpseReclaimRadius || Vector3.Distance(end, goal) <= CombatConstants.CorpseReclaimRadius) return false;
@@ -1540,7 +1540,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 return false;
             }
 
-            if (reachesGoalOnFoot && _route is { } plannedRoute && LeavesGoalOutOfVerticalReach(player, plannedRoute, goal))
+            if (reachesGoalOnFoot && _route is { } plannedRoute && LeavesGoalOutOfVerticalReach(plannedRoute, goal))
             {
                 _route = null;
                 _refusedPlans++;

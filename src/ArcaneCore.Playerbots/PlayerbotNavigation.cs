@@ -77,6 +77,20 @@ internal sealed class PlayerbotRoute
     /// <summary>A route to a moving target (a chase): re-planned as the target moves, so the loop watch does not count its ends.</summary>
     internal bool Chase { get; set; }
 
+    /// <summary>
+    /// The mesh's own answer to a query ended short of its destination (<see cref="PathType.Incomplete"/>, not at the destination): the route
+    /// is the part of the way the mesh knows, not a leg cut on purpose.
+    /// </summary>
+    internal bool MeshEndedShort { get; set; }
+
+    /// <summary>
+    /// <see cref="MeshEndedShort"/> for a query toward the goal of <see cref="PlanToward"/> itself (the goal, or a point of the straight line
+    /// to it): the mesh found no way and this is as near as it gets. A region leg, a chunk the mesh answered whole and a hop end short of the
+    /// goal by design and never carry this. The one exception is the leg to the last portal of a region search that found no way
+    /// to the goal (<see cref="RegionLeg"/>): the graph's nearest ground to the goal, a dead end.
+    /// </summary>
+    internal bool PartialToGoal { get; set; }
+
     /// <summary>The map pathfinder active when this route was planned, used to detect live pathfinder replacement.</summary>
     internal IPathfinder? Pathfinder { get; set; }
 
@@ -411,7 +425,11 @@ internal static class PlayerbotNavigation
         if (distance > chunk && distance <= options.MaxRouteYards)
         {
             if (Plan(player, goal, goal, options, partial: true, trial: false, out route, out bool goalStraightRefused,
-                completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
+                completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder))
+            {
+                if (route is not null) route.PartialToGoal = route.MeshEndedShort;
+                return true;
+            }
             if (!goalStraightRefused || PendingSince(pending)) return false;
         }
         // A point that far may lie on a navigation-mesh tile not loaded yet (tiles load with the map's grids, around the players):
@@ -423,7 +441,13 @@ internal static class PlayerbotNavigation
         {
             Vector3 destination = distance > chunk ? origin + ((goal - origin) * (chunk / distance)) : goal;
             if (Plan(player, destination, goal, options, partial: true, trial: false, out route, out bool straightRefused,
-                completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
+                completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder))
+            {
+                // A chunk the mesh answered whole is a leg cut on purpose; one the mesh could not reach (Incomplete) is the mesh's
+                // own partial answer toward the goal, however far along the line its point lay.
+                if (route is not null) route.PartialToGoal = route.MeshEndedShort;
+                return true;
+            }
             if (!straightRefused || PendingSince(pending) || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
         }
     }
@@ -617,7 +641,13 @@ internal static class PlayerbotNavigation
         // progress toward the nearest portal.
         long pending = PendingMark;
         if (Plan(player, portals[pick], portals[pick], options, partial: true, trial: false, out route, out _,
-            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
+            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder))
+        {
+            // The region search found no way to the goal: the last portal is the nearest ground the graph joins to the bot, so a leg to
+            // it is the walk to the dead end, as much the mesh's partial answer for the goal as a partial path is.
+            if (route is not null && unreachable && pick == portals.Count - 1) route.PartialToGoal = true;
+            return true;
+        }
         if (PendingSince(pending)) { route = null; return null; }
         if (pick > 0 && Plan(player, portals[0], portals[0], options, partial: true, trial: false, out route, out _,
             completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder)) return true;
@@ -663,6 +693,7 @@ internal static class PlayerbotNavigation
                 if (!ReferenceEquals(smoothed, route)
                     && risk?.Blocking(player, smoothed.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is null)
                 {
+                    smoothed.MeshEndedShort = route.MeshEndedShort;
                     route = smoothed;
                 }
             }
@@ -794,6 +825,7 @@ internal static class PlayerbotNavigation
             // 1645.4, 1665.9, 132.6, where Graveweaver stopped): either refused every route from or through such a place, and a bot
             // that started or stood there never moved again. The motion snaps to a floor where it finds one (PlayerbotMotion).
             route = usable;
+            if (usable is not null) usable.MeshEndedShort = partial && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination);
             // The outcome of an exact plan: the route begins at the bot and ends at the destination (a partial plan closes on a goal by design).
             if (!partial && usable is not null) PlayerbotNavigationAnomalies.CheckExactRoute(player, start, destination, path, usable);
             return true;
