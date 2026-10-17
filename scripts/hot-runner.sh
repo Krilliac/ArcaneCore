@@ -38,7 +38,8 @@ export World__HotCode__Enabled=true
 # The Playerbots pack (docs/design/hot-reload-tiers.md, 4.6) is its own assembly that the world executable cannot reference, so
 # dotnet watch on the world project neither builds it nor watches it. Build it first (it builds the world too and copies itself
 # beside the world executable); an edit to the pack is not applied live and needs a restart of this script.
-if [ "$(cd "$repo/$project" && pwd)" = "$repo/src/ArcaneCore.World" ]; then
+project_dir="$repo/$project"; case "$project_dir" in *.csproj) project_dir="$(dirname "$project_dir")" ;; esac
+if [ "$(cd "$project_dir" && pwd)" = "$repo/src/ArcaneCore.World" ]; then
   echo "hot-runner: building the Playerbots pack (Debug) ..."
   dotnet build "$repo/src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj" -c Debug --nologo -v:q || { rc=$?; echo "hot-runner: the Debug build of the Playerbots pack failed (exit $rc); nothing was started." >&2; exit 4; }
 fi

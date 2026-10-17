@@ -46,7 +46,9 @@ if ($AuditLog) { $env:World__HotCode__AuditLogPath = $AuditLog }
 # The Playerbots pack (docs/design/hot-reload-tiers.md, 4.6) is its own assembly that the world executable cannot reference, so
 # dotnet watch on the world project neither builds it nor watches it. Build it first (it builds the world too and copies itself
 # beside the world executable); an edit to the pack is not applied live and needs a restart of this script.
-if ((Resolve-Path (Join-Path $repo $Project)).Path -eq (Resolve-Path (Join-Path $repo 'src/ArcaneCore.World')).Path) {
+$projectDir = (Resolve-Path (Join-Path $repo $Project)).Path
+if ($projectDir.EndsWith('.csproj')) { $projectDir = Split-Path -Parent $projectDir }
+if ($projectDir -eq (Resolve-Path (Join-Path $repo 'src/ArcaneCore.World')).Path) {
     Write-Host 'hot-runner: building the Playerbots pack (Debug) ...'
     & dotnet build (Join-Path $repo 'src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj') -c Debug --nologo -v:q
     if ($LASTEXITCODE -ne 0) {
