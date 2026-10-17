@@ -1264,7 +1264,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
             if (!entered) throw new InvalidOperationException("login-refused");
             // A bot saved over a void (no floor near its height) would log in there again and wander on a stale height: put it on a floor
-            // before its brain starts. Bots only; a real player keeps the saved position (the vmangos login).
+            // before its brain starts (a near teleport, so like any vmangos near teleport it also applies Honorless Target). Bots only; a real player keeps the saved position (the vmangos login).
             try
             {
                 TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
@@ -1274,9 +1274,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 if (settled.Outcome is PlayerbotLoginFloor.Outcome.MovedToMesh or PlayerbotLoginFloor.Outcome.MovedToHome)
                     logger.LogInformation("Playerbot {BotId} logged in over a void; placed {Outcome} at {Position}", bot.BotId, settled.Outcome, settled.Position);
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException and not TimeoutException)
             {
-                // The placement is a courtesy: a bug in it must not fault or quarantine a bot that did log in.
+                // A stalled world thread still fails the login as before; the placement itself is a courtesy: a bug in it must not fault or quarantine a bot that did log in.
                 FaultLedger.Shared.Record("playerbot.login-floor", ex);
                 logger.LogWarning(ex, "Playerbot {BotId} login placement failed; the bot keeps its saved position", bot.BotId);
             }
