@@ -29,7 +29,8 @@ public sealed class WorldRuntime : IDisposable
     private readonly ManualResetEventSlim _stopSignal = new(false);
     private Thread? _thread;
     private int _worldThreadId = -1;
-    private uint _sinceAutosaveMs;
+    private ulong _autosaveClockMs; // world thread: the sum of tick diffs, the clock the per-character autosave timers run on
+    private readonly Dictionary<ObjectGuid, ulong> _autosaveDue = []; // world thread: each online character's next autosave on _autosaveClockMs
 
     /// <summary>A token that is this runtime and nothing else: stamped on reports (<c>AnomalyLedger.Report</c>'s <c>origin</c>) so a test capture can tell two worlds apart without anything holding the runtime itself alive.</summary>
     public object Identity { get; } = new();
@@ -512,6 +513,7 @@ public sealed class WorldRuntime : IDisposable
         // must never overtake this old session's last write.
         _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
         _online.TryRemove(new KeyValuePair<ObjectGuid, Player>(player.Guid, player));
+        _autosaveDue.Remove(player.Guid); // a later login starts a new timer
     }
 
     /// <summary>
@@ -633,16 +635,13 @@ public sealed class WorldRuntime : IDisposable
 
         long autosaveMicros = 0;
         int autosaveSnapshots = 0;
+        _autosaveClockMs += diffMs;
         if (Options.AutosaveIntervalMs > 0)
         {
-            _sinceAutosaveMs += diffMs;
-            if (_sinceAutosaveMs >= Options.AutosaveIntervalMs)
-            {
-                _sinceAutosaveMs = 0;
-                SetPosition(TickPhase.Autosave, null, featuresEnd);
-                autosaveSnapshots = Autosave();
-                autosaveMicros = Micros(Stopwatch.GetTimestamp() - featuresEnd);
-            }
+            SetPosition(TickPhase.Autosave, null, featuresEnd);
+            autosaveSnapshots = Autosave((ulong)Options.AutosaveIntervalMs);
+            // Only a tick that queued snapshots counts as an autosave tick (TickStats), as when the whole world saved at once.
+            autosaveMicros = autosaveSnapshots > 0 ? Micros(Stopwatch.GetTimestamp() - featuresEnd) : 0;
         }
 
         // Assigned after the autosave so the split accounts for every part of the tick body.
@@ -1004,15 +1003,42 @@ public sealed class WorldRuntime : IDisposable
     }
 
     /// <summary>
-    /// The periodic save: like <see cref="SaveAll"/> but a character whose previous snapshot is still waiting in the queue is skipped
-    /// (the queue is behind; another snapshot would only supersede the waiting one and cost a copy). Returns the snapshots queued.
+    /// The periodic save, one character at a time on its own timer (vmangos <c>Player::m_nextSave</c>, counted down from
+    /// <c>PlayerSave.Interval</c> in <c>Player::Update</c>): each online character is snapshotted once per <paramref name="interval"/>.
+    /// A character's first save comes between half an interval and an interval after the tick that first sees it, at a point fixed
+    /// by its id (<see cref="AutosaveStagger"/>), so characters that entered the world together (a server start, a bot fleet) are
+    /// spread over the interval instead of all being snapshotted in one tick: a whole-world pass queued about 1000 bots at once
+    /// on the live server, and their back-to-back writes held the characters database's write lock for tens of seconds
+    /// (2026-10-16). A character whose previous snapshot is still waiting in the queue is skipped until its next turn (the queue
+    /// is behind; another snapshot would only supersede the waiting one and cost a copy). Returns the snapshots queued.
     /// </summary>
-    private int Autosave()
+    private int Autosave(ulong interval)
     {
+        ulong clock = _autosaveClockMs;
         uint now = NowMs;
         int queued = 0;
         foreach (Player player in _online.Values)
         {
+            ref ulong due = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(_autosaveDue, player.Guid, out bool seen);
+            if (!seen)
+            {
+                due = clock + interval - AutosaveStagger(player.Guid.Low, interval);
+                continue;
+            }
+
+            if (due > clock)
+            {
+                continue;
+            }
+
+            // The next turn is one interval after this one (not after now), so the stagger survives late ticks; a stall longer than
+            // an interval skips the turns it missed instead of saving the character again on every tick until it catches up.
+            do
+            {
+                due += interval;
+            }
+            while (due <= clock);
+
             if (player.IsQuestSettlementPending || _saveQueue.IsPending(unchecked((int)player.Guid.Low)))
             {
                 continue;
@@ -1033,6 +1059,13 @@ public sealed class WorldRuntime : IDisposable
 
         return queued;
     }
+
+    /// <summary>
+    /// How much earlier than a full interval a character's first autosave comes: a point in [0, interval / 2) fixed by its id
+    /// (Fibonacci hashing), so consecutive ids are spread evenly. The first save is never later than vmangos' (one interval).
+    /// </summary>
+    internal static ulong AutosaveStagger(uint characterLow, ulong interval)
+        => (unchecked(characterLow * 2654435769u) * (interval / 2)) >> 32;
 
     private void Run()
     {
