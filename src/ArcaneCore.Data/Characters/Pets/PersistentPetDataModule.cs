@@ -99,31 +99,7 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
             await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            PersistentPetRow? row = await db.Set<PersistentPetRow>().SingleOrDefaultAsync(r => r.CharacterId == snapshot.CharacterId, cancellationToken).ConfigureAwait(false);
-            row ??= new PersistentPetRow { CharacterId = snapshot.CharacterId };
-            if (row.Entry == 0) db.Set<PersistentPetRow>().Add(row);
-            row.PetNumber = snapshot.PetNumber; row.Entry = snapshot.Entry; row.Level = snapshot.Level;
-            row.Experience = snapshot.Experience; row.Health = snapshot.Health; row.Mana = snapshot.Mana;
-            row.Happiness = snapshot.Happiness; row.ReactState = snapshot.ReactState; row.IsCurrent = snapshot.IsCurrent;
-            row.ActionBarJson = JsonSerializer.Serialize(snapshot.ActionBar);
-            row.SpellsJson = JsonSerializer.Serialize(snapshot.Spells);
-            row.Name = snapshot.Name;
-            row.NameTimestamp = snapshot.NameTimestamp;
-            row.RenameAllowed = snapshot.RenameAllowed;
-            row.Loyalty = snapshot.LoyaltyLevel;
-            row.LoyaltyPoints = snapshot.LoyaltyPoints;
-            row.TrainingPoints = snapshot.TrainingPoints;
-            await db.Set<PersistentPetCooldownRow>().Where(r => r.CharacterId == snapshot.CharacterId)
-                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            if (snapshot.Cooldowns is { Count: > 0 })
-            {
-                db.Set<PersistentPetCooldownRow>().AddRange(snapshot.Cooldowns.Select(c => new PersistentPetCooldownRow
-                {
-                    CharacterId = snapshot.CharacterId, PetNumber = snapshot.PetNumber, Kind = c.Kind,
-                    SpellId = c.SpellId, Category = c.Category, EndsAtUnixMs = c.EndsAtUnixMs,
-                }));
-            }
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await WriteRowsAsync(db, snapshot, cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -135,6 +111,36 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
         {
             DetachPetRows(snapshot.CharacterId);
         }
+    }
+
+    /// <summary>Write <paramref name="snapshot"/> as the character's character_pet row and its cooldowns, inside the caller's transaction.</summary>
+    internal static async Task WriteRowsAsync(CharacterDbContext db, PersistentPetSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        PersistentPetRow? row = await db.Set<PersistentPetRow>().SingleOrDefaultAsync(r => r.CharacterId == snapshot.CharacterId, cancellationToken).ConfigureAwait(false);
+        row ??= new PersistentPetRow { CharacterId = snapshot.CharacterId };
+        if (row.Entry == 0) db.Set<PersistentPetRow>().Add(row);
+        row.PetNumber = snapshot.PetNumber; row.Entry = snapshot.Entry; row.Level = snapshot.Level;
+        row.Experience = snapshot.Experience; row.Health = snapshot.Health; row.Mana = snapshot.Mana;
+        row.Happiness = snapshot.Happiness; row.ReactState = snapshot.ReactState; row.IsCurrent = snapshot.IsCurrent;
+        row.ActionBarJson = JsonSerializer.Serialize(snapshot.ActionBar);
+        row.SpellsJson = JsonSerializer.Serialize(snapshot.Spells);
+        row.Name = snapshot.Name;
+        row.NameTimestamp = snapshot.NameTimestamp;
+        row.RenameAllowed = snapshot.RenameAllowed;
+        row.Loyalty = snapshot.LoyaltyLevel;
+        row.LoyaltyPoints = snapshot.LoyaltyPoints;
+        row.TrainingPoints = snapshot.TrainingPoints;
+        await db.Set<PersistentPetCooldownRow>().Where(r => r.CharacterId == snapshot.CharacterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        if (snapshot.Cooldowns is { Count: > 0 })
+        {
+            db.Set<PersistentPetCooldownRow>().AddRange(snapshot.Cooldowns.Select(c => new PersistentPetCooldownRow
+            {
+                CharacterId = snapshot.CharacterId, PetNumber = snapshot.PetNumber, Kind = c.Kind,
+                SpellId = c.SpellId, Category = c.Category, EndsAtUnixMs = c.EndsAtUnixMs,
+            }));
+        }
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteAsync(int characterId, CancellationToken cancellationToken = default)
@@ -158,7 +164,9 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
         }
     }
 
-    private void DetachPetRows(int characterId)
+    private void DetachPetRows(int characterId) => DetachPetRows(db, characterId);
+
+    internal static void DetachPetRows(CharacterDbContext db, int characterId)
     {
         // ExecuteDelete bypasses the tracker. A retry on this scope must not
         // publish entities retained from a failed or previous replacement.

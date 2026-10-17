@@ -40,6 +40,7 @@ public sealed class CharacterWriteSweepTests
         ["ArcaneCore.Data/Loot/EfLootStateStore.cs::DeleteStateAsync"] = "only called from CommitAsync, after its Serializable BeginTransactionAsync",
         ["ArcaneCore.Data/Characters/Spells/CharacterSpellStateDataModule.cs::DeleteRowsAsync"] = "only called from SaveAsync, after its BeginTransactionAsync",
         ["ArcaneCore.Data/Social/SocialDataModule.cs::DeleteReferencesAsync"] = "only called from DeleteCharacterDataAsync, inside the deletion transaction",
+        ["ArcaneCore.Data/Characters/Pets/PersistentPetDataModule.cs::WriteRowsAsync"] = "only called from EfPersistentPetStore.SaveCoreAsync and EfPetStableStore.UnstableAsync, after their BeginTransactionAsync",
 
         // The transfer journal (characters schema 62): these helpers run only inside EfTransferDecisionStore.InTransactionAsync, which begins its
         // own transaction under CharacterWriteFence.Exempt; the journal's compare-and-swap on the ownership row is the handoff's own fence.

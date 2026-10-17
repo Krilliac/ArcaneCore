@@ -1,0 +1,53 @@
+using ArcaneCore.Kernel.Characters.Pets;
+using Microsoft.Extensions.Logging;
+
+namespace ArcaneCore.Game.Pets;
+
+/// <summary>The cache and write-ordering seams the hunter pet stable (<see cref="PetStableController"/>) needs.</summary>
+public sealed partial class SummonService
+{
+    /// <summary>Replace (null: drop) the cached current pet of a character without writing it; a read already in flight is discarded.</summary>
+    public void ReplaceCachedPet(int characterId, PersistentPetSnapshot? snapshot)
+    {
+        lock (_cacheGate)
+        {
+            if (snapshot is null) _cached.Remove(characterId);
+            else _cached[characterId] = snapshot;
+            _cacheGeneration[characterId] = _cacheGeneration.GetValueOrDefault(characterId) + 1;
+        }
+    }
+
+    /// <summary>Run <paramref name="write"/> after every earlier pet write of the character and before any later one.</summary>
+    public async Task<T> QueueSerializedWriteAsync<T>(int characterId, Func<CancellationToken, Task<T>> write)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+        Task prior;
+        TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_cacheGate)
+        {
+            prior = _saveTails.GetValueOrDefault(characterId) ?? Task.CompletedTask;
+            _saveTails[characterId] = done.Task;
+        }
+
+        try
+        {
+            try
+            {
+                await prior.ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogWarning(ex, "previous persistent pet write failed for character {CharacterId}; continuing with the stable write", characterId);
+            }
+
+            T result = await write(CancellationToken.None).ConfigureAwait(false);
+            done.SetResult();
+            return result;
+        }
+        catch (Exception ex)
+        {
+            done.SetException(ex);
+            throw;
+        }
+    }
+}
