@@ -348,10 +348,13 @@ public sealed partial class PlayerbotGroupCoordinator
 
     // --- the run's life -------------------------------------------------------------------------------------------------
 
-    /// <summary>The live limits of the run's wipe count (the options change under the running group).</summary>
+    /// <summary>The live limits of the run's wipe count (the options change under the running group), and the wiped step's budget.</summary>
     private void SyncRun(BotGroup group)
     {
-        if (group.Run is { } run) run.MaxWipes = run.Plan.Raid ? _options.Groups.DungeonRuns.Raids.MaxWipes : _options.Groups.DungeonRuns.MaxWipes;
+        if (group.Run is not { } run) return;
+        run.MaxWipes = run.Plan.Raid ? _options.Groups.DungeonRuns.Raids.MaxWipes : _options.Groups.DungeonRuns.MaxWipes;
+        // Before the outcome check, so a wipe whose budget has gone is already in retry and is not reported as stuck there.
+        run.NoteTime(Now, PlayerbotGroupWatch.WipedBudgetMs);
     }
 
     private uint GoalTimeoutOf(BotGroup group)

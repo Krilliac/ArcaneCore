@@ -90,13 +90,18 @@ internal readonly record struct PlayerbotRunSignal(PlayerbotRunEvent Event, uint
 }
 
 /// <summary>
-/// The state of one dungeon or raid run: the step, which of the plan's bosses are dead, the wipes. Pure (events in, state out) so the
+/// The state of one dungeon or raid run: the step, which of the plan's bosses are dead, the wipes. Events in, state out, so the
 /// life of a run is testable without a world; <see cref="PlayerbotGroupCoordinator"/> feeds it what the group observes and acts on its
-/// <see cref="Step"/>. Killed bosses stay killed across wipes: a retry resumes at the first boss still alive. World thread only.
+/// <see cref="Step"/>. Killed bosses stay killed across wipes: a retry resumes at the first boss still alive. The wiped step also
+/// watches the clock (<see cref="NoteTime"/>): it takes the recovery transition itself once its budget has gone, so a regroup that
+/// never finishes cannot leave the run sitting in <see cref="PlayerbotRunStep.Wiped"/>. World thread only.
 /// </summary>
 internal sealed class PlayerbotRunMachine(PlayerbotRunPlan plan, int maxWipes)
 {
     private readonly HashSet<uint> _killed = [];
+    private bool _timed;
+    private PlayerbotRunStep _timedStep;
+    private uint _stepSinceMs;
 
     /// <summary>The plan being run.</summary>
     public PlayerbotRunPlan Plan { get; } = plan ?? throw new ArgumentNullException(nameof(plan));
@@ -201,6 +206,30 @@ internal sealed class PlayerbotRunMachine(PlayerbotRunPlan plan, int maxWipes)
                 GiveUp(string.IsNullOrEmpty(signal.Text) ? "aborted" : signal.Text);
                 break;
         }
+    }
+
+    /// <summary>
+    /// One coordinator tick. The first time a step is seen, the clock starts; a later tick whose wiped step has lasted
+    /// <paramref name="wipedBudgetMs"/> takes <see cref="PlayerbotRunSignal.Regrouped"/> (the recovery transition to
+    /// <see cref="PlayerbotRunStep.Retry"/>). Without this, the step stays <see cref="PlayerbotRunStep.Wiped"/> until every member is
+    /// alive and rested, while a run's regroup is allowed the travel budget, so the step sits past its own budget
+    /// (<c>group/run-step-stuck</c>). A finished run, and any step but wiped, is left as it is. A new entry into wiped starts the
+    /// budget over.
+    /// </summary>
+    public void NoteTime(uint nowMs, uint wipedBudgetMs)
+    {
+        if (!_timed || _timedStep != Step)
+        {
+            _timed = true;
+            _timedStep = Step;
+            _stepSinceMs = nowMs;
+            return;
+        }
+
+        if (Step != PlayerbotRunStep.Wiped || unchecked(nowMs - _stepSinceMs) < wipedBudgetMs) return;
+        Apply(PlayerbotRunSignal.Regrouped);
+        _timedStep = Step;
+        _stepSinceMs = nowMs;
     }
 
     private void GiveUp(string reason)

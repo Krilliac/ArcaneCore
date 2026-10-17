@@ -143,6 +143,67 @@ public sealed class PlayerbotRunMachineTests
         Assert.Equal(PlayerbotRunStep.Enter, run.Step);
     }
 
+    [Fact]
+    public void AWipe_WhoseBudgetExpires_TakesTheRecoveryTransition_WithoutAnotherWipe()
+    {
+        PlayerbotRunMachine run = Machine();
+        uint first = run.CurrentBoss!.Entry;
+        Apply(run, PlayerbotRunSignal.Arrived, PlayerbotRunSignal.AllInside, PlayerbotRunSignal.BossDead(first));
+        Assert.Equal(PlayerbotRunStep.Clear, run.Step);
+
+        const uint start = 5_000;
+        run.Apply(PlayerbotRunSignal.Wipe);
+        run.NoteTime(start, PlayerbotGroupWatch.WipedBudgetMs); // the clock starts when the step is first seen
+        Assert.Equal(PlayerbotRunStep.Wiped, run.Step);
+        Assert.Equal(1, run.Wipes);
+
+        // One millisecond inside the budget the group is still recovering; the step does not move.
+        run.NoteTime(start + PlayerbotGroupWatch.WipedBudgetMs - 1, PlayerbotGroupWatch.WipedBudgetMs);
+        Assert.Equal(PlayerbotRunStep.Wiped, run.Step);
+
+        // The budget expired and nobody sent Regrouped (the group can sit in Regrouping for the travel budget). The recovery
+        // transition is taken anyway: retry, the same wipe, the killed boss stays killed.
+        run.NoteTime(start + PlayerbotGroupWatch.WipedBudgetMs, PlayerbotGroupWatch.WipedBudgetMs);
+        Assert.Equal(PlayerbotRunStep.Retry, run.Step);
+        Assert.Equal(1, run.Wipes);
+        Assert.True(run.IsKilled(first));
+        Assert.False(run.Finished);
+
+        // A regroup that arrives late is not a second recovery, and the retry still enters.
+        run.Apply(PlayerbotRunSignal.Regrouped);
+        Assert.Equal(PlayerbotRunStep.Retry, run.Step);
+        run.Apply(PlayerbotRunSignal.Arrived);
+        Assert.Equal(PlayerbotRunStep.Enter, run.Step);
+
+        // The next wipe gets its own budget: seeing it starts the clock, and the old deadline does not expire it at once.
+        run.Apply(PlayerbotRunSignal.AllInside);
+        run.Apply(PlayerbotRunSignal.Wipe);
+        uint again = start + PlayerbotGroupWatch.WipedBudgetMs;
+        run.NoteTime(again, PlayerbotGroupWatch.WipedBudgetMs);
+        Assert.Equal(PlayerbotRunStep.Wiped, run.Step);
+        Assert.Equal(2, run.Wipes);
+        run.NoteTime(again + PlayerbotGroupWatch.WipedBudgetMs - 1, PlayerbotGroupWatch.WipedBudgetMs);
+        Assert.Equal(PlayerbotRunStep.Wiped, run.Step);
+        run.NoteTime(again + PlayerbotGroupWatch.WipedBudgetMs, PlayerbotGroupWatch.WipedBudgetMs);
+        Assert.Equal(PlayerbotRunStep.Retry, run.Step);
+        Assert.Equal(2, run.Wipes);
+    }
+
+    [Fact]
+    public void AWipeThatAlreadyGaveTheRunUp_IsNotRevivedWhenTimePasses()
+    {
+        PlayerbotRunMachine run = Machine(maxWipes: 1);
+        run.Apply(PlayerbotRunSignal.Wipe);
+        Assert.Equal(PlayerbotRunStep.GiveUp, run.Step);
+
+        run.NoteTime(1_000, PlayerbotGroupWatch.WipedBudgetMs);
+        run.NoteTime(1_000 + PlayerbotGroupWatch.WipedBudgetMs, PlayerbotGroupWatch.WipedBudgetMs);
+
+        Assert.Equal(PlayerbotRunStep.GiveUp, run.Step);
+        Assert.Equal("wiped", run.Reason);
+        Assert.Equal(1, run.Wipes);
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
