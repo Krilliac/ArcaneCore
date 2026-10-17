@@ -3,6 +3,7 @@ using System.Text;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.HotCode;
 using ArcaneCore.World.HotCode.Modules;
@@ -40,6 +41,8 @@ internal static class CommandReferenceRenderer
             Walk(hotCode, string.Empty, options, devOnly: true, "added at start when `World:HotCode:Enabled` is true", nodes);
             ChatCommand hotModule = HotModuleCommands.Create((ModuleHost)RuntimeHelpers.GetUninitializedObject(typeof(ModuleHost)), new HotCodeAudit(null));
             Walk(hotModule, string.Empty, options, devOnly: true, "added at start when `World:HotCode:Modules:Enabled` is true", nodes);
+            ChatCommand feature = FeatureCommands.Create(new FeatureHost(), new HotCodeAudit(null));
+            Walk(feature, string.Empty, options, devOnly: true, "added at start when `World:HotCode:Modules:Enabled` is true", nodes);
         }
 
         return nodes;
@@ -93,7 +96,7 @@ internal static class CommandReferenceRenderer
             sb.Append("| `").Append(security).Append("` | ").Append(options.LevelOf(security)).Append(" | ").Append(reachable).Append(" |\n");
         }
 
-        sb.Append("\nThe counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.\n\n");
+        sb.Append("\nThe counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.hotmodule` and `.feature`) are on; all of those default to off.\n\n");
 
         sb.Append("## Commands\n\n");
         sb.Append("A group (`...`) may also have a handler of its own that serves arguments naming no sub-command. **Level source** says where the level comes from: the retail table recorded in `RetailCommandLevels` (each entry cites its line of vmangos `Chat.cpp`), a level declared on the command, or the command's stored level through the map.\n\n");
