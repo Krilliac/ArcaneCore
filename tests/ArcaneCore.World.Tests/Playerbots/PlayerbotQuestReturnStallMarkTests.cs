@@ -28,6 +28,27 @@ public sealed partial class PlayerbotQuestReturnTests
             => new(PathType.Incomplete, [start, start]);
     }
 
+    /// <summary>
+    /// The mesh ends within <see cref="Reach"/> yards of an off-mesh destination and no nearer, so the bot walks to that end and stands there
+    /// out of reach of its giver. An exact plan ending beyond <c>PlayerbotNavigationAnomalies.PathEndShortYards</c> (12) of its destination is
+    /// refused outright since 5ffb8f2a / f3ae68cb (<see cref="NoWay"/>'s end at the bot's feet, 40 yards off, is refused: the bot then falls to
+    /// Explore and never stalls on the quest), so a stall on the way to take a quest needs an end inside that bound.
+    /// </summary>
+    private sealed class ShortWay : IPathfinder
+    {
+        private const float Reach = 10f;
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            Vector3 toStart = start - end;
+            float distance = toStart.Length();
+            Vector3 stop = distance <= Reach ? start : end + (toStart / distance * Reach);
+            return new(PathType.Incomplete, [start, stop]);
+        }
+    }
+
     /// <summary>Thinks until the stall watch gives the goal up; returns the report, or fails the test.</summary>
     private static async Task<string> StallAsync(ReturnFixture fixture, PlayerbotBrain brain)
     {
@@ -136,7 +157,7 @@ public sealed partial class PlayerbotQuestReturnTests
             var player = fixture.Session.Player!;
             var giver = (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
             giver.SetPosition(player.X + 40, player.Y, player.Z, 0);
-            WorldCollision.Of(fixture.Host.World).Install(lineOfSight: new Walled(player.Z), pathfinder: new NoWay());
+            WorldCollision.Of(fixture.Host.World).Install(lineOfSight: new Walled(player.Z), pathfinder: new ShortWay());
             return true;
         });
         await fixture.Host.WaitForWorldAsync(() => fixture.Session.Player!.VisibleObjects.Contains(QuestInteractionFixture.Guid), "visible giver");

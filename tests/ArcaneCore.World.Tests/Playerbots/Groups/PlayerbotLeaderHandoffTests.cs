@@ -133,7 +133,8 @@ public sealed class PlayerbotLeaderHandoffWorldTests
     {
         await using GroupTestWorld world = await StartAsync(rfc: true);
         await using WorldTestClient master = await world.World.EnterWorldAsync("HANDMASTER", Master, AccountSecurity.Player);
-        (Guid Id, string Name)[] bots = await AddBots(world, 5, level: 16);
+        // A party holds five (Group.MaxGroupSize): the player and four bots. A fifth bot cannot join a non-raid group.
+        (Guid Id, string Name)[] bots = await AddBots(world, 4, level: 16);
         await FormGroup(world, bots, raid: false);
         await EnterInstance(world, bots, GroupRfcContent.Map, new Vector3(0.797643f, -8.23429f, -15.5288f));
         await master.CollectAsync();
@@ -147,10 +148,10 @@ public sealed class PlayerbotLeaderHandoffWorldTests
         Assert.Null(group.Handoff!.Sweep);
         Assert.Equal(PlayerbotRunStep.Clear, group.Run!.Step);
         Assert.Equal(bots[0].Id, group.LeaderBotId);
-        Assert.Equal(5, group.Members.Count(m => !m.Real));
+        Assert.Equal(4, group.Members.Count(m => !m.Real));
         Assert.Single(group.Members, m => m.Real);
         Assert.All(bots, b => Assert.True(world.Coordinator.Drives(b.Id)));
-        Assert.Contains(world.Coordinator.Events, e => e.Contains("handoff", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(world.Coordinator.Events, e => e.Contains($"adopted from {Master}'s party", StringComparison.Ordinal));
         Assert.Equal(1, world.Coordinator.HandoffTotals.Started);
 
         // The take-over line reaches the player in party chat.
@@ -158,7 +159,8 @@ public sealed class PlayerbotLeaderHandoffWorldTests
 
         // The run progresses: the first pack dies.
         Assert.True(await world.RunUntilAsync(180_000, () => Pack(world, bots[0].Id) is { Length: 3 } pack && pack.All(c => !c.IsAlive)), world.Trace());
-        Assert.True(group.Run.PullsLeft == 0 || group.Run.Killed > 0, world.Trace());
+        // PullsLeft is recounted when the leader next picks a target, one think after the last of the pack dies.
+        Assert.True(await world.RunUntilAsync(30_000, () => group.Run.PullsLeft == 0 || group.Run.Killed > 0), world.Trace());
         Assert.Same(group, world.Coordinator.HandoffOf(await ServerGroupId(world, bots[0])));
     }
 

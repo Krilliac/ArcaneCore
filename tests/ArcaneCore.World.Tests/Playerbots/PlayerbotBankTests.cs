@@ -2,12 +2,14 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
@@ -229,7 +231,8 @@ public sealed class PlayerbotBankTests
         Assert.True(stepped);
         Assert.True(bot.Bank.Visiting);
         Assert.Equal(BankFixture.Entry, bot.Bank.TargetEntry);
-        await bot.On(p => { PlayerbotMotion.ElapseForTests(p, 500); return true; });
+        // The manual clock stands still between the think and this read, and this host has no managed-bot tick to pump the motion.
+        await bot.On(p => { PlayerbotMotion.ElapseForTests(p, 500); PlayerbotMotion.Pump(bot.Session, p, bot.Session.World.NowMs); return true; });
         Assert.True(await bot.On(p => p.X) > before, "the bot did not walk east towards the banker");
         Assert.Equal(0, bot.Bank.Deposited);
     }
@@ -256,7 +259,7 @@ internal sealed class BankFixture : ICreatureDataStore, INpcContentStore
         if (WithNear) spawns.Insert(0, new() { Guid = NearSpawn, Entry = Entry, MapId = 0, X = -8948.95f, Y = -132.49f, Z = 83.53f });
         return Task.FromResult(new CreatureContent(
             [new CreatureTemplate { Entry = Entry, Name = "banker", Faction = 900011, NpcFlags = (uint)NpcFlags.Banker, DisplayIds = [49] },
-             new CreatureTemplate { Entry = HostileEntry, Name = "enemy banker", Faction = 900012, NpcFlags = (uint)NpcFlags.Banker, DisplayIds = [49] }],
+             new CreatureTemplate { Entry = HostileEntry, Name = "enemy banker", Faction = 900012, NpcFlags = (uint)NpcFlags.Banker, ExtraFlags = 0x02 /* NO_AGGRO: hostile to the bot by faction, but the manual clock runs its AI and it must not start a fight */, DisplayIds = [49] }],
             spawns, [], [], []));
     }
 }
@@ -268,6 +271,8 @@ internal sealed class BankServices : IWorldTestServices
     public void Register(IServiceCollection services)
     {
         if (Current.Value is not { } fixture) return;
+        // The visit is driven through Advance(), which needs the world's clock under test control.
+        services.AddSingleton<IWorldFeature, BankManualClock>();
         services.AddSingleton<ICreatureDataStore>(fixture);
         services.AddSingleton<INpcContentStore>(fixture);
         services.AddSingleton<IWorldDataStore>(new FarTrainerWorldData());
@@ -277,4 +282,9 @@ internal sealed class BankServices : IWorldTestServices
             new FactionTemplateRecord(900011, 0, 0, 8, 0, 0),
             new FactionTemplateRecord(900012, 0, 0, 0, 0, 1)]));
     }
+}
+
+internal sealed class BankManualClock : IWorldFeature
+{
+    public void Attach(WorldRuntime world) => world.UseManualClock();
 }

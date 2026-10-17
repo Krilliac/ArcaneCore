@@ -92,6 +92,8 @@ public sealed class PlayerbotVendorSupplyNeedsTests
                 Compare("mining pick carried");
                 player.Skills?.Set(SkillIds.Blacksmithing, 1, 75, 1);
                 Compare("blacksmithing learned, no hammer");
+                Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(5956, 1, out _));
+                Compare("blacksmith hammer carried");
                 // Five potions carried: the first recipe is no longer wanted, so its reagent B stops being needed.
                 Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(WantedPotion, 5, out _));
                 Compare("wanted potion stocked");
