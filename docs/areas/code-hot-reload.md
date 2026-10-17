@@ -164,6 +164,42 @@ is audited. None of these commands loads code.
 running process disagree (you reverted the file, or an edit was applied then the tree was changed),
 the process still runs the edited bodies until restart.
 
+## `.worldport` (Tier 3 spike, Administrator, only when enabled)
+
+A development-only experiment for [Hot reload tiers](../design/hot-reload-tiers.md) (section 5.5): does a
+1.12.1 client accept `SMSG_NEW_WORLD` to the map it is already on? vmangos never sends that (a same-map teleport is a near one),
+and phase 3b's handoff depends on the answer. The root exists only with `World:HotCode:Enabled=true` (so only in a Development or
+Staging environment, see the launch gate below), is Administrator only, is appended last like `.hotcode`, takes no path or code
+argument, and every request is audited (kind `worldport-spike`).
+
+| Command | Does |
+|---|---|
+| `.worldport far [#playername] [$x $y $z [$o]]` | Far teleport of the named or selected player (or yourself) to the map it is on, through the existing far path with `TeleportOptions.ForceFar`: `SMSG_TRANSFER_PENDING` and `SMSG_NEW_WORLD` with the same map id, the player out of its map until `MSG_MOVE_WORLDPORT_ACK`, then the login packets and the map add exactly as after a cross-map teleport. Without coordinates, to where the player stands. |
+| `.worldport readd [#playername]` | Comparison: the player is taken out of its map and added back where it stands at the start of the next tick, with the login packets around the add (its own create block and the visible set are sent again), and no transfer packet. |
+| `.worldport status` | The open runs and the last 16 finished ones, each step with its wall-clock time since the request. |
+
+Refused (nothing sent): a player in no map, already teleporting or with a run open, aboard a ship, on a battleground map, or with no
+client (a lean bot). The console can run them with a player name.
+
+What is recorded, as log lines starting `worldport-spike #<run> <far|readd> <player> +<ms> ms <step>:` (category
+`ArcaneCore.World.Gm.Worldport`) and in `.worldport status`:
+
+| Step | Meaning |
+|---|---|
+| `requested` | Who asked, from where to where. |
+| `far-scheduled` | The far teleport was accepted; it runs after the map's update. |
+| `transfer-sent` | `SMSG_TRANSFER_PENDING` then `SMSG_NEW_WORLD` (same map) went out; the player is in no map. |
+| `worldport-ack` | The client's `MSG_MOVE_WORLDPORT_ACK` arrived (the time from `transfer-sent` is the loading screen). |
+| `removed` (readd only) | The player was taken out of its map. |
+| `re-added` | Back in a map, with the map id and position; a different map fails the run. |
+| `ack-timeout` | No ack within 60 s (the teleport stage is named). The run stays open for a late ack, and is abandoned after 10 minutes. |
+| `anomaly` | A `teleport/*` or `session/*` anomaly reported about this player while the run was open. |
+| `client-left` | The player left the world (logout, disconnect, client crash): the run fails. |
+| `observed` | Still in the world 15 s after the re-add: the run ends `ok`. |
+
+The run's last line is `finished after <ms> ms: ok` or `failed: <why>`. The server cannot see a client-side error dialog or a
+client that sits in the loading screen forever beyond the `ack-timeout`; the human or agent driving the client writes that down.
+
 ## Configuration (`World:HotCode`)
 
 | Key | Default | Meaning |

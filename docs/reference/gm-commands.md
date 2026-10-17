@@ -16,9 +16,9 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 23 |
 | `GameMaster` | 3 | 239 |
-| `Administrator` | 6 | 355 |
+| `Administrator` | 6 | 358 |
 
-The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.hotmodule` and `.feature`) are on; all of those default to off.
+The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
 ## Commands
 
@@ -425,3 +425,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.feature list` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .feature list — the detachable features and their state. |
 | `.feature detach` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .feature detach &lt;name&gt; [reason] — quiesce the feature, then remove it from the world at a tick boundary (rolled back if it fails). |
 | `.feature attach` (development only; added at start when `World:HotCode:Modules:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .feature attach &lt;name&gt; [reason] — attach a detached feature again from its handover at a tick boundary. |
+| `.worldport` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Same-map world-port experiment (Tier 3 spike; development only, with World:HotCode:Enabled). |
+| `.worldport far` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .worldport far [#playername] [$x $y $z [$o]] — teleport the named or selected player (or yourself) to the map it is on through the FAR path: SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD with the same map id, then MSG_MOVE_WORLDPORT_ACK. Without coordinates, to where it stands. Every step is logged with its time (worldport-spike). |
+| `.worldport readd` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .worldport readd [#playername] — take the named or selected player (or yourself) out of its map and put it back where it stands, with the login packets and its create block again but no SMSG_NEW_WORLD (comparison for .worldport far). |
+| `.worldport status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .worldport status — the open and the last finished spike runs, each step with its time since the request. |

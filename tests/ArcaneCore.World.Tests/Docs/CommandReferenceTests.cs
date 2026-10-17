@@ -91,6 +91,7 @@ public sealed class CommandReferenceTests
         Assert.Contains("RootName = \"hotcode\"", RepoRoot.ReadText("src/ArcaneCore.World/HotCode/HotCodeCommands.cs"), StringComparison.Ordinal);
         Assert.Contains("RootName = \"hotmodule\"", RepoRoot.ReadText("src/ArcaneCore.World/HotCode/Modules/HotModuleCommands.cs"), StringComparison.Ordinal);
         Assert.Contains("RootName = \"feature\"", RepoRoot.ReadText("src/ArcaneCore.World/Features/FeatureCommands.cs"), StringComparison.Ordinal);
+        Assert.Contains("RootName = \"worldport\"", RepoRoot.ReadText("src/ArcaneCore.World/Gm/Worldport/WorldportSpikeCommands.cs"), StringComparison.Ordinal);
         Assert.Contains("TryAdd", RepoRoot.ReadText("src/ArcaneCore.World/HotCode/HotCodeServiceCollectionExtensions.cs"), StringComparison.Ordinal);
     }
 

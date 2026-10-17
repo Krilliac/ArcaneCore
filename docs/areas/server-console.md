@@ -18,6 +18,7 @@ Each line is read on a background thread, queued to the world thread and run thr
 - `quit`, `exit` and `shutdown [n|cancel]` are shortcuts for `.server shutdown`.
 - `.server faults [top N | show ID | reset]` lists the exceptions the server caught (count, site, type, age), shows one with its frames and message, or clears the list (administrator; the console is one). `.server info` carries a `faults:` summary line for GameMaster and above ([fault ledger](../ops/invariants.md#the-fault-ledger)).
 - Commands that need the invoker's own character or selection answer that they need a player, and do nothing.
+- With `World:HotCode:Enabled` (development only), `.worldport far <name> [x y z [o]]` and `.worldport readd <name>` run the Tier 3 same-map world-port spike on a named player; follow it with `.worldport status` or the `worldport-spike` log lines ([code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)).
 - Replies are printed prefixed `[console] ` and are not written to the log, so a one-time secret in a reply never reaches a log file.
 - Every line is logged under the category `ArcaneCore.Console` as `Console command:` with passwords redacted.
 - Console commands appear in the GM audit log under the name `Console`.
