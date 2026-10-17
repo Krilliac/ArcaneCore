@@ -206,6 +206,9 @@ internal sealed class FakeGitHub
 
     public string FailBody { get; set; } = "{\"message\":\"boom\"}";
 
+    /// <summary>A status to answer every reopen or close (a PATCH of the state) with instead of acting (null: act); other calls are served.</summary>
+    public HttpStatusCode? FailStateChangesWith { get; set; }
+
     /// <summary>How many of the next creates and comments are applied by the server and then answered with a timeout (the reply is lost), like a slow GitHub.</summary>
     public int TimeoutsAfterApply { get; set; }
 
@@ -262,6 +265,12 @@ internal sealed class FakeGitHub
         }
     }
 
+    /// <summary>Replace issue <paramref name="number"/>'s labels with <paramref name="label"/>, as a person editing it would.</summary>
+    public void Relabel(int number, string label)
+    {
+        lock (_gate) Get(number)["labels"] = new JsonArray(new JsonObject { ["name"] = label });
+    }
+
     public JsonObject Get(int number)
     {
         lock (_gate) return _issues.Single(i => (int)i["number"]! == number);
@@ -277,7 +286,16 @@ internal sealed class FakeGitHub
         string prefix = $"/repos/{QaData.Repo}/issues";
         if (request.Method == HttpMethod.Get && path == prefix)
         {
-            lock (_gate) return FakeHttp.Json(HttpStatusCode.OK, new JsonArray([.. _issues.Select(i => (JsonNode?)JsonNode.Parse(i.ToJsonString()))]).ToJsonString());
+            // Like GitHub, a labels= filter lists only the issues that carry the label (an issue whose label was removed is reachable by number only).
+            string? label = request.PathAndQuery.Contains('?', StringComparison.Ordinal)
+                ? request.PathAndQuery.Split('?')[1].Split('&').Where(p => p.StartsWith("labels=", StringComparison.Ordinal)).Select(p => Uri.UnescapeDataString(p["labels=".Length..])).FirstOrDefault()
+                : null;
+            lock (_gate)
+            {
+                return FakeHttp.Json(HttpStatusCode.OK, new JsonArray([.. _issues
+                    .Where(i => label is null || i["labels"]!.AsArray().Any(l => (string?)l?["name"] == label))
+                    .Select(i => (JsonNode?)JsonNode.Parse(i.ToJsonString()))]).ToJsonString());
+            }
         }
 
         if (request.Method == HttpMethod.Get && path == "/search/issues")
@@ -309,6 +327,7 @@ internal sealed class FakeGitHub
             if (request.Method == HttpMethod.Patch && rest.Length == 1)
             {
                 JsonNode patch = JsonNode.Parse(request.Body)!;
+                if (patch["state"] is not null && FailStateChangesWith is { } refuse) return FakeHttp.Json(refuse, FailBody);
                 lock (_gate)
                 {
                     if (patch["state"] is { } state) issue["state"] = (string)state!;

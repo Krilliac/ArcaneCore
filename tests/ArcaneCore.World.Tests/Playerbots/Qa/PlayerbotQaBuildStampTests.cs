@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json.Nodes;
 using ArcaneCore.World.Playerbots.Qa;
 using Xunit;
@@ -854,6 +855,45 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         Assert.EndsWith("\nPlayerbot QA finding: an old body\n\n| Field | Value |", body, StringComparison.Ordinal);
     }
 
+    private static int Lists(Rig rig)
+        => rig.GitHub.Http.Requests.Count(r => r.Method == HttpMethod.Get && r.PathAndQuery.StartsWith($"/repos/{QaData.Repo}/issues?", StringComparison.Ordinal));
+
+    /// <summary>
+    /// Review of st2-qa-reporter: an issue the list does not carry (its label removed; past MaxListPages in a large repo) cannot have its status edited, and that must not
+    /// leave the status due, or every later pass lists every page again and spends a lookup on it, which is the timeout the paged list was meant to end.
+    /// </summary>
+    [Fact]
+    public async Task LiveStatus_OfAnIssueReachableOnlyByNumber_IsTriedOnce_ThenLaterPassesWithNothingNewListNothing()
+    {
+        var rig = new Rig();
+        PlayerbotQaAggregator one = NewAggregator("build-1");
+        string id = Occurs(one, 3, at: QaData.T0);
+        PlayerbotQaPublisher publisher = rig.Publisher(one, "build-1");
+        await rig.Run(publisher, one);
+        int issue = Of(one, id).Publication.Issue;
+        rig.GitHub.Relabel(issue, "triaged"); // a person took the bot-qa label off: the labelled list no longer has it
+
+        // Two hours later it happened again: the status is due, the list does not have the issue, so it is read by number once and its status is left as it is.
+        rig.Time.Advance(TimeSpan.FromHours(2));
+        Occur(one, QaData.Bot1, at: rig.Time.GetUtcNow().UtcDateTime);
+        await rig.Run(publisher, one);
+        int lists = Lists(rig);
+        int gets = rig.GitHub.Gets;
+        Assert.Equal(0, rig.GitHub.BodyEdits);
+
+        // Nothing new: no list, no lookup, on this pass or the next.
+        rig.Time.Advance(TimeSpan.FromMinutes(5));
+        await rig.Run(publisher, one);
+        rig.Time.Advance(TimeSpan.FromMinutes(5));
+        await rig.Run(publisher, one);
+
+        Assert.Equal(lists, Lists(rig));
+        Assert.Equal(gets, rig.GitHub.Gets);
+        Assert.Equal(0, rig.GitHub.BodyEdits);
+        Assert.Equal(0, rig.GitHub.Comments);
+        Assert.Equal(QaPublicationState.Published, Of(one, id).Publication.State);
+    }
+
     [Theory]
     [InlineData(0, 30)]
     [InlineData(60, 0)]
@@ -873,6 +913,23 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         Assert.Equal(1, rig.GitHub.Comments);
         Assert.Equal(0, rig.GitHub.BodyEdits);
         Assert.Equal(PlayerbotQaIssueComposer.MarkerOf(id) + "\nold", BodyOf(rig, issue));
+    }
+
+    [Fact]
+    public void IssueIndex_AnIssueListedTwice_KeepsItsFirstListing_BodyAndMarkers()
+    {
+        // A page boundary that shifts while the list is read repeats an issue: the first listing (newest first) stands, a repeat adds nothing.
+        var index = new QaIssueIndex(complete: true);
+        var issue = new QaIssueRef(7, true, "https://github.com/x/y/issues/7");
+        string first = PlayerbotQaIssueComposer.MarkerOf("aaaaaaaaaaaaaaaa") + "\nfirst";
+        index.Add(issue, first);
+        index.Add(issue with { Open = false }, PlayerbotQaIssueComposer.MarkerOf("bbbbbbbbbbbbbbbb") + "\nrepeat");
+
+        Assert.Equal(1, index.Count);
+        Assert.True(index.ByNumber(7)!.Open);
+        Assert.Equal(first, index.BodyOf(7));
+        Assert.Same(index.ByNumber(7), index.ByMarker("aaaaaaaaaaaaaaaa"));
+        Assert.Null(index.ByMarker("bbbbbbbbbbbbbbbb"));
     }
 
     [Fact]
@@ -954,6 +1011,30 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         Assert.Equal("open", (string)rig.GitHub.Get(issue)["state"]!);
         Assert.Equal(2, rig.CommentBodies().Length);
         Assert.StartsWith("Regression", rig.CommentBodies()[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task QuietClose_AFailedClose_IsRetried_WithoutASecondComment()
+    {
+        var (rig, two, publisher, id, issue) = await StoppedOnBuildOne(git =>
+        {
+            git.AutoCloseQuietMultiple = 3;
+            git.AutoCloseMinQuietHours = 1;
+        });
+        rig.GitHub.FailStateChangesWith = HttpStatusCode.UnprocessableEntity;
+
+        rig.Time.Advance(TimeSpan.FromHours(3.5));
+        await rig.Run(publisher, two);
+        Assert.Single(rig.CommentBodies());
+        Assert.Equal("open", (string)rig.GitHub.Get(issue)["state"]!);
+
+        rig.GitHub.FailStateChangesWith = null;
+        rig.Time.Advance(TimeSpan.FromMinutes(5));
+        await rig.Run(publisher, two);
+
+        Assert.Single(rig.CommentBodies()); // the close is retried, the comment is not posted twice
+        Assert.Equal("closed", (string)rig.GitHub.Get(issue)["state"]!);
+        Assert.Equal(QaPublicationState.KnownClosed, Of(two, id).Publication.State);
     }
 
     [Fact]

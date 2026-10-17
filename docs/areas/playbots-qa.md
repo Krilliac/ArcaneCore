@@ -288,13 +288,15 @@ back from its key on load (only a key that rebuilds to itself), and keeps its id
   day; now, when an open issue's finding has been seen at least `StatusUpdateMinutes` after the time its block shows, the pass rewrites the block in place (one body edit, which
   sends no notification; the rest of the body is kept as it is; an issue opened before this gets the block inserted after its marker). So GitHub lags the finding by at most
   `StatusUpdateMinutes` plus one pass, and a stale-issue sweep can trust `last-seen=` (and the issue's `updated_at`). Edits are capped by `MaxStatusEditsPerHour` (30, saved with
-  the other caps); a finding over the cap waits for a later pass. Only issues in the label list are edited. Closed issues are never edited.
+  the other caps); a finding over the cap waits for a later pass. Only issues in the label list are edited. Closed issues are never edited. The status is tried once per
+  `StatusUpdateMinutes` of new sightings whatever comes of it (an issue outside the list, a spent lookup budget, a failed edit), so an issue the list does not carry never
+  makes later passes list again.
 * **Quiet close** (`World:Playerbots:Qa:GitHub:AutoCloseQuietMultiple`, default 0 = off): with N > 0, an open issue is closed as **completed** when its finding has stopped:
   it was met at least twice (so it has a usual gap, `(last seen - first seen) / (count - 1)`), it was last met on a build other than the running one, the running build is
   newer by the registry (first run after it; a rollback never counts) and has not met it once, and it has been quiet for at least N x its usual gap and at least
   `AutoCloseMinQuietHours` (72). Quiet is measured from the later of its last sighting and the reporter's start, so a server that was down does not count as quiet time.
   The close comes with one comment (last seen, on which build, the usual gap, how long the running build went without it) under `MaxCommentsPerHour`, after the pass's other
-  comments and the duplicate closes. The finding becomes known-closed with the build it was **last seen on** as its closed build, so if it happens again on the running build
+  comments and the duplicate closes; a close that fails after its comment is retried without a second comment (in this process). The finding becomes known-closed with the build it was **last seen on** as its closed build, so if it happens again on the running build
   (or any newer one) it is a regression and `ReopenOnRegression` reopens it with its one comment. An issue a person closed as not planned is never touched. Quiet is not proof:
   a finding the bots simply stopped visiting looks the same, which is why it is off by default; something like 3 x the gap with the 72 h floor is a reasonable start.
 
