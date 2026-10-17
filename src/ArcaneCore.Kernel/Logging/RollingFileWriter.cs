@@ -20,6 +20,13 @@ public readonly record struct RollingFilePolicy(long RollSizeBytes, bool RollDai
 /// day), after which the oldest segments beyond <see cref="RollingFilePolicy.Retain"/> are deleted. On start an existing active
 /// file is continued (its size counts toward the size roll) and, with daily rolling, archived first when it is from an earlier day.
 /// <para>
+/// One writer per file, across processes: before the first open the writer takes an exclusive lock on <c>&lt;path&gt;.lock</c> and keeps
+/// it until <see cref="Dispose"/>. When another writer (another daemon configured with the same path, or a second sink in this process)
+/// already holds it, this writer reports that once and writes <c>name.&lt;process&gt;.ext</c> instead (then <c>name.&lt;process&gt;.&lt;pid&gt;.ext</c>),
+/// rolling and pruning that file under its own name. Two daemons sharing one file tore and interleaved each other's lines, and each
+/// rolled the shared file on its own size count, so one kept appending to the segment the other had just renamed (live 2026-10-16).
+/// </para>
+/// <para>
 /// Not thread-safe: one writer thread (the <see cref="QueuedLineWriter"/>) owns it. Fail-closed on I/O trouble: a failed write
 /// closes the file, reports once to <c>diagnostics</c> (stderr by default), drops lines for <see cref="RetryDelay"/>, then tries to
 /// reopen; the lines lost meanwhile are counted (<see cref="LostLines"/>) and reported when writing resumes. It never throws into
@@ -31,10 +38,12 @@ public sealed class RollingFileWriter : ILineWriter
     /// <summary>How long writes are dropped after a failure before the file is reopened.</summary>
     public static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(5);
 
-    private readonly string _path;
+    private readonly string _configuredPath;
     private readonly string _directory;
-    private readonly string _stem;
     private readonly string _extension;
+    private string _path;
+    private string _stem;
+    private FileStream? _ownership;
     private readonly RollingFilePolicy _policy;
     private readonly Func<DateTime> _clock;
     private readonly TextWriter _diagnostics;
@@ -53,7 +62,7 @@ public sealed class RollingFileWriter : ILineWriter
     public RollingFileWriter(string path, RollingFilePolicy policy, Func<DateTime>? clock = null, TextWriter? diagnostics = null, Func<string, FileStream>? open = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        _path = Path.GetFullPath(path);
+        _path = _configuredPath = Path.GetFullPath(path);
         _directory = Path.GetDirectoryName(_path) ?? Directory.GetCurrentDirectory();
         _stem = Path.GetFileNameWithoutExtension(_path);
         _extension = Path.GetExtension(_path);
@@ -98,7 +107,7 @@ public sealed class RollingFileWriter : ILineWriter
     /// <summary>Open or write failures since start.</summary>
     public long Failures { get; private set; }
 
-    /// <summary>The active file's full path.</summary>
+    /// <summary>The active file's full path: the configured path, or this process's fallback name once another writer was found to own it.</summary>
     public string ActivePath => _path;
 
     /// <summary>Rolled segments next to the active file, newest first.</summary>
@@ -189,11 +198,17 @@ public sealed class RollingFileWriter : ILineWriter
             Failures++;
             _diagnostics.WriteLine($"ArcaneCore logging: cannot close {_path}: {ex.Message}.");
         }
+        finally
+        {
+            _ownership?.Dispose(); // released last, so no other writer can take the name while this one still holds the file
+            _ownership = null;
+        }
     }
 
     private void Open(DateTime now)
     {
         Directory.CreateDirectory(_directory);
+        _ownership ??= TakeOwnership();
         var info = new FileInfo(_path);
         if (info.Exists && info.Length > 0)
         {
@@ -250,6 +265,74 @@ public sealed class RollingFileWriter : ILineWriter
         _size = 0;
         _segmentDate = now.Date;
         _stream = _open(_path);
+    }
+
+    /// <summary>
+    /// Locks the configured path for this writer, else the first free per-process fallback name, and points <c>_path</c>/<c>_stem</c> at it.
+    /// The lock is a separate <c>.lock</c> file opened without sharing (an exclusive flock on Unix, a share-none handle on Windows), so the
+    /// log itself stays readable and renamable by tailers; the OS drops it when the process dies, so a crash never strands the name,
+    /// and the file is deleted when the writer is disposed (on Windows also when the process dies; on Unix a stale empty file is simply relocked).
+    /// </summary>
+    private FileStream TakeOwnership()
+    {
+        string process = ProcessTag();
+        string configuredStem = Path.GetFileNameWithoutExtension(_configuredPath);
+        // The fallbacks use '.' (not '-') after the stem, so no name's segment pattern (stem-*ext) matches another name's files.
+        string[] stems =
+        [
+            configuredStem,
+            configuredStem + "." + process,
+            configuredStem + "." + process + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
+        ];
+        IOException? busy = null;
+        foreach (string stem in stems)
+        {
+            string path = Path.Combine(_directory, stem + _extension);
+            try
+            {
+                var ownership = new FileStream(path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, bufferSize: 1, FileOptions.DeleteOnClose);
+                if (stem != configuredStem)
+                {
+                    _diagnostics.WriteLine($"ArcaneCore logging: {_configuredPath} is in use by another writer (another daemon configured with the same path?); this one writes {path}. Give each daemon its own log path.");
+                }
+
+                _path = path;
+                _stem = stem;
+                return ownership;
+            }
+            catch (IOException ex) when (IsHeldElsewhere(ex))
+            {
+                busy = ex;
+            }
+        }
+
+        throw busy!;
+    }
+
+    /// <summary>A sharing or lock violation (another writer holds the lock), as opposed to a missing directory or a bad path.</summary>
+    private static bool IsHeldElsewhere(IOException ex)
+    {
+        if (ex is FileNotFoundException or DirectoryNotFoundException or PathTooLongException or DriveNotFoundException)
+        {
+            return false;
+        }
+
+        const int SharingViolation = unchecked((int)0x80070020);
+        const int LockViolation = unchecked((int)0x80070021);
+        return !OperatingSystem.IsWindows() || ex.HResult is SharingViolation or LockViolation;
+    }
+
+    /// <summary>The executable's name, reduced to file-name-safe characters ("ArcaneCore.World", "testhost").</summary>
+    private static string ProcessTag()
+    {
+        string name = Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? string.Empty;
+        var tag = new StringBuilder(name.Length);
+        foreach (char c in name)
+        {
+            tag.Append(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' ? c : '_');
+        }
+
+        return tag.Length == 0 ? "process" : tag.ToString();
     }
 
     private void Prune()
