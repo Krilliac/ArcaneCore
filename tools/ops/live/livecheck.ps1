@@ -11,10 +11,17 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LiveEnv.ps1')
 $LiveHome = Resolve-LiveHome $LiveHome
 $l = Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome
-$lines = @(Get-Content $l -Tail $Tail | Where-Object { $_ -ge $Since })
+# Parse -Since (any invariant form: '2026-10-16 22:17', ISO 'o' with T and offset) and compare in the log's own format; a plain string
+# compare of an ISO value put 'T' after every ' ' and kept nothing. A line without a timestamp (a stack trace) goes with the line above it.
+$sinceUtc = [DateTime]::Parse($Since, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AssumeUniversal, AdjustToUniversal')
+$sinceKey = $sinceUtc.ToString('yyyy-MM-dd HH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture)
+$keep = $false
+$lines = @(Get-Content $l -Tail $Tail | Where-Object {
+    if ($_ -match '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} ') { $script:keep = $_.Substring(0, 23) -ge $sinceKey }
+    $script:keep
+})
 "lines since ${Since} UTC: $($lines.Count) ($l)"
 # A fallback file means another process owns the World's log name, so the lines above may not be (all) the World's.
-$sinceUtc = [DateTime]::Parse($Since, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AssumeUniversal, AdjustToUniversal')
 foreach ($f in @(Get-LiveLogFallback -Role World -LiveHome $LiveHome -SinceUtc $sinceUtc)) { "WARNING: fallback log written since ${Since}: $($f.FullName) (another writer owns $l)" }
 "--- startup markers:"
 $lines | Select-String -Pattern 'listening|World started|is ready|Bot chat provider|policy model|high-load threshold|Playerbots? .*(started|spawn)|Playerbot runs:' | Select-Object -First 15 | ForEach-Object { $_.Line.Substring(0, [Math]::Min(220, $_.Line.Length)) }

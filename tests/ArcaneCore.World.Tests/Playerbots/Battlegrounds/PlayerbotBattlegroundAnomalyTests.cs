@@ -144,8 +144,9 @@ public sealed class PlayerbotBattlegroundAnomalyTests
                 ally.RequirePlayer().Map!.FindUpdater<GameObjectMapSystem>()!.GameObjects.Any(go => go.Entry == WarsongGulch.HordeFlagBaseEntry), StartWait);
             await context.ReadAsync(() =>
             {
+                // Remove, not Despawn: a despawned database spawn respawns after its delay and the bot would take it (GameObjectMapSystem.Despawn).
                 GameObjectMapSystem objects = ally.RequirePlayer().Map!.FindUpdater<GameObjectMapSystem>()!;
-                foreach (GameObject stand in objects.GameObjects.Where(go => go.Entry == WarsongGulch.HordeFlagBaseEntry).ToArray()) objects.Despawn(stand);
+                foreach (GameObject stand in objects.GameObjects.Where(go => go.Entry == WarsongGulch.HordeFlagBaseEntry).ToArray()) objects.Remove(stand);
                 return true;
             });
             await context.WaitUntilAsync("the gates open", () => wsg.Status == BattlegroundStatus.InProgress, StartWait);

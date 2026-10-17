@@ -3,6 +3,8 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Playerbots.Battlegrounds;
@@ -10,6 +12,7 @@ using ArcaneCore.World.Playerbots.Scenarios;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Tests.Playerbots.Scenarios;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Content = ArcaneCore.World.Tests.Playerbots.Battlegrounds.BattlegroundBotTestContent;
 using Kind = ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundBuffKind;
@@ -167,6 +170,32 @@ public sealed class PlayerbotBattlegroundBuffTests
         b.Reset(BotB);
         var c = new PlayerbotBattlegroundBuffs();
         Assert.Equal(restoration, c.Decide(new ObjectGuid(4), Team.Alliance, Origin, hurt, board, board.Spots, _ => true, _ => false, 5_100));
+    }
+
+    [Fact]
+    public void ANewBoard_ScansOnItsFirstCurrent_ThenOncePerRefreshWindow()
+    {
+        using var world = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
+        Map map = world.GetMap(0);
+        var board = new PlayerbotBattlegroundBuffBoard();
+        Assert.Equal(0, board.Scans);
+
+        // The first call scans whatever the clock reads (an unscanned board is not "fresh").
+        board.Current(map, 1_000);
+        Assert.Equal(1, board.Scans);
+
+        board.Current(map, 1_000 + PlayerbotBattlegroundBuffBoard.RefreshMs - 1);
+        Assert.Equal(1, board.Scans);
+
+        board.Current(map, 1_000 + PlayerbotBattlegroundBuffBoard.RefreshMs);
+        Assert.Equal(2, board.Scans);
+    }
+
+    private sealed class NullSaveQueue : ICharacterSaveQueue
+    {
+        public void Enqueue(CharacterState state)
+        {
+        }
     }
 
     [Fact]

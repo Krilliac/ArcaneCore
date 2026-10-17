@@ -115,7 +115,8 @@ internal sealed class AvDecision
 /// <item>A defender with nothing to retake guards the team's pending captures first, then its held nodes nearest to it, at most
 /// <see cref="MaxGuardsPerNode"/> per node; with every place full it attacks.</item>
 /// <item>An attacker takes an assaultable banner within <see cref="OpportunityYards"/> (it never runs past one), then the first actionable step of
-/// its lane (<see cref="MainRoad"/> or <see cref="FlankRoad"/>), then the other lane's, then the general; with nothing actionable it advances on the
+/// its lane (<see cref="MainRoad"/> or <see cref="FlankRoad"/>), then the other lane's, then the nearest assaultable node neither lane lists (an own
+/// node the enemy holds: retaken before the general, whose fight goes better with the team's towers and graveyards back), then the general; with nothing actionable it advances on the
 /// enemy keep. A bot never idles while the match has an objective.</item>
 /// </list>
 /// </summary>
@@ -197,7 +198,11 @@ internal static class PlayerbotAlteracValleyTactics
         if (FirstStep(d, own) is { } step) return step;
         if (FirstStep(d, other) is { } fallback) return fallback;
 
-        // 5. The general, then the enemy keep.
+        // 5. A node the lanes do not list (an own node the enemy holds) that the team may click again.
+        if (Nearest(d, n => nodes[n].AssaultableBy(team) && !IsBlocked(d, n), float.MaxValue) is { } retake)
+            return new AvObjective(AvObjectiveKind.Assault, retake, nodes[retake].At);
+
+        // 6. The general, then the enemy keep.
         if (d.EnemyGeneral is { } general) return new AvObjective(AvObjectiveKind.KillGeneral, -1, general);
         if (d.EnemyBase is { } keep) return new AvObjective(AvObjectiveKind.Advance, -1, keep);
         return new AvObjective(AvObjectiveKind.None, -1, null);

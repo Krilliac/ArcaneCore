@@ -178,7 +178,7 @@ recovery).
 - The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
 - The manifest's schema and content versions are operator labels, not read from the databases.
 - The gateway has no conf catalog entry, `.conf.dist`, `--check-config` or metrics; its link counters are only in-process.
-- Phase 3b's handoff needs a same-map `SMSG_NEW_WORLD` the client accepts; the server half of that spike is built (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)), the real-client run is not done.
+- Phase 3b's handoff needs a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5); the reroute itself is not built.
 - A gateway or World restart still drops every client. The 3b handoff above moves the ownership and the players' saved
   state but still disconnects the clients (they log in again); a seamless reroute (one link per worker on the gateway,
   per-session routing, synthesized `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`, input buffered during the freeze) and an

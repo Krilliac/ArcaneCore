@@ -109,7 +109,13 @@ public sealed class PlayerbotChatSafetyWorldTests
     public async Task WithTheProductionScreeningDeadline_TheFirstWhisperGetsTheModelReply_AndNothingTimesOut()
     {
         var client = new FakeBotChatClient();
-        await using WorldTestHost host = Start(client, options => options.Chat.Safety.PatternTimeout = PlayerbotChatSafetyFilter.PatternTimeout);
+        await using WorldTestHost host = Start(client, options =>
+        {
+            options.Chat.Safety.PatternTimeout = PlayerbotChatSafetyFilter.PatternTimeout;
+            // The model fake answers "fake reply" both times: the speech limiter's dedupe and per-target gap (5af206c8) would hold the second.
+            options.Chat.Speech.DedupeSeconds = 0;
+            options.Chat.Speech.TargetGapSeconds = 0;
+        });
         await PartyTestHost.StartBotAsync(host, "Chatreal");
         await using WorldTestClient player = await host.EnterWorldAsync("CHATREALP", "Chatrealp");
         ulong bot = (await host.PlayerStateAsync("Chatreal", p => p.Guid)).Value;
