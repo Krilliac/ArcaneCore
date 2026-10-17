@@ -56,6 +56,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import opsenv  # noqa: E402
 
 
+def require(condition: object, message: object) -> None:
+    """A safety gate: stop the deploy with the message when the condition is false. Not `assert`, which `python -O` compiles out."""
+    if not condition:
+        sys.exit(f"deploy-live: {message}")
+
+
+def ps(code: str, env: dict | None = None):
+    """Runs Windows PowerShell code. Values that are not this script's own integers reach it through env, never through the code text."""
+    return subprocess.run(["powershell", "-NoProfile", "-Command", code], capture_output=True, text=True, timeout=60, env=env, check=False)
+
+
+def world_db_free(path) -> bool:
+    """True when the file opens with no sharing, i.e. nobody else holds it. The path is passed as an environment variable: interpolated
+    into the code, an apostrophe in it ended the quoted string (a free file read as held) or ran as PowerShell."""
+    env = dict(os.environ, ARCANE_DEPLOY_EXCLUSIVE_PATH=str(path))
+    code = ("try { $f=[System.IO.File]::Open($env:ARCANE_DEPLOY_EXCLUSIVE_PATH,'Open','ReadWrite','None'); $f.Dispose(); exit 0 } "
+            "catch { exit 1 }")
+    return ps(code, env=env).returncode == 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Graceful deploy of an integrated ArcaneCore build to a server profile.")
     ap.add_argument("--profile", default=opsenv.optional(opsenv.LIVE_PROFILE), help=f"server profile directory (default: ${opsenv.LIVE_PROFILE})")
@@ -78,7 +98,7 @@ def main() -> int:
     ap.add_argument("--shutdown-timeout-s", type=int, default=300,
                     help="how long to wait for the World to save and exit after the shutdown command")
     ap.add_argument("--servers-stopped", action="store_true",
-                    help="the live Realm/World are already stopped: assert both ports are free and skip the graceful shutdown (steps 1-2)")
+                    help="the live Realm/World are already stopped: check both ports are free and skip the graceful shutdown (steps 1-2)")
     ap.add_argument("--visible-consoles", action="store_true",
                     help="start Realm and World each in its own visible console window with stdin attached")
     ap.add_argument("--status-console", default=None, metavar="PS1",
@@ -105,16 +125,17 @@ def main() -> int:
 
     # --- checks that need no server stopped ---------------------------------------------------------------------------------------
     for p in (world_dll, realm_dll, dbtool, account_tool, client_tool, importer, refresh_script, optional_script):
-        assert p.is_file(), p
+        require(p.is_file(), f"{p} is missing; nothing was stopped")
     if terrain_arg:
-        assert all((Path(terrain_arg) / d).is_dir() for d in ("maps", "vmaps", "mmaps")), terrain_arg
-    assert dump_path.is_file(), dump_path
+        require(all((Path(terrain_arg) / d).is_dir() for d in ("maps", "vmaps", "mmaps")),
+                f"{terrain_arg} lacks maps, vmaps or mmaps; nothing was stopped")
+    require(dump_path.is_file(), f"{dump_path} is missing; nothing was stopped")
 
     REFRESH_DBCS = ["AreaTrigger.dbc", "WorldSafeLocs.dbc", "Map.dbc", "AreaTable.dbc", "TaxiNodes.dbc", "TaxiPath.dbc", "TaxiPathNode.dbc"]
     OPTIONAL_DBCS = ["ItemSet.dbc", "ItemRandomProperties.dbc", "SpellItemEnchantment.dbc", "CharSections.dbc", "CharacterFacialHairStyles.dbc"]
     needed = REFRESH_DBCS + ([] if args.no_elevators else ["TransportAnimation.dbc"]) + ([] if args.no_optional_data else OPTIONAL_DBCS)
     sums_path = dbc_dir / "SHA256SUMS"
-    assert sums_path.is_file(), f"{sums_path} is missing: the DBC directory needs a SHA256SUMS (sha256sum format) listing every DBC"
+    require(sums_path.is_file(), f"{sums_path} is missing: the DBC directory needs a SHA256SUMS (sha256sum format) listing every DBC; nothing was stopped")
     sums = {}
     for line in sums_path.read_text(encoding="utf-8").splitlines():
         m = re.match(r"^([0-9A-Fa-f]{64}) [ *]?(.+)$", line)
@@ -125,19 +146,16 @@ def main() -> int:
         sys.exit(f"{dbc_dir} lacks (or its SHA256SUMS does not list): {', '.join(missing)}; nothing was stopped.")
     for n in needed:
         h = hashlib.sha256((dbc_dir / n).read_bytes()).hexdigest()
-        assert h == sums[n], f"{n} does not match {sums_path} ({h}); nothing was stopped"
+        require(h == sums[n], f"{n} does not match {sums_path} ({h}); nothing was stopped")
 
     out.mkdir(exist_ok=False)
 
-    def ps(code: str):
-        return subprocess.run(["powershell", "-NoProfile", "-Command", code], capture_output=True, text=True, timeout=60)
-
     def listener_pid(port: int) -> int | None:
-        r = ps(f"(Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess")
+        r = ps(f"(Get-NetTCPConnection -LocalPort {int(port)} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess")
         return int(r.stdout.strip()) if r.stdout.strip() else None
 
     def gone(pid: int) -> bool:
-        return ps(f"if(Get-Process -Id {pid} -ErrorAction SilentlyContinue){{exit 1}}").returncode == 0
+        return ps(f"if(Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue){{exit 1}}").returncode == 0
 
     settings_path = profile / "appsettings.json"
 
@@ -145,13 +163,13 @@ def main() -> int:
         return json.loads(settings_path.read_text(encoding="utf-8-sig"))
 
     config = load_config()
-    assert config["World"]["Port"] == args.world_port and config["Auth"]["Port"] == args.auth_port, "ports do not match the profile"
+    require(config["World"]["Port"] == args.world_port and config["Auth"]["Port"] == args.auth_port, "ports do not match the profile")
     paths = {}
     for role in ("Auth", "Characters", "World"):
         cs = config["Database"][role]["ConnectionString"]
         parts = dict((p.split("=", 1)[0].strip().lower(), p.split("=", 1)[1].strip()) for p in cs.split(";") if "=" in p)
         paths[role] = Path(parts["data source"])
-        assert paths[role].is_file(), paths[role]
+        require(paths[role].is_file(), f"the {role} database {paths[role]} is missing")
 
     def ro(role: str):
         # closing(): sqlite3's own context manager only commits, it never closes; a leaked mode=ro handle on world.db made the content
@@ -187,7 +205,8 @@ def main() -> int:
             else:
                 shutil.copyfile(paths[role], target)
             with closing(sqlite3.connect(target)) as b:
-                assert b.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                result = b.execute("PRAGMA integrity_check").fetchone()[0]
+            require(result == "ok", f"the {suffix} snapshot of the {role} database fails PRAGMA integrity_check ({result}): {target}")
 
     def run(argv, name: str, env=None, check: bool = True, timeout: int = 1800) -> int:
         with (out / f"{name}.log").open("x", encoding="utf-8") as log:
@@ -209,9 +228,9 @@ def main() -> int:
 
     old_world, old_realm = listener_pid(args.world_port), listener_pid(args.auth_port)
     if args.servers_stopped:
-        assert not old_world and not old_realm, f"--servers-stopped, but something listens on {args.world_port}/{args.auth_port} ({old_world}/{old_realm})"
+        require(not old_world and not old_realm, f"--servers-stopped, but something listens on {args.world_port}/{args.auth_port} ({old_world}/{old_realm})")
     else:
-        assert old_world and old_realm, "World and Realm must both be listening before the deploy (or pass --servers-stopped)"
+        require(old_world and old_realm, "World and Realm must both be listening before the deploy (or pass --servers-stopped)")
     report.update(old_world=old_world, old_realm=old_realm, bots_before=bots(), characters_before=characters())
     # The operator for step 1 is managed with the RUNNING build's arcane-account (wave 8): the candidate's would upgrade the auth schema
     # under the old Realm, outside step 3's backed-up upgrade.
@@ -220,13 +239,13 @@ def main() -> int:
     elif args.old_artifacts:
         old_art = Path(args.old_artifacts)
     else:
-        cmd = ps(f'(Get-CimInstance Win32_Process -Filter "ProcessId={old_world}").CommandLine').stdout.strip()
+        cmd = ps(f'(Get-CimInstance Win32_Process -Filter "ProcessId={int(old_world)}").CommandLine').stdout.strip()
         m = re.search(r'([A-Za-z]:\\[^"]*?)\\bin\\ArcaneCore\.World\\release\\ArcaneCore\.World\.dll', cmd, re.IGNORECASE)
-        assert m, f"cannot tell the running build from the World command line ({cmd!r}); pass --old-artifacts. Nothing was stopped."
+        require(m, f"cannot tell the running build from the World command line ({cmd!r}); pass --old-artifacts. Nothing was stopped.")
         old_art = Path(m.group(1))
     if old_art is not None:
         old_account_tool = old_art / "bin/ArcaneCore.AccountTool/release/arcane-account.exe"
-        assert old_account_tool.is_file(), f"{old_account_tool} is missing; pass --old-artifacts. Nothing was stopped."
+        require(old_account_tool.is_file(), f"{old_account_tool} is missing; pass --old-artifacts. Nothing was stopped.")
         report["old_artifacts"] = str(old_art)
     snapshot("before", roles=("Auth", "Characters"))
     save()
@@ -251,18 +270,18 @@ def main() -> int:
                 deadline = time.monotonic() + args.shutdown_timeout_s
                 while time.monotonic() < deadline and not gone(old_world):
                     time.sleep(1)
-                assert gone(old_world), "World did not exit gracefully; not force-killing."
+                require(gone(old_world), "World did not exit gracefully; not force-killing.")
             finally:
                 run([old_account_tool, "set-gmlevel", args.operator, "player"], "operator-demote", check=False)
             report["world_stopped"] = True
             save()
 
             # 2. Stop the Realm (stateless logon server).
-            ps(f"Stop-Process -Id {old_realm}")
+            ps(f"Stop-Process -Id {int(old_realm)}")
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline and not gone(old_realm):
                 time.sleep(1)
-            assert gone(old_realm)
+            require(gone(old_realm), f"the Realm (PID {old_realm}) did not exit within 30 s of Stop-Process")
             report["realm_stopped"] = True
             snapshot("after-stop")
         else:
@@ -280,8 +299,8 @@ def main() -> int:
         run([dbtool, "status", "--no-fail-on-pending"] + cfg_arg, "01-status")
         run([dbtool, "upgrade", "--confirm-backup", "--backup-dir", out / "backups"] + cfg_arg, "02-upgrade")
         report["check_rc"] = run([dbtool, "check"] + cfg_arg, "03-check", check=False)
-        assert report["check_rc"] == 0, "arcane-db check reported drift; see 03-check.log"
-        assert characters() == report["characters_stopped"] and bots() == report["bots_stopped"], "the schema upgrade changed characters or bots"
+        require(report["check_rc"] == 0, "arcane-db check reported drift; see 03-check.log")
+        require(characters() == report["characters_stopped"] and bots() == report["bots_stopped"], "the schema upgrade changed characters or bots")
         save()
 
         # 4. Content refresh of the world database (the script backs it up, checks the DBC hashes, refuses a database in use) and, with
@@ -290,7 +309,7 @@ def main() -> int:
         # The refresh script refuses a world.db anyone else holds (exclusive open). arcane-db's check exits a moment earlier and Windows may not
         # have released its handle yet: wait up to 30 s for exclusive access before handing over.
         for _ in range(30):
-            if ps(f"try {{ $f=[System.IO.File]::Open('{paths['World']}','Open','ReadWrite','None'); $f.Dispose(); exit 0 }} catch {{ exit 1 }}").returncode == 0:
+            if world_db_free(paths["World"]):
                 break
             time.sleep(1)
         else:
@@ -394,9 +413,9 @@ def main() -> int:
         realm = start(realm_dll, "realm")
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline and listener_pid(args.auth_port) != realm.pid:
-            assert realm.poll() is None, "Realm exited; see realm.log"
+            require(realm.poll() is None, "Realm exited; see realm.log")
             time.sleep(1)
-        assert listener_pid(args.auth_port) == realm.pid, "Realm not listening"
+        require(listener_pid(args.auth_port) == realm.pid, "Realm not listening")
         world = start(world_dll, "world")
         report.update(new_realm=realm.pid, new_world=world.pid)
         save()
@@ -408,7 +427,7 @@ def main() -> int:
         report.update(enabled_bots=enabled, max_bots=max_bots, expected_started=expected_started)
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
-            assert world.poll() is None, f"World exited {world.returncode}; see world.log"
+            require(world.poll() is None, f"World exited {world.returncode}; see world.log")
             text = log_text("world")
             if listener_pid(args.world_port) == world.pid and text.count("Started managed playerbot") >= expected_started:
                 break
@@ -419,13 +438,13 @@ def main() -> int:
         # (DesiredEnabled of a population member may change), so additions are allowed and population members' DesiredEnabled is ignored.
         now_chars = {tuple(c) for c in characters()}
         lost_chars = [c for c in report["characters_stopped"] if tuple(c) not in now_chars]
-        assert not lost_chars, f"characters lost or changed: {lost_chars[:5]}"
+        require(not lost_chars, f"characters lost or changed: {lost_chars[:5]}")
         pop = set(report["population_stopped"]) | set(population_members())
         now_bots = {tuple(b[:4]): b[4] for b in bots()}
         lost_bots = [b for b in report["bots_stopped"] if tuple(b[:4]) not in now_bots]
-        assert not lost_bots, f"managed bots lost or changed: {lost_bots[:5]}"
+        require(not lost_bots, f"managed bots lost or changed: {lost_bots[:5]}")
         flipped = [b for b in report["bots_stopped"] if b[0] not in pop and now_bots[tuple(b[:4])] != b[4]]
-        assert not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}"
+        require(not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}")
         text = log_text("world")
         expected_lines = ["Terrain: reading .map files from", "Collision: vmaps from", "Collision: navmeshes from", "elevators and trams:",
                           "Started managed playerbot", "loaded 44 maps, 1081 areas", "loaded 122 graveyards and 191 graveyard-zone links"]

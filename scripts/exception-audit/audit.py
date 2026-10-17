@@ -11,22 +11,51 @@ import collections
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if len(sys.argv) != 3:
+    sys.exit('usage: audit.py <repo-root> <base-ref>')
 repo = os.path.abspath(sys.argv[1])
 base_ref = sys.argv[2]
-work = tempfile.mkdtemp(prefix='exception-audit-')
-base_dir = os.path.join(work, 'base')
-os.makedirs(base_dir)
-archive = subprocess.run(['git', '-C', repo, 'archive', base_ref, 'src'], check=True, capture_output=True).stdout
-subprocess.run(['tar', '-x', '-C', base_dir], input=archive, check=True)
-for tree, name in ((repo, 'final.json'), (base_dir, 'base.json')):
-    subprocess.run([sys.executable, os.path.join(HERE, 'scan.py'), tree, os.path.join(work, name)], check=True, capture_output=True)
-final = json.load(open(os.path.join(work, 'final.json')))
-base = json.load(open(os.path.join(work, 'base.json')))
+
+
+def resolve_tree(ref):
+    """The tree id <ref> names. A ref starting with '-' would reach `git archive` as an option (--output=<file> writes anywhere), so it
+    is refused; the archive is then made from the verified hex id, never from the caller's text."""
+    if not ref or ref.startswith('-'):
+        sys.exit(f'audit.py: base ref {ref!r} starts with "-" (or is empty); give a commit, branch or tag')
+    r = subprocess.run(['git', '-C', repo, 'rev-parse', '--verify', '--quiet', '--end-of-options', ref + '^{tree}'],
+                       capture_output=True, text=True, check=False)
+    tree = r.stdout.strip()
+    if r.returncode != 0 or not re.fullmatch(r'[0-9a-f]{40,64}', tree):
+        sys.exit(f'audit.py: base ref {ref!r} does not name a commit or tree in {repo}')
+    return tree
+
+
+def scan_both(base_tree):
+    """Runs scan.py over the working tree and over <base_tree>'s src/, in a temporary directory that is always removed."""
+    work = tempfile.mkdtemp(prefix='exception-audit-')
+    try:
+        base_dir = os.path.join(work, 'base')
+        os.makedirs(base_dir)
+        archive = subprocess.run(['git', '-C', repo, 'archive', base_tree, 'src'], check=True, capture_output=True).stdout
+        subprocess.run(['tar', '-x', '-C', base_dir], input=archive, check=True)
+        for tree, name in ((repo, 'final.json'), (base_dir, 'base.json')):
+            subprocess.run([sys.executable, os.path.join(HERE, 'scan.py'), tree, os.path.join(work, name)], check=True, capture_output=True)
+        with open(os.path.join(work, 'final.json'), encoding='utf-8') as f:
+            final_rows = json.load(f)
+        with open(os.path.join(work, 'base.json'), encoding='utf-8') as f:
+            base_rows = json.load(f)
+        return final_rows, base_rows
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+final, base = scan_both(resolve_tree(base_ref))
 
 # a log call that receives the exception object (directly, or through a helper that does)
 LOG_CALL = re.compile(r'\bLog(Trace|Debug|Information|Warning|Error|Critical)\b|\.Log\(|LogFault|ReportCommandFault|CommandFaultLogging\.Log|LogHookFault|\.Failed\(')
@@ -132,5 +161,6 @@ out.append('|---|---|---|---|')
 for f, line, typ, verdict, why in rows:
     out.append('| `%s:%d` | %s | %s | %s |' % (f, line, typ.replace('|', '/'), verdict, why.replace('|', '/')))
 target = os.path.join(repo, 'docs', 'ops', 'exception-audit.md')
-open(target, 'w', encoding='utf-8', newline='\n').write('\n'.join(out) + '\n')
+with open(target, 'w', encoding='utf-8', newline='\n') as f:
+    f.write('\n'.join(out) + '\n')
 print(dict(counts), len(rows))
