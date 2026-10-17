@@ -46,9 +46,9 @@ public sealed class PlayerbotStealthedHazardTests(ITestOutputHelper output)
         world.Player.Map!.RefreshVisibility(creature);
     }
 
-    private static async Task<Creature> SpawnHiddenAsync(RiskTestWorld world, float dx, float dy)
+    private static async Task<Creature> SpawnHiddenAsync(RiskTestWorld world, float dx, float dy, CreatureTemplate? template = null)
     {
-        Creature creature = await world.OnWorldAsync(() => world.Spawn(Lurker, dx, dy));
+        Creature creature = await world.OnWorldAsync(() => world.Spawn(template ?? Lurker, dx, dy));
         await world.SeeAsync(creature);
         await world.OnWorldAsync(() =>
         {
@@ -181,6 +181,61 @@ public sealed class PlayerbotStealthedHazardTests(ITestOutputHelper output)
             PlayerbotThreat detecting = Assert.Single(around, t => ReferenceEquals(t.Source, wide));
             Assert.True(detecting.Radius >= 30f, $"the buzzard's reach is {detecting.Radius}");
             Assert.True(stealthed.Radius > 18f, $"the lurker's reach is {stealthed.Radius}"); // 18 + its 8 levels above
+            return true;
+        });
+    }
+
+    /// <summary>A stalker of the bot's own level: no hazard by strength, only by the danger memory.</summary>
+    private static readonly CreatureTemplate Stalker = RiskTestWorld.Template(991332, level: 20, health: 400, minDamage: 10, maxDamage: 15);
+
+    /// <summary>
+    /// A stealthed ambusher the bot died to (or fled from) is remembered where it lurks from then on, whether or not the scan sees it
+    /// again. Live 2026-10-16 (bot-risk/died-in-known-hazard): Nightsaber Stalkers (2043, Teldrassil) killed bots that already held them
+    /// in the danger memory (Zoufasleis died fleeing one at 07:47 and to it again at 07:49). The memory held the creature's guid, but its
+    /// hazard was only ever written by a hazard scan that saw it: a stalker back in stealth at its spawn is out of the bot's sight, and
+    /// the stealthed pass reaches only <see cref="PlayerbotRecovery.StealthedHazardYards"/>, so a walk planned from farther out went
+    /// straight through its lair. The lair (the creature's home, where it evades to and hides again) is now a hazard as the memory is written.
+    /// </summary>
+    [Fact]
+    public async Task AStealthedAmbusherTheBotDiedTo_IsAHazardAtItsLair_BeyondTheStealthedScan()
+    {
+        await using RiskTestWorld world = await StartLevelTwentyAsync();
+        Creature stalker = await SpawnHiddenAsync(world, 0, 80, Stalker);
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            uint now = world.Host.World.NowMs;
+            world.Brain.Risk.ScanHazards(player);
+            Assert.Empty(world.Brain.Risk.Hazards.Active(player.MapId, now)); // the premise: no hazard by strength, out of the stealthed pass
+
+            world.Brain.Risk.OnDeath(player, [(stalker.Guid, stalker.Entry)]);
+            world.Brain.Risk.ScanHazards(player);
+            // A walk that passes the lair, planned 80 yards from the bot (the death mark at the bot is far behind).
+            Vector3[] past = [new(player.X + 60, player.Y + 80, player.Z), new(player.X - 60, player.Y + 80, player.Z)];
+            PlayerbotHazard? hit = world.Brain.Risk.Hazards.FirstOnRoute(player.MapId, past, now);
+            Assert.NotNull(hit);
+            Assert.Equal(stalker.Guid, hit!.Value.Creature);
+            Assert.Equal("fled", hit.Value.Kind);
+            return true;
+        });
+    }
+
+    /// <summary>Control: the same hidden stalker that never fought the bot is no hazard (the memory, not the stealth, makes it one).</summary>
+    [Fact]
+    public async Task AStealthedStalkerTheBotNeverFought_IsNoHazardAtItsLair()
+    {
+        await using RiskTestWorld world = await StartLevelTwentyAsync();
+        Creature stalker = await SpawnHiddenAsync(world, 0, 80, Stalker);
+        Creature other = await world.OnWorldAsync(() => world.Spawn(Stalker, -80, 0));
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            uint now = world.Host.World.NowMs;
+            world.Brain.Risk.OnDeath(player, [(other.Guid, other.Entry)]);
+            world.Brain.Risk.ScanHazards(player);
+            Vector3[] past = [new(player.X + 60, player.Y + 80, player.Z), new(player.X - 60, player.Y + 80, player.Z)];
+            Assert.Null(world.Brain.Risk.Hazards.FirstOnRoute(player.MapId, past, now));
+            Assert.NotEqual(stalker.Guid, default);
             return true;
         });
     }

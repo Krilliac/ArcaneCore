@@ -4,6 +4,7 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -52,13 +53,17 @@ internal sealed class PlayerbotBreadcrumbs
 /// <c>max(1.5 x aggro radius, ThreatRadius)</c> from where its fight began (and twelve seconds passed), and the template's hard leash
 /// (cmangos <c>Leash</c>, CheckHardLeash) does the same from the combat start; the creature then evades home
 /// (CreatureAI::EnterEvadeMode). The retreat is over once nothing threatens the bot; it gives up (and fights) after
-/// <see cref="MaxMs"/> or when <see cref="MaxExtensions"/> further runs did not shake its pursuers off. World thread.
+/// <see cref="MaxMs"/>, when <see cref="MaxExtensions"/> further runs did not shake its pursuers off, or after
+/// <see cref="MaxFailedReplans"/> thinks in a row with no way out in any direction it tries (<see cref="PlanAway"/>). World thread.
 /// </summary>
 internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions options, PlayerbotCombatSpells spells)
 {
     internal const uint MaxMs = 60_000;
     internal const int MaxExtensions = 8;
     internal const float ExtendYards = 30f;
+
+    /// <summary>Thinks in a row with no way out at all (<see cref="PlanAway"/>) before the retreat gives up cornered.</summary>
+    internal const int MaxFailedReplans = 8;
 
     /// <summary>The margin past an enemy's leash the retreat runs to.</summary>
     internal const float LeashMarginYards = 5f;
@@ -69,6 +74,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     private PlayerbotRoute? _route;
     private uint _startedMs;
     private int _extensions;
+    private int _failedReplans;
     private bool _attackStopped;
 
     internal bool Active { get; private set; }
@@ -107,6 +113,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         _enemies.AddRange(enemies);
         _route = null;
         _extensions = 0;
+        _failedReplans = 0;
         _attackStopped = false;
         _startedMs = session.World.NowMs;
         _zones.AddRange(BuildZones(player, enemies, anchors));
@@ -205,11 +212,17 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         if (_route is null || _route.Complete)
         {
             if (_extensions >= MaxExtensions) { Stop("cornered"); return false; }
+            _route = PlanAway(player, out Vector3 goal);
+            Goal = goal;
+            if (_route is null)
+            {
+                Trace += $"; no way out at {player.X:F1},{player.Y:F1}";
+                if (++_failedReplans >= MaxFailedReplans) { Stop("cornered"); return false; }
+                return true;
+            }
+
+            _failedReplans = 0;
             _extensions++;
-            Vector3 here = new(player.X, player.Y, player.Z);
-            Goal = here + (Away(player) * ExtendYards);
-            _route = Plan(player, Goal.Value, []);
-            if (_route is null) return true;
         }
 
         if (!PlayerbotNavigation.TryAdvance(session, _route, options, interval, session.World.NowMs))
@@ -276,6 +289,50 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         foreach ((Vector3 anchor, float safe) in zones)
             if (Vector3.Distance(point, anchor) < safe) return false;
         return true;
+    }
+
+    /// <summary>The turns off straight away from the enemies a further run tries, in order (degrees): away first, never back toward them.</summary>
+    private static ReadOnlySpan<float> FanDegrees => [0f, 45f, -45f, 90f, -90f];
+
+    /// <summary>
+    /// A further run of <see cref="ExtendYards"/>: straight away from the enemies when the navigation has a way there, else the first of
+    /// the turns of <see cref="FanDegrees"/> that has one, else the walkable point nearest the straight one
+    /// (<see cref="PlayerbotNavigation.TryPlanToward"/>); null when none. Each goal stands on the ground there (the bot's own height
+    /// is yards off it on a slope). <paramref name="goal"/> is where the run goes (the straight one when there is none).
+    /// <para>
+    /// The retreat once asked only for the straight one, every think: where that was a cliff edge, water or a wall, all
+    /// <see cref="MaxExtensions"/> replans were refused alike within a few thinks and the bot gave up cornered where it stood, although
+    /// the ground to either side was open (live 2026-10-16, Krezelou on Teldrassil: 14 of 16 directions round it plan, the two either
+    /// side of its retreat's own did not). One exact path query a turn, five at most a think.
+    /// </para>
+    /// </summary>
+    private PlayerbotRoute? PlanAway(Player player, out Vector3 goal)
+    {
+        Vector3 here = new(player.X, player.Y, player.Z);
+        Vector3 away = Away(player);
+        float straight = MathF.Atan2(away.Y, away.X);
+        goal = OnGround(player, here + (away * ExtendYards));
+        foreach (float degrees in FanDegrees)
+        {
+            float angle = straight + (degrees * MathF.PI / 180f);
+            Vector3 candidate = degrees == 0f ? goal
+                : OnGround(player, here + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f) * ExtendYards));
+            if (PlayerbotNavigation.TryPlan(player, candidate, options, out PlayerbotRoute? route) && route is not null)
+            {
+                goal = candidate;
+                return route;
+            }
+        }
+
+        return PlayerbotNavigation.TryPlanToward(player, goal, options, out PlayerbotRoute? toward) ? toward : null;
+    }
+
+    /// <summary><paramref name="point"/> on the ground below it (searched from 20 yards above), or as it is where there is none within 30 yards.</summary>
+    private static Vector3 OnGround(Player player, Vector3 point)
+    {
+        if (player.Map is not { } map) return point;
+        float floor = map.Collision.GetHeight(point.X, point.Y, point.Z + 20f);
+        return PlayerbotNavigation.InvalidHeight(floor) || MathF.Abs(floor - point.Z) > 30f ? point : point with { Z = floor };
     }
 
     /// <summary>A route to <paramref name="goal"/>: the navigation's, else back along the trail itself.</summary>

@@ -646,11 +646,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
         }
         // Out of breath while still swimming: the movement acknowledgement below would otherwise consume every think, and the
-        // bot would follow its underwater route until the breath timer killed it (bot QA #271).
-        if (!dead && PlayerbotWater.Submerged(player) && !player.Combat.IsInCombat && PlayerbotWater.BreathRunningOut(player))
+        // bot would follow its underwater route until the breath timer killed it (bot QA #271). In combat too: the breath timer
+        // runs whatever the fight (LiquidEnvironment), so a bot held by a murloc or a crocolisk below the surface swims out with its
+        // attackers behind it rather than drowning where it stands; with breath to spare the fight below the surface goes on.
+        if (!dead && PlayerbotWater.Submerged(player) && PlayerbotWater.BreathRunningOut(player))
         {
             EscapeWater(player, elapsedMs);
-            return;
+            // A fighting bot that found no way out yet (the next search waits two seconds) fights on meanwhile rather than standing idle.
+            if (!player.Combat.IsInCombat || _waterRoute is not null) return;
         }
 
         // Death cleanup must happen before this seam, but pending movement orders still
