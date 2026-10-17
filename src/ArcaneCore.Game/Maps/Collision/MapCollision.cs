@@ -200,6 +200,10 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
     /// <c>StaticMapTree::LoadMapTile</c>), so the terrain decides there.</item>
     /// <item>Inside a WMO group, or a model floor within <see cref="UnderMapFloorSearch"/> below <c>z + 2</c>, or a navigation-mesh
     /// floor in that same window (<see cref="TryGetMeshFloorUnder"/>): <see cref="UnderMapKind.Ok"/>.</item>
+    /// <item>Level with a model or mesh floor beside it (<see cref="LevelWithANearbyFloor"/>): <see cref="UnderMapKind.Ok"/>. The
+    /// extraction has gaps a few yards wide in city floors (Ironforge, Undercity: doodads such as gratings and platforms are not in the
+    /// vmaps, and the mesh is built from the same data), and a unit standing in one at the height of the floor around it has not fallen
+    /// through anything (live sweep 2026-10-17: about 900 Error reports from bots on the Ironforge and Undercity floors).</item>
     /// <item>Otherwise <see cref="UnderMapKind.UnderMap"/> with depth = terrain height - z.</item>
     /// </list>
     /// Reading the coverage may read the map's vmtree from disk the first time (<see cref="VMapManager.GetTree"/>).
@@ -248,12 +252,58 @@ public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
 
         if (models.TryGetAreaInfo(Map.MapId, x, y, z, out _)
             || models.GetModelHeight(Map.MapId, x, y, z + FloorProbeOffset, UnderMapFloorSearch) is not null
-            || TryGetMeshFloorUnder(x, y, z, UnderMapFloorSearch - FloorProbeOffset, out _))
+            || TryGetMeshFloorUnder(x, y, z, UnderMapFloorSearch - FloorProbeOffset, out _)
+            || LevelWithANearbyFloor(models, x, y, z))
         {
             return UnderMapVerdict.Ok;
         }
 
         return UnderMapVerdict.Under(depth);
+    }
+
+    /// <summary>How far from a point a floor at its height is looked for by <see cref="LevelWithANearbyFloor"/> (rings at 2.5, 5 and 8 yards).</summary>
+    public const float NearbyFloorRadius = 8.0f;
+
+    /// <summary>A nearby floor at most this far over the point, or <see cref="NearbyFloorBelow"/> under it, is level with it.</summary>
+    public const float NearbyFloorAbove = 3.0f;
+
+    /// <summary>See <see cref="NearbyFloorAbove"/>.</summary>
+    public const float NearbyFloorBelow = 4.0f;
+
+    private static readonly Vector2[] NearbyFloorDirections =
+    [
+        new(1f, 0f), new(0f, 1f), new(-1f, 0f), new(0f, -1f),
+        new(0.7071f, 0.7071f), new(-0.7071f, 0.7071f), new(-0.7071f, -0.7071f), new(0.7071f, -0.7071f),
+    ];
+
+    /// <summary>
+    /// Whether a model floor or a navigation-mesh polygon lies within <see cref="NearbyFloorRadius"/> yards across of the point, between
+    /// <see cref="NearbyFloorBelow"/> under it and <see cref="NearbyFloorAbove"/> over it: the point stands in a gap in the floor data,
+    /// level with the floor around it. A unit that fell through a floor is far under it by the time it is sampled, so this does not
+    /// excuse it. Up to 48 height queries; asked only for a point every cheaper question has already convicted.
+    /// </summary>
+    internal bool LevelWithANearbyFloor(ILineOfSight models, float x, float y, float z)
+    {
+        foreach (float radius in (ReadOnlySpan<float>)[2.5f, 5.0f, NearbyFloorRadius])
+        {
+            foreach (Vector2 direction in NearbyFloorDirections)
+            {
+                float px = x + (direction.X * radius);
+                float py = y + (direction.Y * radius);
+                if (models.GetModelHeight(Map.MapId, px, py, z + NearbyFloorAbove, NearbyFloorAbove + NearbyFloorBelow) is { } floor
+                    && floor >= z - NearbyFloorBelow)
+                {
+                    return true;
+                }
+
+                if (TryGetMeshFloor(px, py, z, NearbyFloorBelow, NearbyFloorAbove, out _))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

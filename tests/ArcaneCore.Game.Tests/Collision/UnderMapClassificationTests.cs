@@ -121,6 +121,29 @@ public sealed class UnderMapClassificationTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void InAGapOfAFloor_LevelWithTheFloorBesideIt_IsOk_FarUnderItIsNot()
+    {
+        // A slab floor 100 yards under the terrain whose west edge is 3 yards east of the point: nothing straight under the point, the
+        // floor beside it (the live Ironforge and Undercity gaps, 2026-10-17).
+        using var fixture = new VMapFixture();
+        fixture.Place("slab", VMapFixture.Box(new Vector3(-10, -10, -1), new Vector3(10, 10, 0)), new Vector3(X + 13f, Y, Ground - 100f));
+        fixture.Write(0);
+        var vmaps = new VMapManager(fixture.Directory);
+        (int tx, int ty) = TerrainTile.TileOf(X, Y)!.Value;
+        Assert.True(vmaps.LoadTile(0, tx, ty));
+        using var kit = new HazardKit(liquid: null);
+        WorldCollision.Of(kit.Kit.World).Install(lineOfSight: vmaps);
+        MapCollision collision = kit.Map.Collision;
+        Assert.Null(vmaps.GetModelHeight(0, X, Y, Ground - 98f, MapCollision.UnderMapFloorSearch));
+
+        Assert.Equal(UnderMapKind.Ok, collision.ClassifyUnderMap(X, Y, Ground - 100f, 50f).Kind);
+        Assert.Equal(UnderMapKind.Ok, collision.ClassifyUnderMap(X, Y, Ground - 102.5f, 50f).Kind);
+        Assert.Equal(UnderMapKind.UnderMap, collision.ClassifyUnderMap(X, Y, Ground - 130f, 50f).Kind); // fell through: 30 yards under it
+        Assert.Equal(UnderMapKind.UnderMap, collision.ClassifyUnderMap(X - 10f, Y, Ground - 100f, 50f).Kind); // 13 yards from its edge
+        Assert.Equal(UnderMapKind.Ok, collision.ClassifyUnderMap(X - 4f, Y, Ground - 100f, 50f).Kind);        // 7 yards from it
+    }
+
+    [Fact]
     public void AModelSurfaceAboveAUnitInOpenSpace_DoesNotExcuseIt()
     {
         // Triangle hits are double-sided: the underside of a floor the unit fell through must not count as an explanation.

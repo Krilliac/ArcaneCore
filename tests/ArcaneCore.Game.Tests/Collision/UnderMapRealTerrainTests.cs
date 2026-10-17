@@ -32,6 +32,12 @@ public sealed class UnderMapRealTerrainTests(ITestOutputHelper output)
         { "Ironforge", 0u, -5010.6f, -1060.9f, 502.0f },
         { "Undercity", 0u, 1475.6f, 376.3f, -59.4f },
         { "Teldrassil barrow", 1u, 10095.2f, 1088.3f, 1327.7f },
+        // Live sweep 2026-10-17: bots level with the floor in a gap of the extracted floor (no model or mesh floor straight under them).
+        { "Ironforge floor gap 1", 0u, -4650.75f, -908.73f, 506.30f },
+        { "Ironforge floor gap 2", 0u, -4729.25f, -889.95f, 498.96f },
+        { "Ironforge floor gap 3", 0u, -4638.24f, -1059.49f, 501.40f },
+        { "Undercity floor gap 1", 0u, 1745.43f, 114.42f, -60.23f },
+        { "Undercity floor gap 2", 0u, 1641.62f, 421.73f, -62.14f },
     };
 
     private WorldRuntime RealWorld(uint mapId, float x, float y)
