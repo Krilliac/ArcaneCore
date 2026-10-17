@@ -46,6 +46,7 @@ public sealed class SpellAnomalyTests
     private const uint RestoreMaxStacksOk = 947036;
     private const uint ProcSpellCut = 947040;
     private const uint ProcSpellOk = 947041;
+    private const uint PeriodicRestarted = 947042;
     private const long Saved = 1_800_000_000_000;
 
     private static SpellInfo Instant(uint id, SpellEffectInfo effect) => Spell(id, effect) with
@@ -93,7 +94,7 @@ public sealed class SpellAnomalyTests
         SelfHot(PeriodicBad), SelfHot(PeriodicNegative), SelfHot(PeriodicOk), SelfHot(ExpiredBad), SelfHot(ExpiredOk), SelfHot(RemovedStillListed),
         SelfHot(RestoreBadMax), SelfHot(RestoreBadRemaining), SelfHot(RestoreOk), SelfHot(RestoreBadTimer), SelfHot(RestoreBadStacks),
         SelfHot(RestoreMaxStacksOk, stacks: 3),
-        Instant(ProcSpellCut, Effect(SpellEffectName.Heal, 1)), Instant(ProcSpellOk, Effect(SpellEffectName.Heal, 1)));
+        Instant(ProcSpellCut, Effect(SpellEffectName.Heal, 1)), Instant(ProcSpellOk, Effect(SpellEffectName.Heal, 1)), SelfHot(PeriodicRestarted));
 
     private static AnomalyCapture CaptureFor(uint spellId, string key)
         => AnomalyLedger.Shared.Capture(n => n.Key == key && n.Subject == $"spell {spellId}");
@@ -383,6 +384,29 @@ public sealed class SpellAnomalyTests
 
         Assert.Empty(capture.Notices);
         Assert.True(aura.TickCount >= 9, $"ticks: {aura.TickCount}");
+    }
+
+    /// <summary>
+    /// The live world reported Ignite (12654) as stalled after a refresh: RestartHolderTicks puts a fresh full-period timer on the aura, so the
+    /// time since the last tick may pass one period once without a stall. The watch restarts with the timer.
+    /// </summary>
+    [Fact]
+    public void APeriodicAuraWhoseTicksRestart_IsNotReportedStalled()
+    {
+        using SpellTestKit kit = Kit();
+        Player player = Caster(kit, PeriodicRestarted);
+        SpellAuraHolder holder = CastAura(kit, player, PeriodicRestarted);
+        SpellAura aura = Assert.Single(holder.AuraSpan.ToArray(), a => a is not null)!;
+        using AnomalyCapture capture = CaptureFor(PeriodicRestarted, "aura/periodic-stalled");
+
+        kit.Advance(900);
+        kit.System.RestartHolderTicks(holder);
+        kit.Advance(900);
+        kit.System.RestartHolderTicks(holder);
+        kit.Advance(3_000);
+
+        Assert.Empty(capture.Notices);
+        Assert.True(aura.TickCount >= 2, $"ticks: {aura.TickCount}");
     }
 
     // --- aura/expired-not-removed -------------------------------------------------------------------------

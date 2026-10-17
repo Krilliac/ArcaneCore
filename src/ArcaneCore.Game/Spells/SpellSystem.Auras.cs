@@ -176,6 +176,7 @@ public sealed partial class SpellSystem
         {
             aura.PeriodicTimer = PeriodicTiming.InitialTimer(holder.Spell, aura);
             aura.TickCount = 0;
+            aura.ElapsedWithoutTickMs = 0; // the fresh timer is a full period away: the stall watch starts over with it (Ignite's refresh)
         }
 
         WriteAuraApplications(holder);

@@ -68,6 +68,7 @@ public static class PeriodicTiming
 
         int timer = duration > period ? duration % period : duration;
         aura.PeriodicTimer = timer == 0 ? period : timer;
+        aura.ElapsedWithoutTickMs = 0; // the re-synchronised timer may put the next tick up to a period away
     }
 
     /// <summary>
