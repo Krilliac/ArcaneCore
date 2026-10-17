@@ -699,6 +699,26 @@ public sealed class PlayerbotThinkLanesTests
     }
 
     [Fact]
+    public async Task TheFeature_MeasuresTheMainLanesVisitCost_ForTheBudgetsCoverageFloor()
+    {
+        // Each scripted bot's think burns 3 ms: the feature must time its main-lane visits and hand them to the budget (ObserveVisit).
+        var (host, feature, capture, _) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 0, burnMs: 3, "Visitbot");
+        try
+        {
+            double visitMs = 0;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(40);
+            while (DateTime.UtcNow < deadline && (visitMs = await host.World.InvokeAsync(() => feature.ThinkVisitMs)) < 1) await Task.Delay(50);
+            Assert.InRange(visitMs, 1, PlayerbotThinkBudget.MaxVisitSampleMs);
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task WithTheBoundOff_TheFeatureNeverShrinksTheFirstLanesShare()
     {
         var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 0, burnMs: 1200, "Noscalebot");
