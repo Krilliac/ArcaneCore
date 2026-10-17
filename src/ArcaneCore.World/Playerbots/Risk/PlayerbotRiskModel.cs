@@ -36,7 +36,9 @@ internal enum RiskJoin : byte
 
 /// <summary>One creature of a predicted fight: its level, rank, health and damage per second against the bot.</summary>
 /// <param name="Lethal">One of its spells kills the bot outright (<see cref="CreatureSpellThreat.IsLethalTo"/>).</param>
-internal readonly record struct RiskEnemy(uint Entry, byte Level, uint Rank, uint Health, float Dps, RiskJoin Join, bool Lethal = false)
+/// <param name="Remembered">The bot fled from or died to this very creature and still remembers it (<see cref="PlayerbotDangerMemory"/>).</param>
+internal readonly record struct RiskEnemy(uint Entry, byte Level, uint Rank, uint Health, float Dps, RiskJoin Join, bool Lethal = false,
+    bool Remembered = false)
 {
     /// <summary>vmangos CreatureEliteType: 1 elite, 2 rare elite, 3 world boss (4 rare is a normal creature).</summary>
     public bool Elite => Rank is 1 or 2 or 3;
@@ -77,6 +79,12 @@ internal sealed record PlayerbotEngagementFacts
 
     /// <summary>The bot retreated from or died to this very creature within its danger memory.</summary>
     public bool Remembered { get; init; }
+
+    /// <summary>
+    /// A creature of the target's kind alone beat the bot within its danger memory (<see cref="PlayerbotDangerMemory.LostAlone"/>): the
+    /// estimate let it pull one before, and the fight said otherwise.
+    /// </summary>
+    public bool LostToKind { get; init; }
 
     /// <summary>
     /// The players who would take the fight together (1 alone). A group of N deals N times the damage and shares the damage taken
@@ -176,14 +184,27 @@ internal static class PlayerbotRiskModel
         float accept = Acceptable(reward, options.Tolerance);
         PlayerbotEngagement Verdict(PlayerbotEngageDecision decision, string reason) => new(target.Entry, risk, reward, decision, reason, adds);
 
-        if (facts.Remembered) return Verdict(PlayerbotEngageDecision.Avoid, "remembered");
+        // The target, or a creature that would join the fight itself (its assistance, one whose aggro covers the fight spot), is one
+        // the bot fled from or died to: the danger memory steers the bot off the fight, not only off pulling that creature (bot QA #788).
+        if (facts.Remembered || facts.Enemies.Any(enemy => enemy.Remembered && enemy.Join != RiskJoin.Path))
+            return Verdict(PlayerbotEngageDecision.Avoid, "remembered");
+        // A kind that beat the bot one against one is not pulled alone again while it remembers (bot QA #816: run, rest, pull the same
+        // kind, run again). A group is weighed as ever (NeededGroupSize).
+        if (facts.LostToKind && facts.GroupSize <= 1) return Verdict(PlayerbotEngageDecision.Avoid, "lost-to-kind");
         // A creature with a spell that kills the bot outright is never worth it, quest or not: no estimate of rates covers a one-shot.
         if (facts.Enemies.Any(enemy => enemy.Lethal))
             return new(target.Entry, float.PositiveInfinity, reward, PlayerbotEngageDecision.Avoid, "lethal", adds);
         int eliteMargin = EliteLevelMargin + (facts.GroupSize > 1 ? GroupEliteLevelMargin : 0);
         if (target.Elite && target.Level >= facts.BotLevel + eliteMargin && !facts.QuestObjective)
             return Verdict(PlayerbotEngageDecision.Avoid, "elite-above");
-        if (risk <= accept) return Verdict(PlayerbotEngageDecision.Engage, adds > 0 ? $"ok-with-{adds}-adds" : "ok");
+        if (risk <= accept)
+        {
+            // A remembered creature only along the way: the fight may be taken, never by walking through its reach (the fight without
+            // the creatures on the way is no riskier than with them).
+            if (!facts.Enemies.Any(enemy => enemy.Remembered && enemy.Join == RiskJoin.Path))
+                return Verdict(PlayerbotEngageDecision.Engage, adds > 0 ? $"ok-with-{adds}-adds" : "ok");
+            return Verdict(PlayerbotEngageDecision.Detour, $"path-adds-{facts.Enemies.Count(enemy => enemy.Join == RiskJoin.Path)}");
+        }
 
         float full = Risk(facts, facts.BotMaxHealth, facts.BotManaPct is null ? null : 100f, facts.Enemies);
         if (full <= accept)
@@ -214,7 +235,8 @@ internal static class PlayerbotRiskModel
     {
         ArgumentNullException.ThrowIfNull(facts);
         ArgumentNullException.ThrowIfNull(options);
-        if (facts.Enemies.Count == 0 || facts.Remembered || facts.Enemies.Any(enemy => enemy.Lethal)) return 0;
+        if (facts.Enemies.Count == 0 || facts.Remembered
+            || facts.Enemies.Any(enemy => enemy.Lethal || (enemy.Remembered && enemy.Join != RiskJoin.Path))) return 0;
         PlayerbotEngagementFacts alone = facts with { GroupSize = 1 };
         if (Assess(alone, options).Decision is PlayerbotEngageDecision.Engage or PlayerbotEngageDecision.Rest or PlayerbotEngageDecision.Detour)
             return 0;
@@ -266,7 +288,8 @@ internal static class PlayerbotRiskModel
         if (enemy.Lethal) return true;
         if (enemy.Elite && enemy.Level >= botLevel + EliteLevelMargin) return true;
         if (botMaxHealth == 0) return true;
-        float risk = enemy.Dps * (enemy.Health / MathF.Max(0.1f, botDps)) / botMaxHealth;
+        int above = enemy.Level - botLevel;
+        float risk = enemy.Dps * CrushFactor(above) * (enemy.Health / (MathF.Max(0.1f, botDps) * HitFactor(above))) / botMaxHealth;
         return risk > Acceptable(float.PositiveInfinity, options.Tolerance);
     }
 
@@ -296,16 +319,45 @@ internal static class PlayerbotRiskModel
         int players = Math.Max(1, facts.GroupSize);
         float dps = MathF.Max(0.1f, facts.BotDps * ManaFactor(facts.ManaDependence, manaPct)) * players;
         float elapsed = 0, taken = 0;
-        foreach (RiskEnemy enemy in enemies.OrderBy(e => e.Health))
+        byte level = facts.BotLevel;
+        foreach (RiskEnemy enemy in enemies.OrderBy(e => e.Health / HitFactor(e.Level - level)))
         {
-            elapsed += enemy.Health / dps;
-            taken += enemy.Dps * elapsed;
+            elapsed += enemy.Health / (dps * HitFactor(enemy.Level - level));
+            taken += enemy.Dps * CrushFactor(enemy.Level - level) * elapsed;
         }
 
         float risk = taken / ((float)health * players);
         risk *= 1f + (0.5f * Math.Max(0, facts.DangerHits));
         if (facts.ReadyEscapes > 0) risk *= 0.9f;
         return risk;
+    }
+
+    /// <summary>
+    /// The share of the bot's damage that lands on a creature <paramref name="levelsAbove"/> levels above it, relative to one of its own
+    /// level: vmangos Unit::MagicSpellHitResult, a player against a creature, hits <c>96 - diff</c> percent below a difference of 3 and
+    /// <c>94 - (diff - 2) x 11</c> from 3 on (at least 1): 0.86 at +3, 0.75 at +4, 0.64 at +5. The melee table loses about as much (the
+    /// skill gap's misses, dodges and glancing blows). The bot's damage estimate comes from its fights with creatures about its level, so
+    /// a creature well above takes this much longer to kill, and hits all that time. Never above 1: a lower creature is not made easier
+    /// than the estimate already has it.
+    /// </summary>
+    internal static float HitFactor(int levelsAbove)
+    {
+        if (levelsAbove <= 0) return 1f;
+        int hit = levelsAbove < 3 ? 96 - levelsAbove : 94 - ((levelsAbove - 2) * 11);
+        return Math.Max(1, hit) / 96f;
+    }
+
+    /// <summary>
+    /// The damage a creature <paramref name="levelsAbove"/> levels above the bot deals relative to its template: vmangos
+    /// Unit::RollMeleeOutcomeAgainst lets a creature 4 or more levels above its victim, whose weapon skill (5 a level) is 15 or more
+    /// above the victim's defense (capped at 5 a level), crush for 150% damage with a chance of 2% a skill point less 15%: 25% at +4
+    /// (x1.125), 35% at +5.
+    /// </summary>
+    internal static float CrushFactor(int levelsAbove)
+    {
+        if (levelsAbove < 4) return 1f;
+        float chance = Math.Clamp(((levelsAbove * 5 * 2) - 15) / 100f, 0f, 1f);
+        return 1f + (0.5f * chance);
     }
 
     /// <summary>The share of the bot's damage it still deals with <paramref name="manaPct"/> mana left (a wand or melee remains).</summary>
