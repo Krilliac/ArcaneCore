@@ -453,6 +453,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _stall.Reset();
         _homeReturn.Reset();
         _goal = PlayerbotGoalKind.Explore;
+        // The group or battleground AI drove the bot meanwhile (a match lasts minutes): that silence is no think the brain missed.
+        // Left armed, the first think back reported "no think for 195..929 s" (bot-brain/think-starved, live 2026-10-17).
+        _thinkClockArmed = false;
     }
 
     /// <summary>Whether goals skip creatures of <paramref name="entry"/> for now (a stall or a death loop set it aside; tests).</summary>

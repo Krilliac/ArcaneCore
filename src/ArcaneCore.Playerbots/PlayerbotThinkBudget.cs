@@ -63,4 +63,24 @@ internal static class PlayerbotThinkStarvation
         reported = true;
         return true;
     }
+
+    /// <summary>The least share of its time the first lane keeps however late the main lane runs (fights still get thought for).</summary>
+    internal const double MinPriorityScale = 0.2;
+
+    /// <summary>
+    /// How much of its time share the first think lane may use, from the longest silence of any bot (<paramref name="oldestSilentMs"/>, last
+    /// tick's) against the starvation <paramref name="boundMs"/> (0 = off, always 1): 1 up to half the bound, falling in a straight line to
+    /// <see cref="MinPriorityScale"/> at nine tenths of it. A fixed split (70% of the time to the fights) leaves the main lane too few
+    /// thinks for a crowd of fights (<see cref="PlayerbotThinkRotation.TickLanes"/>); this gives the time back just when a bot is about to
+    /// go over the bound, and takes it again once the main lane caught up. Pure.
+    /// </summary>
+    internal static double PriorityScale(uint oldestSilentMs, uint boundMs)
+    {
+        if (boundMs == 0 || oldestSilentMs > int.MaxValue) return 1;
+        double soft = boundMs * 0.5;
+        double hard = boundMs * 0.9;
+        if (oldestSilentMs <= soft) return 1;
+        if (oldestSilentMs >= hard) return MinPriorityScale;
+        return 1 - (1 - MinPriorityScale) * (oldestSilentMs - soft) / (hard - soft);
+    }
 }

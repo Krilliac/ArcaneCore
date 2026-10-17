@@ -77,6 +77,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private readonly PlayerbotThinkBudget _thinkBudget = new();
     private double _lastOwnMs;
     private double _lastBudgetMs = PlayerbotThinkRotation.TickBudgetMs;
+
+    /// <summary>The longest silence (ms of world time) of any running bot after the last tick: the first think lane yields time to the main lane as it nears the starvation bound (<see cref="PlayerbotThinkStarvation.PriorityScale"/>).</summary>
+    private uint _oldestSilentMs;
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
     private readonly PlayerbotThinkProbe _probe = new();
     private PlayerbotSlowThinkLog? _slowThinks;
@@ -1866,7 +1869,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 thinks++;
                 return true;
             },
-            () => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds);
+            () => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds,
+            PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, (uint)_options.ThinkStarvedGapMs));
         LastLaneActions = (combatActions, mainActions >= 0 ? mainActions : reserve + combatBudget.Remaining);
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
         _cadence.EndTick(thinks, _rotation.LastTickTimeLimited, actionLimited, budgetMs);
@@ -1903,16 +1907,22 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private void ReportStarvedBots(ActiveBot[] bots, uint now)
     {
         uint bound = (uint)_options.ThinkStarvedGapMs;
+        _oldestSilentMs = 0;
         if (bound == 0) return;
+        uint oldest = 0;
         foreach (ActiveBot active in bots)
         {
             if (active.Paused || !active.GapPrimed || active.Session.State != SessionState.InWorld) continue;
+            uint silentMs = unchecked(now - active.LastUpdateMs);
+            if (silentMs > oldest && silentMs <= int.MaxValue) oldest = silentMs;
             if (!PlayerbotThinkStarvation.ShouldReport(now, active.LastUpdateMs, bound, ref active.StarvedReported)) continue;
             if (active.Session.Player is not { } player || active.Session.IsInChaosProbe) continue;
             PlayerbotAnomalies.Report(player, "cadence", "think-starved",
                 string.Create(System.Globalization.CultureInfo.InvariantCulture,
                     $"no think for {unchecked(now - active.LastUpdateMs)} ms (bound {bound} ms; {bots.Length} bots, think budget {_lastBudgetMs:F1} ms per tick)"));
         }
+
+        _oldestSilentMs = oldest;
     }
 
     /// <summary>

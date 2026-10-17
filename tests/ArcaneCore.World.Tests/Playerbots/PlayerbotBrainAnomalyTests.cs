@@ -63,6 +63,41 @@ public sealed class PlayerbotBrainAnomalyTests
     }
 
     [Fact]
+    public async Task ABotThatAGroupOrBattlegroundDroveForMinutes_IsNotStarved_WhenTheBrainTakesItBack()
+    {
+        // Live 2026-10-17: a bot queued for Warsong Gulch, was driven through the match and handed back: the brain's first think reported
+        // "no think for 929 s" (bot-brain/think-starved) because its clock stayed armed across the hand-off.
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+        try
+        {
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                brain.CheckThinkClock(player, 1000);                 // the brain thought, the clock is armed
+                brain.ResumeAfterGroup();                             // the AI that drove it for 15 minutes lets it go
+                brain.CheckThinkClock(player, 1000 + 900_000);        // its first think back
+                brain.CheckThinkClock(player, 1000 + 900_000 + PlayerbotBrain.ThinkStarvedMs - 1);
+                return true;
+            });
+            Assert.False(cap.Any(BrainKey("think-starved")), cap.Describe());
+
+            // The clock is armed again by the first think back: a brain that then goes silent is still reported.
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                brain.CheckThinkClock(player, 2_000_000);
+                brain.CheckThinkClock(player, 2_000_000 + PlayerbotBrain.ThinkStarvedMs + 1);
+                return true;
+            });
+            Assert.Equal(1, cap.Count(BrainKey("think-starved")));
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task AThinkThatTakesHalfASecond_IsReportedOverran_AndAFastOneIsNot()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
