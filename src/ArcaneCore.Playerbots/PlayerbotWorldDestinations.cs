@@ -1233,15 +1233,22 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         uint[] allowed = services.Options.OrdinaryRewardQuestIds;
         uint level = player.Level;
         float maxDeliveryYards = Home is null ? _options.MaxDeliveryYards : 0;
-        if (_mapId == mapId && ReferenceEquals(_content, content) && _contentVersion == content.DefinitionsVersion
+        bool sameIdentity = _mapId == mapId && ReferenceEquals(_content, content) && _contentVersion == content.DefinitionsVersion
             && ReferenceEquals(_quests, quests) && _preferredEntry == preferredCreatureEntry
             && ReferenceEquals(_cachedHome, Home)
             && _returnQuestId == returnQuestId && _rewardMode == mode && _level == level
             && _cachedMaxDeliveryYards == maxDeliveryYards
-            && _rewardQuestIds.SequenceEqual(allowed)
-            && !EntryListStale(player)) return;
+            && _rewardQuestIds.SequenceEqual(allowed);
+        // Moving does not by itself abandon the walk: the list is chosen again, and the route is kept when its spawn is still
+        // the nearest one. Clearing it on every small step (the gap between the 128th and 129th spawn is often a yard) replanned
+        // the same camp every think and the not-closing clock then gave the camp up.
+        if (sameIdentity && !EntryListStale(player)) return;
+        bool movementOnly = sameIdentity;
+        PlayerbotRoute? carriedRoute = movementOnly ? _route : null;
+        uint carriedSpawn = movementOnly ? _routeSpawnGuid : 0;
+        uint carriedTarget = movementOnly ? _routeTarget : 0;
+        if (!movementOnly) ClearRoute();
         bool contentChanged = _mapId != mapId || !ReferenceEquals(_content, content) || _contentVersion != content.DefinitionsVersion;
-        ClearRoute();
         _mapId = mapId;
         _content = content;
         _quests = quests;
@@ -1254,7 +1261,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _cachedHome = Home;
         _rewardQuestIds = [.. allowed];
         _entries.Clear();
-        _blockedSpawns.Clear();
+        if (!movementOnly) _blockedSpawns.Clear();
         if (contentChanged) _farBlockedUntil.Clear();
         if (returnQuestId != 0 || preferredCreatureEntry != 0)
         {
@@ -1303,6 +1310,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
 
             RememberEntryList(player, listTruncated, keptSq, nearestDroppedSq);
+            KeepCarriedRoute(player, carriedRoute, carriedSpawn, carriedTarget);
             return;
         }
 
@@ -1340,6 +1348,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         bool truncated = giverSpawns.Count > keep;
         RememberEntryList(player, truncated, farthestKeptSq, truncated ? DistanceSquared(player, giverSpawns[keep].Spawn) : float.PositiveInfinity);
+        KeepCarriedRoute(player, carriedRoute, carriedSpawn, carriedTarget);
     }
 
     /// <summary>Where the nearest-<see cref="MaxEntryScan"/> list was chosen, and whether a farther spawn was dropped.</summary>
@@ -1370,6 +1379,31 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _entryListTruncated = truncated;
         _farthestKeptDistSq = farthestKeptDistSq;
         _nearestDroppedDistSq = nearestDroppedDistSq;
+    }
+
+    /// <summary>
+    /// A list rebuilt only because the bot moved keeps the walk when its spawn is still the nearest unblocked one.
+    /// A dropped spawn that is now nearer replaces it.
+    /// </summary>
+    private void KeepCarriedRoute(Player player, PlayerbotRoute? carriedRoute, uint carriedSpawn, uint carriedTarget)
+    {
+        if (carriedRoute is null) return;
+        uint now = _session.World.NowMs;
+        DestinationEntry? nearest = null;
+        float best = float.PositiveInfinity;
+        foreach (DestinationEntry entry in _entries)
+        {
+            if (IsBlocked(entry.Spawn.Guid, now)) continue;
+            float distance = DistanceSquared(player, entry.Spawn);
+            if (distance < best)
+            {
+                best = distance;
+                nearest = entry;
+            }
+        }
+
+        if (nearest is { } hit && hit.Spawn.Guid == carriedSpawn && hit.Entry == carriedTarget) return;
+        ClearRoute();
     }
 
     /// <summary>
