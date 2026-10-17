@@ -496,7 +496,15 @@ clean, timed record of what the server sent and what came back. Operator page:
 - Gate: registered by `WorldportSpikeServiceModule` (an `IWorldServiceModule`) only with `World:HotCode:Enabled`, which the launch
   gate accepts only in Development or Staging; Administrator only; audited; no path or code argument; no network surface.
 
-Evidence: see the lane report below (compiler and tests).
+Evidence (compiler and tests, at `fe0654a7`): `dotnet build ArcaneCore.slnx -c Debug` 0 warnings / 0 errors;
+`WorldportSpikeTests` 7/7 over real sessions (far: TRANSFER_PENDING then NEW_WORLD for map 0, no near-teleport ack, the player in
+no map until the ack, then the login sequence and back on map 0 at the requested point, the step list and log lines; readd: no
+transfer packet, the login sequence, same map; no ack: `ack-timeout` then `client-left` on a drop; a second run refused;
+GameMaster refused; registered only with `World:HotCode:Enabled`); with them `CommandReferenceTests`, `GridTerrain.TeleportTests`
+and `HotCodeWiringTests` 28/28, the `Docs` filter 98/98, `TeleportServiceTests` (Game) 10/10. RED runs, each restored and green
+again: the `ForceFar` condition removed (4 far tests fail), `FarStageReached` not raised (the far step test fails), the gate
+removed (the registration test fails), the re-add without its login packets (the readd test fails). Nothing was run against a
+real client.
 
 Still open: **the real-client run itself** (the Spike exit criterion in section 9 is not met). How to run it: a Development world
 with `World__HotCode__Enabled=true`, an Administrator character in an open-world zone, `.worldport far`, then `.worldport readd`;
