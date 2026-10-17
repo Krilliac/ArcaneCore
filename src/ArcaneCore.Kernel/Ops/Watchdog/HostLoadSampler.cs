@@ -150,7 +150,8 @@ public readonly record struct HostLoadReport(
     int PoolThreads,
     long PoolPending,
     int Cpus,
-    HostLoadVerdict Verdict)
+    HostLoadVerdict Verdict,
+    long StallMicros = 0)
 {
     /// <summary>CPU the other processes used, as a percentage of the whole machine; 0 when the machine reading is unknown.</summary>
     public double OtherCpuPercent => MachineKnown ? Math.Max(0, MachineCpuPercent - ProcessCpuPercent) : 0;
@@ -172,8 +173,14 @@ public readonly record struct HostLoadReport(
         sb.Append(" over ").Append((WindowMicros / 1_000_000.0).ToString("F1", CultureInfo.InvariantCulture)).Append(" s on ").Append(Cpus).Append(" cpus");
         sb.Append("; gc +").Append(Gen0).Append("/+").Append(Gen1).Append("/+").Append(Gen2).Append(" (gen0/1/2) pause ").Append(GcPauseMicros / 1000).Append(" ms");
         sb.Append("; threadpool ").Append(PoolThreads).Append(" threads, ").Append(PoolPending).Append(" pending");
+        if (StallMicros >= 1000)
+        {
+            sb.Append("; watchdog stalled ").Append(StallMicros / 1000).Append(" ms");
+        }
+
         sb.Append("; verdict ").Append(Verdict switch
         {
+            HostLoadVerdict.ProcessStalled => "process-stalled (the whole process stopped, the watchdog thread too: paging on a machine short of memory, a native debugger or a suspended process, not the code)",
             HostLoadVerdict.HostStarved => "host-starved (other processes are using the machine)",
             HostLoadVerdict.GcPauses => "gc-pauses",
             HostLoadVerdict.ProcessBusy => "process-busy (this process is using the cpu)",
@@ -203,6 +210,12 @@ public enum HostLoadVerdict
 
     /// <summary>Neither the machine nor the collector was under pressure: the code was slow by itself.</summary>
     Quiet = 4,
+
+    /// <summary>
+    /// The watchdog thread itself did not run for longer than the GC pauses explain: the whole process was stopped (paging on a machine
+    /// short of memory, a native debugger holding a debug event, a suspended process), so the slow tick is not the code's.
+    /// </summary>
+    ProcessStalled = 5,
 }
 
 /// <summary>
@@ -226,11 +239,18 @@ public sealed class HostLoadSampler : IWatchdogMonitor
     /// <summary>This process's share of the machine for the busy verdict.</summary>
     public const double ProcessShareThreshold = 50;
 
+    /// <summary>A watchdog stall the GC pauses do not explain must cover this share of the window for the stalled verdict.</summary>
+    public const double StallShareThreshold = 0.30;
+
+    /// <summary>The least unexplained watchdog stall (1 s beyond the check interval) that is the stalled verdict: scheduling jitter never reaches it.</summary>
+    public const long MinStallMicros = 1_000_000;
+
     private readonly HostLoadOptions _options;
     private readonly WatchdogClock _clock;
     private readonly IHostLoadProbe _probe;
     private readonly object _gate = new();
     private readonly (long Micros, HostLoadReading Reading)[] _ring;
+    private readonly long _checkIntervalMicros;
     private int _next;
     private int _count;
 
@@ -244,6 +264,7 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         _options = options;
         _clock = clock;
         _probe = probe ?? new SystemHostLoadProbe();
+        _checkIntervalMicros = Math.Max(1, checkIntervalMs) * 1000L;
         long perSecond = Math.Max(1, 1000 / Math.Max(100, checkIntervalMs));
         _ring = new (long, HostLoadReading)[(int)Math.Clamp(Math.Clamp(options.HistorySeconds, 10, 3600) * perSecond + 2, 4, 40_000)];
     }
@@ -300,6 +321,8 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         long baseMicros = 0;
         HostLoadReading baseline = default;
         bool found = false;
+        long later = now; // the reading after the one being looked at (now for the newest): the gaps between them are when the watchdog did not run
+        long longestGap = 0;
         lock (_gate)
         {
             for (int i = 0; i < _count; i++)
@@ -307,6 +330,8 @@ public sealed class HostLoadSampler : IWatchdogMonitor
                 // Newest first: _next - 1 is the latest write.
                 int index = ((_next - 1 - i) % _ring.Length + _ring.Length) % _ring.Length;
                 (long micros, HostLoadReading reading) = _ring[index];
+                longestGap = Math.Max(longestGap, later - micros);
+                later = micros;
                 baseMicros = micros;
                 baseline = reading;
                 found = true;
@@ -322,7 +347,9 @@ public sealed class HostLoadSampler : IWatchdogMonitor
             return null;
         }
 
-        return Compute(baseMicros, baseline, now, _probe.Read());
+        // The sampler waits one check interval between readings anyway; beyond that the watchdog thread was not running.
+        long stall = Math.Max(0, longestGap - _checkIntervalMicros);
+        return Compute(baseMicros, baseline, now, _probe.Read(), stall);
     }
 
     /// <summary>The report as text (empty when disabled), for appending to a log line.</summary>
@@ -332,8 +359,13 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         return report is { } r ? r.Format() : _options.Enabled ? "host: no baseline sample yet" : string.Empty;
     }
 
-    /// <summary>The differencing and the verdict, separate from the clock so it is testable on fixed readings.</summary>
-    public static HostLoadReport Compute(long startMicros, in HostLoadReading start, long endMicros, in HostLoadReading end)
+    /// <summary>
+    /// The differencing and the verdict, separate from the clock so it is testable on fixed readings. <paramref name="stallMicros"/> is the
+    /// longest time in the window the watchdog thread itself did not run beyond its own check interval (<see cref="Report"/> measures it from
+    /// the gaps between stored readings): the part of it the GC pauses do not explain is the whole process being stopped, which with a
+    /// large enough share of the window is the <see cref="HostLoadVerdict.ProcessStalled"/> verdict rather than the code's.
+    /// </summary>
+    public static HostLoadReport Compute(long startMicros, in HostLoadReading start, long endMicros, in HostLoadReading end, long stallMicros = 0)
     {
         long window = Math.Max(1, endMicros - startMicros);
         int cpus = Math.Max(1, end.Cpus);
@@ -358,7 +390,13 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         }
         else if (machineKnown && machine >= MachineBusyThreshold && machine - process >= OtherShareThreshold)
         {
+            // A starved machine also makes the watchdog thread late: starvation is the more specific cause, so it wins over a stall.
             verdict = HostLoadVerdict.HostStarved;
+        }
+        else if (stallMicros - pauseMicros >= MinStallMicros && stallMicros - pauseMicros >= window * StallShareThreshold)
+        {
+            // Checked before the process-cpu verdicts: a stopped process uses no cpu, so it would otherwise read as host-quiet and blame the code.
+            verdict = HostLoadVerdict.ProcessStalled;
         }
         else if (process >= ProcessShareThreshold)
         {
@@ -372,6 +410,6 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         return new HostLoadReport(
             window, process, machineKnown, machine,
             end.Gen0 - start.Gen0, end.Gen1 - start.Gen1, end.Gen2 - start.Gen2,
-            pauseMicros, end.PoolThreads, end.PoolPending, cpus, verdict);
+            pauseMicros, end.PoolThreads, end.PoolPending, cpus, verdict, Math.Max(0, stallMicros));
     }
 }

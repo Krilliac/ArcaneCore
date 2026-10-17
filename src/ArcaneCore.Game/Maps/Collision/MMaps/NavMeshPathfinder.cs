@@ -145,16 +145,14 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
             return false;
         }
 
-        if (ReadFile(path) is not { } bytes)
-        {
-            return false;
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-
         try
         {
-            NavMeshTile tile = NavMeshTile.ParseFile(bytes);
+            if (!TryReadTileFile(path, FileReader, out NavMeshTile? tile))
+            {
+                return false;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
             if (mesh.AddTile(tileX, tileY, tile))
             {
                 return true;
@@ -166,8 +164,30 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         {
             _logger.LogError(ex, "MMaps: {Path} is not a usable navmesh tile ({Reason}); ignored", path, ex.Message);
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError(ex, "MMaps: could not read {Path}", path);
+        }
 
         return false;
+    }
+
+    /// <summary>
+    /// Read and parse one <c>.mmtile</c>; false when the file does not exist. Without a test <paramref name="reader"/> the file is read into a
+    /// pooled buffer (<see cref="PooledFileReader"/>) that is returned once the parse has copied what it keeps: a tile file is 0.1-2 MB, so a
+    /// fresh array per read went to the large object heap, and the bots' tile reads (prefetch, background and world-thread loads) were the
+    /// World's main LOH churn (2.3 MB/s live, 2026-10-17; issues #744/#755). Read and parse errors propagate to the caller.
+    /// </summary>
+    private static bool TryReadTileFile(string path, Func<string, byte[]?>? reader, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out NavMeshTile? tile)
+    {
+        if (reader is not null)
+        {
+            byte[]? bytes = reader(path);
+            tile = bytes is null ? null : NavMeshTile.ParseFile(bytes);
+            return tile is not null;
+        }
+
+        return PooledFileReader.TryParse(path, static data => NavMeshTile.ParseFile(data), out tile);
     }
 
     /// <summary>Release a terrain tile's navmesh tile (vmangos <c>MMapManager::unloadMap</c>).</summary>
@@ -275,7 +295,8 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
         {
             try
             {
-                return File.Exists(path) ? NavMeshTile.ParseFile(File.ReadAllBytes(path)) : null;
+                // Always the disk, as before the pooled read: the FileReader test seam covers the load paths, not the prefetch.
+                return TryReadTileFile(path, reader: null, out NavMeshTile? tile) ? tile : null;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -840,15 +861,14 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
     /// <summary>Read and parse one tile file on the pool, at most <see cref="MaxConcurrentTileReads"/> at a time. Never faults: a failure is the result.</summary>
     private Task<TileRead> StartTileRead(string path)
     {
-        Func<string, byte[]?> reader = FileReader;
+        Func<string, byte[]?>? reader = FileReader;
         SemaphoreSlim slots = _tileReadSlots;
         return Task.Run(async () =>
         {
             await slots.WaitAsync().ConfigureAwait(false);
             try
             {
-                byte[]? bytes = reader(path);
-                return new TileRead(bytes is null ? null : NavMeshTile.ParseFile(bytes), null);
+                return new TileRead(TryReadTileFile(path, reader, out NavMeshTile? tile) ? tile : null, null);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -997,13 +1017,14 @@ public sealed class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IM
     }
 
     /// <summary>Reads a navmesh file's bytes (null when it does not exist); the disk unless a test substitutes it. Runs on the world thread or, for background tile reads, on the pool.</summary>
-    internal Func<string, byte[]?> FileReader { get; set; } = static path => File.Exists(path) ? File.ReadAllBytes(path) : null;
+    /// <remarks>Null (production): tile files are read into a pooled buffer by <see cref="TryReadTileFile"/>, the small <c>.mmap</c> parameters with <see cref="File.ReadAllBytes(string)"/>.</remarks>
+    internal Func<string, byte[]?>? FileReader { get; set; }
 
     private byte[]? ReadFile(string path)
     {
         try
         {
-            return FileReader(path);
+            return FileReader is { } reader ? reader(path) : File.Exists(path) ? File.ReadAllBytes(path) : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

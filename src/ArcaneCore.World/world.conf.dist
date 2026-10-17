@@ -56,7 +56,7 @@
 #   NAMES                       2 keys
 #   NET                         16 keys
 #   NPCSERVICES                 8 keys
-#   OPS                         57 keys
+#   OPS                         60 keys
 #   PAGETEXT                    1 keys
 #   PERFORMANCELOG              4 keys
 #   PETS                        7 keys
@@ -6020,6 +6020,45 @@ Ops.Watchdog.TickMonitor.HangMs = 2000
 #        Docs: docs/reference/configuration.md#opswatchdog
 #
 Ops.Watchdog.TickMonitor.RingCapacity = 4096
+
+#
+#    Ops.Watchdog.TickMonitor.StackCaptureDirectory
+#        Description: Where the hang stack captures are written (relative paths are under the
+#                     working directory, like the log files). Default logs/hangstacks.
+#        Type: string
+#        Default: "logs/hangstacks"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.TickMonitor.StackCaptureDirectory = "logs/hangstacks"
+
+#
+#    Ops.Watchdog.TickMonitor.StackCaptureIntervalSeconds
+#        Description: Least seconds between two hang stack captures (a capture briefly samples every
+#                     thread of the process). 10-86400. Default 300.
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.TickMonitor.StackCaptureIntervalSeconds = 300
+
+#
+#    Ops.Watchdog.TickMonitor.StackCaptureTool
+#        Description: A stack tool run once per hung tick (past HangMs) against this process, out of
+#                     process and off the world thread, whose output (every managed thread's stack,
+#                     the world thread's among them) goes to StackCaptureDirectory; it is called as
+#                     &lt;tool&gt; report -p &lt;pid&gt; (dotnet-stack). %VAR% references are
+#                     expanded. Empty, or a file that does not exist: no capture. Default empty.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#opswatchdog
+#
+Ops.Watchdog.TickMonitor.StackCaptureTool = ""
 
 #
 #    Ops.Watchdog.TickMonitor.SummaryIntervalSeconds

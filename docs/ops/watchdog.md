@@ -94,13 +94,18 @@ recorder are appended to each line so both views are on one line.
   tick (database load, feature attach) and after the world stopped on purpose (`StopAsync`, so a long final save drain is not killed) the
   source reports alive.
 - **Terminal hang action** (opt-in): when a single tick remains wedged for `ActionHangMs` (0 = never, whatever `Action` says; must be at least
-  `HangMs` when non-zero) and `HostLoadSampler` does not attribute the stall to OS CPU starvation (`HostStarved`) or GC pauses (`GcPauses`),
+  `HangMs` when non-zero) and `HostLoadSampler` does not attribute the stall to OS CPU starvation (`HostStarved`), GC pauses (`GcPauses`) or a stopped process (`ProcessStalled`),
   the configured `Action` fires at most once for that hung tick, always with a `Critical` line (event `TickAction`, 7104) carrying the
   in-progress hang detail (`phase=<Phase>, running=<work>`): `Log` only logs; `Stop` sets `ExitCodes.Current = 1` and signals
   `IHostApplicationLifetime.StopApplication()`; `FailFast` writes a synchronous crash report to `Console.Error` and calls
   `Environment.Exit(70)` (`ExitCodes.UnhandledException`) so a supervisor immediately restarts a process whose world thread is permanently
   deadlocked without waiting on a stuck graceful-shutdown drain. `Action` set with `ActionHangMs` 0 is a configuration warning (the action
   never fires).
+- **Hang stack capture**: once per hung tick, when the hang is first reported, the stack tool in `StackCaptureTool` (dotnet-stack; the World
+  appsettings point it at `%USERPROFILE%/.dotnet/tools/dotnet-stack.exe`) runs as `<tool> report -p <pid>` on the thread pool and its
+  output, every managed thread's stack with the world thread inside `WorldRuntime.RunTick`, goes to
+  `StackCaptureDirectory/hang-stacks-<utc>-<pid>.txt` (a Warning line names the file). At most one capture runs at a time and one per
+  `StackCaptureIntervalSeconds`; nothing runs while no tick is hung, and a missing tool is said once (Information) and skipped.
 - Counters: `watchdog.tick.frames`, `watchdog.tick.overruns`, `watchdog.tick.hangs`, `watchdog.tick.actions`, gauges `watchdog.tick.frame_p99_us`, `watchdog.tick.frame_max_us`.
 - Latency gauges (microseconds, last minute, refreshed every check): `watchdog.tick.frame_{p50,p75,p90,p95,p999,mean,stddev}_us`, the same set with `p99` and `max` for the tick body as `watchdog.tick.body_*_us`, and `watchdog.tick.phase_<name>_p50_us` / `_p99_us` for the phases `commands`, `world_tick`, `features`, `maps` and `autosave`. The overrun and summary log lines append `; frame latency last 1 min: p50 .. p75 .. p90 .. p95 .. p99 .. p99.9 .. max .. (n=.., min .., mean .. +/-..)` (the summary adds the 15 minute window), then the tick body and per-phase p50/p99. The percentile primitive is `LatencyHistogram` (log buckets, at most 1/32 above the exact nearest-rank value, rolling 1 and 15 minute windows, lock-free).
 
@@ -200,6 +205,9 @@ and a host-start failure in the realm daemon. Byte values are plain numbers of b
 | `Ops:Watchdog:TickMonitor:Action` | `None` | `None`, `Log`, `Stop`, `FailFast`. | Unknown name: error. Set with `ActionHangMs` 0: warning, never fires. |
 | `Ops:Watchdog:TickMonitor:WarnIntervalSeconds` | `30` | Rate limit of the overrun and hang-in-progress lines. | Out of 1-86400: error. |
 | `Ops:Watchdog:TickMonitor:SummaryIntervalSeconds` | `300` | Frame summary period; 0 = none. | Negative: error. |
+| `Ops:Watchdog:TickMonitor:StackCaptureTool` | empty | Stack tool run once per hung tick (`%VAR%` expanded); empty or missing = no capture. | - |
+| `Ops:Watchdog:TickMonitor:StackCaptureDirectory` | `logs/hangstacks` | Where the captures are written. | - |
+| `Ops:Watchdog:TickMonitor:StackCaptureIntervalSeconds` | `300` | Least seconds between two captures. | Out of 10-86400: error. |
 | `Ops:Watchdog:TickMonitor:GatesHeartbeat` | `true` | A hung tick withholds the heartbeat. | `false`: the heartbeat ignores the tick. |
 | `Ops:Watchdog:Memory:Enabled` | `true` | Memory monitor on/off. | Off: no sample, no action. |
 | `Ops:Watchdog:Memory:SampleIntervalSeconds` | `10` | Sample period, 1-3600. | Out of range: error. |

@@ -277,6 +277,7 @@ public sealed class TickWatchdogFeatureTests
     [Theory]
     [InlineData(HostLoadVerdict.HostStarved, false)]
     [InlineData(HostLoadVerdict.GcPauses, false)]
+    [InlineData(HostLoadVerdict.ProcessStalled, false)]
     [InlineData(HostLoadVerdict.ProcessBusy, true)]
     [InlineData(HostLoadVerdict.Quiet, true)]
     [InlineData(HostLoadVerdict.Unknown, true)]

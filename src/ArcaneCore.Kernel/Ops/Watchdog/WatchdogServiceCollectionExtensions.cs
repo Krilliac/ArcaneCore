@@ -4,6 +4,7 @@ using ArcaneCore.Kernel.Ops.Watchdog.Heartbeat;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.Kernel.Ops.Watchdog;
@@ -55,7 +56,15 @@ public static class WatchdogServiceCollectionExtensions
     {
         services.AddOpsWatchdog();
         services.TryAddSingleton<ITickHangActuator>(sp => new RuntimeTickHangActuator(sp.GetService<IHostApplicationLifetime>()));
-        services.TryAddSingleton<TickMonitor>();
+        services.TryAddSingleton<TickMonitor>(sp =>
+        {
+            WatchdogOptions options = sp.GetRequiredService<WatchdogOptions>();
+            ILogger<TickMonitor> logger = sp.GetRequiredService<ILogger<TickMonitor>>();
+            return new TickMonitor(options, sp.GetRequiredService<WatchdogClock>(), sp.GetRequiredService<CounterRegistry>(), logger, sp.GetService<ITickHangActuator>())
+            {
+                StackCapture = new HangStackCapture(options.TickMonitor, logger),
+            };
+        });
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWatchdogMonitor, TickMonitor>(sp => sp.GetRequiredService<TickMonitor>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILivenessSource, TickMonitor>(sp => sp.GetRequiredService<TickMonitor>()));
         return services;
