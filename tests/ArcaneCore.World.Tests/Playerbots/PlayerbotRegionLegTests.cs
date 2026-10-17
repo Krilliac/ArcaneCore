@@ -70,6 +70,37 @@ public sealed class PlayerbotRegionLegTests : IDisposable
         Assert.True(Vector2.Distance(new(end.X, end.Y), new(x, y)) < 0.5f, $"the leg ends at {end}");
     }
 
+    /// <summary>
+    /// A goal a few yards away, inside one route chunk, whose straight line crosses a wall. The only mesh connection is a door at the far
+    /// end of the wall, so the polygon search spends its node budget on the open ground beside the wall and answers nothing that closes.
+    /// The two sides are still one component of the region graph (bot QA #810: same component, a few dozen yards, every search refused).
+    /// The plan must take the graph's door instead of refusing.
+    /// </summary>
+    [Fact]
+    public async Task ANearGoalBehindAWall_UsesTheRegionGraph_InsteadOfRefusing()
+    {
+        const int cells = 70;
+        const float size = 2f;
+        int door = cells - 4;
+        var blocked = new CellTile(0, 0, 0, 0, cells, cells, size)
+        {
+            LinkedSides = [2],
+            Walkable = (i, j) => i < cells - 1 || j >= door,
+        };
+        var beyond = new CellTile(0, 1, cells * size, 0, 6, cells, size) { LinkedSides = [6] };
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, [(10, 10, blocked), (10, 11, beyond)]);
+        Vector3 start = new(((cells - 2) * size) + 1f, 4f, 0f);
+        Vector3 goal = new((cells * size) + 4f, 4f, 0f);
+        await world.PlaceAsync(start);
+        var options = new PlayerbotOptions { MaxRouteYards = 2000f, MaxPathPoints = 128 };
+        PlayerbotRoute? route = await world.Host.OnWorldAsync(() =>
+            PlayerbotNavigation.TryPlanToward(world.Player, goal, options, out PlayerbotRoute? planned) ? planned : null);
+
+        Assert.True(route is not null, "the region graph joins the two sides but the plan was refused");
+        Vector3 end = route!.Points[^1];
+        Assert.True(end.Y > start.Y + 30f, $"the route ends at {end}, against the wall instead of toward the door");
+    }
+
     // The layout of NavRegionGraphTests: Detour tile (x, y) covers world Y from 40x and world X from 40y.
     private static readonly (int X, int Y, CellTile Tile)[] Layout =
     [

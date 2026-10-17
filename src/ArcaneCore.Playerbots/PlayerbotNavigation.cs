@@ -448,7 +448,19 @@ internal static class PlayerbotNavigation
                 if (route is not null) route.PartialToGoal = route.MeshEndedShort;
                 return true;
             }
-            if (!straightRefused || PendingSince(pending) || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
+            if (!straightRefused || PendingSince(pending) || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards)
+            {
+                // A goal inside the first chunk never asked the region graph above, so a wall a few yards ahead is refused
+                // even when the two sides are one component and the only door is the graph's (bot QA #810: same component,
+                // a few dozen yards, the polygon search spent its budget on the open ground beside the wall). A far goal
+                // already asked. A tile still being read is no verdict. A graph refusal is not taken here: the plans above
+                // already ran the indoor climb and the steep escape.
+                float firstChunk = MathF.Min(options.MaxRouteYards * 0.9f, Math.Max(1, options.MaxPathPoints - 2));
+                if (!PendingSince(pending) && distance <= firstChunk
+                    && RegionLeg(player, goal, options, out route, completedQuestReturn, friendlyTownEnder) is true)
+                    return true;
+                return false;
+            }
         }
     }
 
