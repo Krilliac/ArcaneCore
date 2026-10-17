@@ -63,13 +63,48 @@ public sealed partial class SpellSystem
     public SpellEffectHandler? GetEffectHandler(SpellEffectName effect) => EffectHandlers.GetValueOrDefault(effect);
 
     /// <summary>
+    /// Wrappers installed through <see cref="RegisterTransparentEffectWrapper"/>, keyed by the wrapper delegate: the handler each one wraps
+    /// and whether it currently adds nothing of its own.
+    /// </summary>
+    private readonly Dictionary<SpellEffectHandler, (SpellEffectHandler? Inner, Func<bool> IsTransparent)> _transparentWrappers =
+        new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// Install <paramref name="wrapper"/> as the handler of <paramref name="effect"/> over <paramref name="inner"/> (the handler it calls,
+    /// read by the caller before this call). While <paramref name="isTransparent"/> returns true the wrapper only calls
+    /// <paramref name="inner"/>, so <see cref="HasBuiltInEffectHandler"/> looks through it: the spell script dispatcher's chained effects,
+    /// which run a script only while some script declares the effect, count as the built-in handler again once no script does.
+    /// </summary>
+    internal void RegisterTransparentEffectWrapper(SpellEffectName effect, SpellEffectHandler wrapper, SpellEffectHandler? inner, Func<bool> isTransparent)
+    {
+        ArgumentNullException.ThrowIfNull(wrapper);
+        ArgumentNullException.ThrowIfNull(isTransparent);
+        RegisterEffect(effect, wrapper);
+        _transparentWrappers[wrapper] = (inner, isTransparent);
+    }
+
+    /// <summary>
     /// Whether the handler of <paramref name="effect"/> is still the one this system installed itself
-    /// (not replaced through <see cref="RegisterEffect"/>). Quest reward preflight models only the
+    /// (not replaced through <see cref="RegisterEffect"/>). A wrapper installed through <see cref="RegisterTransparentEffectWrapper"/> is
+    /// looked through while it reports itself transparent. Quest reward preflight models only the
     /// built-in teleport and summon handlers; replacement code cannot be modelled.
     /// </summary>
     public bool HasBuiltInEffectHandler(SpellEffectName effect)
-        => _builtInEffectHandlers.TryGetValue(effect, out SpellEffectHandler? builtIn)
-            && EffectHandlers.TryGetValue(effect, out SpellEffectHandler? active) && ReferenceEquals(builtIn, active);
+    {
+        if (!_builtInEffectHandlers.TryGetValue(effect, out SpellEffectHandler? builtIn)
+            || !EffectHandlers.TryGetValue(effect, out SpellEffectHandler? active))
+        {
+            return false;
+        }
+
+        while (active is not null && !ReferenceEquals(builtIn, active)
+            && _transparentWrappers.TryGetValue(active, out (SpellEffectHandler? Inner, Func<bool> IsTransparent) wrapper) && wrapper.IsTransparent())
+        {
+            active = wrapper.Inner;
+        }
+
+        return ReferenceEquals(builtIn, active);
+    }
 
     /// <summary>
     /// The effect set, after vmangos SpellEffects.cpp: SCHOOL_DAMAGE (EffectSchoolDMG),

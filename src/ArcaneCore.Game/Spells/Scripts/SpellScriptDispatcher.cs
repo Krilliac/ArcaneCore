@@ -21,7 +21,11 @@ namespace ArcaneCore.Game.Spells.Scripts;
 /// removed scripts take effect from the next hook on. The only thing built at install is the set of chained effect handlers, so the dispatcher
 /// listens to <see cref="SpellScriptRegistry.ScriptsChanged"/> and chains any execute effect a newly added script declares (under the same rule as
 /// at install: only an effect the world handles). A chained effect stays chained after the script that declared it is removed, but then finds no
-/// script (<see cref="SpellScriptRegistry.FindForEffect"/>) and only calls the handler it wraps, which is what a restart without that script does.
+/// script (<see cref="SpellScriptRegistry.FindForEffect"/>) and only calls the handler it wraps. The wrapper is installed through
+/// <see cref="SpellSystem.RegisterTransparentEffectWrapper"/>, so while no current script declares the effect
+/// <see cref="SpellSystem.HasBuiltInEffectHandler"/> looks through it to the wrapped handler: after a module declaring TELEPORT_UNITS or SUMMON is
+/// unloaded, quest reward preflight accepts those rewards again, as after a restart without that script. While such a script is loaded the
+/// effect is not built-in (the script's code cannot be modelled).
 /// </para>
 /// </summary>
 public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
@@ -104,11 +108,17 @@ public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
 
         SpellScriptRegistry registry = Registry;
         SpellEffectHandler? previous = system.GetEffectHandler(effect);
-        system.RegisterEffect(effect, context =>
-        {
-            registry.FindForEffect(context.Spell.Id, effect)?.OnEffectExecute(context);
-            previous?.Invoke(context);
-        });
+
+        // Transparent (counts as the wrapped handler for SpellSystem.HasBuiltInEffectHandler) exactly when FindForEffect cannot return a script.
+        system.RegisterTransparentEffectWrapper(
+            effect,
+            context =>
+            {
+                registry.FindForEffect(context.Spell.Id, effect)?.OnEffectExecute(context);
+                previous?.Invoke(context);
+            },
+            previous,
+            () => effect is not (SpellEffectName.Dummy or SpellEffectName.ScriptEffect) && !registry.ExecuteEffects.Contains(effect));
     }
 
     private static int Stacks(SpellSystem system, Unit unit)

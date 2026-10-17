@@ -16,6 +16,8 @@ public sealed class SpellScriptHotSwapTests
     private const uint HotSpell = 961_002;
     private const uint HealSpell = 961_003;
     private const uint SummonDemonSpell = 961_004;
+    private const uint TeleportSpell = 961_005;
+    private const uint SummonSpell = 961_006;
 
     private readonly List<string> _log = [];
 
@@ -209,6 +211,36 @@ public sealed class SpellScriptHotSwapTests
         Assert.Equal(["before-heal:10"], _log);
         Assert.Equal(30u, player.Health);
     }
+
+    [Fact]
+    public void AModuleDeclaringTeleportUnitsOrSummon_IsNotBuiltInWhileLoaded_AndIsBuiltInAgainAfterUnload()
+    {
+        using SpellTestKit kit = Kit();
+        var registry = new SpellScriptRegistry([]);
+        SpellScriptDispatcher.Install(kit.System, registry);
+        Assert.True(kit.System.HasBuiltInEffectHandler(SpellEffectName.TeleportUnits));
+        Assert.True(kit.System.HasBuiltInEffectHandler(SpellEffectName.Summon));
+
+        var teleport = new TeleportScript();
+        var summon = new SummonScript();
+        registry.CommitSwap([], [teleport, summon]);
+        Assert.False(kit.System.HasBuiltInEffectHandler(SpellEffectName.TeleportUnits)); // the module's code runs before the built-in one
+        Assert.False(kit.System.HasBuiltInEffectHandler(SpellEffectName.Summon));
+
+        registry.CommitSwap([teleport, summon], []);
+        Assert.True(kit.System.HasBuiltInEffectHandler(SpellEffectName.TeleportUnits)); // as after a restart without the module
+        Assert.True(kit.System.HasBuiltInEffectHandler(SpellEffectName.Summon));
+
+        // Replacing the chained wrapper outright is still a replacement.
+        kit.System.RegisterEffect(SpellEffectName.TeleportUnits, static _ => { });
+        Assert.False(kit.System.HasBuiltInEffectHandler(SpellEffectName.TeleportUnits));
+    }
+
+    [SpellScript(TeleportSpell, ExecuteEffects = [SpellEffectName.TeleportUnits])]
+    private sealed class TeleportScript : ISpellScript;
+
+    [SpellScript(SummonSpell, ExecuteEffects = [SpellEffectName.Summon])]
+    private sealed class SummonScript : ISpellScript;
 
     [Fact]
     public void AnAddedScriptDeclaringAnEffectTheWorldDoesNotHandle_DoesNotChainIt()

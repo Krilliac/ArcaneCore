@@ -433,7 +433,7 @@ set (`CodeAssemblies`, today the Game assembly; no pack is configured at startup
 
 | Kind | Live registry the module swaps | When the change is seen |
 |---|---|---|
-| Spell script (`[SpellScript(ids)]`) | `SpellScriptFeature.Registry` (the one the spell script dispatcher uses) | The next hook of any cast, including a cast already under way: nothing caches a script. A newly declared `ExecuteEffects` effect is chained on commit. A spell script that schedules its own work (timer, event, closure) keeps running the old code until that work ends. |
+| Spell script (`[SpellScript(ids)]`) | `SpellScriptFeature.Registry` (the one the spell script dispatcher uses) | The next hook of any cast, including a cast already under way: nothing caches a script. A newly declared `ExecuteEffects` effect is chained on commit; the chain stays after unload but then only calls the handler it wraps, and `SpellSystem.HasBuiltInEffectHandler` looks through it again (so quest reward preflight refuses TeleportUnits/Summon rewards only while a loaded script declares that effect, as after a restart). A spell script that schedules its own work (timer, event, closure) keeps running the old code until that work ends. |
 | Instance script (`[InstanceScript(mapId)]`) | The instance manager's `Scripts` (`InstanceScriptRegistry.Default`) | Instance maps created afterwards. A loaded instance keeps its `InstanceData` (it holds the instance's progress) until it unloads. |
 | EventAI action handler | `EventAiRegistry.Default` | The next action run (looked up per action). |
 | EventAI event handler | `EventAiRegistry.Default` | Creatures whose EventAI is built afterwards (spawn, respawn). A creature built before keeps the old handler until it respawns. |
