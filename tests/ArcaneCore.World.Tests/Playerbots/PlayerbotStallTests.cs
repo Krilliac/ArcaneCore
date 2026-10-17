@@ -9,6 +9,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Population;
 using ArcaneCore.World.Tests.Playerbots.Scenarios;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -125,6 +126,120 @@ public sealed class PlayerbotStallTests
         Assert.Contains("state=Running", line);
         Assert.Contains("error=stalled ", line);
         Assert.Contains("map 0", line);
+    }
+
+    /// <summary>
+    /// A bot with a town home that has nothing to do stands at the inn of its town (<see cref="PlayerbotTownIdle"/>): that is the idle rule,
+    /// not a stall. Before, the watch reported it every stall bound (live 2026-10-17, bot QA "stall|goal=Explore": 1 253 stalls of 186 bots at
+    /// the Stormwind inn), gave its goal up (which freed nothing, the bot was not stuck) and sent it home to where it stood.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ABotLingeringAtItsInn_IsNotStalled(bool capital)
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, StallSeconds = 10 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(player.X, player.Y, player.Z), 300f, "town:stormwind") { Stay = capital ? TownStay.Capital : TownStay.Secondary };
+                return true;
+            });
+            // 35 seconds at the inn, three stall bounds.
+            for (int think = 0; think < 350; think++)
+            {
+                await host.OnWorldAsync(() => { session.ManagedBudget = new ManagedActionBudget(4); brain.Update(100); return true; });
+                await host.World.AdvanceClockAsync(100);
+            }
+
+            Assert.Null(await host.OnWorldAsync(() => brain.StallReport));
+            Assert.Equal(0, await host.OnWorldAsync(() => brain.StallCount));
+            Assert.Equal(0, await host.OnWorldAsync(() => brain.StallGiveUps));
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// Only a bot at its inn (or within <see cref="PlayerbotTownIdle.HoldYards"/> of the spot it cannot get closer to) is held by the idle rule.
+    /// A walk to the inn given up far from it (<see cref="TownIdleAction.Linger"/> for <see cref="PlayerbotTownIdle.StallDeferMs"/>) is not:
+    /// the brain explores meanwhile. Before, 724 of the Explore stalls of 2026-10-17 stood over 150 yards from the town centre, in phase
+    /// explore, doing nothing for the give-up.
+    /// </summary>
+    [Theory]
+    [InlineData(0f, true)]
+    [InlineData(4f, true)]
+    [InlineData(PlayerbotTownIdle.HoldYards, true)]
+    [InlineData(PlayerbotTownIdle.HoldYards + 1f, false)]
+    [InlineData(450f, false)]
+    [InlineData(float.NaN, false)]
+    public void ALingerIsHeldOnlyNearTheInn(float distance, bool held)
+        => Assert.Equal(held, PlayerbotTownIdle.IsHeld(distance));
+
+    /// <summary>
+    /// The same bot far from its town, its walk to the inn given up: it is not held, so the stall watch keeps watching it (it explores) and
+    /// reports it when it gets nowhere, as any exploring bot. (No terrain here: every route is refused.)
+    /// </summary>
+    [Fact]
+    public async Task ABotFarFromItsInn_WithTheWalkGivenUp_IsStillWatched()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, StallSeconds = 60 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(player.X + 450f, player.Y, player.Z), 2_000f, "town:stormwind")
+                { Stay = TownStay.Capital };
+                return true;
+            });
+            // 20 s of a walk that gets no closer, then the give-up (Linger for 180 s): the stall bound (60 s) falls inside the give-up.
+            for (int think = 0; think < 900; think++)
+            {
+                await host.OnWorldAsync(() => { session.ManagedBudget = new ManagedActionBudget(4); brain.Update(100); return true; });
+                await host.World.AdvanceClockAsync(100);
+            }
+
+            Assert.StartsWith("stalled ", await host.OnWorldAsync(() => brain.StallReport));
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// A Linger past <see cref="PlayerbotTownIdle.HoldYards"/> (the walk to the inn given up) falls through to the explore: with no terrain every
+    /// route is refused, so the explore's own wander plan is reached. Before, the bot stopped at the Linger and the explore was never
+    /// reached (no wander plan, ever).
+    /// </summary>
+    [Fact]
+    public async Task ABotFarFromItsInn_WithTheWalkGivenUp_ExploresInsteadOfStanding()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, StallSeconds = 600 });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(player.X + 450f, player.Y, player.Z), 2_000f, "town:stormwind")
+                { Stay = TownStay.Capital };
+                return true;
+            });
+            // 20 s of a walk that gets no closer, then the give-up: Linger far from the inn for the next 180 s.
+            for (int think = 0; think < 600; think++)
+            {
+                await host.OnWorldAsync(() => { session.ManagedBudget = new ManagedActionBudget(4); brain.Update(100); return true; });
+                await host.World.AdvanceClockAsync(100);
+            }
+
+            Assert.True(await host.OnWorldAsync(() => brain.ExploreWanderPlans) > 0, "the far Linger never reached the explore wander plan");
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }
 
     private sealed class ManualClock : IWorldFeature

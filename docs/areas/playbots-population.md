@@ -527,7 +527,10 @@ town state of a bot that is no longer in the population is dropped.
 inn it binds its hearthstone through the server's own path (CMSG_BINDER_ACTIVATE to the innkeeper), so a bind or hearth teleport no longer
 sends a graduate back to its start valley. If the spot beside the innkeeper cannot be reached (a counter, an upper floor, Undercity), the walk
 is given up after `WalkStallMs` (20 s) without getting a yard closer and the bot stands where it is for `StallDeferMs` (3 min); it then tries
-again, so an unreachable spot costs one 20 s attempt every 3 min 20 s, never a re-plan on every think. The progress window restarts
+again, so an unreachable spot costs one 20 s attempt every 3 min 20 s, never a re-plan on every think. Standing is only for a bot within
+`HoldYards` (30) of the town centre, and the stall watch does not count that wait (live 2026-10-17: a bot lingering at its inn was reported
+stalled every two minutes, 1 253 times at the Stormwind inn alone). A bot whose walk was given up farther out explores for the give-up
+(hunts, or wanders inward) instead of standing in the open. The progress window restarts
 only on an explicit interruption: the brain calls `PlayerbotTownIdle.Interrupted()` after any think that ran a goal other than Explore (a
 quest, a fight, an errand), or an Explore think that made no town idle decision, and the idle decision itself restarts the window when the
 last decision was not a walk (the explore window). There is no wall-clock gap rule: a think gap of 10 to 16 s on a busy server, or a think
