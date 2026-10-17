@@ -1260,9 +1260,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         {
             uint[] entries = returnQuestId != 0 ? [.. quests.CreatureEndersOf(returnQuestId).Take(MaxEntryScan)]
                 : [preferredCreatureEntry];
-            float farthestKeptSq = 0f;
+            float keptSq = 0f;
             float nearestDroppedSq = float.PositiveInfinity;
-            bool truncated = false;
+            bool listTruncated = false;
             bool scannedAll = true;
             for (int index = 0; index < entries.Length && _entries.Count < MaxEntryScan; index++)
             {
@@ -1281,13 +1281,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 for (int i = 0; i < take; i++)
                 {
                     float distanceSq = DistanceSquared(player, ordered[i]);
-                    if (distanceSq > farthestKeptSq) farthestKeptSq = distanceSq;
+                    if (distanceSq > keptSq) keptSq = distanceSq;
                     _entries.Add(new DestinationEntry(entry, ordered[i]));
                 }
 
                 if (ordered.Count > take)
                 {
-                    truncated = true;
+                    listTruncated = true;
                     float dropped = DistanceSquared(player, ordered[take]);
                     if (dropped < nearestDroppedSq) nearestDroppedSq = dropped;
                 }
@@ -1298,11 +1298,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // An ender entry past the scan cap was not measured: a closer spawn of it may exist, so any real move rebuilds.
             if (!scannedAll)
             {
-                truncated = true;
-                nearestDroppedSq = farthestKeptSq;
+                listTruncated = true;
+                nearestDroppedSq = keptSq;
             }
 
-            RememberEntryList(player, truncated, farthestKeptSq, nearestDroppedSq);
+            RememberEntryList(player, listTruncated, keptSq, nearestDroppedSq);
             return;
         }
 

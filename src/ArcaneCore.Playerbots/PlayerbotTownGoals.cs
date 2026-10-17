@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
@@ -1288,7 +1289,9 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     {
         if (session.Services.GetService<SpellFeature>()?.System is { } spells
             && PlayerbotConsumables.TryClassify(item.Template, spells, out _)) return true;
-        bool questRequired = (services.StateOf(player)?.Quests.Statuses ?? new Dictionary<uint, QuestStatusData>())
+        IReadOnlyDictionary<uint, QuestStatusData> statuses = services.StateOf(player)?.Quests.Statuses
+            ?? new Dictionary<uint, QuestStatusData>();
+        bool questRequired = statuses
             .Where(row => row.Value.Status is QuestStatus.Incomplete or QuestStatus.Complete)
             .SelectMany(row => services.Quests.Get(row.Key)?.ReqItemId ?? [])
             .Contains(item.Entry);
