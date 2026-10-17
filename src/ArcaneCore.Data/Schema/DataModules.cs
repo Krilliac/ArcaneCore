@@ -1,6 +1,7 @@
 using System.Reflection;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -39,7 +40,7 @@ public interface IDataModule
 public static class DataModules
 {
     /// <summary>Every module in this assembly, ordered by full type name.</summary>
-    public static IReadOnlyList<IDataModule> All { get; } = Discover(typeof(DataModules).Assembly);
+    public static IReadOnlyList<IDataModule> All { get; } = Discover(CodeAssemblies.Of(typeof(DataModules).Assembly));
 
     /// <summary>The modules of one component.</summary>
     public static IEnumerable<IDataModule> For(DatabaseComponent component) => All.Where(m => m.Component == component);
@@ -132,9 +133,14 @@ public static class DataModules
         };
     }
 
-    private static IReadOnlyList<IDataModule> Discover(Assembly assembly) => assembly.GetTypes()
+    /// <summary>
+    /// One instance of every concrete <see cref="IDataModule"/> of <paramref name="assemblies"/> (built-ins plus packs), ordered
+    /// by assembly name, then full type name (for one assembly: full-name order, as <see cref="All"/>). A type that cannot load
+    /// fails closed (<see cref="CodeAssemblyLoadException"/>).
+    /// </summary>
+    public static IReadOnlyList<IDataModule> Discover(CodeAssemblies assemblies) => (assemblies ?? throw new ArgumentNullException(nameof(assemblies)))
+        .GetLoadableTypes()
         .Where(t => t is { IsClass: true, IsAbstract: false } && typeof(IDataModule).IsAssignableFrom(t))
-        .OrderBy(t => t.FullName, StringComparer.Ordinal)
         .Select(t => (IDataModule)(Activator.CreateInstance(t)
             ?? throw new InvalidOperationException($"could not create {t.FullName}")))
         .ToArray();

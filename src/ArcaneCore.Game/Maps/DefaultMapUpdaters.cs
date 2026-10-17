@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Kernel.Reflection;
 
 namespace ArcaneCore.Game.Maps;
 
@@ -19,7 +20,10 @@ public sealed class DefaultMapUpdaterAttribute : Attribute
 /// <summary>Discovery and attachment of the <see cref="DefaultMapUpdaterAttribute"/> systems.</summary>
 public static class DefaultMapUpdaters
 {
-    private static volatile UpdaterSet s_current = Discover([typeof(DefaultMapUpdaters).Assembly]);
+    /// <summary>The default code set: this (Game) assembly alone.</summary>
+    public static CodeAssemblies BuiltIn { get; } = CodeAssemblies.Of(typeof(DefaultMapUpdaters).Assembly);
+
+    private static volatile UpdaterSet s_current = Discover(BuiltIn);
 
     /// <summary>The default updater types, in attach order (deterministic).</summary>
     public static IReadOnlyList<Type> Types => s_current.Types;
@@ -30,11 +34,19 @@ public static class DefaultMapUpdaters
     /// <see cref="Commit"/> on the world thread. A marked type that is not a valid updater throws
     /// here (fail closed) and the current set stays in force.
     /// </summary>
-    public static DefaultMapUpdaterCandidate DiscoverCandidate() => new(Discover([typeof(DefaultMapUpdaters).Assembly]));
+    public static DefaultMapUpdaterCandidate DiscoverCandidate() => new(Discover(BuiltIn));
 
-    /// <summary>Same, scanning other assemblies as well (tests).</summary>
+    /// <summary>
+    /// Same, scanning exactly <paramref name="assemblies"/> (built-ins plus packs; leave out <see cref="BuiltIn"/>'s
+    /// assembly and its updaters are not in the candidate). A type that cannot load fails closed
+    /// (<see cref="CodeAssemblyLoadException"/>).
+    /// </summary>
+    public static DefaultMapUpdaterCandidate DiscoverCandidate(CodeAssemblies assemblies)
+        => new(Discover(assemblies ?? throw new ArgumentNullException(nameof(assemblies))));
+
+    /// <summary>Same, scanning other assemblies as well as this one (tests).</summary>
     internal static DefaultMapUpdaterCandidate DiscoverCandidate(params Assembly[] assemblies)
-        => new(Discover([typeof(DefaultMapUpdaters).Assembly, .. assemblies]));
+        => new(Discover(CodeAssemblies.Of([.. new[] { typeof(DefaultMapUpdaters).Assembly }.Concat(assemblies).Distinct()])));
 
     /// <summary>
     /// Make <paramref name="candidate"/> the set that new maps get (world thread). Maps that
@@ -71,10 +83,10 @@ public static class DefaultMapUpdaters
     /// <see cref="IMapUpdater"/> or lacks the <c>(Map, WorldRuntime)</c> constructor fails here,
     /// at first use, instead of being skipped (fail closed).
     /// </summary>
-    private static UpdaterSet Discover(Assembly[] assemblies)
+    private static UpdaterSet Discover(CodeAssemblies assemblies)
     {
         var found = new List<(Type Type, ConstructorInfo Constructor, int Order)>();
-        foreach (Type type in assemblies.Distinct().SelectMany(a => a.GetTypes()))
+        foreach (Type type in assemblies.GetLoadableTypes())
         {
             if (type.GetCustomAttribute<DefaultMapUpdaterAttribute>() is not { } attribute)
             {

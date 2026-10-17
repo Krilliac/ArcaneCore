@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Kernel.Reflection;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -38,8 +39,19 @@ public static class SpellHandlerModules
     public static IReadOnlyList<Type> Discover(Assembly assembly)
     {
         ArgumentNullException.ThrowIfNull(assembly);
+        return Discover(CodeAssemblies.Of(assembly));
+    }
+
+    /// <summary>
+    /// Every concrete <see cref="ISpellHandlerModule"/> of <paramref name="assemblies"/> (built-ins plus packs), ordered by
+    /// assembly name, then full type name (ordinal; for one assembly, as <see cref="Discover(Assembly)"/>). Fails closed as
+    /// that does, and on a type that cannot load (<see cref="CodeAssemblyLoadException"/>).
+    /// </summary>
+    public static IReadOnlyList<Type> Discover(CodeAssemblies assemblies)
+    {
+        ArgumentNullException.ThrowIfNull(assemblies);
         var found = new List<Type>();
-        foreach (Type type in assembly.GetTypes())
+        foreach (Type type in assemblies.GetLoadableTypes())
         {
             if (type.IsClass && !type.IsAbstract && !type.IsGenericTypeDefinition
                 && typeof(ISpellHandlerModule).IsAssignableFrom(type))
@@ -49,7 +61,6 @@ public static class SpellHandlerModules
             }
         }
 
-        found.Sort(static (a, b) => string.CompareOrdinal(a.FullName, b.FullName));
         return found;
     }
 

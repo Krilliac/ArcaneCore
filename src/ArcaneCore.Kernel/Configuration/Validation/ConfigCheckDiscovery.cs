@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Kernel.Reflection;
 
 namespace ArcaneCore.Kernel.Configuration.Validation;
 
@@ -21,11 +22,28 @@ public static class ConfigCheckDiscovery
             .OrderBy(t => t.FullName, StringComparer.Ordinal)];
     }
 
-    /// <summary>One instance of every <see cref="ConcreteTypes"/> class that has a parameterless constructor, in the same order.</summary>
-    public static IReadOnlyList<IConfigCheck> Create(IEnumerable<Assembly> assemblies)
+    /// <summary>
+    /// Every concrete <see cref="IConfigCheck"/> class of a <see cref="CodeAssemblies"/> set (built-ins plus packs), in set order:
+    /// assembly name, then full type name. Unlike the <see cref="IEnumerable{T}"/> overload this fails closed: a type that cannot
+    /// load throws <see cref="CodeAssemblyLoadException"/> instead of being dropped, so a pack check is never silently unrun.
+    /// </summary>
+    public static IReadOnlyList<Type> ConcreteTypes(CodeAssemblies assemblies)
+    {
+        ArgumentNullException.ThrowIfNull(assemblies);
+        return [.. assemblies.GetLoadableTypes()
+            .Where(t => t is { IsClass: true, IsAbstract: false, IsGenericTypeDefinition: false } && typeof(IConfigCheck).IsAssignableFrom(t))];
+    }
+
+    /// <summary>One instance of every <see cref="ConcreteTypes(IEnumerable{Assembly})"/> class that has a parameterless constructor, in the same order.</summary>
+    public static IReadOnlyList<IConfigCheck> Create(IEnumerable<Assembly> assemblies) => Instantiate(ConcreteTypes(assemblies));
+
+    /// <summary>One instance of every <see cref="ConcreteTypes(CodeAssemblies)"/> class that has a parameterless constructor, in the same order (fails closed).</summary>
+    public static IReadOnlyList<IConfigCheck> Create(CodeAssemblies assemblies) => Instantiate(ConcreteTypes(assemblies));
+
+    private static IReadOnlyList<IConfigCheck> Instantiate(IEnumerable<Type> types)
     {
         var checks = new List<IConfigCheck>();
-        foreach (Type type in ConcreteTypes(assemblies))
+        foreach (Type type in types)
         {
             if (type.GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, Type.EmptyTypes) is not null)
             {
@@ -38,6 +56,14 @@ public static class ConfigCheckDiscovery
 
     /// <summary>The concrete check classes of <paramref name="assemblies"/> that have no instance in <paramref name="checks"/>: declared, but never run.</summary>
     public static IReadOnlyList<Type> NotRun(IEnumerable<Assembly> assemblies, IEnumerable<IConfigCheck> checks)
+    {
+        ArgumentNullException.ThrowIfNull(checks);
+        HashSet<Type> run = [.. checks.Select(c => c.GetType())];
+        return [.. ConcreteTypes(assemblies).Where(t => !run.Contains(t))];
+    }
+
+    /// <summary>The concrete check classes of a <see cref="CodeAssemblies"/> set that have no instance in <paramref name="checks"/> (fails closed).</summary>
+    public static IReadOnlyList<Type> NotRun(CodeAssemblies assemblies, IEnumerable<IConfigCheck> checks)
     {
         ArgumentNullException.ThrowIfNull(checks);
         HashSet<Type> run = [.. checks.Select(c => c.GetType())];

@@ -4,6 +4,7 @@ using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Reflection;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -90,6 +91,19 @@ public sealed class WiringAudit
         _assemblies = [.. assemblies ?? DefaultAssemblies()];
         _catalog = catalog ?? ConfCatalog.Embedded;
     }
+
+    /// <summary>
+    /// An audit of a <see cref="CodeAssemblies"/> set (built-ins plus packs), examined in set order. The audit stays tolerant of a
+    /// type that cannot load (it reports, never throws); discovery itself fails closed on one.
+    /// </summary>
+    public static WiringAudit Of(IServiceProvider services, CodeAssemblies assemblies, ConfCatalog? catalog = null)
+    {
+        ArgumentNullException.ThrowIfNull(assemblies);
+        return new WiringAudit(services, assemblies.Assemblies, catalog);
+    }
+
+    /// <summary><see cref="DefaultAssemblies"/> as a <see cref="CodeAssemblies"/> set with no packs.</summary>
+    public static CodeAssemblies DefaultCodeAssemblies() => CodeAssemblies.Of([.. DefaultAssemblies()]);
 
     /// <summary>The world assembly and every ArcaneCore assembly it references (loaded by name).</summary>
     public static IReadOnlyList<Assembly> DefaultAssemblies()
