@@ -521,6 +521,41 @@ type) and the production wiring in `AddHotModules` (read, not run).
 by a test: the `.hotmodule` handlers themselves (they need a logged-in session) and a real `WorldRuntime`
 tick loop; the swap is exercised through the same `IHotCodeWorld` seam the registry refresh tests use.
 
+## Feature lifecycle: detach and re-attach a world feature (`.feature`)
+
+Tier 2a, part 1 of [Hot reload tiers](../design/hot-reload-tiers.md#42-lifecycle-contract). The seams a reloadable pack
+needs to leave and rejoin a running world. **No existing feature is detachable yet**, so on a default server this changes
+nothing: every feature is pinned, attached once at start and stopped at shutdown exactly as before.
+
+* **Contracts assembly** `src/ArcaneCore.World.Contracts` (default load context, `ContractsVersion.Current = 1`):
+  `IWorldFeature` (moved here, namespace unchanged), `IDetachableWorldFeature` with `DetachKind` (`Pinned`, `Stateless`,
+  `Handover`), `QuiesceAsync`, `Detach(FeatureHandover)` and `AttachFrom(world, handover?, subscriptions)`;
+  `FeatureHandover` (named values of core or contract types; a type from a collectible assembly is refused);
+  `FeatureSubscriptions`, the bag every subscription of a detachable feature goes through (world events,
+  `SpellSystem` observers, any `IDisposable` registration); `IWorldLifecycleHooks` and `ITeleportWaiverRegistry`.
+* **`FeatureHost`** (`src/ArcaneCore.World/Features`) attaches every feature at start (a detachable one through
+  `AttachFrom` with a bag the host owns) and detaches, attaches or cycles one in a running world: quiesce off the world
+  thread, then commit on the world thread at a tick boundary. All or nothing: a `Detach` or unsubscribe that throws is
+  rolled back in the same tick (bag disposed, feature re-attached from the same handover); an `AttachFrom` that throws has
+  its subscriptions undone and the feature stays detached with its handover; a failed quiesce detaches nothing (the
+  feature is detached and re-attached in one tick to restart its work); a commit the world thread does not pick up leaves
+  the feature quiesced but attached. Every operation is logged, written to the hot code audit file (`feature` lines) and
+  reported as a hot swap in the new `Feature` lane.
+* **`.feature list | detach <name> [reason] | attach <name> [reason]`**, Administrator, added at start only when
+  `World:HotCode:Modules:Enabled` is set (the `.hotmodule` switch). The name is the feature's type name.
+* `SpellSystem.UnregisterObserver`, `WorldLifecycleHooks` (named `AfterWorldStart` / `BeforeWorldStop` hooks) and
+  `TeleportWaiverRegistry` (itself a pinned feature and `IAreaTriggerWaiver`, so the teleport handler consults registered
+  waivers without a change of its own; with none registered it waives nothing).
+
+Not done yet (next lanes): the world host does not run `WorldLifecycleHooks` yet (`ManagedPlayerbotFeature` is still
+called by type at shutdown), `PlayerbotGroupCoordinator` still implements `IAreaTriggerWaiver` directly instead of
+registering, no bot feature implements `IDetachableWorldFeature`, the architecture test that forbids a bare `+=` from
+pack code does not exist, and nothing reads `ContractsVersion` from a pack at load.
+
+Tests: `FeatureLifecycleTests` (14) and `FeatureSeamTests` (8) in `tests/ArcaneCore.World.Tests/FeatureLifecycle`, with
+RED runs: bag disposal disabled (13 fail), `UnregisterObserver` not removing (11 fail), rollback, pinned refusal and
+waiver union disabled together (exactly their 5 tests fail), attach-failure undo disabled (its 1 test fails).
+
 ## Proving the claims yourself
 
 `tools/hotcode-spike/run-spike.ps1` is a throwaway process plus a driver. It runs five
@@ -547,7 +582,8 @@ The plan for removing these limits (multi-assembly discovery, swappable spell, i
   through the development runner (Debug, SDK), otherwise by restart. A module cannot replace a
   built-in handler or command (it is rejected), by design.
 * **Module contributions beyond opcode handler groups, chat command groups, creature AI, script hooks, spell scripts,
-  instance scripts and EventAI handlers.** Map updaters, `IWorldFeature`s, `IDataModule`s (tables), DI services, spell handler
+  instance scripts and EventAI handlers.** Map updaters, `IWorldFeature`s (the detach/attach seams exist, see the feature
+  lifecycle section, but no module or pack can contribute one yet), `IDataModule`s (tables), DI services, spell handler
   modules and aura registrations are not module extension points yet. A module that needs one needs a new, reviewed seam in the
   server first. (`CodeAssemblies` can already discover those kinds over built-ins plus pack assemblies, but nothing swaps their live
   registries.)
