@@ -20,12 +20,6 @@ public sealed partial class CreatureMapSystem
     /// <summary>Radius (yards) within which stripped creature flags are restored when a scripted movement step fails or is skipped.</summary>
     public const float MissingPathRestoreRadius = 30f;
 
-    /// <summary>Map-time safeguard window (ms) after which stripped template flags self-heal when out of combat and not on a scripted waypoint path.</summary>
-    public const uint StrippedFlagSafeguardMs = 60_000;
-
-    private readonly Dictionary<Creature, uint> _strippedFlagElapsedMs = [];
-    private readonly Dictionary<Creature, WaypointMovementGenerator> _scriptedWaypointGenerators = [];
-
     /// <summary>
     /// SCRIPT_COMMAND_TEMP_SPAWN_CREATURE: creature <c>datalong</c> at (x, y, z, o), from any source object. Without coordinates it stands
     /// in front of the source at contact distance (CreatureCreatePos(spawner, spawner orientation, CONTACT_DISTANCE) then GetClosePoint,
@@ -113,13 +107,7 @@ public sealed partial class CreatureMapSystem
                 IReadOnlyList<CreatureWaypoint> path = _content.GetEntryWaypoints(template.Entry, step.DataLong3);
                 if (path.Count > 0)
                 {
-                    var wpGen = new WaypointMovementGenerator(path);
-                    if (HasWaypointScripts(path))
-                    {
-                        _scriptedWaypointGenerators[summoned] = wpGen;
-                    }
-
-                    summoned.Motion.Initialize(wpGen, this, start: true);
+                    summoned.Motion.Initialize(new WaypointMovementGenerator(path), this, start: true);
                 }
                 else
                 {
@@ -200,7 +188,8 @@ public sealed partial class CreatureMapSystem
     /// wander then ends by itself and the movement beneath resumes (the default, or idle for the main-movegen form). A waypoint with <c>datalong3</c> bit 0x1 (pass the target) is
     /// skipped only when there is no target (ScriptMgr.cpp:2318-2330).
     /// When a scripted waypoint path has no points in content or movement is skipped/blocked, template <see cref="Creature.NpcFlags"/> and
-    /// <see cref="Unit.UnitFlags"/> stripped earlier in the script are restored on the mover and living creatures within 30 yards.
+    /// <see cref="Unit.UnitFlags"/> stripped earlier in the script are restored on the mover and living creatures within 30 yards, with a
+    /// warning (<see cref="RestoreMissingPathNpcFlags"/>).
     /// </summary>
     private void RelayMovement(RelayScriptStep step, WorldObject? source, WorldObject? target)
     {
@@ -214,7 +203,7 @@ public sealed partial class CreatureMapSystem
 
             if (mover.Combat.IsInCombat)
             {
-                RestoreMissingPathNpcFlags(mover);
+                RestoreMissingPathNpcFlags(mover, step, "the mover is in combat");
                 return; // "source is in combat and may lead to wrong behaviour: skipping"
             }
 
@@ -222,7 +211,7 @@ public sealed partial class CreatureMapSystem
             {
                 if (slot.SlotId != 0)
                 {
-                    RestoreMissingPathNpcFlags(mover);
+                    RestoreMissingPathNpcFlags(mover, step, "the mover follows a formation");
                     return; // "call for creature in formation, skipping": a follower's movement is the formation's
                 }
 
@@ -235,7 +224,6 @@ public sealed partial class CreatureMapSystem
             switch (step.DataLong)
             {
                 case 0:
-                    _scriptedWaypointGenerators.Remove(mover);
                     StopMoving(mover);
                     mover.Motion.Initialize(IdleMovementGenerator.Instance, this, start: true);
                     break;
@@ -249,7 +237,6 @@ public sealed partial class CreatureMapSystem
                     {
                         // Main movegen with an expiry: cmangos Clear(false, true) leaves only the idle generator at the bottom, so the
                         // timed wander goes over idle and the creature stands when it expires.
-                        _scriptedWaypointGenerators.Remove(mover);
                         StopMoving(mover);
                         mover.Motion.Initialize(IdleMovementGenerator.Instance, this, start: true);
                         mover.Motion.MoveRandom(random);
@@ -257,7 +244,6 @@ public sealed partial class CreatureMapSystem
                     else if ((step.DataInt2 & 0x1) != 0)
                     {
                         // "make it main movegen": StopMoving, Clear(false, true), then the wander is the only generator.
-                        _scriptedWaypointGenerators.Remove(mover);
                         StopMoving(mover);
                         mover.Motion.Initialize(random, this, start: true);
                     }
@@ -274,7 +260,7 @@ public sealed partial class CreatureMapSystem
                 {
                     if ((step.DataLong3 & 0x1) != 0 && target is null)
                     {
-                        RestoreMissingPathNpcFlags(mover);
+                        RestoreMissingPathNpcFlags(mover, step, "the step passes a target and has none");
                         return; // "pass target true and target nullptr: skipping"
                     }
 
@@ -285,28 +271,19 @@ public sealed partial class CreatureMapSystem
                             : _content.GetEntryWaypoints(mover.Template.Entry, step.DataLong2);
                     if (path.Count == 0)
                     {
-                        RestoreMissingPathNpcFlags(mover);
+                        RestoreMissingPathNpcFlags(mover, step, $"waypoint path {step.DataLong2} is missing");
                         ReportRelay(step, $"MOVEMENT waypoint path {step.DataLong2} missing for entry {mover.Template.Entry}");
                         return;
                     }
 
                     StopMoving(mover);
                     var wpGen = new WaypointMovementGenerator(path, (step.DataLong3 & 0x1) != 0 ? target!.Guid : default, linear: step.DataLong == 3);
-                    if (HasWaypointScripts(path))
-                    {
-                        _scriptedWaypointGenerators[mover] = wpGen;
-                    }
-                    else
-                    {
-                        _scriptedWaypointGenerators.Remove(mover);
-                    }
-
                     mover.Motion.Initialize(wpGen, this, start: true);
                     break;
                 }
 
                 default:
-                    RestoreMissingPathNpcFlags(mover);
+                    RestoreMissingPathNpcFlags(mover, step, $"movement type {step.DataLong} is unsupported");
                     ReportRelay(step, $"MOVEMENT type {step.DataLong}");
                     break;
             }
@@ -315,24 +292,11 @@ public sealed partial class CreatureMapSystem
         {
             if (source is Creature faultMover)
             {
-                RestoreMissingPathNpcFlags(faultMover);
+                RestoreMissingPathNpcFlags(faultMover, step, "the step faulted");
             }
 
             LogRelayStepFault("CreatureMapSystem.RelayMovement", ex, step, source, target);
         }
-    }
-
-    private static bool HasWaypointScripts(IReadOnlyList<CreatureWaypoint> path)
-    {
-        for (int i = 0; i < path.Count; i++)
-        {
-            if (path[i].ScriptId != 0)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static bool HasStrippedTemplateFlags(Creature creature)
@@ -342,103 +306,43 @@ public sealed partial class CreatureMapSystem
             || (creature.UnitFlags & templateUnitFlags) != templateUnitFlags;
     }
 
-    private void RestoreTemplateFlags(Creature creature)
-    {
-        creature.NpcFlags |= creature.Template.NpcFlags;
-        creature.UnitFlags |= (UnitFlags)creature.Template.UnitFlags;
-        _strippedFlagElapsedMs.Remove(creature);
-    }
-
     /// <summary>
     /// When a scripted waypoint path is absent from content (or a MOVEMENT step is blocked by combat, skipped, or unsupported), any
     /// <c>dbscripts_on_creature_movement</c> step that would restore template <see cref="Creature.NpcFlags"/> or <see cref="Unit.UnitFlags"/>
     /// on arrival can never run (e.g. <c>dbscripts_on_quest_end</c> 412 stripping <c>NPC_FLAG_QUESTGIVER</c> from Razzle 1269 and Ozzie 1268
-    /// before starting missing path 1). Restore template flags on the mover and living creatures within 30 yd.
+    /// before starting missing path 1). Restore template flags on the mover and living creatures within 30 yd. This is not reference
+    /// behaviour (cmangos and vmangos leave the flags off), so every restore is logged as a warning naming the step and the reason.
+    /// Nothing else restores flags a script removed: a creature whose movement runs keeps them off until a script adds them back
+    /// (Kargath: Grunt Gargal's 908601 removes them, his 908602 and Warlord Goretooth's 907701 add them back minutes later).
     /// </summary>
-    private void RestoreMissingPathNpcFlags(Creature mover)
+    private void RestoreMissingPathNpcFlags(Creature mover, RelayScriptStep step, string reason)
     {
-        RestoreTemplateFlags(mover);
         const float RestoreRadiusSq = MissingPathRestoreRadius * MissingPathRestoreRadius;
-        foreach (Creature nearby in _creatures.Values)
-        {
-            if (nearby.IsAlive && HasStrippedTemplateFlags(nearby)
-                && DistanceSquared(nearby, mover) <= RestoreRadiusSq)
-            {
-                RestoreTemplateFlags(nearby);
-            }
-        }
-    }
-
-    private bool IsActivelyMovingOnScriptedWaypointPath(Creature creature)
-    {
-        if (!_scriptedWaypointGenerators.TryGetValue(creature, out WaypointMovementGenerator? scriptedGen))
-        {
-            return false;
-        }
-
-        if (!ReferenceEquals(creature.Motion.Top, scriptedGen))
-        {
-            if (!ReferenceEquals(creature.Motion.Default, scriptedGen))
-            {
-                _scriptedWaypointGenerators.Remove(creature);
-            }
-
-            return false;
-        }
-
-        return !creature.WaypointsPaused && (creature.IsMoving || scriptedGen.WaitMs > 0);
-    }
-
-    /// <summary>
-    /// Self-diagnose and restore stripped template <see cref="Creature.NpcFlags"/> and <see cref="Unit.UnitFlags"/> when a creature has
-    /// remained alive, out of combat, and not actively moving on a scripted waypoint path for <see cref="StrippedFlagSafeguardMs"/> (60s).
-    /// </summary>
-    private void UpdateStrippedFlagSafeguard(uint diffMs)
-    {
-        if (_creatures.Count == 0)
-        {
-            return;
-        }
-
         foreach (Creature creature in _creatures.Values)
         {
-            if (!creature.IsAlive || !HasStrippedTemplateFlags(creature))
+            if (!creature.IsAlive || !HasStrippedTemplateFlags(creature)
+                || (!ReferenceEquals(creature, mover) && DistanceSquared(creature, mover) > RestoreRadiusSq))
             {
-                _strippedFlagElapsedMs.Remove(creature);
                 continue;
             }
 
-            if (creature.Combat.IsInCombat || IsActivelyMovingOnScriptedWaypointPath(creature))
-            {
-                _strippedFlagElapsedMs[creature] = 0;
-                continue;
-            }
-
-            uint elapsed = _strippedFlagElapsedMs.GetValueOrDefault(creature) + diffMs;
-            if (elapsed >= StrippedFlagSafeguardMs)
-            {
-                uint prevNpcFlags = creature.NpcFlags;
-                UnitFlags prevUnitFlags = creature.UnitFlags;
-                RestoreTemplateFlags(creature);
-                _logger.LogWarning(
-                    "Self-diagnosed and restored stripped template flags on creature {Guid} (entry={Entry}, name={Name}, map={MapId}, pos=({X:F2},{Y:F2},{Z:F2}), npcFlags={PrevNpcFlags}->{NewNpcFlags}, unitFlags={PrevUnitFlags}->{NewUnitFlags}) after {ElapsedMs} ms without scripted waypoint restore.",
-                    creature.Guid,
-                    creature.Entry,
-                    creature.Template.Name,
-                    Map.MapId,
-                    creature.X,
-                    creature.Y,
-                    creature.Z,
-                    prevNpcFlags,
-                    creature.NpcFlags,
-                    prevUnitFlags,
-                    creature.UnitFlags,
-                    elapsed);
-            }
-            else
-            {
-                _strippedFlagElapsedMs[creature] = elapsed;
-            }
+            uint prevNpcFlags = creature.NpcFlags;
+            UnitFlags prevUnitFlags = creature.UnitFlags;
+            creature.NpcFlags |= creature.Template.NpcFlags;
+            creature.UnitFlags |= (UnitFlags)creature.Template.UnitFlags;
+            _logger.LogWarning(
+                "Relay script {ScriptId} MOVEMENT of creature entry {MoverEntry} did not run ({Reason}); restored the stripped template flags of creature {Guid} (entry={Entry}, name={Name}, map={MapId}, npcFlags={PrevNpcFlags}->{NewNpcFlags}, unitFlags={PrevUnitFlags}->{NewUnitFlags}) because the script that would restore them cannot run",
+                step.Id,
+                mover.Entry,
+                reason,
+                creature.Guid,
+                creature.Entry,
+                creature.Template.Name,
+                Map.MapId,
+                prevNpcFlags,
+                creature.NpcFlags,
+                prevUnitFlags,
+                creature.UnitFlags);
         }
     }
 

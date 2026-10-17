@@ -169,42 +169,77 @@ public sealed class CreatureRelayScriptTests
     }
 
     [Fact]
-    public void RelayScript_WhenQuestGiverFlagsStrippedWithoutWaypointRestore_SelfHealsAfterSafeguardWindow()
+    public void KargathScripts_StrippedQuestGiverFlagsStayOffUntilTheRestoringScriptRuns()
     {
-        // A script that strips NpcFlags.QuestGiver without starting a scripted waypoint path (or whose waypoint path has no
-        // restore script) must automatically self-diagnose and restore NpcFlags after StrippedFlagSafeguardMs (60s).
+        // classic-db z2815 Kargath (Badlands): Grunt Gargal's waypoint_path 6883 point 1 runs dbscripts_on_creature_movement 908601,
+        // which removes NPC_FLAG_QUESTGIVER from Thal'trak Proudtusk (9082) and Thunderheart (9084) at 101 s (command 29,
+        // datalong2 0) and removes Warlord Goretooth's (9077) gossip and quest flags at 1 s; Gargal's point 28 script 908602 adds
+        // the quest flag back (datalong2 1) about ten minutes later, and Goretooth's point-1 script 907701 adds his back when he
+        // returns to his post (vmangos old_migrations/20190430154254_world.sql does the same with command 4 on the same spawns).
+        // Nothing else restores them (cmangos ScriptMgr.cpp:2535-2557), so the flags must stay off while the officers are away.
+        const uint ThaltrakEntry = 9082;
+        const uint GoretoothEntry = 9077;
+        const uint StripThaltrak = 908601;
+        const uint StripGoretooth = 908611;
+        const uint RestoreThaltrak = 908602;
+        const uint RestoreGoretooth = 907701;
+        const uint NpcFlagGossipAndQuestGiver = 3;
         RelayScriptStep[] steps =
         [
-            Step(Quest412, 1, command: 29, dataLong: NpcFlagQuestGiver, dataLong2: 0),
+            Step(StripThaltrak, 1, command: 29, dataLong: NpcFlagQuestGiver, dataLong2: 0),
+            Step(StripGoretooth, 1, command: 29, dataLong: NpcFlagGossipAndQuestGiver, dataLong2: 0),
+            Step(RestoreThaltrak, 1, command: 29, dataLong: NpcFlagQuestGiver, dataLong2: 1),
+            Step(RestoreGoretooth, 1, command: 29, dataLong: NpcFlagGossipAndQuestGiver, dataLong2: 1),
         ];
         var ai = new CreatureAiContent([], [])
         {
             DbScripts = new DbScriptCatalog(steps.Select(s => (DbScriptKind.QuestEnd, s))),
         };
+        (uint Entry, uint PathId, CreatureWaypoint Point)[] goretoothPatrol =
+        [
+            (GoretoothEntry, 0u, new CreatureWaypoint(1, 0, 0, 83.5f, 0, 0)),
+            (GoretoothEntry, 0u, new CreatureWaypoint(2, 400, 0, 83.5f, 0, 0)),
+        ];
         var content = new CreatureContent(
-            [Template(RazzleEntry) with { NpcFlags = NpcFlagQuestGiver, Civilian = true }],
-            [Spawn(1, RazzleEntry, 0, 0)],
+            [
+                Template(ThaltrakEntry) with { NpcFlags = NpcFlagQuestGiver, Civilian = true },
+                Template(GoretoothEntry) with { NpcFlags = NpcFlagGossipAndQuestGiver, Civilian = true },
+            ],
+            [
+                Spawn(1, ThaltrakEntry, 0, 0),
+                Spawn(2, GoretoothEntry, 0, 0, movementType: 2),
+            ],
             [],
             [],
             [],
-            ai);
+            ai,
+            entryWaypoints: goretoothPatrol);
 
         (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content);
         using (world)
         {
             (Player player, _) = AddPlayer(world, 1, 0, 4);
-            Creature razzle = Assert.Single(system.Creatures);
+            Creature thaltrak = system.Creatures.Single(c => c.Template.Entry == ThaltrakEntry);
+            Creature goretooth = system.Creatures.Single(c => c.Template.Entry == GoretoothEntry);
 
-            Assert.True(system.StartDbScript(DbScriptKind.QuestEnd, Quest412, razzle, player));
-            Assert.Equal(0u, razzle.NpcFlags);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestEnd, StripThaltrak, thaltrak, player));
+            Assert.True(system.StartDbScript(DbScriptKind.QuestEnd, StripGoretooth, goretooth, player));
+            Assert.Equal(0u, thaltrak.NpcFlags);
+            Assert.Equal(0u, goretooth.NpcFlags);
 
-            // Halfway through the safeguard window (30s): still stripped.
-            system.Update(map, CreatureMapSystem.StrippedFlagSafeguardMs / 2);
-            Assert.Equal(0u, razzle.NpcFlags);
+            // Gargal's patrol: ten minutes out of combat, standing (Thal'trak) or walking a path with no scripts (Goretooth).
+            for (int second = 0; second < 600; second++)
+            {
+                system.Update(map, 1000);
+            }
 
-            // Reaching the 60s safeguard window: self-diagnosed and restored.
-            system.Update(map, CreatureMapSystem.StrippedFlagSafeguardMs / 2);
-            Assert.Equal(NpcFlagQuestGiver, razzle.NpcFlags);
+            Assert.Equal(0u, thaltrak.NpcFlags);
+            Assert.Equal(0u, goretooth.NpcFlags);
+
+            Assert.True(system.StartDbScript(DbScriptKind.QuestEnd, RestoreThaltrak, thaltrak, player));
+            Assert.True(system.StartDbScript(DbScriptKind.QuestEnd, RestoreGoretooth, goretooth, player));
+            Assert.Equal(NpcFlagQuestGiver, thaltrak.NpcFlags);
+            Assert.Equal(NpcFlagGossipAndQuestGiver, goretooth.NpcFlags);
         }
     }
 }
