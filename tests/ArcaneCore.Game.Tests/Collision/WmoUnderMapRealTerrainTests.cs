@@ -12,9 +12,8 @@ namespace ArcaneCore.Game.Tests.Collision;
 /// <see cref="MapCollision.ClassifyUnderMap"/> on real terrain, model and navigation-mesh data under Ironforge (a WMO city under the
 /// mountain terrain) and in the Dun Morogh - Loch Modan tunnel, where the live server reported "move/under-map reason=below-terrain"
 /// for bots. A unit standing on the floor there is not under the map; a unit far under that floor, or under open ground, still is
-/// (the mesh floor is searched from 2 yards above the point down, never higher). Two of the live reports stood in a gap of the extracted
-/// floor: no model or mesh floor lies straight under or over the bot, but the floor a few yards beside it is level with it, so it has not
-/// fallen through anything (<see cref="MapCollision.LevelWithANearbyFloor"/>; the live sweep of 2026-10-17 saw about 900 such reports).
+/// (the mesh floor is searched from 2 yards above the point down, never higher). Two of the live reports were true: no floor, model
+/// or mesh polygon lies within 8 yards of where the bot stood, nor anywhere in the 30 yards over it.
 /// </summary>
 public sealed class WmoUnderMapRealTerrainTests(ITestOutputHelper output)
 {
@@ -48,7 +47,7 @@ public sealed class WmoUnderMapRealTerrainTests(ITestOutputHelper output)
         Assert.Equal(UnderMapKind.UnderMap, fallen.Kind);
     }
 
-    /// <summary>Live report positions (map 0) where the bot stood in a gap of the floor data, level with the floor beside it.</summary>
+    /// <summary>Live report positions (map 0) where the bot stood on nothing: true reports.</summary>
     public static TheoryData<string, float, float, float> OffTheFloor => new()
     {
         { "Ironforge commons", -4637.55f, -1033.04f, 501.38f },
@@ -57,7 +56,7 @@ public sealed class WmoUnderMapRealTerrainTests(ITestOutputHelper output)
 
     [RealTerrainTheory]
     [MemberData(nameof(OffTheFloor))]
-    public void InAGapOfTheFloorData_LevelWithTheFloorBesideIt_IsNotUnderTheMap_FarUnderItIs(string name, float x, float y, float z)
+    public void WhereNoFloorIsNearOrOverIt_TheReportWasTrue(string name, float x, float y, float z)
     {
         using WorldRuntime world = Load(x, y);
         MapCollision collision = world.GetMap(0).Collision;
@@ -67,8 +66,7 @@ public sealed class WmoUnderMapRealTerrainTests(ITestOutputHelper output)
             Assert.False(collision.TryGetMeshFloor(x, y, h, 1f, 1f, out float over), $"{name}: a mesh floor over it at {over:F2}");
         }
 
-        Assert.Equal(UnderMapKind.Ok, collision.ClassifyUnderMap(x, y, z, 8f).Kind);
-        Assert.Equal(UnderMapKind.UnderMap, collision.ClassifyUnderMap(x, y, z - 70f, PlayerMargin).Kind);
+        Assert.Equal(UnderMapKind.UnderMap, collision.ClassifyUnderMap(x, y, z, 8f).Kind);
     }
 
     [RealTerrainFact]
