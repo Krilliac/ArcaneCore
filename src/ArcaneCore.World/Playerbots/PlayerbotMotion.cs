@@ -661,7 +661,7 @@ internal static class PlayerbotMotion
     /// then finds the storey below or nothing. Two positions on either side of a corner see each other through the obstacle the
     /// corner goes around. Both refused every start out of the Deathknell crypt and, in the Goldshire inn, every start towards
     /// William Pestle (a pillar on the line), and those bots stood still for good. The leg's height is first moved onto the mesh's
-    /// detail surface straight under or over it within <see cref="MeshFloorToleranceYards"/> (<see cref="MapCollision.TryGetMeshFloor"/>),
+    /// detail surface under the walk, followed along the mesh from the last position or the leg's corner (<see cref="MeshSurface"/>),
     /// when the mesh has one there. The bot then stands on the floor nearest to the
     /// leg's height among the probes from 2 and 6 yards above within <see cref="MeshFloorToleranceYards"/>, else at the leg's
     /// own height.</description></item>
@@ -673,12 +673,11 @@ internal static class PlayerbotMotion
     {
         if (!Finite(candidate)) return null;
         bool navigated = route.LegsNavigated(fromPoint, toPoint);
-        if (navigated && map.Collision.TryGetMeshFloor(candidate.X, candidate.Y, candidate.Z, MeshFloorToleranceYards,
-                MeshFloorToleranceYards, out float surface))
+        if (navigated && MeshSurface(map.Collision, route, fromPoint, toPoint, from, candidate) is { } surface)
         {
-            // The leg runs between polygon corners at the coarse polygons' heights; the mesh's detail surface under it is where the
-            // floor is. Without this a leg dipping under a WMO floor (the Loch Modan tunnel, the Ironforge commons: 2-5 yd under) stays
-            // there, because the floor over the leg is above the ceiling the probes below accept.
+            // The leg is a straight line between string-pulled corners, so its own height is a chord: through the hill, over the hollow,
+            // under the ramp. The mesh's surface under the walk is where the floor is (live: bots 8-30 yd under the terrain and 6-10 yd
+            // above it in the open, under the Ironforge ramps, 2-5 yd under the Loch Modan tunnel floor).
             candidate = candidate with { Z = surface };
         }
 
@@ -705,6 +704,23 @@ internal static class PlayerbotMotion
         // Doodads (fences, trees, rocks) block a stepped leg too: the server does not collide a managed bot's movement.
         if (!PlayerbotMoveCheck.LineClear(map.Collision, from, candidate with { Z = ground })) return null;
         return candidate with { Z = ground + 0.05f };
+    }
+
+    /// <summary>
+    /// The mesh surface under a navigated walk at <paramref name="candidate"/>: walked along the mesh from the last position
+    /// <paramref name="from"/> when no corner was passed (the step follows the leg), else from the corner the current leg starts at (a
+    /// point of the mesh's own path), so the storey is the one the walk is on (<see cref="MapCollision.TryWalkMeshSurface"/>); a step
+    /// of any length (a world tick seconds long) is followed over the ground's rise and fall. When neither is on the mesh (a route
+    /// started off it), the surface straight under or over the leg's height within <see cref="MeshFloorToleranceYards"/>. Null: none.
+    /// </summary>
+    private static float? MeshSurface(MapCollision collision, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
+    {
+        if (toPoint <= fromPoint && collision.TryWalkMeshSurface(from, candidate, out float walked)) return walked;
+        int corner = Math.Clamp(toPoint - 1, 0, route.Points.Count - 1);
+        if (route.Points.Count > 0 && (toPoint > fromPoint || corner > 0)
+            && collision.TryWalkMeshSurface(route.Points[corner], candidate, out float alongLeg)) return alongLeg;
+        return collision.TryGetMeshFloor(candidate.X, candidate.Y, candidate.Z, MeshFloorToleranceYards, MeshFloorToleranceYards,
+            out float near) ? near : null;
     }
 
     /// <summary>

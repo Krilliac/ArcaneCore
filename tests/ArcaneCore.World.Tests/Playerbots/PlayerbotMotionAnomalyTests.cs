@@ -300,6 +300,46 @@ public sealed class PlayerbotMotionAnomalyTests
     }
 
     [Fact]
+    public async Task AMeshLegThroughAModel_ThatStaysOnTheWalkableMesh_IsNotACrossing()
+    {
+        // Live: 147 of 422 wall-crossed reports had both ends on the mesh, 1-7 yd apart (a porch step, a stair slab, a ramp): the chest-high
+        // line clips a model the mesh, built from the same models, walks over.
+        var mesh = new ScriptedMesh();
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, mesh: mesh);
+        scenario.Ground.Blocked = (a, b, _) => Math.Min(a.X, b.X) < scenario.WallX && Math.Max(a.X, b.X) > scenario.WallX;
+        await scenario.WalkAsync(600);
+        Assert.True(mesh.Walks > 0, "the mesh was never asked");
+        Assert.False(scenario.Capture.Any(Key(Code.WallCrossed)), scenario.Capture.Describe());
+        Assert.False(scenario.Capture.Any(Key(Code.DoorCrossed)), scenario.Capture.Describe());
+    }
+
+    [Fact]
+    public async Task AMeshLegThroughAWall_ThatLeavesTheMesh_IsStillACrossing()
+    {
+        var mesh = new ScriptedMesh();
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, mesh: mesh);
+        mesh.Edge = (a, b) => Math.Min(a.X, b.X) < scenario.WallX && Math.Max(a.X, b.X) > scenario.WallX;
+        scenario.Ground.Blocked = (a, b, _) => Math.Min(a.X, b.X) < scenario.WallX && Math.Max(a.X, b.X) > scenario.WallX;
+        await scenario.WalkAsync(600);
+        Assert.True(scenario.Capture.Any(Key(Code.WallCrossed)), scenario.Capture.Describe());
+    }
+
+    /// <summary>
+    /// The walk stands on the mesh surface it walks on, however far that is from the leg's own height: a leg is a chord between two
+    /// string-pulled corners, and over a hill the ground lies 8-30 yd above it (live, the Barrens and Dun Morogh). Before, the surface
+    /// was taken only within 4 yd of the chord, and the bot walked on at the chord's height, under the hill.
+    /// </summary>
+    [Fact]
+    public async Task TheWalkStandsOnTheMeshSurface_HoweverFarFromTheLegsChord()
+    {
+        var mesh = new ScriptedMesh { Surface = Floor + 12f };
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, mesh: mesh);
+        await scenario.WalkAsync(600);
+        float z = await scenario.Host.OnWorldAsync(() => scenario.Session.Player!.Z);
+        Assert.InRange(z, Floor + 11.5f, Floor + 12.5f);
+    }
+
+    [Fact]
     public async Task ChaosProbeMotion_IsNotJudged()
     {
         await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false);
@@ -443,7 +483,7 @@ public sealed class PlayerbotMotionAnomalyTests
         internal float WallX { get; }
 
         internal static async Task<Scenario> StartAsync(Func<Vector3, Vector3, bool, bool> blocked, bool navigated = true, float routeYards = 30,
-            bool start = true)
+            bool start = true, ScriptedMesh? mesh = null)
         {
             WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -451,7 +491,7 @@ public sealed class PlayerbotMotionAnomalyTests
             AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
             (PlayerbotRoute route, float wallX) = await host.OnWorldAsync(() =>
             {
-                WorldCollision.Of(host.World).Install(lineOfSight: ground);
+                WorldCollision.Of(host.World).Install(lineOfSight: ground, pathfinder: mesh);
                 Player player = session.Player!;
                 player.Relocate(player.X, player.Y, Floor, 0, host.World.NowMs);
                 PlayerbotRoute made = LineRoute(player, routeYards, navigated);
@@ -481,6 +521,32 @@ public sealed class PlayerbotMotionAnomalyTests
             Session.Kick();
             await Session.ManagedClosed;
             await Host.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// A navigation mesh everywhere (a straight-line path), whose surface lies at <see cref="Surface"/> and whose walks stop at the edges
+    /// the test scripts (<see cref="Edge"/>).
+    /// </summary>
+    internal sealed class ScriptedMesh : IPathfinder, IMeshPointQuery
+    {
+        internal float Surface { get; set; } = Floor;
+        internal Func<Vector3, Vector3, bool>? Edge { get; set; }
+        internal int Walks { get; private set; }
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null) => new(PathType.Normal, [start, end]);
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+        { point = center; return false; }
+
+        public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            Walks++;
+            return Edge?.Invoke(start, end) == true
+                ? new MeshRaycastResult(true, true, 0.5f, Vector3.Lerp(start, end, 0.5f) with { Z = Surface })
+                : new MeshRaycastResult(true, false, 1f, end with { Z = Surface });
         }
     }
 

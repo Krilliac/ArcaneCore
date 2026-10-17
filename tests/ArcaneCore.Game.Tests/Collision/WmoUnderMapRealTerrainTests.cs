@@ -12,7 +12,8 @@ namespace ArcaneCore.Game.Tests.Collision;
 /// <see cref="MapCollision.ClassifyUnderMap"/> on real terrain, model and navigation-mesh data under Ironforge (a WMO city under the
 /// mountain terrain) and in the Dun Morogh - Loch Modan tunnel, where the live server reported "move/under-map reason=below-terrain"
 /// for bots. A unit standing on the floor there is not under the map; a unit far under that floor, or under open ground, still is
-/// (the mesh floor is searched from 2 yards above the point down, never higher).
+/// (the mesh floor is searched from 2 yards above the point down, never higher). Two of the live reports were true: no floor, model
+/// or mesh polygon lies within 8 yards of where the bot stood, nor anywhere in the 30 yards over it.
 /// </summary>
 public sealed class WmoUnderMapRealTerrainTests(ITestOutputHelper output)
 {
@@ -23,8 +24,6 @@ public sealed class WmoUnderMapRealTerrainTests(ITestOutputHelper output)
     /// <summary>Live under-map / airwalk report positions (map 0): name, x, y, z.</summary>
     public static TheoryData<string, float, float, float> Samples => new()
     {
-        { "Ironforge commons", -4637.55f, -1033.04f, 501.38f },
-        { "Ironforge (Dugro)", -4677.17f, -1013.01f, 502.34f },
         { "Ironforge (Seizihous)", -4601.65f, -896.47f, 503.01f },
         { "Loch Modan tunnel", -5590.54f, -2475.30f, 394.35f },
     };
@@ -46,6 +45,28 @@ public sealed class WmoUnderMapRealTerrainTests(ITestOutputHelper output)
         // Fallen through: 70 yards under that floor, in the rock. Neither the model nor the mesh floor above may excuse it.
         UnderMapVerdict fallen = collision.ClassifyUnderMap(x, y, floor - 70f, PlayerMargin);
         Assert.Equal(UnderMapKind.UnderMap, fallen.Kind);
+    }
+
+    /// <summary>Live report positions (map 0) where the bot stood on nothing: true reports.</summary>
+    public static TheoryData<string, float, float, float> OffTheFloor => new()
+    {
+        { "Ironforge commons", -4637.55f, -1033.04f, 501.38f },
+        { "Ironforge (Dugro)", -4677.17f, -1013.01f, 502.34f },
+    };
+
+    [RealTerrainTheory]
+    [MemberData(nameof(OffTheFloor))]
+    public void WhereNoFloorIsNearOrOverIt_TheReportWasTrue(string name, float x, float y, float z)
+    {
+        using WorldRuntime world = Load(x, y);
+        MapCollision collision = world.GetMap(0).Collision;
+        Assert.False(collision.TryGetMeshFloor(x, y, z, 8f, 8f, out float near), $"{name}: a mesh floor at {near:F2}");
+        for (float h = z + 1f; h <= z + 30f; h += 1f)
+        {
+            Assert.False(collision.TryGetMeshFloor(x, y, h, 1f, 1f, out float over), $"{name}: a mesh floor over it at {over:F2}");
+        }
+
+        Assert.Equal(UnderMapKind.UnderMap, collision.ClassifyUnderMap(x, y, z, 8f).Kind);
     }
 
     [RealTerrainFact]

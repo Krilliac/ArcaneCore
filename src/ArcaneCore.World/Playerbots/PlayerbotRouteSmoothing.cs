@@ -191,6 +191,10 @@ internal static class PlayerbotRouteSmoothing
             {
                 float t = (float)step / subdivisions;
                 Vector3 interp = Vector3.Lerp(a, b, t);
+                // The chord's height is not the ground's (a hill, a hollow): the point is on the mesh surface under it, walked from the
+                // leg's corner, so an un-offset point stays on the ground and an offset one is judged against the ground.
+                if (map.Collision.TryWalkMeshSurface(a, interp, out float surface))
+                    interp = interp with { Z = surface };
                 spine.Add((interp, normal, accumulated + (segLen * t)));
             }
 
