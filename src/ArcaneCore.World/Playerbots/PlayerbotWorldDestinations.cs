@@ -1300,6 +1300,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 // Travel is stricter than the giver: a quest the journal has ever held (rewarded repeatable, abandoned, removed by a GM)
                 // is not worth a trip, whatever its status now.
                 && state.Quests.Get(id) is null
+                // A full log is refused by the server (SMSG_QUESTLOG_FULL): no walk to a giver (GitHub #786). At a giver in sight the
+                // quest goals make room by shedding a grey quest (PlayerbotQuestGoals.FindCandidate).
+                && PlayerbotQuestGoals.HasFreeLogSlot(state)
                 && MayTakeQuest(player, services, state, content, loot, home, giverInHome, quest, _trip,
                     home is null ? _options.MaxDeliveryYards : 0)) { questId = id; return true; }
         }
