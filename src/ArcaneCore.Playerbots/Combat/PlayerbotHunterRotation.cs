@@ -44,7 +44,18 @@ internal sealed class PlayerbotHunterRotation : PlayerbotClassRotation
     protected override RotationAction? Upkeep(RotationState s)
         => Do(s, AspectOfTheHawk, s.Self)
             ?? Pet(s)
-            ?? CommandPet(s);
+            // A pet attack that leads the out-of-combat think is the whole think: the brain returns before Auto Shot or a
+            // swing. Standing on a pull whose shot is ready, that command (when it does not stick, so the pet never gains a
+            // victim) holds goal Combat with nothing hitting the creature. The idle pet is sent beside the shot
+            // (PetCompanion). While still closing in, the pet goes ahead.
+            ?? (YieldsToShot(s) ? null : CommandPet(s));
+
+    /// <summary>
+    /// Standing on a live pull with a shot or strike ready: the think is that action, not the pet command.
+    /// </summary>
+    private bool YieldsToShot(RotationState s)
+        => s.Victim is { IsAlive: true, IsCrowdControlled: false } pull && !s.IsMoving && Fight(s, pull) is not null;
+
 
     /// <summary>
     /// vmangos SummonPetIfNeeded for a hunter: a dead pet is revived, a stabled current pet is called. (vmangos also tames a

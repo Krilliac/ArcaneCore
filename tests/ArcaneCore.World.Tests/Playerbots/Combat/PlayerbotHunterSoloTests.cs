@@ -35,4 +35,20 @@ public sealed class PlayerbotHunterSoloTests
         Assert.Equal("Raptor Strike", Next(Hunter.InCombat(State(Hunter, HunterBook, Self(3), Victim(3f), PlayerbotRole.RangeDps,
             inCombat: false, more: s => s.HasRangedWeapon = true))));
     }
+
+    [Fact]
+    public void StandingOnAPull_DoesNotSpendTheThinkOnAPetCommand()
+    {
+        // The pet command used to be the whole out-of-combat think. It does not stick (the pet never gains a victim), the
+        // brain returns before Auto Shot, and the hunter stands on goal Combat with attackerFacts=none.
+        RotationState standing = State(Hunter, HunterBook, Self(3), Victim(20f), PlayerbotRole.RangeDps,
+            inCombat: false, more: s => { s.HasRangedWeapon = true; s.Pet = RotationPetStatus.Alive; });
+        Assert.Null(Next(Hunter.OutOfCombat(standing)));
+        Assert.Equal("Auto Shot", Next(Hunter.InCombat(standing)));
+        Assert.Equal("pet attack", Next(Hunter.PetCompanion(standing, Hunter.InCombat(standing))));
+
+        // Still closing in: the pet is sent ahead, where a cast-time shot cannot finish.
+        Assert.Equal("pet attack", Next(Hunter.OutOfCombat(State(Hunter, HunterBook, Self(3), Victim(20f), PlayerbotRole.RangeDps,
+            inCombat: false, more: s => { s.HasRangedWeapon = true; s.Pet = RotationPetStatus.Alive; s.IsMoving = true; }))));
+    }
 }
