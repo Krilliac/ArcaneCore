@@ -1261,6 +1261,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 && session.Player is { Map: not null } player && PlayerbotMapPolicy.MayStayOnMap(player, _options))
                 .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
             if (!entered) throw new InvalidOperationException("login-refused");
+            // A bot saved over a void (no floor near its height) would log in there again and wander on a stale height: put it on a floor
+            // before its brain starts. Bots only; a real player keeps the saved position (the vmangos login).
+            PlayerbotLoginFloor.Result settled = await world.InvokeAsync(() => session.Player is { Map: { } botMap } botPlayer
+                    ? PlayerbotLoginFloor.Settle(botPlayer, botMap) : new PlayerbotLoginFloor.Result(PlayerbotLoginFloor.Outcome.Kept, default))
+                .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
+            if (settled.Outcome is PlayerbotLoginFloor.Outcome.MovedToMesh or PlayerbotLoginFloor.Outcome.MovedToHome)
+                logger.LogInformation("Playerbot {BotId} logged in over a void; placed {Outcome} at {Position}", bot.BotId, settled.Outcome, settled.Position);
             bot = await PersistAsync(scope.ServiceProvider, bot with { State = ManagedPlayerbotState.Running }, cancellationToken).ConfigureAwait(false);
             // The row, scope and session are the core's (ManagedBotRegistry): they outlive a detach of this feature.
             var entry = new ManagedBot(bot, scope, session);

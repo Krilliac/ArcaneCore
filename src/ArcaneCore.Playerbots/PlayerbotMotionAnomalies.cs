@@ -22,7 +22,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (not flying, swimming, levitating, on a transport, falling or on a spline). Warning. One height query per bot per
 /// <see cref="SampleIntervalMs"/>.</description></item>
 /// <item><term>under-map</term><description>the terrain surface lies more than <see cref="UnderMapYards"/> above the bot and no
-/// model explains it (inside a WMO, a model floor under it or a model surface just above it: caves, cellars and cities; unloaded model tiles never convict); Error beyond <see cref="FarUnderMapYards"/>. Same sample.</description></item>
+/// model explains it (inside a WMO, a model floor under it or a model surface just above it: caves, cellars and cities; unloaded model tiles never convict); Error beyond <see cref="FarUnderMapYards"/>. Same sample. Airwalk and under-map are one episode per place: a bot that stays within <see cref="SamePlaceYards"/> of its last report is not reported again for <see cref="SamePlaceQuietMs"/> (<see cref="MotionWatch.DueAt"/>).</description></item>
 /// <item><term>wall-crossed</term><description>a leg of a navigation-mesh route the bot walked since the last heartbeat is blocked by a
 /// static model (line of sight at chest height), unless the bot's walkable mesh walks it on the leg's own storey: the mesh walk never
 /// leaves the mesh and starts and ends within <see cref="MeshStoreyYards"/> of the leg's ends (<see cref="StaysOnMesh"/>). Warning. One
@@ -56,6 +56,15 @@ internal static class PlayerbotMotionAnomalies
 
     /// <summary>The same code is not reported again for the same bot sooner than this (world ms).</summary>
     internal const uint EpisodeQuietMs = 30_000;
+
+    /// <summary>
+    /// A ground verdict (airwalk, under-map) is one episode while the bot stays within this many yards of where it was reported: a bot
+    /// that stands in a void is reported once, not once per <see cref="EpisodeQuietMs"/>.
+    /// </summary>
+    internal const float SamePlaceYards = 4f;
+
+    /// <summary>A ground verdict at the same place (<see cref="SamePlaceYards"/>) is reported again after this long (world ms): the episode is re-armed.</summary>
+    internal const uint SamePlaceQuietMs = 600_000;
 
     /// <summary>Height above the floor under a walking bot that is "no ground": mesh legs may float up to 4 yd (<see cref="PlayerbotMotion.MeshFloorToleranceYards"/>).</summary>
     internal const float AirwalkYards = 6f;
@@ -124,6 +133,7 @@ internal static class PlayerbotMotionAnomalies
     internal sealed class MotionWatch
     {
         private readonly uint[] _last = new uint[Names.Length];
+        private readonly Vector3[] _at = new Vector3[Names.Length];
         private int _seen;
         private bool _sampled;
         private uint _nextSampleMs;
@@ -139,6 +149,24 @@ internal static class PlayerbotMotionAnomalies
             if ((_seen & bit) != 0 && AgeOf(now, _last[(int)code]) < EpisodeQuietMs) return false;
             _seen |= bit;
             _last[(int)code] = now;
+            return true;
+        }
+
+        /// <summary>
+        /// <see cref="Due"/> for a report tied to a place: false (and nothing marked) while the last report of <paramref name="code"/> was
+        /// within <see cref="SamePlaceYards"/> of <paramref name="at"/> less than <see cref="SamePlaceQuietMs"/> ago. A report at another
+        /// place, or after that interval, goes through the ordinary <see cref="EpisodeQuietMs"/> gate and records the place.
+        /// </summary>
+        internal bool DueAt(Code code, uint now, Vector3 at)
+        {
+            int bit = 1 << (int)code;
+            if ((_seen & bit) != 0 && AgeOf(now, _last[(int)code]) < SamePlaceQuietMs && Vector3.DistanceSquared(_at[(int)code], at) <= SamePlaceYards * SamePlaceYards)
+            {
+                return false;
+            }
+
+            if (!Due(code, now)) return false;
+            _at[(int)code] = at;
             return true;
         }
 
@@ -289,7 +317,7 @@ internal static class PlayerbotMotionAnomalies
     private static bool ValidHeight(float height)
         => float.IsFinite(height) && height > TerrainTile.InvalidHeight;
 
-    private const MovementFlags NotWalking = MovementFlags.Flying | MovementFlags.Levitating | MovementFlags.Swimming
+    internal const MovementFlags NotWalking = MovementFlags.Flying | MovementFlags.Levitating | MovementFlags.Swimming
         | MovementFlags.OnTransport | MovementFlags.Hover | MovementFlags.WaterWalking | MovementFlags.FallingFar
         | MovementFlags.Jumping | MovementFlags.SplineEnabled;
 
@@ -341,7 +369,7 @@ internal static class PlayerbotMotionAnomalies
     {
         if (verdict == GroundVerdict.Ok || PlayerbotWater.Submerged(map, at, player.Locomotion.CollisionHeight)) return;
         Code code = verdict == GroundVerdict.Airwalk ? Code.Airwalk : Code.UnderMap;
-        if (!watch.Due(code, now)) return;
+        if (!watch.DueAt(code, now, at)) return;
         string detail = verdict == GroundVerdict.Airwalk
             ? string.Create(CultureInfo.InvariantCulture, $"walking {at.Z - floor:F1} yd above the floor under it (floor {floor:F1}, at {Describe(at)})")
             : string.Create(CultureInfo.InvariantCulture, $"{terrain - at.Z:F1} yd under the terrain surface ({terrain:F1}) with no model floor under it (at {Describe(at)})");
