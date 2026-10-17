@@ -72,6 +72,8 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     private Task? _disposeTask;
     private Task? _worldStop;
 
+    static SyntheticArcaneServer() => MockWorldPacks.EnsureRegistered();
+
     private SyntheticArcaneServer(
         OwnedFixtureDirectory directory, TcpListener realmListener, TcpListener worldListener, ServiceProvider services)
     {

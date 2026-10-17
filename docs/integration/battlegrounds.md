@@ -38,7 +38,7 @@ see the area doc for their provider notes.
 New files: `src/ArcaneCore.Game/Battlegrounds/{ArathiBasin,AlteracValley,Battleground.Objectives}.cs`, `src/ArcaneCore.Kernel/WorldData/BattlegroundData.cs`,
 `src/ArcaneCore.Data/World/Battlegrounds/BattlegroundWorldDataModule.cs`, `src/ArcaneCore.Data/Content/Import/Mappers/BattlegroundDumpImporter.cs`,
 `src/ArcaneCore.Game/WorldState/Events/IWrappingSpawnGate.cs`, `src/ArcaneCore.World/Battlegrounds/*.cs`,
-`src/ArcaneCore.World/Playerbots/Scenarios/ScenarioBattlegrounds.cs` and their tests.
+`src/ArcaneCore.Playerbots/Scenarios/ScenarioBattlegrounds.cs` and their tests.
 
 Shared files edited (small, each a seam):
 

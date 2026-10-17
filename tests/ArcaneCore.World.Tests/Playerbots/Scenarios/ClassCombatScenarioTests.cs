@@ -6,7 +6,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 
 /// <summary>
-/// The class combat scenarios (<see cref="ClassCombatScenario"/>, src/ArcaneCore.World/Playerbots/Scenarios/ScenarioCombat.cs):
+/// The class combat scenarios (<see cref="ClassCombatScenario"/>, src/ArcaneCore.Playerbots/Scenarios/ScenarioCombat.cs):
 /// one bot per class, created and taught its first spells through the ordinary paths (<see cref="ScenarioClassContent"/> makes
 /// every race and class creatable), handed to its own brain beside the scenario wolf, kills it the way its class fights. The
 /// world runs without the scenario quest so the alliance bots do not walk off to the quest giver first.

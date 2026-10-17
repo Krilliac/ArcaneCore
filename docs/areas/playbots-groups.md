@@ -14,7 +14,7 @@ server's LFG queue): the matching is ArcaneCore's own.
 
 ## Pieces
 
-| File (`src/ArcaneCore.World/Playerbots/Groups/`) | What it does |
+| File (`src/ArcaneCore.Playerbots/Groups/`) | What it does |
 |---|---|
 | `PlayerbotGroupOptions.cs` | `World:Playerbots:Groups` (every key live through `.reload config`). |
 | `PlayerbotGroupContent.cs` | The pure rules: which content needs a group and how big, who can tank or heal, the matching (`Match`). Unit tested. |

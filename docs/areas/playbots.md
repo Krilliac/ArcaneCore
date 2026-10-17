@@ -1,12 +1,20 @@
 # Playerbots and playtest clients
 
 ArcaneCore has two kinds of bot. **Managed playerbots** are server-owned P0 players inside the
-world daemon (`src/ArcaneCore.World/Playerbots/`); they run autonomously or are driven by a
+world daemon; they run autonomously or are driven by a
 script, which is the **scenario harness** for automated testing of game systems. The
 **MockClient playbot** (`arcane-mock playbot`, last section) is an external build-5875
 protocol client.
 
 ## Managed playerbots
+
+**Project layout.** The bot code is its own project, `src/ArcaneCore.Playerbots/` (assembly `ArcaneCore.Playerbots`, namespaces
+`ArcaneCore.World.Playerbots.*`), which references the world core; the world never references it. The options classes
+(`PlayerbotOptions` and every `World:Playerbots:*` section class except QA's) are in `src/ArcaneCore.World.Contracts/Playerbots/`,
+and the core-owned bot state (`ManagedBotRegistry`, the explore atlas, item scores and talent builds) in
+`src/ArcaneCore.World/Bots/`. The world daemon loads the pack from beside its executable as a built-in at startup
+([code hot reload, tier 2b](code-hot-reload.md#the-playerbots-pack-as-its-own-assembly-tier-2b)); the bot tests are in
+`tests/ArcaneCore.World.Tests/Playerbots/`.
 
 `ManagedPlayerbotFeature` (`IPlayerbotService`) owns persistent bot characters on random,
 password-less Player accounts and logs them in through an ordinary socketless `WorldSession`
@@ -65,7 +73,7 @@ Bots also use the faction auction house and the mailbox: they list loot they hav
 and collect what sold, expired or was won (`World:Playerbots:Economy`, live): `docs/areas/playbots-economy.md`.
 
 In town and out in the world, bots continuously pursue better gear, bags, spells, mounts and trade-skill crafting (`PlayerbotEquipment`,
-`PlayerbotTownGoals`, `PlayerbotCrafting` in `src/ArcaneCore.World/Playerbots/Progression/PlayerbotCrafting.cs`): they equip wearable gear
+`PlayerbotTownGoals`, `PlayerbotCrafting` in `src/ArcaneCore.Playerbots/Progression/PlayerbotCrafting.cs`): they equip wearable gear
 upgrades and larger bags from their pack, use learnable recipe, spell and mount items in their bags (`PlayerbotEquipment.TryLearnFromBagItem`),
 buy affordable weapon/armor/bag/recipe upgrades and crafting tools/reagents from vendors (`PlayerbotTownGoals.TryBuyEquipmentUpgrade`,
 `TryBuyCraftingSupplies`), train class and trade-skill spells (`QuestNpcServices.GetTradeSkillTrainerQuote`) and riding mounts whenever no
@@ -621,7 +629,7 @@ to autonomous mode resumes the brain with whatever state it had before.
 
 ### Goal policy
 
-`World:Playerbots:Policy` (`src/ArcaneCore.World/Playerbots/Policy/`, off by default) lets a scored policy re-rank the out-of-combat goal
+`World:Playerbots:Policy` (`src/ArcaneCore.Playerbots/Policy/`, off by default) lets a scored policy re-rank the out-of-combat goal
 ladder in `PlayerbotBrain.Update`. It is **advisory**: the rule ladder stays the default and the fallback, and a promoted goal is tried by its
 own controller under its own rung's guards, which recheck the live rules, and under the guards of the rungs it jumps: resurrection
 sickness stands every promotion but `Town` down (as the ladder stands every rung below town down), and a quest creature in sight keeps

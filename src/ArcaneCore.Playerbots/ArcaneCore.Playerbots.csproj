@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The Playerbots pack (docs/design/hot-reload-tiers.md, section 4.6): brains, travel, combat, groups, battlegrounds,
+       population, social, chat, QA, scenarios and the bot commands, moved out of ArcaneCore.World in tier 2b. Namespaces are
+       unchanged (ArcaneCore.World.Playerbots.*). Tier 2b loads it in the DEFAULT context as a built-in: the world host
+       registers this assembly in its startup CodeAssemblies set (WorldCodeAssemblies), so features, service modules,
+       commands, config checks and the wiring audit discover it like World's own types. Tier 2c will load it collectibly.
+
+       Direction: this project references ArcaneCore.World (the core) and the contracts; ArcaneCore.World never references it
+       (tests/ArcaneCore.World.Tests/Architecture/PlayerbotCoreBoundaryTests). Because ArcaneCore.World is also the daemon
+       executable, the host cannot take a project reference to its own pack (a cycle); instead the build copies this assembly
+       next to the world executable (CopyPackBesideWorldHost below) and Program.cs loads it from there. Rule: this project adds
+       no package the world host does not already have, because the host's deps.json is what the default context resolves. -->
+  <PropertyGroup>
+    <RootNamespace>ArcaneCore.World.Playerbots</RootNamespace>
+    <AssemblyName>ArcaneCore.Playerbots</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ArcaneCore.World\ArcaneCore.World.csproj" />
+    <ProjectReference Include="..\ArcaneCore.World.Contracts\ArcaneCore.World.Contracts.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Game\ArcaneCore.Game.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Protocol\ArcaneCore.Protocol.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Data\ArcaneCore.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The bot chat local filter's shipped term list (docs/areas/playbots.md, Safety and provider policies). The logical name is the one it had in ArcaneCore.World. -->
+    <EmbeddedResource Include="Chat\PlayerbotChatSafetyTerms.json" LogicalName="ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyTerms.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
+    <InternalsVisibleTo Include="ArcaneCore.Benchmarks" />
+  </ItemGroup>
+
+  <!-- Put the pack beside the world executable, so `dotnet ArcaneCore.World.dll` (deploy, Docker, the dev runner) finds it.
+       The world project's output path is asked from the world project itself, so the artifacts layout (- -artifacts-path) and
+       the plain bin/<Configuration> layout both work. Building only ArcaneCore.World does not refresh the copy: build this
+       project or the solution. -->
+  <Target Name="CopyPackBesideWorldHost" AfterTargets="Build">
+    <MSBuild Projects="..\ArcaneCore.World\ArcaneCore.World.csproj" Targets="GetTargetPath">
+      <Output TaskParameter="TargetOutputs" ItemName="_WorldHostTargetPath" />
+    </MSBuild>
+    <PropertyGroup>
+      <_WorldHostDir>@(_WorldHostTargetPath->'%(RootDir)%(Directory)')</_WorldHostDir>
+    </PropertyGroup>
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(_WorldHostDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(_WorldHostDir)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
+  </Target>
+
+</Project>

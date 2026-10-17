@@ -6,8 +6,9 @@ Status: design, owner go on 2026-10-16 for tiers 1 to 3. Tier 1 is **built and w
 RED proofs and a collected-unload proof exist for the new slots. Still open for Tier 1: the T1-live row (a real client on a dev
 server). Tier 2a part 1 (contracts assembly and feature lifecycle seams, section 4.2) is **built** on `claude/hr2-lifecycle`;
 Tier 2a part 2 (core `ManagedBotRegistry`, call-site inversion, the six bot features detachable, the core/pack
-architecture test, section 4.5) is **built** on `claude/hr2-bots`; the rest of Tier 2 (options into the contracts
-assembly, 2b to 2d) are planned. Tier 3 phase 3a (gateway passthrough) is **built and mock-client tested** on
+architecture test, section 4.5) is **built** on `claude/hr2-bots`; Tier 2b (Playerbots in its own project
+`src/ArcaneCore.Playerbots`, still in the default load context; options in the contracts assembly; core-to-pack
+allowlist 0, section 4.6) is **built** on `claude/hr-2b`; 2c and 2d are planned. Tier 3 phase 3a (gateway passthrough) is **built and mock-client tested** on
 `claude/hr2-gateway` (section 5.4, [gateway.md](../areas/gateway.md)); real-client acceptance and phases 3b/3c are open.
 All three lanes are merged on `claude/hr2-integrate`.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
@@ -42,7 +43,7 @@ listener, runtime upgrade).
 | Tier | Removes the restart for | Mechanism | Status |
 |---|---|---|---|
 | 1 | Gameplay scripts that live outside the core: spell scripts, instance scripts, EventAI handlers, discovered types from several assemblies | Widen the module lane: every discovery site accepts a set of assemblies, and each script registry supports a validated, all-or-nothing swap | **Built and wired** into `ModuleHost`, with full rollback; T1-live not yet run |
-| 2 | A whole subsystem's code, on Release: Playerbots first | Core plus reloadable packs: a contracts assembly, detachable features, one collectible context and one child DI container per pack | 2a parts 1 and 2 **built** (contracts assembly, lifecycle seams, `.feature`, bot registry, call-site inversion, detachable bot features; 4 allowlisted core types left, section 4.5); 2b to 2d planned |
+| 2 | A whole subsystem's code, on Release: Playerbots first | Core plus reloadable packs: a contracts assembly, detachable features, one collectible context and one child DI container per pack | 2a parts 1 and 2 **built** (contracts assembly, lifecycle seams, `.feature`, bot registry, call-site inversion, detachable bot features; section 4.5); 2b **built** (Playerbots in its own project, default context, core-to-pack allowlist 0, section 4.6); 2c and 2d planned |
 | 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | 3a passthrough **built** (mock client only, off by default); 3b/3c planned |
 | 4 | Nothing new for production | The Debug edit-and-continue runner stays a development tool | Built (dev-only), unchanged |
 
@@ -256,12 +257,13 @@ memory-mapped GGUF model, fire-and-forget tasks, and core statics calling pack s
   *Status:* part 1 **built** (contracts assembly, lifecycle interfaces, `FeatureSubscriptions`,
   `SpellSystem.UnregisterObserver`, hook registry, waiver registry, `FeatureHost` and `.feature`, tested with a probe
   feature, section 4.2); part 2 **built** (hooks run by `WorldHost`, `ManagedBotRegistry`, call sites inverted except
-  the 4 allowlisted core types, Detach/AttachFrom on the 6 bot features, the architecture test, section 4.5). Still
-  planned in 2a: the options types into the contracts assembly (clears 3 of the 4 allowlist entries) and
-  `ClusterCommands` onto the registry (the 4th).
+  the 4 allowlisted core types, Detach/AttachFrom on the 6 bot features, the architecture test, section 4.5). The two
+  items left over from 2a (the options types into the contracts assembly, `ClusterCommands` onto the registry) were
+  done in 2b (section 4.6).
 - **2b, move the code (about 3 to 5 weeks):** Playerbots into its own project, the compiler's CS0122/CS0246 list as the
   authoritative coupling inventory, re-point the 449 test files, still loaded in the **default** context and soaked.
-  Useful on its own as modularization.
+  Useful on its own as modularization. *Status:* **built** on `claude/hr-2b` (section 4.6); the soak with the usual bot
+  population (exit criterion, section 9) is still open. Tests stay in `ArcaneCore.World.Tests` (not re-pointed).
 - **2c, swap (about 3 to 4 weeks plus soak):** collectible load through `ModuleHost` (allowlist, audit, tick-boundary
   commit, rollback to the old pack). v1 is a **cold swap**: quiesce, log bots out through the existing path, unload,
   load, restore bots from the database; bots are absent for seconds, players unaffected. A CI unload test loads the
@@ -333,7 +335,7 @@ Architecture test: `tests/ArcaneCore.World.Tests/Architecture/PlayerbotCoreBound
 core type (outermost type outside `ArcaneCore.World.Playerbots`) references a pack type and is not on the allowlist,
 or if an allowlist entry no longer references the pack (the list only shrinks). A positive control
 (`ScannerFindsKnownReferences`) proves the scanner sees references at all. Before this lane it listed 17 core types.
-**Allowlist left (4)**:
+**Allowlist left (4)** at the end of 2a; **0** after 2b (section 4.6):
 
 - `ArcaneCore.World.Cluster.Tooling.ClusterCommands`: `GetRunningBotNames` reads `ManagedPlayerbotFeature` (Cluster/**
   belongs to another lane; fix: `ManagedBotRegistry.RunningNames()`).
@@ -379,6 +381,102 @@ fails; the in-host orphan test still passes, as registration order happens to be
 and the bot QA quiesce change have no dedicated test (from reading; the cycle tests still pass).
 
 RED runs of part 2, each restored and rebuilt green: the bot feature not adding to the registry (the 3 tests with bots across a detach fail), no brain rebuilt on attach (the cycle and detach tests fail), the population's update handler added with a bare `+=` instead of the bag (the cycle test fails), the session policy not registered (the detach test fails), bot QA's hang sink not registered (7 watchdog QA tests and the QA cycle test fail), and `WorldMetricsFeature` naming `ManagedPlayerbotFeature` again (the boundary test fails). Against the base commit the boundary test listed 17 core types.
+
+### 4.6 Tier 2b: Playerbots in its own project (built on `claude/hr-2b`)
+
+**Built** (branch `claude/hr-2b`, based on `origin/main` @ `e3049e4a`; compiler and tests, see Evidence). The pack is
+the project `src/ArcaneCore.Playerbots` (assembly `ArcaneCore.Playerbots`; root namespace unchanged,
+`ArcaneCore.World.Playerbots.*`, so no `using` line in the pack or the tests changed). It loads in the **default**
+context as a built-in. Nothing unloads yet; that is 2c.
+
+What moved:
+
+- All 314 files under `src/ArcaneCore.World/Playerbots/**` moved to `src/ArcaneCore.Playerbots/**` with `git mv`, keeping
+  their relative paths. That includes the embedded `Chat/PlayerbotChatSafetyTerms.json`, which keeps its manifest
+  resource name.
+- The 22 playerbot options files moved to `src/ArcaneCore.World.Contracts/Playerbots/**`, keeping their relative paths
+  and namespaces. `PlayerbotContentionOptions` was split out of `PlayerbotContention.cs` and moved with them.
+- `PlayerbotQaOptions` stays in the pack, because no core code reads it. The home rules that shared a file with the home
+  options (`PlayerbotHomeFacts`, `PlayerbotHomeRules`, `PlayerbotAreaLevelLookup`) stay in the pack, in
+  `PlayerbotHomeRules.cs`.
+- Not moved: the tests (see decision 10) and the core-owned types from 2a (`ArcaneCore.World.Bots.*`).
+
+Dependency decisions. Each one is the smallest change that let World stop seeing the pack:
+
+1. **Direction.** `ArcaneCore.Playerbots` references World, World.Contracts, Game, Kernel, Protocol and Data. It needs
+   World for sessions, the runtime, handlers and commands; without that reference it fails with about 500 compiler
+   errors. So World does **not** reference the pack. `PlayerbotCoreBoundaryTests.CoreAndContractsDoNotReferenceThePack`
+   checks three things: World and the contracts have no assembly reference to the pack, no
+   `ArcaneCore.World.Playerbots.*` type is left in World, and the IL scanner finds no pack reference anywhere in World.
+2. **Options move to contracts as plain data, with their namespaces kept.** The core config readers
+   (`ConfigContentReloadable`, `WorldConfigKeys`, `WorldConfigView`) then compile against the contracts only. Some limits
+   the options validate against were defined in the pack. They now live in the options, and the pack keeps its old names
+   as aliases:
+   - `PlayerbotOptions.MaxRouteSearchNodes` (aliased by `PlayerbotNavigation.MaxSearchNodes`)
+   - `PlayerbotChatInProcessOptions.MaxTopK` (aliased by `ChatSampler.MaxTopK`)
+   - `PlayerbotChatOptions.MaxReplyLength` (aliased by `PlayerbotChatPrompts.MaxReplyLength`)
+   - `PlayerbotChatSafetyOptions.DefaultPatternTimeout` (aliased by `PlayerbotChatSafetyFilter.PatternTimeout`)
+   - the town-cap key list and parser, `PlayerbotPopulationOptions.LevelBandTownKeys`, `TryParseCaps` and `CheckCaps`.
+     The pack's `PopulationTownProgression` now delegates to them, and
+     `TownProgressionTests.TheTownCapKeysOfTheOptions_AreTheLevelBandTownsOfTheTable` pins the 40 keys to the town table.
+3. **Contracts grant `InternalsVisibleTo`** to World, the pack, World.Tests and the benchmarks. The options keep their
+   `internal` computed helpers. Making those public would publish them as config keys through the `ConfigCatalog` walk
+   and change the generated docs.
+4. **`ClusterCommands` reads `ManagedBotRegistry.RunningNames()`** (the 2a seam) instead of `ManagedPlayerbotFeature`.
+   Two stale `using ArcaneCore.World.Playerbots.Progression;` lines in `Gm/Character/Boost/**` were removed. Only using
+   lines changed there, because those files belong to another lane.
+5. **The 2a seam types are now public**: `PlayerbotExploreAtlas`, `PlayerbotItemScore`, `PlayerbotStatWeights`,
+   `PlayerbotWeaponStyle` and `PlayerbotTalentBuild(s)`. They are core API that the pack calls.
+6. **World grants `InternalsVisibleTo` to the pack** for everything else. The pack still uses 44 internal core members:
+   - managed-session `WorldSession` members
+   - battleground internals
+   - GM boost and death helpers
+   - two handler helpers
+   - the options' internal helpers
+
+   Some of these are in areas owned by other lanes. Turning each one into a public seam or a contract is 2c work, because
+   `InternalsVisibleTo` across a version skew is not safe for a collectible pack. The list is pinned by
+   `PlayerbotCoreBoundaryTests.PackUsesOnlyTheAllowlistedCoreInternals`. That test resolves every type and member token
+   in the pack and fails on any non-public core or contracts member that is not on the list. It also fails on a list
+   entry that is no longer used, so the list can only shrink.
+7. **The executable cycle.** World is both the core library and the daemon executable: deploy, Docker, the dev runner
+   and the cluster supervisor all run `ArcaneCore.World.dll`. So the host cannot reference its own pack. Instead:
+   - The pack's build target `CopyPackBesideWorldHost` copies `ArcaneCore.Playerbots.dll` and `.pdb` next to World's
+     output. It asks World's project for its target path, so both the artifacts layout and the plain `bin` layout work.
+   - `Program.cs` loads the pack with `WorldCodeAssemblies.LoadBuiltInPack` and registers it before the host is built.
+     If the file is missing, the daemon refuses to start with exit code 78 and names the file.
+   - The Dockerfile publishes the pack and copies it into the world image, the docker-smoke workflow checks that the
+     file is there, and `scripts/dev-runner.ps1` builds the pack after World.
+   - In-process hosts that reference the pack register its assembly directly:
+     `tests/ArcaneCore.World.Tests/BuiltInPacks.cs`, and `MockWorldPacks.EnsureRegistered` in the mock client.
+8. **Packages.** The pack adds no package the host lacks, because the default context resolves through World's
+   `deps.json`. So `System.Numerics.Tensors`, which only the pack's in-process chat model uses, stays a World package
+   reference. The pack has its own committed `packages.lock.json`. World's lock file is unchanged; the dependents' lock
+   files gained the new project.
+9. **Discovery goes through `CodeAssemblies`.** `WorldCodeAssemblies` (in World) is the startup set: World plus the
+   registered built-in packs. The set is fixed at its first read, and a registration after that throws.
+   `AssemblyDiscovery.BuiltIn` returns this set, so every startup discovery sees the pack: features, service modules
+   (`IWorldServiceModule`), opcode handler groups, commands, data modules, script modules, content reloadables, config
+   checks (`OpsCli.CheckAssemblies`), the conf catalog, scenarios and the wiring audit. Default discovery sorts by type
+   full name across the whole set, so the moved types keep the attach, stop, module and command order they had inside
+   World. `WorldCodeAssembliesTests` covers this.
+10. **Tests stay in `ArcaneCore.World.Tests`**, which now references the pack. Moving them would not be mechanical: they
+    share the World test fixtures with the core tests (in-process worlds, real-terrain helpers, and the assembly sets the
+    docs and wiring tests use). Four source-scan tests were pointed at `src/ArcaneCore.Playerbots` instead.
+
+What remains for 2c:
+
+- Load the pack collectibly through `ModuleHost`, and remove it from the startup set.
+- Turn the 44 internals into public seams or contracts.
+- Move the handover values that are still World or pack types (`PlayerbotSetAside`, `PlayerbotHome`, the private
+  `Quarantine`) into contracts.
+- Check the contracts version when the pack loads.
+- Add an architecture test that rejects bare `+=` subscriptions in the pack.
+- Fix the `ArcaneCore.` shared-prefix rule in `CodeAssemblies`: a collectible pack named `ArcaneCore.*` would resolve as
+  shared from the default context.
+- Fix the dev loop: building only `ArcaneCore.World`, or running `dotnet watch` on it, does not refresh the pack beside it.
+
+Evidence (compiler and tests): EVIDENCE_PLACEHOLDER
 
 ## 5. Tier 3: gateway plus blue/green handoff
 

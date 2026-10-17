@@ -8,7 +8,7 @@ using ArcaneCore.Kernel.Items;
 namespace ArcaneCore.World.Bots.Progression;
 
 /// <summary>How a build holds its weapons; it decides how a main-hand candidate is compared with what the hands hold now.</summary>
-internal enum PlayerbotWeaponStyle
+public enum PlayerbotWeaponStyle
 {
     /// <summary>A two-handed weapon (Arms, Retribution, Enhancement).</summary>
     TwoHand,
@@ -28,7 +28,7 @@ internal enum PlayerbotWeaponStyle
 /// Values are relative (only comparisons between items of one character matter). mangoszero's playerbot ranks items by item
 /// level and armor sub-class alone (ItemUsageValue.cpp QueryItemUsageForEquip); these weights add what the build needs.
 /// </summary>
-internal sealed record PlayerbotStatWeights(
+public sealed record PlayerbotStatWeights(
     string Name,
     float Strength,
     float Agility,
@@ -89,7 +89,7 @@ internal sealed record PlayerbotStatWeights(
 /// level as a tie-break) plus the stats an item instance carries in its enchantment slots (random suffixes and enchants), under
 /// one build's <see cref="PlayerbotStatWeights"/>. Legality is never decided here: the server's own equip rules are.
 /// </summary>
-internal static class PlayerbotItemScore
+public static class PlayerbotItemScore
 {
     /// <summary>The smallest gain worth an equip request (filters float noise and same-item swaps).</summary>
     public const float MinimumGain = 0.05f;

@@ -15,7 +15,6 @@ using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
-using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.WorldState;

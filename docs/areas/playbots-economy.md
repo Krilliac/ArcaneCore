@@ -15,7 +15,7 @@ must obey is the server's, enforced by the ordinary handlers.
 
 ## Pieces
 
-| File (`src/ArcaneCore.World/Playerbots/Economy/`) | What it does |
+| File (`src/ArcaneCore.Playerbots/Economy/`) | What it does |
 |---|---|
 | `PlayerbotBudget.cs`, `PlayerbotServiceIndex.cs`, `PlayerbotRidingTrips.cs`, `PlayerbotMount.cs` (folder `Playerbots/Budget/`) | The budget, the shared trainer/vendor index, the riding and mount-vendor trips, and mounting (`World:Playerbots:Budget`, `World:Playerbots:Mounts`). |
 | `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `VisitIntervalMinutes`, `BankDeposit`, `BuyBankSlots`. |

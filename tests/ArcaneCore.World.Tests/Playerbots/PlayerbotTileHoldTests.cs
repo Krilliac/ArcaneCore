@@ -391,14 +391,14 @@ public sealed class PlayerbotTileHoldTests
     public void ProductionCallers_PlanThroughTheTriStateCalls()
     {
         string? dir = AppContext.BaseDirectory;
-        while (dir is not null && !Directory.Exists(Path.Combine(dir, "src", "ArcaneCore.World", "Playerbots"))) dir = Path.GetDirectoryName(dir);
+        while (dir is not null && !Directory.Exists(Path.Combine(dir, "src", "ArcaneCore.Playerbots"))) dir = Path.GetDirectoryName(dir);
         Assert.NotNull(dir);
         string[] allowed = ["PlayerbotNavigation.cs", "PlayerbotWater.cs", "PlayerbotRisk.cs", "PlayerbotRetreat.cs", "PlayerbotRecovery.cs",
             "PlayerbotElevator.cs", "PlayerbotTram.cs"];
         var bare = new System.Text.RegularExpressions.Regex(@"PlayerbotNavigation\.(TryPlan|TryPlanToward|TryPlanFar|TryPlanUnguarded)\(");
         var offenders = new List<string>();
         int scanned = 0;
-        foreach (string file in Directory.EnumerateFiles(Path.Combine(dir!, "src", "ArcaneCore.World", "Playerbots"), "*.cs", SearchOption.AllDirectories))
+        foreach (string file in Directory.EnumerateFiles(Path.Combine(dir!, "src", "ArcaneCore.Playerbots"), "*.cs", SearchOption.AllDirectories))
         {
             if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") || allowed.Contains(Path.GetFileName(file))) continue;
             scanned++;

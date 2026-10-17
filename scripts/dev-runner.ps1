@@ -167,12 +167,15 @@ foreach ($port in @($RealmPort, $WorldPort)) {
 
 $projects = @{
     World   = Join-Path $repo 'src\ArcaneCore.World\ArcaneCore.World.csproj'
+    # The Playerbots pack (docs/design/hot-reload-tiers.md, 4.6): built after the world, it puts itself beside the world executable.
+    # dotnet watch below watches the world project only: an edit to the pack needs a restart of this runner.
+    Bots    = Join-Path $repo 'src\ArcaneCore.Playerbots\ArcaneCore.Playerbots.csproj'
     Realm   = Join-Path $repo 'src\ArcaneCore.Realm\ArcaneCore.Realm.csproj'
     Account = Join-Path $repo 'tools\ArcaneCore.AccountTool\ArcaneCore.AccountTool.csproj'
 }
 
 if (-not $NoBuild) {
-    foreach ($key in @('Account', 'Realm', 'World')) {
+    foreach ($key in @('Account', 'Realm', 'World', 'Bots')) {
         Write-Host "dev-runner: building $key (Debug) ..."
         & dotnet build $projects[$key] -c Debug -m:1 --nologo -v:q
         if ($LASTEXITCODE -ne 0) { Fail "the Debug build of $key failed (exit $LASTEXITCODE); nothing was started." 7 }

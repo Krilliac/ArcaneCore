@@ -64,7 +64,7 @@ jobs:
           patterns: |
             -**/tests/**:DS148264
             -**/src/ArcaneCore.Game/**:DS148264
-            -**/src/ArcaneCore.World/Playerbots/**:DS148264
+            -**/src/ArcaneCore.Playerbots/**:DS148264
             -**/src/ArcaneCore.World/Skills/**:DS148264
             -**/tests/**:DS126858
             -**/src/ArcaneCore.Cryptography/ClientIntegrity.cs:DS126858

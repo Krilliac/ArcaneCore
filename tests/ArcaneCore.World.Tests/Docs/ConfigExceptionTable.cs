@@ -97,6 +97,8 @@ internal static class ConfigExceptionTable
         typeof(WorldRuntimeOptions).Assembly,
         typeof(DatabaseOptions).Assembly,
         typeof(WorldConfigKeys).Assembly,
+        typeof(ArcaneCore.World.Playerbots.PlayerbotOptions).Assembly, // the contracts: the playerbot options (tier 2b, hot-reload-tiers.md 4.6)
+        typeof(ArcaneCore.World.Playerbots.ManagedPlayerbotFeature).Assembly, // the Playerbots pack: its own sections (World:Playerbots:Qa)
     ];
 
     /// <summary>The names of the classes that carry a section constant, with that constant's value.</summary>

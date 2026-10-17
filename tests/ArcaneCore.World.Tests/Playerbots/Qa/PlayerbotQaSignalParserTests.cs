@@ -215,7 +215,7 @@ public sealed class PlayerbotQaSignalParserTests
     public void ProductionLogTemplates_StillMatchTheLinesTheseTestsWrap()
     {
         // The templates are literals in ManagedPlayerbotFeature and CreatureMapSystem; rewording one must fail here and not blind QA silently.
-        string feature = RepoRoot.ReadText("src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs");
+        string feature = RepoRoot.ReadText("src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs");
         Assert.Contains("\"Playerbot {BotId} ({Name}) {Stall}; it gives up that goal\"", feature, StringComparison.Ordinal);
         Assert.Contains("\"Playerbot {BotId} ({Name}) {Stall}" + PlayerbotQaSignalParser.OutsideHomeSuffix + "\"", feature, StringComparison.Ordinal);
         Assert.Contains("\"Playerbots: {Count} bots stalled on {Goal}; every bot sets it aside (stalls at {Stalls})\"", feature, StringComparison.Ordinal);

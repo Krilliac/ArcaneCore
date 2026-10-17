@@ -5,6 +5,7 @@
     <Project Path="src/ArcaneCore.Gateway/ArcaneCore.Gateway.csproj" />
     <Project Path="src/ArcaneCore.Game/ArcaneCore.Game.csproj" />
     <Project Path="src/ArcaneCore.Kernel/ArcaneCore.Kernel.csproj" />
+    <Project Path="src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj" />
     <Project Path="src/ArcaneCore.Protocol/ArcaneCore.Protocol.csproj" />
     <Project Path="src/ArcaneCore.Realm/ArcaneCore.Realm.csproj" />
     <Project Path="src/ArcaneCore.World/ArcaneCore.World.csproj" />

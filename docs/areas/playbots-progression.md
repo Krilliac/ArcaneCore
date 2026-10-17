@@ -3,7 +3,7 @@
 Managed playerbots (docs/areas/playbots.md) now grow the way a player does: they spend talent points, wear better gear and
 weapons, pick useful quest rewards, repair, keep bag space, buy ammunition, and take every quest the server settles under the
 default configuration. Everything goes through the client's own packets and the real handlers (`WorldSession.TryManagedAction`):
-the server decides legality, the bot only chooses. Code: `src/ArcaneCore.World/Playerbots/Progression/`,
+the server decides legality, the bot only chooses. Code: `src/ArcaneCore.Playerbots/Progression/`,
 `PlayerbotEquipment.cs`, `PlayerbotTownGoals.cs`, `PlayerbotQuestGoals.cs`, `PlayerbotWorldDestinations.cs`.
 
 ## Out-of-combat upkeep (one request per think)

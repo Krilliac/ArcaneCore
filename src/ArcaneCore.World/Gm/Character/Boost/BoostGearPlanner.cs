@@ -1,7 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Items;
-using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Bots.Progression;
 
 namespace ArcaneCore.World.Gm.Character.Boost;

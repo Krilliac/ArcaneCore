@@ -1,6 +1,6 @@
 # Playerbot social life: guilds, guild chat and greetings
 
-`PlayerbotSocialFeature` (`src/ArcaneCore.World/Playerbots/Social/`, namespace `ArcaneCore.World.Playerbots.BotSocial`) lets
+`PlayerbotSocialFeature` (`src/ArcaneCore.Playerbots/Social/`, namespace `ArcaneCore.World.Playerbots.BotSocial`) lets
 managed playerbots found guilds, fill them, rank their members, say a short line in guild chat and, when asked to, wave at real
 players. Everything is configuration under `World:Playerbots:Social`, live through `.reload config`, and runs only while
 `World:Playerbots:Enabled` is on. Every action is a real client packet run through the real world handler of the bot's own session

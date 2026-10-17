@@ -14,7 +14,7 @@ that part is ArcaneCore's own.
 
 ## Pieces
 
-| File (`src/ArcaneCore.World/Playerbots/Risk/`) | What it does |
+| File (`src/ArcaneCore.Playerbots/Risk/`) | What it does |
 |---|---|
 | `PlayerbotRiskOptions.cs` | `World:Playerbots:Risk`: `Enabled`, `Tolerance`, `RetreatHealthPct`, `NearlyWonHealthPct`, `RecoverHealthPct`, `DangerMemorySeconds`, `DeathLoopMemorySeconds`, `PartyRetreatOnWipe`. |
 | `PlayerbotRiskModel.cs` | The pure arithmetic: the pre-engagement verdict (`Assess`) and the in-combat verdict (`Judge`). Unit tested on snapshots. |

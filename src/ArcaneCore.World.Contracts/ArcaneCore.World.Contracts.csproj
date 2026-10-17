@@ -13,4 +13,14 @@
     <ProjectReference Include="..\ArcaneCore.Game\ArcaneCore.Game.csproj" />
   </ItemGroup>
 
+  <!-- The playerbot options (Playerbots/, tier 2b) keep their internal helpers (the reload validators and computed views such as
+       PlayerbotChatOptions.EffectiveProviders): made public they would become documented configuration keys. The core reads them for
+       .reload config, the pack for its behaviour, the tests for both. Tier 2c revisits this list (hot-reload-tiers.md, 4.6). -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.World" />
+    <InternalsVisibleTo Include="ArcaneCore.Playerbots" />
+    <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
+    <InternalsVisibleTo Include="ArcaneCore.Benchmarks" />
+  </ItemGroup>
+
 </Project>

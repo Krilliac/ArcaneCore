@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.World;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.HotCode;
 using ArcaneCore.World.Ops.Cli;
 using ArcaneCore.World.Ops.ServerConsole;
@@ -21,6 +22,19 @@ DaemonCommand command = DaemonCommandLine.Parse(args, ConfigDaemon.World, ConfCa
 if (ConfStartup.TryAnswerEarly(command, ConfigDaemon.World, Console.Out, Console.Error, out int earlyExit))
 {
     return earlyExit;
+}
+
+// Built-in packs (docs/design/hot-reload-tiers.md, 4.6): the Playerbots pack is its own assembly, which references World, so this
+// executable cannot reference it; the build puts it beside this one and it is registered here, before anything discovers the
+// startup code set (features, service modules, commands, config checks, the wiring audit). Default context: it never unloads.
+try
+{
+    WorldCodeAssemblies.RegisterBuiltIn(WorldCodeAssemblies.LoadBuiltInPack(WorldCodeAssemblies.PlayerbotsAssemblyName));
+}
+catch (Exception ex) when (ex is FileNotFoundException or FileLoadException or BadImageFormatException)
+{
+    Console.Error.WriteLine($"ArcaneCore.World refuses to start: {ex.Message}");
+    return 78; // EX_CONFIG: an incomplete install, a supervisor must not restart it
 }
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder([.. command.HostArgs]);

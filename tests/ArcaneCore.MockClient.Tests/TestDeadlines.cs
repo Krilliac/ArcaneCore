@@ -16,6 +16,10 @@ internal static class TestDeadlines
 
 #pragma warning disable CA2255 // A test assembly's one-time setup, before xUnit runs any test; it is not a library initializer.
     [ModuleInitializer]
-    internal static void Initialize() => ProtocolIO.OperationTimeout = Operation;
+    internal static void Initialize()
+    {
+        ProtocolIO.OperationTimeout = Operation;
+        ArcaneCore.MockClient.Hosting.MockWorldPacks.EnsureRegistered(); // before any test reads the world's startup code set
+    }
 #pragma warning restore CA2255
 }

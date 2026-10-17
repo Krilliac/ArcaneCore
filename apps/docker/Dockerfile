@@ -17,11 +17,13 @@ COPY src/ src/
 COPY tools/ tools/
 # Locked mode: the restore must match the packages.lock.json committed beside each project (exact versions and content hashes),
 # so the image cannot build against a package graph CI never saw.
-RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj --locked-mode \
+RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj --locked-mode && dotnet restore src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj --locked-mode \
  && dotnet restore src/ArcaneCore.Realm/ArcaneCore.Realm.csproj --locked-mode \
  && dotnet restore tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj --locked-mode \
  && dotnet restore tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj --locked-mode
-RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATION --no-restore -o /out/world \
+# The Playerbots pack (docs/design/hot-reload-tiers.md, 4.6) references World, so World cannot reference it: it is published on its
+# own and its assembly placed beside the world executable, where Program.cs loads it (its packages are all World's).
+RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATION --no-restore -o /out/world && dotnet publish src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj -c $CONFIGURATION --no-restore -o /out/playerbots && cp /out/playerbots/ArcaneCore.Playerbots.dll /out/playerbots/ArcaneCore.Playerbots.pdb /out/world/ \
  && dotnet publish src/ArcaneCore.Realm/ArcaneCore.Realm.csproj -c $CONFIGURATION --no-restore -o /out/realm \
  && dotnet publish tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj -c $CONFIGURATION --no-restore -o /out/tools \
  && dotnet publish tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj -c $CONFIGURATION --no-restore -o /out/dbupgrade

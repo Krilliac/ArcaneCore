@@ -58,6 +58,7 @@ jobs:
         # The entrypoint assembly names are hard-coded in the Dockerfile; a renamed assembly would otherwise only fail at `docker run`.
         run: |
           docker run --rm --entrypoint test arcanecore/world:smoke -f ArcaneCore.World.dll
+          docker run --rm --entrypoint test arcanecore/world:smoke -f ArcaneCore.Playerbots.dll
           docker run --rm --entrypoint test arcanecore/realm:smoke -f ArcaneCore.Realm.dll
           docker run --rm --entrypoint test arcanecore/tools:smoke -f arcane-content-importer.dll
           docker run --rm --entrypoint test arcanecore/tools:smoke -f /arcanecore/dbupgrade/arcane-db.dll

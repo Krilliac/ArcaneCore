@@ -62,8 +62,11 @@ public static class OpsCli
         return report.IsInvalid ? ExitCodes.InvalidConfiguration : ExitCodes.Success;
     }
 
-    /// <summary>The assemblies whose <see cref="IConfigCheck"/> classes the world daemon runs: the Kernel's (logging, resilience, watchdog, metrics) and this one's.</summary>
-    public static IReadOnlyList<System.Reflection.Assembly> CheckAssemblies { get; } = [typeof(IConfigCheck).Assembly, typeof(OpsCli).Assembly];
+    /// <summary>
+    /// The assemblies whose <see cref="IConfigCheck"/> classes the world daemon runs: the Kernel's (logging, resilience, watchdog, metrics),
+    /// then the world's startup code set (this assembly, then the built-in packs such as Playerbots, <see cref="Features.WorldCodeAssemblies.Ordered"/>).
+    /// </summary>
+    public static IReadOnlyList<System.Reflection.Assembly> CheckAssemblies { get; } = [typeof(IConfigCheck).Assembly, .. Features.WorldCodeAssemblies.Ordered];
 
     /// <summary>
     /// Every check the world daemon runs: the .conf file check (it needs the catalog and the daemon, so it is supplied here) first, then

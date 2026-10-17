@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+    <ProjectReference Include="..\..\..\src\ArcaneCore.Playerbots\ArcaneCore.Playerbots.csproj" />
     <ProjectReference Include="..\..\..\src\ArcaneCore.Game\ArcaneCore.Game.csproj" />
     <ProjectReference Include="..\..\..\src\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
     <ProjectReference Include="..\..\..\src\ArcaneCore.Data\ArcaneCore.Data.csproj" />

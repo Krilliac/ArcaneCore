@@ -1,6 +1,6 @@
 # Playerbots in dungeons: movement, area triggers, death recovery
 
-The dungeon half of the managed playerbots (`src/ArcaneCore.World/Playerbots/`) that does not depend on the party AI: a bot can move
+The dungeon half of the managed playerbots (`src/ArcaneCore.Playerbots/`) that does not depend on the party AI: a bot can move
 inside the dungeon it is in, crosses area triggers the way a 1.12 client does, and recovers from a death inside or outside an instance
 without being quarantined. General bot behaviour: `docs/areas/playbots.md`. Faults and quarantine: `docs/integration/playerbot-faults-20261007.md`.
 

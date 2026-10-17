@@ -16,7 +16,7 @@ server's own rules (below).
 
 ## Pieces
 
-| File (`src/ArcaneCore.World/Playerbots/Battlegrounds/`) | What it does |
+| File (`src/ArcaneCore.Playerbots/Battlegrounds/`) | What it does |
 |---|---|
 | `PlayerbotBattlegroundOptions.cs` | `World:Playerbots:Battlegrounds` (every key live through `.reload config`). |
 | `PlayerbotBattlegroundBrackets.cs` | Which types and brackets a bot of a level may join; refuses Alterac Valley, a missing template, missing objective content and no battlemaster in reach. Unit tested. |

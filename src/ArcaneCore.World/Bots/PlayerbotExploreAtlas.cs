@@ -8,13 +8,13 @@ namespace ArcaneCore.World.Bots;
 /// Startup index of the world's static creature spawns for optional grinding. The bot asks only for nearby cells of its own
 /// level band; the live target and combat rules still decide whether an arrived creature can actually be attacked.
 /// </summary>
-internal sealed class PlayerbotExploreAtlas
+public sealed class PlayerbotExploreAtlas
 {
-    internal const float CellYards = 160f;
-    internal const int MaxRing = 40;
-    internal const int SamplesPerFactionCell = 4;
-    internal const int MaxFactionsPerCell = 16;
-    internal const int ThreatSamplesPerCell = 24;
+    public const float CellYards = 160f;
+    public const int MaxRing = 40;
+    public const int SamplesPerFactionCell = 4;
+    public const int MaxFactionsPerCell = 16;
+    public const int ThreatSamplesPerCell = 24;
     private const float ThreatCellYards = 80f;
 
     private readonly Dictionary<(uint Map, byte Level, int X, int Y), Cell> _cells = [];
@@ -22,19 +22,19 @@ internal sealed class PlayerbotExploreAtlas
     private readonly HashSet<uint> _mapsIndexed = [];
     private int _entryCount;
 
-    internal int CellCount => _cells.Count;
-    internal int EntryCount => _entryCount;
-    internal int ThreatCellCount => _threats.Count;
-    internal bool HasIndexedMap(uint mapId) => _mapsIndexed.Contains(mapId);
+    public int CellCount => _cells.Count;
+    public int EntryCount => _entryCount;
+    public int ThreatCellCount => _threats.Count;
+    public bool HasIndexedMap(uint mapId) => _mapsIndexed.Contains(mapId);
 
-    internal readonly record struct Candidate(CreatureSpawn Spawn, int CellX, int CellY);
+    public readonly record struct Candidate(CreatureSpawn Spawn, int CellX, int CellY);
     private readonly record struct Threat(CreatureSpawn Spawn, byte MinLevel, uint Rank, uint Faction);
 
     private sealed class Cell
     {
-        internal readonly Dictionary<uint, List<CreatureSpawn>> ByFaction = [];
+        public readonly Dictionary<uint, List<CreatureSpawn>> ByFaction = [];
 
-        internal bool Add(uint faction, CreatureSpawn spawn)
+        public bool Add(uint faction, CreatureSpawn spawn)
         {
             if (!ByFaction.TryGetValue(faction, out List<CreatureSpawn>? samples))
             {
@@ -52,9 +52,9 @@ internal sealed class PlayerbotExploreAtlas
 
     private sealed class ThreatCell
     {
-        internal readonly Dictionary<uint, List<Threat>> ByFaction = [];
+        public readonly Dictionary<uint, List<Threat>> ByFaction = [];
 
-        internal void Add(Threat incoming)
+        public void Add(Threat incoming)
         {
             if (!ByFaction.TryGetValue(incoming.Faction, out List<Threat>? samples))
             {
@@ -73,7 +73,7 @@ internal sealed class PlayerbotExploreAtlas
         }
     }
 
-    internal PlayerbotExploreAtlas(CreatureContent spawns, CreatureContent? definitions = null)
+    public PlayerbotExploreAtlas(CreatureContent spawns, CreatureContent? definitions = null)
     {
         definitions ??= spawns;
         foreach (uint map in spawns.MapsWithSpawns)
@@ -112,7 +112,7 @@ internal sealed class PlayerbotExploreAtlas
         }
     }
 
-    internal static int CellOf(float coordinate) => (int)MathF.Floor(coordinate / CellYards);
+    public static int CellOf(float coordinate) => (int)MathF.Floor(coordinate / CellYards);
     private static int ThreatCellOf(float coordinate) => (int)MathF.Floor(coordinate / ThreatCellYards);
     private static int Strength(Threat threat) => (threat.Rank == 0 ? 0 : 100) + threat.MinLevel;
 
@@ -121,7 +121,7 @@ internal sealed class PlayerbotExploreAtlas
     /// <paramref name="level"/> (at most (2*rings+1)^2 dictionary probes). It ignores eligibility, hazards and blocked cells: it
     /// answers only whether the area holds anything of the bot's level band at all.
     /// </summary>
-    internal bool HasCellNear(uint map, uint level, Vector3 from, int rings)
+    public bool HasCellNear(uint map, uint level, Vector3 from, int rings)
     {
         if (level is < 1 or > 60 || !float.IsFinite(from.X) || !float.IsFinite(from.Y)) return false;
         int cx = CellOf(from.X), cy = CellOf(from.Y);
@@ -139,7 +139,7 @@ internal sealed class PlayerbotExploreAtlas
     /// threat cell under the bot stops one threat cell short of that square's far side (the bot occupies only one half of its
     /// own explore cell), so the stronger creature in the missed strip was invisible and the bot stayed on Explore.
     /// </summary>
-    internal bool HasStrongerNear(uint map, uint level, Vector3 from, int rings, int margin)
+    public bool HasStrongerNear(uint map, uint level, Vector3 from, int rings, int margin)
     {
         if (!float.IsFinite(from.X) || !float.IsFinite(from.Y) || rings < 0) return false;
         (int x0, int x1) = ThreatSpan(CellOf(from.X), rings);
@@ -166,7 +166,7 @@ internal sealed class PlayerbotExploreAtlas
     }
 
     /// <summary>A candidate near an elite or creature at least five levels higher is a poor unattended grinding site.</summary>
-    internal bool HasStrongHazard(Candidate candidate, uint level, Func<uint, bool> hostileFaction)
+    public bool HasStrongHazard(Candidate candidate, uint level, Func<uint, bool> hostileFaction)
     {
         const float radius2 = 70f * 70f;
         int cx = ThreatCellOf(candidate.Spawn.X), cy = ThreatCellOf(candidate.Spawn.Y);
@@ -194,7 +194,7 @@ internal sealed class PlayerbotExploreAtlas
     /// adding thousands of spawns to one cell does not add think-time work. The eligibility callback checks current faction,
     /// spawn gate, home and hazard state. The caller tests one route, then sets a refused or exhausted cell aside.
     /// </summary>
-    internal Candidate? Find(uint map, uint level, Vector3 from, Func<Candidate, bool> eligible,
+    public Candidate? Find(uint map, uint level, Vector3 from, Func<Candidate, bool> eligible,
         Func<int, int, bool> blocked, out int examined, Func<uint, bool>? factionEligible = null)
     {
         examined = 0;

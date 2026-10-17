@@ -27,7 +27,7 @@ public sealed class PlayerbotPacketIntakeTests
     public void EveryOpcodeABotReadsBackIsInTheDeclaredSet()
     {
         const string call = "DrainManagedPackets(";
-        string root = Path.Combine(RepoRoot.Find(), "src", "ArcaneCore.World", "Playerbots");
+        string root = Path.Combine(RepoRoot.Find(), "src", "ArcaneCore.Playerbots");
         int calls = 0;
         var read = new SortedSet<string>(StringComparer.Ordinal);
         var problems = new List<string>();

@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Bots.Progression;
 /// With the build-5875 TalentTab.dbc the pages are the client's tabs, except that the mage's Fire and Arcane tabs share order 0:
 /// page 0 is Fire (tab 41) and page 1 Arcane (tab 81).
 /// </summary>
-internal readonly record struct PlayerbotTalentPick(byte Page, byte Row, byte Column, byte Ranks);
+public readonly record struct PlayerbotTalentPick(byte Page, byte Row, byte Column, byte Ranks);
 
 /// <summary>
 /// A premade talent build: the picks in learning order (each tier gate met by the picks before it in the same page: row
@@ -17,7 +17,7 @@ internal readonly record struct PlayerbotTalentPick(byte Page, byte Row, byte Co
 /// <see cref="RoleSpell"/> vmangos CombatBotBaseAI::AutoAssignRole looks for to give the bot its role (0 when that class has
 /// no such check or the build is the class's default role).
 /// </summary>
-internal sealed record PlayerbotTalentBuild(Class Class, string Name, PlayerbotStatWeights Weights, uint RoleSpell,
+public sealed record PlayerbotTalentBuild(Class Class, string Name, PlayerbotStatWeights Weights, uint RoleSpell,
     IReadOnlyList<PlayerbotTalentPick> Picks)
 {
     /// <summary>The points the whole build spends (51 at level 60).</summary>
@@ -31,7 +31,7 @@ internal sealed record PlayerbotTalentBuild(Class Class, string Name, PlayerbotS
 /// (CombatBotBaseAI.cpp:58-122: Shield Slam, Holy Shield, Sanctity Aura, Shadowform, Elemental Mastery, Stormstrike,
 /// Moonkin Form, Leader of the Pack). A bot's build is a pure function of its id (<see cref="Choose"/>).
 /// </summary>
-internal static class PlayerbotTalentBuilds
+public static class PlayerbotTalentBuilds
 {
     /// <summary>vmangos CombatBotBaseAI.cpp:22-29.</summary>
     public const uint ShieldSlam = 23922, HolyShield = 20925, SanctityAura = 20218, Shadowform = 15473,

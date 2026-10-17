@@ -149,6 +149,18 @@ public sealed class TownProgressionTests
         }
     }
 
+    /// <summary>
+    /// The keys TownCaps accepts live in the contracts assembly (the core validates them at .reload config, tier 2b), the town table in
+    /// the pack: the two lists must be the same, or a cap for a real town is refused, or one for a removed town silently ignored.
+    /// </summary>
+    [Fact]
+    public void TheTownCapKeysOfTheOptions_AreTheLevelBandTownsOfTheTable()
+    {
+        string[] table = [.. PopulationTownProgression.Rows.Where(r => !r.Capital).Select(r => r.Key).Order(StringComparer.Ordinal)];
+        Assert.Equal(40, table.Length);
+        Assert.Equal<string>(table, PlayerbotPopulationOptions.LevelBandTownKeys.Order(StringComparer.Ordinal));
+    }
+
     // ---- hysteresis ----
 
     [Fact]

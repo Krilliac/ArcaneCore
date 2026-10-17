@@ -7,7 +7,7 @@ through `.reload config`). Chest seeking is ArcaneCore's own: vmangos bots do no
 
 ## Pieces
 
-| File (`src/ArcaneCore.World/Playerbots/Opportunities/`) | What it does |
+| File (`src/ArcaneCore.Playerbots/Opportunities/`) | What it does |
 |---|---|
 | `PlayerbotOpportunityOptions.cs` | `World:Playerbots:Opportunities` and its ranges (`Validate`). |
 | `PlayerbotOpportunityModel.cs` | The pure arithmetic: the loot estimate, the verdict (`Decide`), the death probability, the bot's temperament, and the ledger of finds set aside (`PlayerbotOpportunityLedger`). Unit tested on snapshots. |

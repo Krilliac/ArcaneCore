@@ -407,6 +407,7 @@
         "type": "Project",
         "dependencies": {
           "ArcaneCore.Data": "[1.0.0, )",
+          "ArcaneCore.Playerbots": "[1.0.0, )",
           "ArcaneCore.Realm": "[1.0.0, )",
           "ArcaneCore.World": "[1.0.0, )"
         }
@@ -445,6 +446,17 @@
           "Microsoft.Extensions.FileProviders.Physical": "[9.0.0, )",
           "Microsoft.Extensions.Logging": "[9.0.0, )",
           "Microsoft.Extensions.Options.ConfigurationExtensions": "[9.0.0, )"
+        }
+      },
+      "arcanecore.playerbots": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Data": "[1.0.0, )",
+          "ArcaneCore.Game": "[1.0.0, )",
+          "ArcaneCore.Kernel": "[1.0.0, )",
+          "ArcaneCore.Protocol": "[1.0.0, )",
+          "ArcaneCore.World": "[1.0.0, )",
+          "ArcaneCore.World.Contracts": "[1.0.0, )"
         }
       },
       "arcanecore.protocol": {

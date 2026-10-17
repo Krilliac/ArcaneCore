@@ -17,6 +17,8 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
     <!-- Microsoft-owned (nuget.org owner dotnetframework, MIT). .debug dump writes this process's own dump through the runtime's diagnostics IPC (docs/ops/diagnostics.md). net8.0 asset, runs on net11.0. -->
     <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
+    <!-- Used by the Playerbots pack (src/ArcaneCore.Playerbots, the in-process chat model). It stays here because the pack loads into the
+         default context of this executable, which resolves packages from this project's deps.json (docs/design/hot-reload-tiers.md, 4.6). -->
     <PackageReference Include="System.Numerics.Tensors" Version="10.0.13" />
   </ItemGroup>
 
@@ -33,11 +35,17 @@
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Tier 2b (docs/design/hot-reload-tiers.md, 4.6): the Playerbots pack moved to its own assembly and still uses a short list of
+       World internals (the managed-bot session members of WorldSession, a few battleground, boost, teleport and movement helpers).
+       That list is pinned by tests/ArcaneCore.World.Tests/Architecture/PlayerbotCoreBoundaryTests (it may only shrink); tier 2c turns
+       each entry into a public seam or a contract before the pack loads collectibly. -->
   <ItemGroup>
-    <!-- The bot chat local filter's shipped term list (docs/areas/playbots.md, Safety and provider policies). -->
+    <InternalsVisibleTo Include="ArcaneCore.Playerbots" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- The delivered Warden module for build 5875 (MaNGOS Zero src/game/Warden/WardenModuleWin5875Data.cpp, MD5 79C0768D..., stored as base64 text). -->
     <EmbeddedResource Include="Warden\WardenModuleWin5875.b64" LogicalName="ArcaneCore.World.Warden.WardenModuleWin5875.b64" />
-    <EmbeddedResource Include="Playerbots\Chat\PlayerbotChatSafetyTerms.json" LogicalName="ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyTerms.json" />
   </ItemGroup>
 
 </Project>

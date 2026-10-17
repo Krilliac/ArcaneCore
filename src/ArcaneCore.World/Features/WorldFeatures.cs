@@ -16,12 +16,12 @@ public static class WorldFeatures
     /// <summary>Seam interfaces a feature is additionally registered as, when it implements them.</summary>
     private static readonly Type[] SeamInterfaces = [typeof(IWorldFeature), typeof(IChatMessageHandler), typeof(Chat.IChatMuteSource), typeof(ICharacterHooks), typeof(ICharacterDeleteHook), typeof(ICharacterSettlementBarrier), typeof(ISpellSummonSink), typeof(Game.Creatures.ICreatureHostility)];
 
-    /// <summary>Every feature type in this assembly, ordered by full name (deterministic).</summary>
+    /// <summary>Every feature type of the startup set (<see cref="WorldCodeAssemblies.Startup"/>: World plus the built-in packs), ordered by full name, then assembly name (deterministic, the order of before the pack moved out).</summary>
     public static IReadOnlyList<Type> FeatureTypes { get; } = AssemblyDiscovery.FindTypes<IWorldFeature>();
 
     /// <summary>
     /// Every feature type of <paramref name="assemblies"/> (built-ins plus packs), ordered by assembly name, then full
-    /// type name (deterministic). <see cref="FeatureTypes"/> is this over the world assembly alone.
+    /// type name (deterministic). <see cref="FeatureTypes"/> is this over <see cref="WorldCodeAssemblies.Startup"/>.
     /// </summary>
     public static IReadOnlyList<Type> DiscoverFeatureTypes(CodeAssemblies assemblies) => AssemblyDiscovery.FindTypes<IWorldFeature>(assemblies);
 
@@ -98,11 +98,18 @@ public static class WorldFeatures
 /// </summary>
 internal static class AssemblyDiscovery
 {
-    /// <summary>The default set: this assembly alone.</summary>
-    public static CodeAssemblies BuiltIn { get; } = CodeAssemblies.Of(typeof(AssemblyDiscovery).Assembly);
+    /// <summary>The default set: the world's startup code set (this assembly plus the registered built-in packs, <see cref="WorldCodeAssemblies.Startup"/>).</summary>
+    public static CodeAssemblies BuiltIn => WorldCodeAssemblies.Startup;
 
-    /// <summary>Non-abstract classes in this assembly assignable to <typeparamref name="T"/>, ordered by full name.</summary>
-    public static IReadOnlyList<Type> FindTypes<T>() => FindTypes<T>(BuiltIn);
+    /// <summary>
+    /// Non-abstract classes of the startup set assignable to <typeparamref name="T"/>, ordered by full name (ordinal) across its assemblies.
+    /// The built-in packs are part of the world (tier 2b moved the Playerbots pack out of this assembly with its namespaces unchanged),
+    /// so their types interleave with World's by name: features, service modules, commands and hosted services keep the order they
+    /// had when the pack was inside ArcaneCore.World. A pack set (<see cref="FindTypes{T}(CodeAssemblies)"/>) keeps the set order.
+    /// </summary>
+    public static IReadOnlyList<Type> FindTypes<T>() => [.. FindTypes<T>(BuiltIn)
+        .OrderBy(t => t.FullName, StringComparer.Ordinal)
+        .ThenBy(t => t.Assembly.GetName().Name, StringComparer.Ordinal)];
 
     /// <summary>
     /// Non-abstract classes of <paramref name="assemblies"/> assignable to <typeparamref name="T"/>, in set order
@@ -116,10 +123,12 @@ internal static class AssemblyDiscovery
     }
 
     /// <summary>One instance (parameterless constructor) of every type <see cref="FindTypes{T}()"/> returns.</summary>
-    public static IReadOnlyList<T> CreateAll<T>() => CreateAll<T>(BuiltIn);
+    public static IReadOnlyList<T> CreateAll<T>() => Create<T>(FindTypes<T>());
 
     /// <summary>One instance (parameterless constructor) of every type <see cref="FindTypes{T}(CodeAssemblies)"/> returns.</summary>
-    public static IReadOnlyList<T> CreateAll<T>(CodeAssemblies assemblies) => FindTypes<T>(assemblies)
+    public static IReadOnlyList<T> CreateAll<T>(CodeAssemblies assemblies) => Create<T>(FindTypes<T>(assemblies));
+
+    private static T[] Create<T>(IEnumerable<Type> types) => types
         .Select(t => (T)(Activator.CreateInstance(t)
             ?? throw new InvalidOperationException($"could not create {t.FullName}")))
         .ToArray();

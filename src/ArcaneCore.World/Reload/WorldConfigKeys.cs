@@ -433,7 +433,7 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Population:CapitalStayMaxMinutes", o => o.Population.CapitalStayMaxMinutes, (o, v) => o.Population.CapitalStayMaxMinutes = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, 240)),
         LivePlayerbotsValue("Population:TownBandMargin", o => o.Population.TownBandMargin, (o, v) => o.Population.TownBandMargin = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 10)),
         LivePlayerbots("Population:TownProgressionTeleport", o => o.Population.TownProgressionTeleport, (o, v) => o.Population.TownProgressionTeleport = v),
-        LivePlayerbotsValue("Population:TownCaps", o => o.Population.TownCaps, (o, v) => o.Population.TownCaps = v, v => Playerbots.Population.PopulationTownProgression.CheckCaps(v)),
+        LivePlayerbotsValue("Population:TownCaps", o => o.Population.TownCaps, (o, v) => o.Population.TownCaps = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckCaps(v)),
         LivePlayerbots("Population:AdoptOperatorHomes", o => o.Population.AdoptOperatorHomes, (o, v) => o.Population.AdoptOperatorHomes = v),
         LivePlayerbotsValue("Population:ExcludedZones", o => new Playerbots.Population.PopulationIdList([.. o.Population.ExcludedZones]),
             (o, v) => o.Population.ExcludedZones = [.. v.Items], v => Playerbots.Population.PlayerbotPopulationOptions.CheckZones(v.Items)),

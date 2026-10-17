@@ -12,7 +12,7 @@ the zone placement are ArcaneCore's own. Nothing here changes what a bot does on
 
 ## Pieces
 
-| File (`src/ArcaneCore.World/Playerbots/Population/`) | What it does |
+| File (`src/ArcaneCore.Playerbots/Population/`) | What it does |
 |---|---|
 | `PlayerbotPopulationOptions.cs` | `World:Playerbots:Population` (every key live through `.reload config`), the validation and the list bindings. |
 | `PopulationBudgetController.cs` | The control loop as a pure function: samples, p95, counts, confirmed windows -> hold, add or park, with a stable state code; `PopulationBudgetWindows` counts the windows. |

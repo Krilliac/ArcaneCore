@@ -21,7 +21,7 @@ References (read-only, never copied): **vmangos** `D:\refs\vmangos` (primary; `s
 | Persistence | `Data/Characters/Talents/CharacterTalentDataModule.cs`, `World/Talents/TalentPersistence.cs` | `character_talent` and `character_spell_disabled`, a single-writer retain-on-failure queue. |
 | World | `World/Talents/TalentFeature.cs`, `TalentHandlers.cs`, `TalentCharacterDeleteHook.cs` | Feature wiring, `CMSG_LEARN_TALENT`, `MSG_TALENT_WIPE_CONFIRM`, the unlearn gossip option, character-delete cleanup. |
 | GM | `World/Gm/Character/ResetCommands.cs`, `ModifyCommands.cs` (`.modify tp`, `.levelup`), `World/Talents/TalentFeature.ResetFlags.cs`, `TalentResetFlags.cs` | `.reset talents [$name]`, `.reset all talents`, `.modify tp #n`; the reset-at-login request and its store. |
-| Bot scenario | `World/Playerbots/Scenarios/ScenarioTalents.cs` | Talent client actions for scenarios and `talent-lifecycle` (`TalentLifecycleScenario`). |
+| Bot scenario | `Playerbots/Scenarios/ScenarioTalents.cs` | Talent client actions for scenarios and `talent-lifecycle` (`TalentLifecycleScenario`). |
 
 ### Behaviour (all cited)
 

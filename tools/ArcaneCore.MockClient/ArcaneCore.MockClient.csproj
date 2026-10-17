@@ -8,6 +8,8 @@
     <ProjectReference Include="../../src/ArcaneCore.Data/ArcaneCore.Data.csproj" />
     <ProjectReference Include="../../src/ArcaneCore.Realm/ArcaneCore.Realm.csproj" />
     <ProjectReference Include="../../src/ArcaneCore.World/ArcaneCore.World.csproj" />
+    <!-- The world's built-in Playerbots pack, registered by Hosting/MockWorldPacks like the daemon registers it (docs/design/hot-reload-tiers.md, 4.6). -->
+    <ProjectReference Include="../../src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="ArcaneCore.MockClient.Tests" />

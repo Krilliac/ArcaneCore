@@ -105,14 +105,25 @@ public sealed class WiringAudit
     /// <summary><see cref="DefaultAssemblies"/> as a <see cref="CodeAssemblies"/> set with no packs.</summary>
     public static CodeAssemblies DefaultCodeAssemblies() => CodeAssemblies.Of([.. DefaultAssemblies()]);
 
-    /// <summary>The world assembly and every ArcaneCore assembly it references (loaded by name).</summary>
+    /// <summary>
+    /// The world's startup code set (the world assembly and the built-in packs, <see cref="Features.WorldCodeAssemblies.Startup"/>) and every
+    /// ArcaneCore assembly they reference (loaded by name), each once, in that order.
+    /// </summary>
     public static IReadOnlyList<Assembly> DefaultAssemblies()
     {
-        Assembly world = typeof(WiringAudit).Assembly;
-        var list = new List<Assembly> { world };
-        foreach (AssemblyName name in world.GetReferencedAssemblies().Where(n => n.Name?.StartsWith("ArcaneCore.", StringComparison.Ordinal) == true))
+        var list = new List<Assembly>();
+        IReadOnlyList<Assembly> startup = Features.WorldCodeAssemblies.Ordered; // fixes the set: the audit sees what discovery sees
+        list.AddRange(startup);
+        foreach (Assembly owner in startup)
         {
-            list.Add(Assembly.Load(name));
+            foreach (AssemblyName name in owner.GetReferencedAssemblies().Where(n => n.Name?.StartsWith("ArcaneCore.", StringComparison.Ordinal) == true))
+            {
+                Assembly referenced = Assembly.Load(name);
+                if (!list.Contains(referenced))
+                {
+                    list.Add(referenced);
+                }
+            }
         }
 
         return list;

@@ -4,7 +4,7 @@ The bots play the game all day and keep running into the same few problems: a qu
 die over and over, a recovery that throws. They already log each one as a warning. Bot QA reads those warnings, folds the many
 repeats into a few ranked findings, writes a report a person can read, and (only when asked) opens one GitHub issue per finding.
 The bots themselves are untouched: QA listens to what they log. Configuration: `World:Playerbots:Qa` (read once at start; a change
-needs a restart). Commands: `.playerbot qa` (GameMaster). Everything lives in `src/ArcaneCore.World/Playerbots/Qa/`.
+needs a restart). Commands: `.playerbot qa` (GameMaster). Everything lives in `src/ArcaneCore.Playerbots/Qa/`.
 
 ## What it watches (signals)
 

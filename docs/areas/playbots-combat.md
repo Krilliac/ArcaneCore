@@ -5,7 +5,7 @@ How a managed playerbot fights like its class. The rest of the bot (goals, movem
 
 ## Pieces
 
-| File (`src/ArcaneCore.World/Playerbots/`) | vmangos | What it does |
+| File (`src/ArcaneCore.Playerbots/`) | vmangos | What it does |
 |---|---|---|
 | `Combat/PlayerbotAbilities.cs` | `PopulateSpellData` (:136-1827) | Each class ability by its exact Spell.dbc name at the highest known rank ("Rank N", else the higher id); passive and hidden spells skipped; direct and periodic heal lists, strongest first. A direct heal is an effect Heal, or a ScriptEffect (Holy Light, Flash of Light) whose heal is another spell (read from a per-store index of the spell store: the lowest-id rank-less Heal spell of the same name, family and icon); its reach (self-only, friend, chain friend, party) comes from the effect's TargetA, so Healing Wave and Chain Heal (target 45) count. Deviation from vmangos, which lists every Heal-effect spell: group heals (Prayer of Healing, Holy Nova: target 20 with a radius) stay out of the single-target list, and a heal that lands on its caster is never picked for a friend. |
 | `Combat/PlayerbotRole.cs` | `AutoAssignRole` (:58-118) | Tank / melee / ranged / healer from the talent spell the bot knows: Shield Slam, Holy Shield, Sanctity Aura, Shadowform, Elemental Mastery, Stormstrike, Moonkin Form, Leader of the Pack. A later rank of the same spell counts. |

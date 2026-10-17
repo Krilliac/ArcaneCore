@@ -439,148 +439,148 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.World/Persistence/KeyedStoreWriteQueue.cs:325` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Persistence/RetainedRetryTimer.cs:82` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow; "stopping" |
 | `src/ArcaneCore.World/Pets/PersistentPetFeature.cs:85` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Battlegrounds/PlayerbotBattlegroundCoordinator.cs:704` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
-| `src/ArcaneCore.World/Playerbots/Battlegrounds/PlayerbotBattlegroundCoordinator.cs:716` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
-| `src/ArcaneCore.World/Playerbots/Chat/HttpBotChatClient.cs:73` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Chat/HttpBotChatClient.cs:77` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/HttpBotChatClient.cs:101` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Chat/HttpBotChatClient.cs:105` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/HttpBotChatClient.cs:128` | JsonException | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/HttpBotChatClient.cs:242` | JsonException | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/HttpBotChatClient.cs:275` | JsonException | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChat.cs:282` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChat.cs:291` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChat.cs:360` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChat.cs:364` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChat.cs:459` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChat.cs:463` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChat.cs:599` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChat.cs:603` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChat.cs:752` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatPrompts.cs:131` | JsonException | by-design | documented in place: "the model's answer was not the JSON asked for: no reply and no command, the bot says nothing" (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafety.cs:139` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafetyFilter.cs:115` | Exception | propagated | carried to a caller / observer that logs or rethrows it (not checked per site) |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafetyFilter.cs:171` | Exception | propagated | carried to a caller / observer that logs or rethrows it (not checked per site) |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafetyFilter.cs:178` | JsonException | propagated | carried to a caller / observer that logs or rethrows it (not checked per site) |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafetyFilter.cs:216` | RegexMatchTimeoutException | by-design | regex timeout: treated as a match / rejection (fails closed) |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafetyFilter.cs:300` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafetyFilter.cs:314` | RegexMatchTimeoutException | by-design | regex timeout: treated as a match / rejection (fails closed); "A cold match ran out of time here instead of on a player's line: the next one is warm." |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafetyFilter.cs:318` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafetyFilter.cs:424` | RegexMatchTimeoutException | by-design | regex timeout: treated as a match / rejection (fails closed) |
-| `src/ArcaneCore.World/Playerbots/Chat/PlayerbotChatSafetyFilter.cs:453` | RegexMatchTimeoutException | by-design | regex timeout: treated as a match / rejection (fails closed) |
-| `src/ArcaneCore.World/Playerbots/Economy/PlayerbotEconomy.cs:853` | FormatException | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Economy/PlayerbotEconomyWire.cs:222` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Economy/PlayerbotGearScoreSeam.cs:39` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.World/Playerbots/Groups/PlayerbotGroupAI.cs:956` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
-| `src/ArcaneCore.World/Playerbots/Groups/PlayerbotGroupCoordinator.Runs.cs:109` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Groups/PlayerbotGroupCoordinator.cs:1390` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.Reset.cs:308` | Exception | by-design | documented in place: "counted per task below" |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.Reset.cs:389` | TimeoutException | FIXED | was message-only (logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.Reset.cs:411` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:269` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:281` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:319` | TimeoutException | FIXED | was message-only (logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:331` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:610` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:785` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:828` | TimeoutException | FIXED | was message-only (logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:886` | TimeoutException | FIXED | was message-only (logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:923` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:932` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1000` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1018` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1030` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1056` | Exception | propagated | rethrows (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1064` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1097` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1102` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1114` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1135` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1256` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1376` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1431` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1478` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1493` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1501` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1522` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1529` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1547` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1623` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1643` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/ManagedPlayerbotFeature.cs:1743` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Party/PlayerbotChatCommands.cs:119` | ArgumentOutOfRangeException | by-design | documented in place: "no terminator (PacketReader's malformed-packet exception)" |
-| `src/ArcaneCore.World/Playerbots/Party/PlayerbotPartyAI.cs:369` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.World/Playerbots/Party/PlayerbotPartyAI.cs:1144` | InvalidOperationException | by-design | documented in place: "not attached" |
-| `src/ArcaneCore.World/Playerbots/PlayerbotCommands.cs:297` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/PlayerbotCommands.cs:364` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
-| `src/ArcaneCore.World/Playerbots/PlayerbotCommands.cs:402` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/PlayerbotCommands.cs:431` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/PlayerbotCommands.cs:502` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/PlayerbotFleetCommands.cs:526` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/PlayerbotFleetCommands.cs:558` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/PlayerbotFleetCommands.cs:616` | Exception | FIXED | was propagated (carried to a caller / observer that logs or rethrows it (not checked per site)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/PlayerbotLocalPlanner.cs:43` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/PlayerbotLocalPlanner.cs:108` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.World/Playerbots/PlayerbotLocalPlanner.cs:126` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Population/PlayerbotPopulationFeature.cs:230` | Exception | by-design | documented in place: "a pass cut short by the shutdown" |
-| `src/ArcaneCore.World/Playerbots/Population/PlayerbotPopulationFeature.cs:231` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Population/PlayerbotPopulationFeature.cs:331` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Population/PlayerbotPopulationFeature.cs:540` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Population/PlayerbotPopulationFeature.cs:541` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Population/PlayerbotPopulationFeature.cs:747` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Population/PlayerbotPopulationFeature.cs:752` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Population/PlayerbotPopulationFeature.cs:1032` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaConfigChecks.cs:20` | InvalidOperationException | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:98` | FormatException | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:148` | Exception | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:160` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:196` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:223` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:270` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:273` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:303` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:331` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:335` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaFeature.cs:369` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGhCliClient.cs:55` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGhCliClient.cs:70` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGhCliClient.cs:75` | all exceptions | propagated | rethrows |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGhCliClient.cs:102` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGhCliClient.cs:288` | OperationCanceledException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGhCliClient.cs:310` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGhCliClient.cs:325` | Exception | by-design | documented in place: "best-effort removal of a temporary body file; a leftover file is harmless" (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGhCliClient.cs:337` | JsonException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGitHubClient.cs:169` | HttpRequestException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGitHubClient.cs:174` | OperationCanceledException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaGitHubClient.cs:243` | JsonException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaLogTap.cs:88` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaPublisher.cs:235` | PlayerbotQaPublishException | propagated | rethrows |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaPublisher.cs:381` | OperationCanceledException | propagated | rethrows |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaPublisher.cs:385` | PlayerbotQaPublishException | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaPublisher.cs:390` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaPublisher.cs:464` | OperationCanceledException | propagated | rethrows |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaPublisher.cs:468` | PlayerbotQaPublishException | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaPublisher.cs:534` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaStore.cs:57` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaStore.cs:67` | JsonException | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
-| `src/ArcaneCore.World/Playerbots/Qa/PlayerbotQaStore.cs:94` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Scenarios/PlayerbotScenarioCommands.cs:76` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioAuctionWire.cs:128` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioClassDecoders.cs:44` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioClassDecoders.cs:73` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioCombat.cs:170` | ScenarioTimeoutException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioCombat.cs:415` | ScenarioTimeoutException | by-design | documented in place: "The watch ran out with the wolf untouched by the bot: that is the pass." |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioContext.cs:120` | Exception | propagated | rethrows |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioContext.cs:151` | Exception | by-design | documented in place: "Already recorded by StepAsync (a timeout of the cleanup's own bound as a cancellation)." |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioContext.cs:246` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioDecoders.cs:299` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioParty.cs:370` | ScenarioTimeoutException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioRunner.cs:36` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Playerbots/Scenarios/ScenarioRunner.cs:40` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.World/Playerbots/Social/PlayerbotSocialFeature.cs:237` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Social/PlayerbotSocialFeature.cs:250` | InvalidOperationException | by-design | documented in place: "not attached" |
-| `src/ArcaneCore.World/Playerbots/Social/PlayerbotSocialFeature.cs:347` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
-| `src/ArcaneCore.World/Playerbots/Social/PlayerbotSocialPackets.cs:94` | ArgumentOutOfRangeException | by-design | documented in place: "no terminator (PacketReader's malformed-packet exception)" |
+| `src/ArcaneCore.Playerbots/Battlegrounds/PlayerbotBattlegroundCoordinator.cs:704` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
+| `src/ArcaneCore.Playerbots/Battlegrounds/PlayerbotBattlegroundCoordinator.cs:716` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
+| `src/ArcaneCore.Playerbots/Chat/HttpBotChatClient.cs:73` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Chat/HttpBotChatClient.cs:77` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/HttpBotChatClient.cs:101` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Chat/HttpBotChatClient.cs:105` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/HttpBotChatClient.cs:128` | JsonException | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/HttpBotChatClient.cs:242` | JsonException | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/HttpBotChatClient.cs:275` | JsonException | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChat.cs:282` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChat.cs:291` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChat.cs:360` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChat.cs:364` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChat.cs:459` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChat.cs:463` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChat.cs:599` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChat.cs:603` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChat.cs:752` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatPrompts.cs:131` | JsonException | by-design | documented in place: "the model's answer was not the JSON asked for: no reply and no command, the bot says nothing" (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafety.cs:139` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafetyFilter.cs:115` | Exception | propagated | carried to a caller / observer that logs or rethrows it (not checked per site) |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafetyFilter.cs:171` | Exception | propagated | carried to a caller / observer that logs or rethrows it (not checked per site) |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafetyFilter.cs:178` | JsonException | propagated | carried to a caller / observer that logs or rethrows it (not checked per site) |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafetyFilter.cs:216` | RegexMatchTimeoutException | by-design | regex timeout: treated as a match / rejection (fails closed) |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafetyFilter.cs:300` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafetyFilter.cs:314` | RegexMatchTimeoutException | by-design | regex timeout: treated as a match / rejection (fails closed); "A cold match ran out of time here instead of on a player's line: the next one is warm." |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafetyFilter.cs:318` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafetyFilter.cs:424` | RegexMatchTimeoutException | by-design | regex timeout: treated as a match / rejection (fails closed) |
+| `src/ArcaneCore.Playerbots/Chat/PlayerbotChatSafetyFilter.cs:453` | RegexMatchTimeoutException | by-design | regex timeout: treated as a match / rejection (fails closed) |
+| `src/ArcaneCore.Playerbots/Economy/PlayerbotEconomy.cs:853` | FormatException | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Economy/PlayerbotEconomyWire.cs:222` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Economy/PlayerbotGearScoreSeam.cs:39` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Playerbots/Groups/PlayerbotGroupAI.cs:956` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
+| `src/ArcaneCore.Playerbots/Groups/PlayerbotGroupCoordinator.Runs.cs:109` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Groups/PlayerbotGroupCoordinator.cs:1390` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.Reset.cs:308` | Exception | by-design | documented in place: "counted per task below" |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.Reset.cs:389` | TimeoutException | FIXED | was message-only (logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.Reset.cs:411` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:269` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:281` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:319` | TimeoutException | FIXED | was message-only (logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:331` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:610` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:785` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:828` | TimeoutException | FIXED | was message-only (logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:886` | TimeoutException | FIXED | was message-only (logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:923` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:932` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1000` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1018` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1030` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1056` | Exception | propagated | rethrows (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1064` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1097` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1102` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1114` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1135` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1256` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1376` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1431` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1478` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1493` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1501` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1522` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1529` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1547` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1623` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1643` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:1743` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Party/PlayerbotChatCommands.cs:119` | ArgumentOutOfRangeException | by-design | documented in place: "no terminator (PacketReader's malformed-packet exception)" |
+| `src/ArcaneCore.Playerbots/Party/PlayerbotPartyAI.cs:369` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Playerbots/Party/PlayerbotPartyAI.cs:1144` | InvalidOperationException | by-design | documented in place: "not attached" |
+| `src/ArcaneCore.Playerbots/PlayerbotCommands.cs:297` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/PlayerbotCommands.cs:364` | InvalidOperationException | by-design | optional service not attached (inferred from the type; no comment) |
+| `src/ArcaneCore.Playerbots/PlayerbotCommands.cs:402` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/PlayerbotCommands.cs:431` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/PlayerbotCommands.cs:502` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/PlayerbotFleetCommands.cs:526` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/PlayerbotFleetCommands.cs:558` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/PlayerbotFleetCommands.cs:616` | Exception | FIXED | was propagated (carried to a caller / observer that logs or rethrows it (not checked per site)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/PlayerbotLocalPlanner.cs:43` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/PlayerbotLocalPlanner.cs:108` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Playerbots/PlayerbotLocalPlanner.cs:126` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Population/PlayerbotPopulationFeature.cs:230` | Exception | by-design | documented in place: "a pass cut short by the shutdown" |
+| `src/ArcaneCore.Playerbots/Population/PlayerbotPopulationFeature.cs:231` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Population/PlayerbotPopulationFeature.cs:331` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Population/PlayerbotPopulationFeature.cs:540` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Population/PlayerbotPopulationFeature.cs:541` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Population/PlayerbotPopulationFeature.cs:747` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Population/PlayerbotPopulationFeature.cs:752` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Population/PlayerbotPopulationFeature.cs:1032` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaConfigChecks.cs:20` | InvalidOperationException | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:98` | FormatException | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:148` | Exception | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:160` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:196` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:223` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:270` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:273` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:303` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:331` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:335` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaFeature.cs:369` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGhCliClient.cs:55` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGhCliClient.cs:70` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGhCliClient.cs:75` | all exceptions | propagated | rethrows |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGhCliClient.cs:102` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGhCliClient.cs:288` | OperationCanceledException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGhCliClient.cs:310` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGhCliClient.cs:325` | Exception | by-design | documented in place: "best-effort removal of a temporary body file; a leftover file is harmless" (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGhCliClient.cs:337` | JsonException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGitHubClient.cs:169` | HttpRequestException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGitHubClient.cs:174` | OperationCanceledException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaGitHubClient.cs:243` | JsonException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaLogTap.cs:88` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaPublisher.cs:235` | PlayerbotQaPublishException | propagated | rethrows |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaPublisher.cs:381` | OperationCanceledException | propagated | rethrows |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaPublisher.cs:385` | PlayerbotQaPublishException | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaPublisher.cs:390` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaPublisher.cs:464` | OperationCanceledException | propagated | rethrows |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaPublisher.cs:468` | PlayerbotQaPublishException | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaPublisher.cs:534` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaStore.cs:57` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaStore.cs:67` | JsonException | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
+| `src/ArcaneCore.Playerbots/Qa/PlayerbotQaStore.cs:94` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/Scenarios/PlayerbotScenarioCommands.cs:76` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioAuctionWire.cs:128` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioClassDecoders.cs:44` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioClassDecoders.cs:73` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioCombat.cs:170` | ScenarioTimeoutException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioCombat.cs:415` | ScenarioTimeoutException | by-design | documented in place: "The watch ran out with the wolf untouched by the bot: that is the pass." |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioContext.cs:120` | Exception | propagated | rethrows |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioContext.cs:151` | Exception | by-design | documented in place: "Already recorded by StepAsync (a timeout of the cleanup's own bound as a cancellation)." |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioContext.cs:246` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioDecoders.cs:299` | Exception | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioParty.cs:370` | ScenarioTimeoutException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioRunner.cs:36` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/Scenarios/ScenarioRunner.cs:40` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/Social/PlayerbotSocialFeature.cs:237` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/Social/PlayerbotSocialFeature.cs:250` | InvalidOperationException | by-design | documented in place: "not attached" |
+| `src/ArcaneCore.Playerbots/Social/PlayerbotSocialFeature.cs:347` | Exception | FIXED | was by-design (reported as the exception type only (a message may hold a secret or client data; some tests enforce it)); now logs the exception object |
+| `src/ArcaneCore.Playerbots/Social/PlayerbotSocialPackets.cs:94` | ArgumentOutOfRangeException | by-design | documented in place: "no terminator (PacketReader's malformed-packet exception)" |
 | `src/ArcaneCore.World/Program.cs:71` | HotCodeRefusedException | by-design | reported to the operator / returned as a failure result using the exception message |
 | `src/ArcaneCore.World/Progression/RestWriteQueue.cs:303` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Progression/RestWriteQueue.cs:389` | Exception | logged | logs the exception object |

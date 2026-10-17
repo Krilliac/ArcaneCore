@@ -21,7 +21,6 @@ using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Gm.Lookup;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Persistence;
-using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.WorldState;
@@ -696,24 +695,9 @@ public sealed class ClusterCommands : ICommandGroup
         };
     }
 
+    // The core bot registry (logged in and running), not the playerbot pack's feature: World does not reference the pack (tier 2b).
     private static HashSet<string> GetRunningBotNames(IServiceProvider services)
-    {
-        if (services.GetService<ManagedPlayerbotFeature>() is not { } bots)
-        {
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        }
-
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (PlayerbotStatus status in bots.Snapshot())
-        {
-            if (status.State == ManagedPlayerbotState.Running && !string.IsNullOrWhiteSpace(status.Name))
-            {
-                set.Add(status.Name);
-            }
-        }
-
-        return set;
-    }
+        => services.GetService<ManagedBotRegistry>()?.RunningNames() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     private static (int Pending, int Retained) SumQueueDepths(IServiceProvider services)
     {
