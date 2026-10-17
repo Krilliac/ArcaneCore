@@ -14,7 +14,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.20" />
     <!-- Microsoft-owned (nuget.org owner dotnetframework, MIT). .debug dump writes this process's own dump through the runtime's diagnostics IPC (docs/ops/diagnostics.md). net8.0 asset, runs on net11.0. -->
     <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
     <PackageReference Include="System.Numerics.Tensors" Version="10.0.13" />
