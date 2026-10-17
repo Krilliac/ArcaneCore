@@ -235,7 +235,11 @@ internal sealed class FakeGitHub
 
     public int Comments => Count(HttpMethod.Post, "/comments");
 
-    public int Patches => Http.Requests.Count(r => r.Method == HttpMethod.Patch);
+    /// <summary>The PATCHes that changed an issue's state (reopen, close); a body edit is counted by <see cref="BodyEdits"/>.</summary>
+    public int Patches => Http.Requests.Count(r => r.Method == HttpMethod.Patch && JsonNode.Parse(r.Body)?["state"] is not null);
+
+    /// <summary>The PATCHes that rewrote an issue's body (the live status block).</summary>
+    public int BodyEdits => Http.Requests.Count(r => r.Method == HttpMethod.Patch && JsonNode.Parse(r.Body)?["body"] is not null);
 
     public int Gets => Http.Requests.Count(r => r.Method == HttpMethod.Get);
 
@@ -304,7 +308,14 @@ internal sealed class FakeGitHub
             }
             if (request.Method == HttpMethod.Patch && rest.Length == 1)
             {
-                lock (_gate) issue["state"] = (string)JsonNode.Parse(request.Body)!["state"]!;
+                JsonNode patch = JsonNode.Parse(request.Body)!;
+                lock (_gate)
+                {
+                    if (patch["state"] is { } state) issue["state"] = (string)state!;
+                    if (patch["state_reason"] is { } reason) issue["state_reason"] = (string)reason!;
+                    if (patch["body"] is { } body) issue["body"] = (string)body!;
+                }
+
                 return FakeHttp.Json(HttpStatusCode.OK, issue.ToJsonString());
             }
         }

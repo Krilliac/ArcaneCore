@@ -100,6 +100,25 @@ internal sealed class ScriptedTransport : IQaIssueTransport
         return Task.CompletedTask;
     }
 
+    /// <summary>The body edits (live status), in order.</summary>
+    public List<int> Edits { get; } = [];
+
+    public string BodyOf(int number) => _issues[number].Body;
+
+    public Task CloseAsCompletedAsync(int number, CancellationToken cancellationToken)
+    {
+        Calls.Add("close-completed " + number);
+        _issues[number] = (false, _issues[number].Body);
+        return Task.CompletedTask;
+    }
+
+    public Task EditBodyAsync(int number, string body, CancellationToken cancellationToken)
+    {
+        Edits.Add(number);
+        _issues[number] = (_issues[number].Open, body);
+        return Task.CompletedTask;
+    }
+
     public void Dispose()
     {
     }
@@ -248,6 +267,10 @@ public sealed partial class PlayerbotQaMergeSafetyTests(ITestOutputHelper output
         public Task ReopenAsync(int number, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task CloseAsCompletedAsync(int number, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task EditBodyAsync(int number, string body, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public void Dispose()
         {

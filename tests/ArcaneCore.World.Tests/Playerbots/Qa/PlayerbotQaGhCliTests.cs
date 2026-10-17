@@ -28,7 +28,45 @@ internal sealed class FakeGh : IQaProcessRunner
     /// <summary>A result to answer every request with instead of acting.</summary>
     public Func<QaProcessRequest, QaProcessResult?>? Override { get; set; }
 
-    public int Count(string verb) => Requests.Count(r => r.Arguments.Count >= 2 && r.Arguments[0] == "issue" && r.Arguments[1] == verb);
+    /// <summary>How many calls ran <paramref name="verb"/>; <c>list</c> counts the issue-list calls of either form (<c>gh issue list</c>, <c>gh api .../issues?</c>).</summary>
+    public int Count(string verb) => Requests.Count(r => r.Arguments.Count >= 2 && ((r.Arguments[0] == "issue" && r.Arguments[1] == verb) || (verb == "list" && IsApiList(r))));
+
+    /// <summary>
+    /// The most issues one call can print before gh runs past its timeout (null: no limit). Models the live failure of 2026-10-17: one <c>gh issue list</c> of 635 issues with
+    /// their bodies took 20-40 s and was killed at 30 s on most passes.
+    /// </summary>
+    public int? MaxIssuesPerCall { get; set; }
+
+    private static bool IsApiList(QaProcessRequest r) => r.Arguments[0] == "api" && r.Arguments[^1].Contains("/issues?", StringComparison.Ordinal);
+
+    /// <summary>The bodies <c>gh issue edit</c> wrote, by issue number.</summary>
+    public Dictionary<int, string> Edited { get; } = [];
+
+    public string BodyOf(int number)
+    {
+        lock (_gate) return (string)_issues.Single(i => (int)i["number"]! == number)["body"]!;
+    }
+
+    public bool IsOpen(int number)
+    {
+        lock (_gate) return (string)_issues.Single(i => (int)i["number"]! == number)["state"]! == "OPEN";
+    }
+
+    private Task<QaProcessResult> ApiList(QaProcessRequest request)
+    {
+        string path = request.Arguments[^1];
+        var query = path[(path.IndexOf('?', StringComparison.Ordinal) + 1)..].Split('&').Select(p => p.Split('=', 2)).ToDictionary(p => p[0], p => Uri.UnescapeDataString(p[1]), StringComparer.Ordinal);
+        int perPage = int.Parse(query["per_page"], CultureInfo.InvariantCulture);
+        int page = int.Parse(query["page"], CultureInfo.InvariantCulture);
+        JsonObject[] slice = [.. _issues.Skip((page - 1) * perPage).Take(perPage)];
+        if (MaxIssuesPerCall is { } max && slice.Length > max) return Task.FromResult(new QaProcessResult(-1, string.Empty, string.Empty, TimedOut: true));
+        // The REST shape: lower-case state, state_reason, html_url.
+        return Ok(new JsonArray([.. slice.Select(i => (JsonNode?)new JsonObject
+        {
+            ["number"] = (int)i["number"]!, ["state"] = ((string)i["state"]!).ToLowerInvariant(), ["html_url"] = (string)i["url"]!, ["body"] = (string)i["body"]!,
+            ["state_reason"] = i["stateReason"] is { } reason ? ((string)reason!).ToLowerInvariant() : null,
+        })]).ToJsonString());
+    }
 
     public void SetReason(int number, string reason)
     {
@@ -51,12 +89,14 @@ internal sealed class FakeGh : IQaProcessRunner
         {
             _requests.Add(request);
             if (Override?.Invoke(request) is { } forced) return Task.FromResult(forced);
+            if (IsApiList(request)) return ApiList(request);
             string verb = request.Arguments[1];
             string? file = request.Arguments.Contains("--body-file") ? request.Arguments[request.Arguments.ToList().IndexOf("--body-file") + 1] : null;
             if (file is not null) BodyFiles.Add((file, File.Exists(file) ? File.ReadAllText(file) : string.Empty, File.Exists(file)));
             switch (verb)
             {
                 case "list":
+                    if (MaxIssuesPerCall is { } max && _issues.Count > max) return Task.FromResult(new QaProcessResult(-1, string.Empty, string.Empty, TimedOut: true));
                     return Ok(new JsonArray([.. _issues.Select(i => (JsonNode?)JsonNode.Parse(i.ToJsonString()))]).ToJsonString());
                 case "view":
                     {
@@ -78,6 +118,15 @@ internal sealed class FakeGh : IQaProcessRunner
                         int number = int.Parse(request.Arguments[2], CultureInfo.InvariantCulture);
                         _issues.Single(i => (int)i["number"]! == number)["state"] = "CLOSED";
                         return Ok(string.Empty);
+                    }
+
+                case "edit":
+                    {
+                        int number = int.Parse(request.Arguments[2], CultureInfo.InvariantCulture);
+                        string body = File.ReadAllText(file!);
+                        Edited[number] = body;
+                        _issues.Single(i => (int)i["number"]! == number)["body"] = body;
+                        return Ok($"https://github.com/{QaData.Repo}/issues/{number}\n");
                     }
 
                 case "reopen":
@@ -156,7 +205,7 @@ public sealed class PlayerbotQaGhCliTests : IDisposable
     // ----- the adapter -----------------------------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task List_RunsOneGhCall_WithTheDocumentedArguments_AndIndexesOpenAndClosed()
+    public async Task List_RunsOneGhApiCallPerPage_WithTheDocumentedArguments_AndIndexesOpenAndClosed()
     {
         var gh = new FakeGh();
         int open = gh.Add(PlayerbotQaIssueComposer.MarkerOf(A) + "\nx");
@@ -167,7 +216,7 @@ public sealed class PlayerbotQaGhCliTests : IDisposable
 
         QaProcessRequest request = Assert.Single(gh.Requests);
         Assert.Equal(Exe, request.FileName);
-        Assert.Equal(["issue", "list", "--repo", QaData.Repo, "--label", "bot-qa", "--state", "all", "--json", "number,state,stateReason,body,url", "--limit", "1000"], request.Arguments);
+        Assert.Equal(["api", "--method", "GET", $"repos/{QaData.Repo}/issues?labels=bot-qa&state=all&per_page=100&page=1"], request.Arguments);
         Assert.True(index.ByMarker(A)!.Open);
         Assert.Equal(open, index.ByMarker(A)!.Number);
         Assert.False(index.ByMarker(B)!.Open);
@@ -350,7 +399,9 @@ public sealed class PlayerbotQaGhCliTests : IDisposable
 
         Assert.Equal(0, gh.Count("create"));
         Assert.Equal(1, gh.Count("comment")); // the second pass has nothing new
-        Assert.NotEmpty(Assert.Single(gh.BodyFiles).Content);
+        Assert.Equal(1, gh.Count("edit")); // the issue predates the live status block: it is inserted once
+        Assert.Equal(2, gh.BodyFiles.Count);
+        Assert.All(gh.BodyFiles, file => Assert.NotEmpty(file.Content));
     }
 
     [Fact]
@@ -527,6 +578,77 @@ public sealed class PlayerbotQaGhCliTests : IDisposable
             new QaProcessRequest(missing, [], Path.GetTempPath(), new Dictionary<string, string?>(), TimeSpan.FromSeconds(5)), CancellationToken.None));
 
         Assert.False(ex.Transient);
+    }
+
+    // ----- the issue list at live size (2026-10-17: "gh issue list timed out after 30 s" on most passes) -----------------------------------------
+
+    [Fact]
+    public async Task List_Of635Issues_DoesNotRideOnOneCall_SoItNoLongerTimesOut()
+    {
+        // Live: 635 bot-qa issues, about 1.9 MB of bodies; one `gh issue list --limit 1000` took 20-40 s and was killed at 30 s, so the pass failed before publishing anything.
+        var gh = new FakeGh { MaxIssuesPerCall = 100 };
+        for (int i = 0; i < 635; i++) gh.Add(PlayerbotQaIssueComposer.MarkerOf(i.ToString("x16", CultureInfo.InvariantCulture)) + "\nbody", open: i % 3 != 0);
+        using PlayerbotQaGhCliClient client = NewClient(gh);
+
+        QaIssueIndex index = await client.ListIndexAsync(CancellationToken.None);
+
+        Assert.Equal(635, index.Count);
+        Assert.True(index.Complete);
+        Assert.Equal(7, gh.Count("list")); // one call per page of 100, each under its own timeout
+        Assert.All(gh.Requests, r => Assert.Equal(TimeSpan.FromSeconds(30), r.Timeout));
+        Assert.Equal(["page=1", "page=2", "page=3", "page=4", "page=5", "page=6", "page=7"], gh.Requests.Select(r => r.Arguments[^1].Split('&')[^1]).ToArray());
+        Assert.False(index.ByMarker(0.ToString("x16", CultureInfo.InvariantCulture))!.Open);
+        Assert.True(index.ByMarker(634.ToString("x16", CultureInfo.InvariantCulture))!.Open);
+    }
+
+    [Fact]
+    public async Task List_OfAnExactMultipleOfAPage_ReadsOneEmptyPage_AndIsComplete()
+    {
+        var gh = new FakeGh();
+        for (int i = 0; i < 200; i++) gh.Add("x");
+        using PlayerbotQaGhCliClient client = NewClient(gh);
+
+        QaIssueIndex index = await client.ListIndexAsync(CancellationToken.None);
+
+        Assert.Equal(200, index.Count);
+        Assert.True(index.Complete);
+        Assert.Equal(3, gh.Count("list"));
+    }
+
+    [Fact]
+    public async Task List_SkipsPullRequests_AndKeepsEachIssuesBody()
+    {
+        var gh = new FakeGh
+        {
+            Override = r => r.Arguments[0] == "api"
+                ? new QaProcessResult(0, """[{"number":7,"state":"open","html_url":"https://github.com/o/r/pull/7","body":"<!-- arcanecore-bot-qa:aaaaaaaaaaaaaaaa -->","pull_request":{}},{"number":8,"state":"closed","state_reason":"not_planned","html_url":"https://github.com/o/r/issues/8","body":"<!-- arcanecore-bot-qa:bbbbbbbbbbbbbbbb -->\nrest"}]""", string.Empty, false)
+                : null,
+        };
+        using PlayerbotQaGhCliClient client = NewClient(gh);
+
+        QaIssueIndex index = await client.ListIndexAsync(CancellationToken.None);
+
+        Assert.Null(index.ByNumber(7));
+        Assert.Null(index.ByMarker(A));
+        Assert.True(index.ByMarker(B)!.NotPlanned);
+        Assert.Equal("<!-- arcanecore-bot-qa:bbbbbbbbbbbbbbbb -->\nrest", index.BodyOf(8));
+    }
+
+    [Fact]
+    public async Task EditBody_UsesABodyFile_AndCloseAsCompleted_SaysCompleted()
+    {
+        var gh = new FakeGh();
+        int number = gh.Add("old");
+        using PlayerbotQaGhCliClient client = NewClient(gh);
+
+        await client.EditBodyAsync(number, "new body", CancellationToken.None);
+        await client.CloseAsCompletedAsync(number, CancellationToken.None);
+
+        Assert.Equal(["issue", "edit", number.ToString(CultureInfo.InvariantCulture), "--repo", QaData.Repo, "--body-file"], gh.Requests[0].Arguments.Take(6).ToArray());
+        Assert.Equal("new body", gh.BodyOf(number));
+        Assert.Empty(Directory.GetFiles(_directory));
+        Assert.Equal(["issue", "close", number.ToString(CultureInfo.InvariantCulture), "--repo", QaData.Repo, "--reason", "completed"], gh.Requests[1].Arguments);
+        Assert.False(gh.IsOpen(number));
     }
 
     // ----- options ----------------------------------------------------------------------------------------------------------------------------

@@ -115,6 +115,12 @@ An issue handed over to the survivor (the publish was in flight when the merge h
 The survivor of such an in-flight publish is protected from age-out and eviction like the finding itself; an entry whose survivor no longer exists is dropped (the issue stays open as it was).
 Each merge of two issues is logged as `issue #a ... absorbed into #b`; the start-up line counts the merges and the issues left to close.
 
+Turning it on is configuration only (the code is in place): set `World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates` to `true` in the profile's `appsettings.json`
+(`"Playerbots": { "Qa": { "GitHub": { "CloseAbsorbedDuplicates": true } } }` under `World`), or the environment variable
+`World__Playerbots__Qa__GitHub__CloseAbsorbedDuplicates=true`, and restart. Check the start-up `issue #a -> duplicate of #b` lines first. Each close costs one comment of
+`MaxCommentsPerHour` (10), after the pass's own comments, so a backlog of 65 duplicates takes roughly 7 hours or more. The closes run only in a pass that got that far: while the
+`gh` issue list timed out (before 2026-10-17) no pass did, so the switch would have closed nothing.
+
 ## Classifier: why it probably happens
 
 `PlayerbotQaClassifier` asks the loaded content (`IQaContentFacts`, read-only) and names a likely cause. It makes no claim while the
@@ -220,8 +226,11 @@ Off by default. It is a three-step ladder; each step needs an explicit setting.
   killed), stdin closed and `GH_PROMPT_DISABLED=1`. `GITHUB_TOKEN` and `GH_TOKEN` are removed from the child so `gh` uses its own login;
   set `World:Playerbots:Qa:GitHub:GhPassToken` = true to hand it the token from `TokenEnvironmentVariable` as `GH_TOKEN` instead. Issue and
   comment bodies go through a temp file (`--body-file`, deleted afterwards) and never on the command line. The calls are
-  `gh issue list --repo R --label L --state all --json number,state,stateReason,body,url --limit N` (N = `MaxListPages` x 100), `gh issue view N`,
-  `gh issue create --repo R --title T --body-file F --label L`, `gh issue comment N --repo R --body-file F` and `gh issue reopen N`.
+  `gh api --method GET repos/R/issues?labels=L&state=all&per_page=100&page=P` (the list: one call per page of 100, pages 1.. until a short page or `MaxListPages`,
+  each call under its own 30 s timeout), `gh issue view N`, `gh issue create --repo R --title T --body-file F --label L`, `gh issue comment N --repo R --body-file F`,
+  `gh issue edit N --repo R --body-file F` (the live status), `gh issue reopen N` and `gh issue close N --reason "not planned"` (a duplicate) or `--reason completed` (a quiet close).
+  Before 2026-10-17 the list was one `gh issue list --limit 1000` with every body: at 635 issues (about 1.9 MB) it took 20-40 s, was killed at 30 s on most passes, and the
+  pass stopped before publishing, commenting or closing anything.
   There is no search: an issue whose label was removed by hand is not found, and if the list was cut at its limit a finding with no known
   issue stays pending (a warning says so) instead of risking a duplicate. A dry run starts no process and does not look for `gh`.
 
@@ -267,10 +276,27 @@ back from its key on load (only a key that rebuilds to itself), and keeps its id
   tombstone, the build that last met it, else the running one) is a regression, provided the running build met it at least `MinOccurrences` times (one for a single-occurrence kind) and is newer than that reference by the registry: a rollback to an older build, or a build the registry does not know, never reopens (nothing reopens on doubt), and neither does an issue GitHub shows as closed `not_planned` (a decision; `ReopenClosed` still does). The issue is reopened and gets **one** comment: the new build, the occurrences on it, the total, the
   distinct bots and the latest sample. A recurrence on the **same** build is a person's won't-fix and is left closed (and counted nowhere else). The reopen and its comment
   are one step under `MaxCommentsPerHour`: with no budget the issue stays closed and the next pass retries, and the comment ignores `CommentIntervalHours` (it is not a routine
-  occurrence note). The option only acts while publishing is on, and it never closes anything: the lane has no auto-close.
+  occurrence note). The option only acts while publishing is on, and it never closes anything (closing is the quiet close below, off by default).
   How it interacts with `ReopenClosed`: `ReopenClosed` (default off) reopens a closed issue for **any** recurrence on any build and keeps its old comment rules; with it on,
   `ReopenOnRegression` only chooses the comment, so a regression gets the regression comment (when the comment budget allows) instead of the routine occurrence comment. With
   `ReopenClosed` off, `ReopenOnRegression` is the only way a closed issue is reopened; with both off a closed issue is left alone.
+
+* **Live status** (`World:Playerbots:Qa:GitHub:StatusUpdateMinutes`, default 60; 0 is off): every issue body carries, right under its marker, a status block between
+  `<!-- arcanecore-bot-qa-status:begin -->` and `<!-- arcanecore-bot-qa-status:end -->`. Its first line is machine-readable:
+  `<!-- arcanecore-bot-qa-status last-seen=2026-10-17T04:58:12Z count=1234 build-count=56 bots=12 -->` (last seen UTC, occurrences in all, on the running build, distinct
+  bots); the second says the same in words. Comments come at most once per `CommentIntervalHours` (24), so GitHub's idea of when a finding last happened used to lag by up to a
+  day; now, when an open issue's finding has been seen at least `StatusUpdateMinutes` after the time its block shows, the pass rewrites the block in place (one body edit, which
+  sends no notification; the rest of the body is kept as it is; an issue opened before this gets the block inserted after its marker). So GitHub lags the finding by at most
+  `StatusUpdateMinutes` plus one pass, and a stale-issue sweep can trust `last-seen=` (and the issue's `updated_at`). Edits are capped by `MaxStatusEditsPerHour` (30, saved with
+  the other caps); a finding over the cap waits for a later pass. Only issues in the label list are edited. Closed issues are never edited.
+* **Quiet close** (`World:Playerbots:Qa:GitHub:AutoCloseQuietMultiple`, default 0 = off): with N > 0, an open issue is closed as **completed** when its finding has stopped:
+  it was met at least twice (so it has a usual gap, `(last seen - first seen) / (count - 1)`), it was last met on a build other than the running one, the running build is
+  newer by the registry (first run after it; a rollback never counts) and has not met it once, and it has been quiet for at least N x its usual gap and at least
+  `AutoCloseMinQuietHours` (72). Quiet is measured from the later of its last sighting and the reporter's start, so a server that was down does not count as quiet time.
+  The close comes with one comment (last seen, on which build, the usual gap, how long the running build went without it) under `MaxCommentsPerHour`, after the pass's other
+  comments and the duplicate closes. The finding becomes known-closed with the build it was **last seen on** as its closed build, so if it happens again on the running build
+  (or any newer one) it is a regression and `ReopenOnRegression` reopens it with its one comment. An issue a person closed as not planned is never touched. Quiet is not proof:
+  a finding the bots simply stopped visiting looks the same, which is why it is off by default; something like 3 x the gap with the 72 h floor is a reasonable start.
 
 A POST is never sent twice. If a create or comment times out, gets a 5xx or loses the connection, GitHub may already have applied it, so
 the call is **not** retried: the finding is marked Failed and the next pass's marker lookup finds what was created (or creates it if it

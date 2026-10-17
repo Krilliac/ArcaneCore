@@ -786,4 +786,237 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         (PlayerbotQaAggregator three, _) = Restart(two, publisher.Ledger.Export(), "build-3");
         Assert.True(Of(three, id).NotPlanned); // persisted
     }
+
+    // ----- live status in the issue body (GitHub's last-seen lagged up to a day: one comment per CommentIntervalHours) ------------------------
+
+    private string BodyOf(Rig rig, int issue) => (string)rig.GitHub.Get(issue)["body"]!;
+
+    private static int Blocks(string body) => body.Split(PlayerbotQaIssueComposer.StatusBegin).Length - 1;
+
+    [Fact]
+    public async Task LiveStatus_TheNewIssueCarriesIt_AndItFollowsTheFinding_BetweenTheDailyComments()
+    {
+        var rig = new Rig();
+        PlayerbotQaAggregator one = NewAggregator("build-1");
+        string id = Occurs(one, 3, at: QaData.T0);
+        PlayerbotQaPublisher publisher = rig.Publisher(one, "build-1");
+        await rig.Run(publisher, one);
+        int issue = Of(one, id).Publication.Issue;
+        string created = BodyOf(rig, issue);
+        Assert.StartsWith(PlayerbotQaIssueComposer.MarkerOf(id) + "\n" + PlayerbotQaIssueComposer.StatusBegin, created, StringComparison.Ordinal);
+        Assert.Contains("<!-- arcanecore-bot-qa-status last-seen=2026-10-10T12:00:00Z count=3 build-count=3 bots=2 -->", created, StringComparison.Ordinal);
+        Assert.Equal(QaData.T0, PlayerbotQaIssueComposer.StatusLastSeen(created));
+
+        // Two hours later it happened again: no comment is due (one a day), but the body's status follows.
+        rig.Time.Advance(TimeSpan.FromHours(2));
+        Occur(one, QaData.Bot1, at: rig.Time.GetUtcNow().UtcDateTime);
+        await rig.Run(publisher, one);
+
+        Assert.Equal(0, rig.GitHub.Comments);
+        Assert.Equal(1, rig.GitHub.BodyEdits);
+        string edited = BodyOf(rig, issue);
+        Assert.Contains("<!-- arcanecore-bot-qa-status last-seen=2026-10-10T14:00:00Z count=4 build-count=4 bots=2 -->", edited, StringComparison.Ordinal);
+        Assert.Equal(1, Blocks(edited));
+        string tail = created[(created.IndexOf(PlayerbotQaIssueComposer.StatusEnd, StringComparison.Ordinal) + PlayerbotQaIssueComposer.StatusEnd.Length)..];
+        Assert.EndsWith(tail, edited, StringComparison.Ordinal); // the rest of the body is untouched
+
+        // Ten minutes later: within StatusUpdateMinutes (60) of what the body shows, nothing is edited.
+        rig.Time.Advance(TimeSpan.FromMinutes(10));
+        Occur(one, QaData.Bot2, at: rig.Time.GetUtcNow().UtcDateTime);
+        await rig.Run(publisher, one);
+        Assert.Equal(1, rig.GitHub.BodyEdits);
+
+        // An hour after the time the body shows: edited again.
+        rig.Time.Advance(TimeSpan.FromMinutes(55));
+        Occur(one, QaData.Bot1, at: rig.Time.GetUtcNow().UtcDateTime);
+        await rig.Run(publisher, one);
+        Assert.Equal(2, rig.GitHub.BodyEdits);
+        Assert.Equal(QaData.T0.AddMinutes(185), PlayerbotQaIssueComposer.StatusLastSeen(BodyOf(rig, issue)));
+        Assert.Equal(0, rig.GitHub.Comments);
+    }
+
+    [Fact]
+    public async Task LiveStatus_IsInsertedAfterTheMarker_OfAnIssueOpenedBeforeIt_KeepingTheRestOfTheBody()
+    {
+        var rig = new Rig();
+        PlayerbotQaAggregator one = NewAggregator("build-1");
+        string id = Occurs(one, 3, at: QaData.T0);
+        string old = PlayerbotQaIssueComposer.MarkerOf(id) + "\nPlayerbot QA finding: an old body\n\n| Field | Value |";
+        int issue = rig.GitHub.Add(old);
+
+        await rig.Run(rig.Publisher(one, "build-1"), one);
+
+        Assert.Equal(1, rig.GitHub.Comments); // the occurrences since it was opened
+        Assert.Equal(1, rig.GitHub.BodyEdits);
+        string body = BodyOf(rig, issue);
+        Assert.Equal(PlayerbotQaIssueComposer.WithStatus(old, PlayerbotQaIssueComposer.StatusBlock(Of(one, id), "build-1")), body);
+        Assert.StartsWith(PlayerbotQaIssueComposer.MarkerOf(id) + "\n" + PlayerbotQaIssueComposer.StatusBegin, body, StringComparison.Ordinal);
+        Assert.EndsWith("\nPlayerbot QA finding: an old body\n\n| Field | Value |", body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0, 30)]
+    [InlineData(60, 0)]
+    public async Task LiveStatus_IsOffAtZeroMinutes_AndHeldByTheHourlyEditCap(int minutes, int cap)
+    {
+        var rig = new Rig(git =>
+        {
+            git.StatusUpdateMinutes = minutes;
+            git.MaxStatusEditsPerHour = cap;
+        });
+        PlayerbotQaAggregator one = NewAggregator("build-1");
+        string id = Occurs(one, 3, at: QaData.T0);
+        int issue = rig.GitHub.Add(PlayerbotQaIssueComposer.MarkerOf(id) + "\nold");
+
+        await rig.Run(rig.Publisher(one, "build-1"), one);
+
+        Assert.Equal(1, rig.GitHub.Comments);
+        Assert.Equal(0, rig.GitHub.BodyEdits);
+        Assert.Equal(PlayerbotQaIssueComposer.MarkerOf(id) + "\nold", BodyOf(rig, issue));
+    }
+
+    [Fact]
+    public void LiveStatus_Block_IsReplacedInPlace_AndABodyWithoutAMarker_GetsItOnTop()
+    {
+        QaFindingView first = QaData.View("aaaaaaaaaaaaaaaa", count: 3);
+        QaFindingView later = first with { Count = 9, LastSeenUtc = QaData.T0.AddHours(5) };
+        string marker = PlayerbotQaIssueComposer.MarkerOf(first.Id);
+        string body = marker + "\n" + PlayerbotQaIssueComposer.StatusBlock(first, "b") + "\n\nrest";
+
+        Assert.Equal(marker + "\n" + PlayerbotQaIssueComposer.StatusBlock(later, "b") + "\n\nrest", PlayerbotQaIssueComposer.WithStatus(body, PlayerbotQaIssueComposer.StatusBlock(later, "b")));
+        Assert.Equal(QaData.T0.AddHours(5), PlayerbotQaIssueComposer.StatusLastSeen(PlayerbotQaIssueComposer.WithStatus(body, PlayerbotQaIssueComposer.StatusBlock(later, "b"))));
+        Assert.Equal(PlayerbotQaIssueComposer.StatusBlock(later, "b") + "\n\nplain", PlayerbotQaIssueComposer.WithStatus("plain", PlayerbotQaIssueComposer.StatusBlock(later, "b")));
+        Assert.Null(PlayerbotQaIssueComposer.StatusLastSeen(marker + "\nno block"));
+        Assert.Null(PlayerbotQaIssueComposer.StatusLastSeen(null));
+    }
+
+    // ----- closing the issue of a finding that stopped (AutoCloseQuietMultiple, off by default) --------------------------------------------------
+
+    /// <summary>A finding met three times an hour apart on build-1 (usual gap 1 h), its issue opened there, then the server restarted on build-2 at T0+12h.</summary>
+    private async Task<(Rig Rig, PlayerbotQaAggregator Two, PlayerbotQaPublisher Publisher, string Id, int Issue)> StoppedOnBuildOne(Action<PlayerbotQaGitHubOptions>? configure, double gapHours = 1)
+    {
+        var rig = new Rig(configure);
+        PlayerbotQaAggregator one = NewAggregator("build-1");
+        string id = Occur(one, QaData.Bot1, at: QaData.T0);
+        Occur(one, QaData.Bot2, at: QaData.T0.AddHours(gapHours));
+        Occur(one, QaData.Bot1, at: QaData.T0.AddHours(2 * gapHours));
+        rig.Time.Advance(TimeSpan.FromHours(2 * gapHours));
+        PlayerbotQaPublisher first = rig.Publisher(one, "build-1");
+        await rig.Run(first, one);
+        int issue = Of(one, id).Publication.Issue;
+        Assert.Equal(1, rig.GitHub.Creates);
+
+        rig.Time.Advance(TimeSpan.FromHours(12 - (2 * gapHours)));
+        await rig.Run(first, one); // quiet for hours, but on the build that last met it: never closed
+        Assert.Equal(0, rig.GitHub.Patches);
+
+        (PlayerbotQaAggregator two, QaLedgerState ledger) = Restart(one, first.Ledger.Export(), "build-2", at: rig.Time.GetUtcNow().UtcDateTime);
+        return (rig, two, rig.Publisher(two, "build-2", ledger), id, issue);
+    }
+
+    [Fact]
+    public async Task QuietClose_ClosesTheIssueOfAFindingThatStoppedOnANewerBuild_AndARecurrenceReopensIt()
+    {
+        var (rig, two, publisher, id, issue) = await StoppedOnBuildOne(git =>
+        {
+            git.AutoCloseQuietMultiple = 3;
+            git.AutoCloseMinQuietHours = 1;
+        });
+
+        rig.Time.Advance(TimeSpan.FromHours(2)); // build-2 has gone 2 h without it: less than 3 x 1 h
+        await rig.Run(publisher, two);
+        Assert.Equal(0, rig.GitHub.Patches);
+        Assert.Equal("open", (string)rig.GitHub.Get(issue)["state"]!);
+
+        rig.Time.Advance(TimeSpan.FromHours(1.5));
+        await rig.Run(publisher, two);
+
+        Assert.Equal(1, rig.GitHub.Patches);
+        Assert.Equal("closed", (string)rig.GitHub.Get(issue)["state"]!);
+        Assert.Equal("completed", (string)rig.GitHub.Get(issue)["state_reason"]!);
+        string comment = Assert.Single(rig.CommentBodies());
+        Assert.StartsWith("Closing as completed", comment, StringComparison.Ordinal);
+        Assert.Contains("build-1", comment, StringComparison.Ordinal);
+        Assert.Contains("build-2", comment, StringComparison.Ordinal);
+        QaFindingView closed = Of(two, id);
+        Assert.Equal(new QaPublication(QaPublicationState.KnownClosed, issue), closed.Publication);
+        Assert.Equal("build-1", closed.ClosedBuild); // the build it was last met on, so build-2 meeting it is a regression
+        Assert.False(closed.NotPlanned);
+
+        await rig.Run(publisher, two); // nothing more to do
+        Assert.Equal(1, rig.GitHub.Patches);
+
+        // It happens again on build-2: the issue is reopened with one comment.
+        Occurs(two, 3, at: rig.Time.GetUtcNow().UtcDateTime);
+        await rig.Run(publisher, two);
+
+        Assert.Equal(2, rig.GitHub.Patches);
+        Assert.Equal("open", (string)rig.GitHub.Get(issue)["state"]!);
+        Assert.Equal(2, rig.CommentBodies().Length);
+        Assert.StartsWith("Regression", rig.CommentBodies()[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task QuietClose_IsOffByDefault()
+    {
+        Assert.Equal(0, new PlayerbotQaGitHubOptions().AutoCloseQuietMultiple);
+        var (rig, two, publisher, _, issue) = await StoppedOnBuildOne(null);
+
+        rig.Time.Advance(TimeSpan.FromDays(60));
+        await rig.Run(publisher, two);
+
+        Assert.Equal(0, rig.GitHub.Patches);
+        Assert.Equal("open", (string)rig.GitHub.Get(issue)["state"]!);
+        Assert.Empty(rig.CommentBodies());
+    }
+
+    [Fact]
+    public async Task QuietClose_WaitsForTheMinimumQuietHours_WhenTheUsualGapIsShort()
+    {
+        // Met a minute apart: 3 x the gap is 3 minutes, but nothing closes before AutoCloseMinQuietHours (72 by default).
+        var (rig, two, publisher, _, issue) = await StoppedOnBuildOne(git => git.AutoCloseQuietMultiple = 3, gapHours: 1.0 / 60);
+
+        rig.Time.Advance(TimeSpan.FromHours(71));
+        await rig.Run(publisher, two);
+        Assert.Equal(0, rig.GitHub.Patches);
+
+        rig.Time.Advance(TimeSpan.FromHours(1));
+        await rig.Run(publisher, two);
+        Assert.Equal(1, rig.GitHub.Patches);
+        Assert.Equal("closed", (string)rig.GitHub.Get(issue)["state"]!);
+    }
+
+    [Fact]
+    public async Task QuietClose_LeavesAFindingTheNewBuildAlreadyMet()
+    {
+        var (rig, two, publisher, id, issue) = await StoppedOnBuildOne(git =>
+        {
+            git.AutoCloseQuietMultiple = 3;
+            git.AutoCloseMinQuietHours = 1;
+        });
+        Occur(two, QaData.Bot1, at: rig.Time.GetUtcNow().UtcDateTime); // once on build-2: it has not stopped
+
+        rig.Time.Advance(TimeSpan.FromDays(30));
+        await rig.Run(publisher, two);
+
+        Assert.Equal(0, rig.GitHub.Patches);
+        Assert.Equal("open", (string)rig.GitHub.Get(issue)["state"]!);
+        Assert.Equal(QaPublicationState.Published, Of(two, id).Publication.State);
+    }
+
+    [Fact]
+    public void Options_LiveStatusAndQuietClose_DefaultsAndBounds()
+    {
+        var git = new PlayerbotQaGitHubOptions();
+        Assert.Equal(60, git.StatusUpdateMinutes);
+        Assert.Equal(30, git.MaxStatusEditsPerHour);
+        Assert.Equal(0, git.AutoCloseQuietMultiple);
+        Assert.Equal(72, git.AutoCloseMinQuietHours);
+        Assert.False(git.CloseAbsorbedDuplicates);
+        Assert.Empty(git.Validate());
+        Assert.Contains(new PlayerbotQaGitHubOptions { StatusUpdateMinutes = -1 }.Validate(), p => p.Contains("StatusUpdateMinutes", StringComparison.Ordinal));
+        Assert.Contains(new PlayerbotQaGitHubOptions { MaxStatusEditsPerHour = 1001 }.Validate(), p => p.Contains("MaxStatusEditsPerHour", StringComparison.Ordinal));
+        Assert.Contains(new PlayerbotQaGitHubOptions { AutoCloseQuietMultiple = -1 }.Validate(), p => p.Contains("AutoCloseQuietMultiple", StringComparison.Ordinal));
+        Assert.Contains(new PlayerbotQaGitHubOptions { AutoCloseMinQuietHours = 0 }.Validate(), p => p.Contains("AutoCloseMinQuietHours", StringComparison.Ordinal));
+    }
 }

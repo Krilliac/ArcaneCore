@@ -719,6 +719,11 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
                 finding.ClosedBuildSeenUtc = null;
                 finding.NotPlanned = false;
             }
+            else if (QaFinding.CleanBuild(update.ClosedBuild) is { } closedOn)
+            {
+                finding.ClosedBuild = closedOn;
+                finding.ClosedBuildSeenUtc = SeenUtc(closedOn);
+            }
             else if (!wasClosed || finding.ClosedBuild is null)
             {
                 finding.ClosedBuild = Build;

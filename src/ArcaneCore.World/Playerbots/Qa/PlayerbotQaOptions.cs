@@ -156,6 +156,28 @@ public sealed class PlayerbotQaGitHubOptions
     /// </summary>
     public bool CloseAbsorbedDuplicates { get; set; }
 
+    /// <summary>
+    /// Keep a live status block at the top of each open issue's body (last seen UTC, occurrences in all and on the running build, distinct bots), rewritten when the finding was
+    /// seen again at least this many minutes after the time the block shows (0..10080; 0 is off). Comments come at most every <see cref="CommentIntervalHours"/>, so without it
+    /// GitHub's view of when a finding last happened lags by up to a day; with it the lag is at most this long. A body edit sends no notification; edits are capped by
+    /// <see cref="MaxStatusEditsPerHour"/>.
+    /// </summary>
+    public int StatusUpdateMinutes { get; set; } = 60;
+
+    /// <summary>The most live-status body edits per rolling hour (0..1000; 0 makes none), saved with the hourly caps.</summary>
+    public int MaxStatusEditsPerHour { get; set; } = 30;
+
+    /// <summary>
+    /// Close an open issue as completed when its finding has stopped: it was last seen on an older build, the running build is newer and has not met it, and it has been quiet
+    /// (since the later of its last sighting and the reporter's start) for this many times its usual gap between occurrences ((last seen - first seen) / (count - 1)) and at least
+    /// <see cref="AutoCloseMinQuietHours"/>. One comment says why; a recurrence on any later build counts as a regression of the build it was last seen on and reopens it
+    /// (<see cref="ReopenOnRegression"/>). 0 (default) is off (0..1000). Quiet is not proof: a finding the bots simply stopped visiting looks the same.
+    /// </summary>
+    public int AutoCloseQuietMultiple { get; set; }
+
+    /// <summary>The least quiet time, in hours, before <see cref="AutoCloseQuietMultiple"/> may close an issue (1..8760, default 72), whatever the finding's usual gap.</summary>
+    public int AutoCloseMinQuietHours { get; set; } = 72;
+
     /// <summary>The labels put on created issues; the first one is also how existing issues are listed (1..10 labels; a configured list replaces the default).</summary>
     public string[] Labels { get; set; } = ["bot-qa"];
 
@@ -196,6 +218,10 @@ public sealed class PlayerbotQaGitHubOptions
         if (MaxSpellIssuesPerDay is < 0 or > 1000) problems.Add("GitHub:MaxSpellIssuesPerDay must be 0..1000");
         if (RequestTimeoutSeconds is < 1 or > 120) problems.Add("GitHub:RequestTimeoutSeconds must be 1..120");
         if (MaxListPages is < 1 or > 100) problems.Add("GitHub:MaxListPages must be 1..100");
+        if (StatusUpdateMinutes is < 0 or > 10_080) problems.Add("GitHub:StatusUpdateMinutes must be 0..10080");
+        if (MaxStatusEditsPerHour is < 0 or > 1000) problems.Add("GitHub:MaxStatusEditsPerHour must be 0..1000");
+        if (AutoCloseQuietMultiple is < 0 or > 1000) problems.Add("GitHub:AutoCloseQuietMultiple must be 0..1000");
+        if (AutoCloseMinQuietHours is < 1 or > 8760) problems.Add("GitHub:AutoCloseMinQuietHours must be 1..8760");
         if (Labels is null || Labels.Length is < 1 or > 10 || Labels.Any(label => string.IsNullOrWhiteSpace(label) || label.Length > 50 || label.Any(char.IsControl)))
         {
             problems.Add("GitHub:Labels must be 1..10 non-empty labels of at most 50 characters");

@@ -110,8 +110,8 @@ internal sealed class QaProcessRunner : IQaProcessRunner
 /// The <c>gh</c> command-line transport of bot QA. Each call runs the resolved <c>gh</c> executable with an argument list (no shell), in a neutral working directory (the
 /// temp folder), with a timeout (30 seconds by default), with <c>GITHUB_TOKEN</c> and <c>GH_TOKEN</c> removed from the child unless a token was handed in on purpose,
 /// <c>GH_PROMPT_DISABLED</c> set so it never waits for input, and output parsed as JSON. Bodies go through a temp file (<c>--body-file</c>, deleted afterwards), never
-/// the command line. The list is one call (<c>gh issue list --label L --state all --json number,state,body,url --limit N</c>); there is no search, so an issue outside
-/// the label is only found by number. A create is never resent: a timeout or failure throws a transient exception and the next pass's list settles it. One instance
+/// the command line. The list is one <c>gh api</c> call per REST page of 100 (<see cref="ListIndexAsync"/>), each under its own timeout; there is no search, so an issue
+/// outside the label is only found by number. A create is never resent: a timeout or failure throws a transient exception and the next pass's list settles it. One instance
 /// serves one publish pass; calls are sequential. Failure text is redacted before it leaves.
 /// </summary>
 internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
@@ -192,20 +192,39 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
         return null;
     }
 
+    /// <summary>
+    /// The labelled issues (state all), one REST page of <see cref="ItemsPerPage"/> per <c>gh api</c> call, each call with its own timeout, up to
+    /// <see cref="PlayerbotQaGitHubOptions.MaxListPages"/> pages. The index is complete when a page came back short. A single <c>gh issue list --limit N</c>
+    /// fetched every body in one child under one timeout: with 600+ issues (about 1.9 MB of bodies) it took 20-40 s and timed out on most passes (live log 2026-10-17).
+    /// </summary>
     public async Task<QaIssueIndex> ListIndexAsync(CancellationToken cancellationToken)
     {
         string label = _options.Labels.Length > 0 ? _options.Labels[0] : "bot-qa";
-        int limit = Math.Max(1, _options.MaxListPages) * ItemsPerPage;
-        QaProcessResult result = await RunAsync(["issue", "list", "--repo", _repository, "--label", label, "--state", "all", "--json", "number,state,stateReason,body,url", "--limit",
-            limit.ToString(CultureInfo.InvariantCulture)], "issue list", cancellationToken).ConfigureAwait(false);
-        using JsonDocument doc = Parse(result.StdOut);
-        if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new PlayerbotQaPublishException("gh issue list did not print a JSON array", transient: false);
-        var index = new QaIssueIndex(complete: doc.RootElement.GetArrayLength() < limit);
-        foreach (JsonElement item in doc.RootElement.EnumerateArray())
+        int pages = Math.Max(1, _options.MaxListPages);
+        var items = new List<(QaIssueRef Issue, string Body)>();
+        bool complete = false;
+        for (int page = 1; page <= pages; page++)
         {
-            if (ToRef(item) is { } issue) index.Add(issue, BodyOf(item));
+            string path = string.Create(CultureInfo.InvariantCulture,
+                $"repos/{_repository}/issues?labels={Uri.EscapeDataString(label)}&state=all&per_page={ItemsPerPage}&page={page}");
+            QaProcessResult result = await RunAsync(["api", "--method", "GET", path], "issue list", cancellationToken).ConfigureAwait(false);
+            using JsonDocument doc = Parse(result.StdOut);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new PlayerbotQaPublishException("gh api did not print a JSON array for the issue list", transient: false);
+            foreach (JsonElement item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object || item.TryGetProperty("pull_request", out _)) continue; // the REST list includes pull requests
+                if (ToRestRef(item) is { } issue) items.Add((issue, BodyOf(item)));
+            }
+
+            if (doc.RootElement.GetArrayLength() < ItemsPerPage)
+            {
+                complete = true;
+                break;
+            }
         }
 
+        var index = new QaIssueIndex(complete);
+        foreach ((QaIssueRef issue, string body) in items) index.Add(issue, body);
         return index;
     }
 
@@ -268,6 +287,22 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
 
     public async Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken)
         => await RunAsync(["issue", "close", number.ToString(CultureInfo.InvariantCulture), "--repo", _repository, "--reason", "not planned"], "issue close", cancellationToken).ConfigureAwait(false);
+
+    public async Task CloseAsCompletedAsync(int number, CancellationToken cancellationToken)
+        => await RunAsync(["issue", "close", number.ToString(CultureInfo.InvariantCulture), "--repo", _repository, "--reason", "completed"], "issue close", cancellationToken).ConfigureAwait(false);
+
+    public async Task EditBodyAsync(int number, string body, CancellationToken cancellationToken)
+    {
+        string file = await WriteBodyAsync(body, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await RunAsync(["issue", "edit", number.ToString(CultureInfo.InvariantCulture), "--repo", _repository, "--body-file", file], "issue edit", cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            DeleteQuietly(file);
+        }
+    }
 
     private async Task<QaProcessResult> RunAsync(IReadOnlyList<string> arguments, string what, CancellationToken cancellationToken, bool allowNotFound = false)
     {
@@ -351,6 +386,17 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
         string url = item.TryGetProperty("url", out JsonElement u) && u.ValueKind == JsonValueKind.String ? u.GetString() ?? string.Empty : string.Empty;
         // gh prints the reason in capitals with an underscore (NOT_PLANNED, COMPLETED).
         string? reason = item.TryGetProperty("stateReason", out JsonElement why) && why.ValueKind == JsonValueKind.String ? why.GetString() : null;
+        return new QaIssueRef(n, open, url, reason);
+    }
+
+    /// <summary>An issue of the REST list (<c>gh api</c>): lower-case <c>state</c>, <c>state_reason</c>, <c>html_url</c>.</summary>
+    private static QaIssueRef? ToRestRef(JsonElement item)
+    {
+        if (!item.TryGetProperty("number", out JsonElement number) || !number.TryGetInt32(out int n) || n <= 0) return null;
+        bool open = item.TryGetProperty("state", out JsonElement state) && state.ValueKind == JsonValueKind.String
+            && string.Equals(state.GetString(), "open", StringComparison.OrdinalIgnoreCase);
+        string url = item.TryGetProperty("html_url", out JsonElement u) && u.ValueKind == JsonValueKind.String ? u.GetString() ?? string.Empty : string.Empty;
+        string? reason = item.TryGetProperty("state_reason", out JsonElement why) && why.ValueKind == JsonValueKind.String ? why.GetString() : null;
         return new QaIssueRef(n, open, url, reason);
     }
 
