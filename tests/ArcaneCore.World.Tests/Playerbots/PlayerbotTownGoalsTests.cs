@@ -690,6 +690,75 @@ public sealed class PlayerbotTownGoalsTests
         finally { FarRepairServices.Current.Value = null; }
     }
 
+    /// <summary>
+    /// Cluster 4 of the bot QA stalls (#684, #700, #705, #741, #845, #884 and more: <c>loot-bag-full -> goal=Explore</c> before the stall):
+    /// bags full of things to sell and no vendor in sight. The bot walks to the vendor 130 yards away (out of sight), as it walks to a
+    /// repair NPC for broken gear, instead of leaving every corpse unlooted and exploring on. It needs no money for that trip.
+    /// </summary>
+    [Fact]
+    public async Task FullBags_WithNoVendorInSight_TravelToOne()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable,
+            Stackable = 20, BuyPrice = 10, SellPrice = 1, FoodType = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9301, Name = "White goods", Class = (uint)ItemClass.TradeGoods,
+            Quality = 1, Stackable = 1, SellPrice = 7 });
+        using IDisposable itemScope = items.Use();
+        FarRepairServices.Current.Value = new FarRepairFixture
+        {
+            Flags = NpcFlags.Vendor, VendorItems = [new VendorItem { Entry = FarRepairFixture.Entry, Item = 117, Slot = 0 }],
+        };
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+            try
+            {
+                float start = await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                    Assert.DoesNotContain(FarRepairFixture.Guid, player.VisibleObjects);
+                    player.Money = 0;
+                    Assert.False(PlayerbotTownGoals.NeedsRepairTrip(player));
+
+                    // Free bag slots: no trip.
+                    Assert.True(PlayerbotTownGoals.FreeBagSlots(player) > 0);
+                    Assert.False(goals.HasCandidate(player));
+
+                    while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                        Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9301, 1, out _));
+                    Assert.True(goals.HasCandidate(player), "full bags of goods to sell are no reason to walk to the vendor out of sight");
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(goals.Update(player, 500));
+                    Assert.Equal(FarRepairFixture.Entry, goals.TargetEntry);
+                    Assert.Equal(PlayerbotGoalKind.Vendor, goals.Goal);
+                    return player.X;
+                });
+
+                float walked = await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    float last = player.X;
+                    for (int think = 0; think < 2; think++)
+                    {
+                        PlayerbotMotion.ElapseForTests(player, 500);
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        Assert.True(goals.Update(player, 500), $"think {think}: the trip stopped at x {player.X:F1}");
+                        Assert.True(player.X > last, $"think {think}: no step east from x {last:F1}");
+                        last = player.X;
+                    }
+
+                    return player.X;
+                });
+                Assert.True(walked > start + 5f, $"the bot walked from x {start:F1} only to {walked:F1}");
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { FarRepairServices.Current.Value = null; }
+    }
+
     private static ItemTemplate Boots(uint entry, uint durability) => new()
     {
         Entry = entry, Name = $"boots-{entry}", Class = (uint)ItemClass.Armor, SubClass = ItemSubClasses.ArmorMisc,
@@ -782,17 +851,23 @@ internal sealed class TownVendorFixture : ICreatureDataStore, INpcContentStore, 
                 : [new CreatureSpawn { Guid = 92201, Entry = Entry, MapId = 0, X = -8948.95f, Y = -132.49f, Z = 83.53f }], [], [], []));
 }
 
-/// <summary>A repair NPC 130 yards east of the start position (beyond the 100-yard visibility), friendly to the bot.</summary>
+/// <summary>
+/// A repair NPC 130 yards east of the start position (beyond the 100-yard visibility), friendly to the bot; or, with
+/// <see cref="Flags"/> and <see cref="VendorItems"/>, another service NPC there (a vendor).
+/// </summary>
 internal sealed class FarRepairFixture : ICreatureDataStore, INpcContentStore
 {
     public const uint Entry = 945;
     public const float X = -8819.95f;
     public static readonly ObjectGuid Guid = ObjectGuid.WithEntry(HighGuid.Unit, Entry, 94501);
+    public NpcFlags Flags { get; init; } = NpcFlags.Repair;
+    public IReadOnlyList<VendorItem> VendorItems { get; init; } = [];
 
-    Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(NpcContent.Empty);
+    Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken)
+        => Task.FromResult(VendorItems.Count == 0 ? NpcContent.Empty : NpcContent.Empty with { VendorItems = VendorItems });
 
     Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
-        [new CreatureTemplate { Entry = Entry, Name = "far armorer", Faction = 900011, NpcFlags = (uint)NpcFlags.Repair, DisplayIds = [49] }],
+        [new CreatureTemplate { Entry = Entry, Name = "far armorer", Faction = 900011, NpcFlags = (uint)Flags, DisplayIds = [49] }],
         [new CreatureSpawn { Guid = 94501, Entry = Entry, MapId = 0, X = X, Y = -132.49f, Z = 83.53f }], [], [], []));
 }
 
