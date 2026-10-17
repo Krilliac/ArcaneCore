@@ -151,6 +151,37 @@ public sealed class StandbyWorkerTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => Host(active).PromoteAsync(handed, cts.Token));
     }
 
+    [Fact]
+    public async Task ARefusedPromotion_OfAReleasedOwnership_ChangesNothing_AndClaimsNothing()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer active = await StartActiveAsync(cts.Token);
+        await using SyntheticArcaneServer standby = await StartStandbyAsync(active, cts.Token);
+        WorldHost standbyHost = Host(standby);
+        CharacterOwnershipToken old = active.World.CharacterOwnership!;
+
+        // The active world gives the ownership back (as a clean stop does): the row is inactive, and no takeover handed it to the standby.
+        await using (AsyncServiceScope scope = standby.Services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().ReleaseAsync(old, cts.Token);
+        CharacterOwnershipRow released = await OwnershipAsync(standby);
+        Assert.False(released.Active);
+
+        // Neither the epoch a claim would produce nor any other is promoted, and the refusal claims nothing: a promotion only reads the row.
+        foreach (long epoch in new[] { old.Epoch + 1, old.Epoch + 5 })
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                standbyHost.PromoteAsync(old with { Epoch = epoch, Incarnation = standbyHost.Incarnation }, cts.Token));
+            Assert.True(standbyHost.IsStandby);
+            Assert.Null(standby.World.CharacterOwnership);
+            Assert.False(standby.Services.GetRequiredService<WorkerAdmission>().IsOpen);
+            CharacterOwnershipRow after = await OwnershipAsync(standby);
+            Assert.False(after.Active);
+            Assert.Null(after.OwnerIncarnation);
+            Assert.Equal(released.Epoch, after.Epoch);
+            Assert.Equal(released.WriteSequence, after.WriteSequence);
+        }
+    }
+
     internal static async Task<CharacterOwnershipToken> TakeOverAsync(SyntheticArcaneServer standby, CharacterOwnershipToken old, CancellationToken token)
     {
         WorldHost host = Host(standby);

@@ -76,7 +76,7 @@ public sealed class ClusterWorldHandoffRow
 /// ownership token and in-flight claim, <c>cluster_world_handoff</c> each stage of a whole-World handoff. Implemented by
 /// <see cref="EfTransferDecisionStore"/>, registered as the <see cref="ITransferDecisionStore"/> and <see cref="IWorldHandoffStore"/>.
 /// </summary>
-public sealed class ClusterTransferDataModule : IDataModule
+public sealed class ClusterTransferDataModule : IDataModule, ICharacterDataCleanup
 {
     public const int Version = 62;
     public const string DecisionTable = "cluster_transfer_decision";
@@ -168,5 +168,28 @@ public sealed class ClusterTransferDataModule : IDataModule
         services.TryAddSingleton<EfTransferDecisionStore>();
         services.TryAddSingleton<ITransferDecisionStore>(sp => sp.GetRequiredService<EfTransferDecisionStore>());
         services.TryAddSingleton<IWorldHandoffStore>(sp => sp.GetRequiredService<EfTransferDecisionStore>());
+    }
+
+    /// <summary>
+    /// Refuses to delete a character while a transfer of it is unresolved (its <see cref="ClusterTransferOwnerRow.ActiveTransfer"/>
+    /// claim is held, or a decision is still pre-commit or committed): the transfer would otherwise resume, roll forward or abort onto a
+    /// character that no longer exists. Otherwise removes its ownership token and its (resolved) transfer decisions. A player character's
+    /// guid is its id (high part 0), which is how the transfer rows key it.
+    /// </summary>
+    public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        long guid = characterId;
+        bool unresolved = await db.Set<ClusterTransferOwnerRow>()
+                .AnyAsync(r => r.CharacterGuid == guid && r.ActiveTransfer != null, cancellationToken).ConfigureAwait(false)
+            || await db.Set<ClusterTransferDecisionRow>()
+                .AnyAsync(r => r.CharacterGuid == guid
+                    && (r.State == (int)PlayerTransferDecisionState.PreCommit || r.State == (int)PlayerTransferDecisionState.Committed), cancellationToken)
+                .ConfigureAwait(false);
+        if (unresolved)
+            throw new CharacterDeletionRefusedException($"character {characterId} has a cluster transfer in flight");
+
+        await db.Set<ClusterTransferDecisionRow>().Where(r => r.CharacterGuid == guid).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<ClusterTransferOwnerRow>().Where(r => r.CharacterGuid == guid).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
 }

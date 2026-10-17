@@ -207,8 +207,9 @@ public sealed class WorldHost(
         {
             ICharacterOwnershipStore store = scope.ServiceProvider.GetService<ICharacterOwnershipStore>()
                 ?? throw new InvalidOperationException("no characters ownership store is registered; a standby cannot be promoted");
-            // Reads the row (no write when it is already this incarnation's): the token must be the database's current one.
-            CharacterOwnershipToken? current = await store.TryAcquireAsync("world", _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
+            // Only reads the row: the token must be the database's current active one. Never TryAcquireAsync here, which would claim a released
+            // (inactive) row at a new epoch outside the handoff journal and leave it claimed by a standby whose refusal then holds no token.
+            CharacterOwnershipToken? current = await store.GetCurrentAsync("world", cancellationToken).ConfigureAwait(false);
             if (current != takenOver)
                 throw new InvalidOperationException("the characters database is not owned by this standby under the promoted token; refusing to promote");
         }

@@ -257,6 +257,32 @@ public sealed class WorldHandoffTests
         AssertAResumed(a, b, source, before, router);
     }
 
+    [Fact]
+    public async Task AnAbortWhoseJournalWriteFails_StillResumesA_AndRecoveryAbortsTheHandoff()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer a = await StartActiveAsync(cts.Token);
+        await using SyntheticArcaneServer b = await StartStandbyAsync(a, cts.Token);
+        using LocalWorldHandoffSource source = Source(a);
+        CharacterOwnershipToken before = a.World.CharacterOwnership!;
+        var router = new RecordingRouter();
+        Guid handoffId = Guid.NewGuid();
+        var flaky = new AbortFailsOnceStore(Store(a));
+
+        // A fails after the freeze, and the journal write of the abort fails too (a transient database error): A must not stay parked.
+        await Assert.ThrowsAsync<TransientJournalFailure>(() =>
+            new WorldHandoffCoordinator(flaky, source, new StandbyWorldHandoffTarget(new WorkerNodeId("b"), Host(b)), router)
+                .RunAsync(handoffId, (stage, _) => stage == WorldHandoffStage.Flushed ? throw new InvalidOperationException("injected") : Task.CompletedTask, cts.Token));
+        AssertAResumed(a, b, source, before, router);
+        WorldHandoffRecord open = Assert.Single(await Store(a).GetUnresolvedAsync(cts.Token));
+        Assert.Equal(WorldHandoffStage.Flushed, open.Stage); // still pre-commit: a recovery aborts it
+
+        WorldHandoffRecord recovered = await Coordinator(a, b, source, router).RecoverAsync(handoffId, cts.Token);
+        Assert.Equal(WorldHandoffStage.Aborted, recovered.Stage);
+        AssertAResumed(a, b, source, before, router);
+        Assert.Empty(await Store(a).GetUnresolvedAsync(cts.Token));
+    }
+
     private static void AssertAResumed(SyntheticArcaneServer a, SyntheticArcaneServer b, LocalWorldHandoffSource source, CharacterOwnershipToken before, RecordingRouter router)
     {
         Assert.False(source.IsFrozen);
@@ -301,6 +327,29 @@ public sealed class WorldHandoffTests
     }
 
     private sealed class CoordinatorCrash : Exception;
+
+    private sealed class TransientJournalFailure : Exception;
+
+    private sealed class AbortFailsOnceStore(IWorldHandoffStore inner) : IWorldHandoffStore
+    {
+        private int _failed;
+
+        public Task<WorldHandoffRecord> AbortAsync(Guid handoffId, string reason, CancellationToken cancellationToken = default)
+            => Interlocked.Exchange(ref _failed, 1) == 0 ? throw new TransientJournalFailure() : inner.AbortAsync(handoffId, reason, cancellationToken);
+
+        public Task<WorldHandoffRecord> BeginAsync(Guid handoffId, WorkerNodeId sourceWorkerId, WorkerNodeId targetWorkerId, CharacterOwnershipToken sourceOwnershipToken, CancellationToken cancellationToken = default)
+            => inner.BeginAsync(handoffId, sourceWorkerId, targetWorkerId, sourceOwnershipToken, cancellationToken);
+        public Task<WorldHandoffRecord> AdvancePreCommitAsync(Guid handoffId, WorldHandoffStage nextStage, CancellationToken cancellationToken = default)
+            => inner.AdvancePreCommitAsync(handoffId, nextStage, cancellationToken);
+        public Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(Guid handoffId, string targetOwnerNode, Guid targetIncarnation, CancellationToken cancellationToken = default)
+            => inner.CommitEpochTakeoverAsync(handoffId, targetOwnerNode, targetIncarnation, cancellationToken);
+        public Task<WorldHandoffRecord> MarkReroutedAsync(Guid handoffId, CancellationToken cancellationToken = default) => inner.MarkReroutedAsync(handoffId, cancellationToken);
+        public Task<WorldHandoffRecord> MarkRetiredAsync(Guid handoffId, CancellationToken cancellationToken = default) => inner.MarkRetiredAsync(handoffId, cancellationToken);
+        public Task<WorldHandoffRecord?> GetAsync(Guid handoffId, CancellationToken cancellationToken = default) => inner.GetAsync(handoffId, cancellationToken);
+        public Task<IReadOnlyList<WorldHandoffRecord>> GetUnresolvedAsync(CancellationToken cancellationToken = default) => inner.GetUnresolvedAsync(cancellationToken);
+        public Task<IReadOnlyList<Guid>> GetTransferIdsAsync(Guid handoffId, CancellationToken cancellationToken = default) => inner.GetTransferIdsAsync(handoffId, cancellationToken);
+        public ITransferDecisionStore ForHandoff(Guid handoffId) => inner.ForHandoff(handoffId);
+    }
 
     private sealed class RecordingRouter : IWorldHandoffRouter
     {

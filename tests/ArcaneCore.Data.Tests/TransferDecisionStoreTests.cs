@@ -247,6 +247,51 @@ public sealed class TransferDecisionStoreTests : IAsyncLifetime
         await store.BeginAsync(Guid.NewGuid(), A, B, worldA);
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task DeletingACharacter_IsRefusedWhileItsTransferIsUnresolved_AndOtherwiseRemovesItsTransferRows(DatabaseProvider provider)
+    {
+        (ServiceProvider services, EfTransferDecisionStore store) = await OpenAsync(await _databases.CreateAsync(provider));
+        Assert.Contains(CharacterDataCleanups.All, c => c is ClusterTransferDataModule);
+        services.GetRequiredService<CharacterOwnershipContext>().Current = await AcquireAsync(services, "node-a");
+        int characterId = await CreateCharacterAsync(services, "Mover");
+        int otherId = await CreateCharacterAsync(services, "Stayer");
+        ulong guid = (ulong)characterId;
+        var source = new CharacterOwnershipToken($"char:{characterId}", 1, Guid.NewGuid());
+        var otherSource = new CharacterOwnershipToken($"char:{otherId}", 1, Guid.NewGuid());
+        Guid transfer = Guid.NewGuid();
+        await store.CreateReservationAsync(transfer, guid, 1, 1, A, B, 0, 0, 1, 0, source);
+        await store.CreateReservationAsync(Guid.NewGuid(), (ulong)otherId, 1, 1, A, B, 0, 0, 1, 0, otherSource);
+
+        // In flight: the deletion is refused and rolls back; the character and its transfer rows stay.
+        Assert.False(await DeleteCharacterAsync(services, characterId));
+        Assert.Equal((1, 1, true), await CountTransferRowsAsync(services, characterId));
+        Assert.Single(await store.GetUnresolvedForCharacterAsync(guid));
+
+        // Resolved: the deletion removes the character's ownership token and decisions, and only its own.
+        await store.AbortPreCommitAsync(transfer, "operator");
+        Assert.True(await DeleteCharacterAsync(services, characterId));
+        Assert.Equal((0, 0, false), await CountTransferRowsAsync(services, characterId));
+        Assert.Null(await store.GetDecisionAsync(transfer));
+        Assert.Equal((1, 1, true), await CountTransferRowsAsync(services, otherId));
+    }
+
+    private static async Task<bool> DeleteCharacterAsync(ServiceProvider services, int characterId)
+    {
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        return await new EfCharacterStore(scope.ServiceProvider.GetRequiredService<CharacterDbContext>()).DeleteAsync(characterId, accountId: 1);
+    }
+
+    private static async Task<(int Owners, int Decisions, bool Character)> CountTransferRowsAsync(ServiceProvider services, int characterId)
+    {
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        long guid = characterId;
+        return (await db.Set<ClusterTransferOwnerRow>().CountAsync(r => r.CharacterGuid == guid),
+            await db.Set<ClusterTransferDecisionRow>().CountAsync(r => r.CharacterGuid == guid),
+            await db.Characters.AnyAsync(c => c.Id == characterId));
+    }
+
     private async Task<(ServiceProvider Services, EfTransferDecisionStore Store)> OpenAsync(DatabaseConnectionOptions connection)
     {
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>

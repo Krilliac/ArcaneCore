@@ -478,11 +478,10 @@ Differences from 5.2 and what is left of 3a:
 - The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, the transfer
   coordinator is still test-only.
 
-### 5.5 Phase 3b groundwork as built (`claude/hr3-standby`)
+### 5.5 Phase 3b groundwork as built
 
 Built and covered by committed tests; everything runs in process (two synthetic Worlds on one set of SQLite databases,
-the real gateway, the mock client). Commits: `28b77434` (fencing), `ca7aa78d` (decision store), `a4cf1677` (standby),
-then the drain protocol.
+the real gateway, the mock client). Four steps: fencing, the decision store, standby mode, the drain protocol.
 
 - **Fencing mandatory in worker mode.** `Cluster:Worker:Enabled = true` registers the characters write fence
   (`DataServiceCollectionExtensions.IsCharacterWriteFenceRequired`) and the World refuses to start without
@@ -492,18 +491,47 @@ then the drain protocol.
   `cluster_transfer_owner` (the per-character in-flight claim, compare-and-swap) and `cluster_world_handoff` (at most one
   unresolved). `EfTransferDecisionStore` implements `ITransferDecisionStore` and the new Kernel `IWorldHandoffStore`;
   `CommitEpochTakeoverAsync` moves the world ownership row (epoch N, A's incarnation, to N + 1, B's) and commits every
-  transfer of the handoff in one transaction, or changes nothing. Tests: `TransferDecisionStoreTests` (6), and
+  transfer of the handoff in one transaction, or changes nothing. The module is an `ICharacterDataCleanup`: deleting a
+  character is refused while a transfer of it is unresolved (its in-flight claim is held, or a decision is pre-commit or
+  committed); otherwise its `cluster_transfer_owner` and `cluster_transfer_decision` rows go with it. The SQL update
+  files for schema 62 are generated for all three providers. Tests: `TransferDecisionStoreTests` (7 per provider), and
   `PlayerTransferCoordinatorTests` now run on both stores, including a restart between stages (16).
 - **Standby mode** (`Cluster:Worker:Standby`, off by default): see [gateway.md](../areas/gateway.md#standby-worker-tier-3b-groundwork).
   Differs from 5.3: a standby does **not** load characters-backed state or attach features before promotion. The fence
   refuses a non-owner's transactions, reads included, and that state would be stale at the handoff anyway; so the
   warm-up covers the process, the container, schema validation and the gateway link, and promotion pays for the feature
-  attach. Tests: `StandbyWorkerTests` (7).
+  attach. Promotion only reads the ownership row (`ICharacterOwnershipStore.GetCurrentAsync`) and compares it with the
+  token; a refused promotion changes nothing, including when the row is inactive (released). Tests: `StandbyWorkerTests` (8).
 - **Drain protocol.** `WorldHandoffCoordinator` with `LocalWorldHandoffSource` (A: close admission, park the simulation
   thread at a tick boundary after capturing every online player's save through the settlement path, then flush every
   per-character queue through `CharacterPersistenceBarrier`), `StandbyWorldHandoffTarget` (B: `WorldHost.PromoteAsync`)
-  and `GatewayWorldHandoffRouter` (`GatewayServer.RetargetWorkerAsync`). Abort before the takeover resumes A; after it,
-  roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (9).
+  and `GatewayWorldHandoffRouter` (`GatewayServer.RetargetWorkerAsync`). Abort before the takeover resumes A first and
+  then journals the abort, so a failed journal write leaves A running and the handoff open (pre-commit) for
+  `RecoverAsync` to abort; after the takeover, roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (10).
+
+Known limits of what is built (from the review of the groundwork; none is fixed yet):
+
+- **In process only.** The production participants (`LocalWorldHandoffSource`, `StandbyWorldHandoffTarget`,
+  `GatewayWorldHandoffRouter`) have no DI registration and there is no cross-process control channel. In the real
+  topology A, B and the gateway are separate processes, so one coordinator **cannot** drive a real multi-process
+  handoff with them; only the single-process tests do.
+- **A crash of B after the takeover cannot be rolled forward.** The journal's target token carries the dead B's
+  incarnation, and a restarted B gets a new one (`WorldHost` incarnation is `Guid.NewGuid()` per process), so
+  `RecoverAsync`'s promotion is refused forever. Manual recovery: start a world with
+  `Cluster:Fencing:TakeoverEpoch` / `TakeoverIncarnation` set to the journal's target token (an explicit fencing
+  takeover), then resolve the journal row.
+- **One coordinator is assumed, not enforced.** `CommitEpochTakeoverAsync` and `AbortAsync` read and then update the
+  `cluster_world_handoff` row without a row lock or concurrency token; on MariaDB/PostgreSQL a `RecoverAsync` racing a
+  live `RunAsync` could lose an update (ownership moved, journal says Aborted). There is no coordinator lease.
+- **Only per-character queues are flushed** at the freeze (`CharacterPersistenceBarrier`). Whether non-per-character
+  pending writes (guild, mail, auction, world state) are flushed before the takeover is not verified; any still pending
+  afterwards are refused by the fence.
+- **Admission check and close race.** An open that passes `RemoteWorldSession`'s admission check just before
+  `StopAdmissionsAsync` can log in during the freeze; its writes on A are later fenced.
+- **The standby's link manifest incarnation** is a fresh `Guid`, not the host's `Incarnation`, so it never matches the
+  incarnation the takeover hands the ownership to.
+- **`RetargetWorkerAsync` retries forever** while B's link host refuses (secret or manifest mismatch); the roll-forward
+  then depends on the caller's cancellation token, with no timeout or diagnostic of its own.
 
 Not built (from 5.3): the per-player production transfer workers (the handoff moves ownership and saved state, not live
 entities), gateway input buffering and PING answering during the freeze, one link per worker and a per-session reroute

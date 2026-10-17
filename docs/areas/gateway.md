@@ -93,7 +93,8 @@ claims no ownership, registers no `World:Port` listener, and links to a gateway;
 simulation (features read the characters database, which the active World still owns: the fence refuses a non-owner's
 transactions, reads included), and it refuses every session open with `AUTH_UNAVAILABLE` (`WorkerAdmission`). It runs
 only after `WorldHost.PromoteAsync(token)`: the token must be the ownership the database holds, under this process's
-incarnation, as the handoff's epoch takeover leaves it. There is no operator command for it yet; the drain protocol
+incarnation, as the handoff's epoch takeover leaves it. Promotion only reads the ownership row
+(`ICharacterOwnershipStore.GetCurrentAsync`); a refused promotion claims nothing, even when the row is released. There is no operator command for it yet; the drain protocol
 below drives it in process.
 
 ### Whole-World handoff (Tier 3b groundwork, in process only)
@@ -103,11 +104,15 @@ three participants and journals each stage in the characters database (`cluster_
 B warm, A stops admissions, A freezes at a tick boundary (`LocalWorldHandoffSource` parks the simulation thread after
 capturing every online player's save), the saves and every per-character queue flush (`CharacterPersistenceBarrier`),
 then the **epoch takeover** (one transaction: the ownership row moves from A at epoch N to B at N + 1). Any failure
-before the takeover aborts and resumes A; after it the handoff only rolls forward (`RecoverAsync` finishes a crashed
+before the takeover resumes A and then journals the abort (a failed journal write leaves A running and the handoff open
+for `RecoverAsync`); after it the handoff only rolls forward (`RecoverAsync` finishes a crashed
 one from the journal): promote B, reroute, retire A. The gateway reroute (`GatewayWorldHandoffRouter`,
 `GatewayServer.RetargetWorkerAsync`) moves the gateway's single worker link to B: **clients on A are disconnected and log
 in again** (no `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` carry-over, no input buffering during the freeze). A retired A
-stays frozen; when its process stops, every write it still attempts is refused by the fence.
+stays frozen; when its process stops, every write it still attempts is refused by the fence. The participants are not
+registered in DI and there is no cross-process control channel: one coordinator can drive them only when A, B and the
+gateway share a process (the tests). Known limits, including B crashing after the takeover, are listed in design
+section 5.5.
 
 Gateway side: `gateway.json` next to the executable, then environment variables and the command line (generic host
 order). The gateway also reads the `Database:Auth` section (the realm's auth database), `Net:Protection` and `Logging`.
@@ -146,7 +151,7 @@ source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `
 
 ## Tests
 
-`tests/ArcaneCore.Gateway.Tests` (42 tests on `claude/hr3-standby`, run with `--filter`):
+`tests/ArcaneCore.Gateway.Tests` (44 tests, run with `--filter`):
 
 - `GatewaySessionWireTests`: every frame round-trips; every truncation and an out-of-range length throw `InvalidDataException`; the HMAC proof.
 - `GatewaySessionLinkTests`: over loopback TCP, packets keep their order and nothing overtakes the open reply; replays, a
@@ -158,12 +163,13 @@ source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `
   worker is involved; a second login supersedes the first; no link answers `AUTH_UNAVAILABLE`; worker mode registers
   nothing unless enabled.
 
-Tier 3b groundwork (`claude/hr3-standby`): `StandbyWorkerTests` (7: standby registration, standby without worker mode
-refused, a closed worker refuses opens, a standby owns and admits nothing, refused and retried promotion, a promoted
-standby takes a session and writes while the old world is fenced) and `WorldHandoffTests` (9: a full handoff with a
-player in the world through the gateway and the re-login landing on B; an abort injected after each of the five
-pre-commit stages; a source that lost its ownership; a crash after the takeover rolled forward by recovery; a crash
-before it aborted by recovery).
+Tier 3b groundwork: `StandbyWorkerTests` (8: standby registration, standby without worker mode refused, a closed
+worker refuses opens, a standby owns and admits nothing, refused and retried promotion, a refused promotion of a
+released ownership claims nothing, a promoted standby takes a session and writes while the old world is fenced) and
+`WorldHandoffTests` (10: a full handoff with a player in the world through the gateway and the re-login landing on B;
+an abort injected after each of the five pre-commit stages; a source that lost its ownership; a failed abort journal
+write that still resumes A; a crash after the takeover rolled forward by recovery; a crash before it aborted by
+recovery).
 
 ## Not done yet (rest of 3a and beyond)
 

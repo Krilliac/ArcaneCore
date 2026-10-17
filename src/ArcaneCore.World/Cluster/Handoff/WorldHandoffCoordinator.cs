@@ -154,9 +154,18 @@ public sealed class WorldHandoffCoordinator(
         if (record.IsCommittedOrBeyond)
             return await RollForwardAsync(record, afterStage: null, cancellationToken).ConfigureAwait(false);
 
-        WorldHandoffRecord aborted = await store.AbortAsync(handoffId, "recovered before the epoch takeover", cancellationToken).ConfigureAwait(false);
-        await source.ResumeAsync(cancellationToken).ConfigureAwait(false);
-        return aborted;
+        // Before the takeover A still owns the characters, so resuming it is safe; resume first, so a journal write that fails leaves A running
+        // (the handoff stays open, pre-commit, for a later recovery to abort) rather than parked with its admission closed.
+        try
+        {
+            await source.ResumeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            record = await store.AbortAsync(handoffId, "recovered before the epoch takeover", CancellationToken.None).ConfigureAwait(false);
+        }
+
+        return record;
     }
 
     private async Task<WorldHandoffRecord> RollForwardAsync(
@@ -196,10 +205,20 @@ public sealed class WorldHandoffCoordinator(
 
     private async Task<WorldHandoffAbortedException> AbortAsync(Guid handoffId, Exception cause)
     {
-        // Not cancellable: an abort that half-ran would leave A frozen.
+        // Not cancellable: an abort that half-ran would leave A frozen. Called only while the takeover has not committed, when A still owns the
+        // characters: resume A first, so a journal write that fails (a transient database error) leaves A running and the handoff open, pre-commit,
+        // for RecoverAsync to abort, instead of leaving A parked with its admission closed.
         string reason = cause.Message;
-        WorldHandoffRecord aborted = await store.AbortAsync(handoffId, reason, CancellationToken.None).ConfigureAwait(false);
-        await source.ResumeAsync(CancellationToken.None).ConfigureAwait(false);
+        WorldHandoffRecord aborted;
+        try
+        {
+            await source.ResumeAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            aborted = await store.AbortAsync(handoffId, reason, CancellationToken.None).ConfigureAwait(false);
+        }
+
         _logger.LogWarning(cause, "World handoff {Handoff} aborted; {Source} resumed under ownership epoch {Epoch}",
             handoffId, source.WorkerId, aborted.SourceOwnershipToken.Epoch);
         return new WorldHandoffAbortedException(aborted, cause);
