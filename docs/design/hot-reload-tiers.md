@@ -1,7 +1,9 @@
 # Hot reload tiers (design)
 
-Status: design, owner go on 2026-10-16 for tiers 1 to 3. Tier 1 building blocks exist on lane branches (listed below);
-nothing in this document is wired into the running server yet unless it is marked **built and wired**.
+Status: design, owner go on 2026-10-16 for tiers 1 to 3. Tier 1 is **built and wired** into the module lane
+(spell scripts, instance scripts and EventAI handlers load, replace and unload through `.hotmodule`; see
+`docs/areas/code-hot-reload.md`). Still open for Tier 1: rollback of a post-validation failure (section 3.5), RED proofs
+for the instance/EventAI registry tests, and a collected-unload proof for the new slots. Tiers 2 and 3 are planned.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
 
 Goal: a hard restart only when it cannot be avoided. Content, configuration and code change on a running server, and
@@ -33,7 +35,7 @@ listener, runtime upgrade).
 
 | Tier | Removes the restart for | Mechanism | Status |
 |---|---|---|---|
-| 1 | Gameplay scripts that live outside the core: spell scripts, instance scripts, EventAI handlers, discovered types from several assemblies | Widen the module lane: every discovery site accepts a set of assemblies, and each script registry supports a validated, all-or-nothing swap | Building blocks **built on lane branches**, not wired into `ModuleHost` |
+| 1 | Gameplay scripts that live outside the core: spell scripts, instance scripts, EventAI handlers, discovered types from several assemblies | Widen the module lane: every discovery site accepts a set of assemblies, and each script registry supports a validated, all-or-nothing swap | **Built and wired** into `ModuleHost` (rollback of a post-validation failure still open) |
 | 2 | A whole subsystem's code, on Release: Playerbots first | Core plus reloadable packs: a contracts assembly, detachable features, one collectible context and one child DI container per pack | Planned (research done) |
 | 3 | Everything else: core code, runtime upgrades, structural changes | A gateway process keeps the client sockets; a second World is warmed and players are handed over (blue/green) | Planned (research done) |
 | 4 | Nothing new for production | The Debug edit-and-continue runner stays a development tool | Built (dev-only), unchanged |
@@ -112,7 +114,7 @@ creatures still running a retired EventAI event handler (it would need `EventAiE
 Map-specific entry AI and the built-in dungeon boss scripts (consulted before module registrations), `IWorldFeature`s,
 `IDataModule`s and DI services stay out. Features belong to Tier 2; tables need a schema story (section 9).
 
-### 3.5 Integration step (planned)
+### 3.5 Integration step (wired; rollback still open)
 
 - Merge the three lane branches into `claude/hot-reload-tiers` and build them together (each built alone so far).
 - `ModuleHost` builds one candidate per module covering all slots (opcodes, commands, creature AI, hooks, spell
