@@ -565,12 +565,12 @@ public sealed class PlayerbotExploreTests
 
                 session.ManagedBudget = new ManagedActionBudget(2);
                 explore.Invoke(brain, [player, 500u]); // 48-yard ray, refused: the mesh stops 36 yards short
-                Assert.Empty(paths.Ends.Where(IsShortenedRay));
+                Assert.DoesNotContain(paths.Ends, IsShortenedRay);
 
                 options.MoveSpeed = 0f; // the shortened route is planned, then TryAdvance refuses it (no speed)
                 session.ManagedBudget = new ManagedActionBudget(2);
                 explore.Invoke(brain, [player, 500u]);
-                Vector3 failed = Assert.Single(paths.Ends.Where(IsShortenedRay));
+                Vector3 failed = Assert.Single(paths.Ends, IsShortenedRay);
                 options.MoveSpeed = 7f;
 
                 int before = paths.Ends.Count;

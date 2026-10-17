@@ -264,7 +264,7 @@ public sealed class PlayerbotConsumableRecoveryTests
                     Entry = 900020, Name = "spell target", CreatureType = 1, MinLevelHealth = 20, MaxLevelHealth = 20,
                 }, null, new CreatureContent([], [], [], [], []), new Random(1));
                 target.Relocate(player.X + 40, player.Y, player.Z, 0, host.World.NowMs);
-                player.Map.AddObject(target);
+                player.Map!.AddObject(target);
 
                 var options = new PlayerbotOptions { MaxPathPoints = 8, MaxRouteYards = 400 };
                 Assert.True(PlayerbotNavigation.TryPlan(player, new(player.X + 100, player.Y, player.Z), options, out PlayerbotRoute? route));
