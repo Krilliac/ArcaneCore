@@ -114,9 +114,19 @@ public sealed class CombatHandlers : IOpcodeHandlerGroup
     private static void HandleRepopRequest(WorldSession session, Player player, byte[] payload)
         => player.Map?.Combat.RepopPlayer(player);
 
-    /// <summary>CMSG_RECLAIM_CORPSE: u64 corpse GUID, unused by the server (vmangos HandleReclaimCorpseOpcode).</summary>
+    /// <summary>
+    /// CMSG_RECLAIM_CORPSE: u64 corpse GUID, unused by the server (vmangos HandleReclaimCorpseOpcode). vmangos still reads it first, so
+    /// a body shorter than 8 bytes fails the read and the packet is dropped without a resurrection.
+    /// </summary>
     private static void HandleReclaimCorpse(WorldSession session, Player player, byte[] payload)
-        => player.Map?.Combat.TryReclaimCorpse(player);
+    {
+        if (payload.Length < sizeof(ulong))
+        {
+            return;
+        }
+
+        player.Map?.Combat.TryReclaimCorpse(player);
+    }
 
     /// <summary>MSG_CORPSE_QUERY: empty from the client (vmangos HandleCorpseQueryOpcode).</summary>
     private static void HandleCorpseQuery(WorldSession session, Player player, byte[] payload)

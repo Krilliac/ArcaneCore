@@ -33,6 +33,9 @@ try { [Win32.ConsoleModeHelper]::DisableQuickEdit() } catch { }
 if (-not $env:DOTNET_ROOT) { $env:DOTNET_ROOT = Join-Path $env:USERPROFILE '.dotnet' }
 $env:PATH = "$env:DOTNET_ROOT;$env:PATH"
 $env:DOTNET_ENVIRONMENT = 'Development'
+# Each daemon its own log (<LiveHome>\logs\<role>.debug.log/.jsonl): both read the profile's appsettings.json, and a log file has one
+# writer, so with one shared path the daemon started second (the World, in redeploy.ps1) would write a fallback name instead.
+Set-LiveDaemonLogEnvironment -Role $Role -LiveHome $LiveHome
 if ($Role -eq 'World') {
     # The GC turns aggressive (blocking compacting gen2, 2-15 s ticks) when the MACHINE's memory load passes its high-memory threshold
     # (default 90%). On a shared box the load comes from builds and tests, not the world, so compacting the world cannot relieve it.

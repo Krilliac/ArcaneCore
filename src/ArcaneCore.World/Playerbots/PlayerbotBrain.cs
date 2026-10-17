@@ -527,9 +527,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_overranReported && unchecked(now - _overranReportMs) < ThinkAnomalyQuietMs) return;
         _overranReported = true;
         _overranReportMs = now;
+        string slowest = PlayerbotThinkProbe.Active is { } probe ? $", slowest phase {probe.SlowestPhaseNow}" : string.Empty;
         PlayerbotAnomalies.Report(player, "brain", "think-overran",
             string.Create(CultureInfo.InvariantCulture,
-                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase})"));
+                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase}{slowest})"));
     }
 
     internal void Update(uint elapsedMs)
@@ -1054,17 +1055,32 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (defensiveAttacker is null && !rangedFight && player.Combat.IsInCombat && player.Combat.Victim is null
             && !hasDeadLootTarget)
         {
-            PlayerbotMovementControl.Stop(_session, player);
-            // Combat linger after an ordinary attack stop must not reopen an optional
-            // grind target. Let the authoritative combat timer/handler clear the state.
+            uint lingerNow = _session.World.NowMs;
+            if (!_lingering) (_lingering, _lingerSinceMs) = (true, lingerNow);
             _target = null;
-            AbandonRoute();
             _attacking = false;
             _lootOpened = false;
             TargetEntry = 0;
-            _goal = PlayerbotGoalKind.Combat;
+            if (unchecked(lingerNow - _lingerSinceMs) < CombatLingerLimitMs)
+            {
+                PlayerbotMovementControl.Stop(_session, player);
+                // Combat linger after an ordinary attack stop must not reopen an optional
+                // grind target. Let the authoritative combat timer/handler clear the state.
+                AbandonRoute();
+                _goal = PlayerbotGoalKind.Combat;
+                return;
+            }
+
+            // Past the server's own combat timer (CombatConstants.PvpCombatTimerMs and its check interval) with nothing to fight: what holds
+            // the flag is nothing the bot can reach (an evading creature, a phantom state, bot QA #834). It walks on as an exploring bot
+            // would, which also takes it out of reach of whatever still holds it, instead of standing for the stall watch (bot QA #580,
+            // #894: "stalled 120s: goal=Combat target=0", motion moving:no dest:none, phase threats).
+            PlayerbotThinkProbe.Phase("explore");
+            Explore(player, interval);
             return;
         }
+
+        _lingering = false;
 
         if (!player.Combat.IsInCombat && outgoingVictim is null && !hasDeadLootTarget)
         {
@@ -1246,15 +1262,16 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _lootOpened = false;
             if (_target is null)
             {
-                if (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)
+                uint huntEntry = _quests.PreferredCreatureEntry != 0 ? _quests.PreferredCreatureEntry : materialDropper;
+                if ((PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true) && GrindPlanDue(huntEntry))
                 {
                     PlayerbotThinkProbe.Phase("grind destinations");
-                    uint huntEntry = _quests.PreferredCreatureEntry != 0 ? _quests.PreferredCreatureEntry : materialDropper;
                     PlayerbotGoalKind huntGoal = huntEntry != 0 && _quests.PreferredItemUseId == 0
                         ? PlayerbotGoalKind.Grind : PlayerbotGoalKind.Quest;
                     _planningGoal = huntGoal;
                     bool huntPlanned = _destinations.Update(player, huntEntry, interval, preferredQuestId: _quests.PreferredQuestId);
                     _planningGoal = null;
+                    NoteGrindPlan(huntEntry, huntPlanned, _destinations.LastPlanRefused);
                     if (huntPlanned)
                     {
                         AbandonRoute();
@@ -1298,6 +1315,25 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 DropIntent();
                 _goal = PlayerbotGoalKind.Retreat;
                 Risk.UpdateRetreat(player, interval);
+                return;
+            }
+
+            if (FightGoesNowhere(player, target))
+            {
+                // Neither a blow landed nor a step was made at this target for FightNoProgressMs: it stands where the bot cannot reach it
+                // (a ledge, a cave floor, deep water) or cannot hurt it (an evading creature). It is set aside (StalledTargetMs), also as an
+                // attacker (MarkFruitless), and the bot walks on at once rather than standing out the combat linger beside it.
+                MarkUnreachable(target, StalledTargetMs);
+                MarkFruitless(target);
+                (_lingering, _lingerSinceMs) = (true, unchecked(_session.World.NowMs - CombatLingerLimitMs));
+                if (_attacking || player.Combat.Victim is not null) _session.TryManagedAction(WorldOpcode.CmsgAttackstop, []);
+                _contention.ReleaseClaim();
+                _target = null;
+                AbandonRoute();
+                _attacking = false;
+                TargetEntry = 0;
+                PlayerbotThinkProbe.Phase("explore");
+                Explore(player, interval);
                 return;
             }
 
@@ -1629,13 +1665,20 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 else _suspensions.SuspendEntry(TargetEntry, now);
                 break;
             case PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat or PlayerbotGoalKind.Loot:
-                if (_target is { } target) MarkUnreachable(target);
+                // The creature the bot stalled on is skipped for about a respawn (StalledTargetMs), not the 30 seconds of a refused chase:
+                // chosen again at once, it held the bot for the next stall (bot QA #697, #700, #862).
+                if (_target is { } target) MarkUnreachable(target, StalledTargetMs);
                 // A grind walk with no creature in sight (the destinations' spawn walk) has no target to set aside: set the entry it
                 // was walking to aside, or the next decision plans the same camp again (live 2026-10-12, bot QA #368: 177 stalls
-                // at the empty kobold camp of quest 21). The quest's objective is then not hunted until the set-aside ends.
+                // at the empty kobold camp of quest 21). The quest's objective is then not hunted until the set-aside ends. A camp that
+                // stalls the bot again once its set-aside is over is set aside for longer each time (SuspendEntryEscalating: 20, 40, 80
+                // minutes): with the same 10 minutes every time, the camp of #368 stalled 326 bots 5 085 times in four days.
                 if (deadEndPin && TargetEntry != 0) _suspensions.SuspendEntryEscalating(TargetEntry, now);
                 else if (_target is null && _goal is PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat && TargetEntry != 0)
-                    _suspensions.SuspendEntry(TargetEntry, now);
+                {
+                    if (_suspensions.EntryStrikeCount(TargetEntry) > 0) _suspensions.SuspendEntryEscalating(TargetEntry, now);
+                    else _suspensions.SuspendEntry(TargetEntry, now);
+                }
                 break;
             case PlayerbotGoalKind.Home:
                 _homeReturn.MarkBlocked(now);
@@ -2336,7 +2379,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         return units
             .OfType<Creature>()
-            .Where(creature => creature.IsInWorld && creature.IsAlive && !creature.IsInEvadeMode
+            .Where(creature => creature.IsInWorld && creature.IsAlive && !creature.IsInEvadeMode && !IsFruitless(creature)
                 && ReferenceEquals(creature.Map, map)
                 && map.Combat.Hooks.CanAttack(player, creature))
             .OrderBy(IsUnreachable)
@@ -2345,16 +2388,82 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             .FirstOrDefault();
     }
 
-    private void MarkUnreachable(Creature creature)
+    private void MarkUnreachable(Creature creature, uint forMs = UnreachableTargetMs)
     {
         uint now = _session.World.NowMs;
         foreach (ObjectGuid expired in _unreachable.Where(entry => unchecked((int)(entry.Value - now)) <= 0).Select(entry => entry.Key).ToArray())
             _unreachable.Remove(expired);
-        if (_unreachable.Count < 64) _unreachable[creature.Guid] = unchecked(now + UnreachableTargetMs);
+        if (_unreachable.Count < 64 || _unreachable.ContainsKey(creature.Guid)) _unreachable[creature.Guid] = unchecked(now + forMs);
+    }
+
+    /// <summary>
+    /// How long a target the bot stalled on, or fought without a blow or a step for <see cref="FightNoProgressMs"/>, is skipped: about a
+    /// respawn, not the 30 seconds of a refused chase (<see cref="UnreachableTargetMs"/>), after which the same creature was chosen again
+    /// and held the bot for another stall (bot QA #697, #700, #862: the same target entry stalled again within a minute or two).
+    /// </summary>
+    internal const uint StalledTargetMs = 300_000;
+
+    /// <summary>The longest a bot holds a living target without its health falling and without moving <see cref="FightProgressYards"/> (<see cref="FightGoesNowhere"/>).</summary>
+    internal const uint FightNoProgressMs = 20_000;
+
+    /// <summary>A step this long (yards) at a target counts as progress of the fight (a chase, a reposition).</summary>
+    internal const float FightProgressYards = 3f;
+
+    private ObjectGuid _fightWatchTarget;
+    private uint _fightWatchHealth;
+    private System.Numerics.Vector3 _fightWatchAt;
+    private uint _fightWatchSince;
+    private uint _fightWatchSeen;
+
+    /// <summary>A fight not looked at for this long (world ms: the bot rested, travelled or did something else) is watched afresh.</summary>
+    private const uint FightWatchGapMs = 15_000;
+
+    /// <summary>
+    /// The fight with <paramref name="target"/> makes no progress: since the bot took it (or since its last progress) its health has not
+    /// fallen and the bot has not moved <see cref="FightProgressYards"/>, for <see cref="FightNoProgressMs"/>. A bot that chases, swings
+    /// or casts at a target it can reach makes progress well within that; one that stands under a target on a ledge, or re-plans a
+    /// chase that ends where it stands, does not (bot QA #697, #700, #862: <c>goal=Combat</c> stalls with motion moving:no dest:none,
+    /// phase combat). True once, then the watch starts over.
+    /// </summary>
+    private bool FightGoesNowhere(Player player, Creature target)
+    {
+        uint now = _session.World.NowMs;
+        var at = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        bool gap = unchecked(now - _fightWatchSeen) > FightWatchGapMs;
+        _fightWatchSeen = now;
+        if (gap || target.Guid != _fightWatchTarget || target.Health < _fightWatchHealth
+            || System.Numerics.Vector3.Distance(at, _fightWatchAt) >= FightProgressYards)
+        {
+            (_fightWatchTarget, _fightWatchHealth, _fightWatchAt, _fightWatchSince) = (target.Guid, target.Health, at, now);
+            return false;
+        }
+
+        _fightWatchHealth = target.Health; // a target healing back up is no progress, and none taken back either
+        if (unchecked(now - _fightWatchSince) < FightNoProgressMs) return false;
+        _fightWatchTarget = default;
+        return true;
     }
 
     private bool IsUnreachable(Creature creature)
         => _unreachable.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
+
+    /// <summary>
+    /// Creatures the bot fought without progress (<see cref="FightGoesNowhere"/>) until when (world ms): no defensive target either while
+    /// the mark lasts (<see cref="StalledTargetMs"/>). An attacker is otherwise always the bot's fight, unreachable or not, so the one the bot
+    /// had just set aside, still swinging at it, was taken back on the next think and held it for the next 20 seconds.
+    /// </summary>
+    private readonly Dictionary<ObjectGuid, uint> _fruitless = [];
+
+    private void MarkFruitless(Creature creature)
+    {
+        uint now = _session.World.NowMs;
+        foreach (ObjectGuid expired in _fruitless.Where(entry => unchecked((int)(entry.Value - now)) <= 0).Select(entry => entry.Key).ToArray())
+            _fruitless.Remove(expired);
+        if (_fruitless.Count < 16 || _fruitless.ContainsKey(creature.Guid)) _fruitless[creature.Guid] = unchecked(now + StalledTargetMs);
+    }
+
+    private bool IsFruitless(Creature creature)
+        => _fruitless.Count != 0 && _fruitless.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
 
     /// <summary>Whether a live creature in sight is no target for the bot (the grind filter's rules; <see cref="PlayerbotWorldDestinations.Untakeable"/>).</summary>
     internal bool IsUntakeable(Player player, Creature creature)
@@ -2870,8 +2979,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
 
-        if (player.Map is null || PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false })
-            return;
+        if (player.Map is null) return;
+        // The think's optional path budget (PlayerbotThinkProbe.HasOptionalPlanBudget) may already be spent by the planners before this
+        // one: then the explore site search and its long plan wait for a think with budget, but the bot still takes its one short wander
+        // leg (a search of at most a 48-yard leg's nodes) rather than standing until the stall watch gives it up.
+        bool budget = PlayerbotThinkProbe.Active is not { HasOptionalPlanBudget: false };
         if (_home is { Stay: not Population.TownStay.None } town && (player.Map?.MapId ?? player.MapId) == town.MapId)
         {
             // Idle with a town home: back to the inn and wait there rather than roam the wilderness (PlayerbotTownIdle).
@@ -2881,9 +2993,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
         else _townIdle.Interrupted(); // no town idle decision this think (another map, another kind of home)
 
-        PlayerbotThinkProbe.Phase("explore candidates");
-        if (TryExploreSpawns(player, elapsedMs)) return;
-        if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
+        if (budget)
+        {
+            PlayerbotThinkProbe.Phase("explore candidates");
+            if (TryExploreSpawns(player, elapsedMs)) return;
+        }
         // Wander onward: keep roughly the current facing (within +-60 degrees, golden-ratio spread so successive legs
         // differ). Only after a refusal turn anywhere. The old golden-angle-from-zero choice sent each leg
         // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
@@ -2914,6 +3028,58 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             PlayerbotMovementControl.Stop(_session, player);
         }
     }
+
+    /// <summary>The first wait (world ms) before the grind destinations plan again after a refused plan (<see cref="NoteGrindPlan"/>).</summary>
+    internal const uint GrindPlanBackoffMs = 4_000;
+
+    /// <summary>The longest wait of the grind destinations after refused plans in a row (the wait doubles with each).</summary>
+    internal const uint GrindPlanBackoffMaxMs = 64_000;
+
+    private uint _grindPlanEntry;
+    private int _grindPlanRefusals;
+    private uint _grindPlanRetryAt;
+
+    /// <summary>Refused grind-destination plans in a row for the entry hunted now (tests, inspection).</summary>
+    internal int GrindPlanRefusals => _grindPlanRefusals;
+
+    /// <summary>Whether the grind destinations may plan for <paramref name="huntEntry"/> this think (<see cref="NoteGrindPlan"/>).</summary>
+    private bool GrindPlanDue(uint huntEntry)
+        => _grindPlanRefusals == 0 || huntEntry != _grindPlanEntry || unchecked((int)(_grindPlanRetryAt - _session.World.NowMs)) <= 0;
+
+    /// <summary>
+    /// The answer of one grind-destination plan. A refused one (<see cref="PlayerbotWorldDestinations.LastPlanRefused"/>: a path search that
+    /// found no way, usually one run to its node cap) backs the planner off for <see cref="GrindPlanBackoffMs"/>, doubling while it keeps
+    /// being refused (up to <see cref="GrindPlanBackoffMaxMs"/>); a planned walk, or another entry to hunt, starts over. Meanwhile the think
+    /// goes to the explore, with the think's path budget (<see cref="PlayerbotThinkProbe.HasOptionalPlanBudget"/>) whole.
+    /// <para>
+    /// Before, the planner ran first on every think, and its refused search (the next spawn of the camp each think, every one beyond
+    /// reach) spent the think's optional path budget, so the explore after it returned without a step: live 2026-10-11..16, bot QA #249,
+    /// #281, #845 and 139 other stall issues, 343 of 414 stall diagnostics showed <c>moving:no dest:none</c>, 270 of them in phase explore.
+    /// </para>
+    /// </summary>
+    private void NoteGrindPlan(uint huntEntry, bool planned, bool refused)
+    {
+        if (planned || huntEntry != _grindPlanEntry)
+        {
+            _grindPlanEntry = huntEntry;
+            _grindPlanRefusals = 0;
+        }
+
+        if (planned || !refused) return;
+        if (_grindPlanRefusals < 8) _grindPlanRefusals++;
+        uint wait = (uint)Math.Min((ulong)GrindPlanBackoffMs << (_grindPlanRefusals - 1), GrindPlanBackoffMaxMs);
+        _grindPlanRetryAt = unchecked(_session.World.NowMs + wait);
+    }
+
+    /// <summary>
+    /// The longest a bot stands in combat with nothing to fight (no victim, no creature attacking it or holding it on a threat list it can
+    /// fight) before it walks on: past the server's 5.5-second combat timer and its 1.2-second check (<see cref="CombatConstants"/>), so an
+    /// ordinary linger ends by itself first.
+    /// </summary>
+    internal const uint CombatLingerLimitMs = 10_000;
+
+    private bool _lingering;
+    private uint _lingerSinceMs;
 
     private readonly PlayerbotTownIdle _townIdle = new();
     private uint _bindCheckAt;
@@ -2949,7 +3115,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>Plans and walks the next leg of an idle bot's way back to the centre of its town home (the wander planner, aimed inward).</summary>
     private void WalkTowardTown(Player player, PlayerbotHomeArea town, uint elapsedMs)
     {
-        if (PlayerbotThinkProbe.Active is { HasOptionalPlanBudget: false }) return;
+        // One short leg, as the wander of Explore: taken even when the think's optional path budget is spent.
         System.Numerics.Vector3 destination = InwardLeg(town, player, _exploreRefusals);
         PlayerbotThinkProbe.Phase("explore town plan");
         if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)

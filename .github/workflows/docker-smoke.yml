@@ -1,0 +1,64 @@
+name: Docker smoke
+
+# Builds every target of apps/docker/Dockerfile and validates docker-compose.yml, so the container images cannot go stale silently.
+# They did once: the SDK moved to .NET 11 (global.json, Directory.Build.props) while the Dockerfile still built on the .NET 10 images,
+# and nothing noticed. Pull requests run it when a file the image build depends on changes; every push to main runs it.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "apps/docker/**"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - "global.json"
+      - "Directory.Build.props"
+      - ".editorconfig"
+      - "**/*.csproj"
+      - ".github/workflows/docker-smoke.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate docker-compose.yml
+        # Compose refuses to start without the database credentials (by design); give it throwaway values to check the file alone.
+        env:
+          DOCKER_DB_ROOT_PASSWORD: smoke-only
+          DOCKER_DB_USER: smoke
+          DOCKER_DB_PASSWORD: smoke-only
+        run: docker compose --profile tools --profile monitoring config --quiet
+
+      # The three targets share the build stage, so the second and third reuse its cached layers.
+      - name: Build world image
+        run: docker build -f apps/docker/Dockerfile --target world -t arcanecore/world:smoke .
+
+      - name: Build realm image
+        run: docker build -f apps/docker/Dockerfile --target realm -t arcanecore/realm:smoke .
+
+      - name: Build tools image
+        run: docker build -f apps/docker/Dockerfile --target tools -t arcanecore/tools:smoke .
+
+      - name: Check each entrypoint is in its image
+        # The entrypoint assembly names are hard-coded in the Dockerfile; a renamed assembly would otherwise only fail at `docker run`.
+        run: |
+          docker run --rm --entrypoint test arcanecore/world:smoke -f ArcaneCore.World.dll
+          docker run --rm --entrypoint test arcanecore/realm:smoke -f ArcaneCore.Realm.dll
+          docker run --rm --entrypoint test arcanecore/tools:smoke -f arcane-content-importer.dll
+          docker run --rm --entrypoint test arcanecore/tools:smoke -f /arcanecore/dbupgrade/arcane-db.dll
+          docker run --rm --entrypoint dotnet arcanecore/world:smoke --list-runtimes

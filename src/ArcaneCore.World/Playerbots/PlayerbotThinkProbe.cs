@@ -304,6 +304,26 @@ internal sealed class PlayerbotThinkProbe
     }
 
     /// <summary>
+    /// The slowest phase of the think still running, its open phase counted up to now (<see cref="SlowestPhase"/> counts closed phases
+    /// only). The overrun report names it beside the last phase: the last phase of a slow think is often not where its time went (bot QA
+    /// #787: "last phase explore advance" after a think whose time went to the planners before it).
+    /// </summary>
+    internal string SlowestPhaseNow
+    {
+        get
+        {
+            long current = Stopwatch.GetTimestamp() - _phaseStarted;
+            for (int i = 0; i < _phases; i++)
+                if (ReferenceEquals(_names[i], _phase)) current += _ticks[i];
+            string best = _phase;
+            long bestTicks = current;
+            for (int i = 0; i < _phases; i++)
+                if (!ReferenceEquals(_names[i], _phase) && _ticks[i] > bestTicks) (best, bestTicks) = (_names[i], _ticks[i]);
+            return best;
+        }
+    }
+
+    /// <summary>
     /// The think in one line (only for a slow one): its phases over a millisecond, slowest first, then its navigation work.
     /// </summary>
     internal string Describe()

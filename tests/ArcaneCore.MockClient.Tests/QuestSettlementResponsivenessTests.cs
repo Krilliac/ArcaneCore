@@ -376,10 +376,10 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
             await MockScenarios.KillRewardTargetAsync(server, hero.Connection, hero.Guid, SyntheticArcaneServer.SecondTargetGuid, 2, token);
             await server.FlushCharacterAsync(checked((int)hero.Guid), token);
 
-            // 120 other characters, each snapshot taking 50 ms to write: six seconds of backlog, longer than the production
-            // five-second settlement budget (which is left at its default). A strict FIFO queue puts the hero's pre-reward
-            // save behind all of it, the budget expires while it waits, and the reward is never granted.
-            Assert.True(feature.Options.SettlementBudgetSeconds <= 5, "this test relies on the production settlement budget");
+            // 120 other characters, each snapshot taking 50 ms to write: six seconds of backlog, longer than a five-second
+            // settlement budget. A strict FIFO queue puts the hero's pre-reward save behind all of it, the budget expires while
+            // it waits, and the reward is never granted.
+            feature.Options.SettlementBudgetSeconds = 5;
             slowSaves.Armed = true;
             const int OtherCharacters = 120;
             for (int index = 0; index < OtherCharacters; index++)

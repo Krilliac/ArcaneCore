@@ -1,0 +1,11 @@
+---
+# Codacy configuration (read by the Codacy Analysis CLI in .github/workflows/codacy.yml and by Codacy's own analysis).
+# Generated files are excluded: their content comes from a renderer, so findings there are fixed in the generator, not the file.
+exclude_paths:
+  # Reference docs rendered by tests/ArcaneCore.World.Tests/Docs (each file's header says GENERATED; opcodes.md says "Generated
+  # from"). Regenerate with ARCANECORE_UPDATE_DOCS=1 dotnet test tests/ArcaneCore.World.Tests --filter Docs.
+  - "docs/reference/configuration.md"
+  - "docs/reference/exit-codes.md"
+  - "docs/reference/gm-commands.md"
+  - "docs/reference/opcodes.md"
+  - "docs/reference/schema.md"

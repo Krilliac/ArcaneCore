@@ -31,7 +31,7 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
     public const int MaxConcurrentOperations = 16;
 
     /// <summary>The shipped settlement budget (<c>GameObjects:LootSettlementBudgetSeconds</c>).</summary>
-    public static readonly TimeSpan DefaultBudget = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan DefaultBudget = new ArcaneCore.Game.GameObjects.GameObjectOptions().LootSettlementBudget;
 
     /// <summary>Wall time one operation (save, barrier, commit) may take before it is abandoned; read at each operation.</summary>
     public TimeSpan Budget => budgetSource?.Invoke() ?? DefaultBudget;

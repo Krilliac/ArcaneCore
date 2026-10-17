@@ -72,7 +72,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
     public const int MaxConcurrentOperations = 16;
 
     /// <summary>The shipped settlement budget (<c>Economy:SettlementBudgetSeconds</c>).</summary>
-    public static readonly TimeSpan DefaultBudget = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan DefaultBudget = new ArcaneCore.Game.Economy.EconomyOptions().SettlementBudget;
 
     /// <summary>Wall time one operation (its saves and its commit) may take before it is abandoned; read at each operation.</summary>
     public TimeSpan Budget => budgetSource?.Invoke() ?? DefaultBudget;

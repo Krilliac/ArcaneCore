@@ -60,6 +60,12 @@ internal sealed class PlayerbotRisk
     private ulong _fruitlessHealth;
     private ulong _fruitlessMana;
     private bool _cornered;
+
+    /// <summary>
+    /// When the bot was first seen in the combat it is in (<see cref="Track"/>; 0 out of combat): the danger memory written since, by a
+    /// retreat of this very fight that ended cornered, is not older knowledge (<see cref="CheckKnownDanger"/>).
+    /// </summary>
+    private uint _fightSinceMs;
     private (ObjectGuid Guid, uint Entry)[] _fledFrom = [];
     private (uint MapId, Vector3 Where) _fledAt;
 
@@ -210,10 +216,12 @@ internal sealed class PlayerbotRisk
         if (!_session.IsInChaosProbe) _phantomCombat.Look(player, _session.World.NowMs);
         if (player.Combat.IsInCombat)
         {
+            if (_fightSinceMs == 0) _fightSinceMs = Math.Max(1u, _session.World.NowMs);
             EndEscape(); // aggroed on the way out: the fight is judged as any other
             return;
         }
 
+        _fightSinceMs = 0;
         _cornered = false;
         _refusalCounted = false;
         if (Tracker.Active) Tracker.End(PlayerbotRiskModel.PriorBotDps(player.Level));
@@ -230,6 +238,7 @@ internal sealed class PlayerbotRisk
         if (Enabled && killers.Length > 0)
             Memory.Remember(player.MapId, new Vector3(player.X, player.Y, player.Z), killers, _session.World.NowMs,
                 _options.Risk.DangerMemorySeconds);
+        _verdicts.Clear();
         if (Enabled)
             Hazards.Add(player.MapId, new Vector3(player.X, player.Y, player.Z), PlayerbotHazards.DeathYards, _session.World.NowMs,
                 _options.Risk.DangerMemorySeconds, "death");
@@ -244,6 +253,7 @@ internal sealed class PlayerbotRisk
         _boxedSinceMs = 0;
         Detour = null;
         _waitUntilMs = 0;
+        _fightSinceMs = 0;
         _retreatLoop.Reset();
     }
 
@@ -259,8 +269,11 @@ internal sealed class PlayerbotRisk
         // A retreat that ended in this death remembers its enemies first (NoteRetreatEnd): that memory is not older knowledge.
         if (!Enabled || Retreat.Active || _session.IsInChaosProbe
             || (_retreatDiedMs != 0 && unchecked(now - _retreatDiedMs) < 30_000)) return;
+        // Only what the bot knew before this fight began: a retreat that ended cornered remembers the very creatures the bot then fights
+        // on against, and a death in that fight is no death to a known danger (live 2026-10-16: 509 of 1218 reports came within two
+        // minutes of the same bot's risk/retreat-cornered).
         foreach ((ObjectGuid guid, uint entry) in killers)
-            if (Memory.IsRemembered(guid, now))
+            if (Memory.RememberedBefore(guid, _fightSinceMs, now))
             {
                 PlayerbotAnomalies.Report(player, "risk", "died-in-known-hazard",
                     $"killed by creature {entry} that the danger memory already held (fled from or died to before)");
@@ -269,7 +282,8 @@ internal sealed class PlayerbotRisk
 
         var here = new Vector3(player.X, player.Y, player.Z);
         foreach (PlayerbotHazard hazard in Hazards.Active(player.MapId, now))
-            if (!hazard.Creature.IsEmpty && hazard.Kind != PlayerbotHazards.StrongKind && hazard.Covers(here))
+            if (!hazard.Creature.IsEmpty && hazard.Kind != PlayerbotHazards.StrongKind && hazard.Covers(here)
+                && (hazard.Kind != "fled" || Memory.RememberedBefore(hazard.Creature, _fightSinceMs, now)))
             {
                 PlayerbotAnomalies.Report(player, "risk", "died-in-known-hazard",
                     $"died inside a '{hazard.Kind}' hazard of creature {hazard.Creature.Value:X} (radius {hazard.Radius:F1})");
@@ -444,7 +458,7 @@ internal sealed class PlayerbotRisk
         float distance = Vector3.Distance(here, there);
         spot = distance <= range || distance < 0.01f ? here : there + ((here - there) * (range / distance));
 
-        var enemies = new List<RiskEnemy> { Enemy(target, RiskJoin.Target, player) };
+        var enemies = new List<RiskEnemy> { Enemy(target, RiskJoin.Target, player) with { Remembered = IsRemembered(target) } };
         var counted = new HashSet<ObjectGuid> { target.Guid };
         List<PlayerbotThreat> threats = PlayerbotRecovery.Threats(player);
 
@@ -456,7 +470,7 @@ internal sealed class PlayerbotRisk
                     && system.CanAssist(helper, target, player, assist))
                 {
                     counted.Add(helper.Guid);
-                    enemies.Add(Enemy(helper, RiskJoin.Assist, player));
+                    enemies.Add(Enemy(helper, RiskJoin.Assist, player) with { Remembered = IsRemembered(helper) });
                 }
 
         // vmangos BasicAI::MoveInLineOfSight: any creature whose aggro radius covers where the bot will fight.
@@ -464,7 +478,7 @@ internal sealed class PlayerbotRisk
             if (threat.Source is { } creature && !counted.Contains(creature.Guid) && threat.Reaches(spot, 0f))
             {
                 counted.Add(creature.Guid);
-                enemies.Add(Enemy(creature, RiskJoin.FightSpot, player));
+                enemies.Add(Enemy(creature, RiskJoin.FightSpot, player) with { Remembered = IsRemembered(creature) });
             }
 
         fight = [.. counted];
@@ -475,7 +489,7 @@ internal sealed class PlayerbotRisk
                 if (threat.Source is { } creature && !counted.Contains(creature.Guid) && Covers(threat, approach.Points))
                 {
                     counted.Add(creature.Guid);
-                    enemies.Add(Enemy(creature, RiskJoin.Path, player));
+                    enemies.Add(Enemy(creature, RiskJoin.Path, player) with { Remembered = IsRemembered(creature) });
                 }
 
         float? mana = null;
@@ -496,6 +510,7 @@ internal sealed class PlayerbotRisk
             LootValue = LootValue(player, target.Template),
             DangerHits = Enabled ? Memory.Hits(player.MapId, there, target.Entry, now) : 0,
             Remembered = IsRemembered(target),
+            LostToKind = Enabled && Memory.LostAlone(target.Entry, now),
         };
     }
 
@@ -827,7 +842,8 @@ internal sealed class PlayerbotRisk
             PackExposureEvaluations++;
             float melee = PlayerbotRiskModel.CreatureDps(template.MinMeleeDamage, template.MaxMeleeDamage,
                 template.MeleeBaseAttackTime, creature.Level, template.Rank is 1 or 2 or 3);
-            _packExposures[index] = melee * creature.Health / denominator;
+            int above = creature.Level - player.Level;
+            _packExposures[index] = melee * PlayerbotRiskModel.CrushFactor(above) * creature.Health / (denominator * PlayerbotRiskModel.HitFactor(above));
         }
     }
 
@@ -1143,7 +1159,11 @@ internal sealed class PlayerbotRisk
     /// </summary>
     private void RememberFlight()
     {
-        Memory.Remember(_fledAt.MapId, _fledAt.Where, _fledFrom, _session.World.NowMs, _options.Risk.DangerMemorySeconds);
+        // A retreat from one creature is the estimate proved wrong about its kind (a death alone is not: one death to a kind still
+        // leaves it a target, the stall watch sets it aside at the second, PlayerbotStallWatch.RecordDeath).
+        Memory.Remember(_fledAt.MapId, _fledAt.Where, _fledFrom, _session.World.NowMs, _options.Risk.DangerMemorySeconds,
+            alone: _fledFrom.Length == 1);
+        _verdicts.Clear(); // weighed before the loss: the memory now says more about every candidate near it or of its kind
         Hazards.Add(_fledAt.MapId, _fledAt.Where, PlayerbotHazards.RetreatYards, _session.World.NowMs, _options.Risk.DangerMemorySeconds, "retreat");
     }
 

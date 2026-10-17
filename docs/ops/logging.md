@@ -35,7 +35,7 @@ Section `Logging:ArcaneCore` (every key also in `docs/reference/configuration.md
 | `Logging:ArcaneCore:Console:Mode` | `Color` | live | `Color`: ANSI colour per level, timestamp/category/scopes dimmed. `Plain`: no escape codes, fixed four-character level column (journald, CI, redirected stdout). `Off`: nothing on stdout. |
 | `Logging:ArcaneCore:Console:QueueCapacity` | `4096` | restart | Lines the console writer thread may hold before new lines are dropped. |
 | `Logging:ArcaneCore:File:Enabled` | `false` | restart | Plain text file sink on or off. |
-| `Logging:ArcaneCore:File:Path` | `logs/arcanecore.log` (shipped files: `logs/realm.log`, `logs/world.log`) | restart | Active file; relative to the working directory. Directory created on first write. |
+| `Logging:ArcaneCore:File:Path` | `logs/arcanecore.log` (shipped files: `logs/realm.log`, `logs/world.log`) | restart | Active file; relative to the working directory. Directory created on first write. One writer per file, across processes (a lock on `<path>.lock`, released when the writer closes or the process dies): a writer that finds the path owned writes `<name>.<process>.<ext>` instead (then `<name>.<process>.<pid>.<ext>`), says so once on stderr, and rolls that file under its own name. Give each daemon its own path. |
 | `Logging:ArcaneCore:File:RollSizeMb` | `64` | restart | Roll before a write would take the file past this size; `0` never rolls by size. |
 | `Logging:ArcaneCore:File:RollDaily` | `true` | restart | Roll at the first line of a new day (in the `Timestamps` clock). |
 | `Logging:ArcaneCore:File:Retain` | `14` | restart | Rolled segments kept; oldest beyond this deleted after each roll. `0` keeps all. |

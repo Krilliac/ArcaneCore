@@ -1,6 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
@@ -17,6 +18,99 @@ namespace ArcaneCore.World.Tests.Playerbots;
 
 public sealed class PlayerbotWaterTests
 {
+    /// <summary>
+    /// Bot QA #271 (drownings on the Sen'jin and Durotar coasts): the exit search planned at most 8 dry candidates, nearest ring first,
+    /// and the caller retries the same search every two seconds from the same place. When the near rings' dry candidates are ground no
+    /// walk reaches (here every one within 40 yards: a cliff top over a cove), the budget was spent on them every time, the beach 64
+    /// yards out was never asked for, and the bot stood under water until the breath timer killed it. Every ring is now asked within
+    /// the budget.
+    /// </summary>
+    [Fact]
+    public async Task ExitSearch_ReachesTheFarShore_WhenEveryNearDryCandidateIsUnreachable()
+    {
+        string dataDir = Path.Combine(Path.GetTempPath(), "arcanecore-water-exit-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dataDir, "maps"));
+        try
+        {
+            // Tile (32, 32): x in (-533.33, 0], water at 88 over ground at 83 (submerged); tile (31, 32): x in (0, 533.33], dry ground.
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 32, 32)), MapTileBytes(groundHeight: 83.0f, liquidLevel: 88f));
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 31, 32)), MapTileBytes(groundHeight: 83.53f, liquidLevel: null));
+            await using WorldTestHost host = WorldTestHost.Start(configure: options => options.Maps.DataDirectory = dataDir);
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.OnWorldAsync(() =>
+                {
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new FarOnlyPathfinder(40f));
+                    Player player = session.Player!;
+                    player.Relocate(-10f, -30f, 83.0f, 0f, host.World.NowMs);
+                    Map map = player.Map!;
+                    Assert.True(PlayerbotWater.Submerged(map, new Vector3(player.X, player.Y, player.Z), player.Locomotion.CollisionHeight));
+                    var options = new PlayerbotOptions { Enabled = true, MaxRouteYards = 300, MaxPathPoints = 128 };
+
+                    PlayerbotRoute? route = PlayerbotWater.FindExit(player, options);
+                    Assert.NotNull(route);
+                    Vector3 end = route!.Points[^1];
+                    Assert.False(PlayerbotWater.Submerged(map, end, player.Locomotion.CollisionHeight));
+                    Assert.True(Vector2.Distance(new(end.X, end.Y), new(player.X, player.Y)) >= 40f);
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally
+        {
+            if (Directory.Exists(dataDir)) Directory.Delete(dataDir, recursive: true);
+        }
+    }
+
+    /// <summary>No route to anything within <paramref name="nearYards"/> (flat): a cliff band round the cove; straight lines beyond.</summary>
+    private sealed class FarOnlyPathfinder(float nearYards) : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => Vector2.Distance(new(start.X, start.Y), new(end.X, end.Y)) < nearYards
+                ? PathResult.None(start)
+                : PathResult.StraightLine(start, end, PathType.Normal);
+    }
+
+    /// <summary>A one-cell map tile of flat ground, with flat water over it when <paramref name="liquidLevel"/> is set.</summary>
+    private static byte[] MapTileBytes(float groundHeight, float? liquidLevel)
+    {
+        bool hasLiquid = liquidLevel.HasValue;
+        byte[] bytes = new byte[hasLiquid ? 73 : 56];
+        Span<byte> span = bytes;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[0..], TerrainTile.MapMagic);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[4..], TerrainTile.MapVersionMagic);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[16..], 40u);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[20..], 16u);
+        if (hasLiquid)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[24..], 56u);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[28..], 17u);
+        }
+
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[40..], 0x5447484Du); // "MHGT"
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[44..], 1u); // MapHeightNoHeight
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[48..], groundHeight);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[52..], groundHeight);
+        if (hasLiquid)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[56..], 0x51494C4Du); // "MLIQ"
+            span[60] = 0x03; // MapLiquidNoType | MapLiquidNoHeight
+            span[61] = (byte)LiquidTypeFlags.Water;
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(span[62..], 1);
+            span[64] = 0;
+            span[65] = 0;
+            span[66] = 128;
+            span[67] = 128;
+            System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[68..], liquidLevel!.Value);
+        }
+
+        return bytes;
+    }
+
     [Fact]
     public async Task SubmergedBotWaitingForHealth_MovesBeforeItRests()
     {

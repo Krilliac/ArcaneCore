@@ -33,3 +33,50 @@ function Get-LiveDaemon {
     if ($found.Count -eq 0) { return $null }
     return $found[0]
 }
+
+function Get-LiveDaemonLogPath {
+    <#
+    .SYNOPSIS
+      The log a live daemon writes: <LiveHome>\logs\<role>.debug.log (text) or .jsonl (JSON lines). launch-daemon.ps1 sets these per role.
+    #>
+    param(
+        [Parameter(Mandatory)][ValidateSet('Realm', 'World')][string]$Role,
+        [Parameter(Mandatory)][string]$LiveHome,
+        [ValidateSet('Text', 'Json')][string]$Kind = 'Text'
+    )
+    $extension = if ($Kind -eq 'Json') { 'jsonl' } else { 'log' }
+    return Join-Path (Join-Path $LiveHome 'logs') "$($Role.ToLowerInvariant()).debug.$extension"
+}
+
+function Set-LiveDaemonLogEnvironment {
+    <#
+    .SYNOPSIS
+      Points this process's Logging:ArcaneCore:File:Path and Json:Path (environment configuration, which overrides the profile's
+      appsettings.json) at the role's own files, for the daemon started next from this process.
+    .DESCRIPTION
+      Both daemons start in the same profile directory and read the same appsettings.json. With one path for both, the daemon that starts
+      second finds the file owned (a log file has one writer) and writes <name>.<process>.<ext> instead; redeploy.ps1 starts the Realm
+      first, so the World would lose world.debug.log to it. Whether a sink is on stays the profile's choice (File:Enabled, Json:Enabled).
+    #>
+    param([Parameter(Mandatory)][ValidateSet('Realm', 'World')][string]$Role, [Parameter(Mandatory)][string]$LiveHome)
+    $env:Logging__ArcaneCore__File__Path = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome -Kind Text
+    $env:Logging__ArcaneCore__Json__Path = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome -Kind Json
+}
+
+function Get-LiveLogFallback {
+    <#
+    .SYNOPSIS
+      The fallback files (<role>.debug.<process>[.<pid>].<ext> and their rolled segments) written at or after -SinceUtc. A writer
+      creates one only when another writer already owns the role's log, so any result means the role's log is not the role's alone.
+    #>
+    param(
+        [Parameter(Mandatory)][ValidateSet('Realm', 'World')][string]$Role,
+        [Parameter(Mandatory)][string]$LiveHome,
+        [Parameter(Mandatory)][DateTime]$SinceUtc
+    )
+    $stem = "$($Role.ToLowerInvariant()).debug"
+    $own = '^' + [regex]::Escape($stem) + '\.(log|jsonl)$'
+    $since = $SinceUtc.ToUniversalTime()
+    Get-ChildItem -LiteralPath (Join-Path $LiveHome 'logs') -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name.StartsWith("$stem.", [StringComparison]::Ordinal) -and $_.Name -notmatch $own -and $_.Extension -ne '.lock' -and $_.LastWriteTimeUtc -ge $since }
+}

@@ -43,8 +43,8 @@ if (-not [DevRunnerConsole]::AttachConsole([uint32]$ProcessId)) {
 # Keep the delegate referenced for as long as the handler is installed; returning true swallows the event here.
 $handler = [DevRunnerConsole+Handler] { param([uint32]$type) $true }
 [void][DevRunnerConsole]::SetConsoleCtrlHandler($handler, $true)
-$event = if ($Signal -eq 'C') { 0 } else { 1 }
-$sent = [DevRunnerConsole]::GenerateConsoleCtrlEvent([uint32]$event, 0)
+$ctrlEvent = if ($Signal -eq 'C') { 0 } else { 1 }
+$sent = [DevRunnerConsole]::GenerateConsoleCtrlEvent([uint32]$ctrlEvent, 0)
 Start-Sleep -Milliseconds 1500
 [void][DevRunnerConsole]::SetConsoleCtrlHandler($handler, $false)
 [void][DevRunnerConsole]::FreeConsole()

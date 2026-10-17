@@ -24,7 +24,8 @@ namespace ArcaneCore.World.Playerbots;
 /// Bounded ordinary vendor/trainer goals for one managed player: repairs (mangoszero RepairAllAction: any equipped item broken or
 /// under a quarter of its durability, at an NPC with the repair flag), food and drink, a hunter's ammunition, gray items, junk
 /// when the bags are full, and trainer spells. Every request goes through the real NPC handler. Badly worn gear
-/// (<see cref="NeedsRepairTrip"/>) is also a reason to travel to a repair NPC out of sight (<see cref="TravelToRepair"/>).
+/// (<see cref="NeedsRepairTrip"/>) is also a reason to travel to a repair NPC out of sight (<see cref="TravelToRepair"/>), and full bags
+/// with something to sell (<see cref="SellTripNeeded"/>) a reason to travel to a vendor.
 /// </summary>
 internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions options)
 {
@@ -93,7 +94,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private uint? ClassTrainingLimit(Player player) => Budget?.Spendable(PlayerbotSpendKind.ClassTraining, player);
 
     internal bool HasCandidate(Player player)
-        => FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair) is not null || RepairTripWanted(player);
+        => FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair) is not null || TripWanted(player) != NpcFlags.None;
 
     internal bool Update(Player player, uint elapsedMs)
     {
@@ -406,7 +407,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairSpawns = [];
     private readonly HashSet<uint> _blockedRepairSpawns = [];
-    private (uint MapId, CreatureContent? Content, int Version) _repairIndex;
+    private (uint MapId, CreatureContent? Content, int Version, NpcFlags Service) _repairIndex;
     private PlayerbotRoute? _repairRoute;
     private uint _repairSpawn;
     private uint _repairMissReported;
@@ -418,23 +419,29 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private float _repairBest = float.PositiveInfinity;
 
     /// <summary>
-    /// A repair trip is worth starting: the gear needs it (<see cref="NeedsRepairTrip"/>), the last repair did not come to nothing a
-    /// minute ago (<see cref="RepairBackoffMs"/>), the bot is not resting from an earlier trip that found nothing, and it can pay for at
-    /// least one of its damaged worn items (<see cref="CheapestWornRepair"/>): with too little money the gear stays as it is, and the
-    /// question is asked again at the next think.
+    /// The trip worth starting to a service NPC out of sight, as the service it is for (<see cref="NpcFlags.None"/>: none). A repair
+    /// (<see cref="NpcFlags.Repair"/>) first: the gear needs it (<see cref="NeedsRepairTrip"/>), the last repair did not come to nothing a
+    /// minute ago (<see cref="RepairBackoffMs"/>), and the bot can pay for at least one of its damaged worn items (<see cref="CheapestWornRepair"/>):
+    /// with too little money the gear stays as it is, and the question is asked again at the next think. Else a sale
+    /// (<see cref="NpcFlags.Vendor"/>): the bags are full and hold something the bot sells (<see cref="SellTripNeeded"/>). Either waits while
+    /// the bot rests from an earlier trip that found nothing.
     /// </summary>
-    private bool RepairTripWanted(Player player)
+    private NpcFlags TripWanted(Player player)
     {
-        if (!player.IsAlive) return false;
-        if (!NeedsRepairTrip(player))
+        if (!player.IsAlive) return NpcFlags.None;
+        QuestNpcServices? services = session.Services.GetService<QuestNpcFeature>()?.Services;
+        bool repairDue = NeedsRepairTrip(player);
+        bool sellDue = services is not null && SellTripNeeded(player, services);
+        if (!repairDue && !sellDue)
         {
-            _repairEmptyRounds = 0; // the gear is fine (whatever the bot's money): the next trip starts with the short rest again
-            return false;
+            _repairEmptyRounds = 0; // the gear is fine and the bags are not full (whatever the bot's money): the next trip starts with the short rest again
+            return NpcFlags.None;
         }
 
-        if (player.Money == 0) return false;
         uint now = session.World.NowMs;
-        if (_repairBackoffUntil != 0 && unchecked(now - _repairBackoffUntil) > int.MaxValue) return false;
+        bool repair = repairDue && player.Money != 0
+            && !(_repairBackoffUntil != 0 && unchecked(now - _repairBackoffUntil) > int.MaxValue);
+        if (!repair && !sellDue) return NpcFlags.None;
         if (_repairEmptyRounds > 0)
         {
             // Another map, or far from where the last round found nothing (also once the rest is over): the way from here may be open,
@@ -445,12 +452,21 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 _repairTripBackoffUntil = 0;
                 _repairEmptyRounds = 0;
             }
-            else if (_repairTripBackoffUntil != 0 && unchecked(now - _repairTripBackoffUntil) > int.MaxValue) return false;
+            else if (_repairTripBackoffUntil != 0 && unchecked(now - _repairTripBackoffUntil) > int.MaxValue) return NpcFlags.None;
         }
 
-        return session.Services.GetService<QuestNpcFeature>()?.Services is { } services
-            && CheapestWornRepair(player, services) is { } cost && cost <= player.Money;
+        if (repair && services is not null && CheapestWornRepair(player, services) is { } cost && cost <= player.Money) return NpcFlags.Repair;
+        return sellDue ? NpcFlags.Vendor : NpcFlags.None;
     }
+
+    /// <summary>
+    /// Full bags (no free slot, <see cref="FreeBagSlots"/>) holding something the bot sells (junk, <see cref="FindJunk"/>, or a gray item,
+    /// <see cref="SellableGrays"/>): a reason to walk to a vendor out of sight, as badly worn gear is to a repair NPC. Before, junk was sold
+    /// only when a vendor happened to be in sight, and a bot with full bags left every corpse it killed unlooted and went on exploring and
+    /// killing (bot QA #684, #700, #705, #741, #845, #884 and more: <c>loot-bag-full -> goal=Explore</c> in the trace before the stall).
+    /// </summary>
+    private bool SellTripNeeded(Player player, QuestNpcServices services)
+        => FreeBagSlots(player) == 0 && (FindJunk(player, services) is not null || SellableGrays(player, services).Any());
 
     /// <summary>
     /// The price of the cheapest damaged worn item's repair, by the server's own pricing (<see cref="IItemService.Repair"/>, asked with
@@ -477,7 +493,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     /// <summary>
     /// Walk toward the nearest repair NPC of the map (a creature_template with UNIT_NPC_FLAG_REPAIR that the bot's faction may approach,
-    /// <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>) while <see cref="RepairTripWanted"/> holds; once it is in sight the
+    /// <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>) while <see cref="TripWanted"/> names a trip (or toward the nearest vendor, for a sale); once it is in sight the
     /// ordinary visit (<see cref="FindNpc"/>, <see cref="TryRepair"/>: CMSG_REPAIR_ITEM through vmangos HandleRepairItemOpcode, each item
     /// paid for or skipped when unaffordable) takes over. A spawn the walk cannot plan to, or stops closing on for
     /// <see cref="RepairTripStuckMs"/>, is set aside for this trip; with none left the trip rests for <see cref="RepairTripBackoffMs"/>.
@@ -485,7 +501,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     /// </summary>
     private bool TravelToRepair(Player player, QuestNpcServices services, uint elapsedMs)
     {
-        if (!RepairTripWanted(player) || player.Map is not { } map)
+        NpcFlags service = TripWanted(player);
+        if (service == NpcFlags.None || player.Map is not { } map)
         {
             ClearRepairTrip();
             return false;
@@ -493,7 +510,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
         uint now = session.World.NowMs;
         OpenThinkIfClockMoved(now);
-        RefreshRepairSpawns(player, map.MapId, services);
+        RefreshRepairSpawns(player, map.MapId, services, service);
         Vector3 here = new(player.X, player.Y, player.Z);
         // The spawn being walked to: closing on it resets the stuck clock; a route walked to its end (a route toward a far goal is
         // one leg of the way, PlayerbotNavigation.TryPlanToward) is planned again from here, and only no closing for
@@ -508,7 +525,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             {
                 _repairMissReported = _repairSpawn;
                 PlayerbotAnomalies.Report(player, "town", "service-npc-missing",
-                    $"stands {left:F1} yd from the spawn of repair NPC {current.Entry} (spawn {_repairSpawn}) and finds no usable service NPC in sight");
+                    $"stands {left:F1} yd from the spawn of {(service == NpcFlags.Repair ? "repair NPC" : "vendor")} {current.Entry} (spawn {_repairSpawn}) and finds no usable service NPC in sight");
             }
             if (left < _repairBest - 0.5f) { _repairBest = left; _repairStuckMs = 0; }
             else if (!_repairClockedThisThink && !PlayerbotMount.IsBusy(session)) _repairStuckMs += elapsedMs; // a second Update of one think does not run the clock twice
@@ -625,14 +642,18 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         _repairBest = float.PositiveInfinity;
     }
 
-    /// <summary>The repair NPC spawns of the map the bot may approach, kept until the map or the creature content changes.</summary>
-    private void RefreshRepairSpawns(Player player, uint mapId, QuestNpcServices services)
+    /// <summary>
+    /// The spawns of the map's NPCs of <paramref name="service"/> the bot may approach (repair NPCs; or vendors with something on sale, so
+    /// that they buy too), kept until the map, the service or the creature content changes.
+    /// </summary>
+    private void RefreshRepairSpawns(Player player, uint mapId, QuestNpcServices services, NpcFlags service)
     {
         CreatureContent? content = session.Services.GetService<CreatureWorldFeature>()?.Content;
         if (content is null) { _repairSpawns.Clear(); return; }
-        if (_repairIndex.MapId == mapId && ReferenceEquals(_repairIndex.Content, content) && _repairIndex.Version == content.DefinitionsVersion)
+        if (_repairIndex.MapId == mapId && ReferenceEquals(_repairIndex.Content, content) && _repairIndex.Version == content.DefinitionsVersion
+            && _repairIndex.Service == service)
             return;
-        _repairIndex = (mapId, content, content.DefinitionsVersion);
+        _repairIndex = (mapId, content, content.DefinitionsVersion, service);
         _repairSpawns.Clear();
         _blockedRepairSpawns.Clear();
         ClearRepairTrip();
@@ -640,7 +661,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         Vector3 here = new(player.X, player.Y, player.Z);
         foreach (CreatureTemplate template in content.Templates)
         {
-            if (((NpcFlags)template.NpcFlags & NpcFlags.Repair) == 0
+            if (((NpcFlags)template.NpcFlags & service) == 0
+                || service == NpcFlags.Vendor && services.Npcs.VendorItems(template.Entry).Count == 0
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction)) continue;
             foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry))
                 if (float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z)) _repairSpawns.Add((template.Entry, spawn));

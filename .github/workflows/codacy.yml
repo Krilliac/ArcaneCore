@@ -50,16 +50,20 @@ jobs:
       # more than 20 runs in one upload. Give each run its own category, codacy/<tool>/ (a repeated tool gets -1, -2, ...), so each
       # tool's alerts keep a stable home across scans, then split the runs, sorted by category, into files of at most 20, one upload
       # each. The uploads set no category of their own: one would override these. More runs than the three uploads hold fail here.
-      # Code scanning also rejects the whole file when one run holds more than 25,000 results (25,876 on 2026-10-16). Style and
-      # complexity linters (markdownlint, lizard) are not security findings and are dropped; any other run over the cap keeps its
-      # most severe 25,000 results and says so in the log.
+      # Code scanning also rejects the whole file when one run holds more than 25,000 results (25,876 on 2026-10-16). Style, lint
+      # and complexity tools (markdownlint, remark-lint, lizard, pylint, prospector, ruff, PSScriptAnalyzer) are not security
+      # findings and are dropped: they were about 2,616 of the 2,798 open Codacy alerts on 2026-10-16. Names match by prefix of
+      # the normalised driver name, so "pylint" also covers pylintpython3. The security tools (bandit, opengrep, shellcheck,
+      # cppcheck, flawfinder, ...) are kept, and any run over the cap keeps its most severe 25,000 results and says so in the log.
+      # Dropping a tool here stops new uploads only: its existing alerts stay open until they are dismissed.
       - name: Give each Codacy tool its own SARIF category
         run: |
           python3 - <<'PY'
           import json, re, sys
           with open("results.sarif", encoding="utf-8") as f:
               sarif = json.load(f)
-          NOT_SECURITY = ("markdownlint", "lizard")
+          NOT_SECURITY = ("markdownlint", "remark-lint", "remarklint", "lizard", "pylint", "pylintpython3", "prospector", "ruff",
+                          "psscriptanalyzer")
           MAX_RESULTS = 25000
           SEVERITY = {"error": 0, "warning": 1, "note": 2, "none": 3}
           seen = {}

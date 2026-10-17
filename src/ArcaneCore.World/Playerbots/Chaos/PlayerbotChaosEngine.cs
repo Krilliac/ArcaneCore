@@ -253,21 +253,24 @@ public sealed class PlayerbotChaosEngine
     }
 
     /// <summary>
-    /// Observe post-probe movement progress on <paramref name="player"/> and report <c>bot-chaos/probe-left-bot-stuck</c> once per episode
-    /// if a bot with an active movement route makes no progress for <see cref="PostProbeStuckTimeoutMs"/> after a chaos probe.
+    /// Observe movement progress on <paramref name="player"/> and report <c>bot-chaos/probe-left-bot-stuck</c> once per episode if a bot
+    /// whose movement route was active when a chaos probe hit it makes no progress for <see cref="PostProbeStuckTimeoutMs"/> after it.
+    /// The episode ends when the bot moves on, or its motion ends or something else takes it over (a fight, death, a flight); progress is
+    /// tracked before any probe too, so a bot already stalled when the probe came (<see cref="PreProbeStallMs"/>) does not start one.
+    /// GitHub #814: with a watch that never ended, different probes "left" bots stuck at the same spot (1601.0,427.6,-3.1) minutes after them.
     /// </summary>
     public void ObserveBotProgress(Guid botId, Player player, uint nowMs)
     {
-        if (!_postProbeWatches.TryGetValue(botId, out PostProbeWatch? watch) || !watch.HasProbed)
-            return;
-
-        if (!player.IsInWorld
-            || player.Map is null
-            || !player.IsAlive
-            || IsTraveling(player)
-            || player.Combat.IsInCombat
-            || !PlayerbotMotion.IsActive(player))
+        bool moving = IsMovingFreely(player);
+        if (!_postProbeWatches.TryGetValue(botId, out PostProbeWatch? watch))
         {
+            if (!moving) return;
+            watch = _postProbeWatches.GetOrAdd(botId, static _ => new PostProbeWatch());
+        }
+
+        if (!moving)
+        {
+            watch.HasProbed = false;
             watch.WatchingMotion = false;
             watch.Reported = false;
             return;
@@ -275,13 +278,7 @@ public sealed class PlayerbotChaosEngine
 
         if (!watch.WatchingMotion || watch.MapId != player.MapId)
         {
-            watch.WatchingMotion = true;
-            watch.MotionSinceMs = nowMs;
-            watch.StartX = player.X;
-            watch.StartY = player.Y;
-            watch.StartZ = player.Z;
-            watch.MapId = player.MapId;
-            watch.Reported = false;
+            StartWatching(watch, player, nowMs);
             return;
         }
 
@@ -291,13 +288,13 @@ public sealed class PlayerbotChaosEngine
         float distSq = (dx * dx) + (dy * dy) + (dz * dz);
         if (distSq >= PostProbeMinProgressYards * PostProbeMinProgressYards)
         {
-            watch.MotionSinceMs = nowMs;
-            watch.StartX = player.X;
-            watch.StartY = player.Y;
-            watch.StartZ = player.Z;
-            watch.Reported = false;
+            // The bot moved on: a probe before this did not leave it stuck, and its episode ends here.
+            watch.HasProbed = false;
+            StartWatching(watch, player, nowMs);
             return;
         }
+
+        if (!watch.HasProbed) return; // a stall no probe preceded is not the chaos engine's to report
 
         uint elapsedMs = unchecked(nowMs - watch.MotionSinceMs);
         if (!watch.Reported && elapsedMs >= PostProbeStuckTimeoutMs)
@@ -310,6 +307,34 @@ public sealed class PlayerbotChaosEngine
                 $"bot made no movement progress ({MathF.Sqrt(distSq):F2} yd) for {elapsedMs} ms after chaos probe '{watch.LastProbe}' while motion remained active",
                 AnomalySeverity.Warning);
         }
+    }
+
+    /// <summary>How long a bot may already have been making no progress when a probe hits it before the stall is counted as its own.</summary>
+    public const uint PreProbeStallMs = PostProbeStuckTimeoutMs / 4;
+
+    private static bool IsMovingFreely(Player player)
+        => player.IsInWorld && player.Map is not null && player.IsAlive && !IsTraveling(player)
+            && !player.Combat.IsInCombat && PlayerbotMotion.IsActive(player);
+
+    private static void StartWatching(PostProbeWatch watch, Player player, uint nowMs)
+    {
+        watch.WatchingMotion = true;
+        watch.MotionSinceMs = nowMs;
+        watch.StartX = player.X;
+        watch.StartY = player.Y;
+        watch.StartZ = player.Z;
+        watch.MapId = player.MapId;
+        watch.Reported = false;
+    }
+
+    /// <summary>Test seam: run one named probe exactly as a burst runs it (budget lifted, verified and healed after), on the world thread.</summary>
+    internal void RunProbe(Guid botId, WorldSession session, Player player, ChaosProbeCategory category, string probeName,
+        WorldOpcode opcode, byte[] payload)
+    {
+        ManagedActionBudget? savedBudget = session.ManagedBudget;
+        session.ManagedBudget = null;
+        try { ExecuteSingleProbe(botId, session, player, category, probeName, opcode, payload, new Random(0)); }
+        finally { session.ManagedBudget = savedBudget; }
     }
 
     private int RunProbes(Guid botId, WorldSession session, Player player, int count)
@@ -394,17 +419,18 @@ public sealed class PlayerbotChaosEngine
         if (executed > 0)
         {
             PostProbeWatch watch = _postProbeWatches.GetOrAdd(botId, static _ => new PostProbeWatch());
-            watch.HasProbed = true;
             watch.LastProbe = lastProbeName;
-            if (!watch.WatchingMotion && PlayerbotMotion.IsActive(player) && player.IsAlive && !player.Combat.IsInCombat && !IsTraveling(player))
+            uint now = session.World.NowMs;
+            if (!watch.HasProbed && IsMovingFreely(player))
             {
-                watch.WatchingMotion = true;
-                watch.MotionSinceMs = session.World.NowMs;
-                watch.StartX = player.X;
-                watch.StartY = player.Y;
-                watch.StartZ = player.Z;
-                watch.MapId = player.MapId;
-                watch.Reported = false;
+                // A new episode only for a bot that was making progress: one already stalled before the probe was stuck without it.
+                bool stalledBefore = watch.WatchingMotion && watch.MapId == player.MapId
+                    && unchecked(now - watch.MotionSinceMs) >= PreProbeStallMs;
+                if (!stalledBefore)
+                {
+                    watch.HasProbed = true;
+                    StartWatching(watch, player, now);
+                }
             }
         }
 
@@ -428,6 +454,7 @@ public sealed class PlayerbotChaosEngine
         var prevLastSafe = player.LastSafePosition;
         StandState prevStandState = player.StandState;
         bool prevAlive = player.IsAlive;
+        bool prevMayReclaim = MayReclaimCorpse(player);
         _ = player.ConsumeRejectedNonFiniteRelocation();
         Interlocked.Increment(ref _probesExecuted);
         Interlocked.Increment(ref _categoryCounts[(int)category]);
@@ -473,7 +500,8 @@ public sealed class PlayerbotChaosEngine
             in prevMovement,
             prevLastSafe,
             prevStandState,
-            prevAlive);
+            prevAlive,
+            prevMayReclaim);
     }
 
     private void DispatchProbePacket(WorldSession session, Player player, WorldOpcode opcode, byte[] payload)
@@ -578,7 +606,8 @@ public sealed class PlayerbotChaosEngine
         in MovementInfo prevMovement,
         (uint MapId, float X, float Y, float Z, float O)? prevLastSafe,
         StandState prevStandState,
-        bool prevAlive)
+        bool prevAlive,
+        bool prevMayReclaim = false)
     {
         player.LastSafePosition = prevLastSafe;
 
@@ -670,7 +699,13 @@ public sealed class PlayerbotChaosEngine
                 AnomalySeverity.Warning);
         }
 
-        if (prevAlive != player.IsAlive
+        // CMSG_RECLAIM_CORPSE carries a corpse GUID the server never reads (vmangos HandleReclaimCorpseOpcode; CombatHandlers): a whole
+        // packet, whatever GUID it names (the bot's own, a bogus one), from a ghost the reclaim rules allowed is a legitimate reclaim,
+        // not bad input (GitHub #785, and the heal-mismatch it caused, #783). A truncated packet is still bad input: vmangos throws on
+        // the short read and never reaches the handler.
+        bool legitimateReclaim = !prevAlive && player.IsAlive && prevMayReclaim
+            && opcode == WorldOpcode.CmsgReclaimCorpse && payload.Length >= sizeof(ulong);
+        if (prevAlive != player.IsAlive && !legitimateReclaim
             && (category == ChaosProbeCategory.DeathAndResurrection || opcode is WorldOpcode.CmsgRepopRequest or WorldOpcode.CmsgSelfRes or WorldOpcode.CmsgReclaimCorpse or WorldOpcode.CmsgResurrectResponse))
         {
             PlayerbotAnomalies.Report(
@@ -749,7 +784,7 @@ public sealed class PlayerbotChaosEngine
         bool mapMismatch = player.MapId != prevMapId || !ReferenceEquals(player.Map, prevMap);
         bool moveMismatch = player.Movement.Flags != expectedFlags || player.Movement.TransportGuid != prevMovement.TransportGuid;
         bool safeMismatch = player.LastSafePosition != prevLastSafe;
-        bool lifeMismatch = player.IsAlive != prevAlive;
+        bool lifeMismatch = player.IsAlive != prevAlive && !legitimateReclaim;
         if (posMismatch || mapMismatch || moveMismatch || safeMismatch || lifeMismatch || player.IsLoggingOut)
         {
             PlayerbotAnomalies.Report(
@@ -759,6 +794,21 @@ public sealed class PlayerbotChaosEngine
                 $"post-probe heal mismatch after {category}/{probeName} ({opcode}): posMismatch={posMismatch}, mapMismatch={mapMismatch} ({prevMapId}->{player.MapId}), moveMismatch={moveMismatch} ({expectedFlags}->{player.Movement.Flags}), safeMismatch={safeMismatch}, lifeMismatch={lifeMismatch} ({prevAlive}->{player.IsAlive}), loggingOut={player.IsLoggingOut}",
                 AnomalySeverity.Error);
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="player"/> may reclaim its corpse right now by the server's rules (<see cref="MapCombat.TryReclaimCorpse"/>,
+    /// vmangos HandleReclaimCorpseOpcode): a ghost with a corpse in its map whose reclaim delay has passed, strictly within
+    /// <see cref="CombatConstants.CorpseReclaimRadius"/> plus both bounding radii (3D). Read before a probe: a reclaim removes the corpse.
+    /// </summary>
+    internal static bool MayReclaimCorpse(Player player)
+    {
+        if (player.IsAlive || (player.Flags & PlayerFlags.Ghost) == 0 || player.Combat.Corpse is not { } corpse
+            || player.Map is not { } map || !ReferenceEquals(corpse.Map, map) || map.Combat.CorpseReclaimWaitSeconds(player) > 0)
+            return false;
+        float dx = corpse.X - player.X, dy = corpse.Y - player.Y, dz = corpse.Z - player.Z;
+        float max = CombatConstants.CorpseReclaimRadius + corpse.BoundingRadius + player.BoundingRadius;
+        return (dx * dx) + (dy * dy) + (dz * dz) < max * max;
     }
 
     private sealed class PostProbeWatch

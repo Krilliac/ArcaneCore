@@ -6,12 +6,12 @@ namespace ArcaneCore.Game.Tests.Npc;
 public sealed class QuestNpcOptionsTests
 {
     [Fact]
-    public void SettlementBudget_DefaultsToTheShippedFiveSeconds()
+    public void SettlementBudget_DefaultsToTheShippedFifteenSeconds()
     {
         var options = new QuestNpcOptions();
 
-        Assert.Equal(5, options.SettlementBudgetSeconds);
-        Assert.Equal(TimeSpan.FromSeconds(5), options.SettlementBudget);
+        Assert.Equal(15, options.SettlementBudgetSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(15), options.SettlementBudget);
     }
 
     [Theory]
