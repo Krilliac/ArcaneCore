@@ -117,6 +117,22 @@ A malformed, duplicated or missing file fails startup; an unset file with modifi
 count. `SpellModFeature` and `TalentModCoverage` print the numbers, which is the operator's counter (this repository has no
 `Spell.dbc`, so per-class counts could not be measured here).
 
+### Producing the overlay (operator step)
+
+Run the importer against the same dump the world was built from (a world's `sql-import.json` names it and its sha256), with the
+output outside the repository (the importer refuses a path inside it):
+
+```
+dotnet run --project tools/ArcaneCore.ContentImporter -c Debug -- class-masks <ClassicDB_1_12_1_z2815.sql.gz> --class-mask-file <dir>/class-masks-classicdb-z2815.txt
+```
+
+It prints `spell_affect: 132 row(s), 15 above 32 bits, 7 empty, 0 skipped` for classic-db z2815 and writes one line per row. Set
+`Spells:Mods:ClassMaskFile` to that file and restart the world; the file is read once at startup. Measured against a z2815 world
+(2026-10-17): the startup warning counts 225 of 1309 modifier effects with an empty mask; the overlay gives 106 of them a mask and
+7 more stay empty because their `spell_affect` mask is 0, so 119 remain without a mask after the overlay (classic-db has no
+`spell_affect` row for them). With the file set, startup logs `class mask overlay <file>: 132 row(s), 15 above 32 bits` and an
+information line with the remaining empty count instead of the warning.
+
 ## Limits and open questions
 
 - **Operations not wired** (nothing in the base reads them yet): SPEED and ATTACK_POWER on an aura's own amount (`SpellAuras.cpp:3982`,
