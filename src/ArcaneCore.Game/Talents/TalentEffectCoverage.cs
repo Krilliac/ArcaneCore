@@ -1,5 +1,6 @@
 using System.Text;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Druid;
 using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Scripts;
@@ -157,6 +158,20 @@ public static class TalentEffectCoverage
         new(ExternalReaderKind.ClassScript, 834, 0, "Spells/Stances/ShapeshiftService.cs", @"\(834, 200\)"),
         new(ExternalReaderKind.ClassScript, 835, 0, "Spells/Stances/ShapeshiftService.cs", @"\(835, 250\)"),
         new(ExternalReaderKind.ClassScript, 831, 0, "Spells/Stances/ShapeshiftService.cs", @"GetTacticalMasteryRage\(target\)"),
+
+        // Leader of the Pack (ShapeshiftService): knowing the talent spell casts the party aura 24932 on entering Cat, Bear or Dire Bear Form
+        // (vmangos Player::_ApplyShapeshiftFormBoost / CastFormBoost); the dummy aura itself does nothing.
+        new(ExternalReaderKind.DummySpell, FormBoostTable.LeaderOfThePackKnownSpell, 0, "Spells/Stances/ShapeshiftService.cs",
+            @"known\.Contains\(FormBoostTable\.LeaderOfThePackKnownSpell\)"),
+
+        // Seal of Command (the talent's seal, 20375): its third effect's dummy aura names the judgement (20425), which Judgement reads off every seal
+        // (vmangos SpellEffects.cpp:4502-4529, "all seals have judgement's aura dummy spell id in 2 effect").
+        new(ExternalReaderKind.DummySpell, 20375, 0, "Spells/Paladin/PaladinSpellScripts.cs",
+            @"holder\.Auras\[JudgementEffectIndex\] is not \{ Type: AuraType\.Dummy \}"),
+
+        // Spirit of Redemption (20711): the killing blow on a priest with the talent aura makes the spirit (vmangos Unit::Kill, Unit.cpp:1108-1140).
+        new(ExternalReaderKind.DummySpell, SpellSystem.SpiritOfRedemptionTalent, 0, "Spells/SpellSystem.SpiritOfRedemption.cs",
+            @"HasAura\(priest, SpiritOfRedemptionTalent\)"),
 
         // Demonic Sacrifice: removed when a demon is summoned (SummonService) and kept through death (ResurrectEffects).
         new(ExternalReaderKind.ClassScript, (uint)DemonicSacrificeScript.ClassScriptMisc, 0, "Pets/SummonService.Demons.cs",
