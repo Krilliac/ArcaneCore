@@ -33,6 +33,15 @@ public static class PooledFileReader
     public static bool TryParse<T>(string path, Parser<T> parse, [MaybeNullWhen(false)] out T result)
     {
         ArgumentNullException.ThrowIfNull(parse);
+        // Most missing tiles (open sea, unbuilt edges) are probed over and over; a FileNotFoundException per probe was the World's most
+        // frequent first-chance exception (1,400 in one live session, each one a crash-report dump at Debug). The catch below still
+        // covers a file removed between this check and the open.
+        if (!File.Exists(path))
+        {
+            result = default;
+            return false;
+        }
+
         FileStream stream;
         try
         {
