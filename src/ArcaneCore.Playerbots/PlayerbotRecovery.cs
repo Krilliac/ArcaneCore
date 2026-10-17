@@ -665,7 +665,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             case PlayerbotRecoveryStep.WalkToCorpse:
                 PlayerbotThinkProbe.Phase("recovery corpse walk");
                 if (corpse is not { } walkCorpse) return false;
-                bool walkedToBody = Walk(player, new Vector3(walkCorpse.X, walkCorpse.Y, walkCorpse.Z), walkCorpse.Guid, elapsedMs, now);
+                bool walkedToBody = Walk(player, new Vector3(walkCorpse.X, walkCorpse.Y, walkCorpse.Z), walkCorpse.Guid, elapsedMs, now, reachesGoalOnFoot: true);
                 return _refusedPlans < MaxRefusedPlans ? walkedToBody : GiveUpUnreachableBody(player, walkCorpse, now);
 
             case PlayerbotRecoveryStep.WalkToEntrance:
@@ -1492,6 +1492,23 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// </summary>
     internal const float BodyThreatYards = CombatConstants.CorpseReclaimRadius + 50f;
     /// <summary>
+    /// Whether <paramref name="route"/> (a partial route: the mesh ended before the goal) ends where the goal cannot be closed on foot: the
+    /// goal is farther than <see cref="CombatConstants.CorpseReclaimRadius"/> from its end, more than that above or below it (a ghost
+    /// reclaims within that radius, and no stretch of it is walkable straight up), and the route did not narrow that vertical gap. On the
+    /// real Teldrassil mesh the corpse run from Rut'theran graveyard to a body 438 yards up over the sea planned a route 230 yards out to
+    /// sea, flat-closing on the body, and the ghost walked it for 35 s before the no-progress bound ended it. A route that narrows the
+    /// gap (a climb, a descent) stays a route. Such a plan is refused, and <see cref="MaxRefusedPlans"/> of them give the body up.
+    /// </summary>
+    private static bool LeavesGoalOutOfVerticalReach(Player player, PlayerbotRoute route, Vector3 goal)
+    {
+        if (route.Points.Count < 2) return false;
+        Vector3 end = route.Points[^1];
+        float gap = MathF.Abs(end.Z - goal.Z);
+        if (gap <= CombatConstants.CorpseReclaimRadius || Vector3.Distance(end, goal) <= CombatConstants.CorpseReclaimRadius) return false;
+        return gap >= MathF.Abs(route.Points[0].Z - goal.Z) - PlayerbotNavigation.PartialProgressYards;
+    }
+
+    /// <summary>
     /// Walk towards <paramref name="goal"/> (identified by <paramref name="key"/>) in bounded chunks. Two things count as closing for
     /// the stuck bound (<see cref="StuckMs"/>): a straight-line distance to the goal shorter than any before, and, on the route being
     /// followed, less way left along it (its remaining legs, then straight on to the goal). A route down a switchback leads away from
@@ -1500,7 +1517,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     /// corpse run stuck and took the spirit healer. Only the straight-line measure is progress for <see cref="NoProgressMs"/>, so
     /// routes that keep leading nowhere still end in the spirit healer.
     /// </summary>
-    private bool Walk(Player player, Vector3 goal, object key, uint elapsedMs, long now, bool countsAsProgress = true)
+    private bool Walk(Player player, Vector3 goal, object key, uint elapsedMs, long now, bool countsAsProgress = true, bool reachesGoalOnFoot = false)
     {
         if (!Equals(_goal, key))
         {
@@ -1520,6 +1537,13 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
                 // A refusal counts toward MaxRefusedPlans, which the callers turn into giving the goal up.
                 if (planned == PlanOutcome.Pending) MarkClosing(now);
                 else _refusedPlans++;
+                return false;
+            }
+
+            if (reachesGoalOnFoot && _route is { } plannedRoute && LeavesGoalOutOfVerticalReach(player, plannedRoute, goal))
+            {
+                _route = null;
+                _refusedPlans++;
                 return false;
             }
 

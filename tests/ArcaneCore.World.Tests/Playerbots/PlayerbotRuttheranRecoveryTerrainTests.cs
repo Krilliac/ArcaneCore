@@ -74,12 +74,10 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         RecoveryRun run = await RunRecoveryAsync(terrain, maxThinks: 900);
 
         Assert.True(run.Fault is null, $"the recovery threw ({run.Fault}): {run.Path}");
-        // The mesh ends in the sea 230 yards out and reaches neither the body (438 yards up, 1,000 out) nor any way to it: the run walks that
-        // partial route down (a plan that closes on the goal is a route, not a refusal), then no plan is left. What must stay bounded is
-        // the refusals (live: hundreds), and the whole run by the no-progress bound that cuts a walk that keeps leading nowhere.
-        Assert.True(run.PlanlessCorpseThinks <= PlayerbotRecovery.MaxRefusedPlans + 6,
-            $"{run.PlanlessCorpseThinks} thinks of a corpse run with no plan: {run.Path}");
-        Assert.True(run.CorpseThinks <= PlayerbotRecovery.NoProgressMs / 500,
+        // The mesh ends in the sea 230 yards out and reaches neither the body (438 yards up, 1,000 out) nor any way to it. That partial route
+        // closes on the body flat but leaves it 438 yards out of vertical reach, so the corpse run refuses it
+        // (PlayerbotRecovery.LeavesGoalOutOfVerticalReach) instead of walking it out to sea; the refusals give the body up.
+        Assert.True(run.CorpseThinks <= PlayerbotRecovery.MaxRefusedPlans + 6,
             $"{run.CorpseThinks} thinks on a corpse run no plan reaches: {run.Path}");
         Assert.True(run.TookPortal, "the ghost never took the Rut'theran portal: " + run.Path);
         Assert.True(run.Alive, "the ghost was never resurrected: " + run.Path);
@@ -113,7 +111,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         Assert.True(run.Alive, "the ghost was never revived: " + run.Path);
     }
 
-    private sealed record RecoveryRun(string? Fault, bool Alive, bool TookPortal, int CorpseThinks, int CorpseThinksBeforePortal, int PlanlessCorpseThinks, string Path);
+    private sealed record RecoveryRun(string? Fault, bool Alive, bool TookPortal, int CorpseThinks, int CorpseThinksBeforePortal, string Path);
 
     private static async Task<RecoveryRun> RunRecoveryAsync(Terrain terrain, int maxThinks)
     {
@@ -123,7 +121,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
         };
         string? fault = null;
         bool alive = false, portal = false;
-        int corpseThinks = 0, corpseBeforePortal = 0, planless = 0;
+        int corpseThinks = 0, corpseBeforePortal = 0;
         var trail = new List<string>();
         for (int think = 0; think < maxThinks && fault is null && !alive; think++)
         {
@@ -137,7 +135,6 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
                 if (recovery.LastStep == PlayerbotRecoveryStep.WalkToCorpse)
                 {
                     corpseThinks++;
-                    if (recovery.RouteEnd is null) planless++;
                     if (!portal) corpseBeforePortal++;
                 }
 
@@ -157,7 +154,7 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
             }
         }
 
-        return new RecoveryRun(fault, alive, portal, corpseThinks, corpseBeforePortal, planless, string.Join(" -> ", trail));
+        return new RecoveryRun(fault, alive, portal, corpseThinks, corpseBeforePortal, string.Join(" -> ", trail));
     }
 
     /// <summary>The graveyard links of classic-db for Teldrassil: 129 below the tree (area 702), else the nearest on top of it.</summary>
