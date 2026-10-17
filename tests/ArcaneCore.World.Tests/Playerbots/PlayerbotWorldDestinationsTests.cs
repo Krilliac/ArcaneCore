@@ -402,6 +402,84 @@ public sealed class PlayerbotWorldDestinationsTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// Cluster 3 of the bot QA stalls (#368: 5 085 "stalled 120s: goal=Grind target=80" at one spot of the Echo Ridge Mine): every leg the
+    /// mesh gives toward the east spawn is a yard's step sideways, so the bot keeps moving (the 5-second stuck clock never runs out) and
+    /// keeps planning, but never comes nearer. Within <see cref="PlayerbotWorldDestinations.SpawnNotClosingMs"/> and a little more the walk
+    /// gives that spawn up and the hunt plans toward the other (west) spawn.
+    /// </summary>
+    [Fact]
+    public async Task LegsThatNeverCloseOnTheSpawn_GiveItUp_AndTheHuntTurnsToAnotherSpawn()
+    {
+        const float startX = -8949.95f;
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 6, Name = "objective", DisplayIds = [49] }],
+            [new CreatureSpawn { Guid = 23001, Entry = 6, MapId = 0, X = startX + 200, Y = -132.49f, Z = 83.53f },
+             new CreatureSpawn { Guid = 23002, Entry = 6, MapId = 0, X = startX - 260, Y = -132.49f, Z = 83.53f }], [], [], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content));
+            services.AddSingleton<IWorldFeature, ManualClockFeature>();
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            var pathfinder = new SidestepEastPathfinder();
+            var destinations = await host.OnWorldAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+                return new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+            });
+            const uint think = 500;
+            uint westAtMs = 0;
+            for (uint elapsed = 0; elapsed < 40_000 && westAtMs == 0; elapsed += think)
+            {
+                await host.OnWorldAsync(() =>
+                {
+                    var player = session.Player!;
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    destinations.Update(player, 6, think);
+                    PlayerbotMotion.ElapseForTests(player, think);
+                    return true;
+                });
+                if (pathfinder.WestQueries > 0) westAtMs = elapsed + think;
+                await host.World.AdvanceClockAsync(think);
+            }
+
+            float fromEast = await host.OnWorldAsync(() => MathF.Abs(session.Player!.X - startX));
+            Assert.True(pathfinder.EastQueries > 4, $"the east spawn was planned only {pathfinder.EastQueries} times: the sidestep legs were never walked");
+            Assert.True(fromEast < 10f, $"the bot drifted {fromEast:F1} yd along x, so it did close on a spawn");
+            Assert.True(westAtMs != 0, $"after 40 s of legs that never came nearer the east spawn ({pathfinder.EastQueries} east plans) the hunt never turned west");
+            Assert.True(westAtMs >= PlayerbotWorldDestinations.SpawnNotClosingMs, $"turned west after {westAtMs} ms, before the not-closing clock ran out");
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// Every query east of the bot answers a complete one-yard leg sideways (alternating north and south): a route the bot walks, which
+    /// never brings it nearer the east. Queries west are answered straight.
+    /// </summary>
+    private sealed class SidestepEastPathfinder : IPathfinder
+    {
+        private bool _north;
+        public bool Enabled => true;
+        public int EastQueries { get; private set; }
+        public int WestQueries { get; private set; }
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            if (end.X > start.X + 20f)
+            {
+                EastQueries++;
+                _north = !_north;
+                return PathResult.StraightLine(start, start + new Vector3(0, _north ? 1f : -1f, 0), PathType.Normal);
+            }
+
+            if (end.X < start.X - 20f) WestQueries++;
+            return PathResult.StraightLine(start, end, PathType.Normal);
+        }
+    }
+
     private sealed class ManualClockFeature : IWorldFeature
     {
         public void Attach(WorldRuntime world) => world.UseManualClock();

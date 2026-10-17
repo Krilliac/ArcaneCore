@@ -29,6 +29,30 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private const int MaxEntryScan = 128;
     private const uint BackoffMs = 2_000;
     private const uint FarSpawnBlockMs = 30_000;
+
+    /// <summary>
+    /// How long a spawn the walk stopped closing on (<see cref="SpawnNotClosingMs"/>) is passed over: about a camp's respawn, so the rotation
+    /// goes on to the other spawns and the brain explores meanwhile instead of re-planning the same dead end.
+    /// </summary>
+    internal const uint NotClosingBlockMs = 180_000;
+
+    /// <summary>
+    /// The longest the hunt's walk to one spawn may go without getting at least <see cref="ClosingStepYards"/> nearer to it, across every leg
+    /// planned to it (a route toward a far goal is one leg of the way, and a leg walked to its end is planned again from there). Before,
+    /// the only clock was the 5-second stuck clock of one route, which every new plan started over: a bot whose legs to a spawn kept ending
+    /// at the same place (planned again each think, or a short leg walked back and forth) never ran it out, and only the 120-second stall
+    /// watch gave the camp up (live 2026-10-12..16, bot QA #368: 5 085 "stalled 120s: goal=Grind target=80" of 326 bots within a few yards
+    /// of one spot at the Echo Ridge Mine).
+    /// </summary>
+    internal const uint SpawnNotClosingMs = 20_000;
+
+    /// <summary>A walk must come this much nearer to its spawn (yards) for the not-closing clock to start over.</summary>
+    internal const float ClosingStepYards = 2f;
+
+    private uint _closingSpawn;
+    private float _closingBest = float.PositiveInfinity;
+    private uint _closingMs;
+    private uint _closingClockedAt;
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly PlayerbotNavigationExecutor? _executor = executor;
@@ -90,6 +114,12 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
+
+    /// <summary>
+    /// The last <see cref="Update"/> ran a path search to a destination and the search was refused (or the walk to it was given up as stuck
+    /// or not closing): a costly answer the brain backs its grind planner off for, so the explore after it has the think's path budget.
+    /// </summary>
+    internal bool LastPlanRefused { get; private set; }
 
     /// <summary>Whether the route being walked was planned under the completed-return rule (test seam).</summary>
     internal bool RouteIsRelaxed => _route?.CompletedQuestReturn == true;
@@ -314,6 +344,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal bool Update(Player player, uint preferredCreatureEntry, uint elapsedMs, uint returnQuestId = 0, uint preferredQuestId = 0)
     {
         WaitingForTiles = false;
+        LastPlanRefused = false;
         if (Volatile.Read(ref _permanentlyStopped) != 0 || (player.IsInWorld && !player.IsAlive))
         {
             // Stopped for good, or dead: the route and the trip are over.
@@ -372,6 +403,14 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 _blockedSpawns.Add(_routeSpawnGuid);
                 ClearRoute();
                 Backoff(now);
+                LastPlanRefused = true;
+                return false;
+            }
+            if (hunting && NotClosing(player, _routeSpawnGuid, elapsedMs, now))
+            {
+                ClearRoute();
+                Backoff(now);
+                LastPlanRefused = true;
                 return false;
             }
             _tripWatch.Note(player, _routeTarget, _routeSpawnGuid, now);
@@ -570,6 +609,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             }
             if (planned == PlanOutcome.Refused)
             {
+                LastPlanRefused = true;
                 // A far failed search is expensive. Defer the next far spawn until the backoff expires instead of
                 // running another capped search on the very next think; nearby alternatives still rotate promptly.
                 float longRoute = _options.MaxRouteYards * 0.5f;
@@ -587,6 +627,15 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 return false; // Nearby alternatives rotate next think; far failures wait for backoff.
             }
             _tileWait.Reset();
+            // A leg planned again to the spawn the last leg walked to keeps that walk's not-closing clock (NotClosing): planning the same
+            // dead end afresh every think is no progress. One that does not come nearer for SpawnNotClosingMs is passed over.
+            if (hunting && NotClosing(player, entry.Spawn.Guid, elapsedMs, now))
+            {
+                ClearRoute();
+                Backoff(now);
+                LastPlanRefused = true;
+                return false;
+            }
             if (questId == _failQuest) _failCount = 0;
             // The chosen giver or ender of a trip must not be an enemy's: a hostile faction template is a town the bot should not walk into.
             if (!hunting && PlayerbotNavigationAnomalies.DestinationFault(map.MapId, player.FactionTemplate, entry.Spawn,
@@ -617,6 +666,42 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         if (attempted) Backoff(now);
         return false;
+    }
+
+    /// <summary>
+    /// The not-closing clock of the walk to spawn <paramref name="spawnGuid"/> (<see cref="SpawnNotClosingMs"/>), run once per think: the
+    /// walk to another spawn starts it over, coming <see cref="ClosingStepYards"/> nearer resets it. True when it ran out: the spawn is
+    /// passed over for <see cref="NotClosingBlockMs"/> and the clock starts over. A walk the bot arrived on (within <see cref="ArrivalYards"/>)
+    /// is the arrival rules' (<see cref="NoteArrival"/>), never this.
+    /// </summary>
+    private bool NotClosing(Player player, uint spawnGuid, uint elapsedMs, uint now)
+    {
+        DestinationEntry? spawn = null;
+        foreach (DestinationEntry entry in _entries)
+            if (entry.Spawn.Guid == spawnGuid) { spawn = entry; break; }
+        if (spawn is null) return false;
+        float distance = MathF.Sqrt(DistanceSquared(player, spawn.Spawn));
+        if (spawnGuid != _closingSpawn)
+        {
+            (_closingSpawn, _closingBest, _closingMs, _closingClockedAt) = (spawnGuid, distance, 0, now);
+            return false;
+        }
+
+        if (distance <= ArrivalYards || distance < _closingBest - ClosingStepYards)
+        {
+            _closingBest = MathF.Min(_closingBest, distance);
+            _closingMs = 0;
+            _closingClockedAt = now;
+            return false;
+        }
+
+        if (_closingClockedAt == now) return false; // a second look in one think does not run the clock twice
+        _closingClockedAt = now;
+        _closingMs += elapsedMs;
+        if (_closingMs < SpawnNotClosingMs) return false;
+        _farBlockedUntil[spawnGuid] = unchecked(now + NotClosingBlockMs);
+        (_closingSpawn, _closingBest, _closingMs) = (0, float.PositiveInfinity, 0);
+        return true;
     }
 
     /// <summary>A spawn point the bot reached with nothing of the hunted entry alive in sight is a visit: how near (yards) the bot must stand to it.</summary>

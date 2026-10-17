@@ -120,6 +120,31 @@ public sealed class PlayerbotThinkProbeTests
         Assert.Null(PlayerbotThinkProbe.Active);
     }
 
+    /// <summary>
+    /// Bot QA #787: an overrun report named only the last phase ("last phase explore advance") of a think whose time went to an earlier
+    /// phase. The slowest phase while the think still runs counts the closed phases and the open one up to now.
+    /// </summary>
+    [Fact]
+    public void SlowestPhaseNow_NamesTheEarlierSlowPhase_AndCountsTheOpenOne()
+    {
+        var probe = new PlayerbotThinkProbe();
+        probe.Begin();
+        try
+        {
+            PlayerbotThinkProbe.Phase("grind destinations");
+            Spin(30);
+            PlayerbotThinkProbe.Phase("explore advance");
+            Spin(1);
+            Assert.Equal("grind destinations", probe.SlowestPhaseNow);
+            Assert.Equal("explore advance", PlayerbotThinkProbe.CurrentPhase);
+
+            // The open phase grows past every closed one: it is the slowest now, before it is closed.
+            Spin(45);
+            Assert.Equal("explore advance", probe.SlowestPhaseNow);
+        }
+        finally { probe.End(); }
+    }
+
     [Fact]
     public void TileAttribution_ReportsSlowestTileAndPrefetchState_WithoutLeakingIntoNextThink()
     {
