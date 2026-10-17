@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Content.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ArcaneCore.World.Tests.Spells;
 
@@ -39,7 +40,10 @@ internal sealed class SpellTestServices : IWorldTestServices
 
     public void Register(IServiceCollection services)
     {
-        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Content()));
+        // The shared default, not an override: IWorldTestServices run in FullName order, so a fixture in a namespace that sorts before
+        // 'Spells' (Items.ZFailureItemWorldServices) has already registered its own store, and AddSingleton here would replace it. One that
+        // sorts after (Talents) still replaces this default, as intended.
+        services.TryAddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Content()));
         services.AddSingleton<ICharacterSpellStore, InMemoryCharacterSpellStore>();
         services.AddSingleton<ICharacterSpellStateStore, InMemoryCharacterSpellStateStore>();
     }
