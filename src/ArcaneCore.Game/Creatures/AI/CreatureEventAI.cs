@@ -43,6 +43,10 @@ public class CreatureEventAI : AggressorAI
     private float _chaseDistance;
     private int _rangedModeType;
 
+    /// <summary>
+    /// EventAI on the live handler registry, <see cref="EventAiRegistry.Default"/>: the registry object is the swappable holder (its table is
+    /// replaced by <see cref="EventAiRegistry.CommitSwap"/>), so this creature sees a module swap without being rebuilt.
+    /// </summary>
     public CreatureEventAI(Creature creature, CreatureAiContent content)
         : this(creature, content, EventAiRegistry.Default)
     {
