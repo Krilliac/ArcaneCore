@@ -319,8 +319,14 @@ public sealed partial class SpellSystem
 
     private bool IsEnemy(Unit caster, Unit unit) => unit.IsAlive && Relations.IsHostile(caster, unit);
 
+    /// <summary>
+    /// A friendly unit the spell may take: in a state the spell can target (vmangos SpellNotifierCreatureAndPlayer::Visit, Spell.cpp:8008-8012,
+    /// SpellEntry::CanTargetAliveState: a living unit unless the spell is death-only, a dead one only with ALLOW_DEAD_TARGET or a death-only
+    /// spell). Requiring a living unit kept the battleground spirit guide's Spirit Heal (22012: TARGET_ENUM_UNITS_FRIEND_AOE_AT_DEST_LOC,
+    /// ALLOW_DEAD_TARGET, TARGET_FLAG_UNIT_DEAD) from ever taking a ghost: no resurrection wave came (bot QA #887).
+    /// </summary>
     private bool IsFriend(SpellCast cast, Unit unit)
-        => unit.IsAlive && Relations.IsFriendly(cast.Caster, unit)
+        => (unit.IsAlive ? !cast.Spell.IsDeathOnly : cast.Spell.CanTargetDead) && Relations.IsFriendly(cast.Caster, unit)
             && !(ReferenceEquals(unit, cast.Caster) && cast.Spell.HasAttribute(SpellAttributesEx.CantTargetSelf));
 
     private bool IsAliveGroupMember(SpellCast cast, Unit reference, Unit unit, bool raid)

@@ -60,6 +60,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         if (order.Duty == PlayerbotAbDuty.Retreat)
         {
             if (_target is not null) ClearTarget(player);
+            EndRest(player);
             Activity = "retreating";
             TargetEntry = 0;
             WalkTo(player, order.Goal, interval, toward: true);
@@ -75,6 +76,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         enemy ??= SelectEnemy(player, ab, team);
         if (enemy is not null)
         {
+            EndRest(player);
             Activity = "fighting";
             Fight(player, enemy, interval);
             return;
@@ -82,6 +84,7 @@ internal sealed partial class PlayerbotBattlegroundAI
 
         if (_target is not null) ClearTarget(player);
         TargetEntry = 0;
+        if (RestBetweenFights(player, carrier: false)) return;
         if (!player.Combat.IsInCombat && _spells.UpdateOutOfCombat(player, interval)) return;
 
         if (TakeBuff(player, map, interval)) return;
