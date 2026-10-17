@@ -197,4 +197,27 @@ public sealed class PetStableTests
         stable.HandleList(hunter, ObjectGuid.WithEntry(HighGuid.Unit, 1, 2));
         Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.MsgListStabledPets);
     }
+
+    [Fact]
+    public void TheOwnGuid_IsAStableMaster_OnlyAfterTheGmCommand()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, _) = Stable(kit, slots: 1);
+        (Player hunter, FakeSession session) = Hunter(kit);
+        Tame(kit, hunter);
+
+        stable.HandleStable(hunter, hunter.Guid);
+        Assert.Equal(StableResult.ErrStable, LastResult(session));
+        Assert.False(hunter.PetGuid.IsEmpty);
+
+        stable.OpenAsGm(hunter);
+        Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.MsgListStabledPets);
+        stable.HandleStable(hunter, hunter.Guid);
+        Assert.Equal(StableResult.SuccessStable, LastResult(session));
+
+        stable.Forget(1);
+        session.Clear();
+        stable.HandleBuySlot(hunter, hunter.Guid);
+        Assert.Equal(StableResult.ErrStable, LastResult(session));
+    }
 }

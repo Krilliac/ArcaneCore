@@ -181,7 +181,7 @@ public sealed class M6LogoutAndCommandTests
         // "modify ..." is listed for its player-level "xprate" (vmangos Chat.cpp:630, SEC_PLAYER).
         await player.SendChatAsync(ChatType.Say, Language.Common, "!commands");
         Assert.Equal("Commands (page 1/1)", (await player.ReadChatAsync()).Text);
-        Assert.Equal("modify (1), server (2), commands, help, save", (await player.ReadChatAsync()).Text);
+        Assert.Equal("modify (1), server (2), commands, dismount, help, save", (await player.ReadChatAsync()).Text);
         Assert.StartsWith("Search: .commands <text>", (await player.ReadChatAsync()).Text, StringComparison.Ordinal);
 
         // Known but above the caller: "not available" (resolve first, then authorise); unknown: "no such command".

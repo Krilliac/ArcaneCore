@@ -13,10 +13,10 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 
 | Stored account | Retail level (default map) | Commands reachable |
 |---|---|---|
-| `Player` | 0 | 6 |
-| `Moderator` | 1 | 23 |
-| `GameMaster` | 3 | 239 |
-| `Administrator` | 6 | 358 |
+| `Player` | 0 | 7 |
+| `Moderator` | 1 | 24 |
+| `GameMaster` | 3 | 246 |
+| `Administrator` | 6 | 365 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -225,8 +225,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.namego` | 2 | GameMaster | declared retail level | Syntax: .namego [$charactername] Teleport the given character, or the selected one, to you. |
 | `.gocorpse` | 3 | GameMaster | stored level through the map | Syntax: .gocorpse [$playername] Teleport to the corpse of the selected player (or the named one, or yourself). |
 | `.commands` | 0 | Player | stored level through the map | Syntax: .commands [page \| text [page]] Display an overview of the commands available to you, one page at a time; with text, list the commands whose name contains it (e.g. .commands npc). |
+| `.demorph` | 3 | GameMaster | declared retail level | Syntax: .demorph Restore the native model of the selected unit or yourself. |
 | `.die` | 3 | GameMaster | declared retail level | Syntax: .die Kill the selected unit or yourself without kill credit. |
 | `.revive` | 3 | GameMaster | stored level through the map | Syntax: .revive [$playername] Revive the selected player (or the named one, or yourself): half health and mana, the corpse gone. |
+| `.dismount` | 0 | Player | declared retail level | Syntax: .dismount Dismount you, if you are mounted. |
 | `.gps` | 1 | Moderator | stored level through the map | Syntax: .gps Display the position of the selected player, or yours. |
 | `.guid` | 2 | GameMaster | declared retail level | Syntax: .guid Show the GUID of the selected object. |
 | `.help` | 0 | Player | stored level through the map | Syntax: .help [command [page]] Display usage instructions for the given command or group (a group lists its subcommands, paged); without a command, an overview of the commands you can use. |
@@ -266,6 +268,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.additem` | 3 | GameMaster | declared retail level | Syntax: .additem #itemId\|[#itemName]\|#shift-click-item-link #itemCount Adds the item to the selected player (or yourself); a negative count removes items, bank included in the check. |
 | `.deleteitem` | 3 | GameMaster | declared retail level | Syntax: .deleteitem #itemId\|[#itemName]\|#shift-click-item-link #itemCount [#playerName] Removes items from the named or selected player (or yourself), bank included. |
 | `.additemset` | 3 | GameMaster | declared retail level | Syntax: .additemset #itemset\|#itemset-link Give every item in a set to the selected player or yourself. |
+| `.bank` | 2 | GameMaster | declared retail level | Syntax: .bank Open your bank. |
 | `.wchange` | 6 | Administrator | stored level through the map | Syntax: .wchange #weathertype #status — set the weather of your zone. Type: 0 fine, 1 rain, 2 snow, 3 sandstorm; status 0..1. |
 | `.ticket` ... | 3 | GameMaster | stored level through the map | Syntax: .ticket [$subcommand] Without a subcommand, show how many tickets are open. |
 | `.ticket list` | 3 | GameMaster | stored level through the map | Syntax: .ticket list List the open tickets, oldest first (at most 50). |
@@ -282,7 +285,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.mute` | 1 | Moderator | stored level through the map | Syntax: .mute [$playername] $duration [$reason] Disable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online. |
 | `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again. The character may be offline. |
 | `.damage` | 3 | GameMaster | declared retail level | Syntax: .damage #amount Deal direct physical damage to the selected unit. |
+| `.combatstop` | 3 | GameMaster | declared retail level | Syntax: .combatstop [$playername] Stop combat for the selected or named player. |
 | `.repairitems` | 3 | GameMaster | declared retail level | Syntax: .repairitems [#itemGuid] Repair durability on the selected online player or yourself. |
+| `.stable` | 2 | GameMaster | declared retail level | Syntax: .stable Open your pet stable. |
+| `.freeze` | 2 | GameMaster | declared retail level | Syntax: .freeze Freeze the selected unit (spell 9454). |
+| `.unfreeze` | 2 | GameMaster | declared retail level | Syntax: .unfreeze Unfreeze the selected unit. |
 | `.anticheat` ... | 3 | GameMaster | stored level through the map | Anticheat scores, reports and settings. |
 | `.anticheat status` | 3 | GameMaster | stored level through the map | Syntax: .anticheat status [$name] Show the anticheat settings and the live score of the character (or the selected player, or you). |
 | `.anticheat top` | 3 | GameMaster | stored level through the map | Syntax: .anticheat top [#count] List the highest live scores (10 by default, at most 50). |

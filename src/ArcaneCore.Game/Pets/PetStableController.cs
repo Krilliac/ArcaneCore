@@ -33,6 +33,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
 
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
     private readonly Dictionary<int, Entry> _entries = [];
+    private readonly HashSet<int> _gmStables = [];
 
     /// <summary>The characters-database stable; without one every request is refused.</summary>
     public IPetStableStore? Store { get; set; }
@@ -50,7 +51,22 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
     public PetStableState? CachedState(int characterId) => _entries.GetValueOrDefault(characterId)?.State;
 
     /// <summary>Drop a character's cached stable (logout).</summary>
-    public void Forget(int characterId) => _entries.Remove(characterId);
+    public void Forget(int characterId)
+    {
+        _entries.Remove(characterId);
+        _gmStables.Remove(characterId);
+    }
+
+    /// <summary>
+    /// The .stable command (vmangos HandleStableCommand: SendStablePet(own guid)): the player's own guid then stands in for a stable master
+    /// until logout (vmangos CheckStableMaster accepts the own guid only for a player who has the command).
+    /// </summary>
+    public void OpenAsGm(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        _gmStables.Add(Id(player));
+        HandleList(player, player.Guid);
+    }
 
     /// <summary>MSG_LIST_STABLED_PETS from the client: u64 stable master.</summary>
     public void HandleList(Player player, ObjectGuid npc)
@@ -252,7 +268,8 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
     }
 
     private bool Allowed(Player player, ObjectGuid npc)
-        => player.Class == Class.Hunter && player.IsInWorld && IsStableMaster is { } check && check(player, npc);
+        => player.Class == Class.Hunter && player.IsInWorld
+            && (npc == player.Guid ? _gmStables.Contains(Id(player)) : IsStableMaster is { } check && check(player, npc));
 
     private static int Id(Player player) => checked((int)player.Guid.Low);
 
