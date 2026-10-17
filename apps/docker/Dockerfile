@@ -2,13 +2,17 @@
 # one multi-stage file, a shared build stage and one runtime target per daemon (worldserver, authserver there;
 # world, realm here) plus a tools target for the content importer and database upgrade.
 #   docker build -f apps/docker/Dockerfile --target world -t arcanecore/world .
-ARG DOTNET_VERSION=10.0
+#
+# Base images: the SDK tag must satisfy global.json (11.0.100-rc.2.26504.105, rollForward latestFeature) and the runtime tag must
+# run net11.0 (Directory.Build.props). Both are pinned by manifest-list digest (multi-arch) so a re-pushed tag cannot change the
+# build; Dependabot (.github/dependabot.yml, docker ecosystem) proposes tag and digest bumps together. When global.json moves to a
+# new SDK, move these tags with it: .github/workflows/docker-smoke.yml builds every target so a mismatch fails CI.
 
-FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0.100-rc.2@sha256:bfabf51e74c5a7cf2fc4eac852145db86f4867d475257d809518d6a2b0fe71e1 AS build
 ARG CONFIGURATION=Release
 WORKDIR /src
-# Restore first so the package layer is cached across source edits.
-COPY global.json Directory.Build.props ArcaneCore.slnx ./
+# .editorconfig: the in-image build enforces the same code-style rules as CI (EnforceCodeStyleInBuild, warnings are errors).
+COPY global.json Directory.Build.props ArcaneCore.slnx .editorconfig ./
 COPY src/ src/
 COPY tools/ tools/
 RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj \
@@ -21,7 +25,7 @@ RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATIO
  && dotnet publish tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj -c $CONFIGURATION --no-restore -o /out/dbupgrade
 
 # Shared runtime skeleton (AzerothCore "skeleton"/"runtime"): non-root user, data and log directories.
-FROM mcr.microsoft.com/dotnet/runtime:${DOTNET_VERSION} AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:11.0.0-rc.2@sha256:48e6be84d7f413a619590e999d8e03c9d8d99be2e4646b93a28a93f2eba4da05 AS runtime
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 ENV DOTNET_gcServer=0 \
