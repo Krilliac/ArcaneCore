@@ -20,7 +20,7 @@
   pwsh -NoExit -File tools/ops/diag/server-status.ps1 -Profile $env:ARCANECORE_LIVE_PROFILE -Supervise
 #>
 param(
-    [string] $Profile = '',
+    [Alias('Profile')][string] $ProfileDir = '',
     [int] $WorldPort = 8085,
     [int] $AuthPort = 3724,
     [int] $IntervalSeconds = 5,
@@ -31,8 +31,8 @@ param(
     [switch] $Once
 )
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'OpsEnv.ps1')
-if ([string]::IsNullOrWhiteSpace($Profile)) {
-    $Profile = Get-OpsRequiredEnv -Name 'ARCANECORE_LIVE_PROFILE' -Purpose 'the live server profile directory that holds appsettings.json'
+if ([string]::IsNullOrWhiteSpace($ProfileDir)) {
+    $ProfileDir = Get-OpsRequiredEnv -Name 'ARCANECORE_LIVE_PROFILE' -Purpose 'the live server profile directory that holds appsettings.json'
 }
 if (-not $Once) {
     try { $Host.UI.RawUI.WindowTitle = if ($Supervise) { "ArcaneCore status [SUPERVISOR]" } else { "ArcaneCore status" } } catch { }
@@ -57,7 +57,7 @@ function Get-JsonProp($obj, [string]$name) {
     return $prop.Value
 }
 
-$settingsPath = Join-Path $Profile 'appsettings.json'
+$settingsPath = Join-Path $ProfileDir 'appsettings.json'
 $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
 $opsSection = Get-JsonProp $settings 'Ops'
 $metricsSection = Get-JsonProp $opsSection 'Metrics'
@@ -65,10 +65,10 @@ $watchdogSection = Get-JsonProp $opsSection 'Watchdog'
 $hbSection = Get-JsonProp $watchdogSection 'Heartbeat'
 $hbRelPath = [string](Get-JsonProp $hbSection 'FilePath')
 if ([string]::IsNullOrWhiteSpace($hbRelPath)) { $hbRelPath = 'logs/world.heartbeat' }
-$heartbeatPath = if ([System.IO.Path]::IsPathRooted($hbRelPath)) { $hbRelPath } else { Join-Path $Profile $hbRelPath }
-$supervisorLogPath = Join-Path $Profile 'logs\supervisor.log'
-$deployLockPath = Join-Path $Profile 'deploying.lock'
-$metaPath = Join-Path $Profile 'standard-processes.json'
+$heartbeatPath = if ([System.IO.Path]::IsPathRooted($hbRelPath)) { $hbRelPath } else { Join-Path $ProfileDir $hbRelPath }
+$supervisorLogPath = Join-Path $ProfileDir 'logs\supervisor.log'
+$deployLockPath = Join-Path $ProfileDir 'deploying.lock'
+$metaPath = Join-Path $ProfileDir 'standard-processes.json'
 
 if ([string]::IsNullOrWhiteSpace($MetricsUrl)) {
     $prefix = [string](Get-JsonProp $metricsSection 'PrometheusPrefix')
@@ -136,11 +136,11 @@ function Restart-SupervisedService([string] $svcName, [string] $reason) {
             Write-SupervisorLog "cannot restart ${svcName} ($reason): dll not found ($dll)"
             return
         }
-        $logDir = Join-Path $Profile 'logs'
+        $logDir = Join-Path $ProfileDir 'logs'
         if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
         $logFile = Join-Path $logDir ("{0}-supervised.log" -f $svcName.ToLowerInvariant())
         $psi = [System.Diagnostics.ProcessStartInfo]::new('dotnet', "`"$dll`"")
-        $psi.WorkingDirectory = $Profile
+        $psi.WorkingDirectory = $ProfileDir
         $psi.UseShellExecute = $true
         $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
         $envPrevEnabled = $env:Logging__ArcaneCore__File__Enabled
@@ -173,7 +173,7 @@ function AuthDbPath {
     $cs = if ($null -ne (Get-JsonProp $authSection 'ConnectionString')) { [string](Get-JsonProp $authSection 'ConnectionString') } else { [string]$authSection }
     if ($cs -match '(?i)Data Source=([^;}]+)') {
         $p = $Matches[1].Trim().Trim('"')
-        if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path $Profile $p }
+        if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path $ProfileDir $p }
         return $p
     }
     return $null
@@ -254,7 +254,7 @@ while ($true) {
     $cpuWindowSec = if ($null -ne $prevCpuAt) { ($now - $prevCpuAt).TotalSeconds } else { 0.0 }
     $nextCpu = @{}
     $out = [System.Collections.Generic.List[string]]::new()
-    $out.Add("ArcaneCore status   $($now.ToString('yyyy-MM-dd HH:mm:ss'))   profile: $Profile")
+    $out.Add("ArcaneCore status   $($now.ToString('yyyy-MM-dd HH:mm:ss'))   profile: $ProfileDir")
     $out.Add('')
 
     $out.Add('REALM LIST (served to clients)')
