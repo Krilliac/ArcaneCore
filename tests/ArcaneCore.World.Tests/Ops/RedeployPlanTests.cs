@@ -389,7 +389,7 @@ public sealed class RedeployPlanTests(ITestOutputHelper output)
         string script = File.ReadAllText(Path.Combine(Root, "tools", "ops", "live", "redeploy.ps1"));
         int plan = script.IndexOf("Get-LiveRedeployPlan", StringComparison.Ordinal);
         int stop = script.IndexOf("if ($Plan -or $WhatIfPreference) { exit 0 }", StringComparison.Ordinal);
-        int firstStop = script.IndexOf("Stop-Graceful $world.Id", StringComparison.Ordinal);
+        int firstStop = script.IndexOf("Stop-Graceful World $world.Id", StringComparison.Ordinal);
         int firstCopy = script.IndexOf("robocopy", StringComparison.Ordinal);
         int hot = script.IndexOf("Invoke-HotRedeploy", StringComparison.Ordinal);
         Assert.True(plan > 0 && stop > plan, "redeploy.ps1 must plan, then stop on -Plan/-WhatIf");
