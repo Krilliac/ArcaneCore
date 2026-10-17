@@ -9,6 +9,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -17,6 +18,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots.Groups;
@@ -29,7 +31,9 @@ namespace ArcaneCore.World.Playerbots.Groups;
 /// objective's spawn, or the instance entrance) without leaving anyone more than <see cref="WaitForMembersYards"/> behind, walks
 /// into the entrance (the members follow it through the same trigger, into the group's instance) and clears towards the objective:
 /// whatever hostile creature stands within <see cref="ClearYards"/> of its way is pulled first. The members follow it at 2-5 yards
-/// (the party bots' follow, vmangos PartyBotAI MoveFollow) and fight by role: the tank takes whatever attacks someone else (its
+/// (the party bots' follow, vmangos PartyBotAI MoveFollow). While travelling, engaging or regrouping, one farther than the follow
+/// teleport distance is brought to the leader (vmangos' 100-yard catch-up); a dungeon run that fights through still only walks.
+/// They fight by role: the tank takes whatever attacks someone else (its
 /// rotation taunts what turned away from it), the healer heals (its rotation's group heals) and fights when nobody needs healing, the
 /// damage dealers assist the leader's target. Out of combat a member eats and drinks (the leader waits for it), resurrects a dead
 /// member when its class can, and loots the corpses whose round-robin turn is its own. A dead member waits for a resurrection while a
@@ -457,6 +461,44 @@ internal sealed class PlayerbotGroupAI
 
     // --- following ------------------------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// Whether a group member teleports to a living leader on its map instead of walking (vmangos PartyBotAI's
+    /// <c>!IsWithinDistInMap(pLeader, 100)</c>, <see cref="Party.PlayerbotParty.DecideFollow"/>). Travelling, engaging and regrouping
+    /// only: gathering walks, because the leader holds until the members arrive. A dungeon run that fights through
+    /// (<see cref="PlayerbotGroupTravelPolicy.FightThrough"/>) never teleports a laggard.
+    /// </summary>
+    internal static bool ShouldCatchUp(in PlayerbotGroupCatchUpFacts facts)
+    {
+        if (facts.FightThroughRun || facts.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging or PlayerbotGroupState.Regrouping))
+            return false;
+        return Party.PlayerbotParty.DecideFollow(new Party.PlayerbotFollowFacts(
+            Party.PlayerbotPartyMode.Follow, MasterInWorld: true, SameMap: true, facts.Distance, facts.TeleportToLeader,
+            MasterMapAllowed: true, MasterFlying: false, facts.InCombat, MasterInOtherInstance: false, facts.Mode, facts.TeleportDistance,
+            facts.LeaderInCombat, facts.LeaderCombatRange, EntranceToMaster: false)) == Party.PlayerbotFollowAction.Teleport;
+    }
+
+    /// <summary>Land on the leader (the party follower's catch-up teleport). False when the teleport service refuses: the member walks.</summary>
+    private bool TryCatchUp(Player player, Player leader)
+    {
+        TeleportService? teleports;
+        try
+        {
+            teleports = _session.Services.GetService<TeleportFeature>()?.Teleports;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        if (teleports is null || !_session.IsManaged || teleports.IsBeingTeleported(player) || teleports.IsBeingTeleported(leader)) return false;
+        if ((leader.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar)) != 0) return false;
+        if (player.Duel is not null) return false;
+        PlayerbotMovementControl.Stop(_session, player);
+        if (!teleports.TeleportTo(player, leader.MapId, leader.X, leader.Y, leader.Z, leader.Orientation)) return false;
+        _route = null;
+        return true;
+    }
+
     private void Follow(Player player, PlayerbotGroupCoordinator.BotGroup group, Player? leader, uint interval)
     {
         Goal = PlayerbotGoalKind.Follow;
@@ -495,6 +537,18 @@ internal sealed class PlayerbotGroupAI
         if (distance <= 5f)
         {
             Hold(player);
+            return;
+        }
+
+        // vmangos PartyBotAI teleports a follower farther than TeleportDistanceYards. Group follow only walked, so the distance
+        // check never ran: a member 428 yards from its leader stayed on step "follow" for the whole left-behind budget (bot QA #989).
+        // Gathering still walks (the leader holds until the members arrive on foot). A fight-through run never teleports.
+        if (ShouldCatchUp(new PlayerbotGroupCatchUpFacts(group.State, distance, player.Combat.IsInCombat, leader.Combat.IsInCombat,
+                _options.Party.TeleportToLeader && _session.IsManaged, _options.Follow.CatchUpMode, _options.Follow.TeleportDistanceYards,
+                _options.Follow.LeaderCombatRangeYards, group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance))
+            && TryCatchUp(player, leader))
+        {
+            Step = "follow:catch-up";
             return;
         }
 
@@ -1024,3 +1078,12 @@ internal sealed class PlayerbotGroupAI
     private static float Distance(WorldObject a, WorldObject b)
         => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
 }
+
+/// <summary>
+/// One group-follow catch-up decision (<see cref="PlayerbotGroupAI.ShouldCatchUp"/>): the group's state, how far the member is from
+/// its leader, and the follow options the party bots already use. A fight-through dungeon run sets <see cref="FightThroughRun"/>.
+/// </summary>
+internal readonly record struct PlayerbotGroupCatchUpFacts(
+    PlayerbotGroupState State, float Distance, bool InCombat, bool LeaderInCombat, bool TeleportToLeader,
+    PlayerbotCatchUpMode Mode = PlayerbotCatchUpMode.Teleport, float TeleportDistance = Party.PlayerbotParty.TeleportDistance,
+    float LeaderCombatRange = Party.PlayerbotParty.PartyAssistRange, bool FightThroughRun = false);
