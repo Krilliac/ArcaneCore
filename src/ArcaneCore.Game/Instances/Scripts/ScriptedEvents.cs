@@ -40,6 +40,12 @@ public static class ScriptedEvents
     /// <summary>event_naxxramas EVENT_ID_DECIMATE (naxxramas.h:198, sent by Gluth's Decimate).</summary>
     public const uint GluthDecimate = 10495;
 
+    /// <summary>
+    /// Warsong Gulch WS_EVENT_ALLIANCE_FLAG_PICKUP / WS_EVENT_HORDE_FLAG_PICKUP (mangos-classic BattleGroundWS.h:115-116), the SEND_EVENT of
+    /// the carried-flag auras Silverwing Flag (23335) and Warsong Flag (23333).
+    /// </summary>
+    public const uint WsAllianceFlagPickup = 8504, WsHordeFlagPickup = 8505;
+
     /// <summary>Gluth (naxxramas.h NPC_GLUTH).</summary>
     public const uint Gluth = 15932;
 
@@ -85,6 +91,11 @@ public static class ScriptedEvents
         // instance_naxxramas::DoHandleEvent (naxxramas.cpp:916-951): false (the DB script runs) while Gluth is in the instance's
         // storage, true without him. ArcaneCore has no Naxxramas instance script; Gluth on the map stands for the storage.
         GluthDecimate => map.FindUpdater<CreatureMapSystem>()?.Creatures.Any(creature => creature.Template.Entry == Gluth) != true,
+        // BattleGroundWS::HandleEvent (BattleGroundWS.cpp:466-486) takes the flag when the click's spell sends this event. ArcaneCore's
+        // WarsongGulch takes the flag in the flag object's use handler and only then casts the carried aura, whose SEND_EVENT arrives
+        // after the pickup is done: nothing is left to do, and the events have no dbscripts_on_event rows (the live log reported each
+        // pickup as 'send event 8504/8505 is not implemented yet').
+        WsAllianceFlagPickup or WsHordeFlagPickup => true,
         _ => false,
     };
 }

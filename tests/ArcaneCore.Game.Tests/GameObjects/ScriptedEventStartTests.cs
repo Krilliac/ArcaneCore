@@ -56,6 +56,11 @@ public sealed class ScriptedEventStartTests
         Assert.Equal(ScriptedEventResult.Started, ScriptedEvents.Start(rig.Map, ScriptedEvents.GluthDecimate, gluth, null));
         Assert.Equal(2, creatures.PendingDbScriptSteps);
 
+        // The Warsong Gulch flag pickup events are already handled by the flag's use handler before the carried aura sends them.
+        Assert.Equal(ScriptedEventResult.Handled, ScriptedEvents.Start(rig.Map, ScriptedEvents.WsAllianceFlagPickup, player, bonfire));
+        Assert.Equal(ScriptedEventResult.Handled, ScriptedEvents.Start(rig.Map, ScriptedEvents.WsHordeFlagPickup, player, null));
+        Assert.Equal(2, creatures.PendingDbScriptSteps);
+
         Assert.Equal(ScriptedEventResult.NoScript, ScriptedEvents.Start(rig.Map, 9999, player, null));
     }
 
