@@ -70,6 +70,15 @@ public sealed class PlayerbotGuildChatWorldTests
             {
                 options.Chat.Enabled = true;
                 options.Social.Guilds.Enabled = false;
+                // These tests are about the guild-chat feature's own limits (messages per hour, the speaker gap, the switches). The
+                // speech limiter (5af206c8) has its own and would hide them: the model fake says the same line every time (dedupe), and
+                // the bot gap, the per-minute caps and the guild's lines-per-minute budget are wall-clock while the passes here run in
+                // simulated time. Its limits are covered by PlayerbotSpeechTests.
+                options.Chat.Speech.DedupeSeconds = 0;
+                options.Chat.Speech.BotGapSeconds = 0;
+                options.Chat.Speech.TargetGapSeconds = 0;
+                options.Chat.Speech.BotLinesPerMinute = 60;
+                options.Chat.Speech.GuildLinesPerMinute = 120;
                 configure?.Invoke(options);
             }, frozen: true, services: services =>
             {
