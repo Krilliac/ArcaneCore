@@ -71,17 +71,19 @@ public sealed class MapAndRuntimeTests
     }
 
     [Fact]
-    public void Autosave_SnapshotsEveryOnlinePlayerAfterTheInterval()
+    public void Autosave_SnapshotsEveryOnlinePlayerWithinTheInterval()
     {
         var saves = new RecordingSaveQueue();
         using WorldRuntime world = TestWorld.CreateRuntime(saves, autosaveMs: 1000);
         world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new FakeSession(1)));
         world.AddPlayer(TestWorld.CreatePlayer(2, 0, 0, new FakeSession(2)));
 
-        world.RunTick(600);
+        world.RunTick(500);
         Assert.Empty(saves.Saved);
 
-        world.RunTick(600);
+        // Each player's first save is staggered into the second half of the interval after the tick that first saw it.
+        world.RunTick(500);
+        world.RunTick(500);
         Assert.Equal([1, 2], saves.Saved.Select(s => s.Id).Order());
     }
 

@@ -69,14 +69,40 @@ consecutive priority picks, then one ordinary pick if any is waiting). Ordering 
   settlement is attached.
 - `QuestNpcFeature.Rewards` now bounds `FlushCharacterAsync` with the same budget token (`WaitAsync(budget.Token)`), so the budget governs
   the whole pre-reward drain and cancellation of the wait never removes retained state.
+- **Busy pause.** After a "database is locked" failure the queue pauses (see [A locked database does not stall the write queues](#a-locked-database-does-not-stall-the-write-queues)).
+  The pause holds back ordinary snapshots only: a settlement or barrier is taken at once (`TakeFreshPriority`) unless its own character's
+  snapshot is the one retained by the lock, or the backoff has reached its top (`BusyStormStreak` = 3 locked writes in a row). In a lock
+  storm every attempt would sit out the whole write bound on the one consumer and a burst of settlements would queue behind each other's
+  doomed writes, so then they wait out the pause like the rest.
 
-### Autosave skips characters with a pending snapshot
+### Settlement budgets
 
-The periodic save is `WorldRuntime.Autosave()` and runs at the end of the tick body (it used to be `SaveAll()`, which is unchanged and
-still used for the final save). It skips a character whose previous snapshot is still **waiting** (`CharacterSaveQueue.IsPending`: a
-snapshot in flight does not count, since the next autosave then queues normally) and one whose quest settlement is pending. The queue is
-behind in exactly that case, and another snapshot would only supersede the waiting one at the cost of a copy. The tick records the time
-the pass took and the number of snapshots it queued (`TickPhases.AutosaveMicros` / `AutosaveSnapshots`, shown in the slow-tick detail).
+`Quests:SettlementBudgetSeconds`, `Economy:SettlementBudgetSeconds` and `GameObjects:LootSettlementBudgetSeconds` (shipped **15 s**, valid
+1-300) bound one settlement end to end: the pre-reward save, the drains, the reward transaction. A settlement can meet up to three lock
+waits in a row, each bounded by `Database:SqliteWriteTimeoutMs` (5 s): an unrelated character's write already in flight on the queue's
+one consumer (the priority lane cannot overtake a write that has started, and SQLite's busy wait cannot be cancelled), its own save, and
+the transaction. The budget used to be 5 s, equal to one write bound, so a single ordinary write sitting in the busy wait ahead of it used
+up the whole budget: on the live server on 2026-10-16 the settlement of character 3262 for quest 761 timed out at 23:54:09.424 with its
+own save never written ("saved at -1 ms"), while the queue's backlog was 15 characters and no autosave snapshots were queued; the busy
+pause opened only afterwards (23:54:09.546). `CharacterSaveQueueTests.ASettlementBehindAnOrdinaryWriteStuckInTheBusyWaitStillFinishesWithinItsBudget`
+replays that order with the shipped values.
+
+### Autosave: one timer per character
+
+The periodic save is `WorldRuntime.Autosave()` and runs at the end of the tick body (`SaveAll()` is unchanged and still used for the
+final save). Each online character has its own timer, as vmangos counts `Player::m_nextSave` down from `PlayerSave.Interval` in
+`Player::Update`: it is snapshotted once per `World:AutosaveIntervalMs`. A character's first save comes between half an interval and an
+interval after the tick that first sees it, at a point fixed by its id (`AutosaveStagger`, Fibonacci hashing), so characters that
+entered the world together (a server start, a bot fleet) are spread over the interval instead of all being queued in one tick, as the
+old whole-world pass did (one write per online character at once). The next turn is one interval after the last one, not after the
+tick that ran it, so the spread survives late ticks; a stall longer than an interval skips the missed turns. A logout drops the timer;
+the next login starts a new one.
+
+A character whose previous snapshot is still **waiting** (`CharacterSaveQueue.IsPending`: a snapshot in flight does not count) or whose
+quest settlement is pending is skipped until its next turn: the queue is behind in exactly that case, and another snapshot would only
+supersede the waiting one at the cost of a copy. The timers are scanned only when the earliest one is due or a player came online since
+the last scan, so most ticks do no autosave work. A tick that scanned records the time the scan took and the number of snapshots it
+queued (`TickPhases.AutosaveMicros` / `AutosaveSnapshots`, shown in the slow-tick detail).
 
 ### Backlog warnings
 
@@ -85,7 +111,7 @@ The consumer (and `Enqueue`) check the backlog at most once per second and warn 
 | Key | Default | Meaning |
 |---|---|---|
 | `World:SaveQueueWarnDepth` | `1000` | Warn while this many characters or more have a snapshot waiting or being written. 0 disables the depth check. |
-| `World:SaveQueueWarnAgeMs` | `5000` | Warn while the oldest waiting or in-flight snapshot has waited this long. 0 disables the age check. The default is the quest settlement budget: a pre-reward save older than that is already failing its settlement. |
+| `World:SaveQueueWarnAgeMs` | `5000` | Warn while the oldest waiting or in-flight snapshot has waited this long. 0 disables the age check. The default is the characters database's write bound (`Database:SqliteWriteTimeoutMs`): a snapshot that old has waited out at least one locked write. |
 
 The warning is `character save backlog: N characters pending, oldest waiting M ms (warns at ...)`, repeated at most every 30 s while
 the backlog persists, followed by one `character save backlog cleared: ...` line (Information) when it ends. An idle queue wakes once a
@@ -125,7 +151,7 @@ connection's 30 s `Default Timeout` and was retried inline three times, while ev
 | `Database:SlowCommandWarnMs` | `2000` | All providers. A single command whose execution takes at least this long is logged at WARN with the DbContext, duration, autocommit versus inside a transaction, write versus read, the first 80 characters of the SQL (parameter values are never logged; in the SQL text single- and double-quoted text and numeric literals print as `?`, comments are dropped, a backslash escapes the next character inside quotes, and the only double-quoted names kept are table names straight after FROM, INTO, UPDATE, JOIN or TABLE) and the calling code (`SlowCommandInterceptor`). It covers what the transaction warning cannot see: autocommit writes (single-command `SaveChanges`, `ExecuteUpdate`/`ExecuteDelete`, raw SQL) and commands that fail as "database is locked". Identical warnings (same caller and SQL prefix) are limited to one per 10 s and the next one states how many were suppressed since the previous warning for that caller. A `WITH ...` statement is classified by its main statement. Cost: registering any command interceptor makes EF build command event data for every command on every database (EF's logging-suppression shortcut is off while one is registered), regardless of the threshold; the interceptor's own check is one comparison. 0 disables. |
 
 - **Interaction with `busy_timeout`.** `busy_timeout` makes SQLite wait inside one call; the driver repeats the call until the command timeout has elapsed. Because the write timeout is already in the connection's `Default Timeout` when the pragma is set, `busy_timeout = min(SqliteBusyTimeoutMs, write timeout)` on a characters connection, so with the defaults a locked command fails after about 5 s (previously 30 s). The driver ignores cancellation tokens during the wait, so a timeout is the only bound. Auth and World connections are not bounded.
-- **`CharacterSaveQueue`.** A busy/locked failure (SQLite 5/6, also inside `DbUpdateException`) is not retried inline. The snapshot is retained, the whole queue pauses (1 s, 2 s, then 5 s while it keeps happening; reset by the next successful write) and the consumer moves on. Retained snapshots are retried when the queue is idle and at least every 16th pick, by a barrier (`FlushCharacterAsync`, which waits until the snapshot is written or its token fires), or by a newer snapshot of the character (merged over it). Shutdown ignores the pause and retries inline, then names the characters it could not write.
+- **`CharacterSaveQueue`.** A busy/locked failure (SQLite 5/6, also inside `DbUpdateException`) is not retried inline. The snapshot is retained, the ordinary snapshots pause (1 s, 2 s, then 5 s while it keeps happening; reset by the next successful write; settlements and barriers of other characters are not held by the first two steps, see [Priority lane](#priority-lane-and-the-1-in-8-ordinary-pick)) and the consumer moves on. Retained snapshots are retried when the queue is idle and at least every 16th pick, by a barrier (`FlushCharacterAsync`, which waits until the snapshot is written or its token fires), or by a newer snapshot of the character (merged over it). Shutdown ignores the pause and retries inline, then names the characters it could not write.
 - **Other queues.** Creature respawn and keyed (GM audit, groups, last address) queues no longer repeat a lock wait inline: the write stays retained and their retained-retry timers (30 s) land it. The honor, reputation, taxi, rested-state, explored-zones and social queues keep three inline attempts per write (about 5 s each under the characters write bound) and share `RetainedRetryTimer`: every 30 s while the queue holds a retained write, one sweep marker is posted into the queue's single consumer (never stacked), which makes one attempt per retained character or key and stops at the first locked database, so a lock outlasting the inline attempts costs about one 5 s wait per 30 s and the write lands once the lock clears, with no new trigger and no one online. The sweep runs on the consumer, ordered with every other item, and never replaces a newer value. Shutdown still drains and names whatever is not durable. A taxi save with an abandon fallback keeps the route (it is not abandoned) when the failure is a locked database. The instance write queue keeps its inline retries only (it has no retention).
 
 ### Decision: keep `BEGIN IMMEDIATE`, WAL and `synchronous=FULL` by default (`NORMAL` is opt-in)

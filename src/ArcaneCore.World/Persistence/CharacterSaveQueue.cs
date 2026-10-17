@@ -20,7 +20,9 @@ namespace ArcaneCore.World.Persistence;
 /// the queue holds at most one waiting snapshot per character. A write in flight is never replaced: the newer
 /// snapshot follows it. Settlement pre-reward saves and character barriers (<see cref="FlushCharacterAsync"/>) use a
 /// priority lane so they do not wait behind unrelated characters' autosaves; every eighth pick is an ordinary
-/// snapshot, so the priority lane cannot starve them. Ordering is per character only, as before.
+/// snapshot, so the priority lane cannot starve them. The priority lane also skips the pause a locked database imposes on
+/// ordinary snapshots, except for the character whose own write hit the lock and except during a lock storm (the backoff at its
+/// top). Ordering is per character only, as before.
 /// Thread-safe; all state is guarded by one lock that is never held across an await or a store call.
 /// </summary>
 public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
@@ -387,8 +389,20 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 if (!_stopped && _busyUntil > now)
                 {
                     // A write just failed because another connection holds the database: starting another write now would wait out
-                    // the whole write bound for nothing. Shutdown ignores the pause (it retries inline and must not sit idle).
-                    pauseTicks = _busyUntil - now;
+                    // the whole write bound for nothing. Shutdown ignores the pause (it retries inline and must not sit idle). A
+                    // settlement or barrier is the exception while the lock is short-lived: its caller is waiting on a budget, so it
+                    // gets its one attempt now unless its own character is the one that hit the lock. Once the backoff has reached its
+                    // top (BusyStormStreak locked writes in a row) the lock is held for long and every attempt would sit out the whole
+                    // write bound on the one consumer, holding the settlements behind it: then they wait out the pause like the rest.
+                    slot = _busyStreak < BusyStormStreak ? TakeFreshPriority() : null;
+                    if (slot is null)
+                    {
+                        pauseTicks = _busyUntil - now;
+                    }
+                    else
+                    {
+                        _sinceRetained++;
+                    }
                 }
                 else
                 {
@@ -961,6 +975,48 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         }
 
         return slot;
+    }
+
+    /// <summary>
+    /// During a busy pause: the first slot on the priority lane that is ready (a settlement or barrier waiting, no write in flight) and
+    /// whose character has no snapshot retained by a locked database (that one keeps the pause, so a held lock is not retried in a
+    /// loop; a successful write ends the pause for it anyway). The other hints keep their order. Null when there is none.
+    /// </summary>
+    private Slot? TakeFreshPriority()
+    {
+        Slot? chosen = null;
+        for (int remaining = _priorityHints.Count; remaining > 0; remaining--)
+        {
+            int id = _priorityHints.Dequeue();
+            if (!_slots.TryGetValue(id, out Slot? slot))
+            {
+                continue;
+            }
+
+            bool ready = !slot.InFlight && slot.Waiters.Count > 0;
+            if (!ready)
+            {
+                slot.PriorityHint = false; // as Dequeue: a slot that finishes a write with waiters is hinted again
+                Reap(slot);
+                continue;
+            }
+
+            if (chosen is null && !(_failed.TryGetValue(id, out FailedSave? failed) && failed.Deferred))
+            {
+                slot.PriorityHint = false;
+                chosen = slot;
+                continue;
+            }
+
+            _priorityHints.Enqueue(id);
+        }
+
+        if (chosen is not null)
+        {
+            _priorityRun++;
+        }
+
+        return chosen;
     }
 
     private Slot? Dequeue(bool priority)
