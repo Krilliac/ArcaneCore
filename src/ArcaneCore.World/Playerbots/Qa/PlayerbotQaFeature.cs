@@ -97,8 +97,21 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
 
     public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(PlayerbotQaFeature)));
 
-    /// <summary>Save the findings and stop the background pass (the shutdown work; see <see cref="StopAsync"/>).</summary>
-    public Task QuiesceAsync(CancellationToken cancellationToken) => StopAsync();
+    /// <summary>
+    /// Stop the background pass and save the findings, like <see cref="StopAsync"/>, except that a pass still running is waited for
+    /// as long as the host allows (its token), not abandoned after 10 s: a quiesce that gives up fails, and the host restores the feature.
+    /// </summary>
+    public async Task QuiesceAsync(CancellationToken cancellationToken)
+    {
+        if (Aggregator is null) return;
+        await _cts.CancelAsync().ConfigureAwait(false);
+        await Task.WhenAll(_loop, _publishing).WaitAsync(cancellationToken).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_loop.IsCompleted || !_publishing.IsCompleted) throw new TimeoutException("bot QA's background pass did not stop");
+        _findingsMeter?.Dispose();
+        _findingsMeter = null;
+        SaveFinal();
+    }
 
     /// <summary>Forget everything the attach built; the next attach starts from the store file again.</summary>
     public void Detach(FeatureHandover handover)
@@ -114,8 +127,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         _facts = NoQaContentFacts.Instance;
         _options = new();
         _directory = string.Empty;
-        _loop = Task.CompletedTask;
-        _publishing = Task.CompletedTask;
+        // _loop and _publishing are kept: after a quiesce that gave up they may still run (cancelled), and the next attach starts its
+        // pass only once the old one has ended, and a publish only once the old publish has.
+        _cts.Cancel();
         _cts.Dispose();
         _cts = new CancellationTokenSource();
         _world = null;
@@ -204,7 +218,14 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             if (registry is not null) subscriptions.Add(registry.UseCastRefusals(SpellMonitor));
         }
 
-        _loop = Task.Run(() => RunAsync(_cts.Token));
+        // A pass of an earlier attach still winding down (a quiesce the host gave up on) ends first: never two passes at once.
+        Task previous = _loop;
+        CancellationToken token = _cts.Token;
+        _loop = Task.Run(async () =>
+        {
+            await previous.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            await RunAsync(token).ConfigureAwait(false);
+        });
     }
 
     public async Task StopAsync()
@@ -221,6 +242,12 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             _log.LogWarning("Bot QA did not stop within 10 seconds; its last pass is abandoned");
         }
 
+        SaveFinal();
+    }
+
+    /// <summary>Fold what is queued and save the findings (the end of a stop or a quiesce).</summary>
+    private void SaveFinal()
+    {
         try
         {
             Drain();
@@ -231,7 +258,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _log.LogError(ex, "Bot QA could not save its findings at shutdown");
+            _log.LogError(ex, "Bot QA could not save its findings at a stop or detach");
         }
     }
 

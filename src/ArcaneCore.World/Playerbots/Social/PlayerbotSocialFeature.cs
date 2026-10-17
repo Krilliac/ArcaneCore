@@ -220,6 +220,10 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private FeatureSubscriptions? _subscriptions;
     private Task _refresh = Task.CompletedTask;
 
+    // Set by a quiesce, cleared by the next attach: no registry read starts in between (one started after the quiesce waited would
+    // run on after the detach).
+    private volatile bool _quiesced;
+
     public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(PlayerbotSocialFeature)));
 
     public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
@@ -228,6 +232,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         ArgumentNullException.ThrowIfNull(subscriptions);
         _world = world;
         _subscriptions = subscriptions;
+        _quiesced = false;
         subscriptions.OnUpdated(world, Update);
         subscriptions.OnMapCreated(world, OnMapCreated);
         subscriptions.OnMapUnloading(world, OnMapUnloading);
@@ -236,8 +241,18 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         foreach (Map map in world.Maps) OnMapCreated(map);
     }
 
-    /// <summary>Wait for a bot registry read still running (the only background work).</summary>
-    public Task QuiesceAsync(CancellationToken cancellationToken) => Volatile.Read(ref _refresh).WaitAsync(cancellationToken);
+    /// <summary>Start no further bot registry read, then wait for one still running (the only background work).</summary>
+    public async Task QuiesceAsync(CancellationToken cancellationToken)
+    {
+        _quiesced = true;
+        if (_world is { IsStopped: false, IsWorldThread: false } world)
+        {
+            // One hop through the world thread: an update that read the flag before it was set has finished, and its read is in _refresh.
+            await world.InvokeAsync(() => true, cancellationToken).ConfigureAwait(false);
+        }
+
+        await Volatile.Read(ref _refresh).WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public void Detach(FeatureHandover handover) => Release();
 
@@ -403,7 +418,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         if (!due && pass.NowMs - _registryAtMs >= Timings.RegistryMissGapMs)
             foreach (PlayerbotSocialBot bot in pass.Bots)
                 if (!registry!.Contains(bot.Player.Guid.Low)) { due = true; break; }
-        if (!due || Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0) return;
+        if (!due || _quiesced || Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0) return;
         _registryAtMs = pass.NowMs;
         Volatile.Write(ref _refresh, Task.Run(RefreshRegistryAsync));
     }

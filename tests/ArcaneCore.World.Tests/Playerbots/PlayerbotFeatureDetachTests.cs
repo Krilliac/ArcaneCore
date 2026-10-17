@@ -8,6 +8,7 @@ using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
 using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -204,6 +205,100 @@ public sealed class PlayerbotFeatureDetachTests
         ManagedPlayerbot row = owners.Peek(id)!;
         Assert.Equal(ManagedPlayerbotState.Running, row.State); // restored by the next start
         Assert.True(row.DesiredEnabled);
+    }
+
+    [Fact]
+    public async Task AQuiesceThatTimesOutBehindARunningOperation_DetachesNothing_AndLeavesOneOfEachService()
+    {
+        // A fleet reset, start or slow checkpoint holds the operation lock past the quiesce timeout. The host undoes the failed quiesce
+        // by a detach and re-attach in one tick: the detach must refuse (the operation still works on the active set) and the
+        // re-attach must keep the chat, policy and navigation services the quiesce never stopped, not start a second set beside them.
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            configure: o =>
+            {
+                o.Policy.Enabled = true;
+                o.Policy.Telemetry.Enabled = false;
+            },
+            manualClock: true,
+            extraServices: services => services.Replace(ServiceDescriptor.Singleton(_ => new FeatureHost(quiesceTimeout: TimeSpan.FromMilliseconds(300)))));
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        ManagedBotRegistry registry = host.WorldServices.GetRequiredService<ManagedBotRegistry>();
+        FeatureHost features = host.WorldServices.GetRequiredService<FeatureHost>();
+        (Guid[] ids, IdleController[] controllers) = await StartBotsAsync(feature, 1);
+        var chat = feature.Chat;
+        var inProcess = feature.ChatInProcess;
+        var policy = feature.PolicyEngine;
+        Assert.NotNull(chat);
+        Assert.NotNull(inProcess);
+        Assert.NotNull(policy);
+        PlayerbotBrain brain = await host.World.InvokeAsync(() => feature.FindBrain(ids[0])!);
+        int subscriptions = features.Find(nameof(ManagedPlayerbotFeature))!.Subscriptions;
+
+        FeatureResult detached;
+        using (IDisposable operation = await feature.HoldOperationForTestsAsync())
+        {
+            detached = await features.DetachAsync(nameof(ManagedPlayerbotFeature));
+            // The operation is still running: the restore did not clear the active set under it (the same brain drives the bot).
+            Assert.Same(brain, await host.World.InvokeAsync(() => feature.FindBrain(ids[0])));
+        }
+
+        Assert.False(detached.Ok);
+        Assert.Contains("nothing was detached", detached.Detail, StringComparison.Ordinal);
+        FeatureStatus status = features.Find(nameof(ManagedPlayerbotFeature))!;
+        Assert.Equal(FeatureState.Attached, status.State);
+        Assert.Equal(subscriptions, status.Subscriptions);
+        Assert.False(feature.IsDetaching);
+        Assert.NotNull(registry.SessionPolicy);
+        // One of each service: the very instances from before, none started beside them.
+        Assert.Same(chat, feature.Chat);
+        Assert.Same(inProcess, feature.ChatInProcess);
+        Assert.Same(policy, feature.PolicyEngine);
+        Assert.True(registry.TryGet(ids[0], out ManagedBot bot));
+        Assert.Equal(SessionState.InWorld, bot.Session.State);
+        Assert.Equal(0, controllers[0].Detaches);
+
+        // With the operation done, a cycle goes through: its quiesce stops the services and the attach starts one new set.
+        FeatureResult cycled = await features.CycleAsync(nameof(ManagedPlayerbotFeature));
+        Assert.True(cycled.Ok, cycled.Detail);
+        Assert.NotNull(feature.Chat);
+        Assert.NotSame(chat, feature.Chat);
+        Assert.NotNull(feature.PolicyEngine);
+        Assert.NotSame(policy, feature.PolicyEngine);
+        Assert.True((await feature.StopAsync(ids[0].ToString())).Success);
+    }
+
+    [Fact]
+    public async Task TheOrphanSweep_RunsAfterThePlayerbotShutdown_WhateverOrderTheHooksWereRegisteredIn()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(owners);
+        WorldLifecycleHooks hooks = host.WorldServices.GetRequiredService<WorldLifecycleHooks>();
+        FeatureHost features = host.WorldServices.GetRequiredService<FeatureHost>();
+        Assert.Equal(ManagedBotRegistry.OrphansHook, hooks.Registered(WorldLifecycleStage.BeforeWorldStop)[^1]);
+
+        // The playerbot shutdown registered again after the sweep (a cycle) and a pack hook registered at any time still run first.
+        Assert.True((await features.CycleAsync(nameof(ManagedPlayerbotFeature))).Ok);
+        using IDisposable pack = hooks.Register(WorldLifecycleStage.BeforeWorldStop, "pack.stop", _ => Task.CompletedTask);
+        IReadOnlyList<string> order = hooks.Registered(WorldLifecycleStage.BeforeWorldStop);
+        Assert.Equal(ManagedBotRegistry.OrphansHook, order[^1]);
+        Assert.Contains("playerbots.shutdown", order);
+        Assert.Contains("pack.stop", order);
+    }
+
+    [Fact]
+    public void ALastHook_RunsAfterEveryOrdinaryHook_RegisteredBeforeOrAfterIt()
+    {
+        var hooks = new WorldLifecycleHooks();
+        using IDisposable early = hooks.Register(WorldLifecycleStage.BeforeWorldStop, "early", _ => Task.CompletedTask);
+        using IDisposable sweep = hooks.RegisterLast(WorldLifecycleStage.BeforeWorldStop, "sweep", _ => Task.CompletedTask);
+        using IDisposable late = hooks.Register(WorldLifecycleStage.BeforeWorldStop, "late", _ => Task.CompletedTask);
+        using IDisposable start = hooks.Register(WorldLifecycleStage.AfterWorldStart, "start", _ => Task.CompletedTask);
+        using IDisposable startLast = hooks.RegisterLast(WorldLifecycleStage.AfterWorldStart, "start.last", _ => Task.CompletedTask);
+        using IDisposable startAfter = hooks.Register(WorldLifecycleStage.AfterWorldStart, "start.after", _ => Task.CompletedTask);
+        Assert.Equal(["late", "early", "sweep"], hooks.Registered(WorldLifecycleStage.BeforeWorldStop));
+        Assert.Equal(["start", "start.after", "start.last"], hooks.Registered(WorldLifecycleStage.AfterWorldStart));
+        Assert.Throws<InvalidOperationException>(() => hooks.Register(WorldLifecycleStage.BeforeWorldStop, "sweep", _ => Task.CompletedTask));
     }
 
     [Fact]

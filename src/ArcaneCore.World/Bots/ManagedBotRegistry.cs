@@ -167,11 +167,17 @@ public sealed class ManagedBotRegistry(IServiceProvider? services = null, ILogge
         return new Registration(() => Interlocked.CompareExchange(ref _hangSink, null, sink));
     }
 
+    /// <summary>The name of the shutdown hook that logs out the bots no feature stopped.</summary>
+    internal const string OrphansHook = "managed-bots.orphans";
+
     public void Attach(WorldRuntime world)
     {
         if (services?.GetService<IWorldLifecycleHooks>() is { } hooks && _shutdownHook is null)
         {
-            _shutdownHook = hooks.Register(WorldLifecycleStage.BeforeWorldStop, "managed-bots.orphans", _ => LogOutOrphansAsync());
+            // After every feature's own shutdown hook (the playerbot shutdown first of all), explicitly: not by attach order.
+            _shutdownHook = hooks is WorldLifecycleHooks core
+                ? core.RegisterLast(WorldLifecycleStage.BeforeWorldStop, OrphansHook, _ => LogOutOrphansAsync())
+                : hooks.Register(WorldLifecycleStage.BeforeWorldStop, OrphansHook, _ => LogOutOrphansAsync());
         }
     }
 

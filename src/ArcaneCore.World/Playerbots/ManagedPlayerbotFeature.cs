@@ -307,18 +307,29 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         ArgumentNullException.ThrowIfNull(subscriptions);
         _ = PlayerbotAnomalyHistory.Shared; // the bot anomaly history hears the anomaly ledger from now on (the core no longer touches it)
         _options.Validate();
-        if (_options.Policy.Enabled) StartPolicy();
-        // The in-process model provider (Chat:InProcess) sits in front of the transport; every other provider kind passes through.
-        _chatInProcess = new Chat.Inference.InProcessBotChatClient(
-            services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()), _options,
-            services.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory, logger);
-        _chat = new Chat.PlayerbotChat(_options, _chatInProcess,
-            services.GetService<Chat.IBotChatEnvironment>() ?? new Chat.ProcessBotChatEnvironment(),
-            services.GetService<TimeProvider>() ?? TimeProvider.System, logger);
-        if (_options.Enabled) _chat.LogConfiguration();
+        // A service still running is kept, not replaced: a quiesce that failed before it stopped them is undone by a detach and
+        // re-attach in one tick (FeatureHost), and a second policy engine, navigation worker or chat service would leak beside the first.
+        if (_options.Policy.Enabled && _policy is null) StartPolicy();
+        if (_chat is null)
+        {
+            // A chat service whose stop was interrupted part way leaves its provider behind: it goes, and the chain is built afresh.
+            _chatInProcess?.Dispose();
+            _chatInProcess = null;
+            _chatClient?.Dispose();
+            _chatClient = null;
+            // The in-process model provider (Chat:InProcess) sits in front of the transport; every other provider kind passes through.
+            _chatInProcess = new Chat.Inference.InProcessBotChatClient(
+                services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()), _options,
+                services.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory, logger);
+            _chat = new Chat.PlayerbotChat(_options, _chatInProcess,
+                services.GetService<Chat.IBotChatEnvironment>() ?? new Chat.ProcessBotChatEnvironment(),
+                services.GetService<TimeProvider>() ?? TimeProvider.System, logger);
+            if (_options.Enabled) _chat.LogConfiguration();
+        }
+
         _world = world;
         _sharedSetAsides.World = world;
-        if (_options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
+        if (_navigationExecutor is null && _options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
         {
             ILogger ownerLogger = logger;
             _navigationExecutor = new PlayerbotNavigationExecutor(
@@ -377,10 +388,36 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         await StopServicesAsync().ConfigureAwait(false);
     }
 
-    /// <summary>World thread (the feature host): stop every brain, hand the state over and forget it. The sessions stay open.</summary>
+    /// <summary>
+    /// World thread (the feature host): stop every brain, hand the state over and forget it. The sessions stay open.
+    /// <para>
+    /// Throws, having changed nothing, while an operation (a start, stop, create, home change, fleet reset or checkpoint) still holds
+    /// the operation lock: it works on <see cref="_active"/>, the homes and the registry off the world thread, and clearing them under it
+    /// would race it. That is the case of a quiesce that timed out waiting for the lock; the host then rolls the detach back (re-attach
+    /// from an empty handover, which keeps every bot and service as it is) and reports the detach failed.
+    /// </para>
+    /// </summary>
     public void Detach(FeatureHandover handover)
     {
         ArgumentNullException.ThrowIfNull(handover);
+        if (!_operations.Wait(0))
+        {
+            throw new InvalidOperationException("a playerbot operation is still running; nothing was detached");
+        }
+
+        try
+        {
+            DetachHeld(handover);
+        }
+        finally
+        {
+            _operations.Release();
+        }
+    }
+
+    /// <summary>The body of <see cref="Detach"/>, with the operation lock held.</summary>
+    private void DetachHeld(FeatureHandover handover)
+    {
         long unixNow = _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds();
         var setAsides = new Dictionary<Guid, PlayerbotSetAside[]>();
         var controllers = new Dictionary<Guid, IPlayerbotController>();
@@ -455,13 +492,31 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Stop the policy engine, the navigation executor and the chat services (a detach; the next attach starts them again).</summary>
     private async Task StopServicesAsync()
     {
-        if (_policy is { } policy) { _policy = null; await policy.DisposeAsync().ConfigureAwait(false); }
-        if (_navigationExecutor is { } navigationExecutor) { _navigationExecutor = null; await navigationExecutor.DisposeAsync().ConfigureAwait(false); }
-        if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
-        _chatInProcess?.Dispose();
-        _chatInProcess = null;
-        _chatClient?.Dispose();
-        _chatClient = null;
+        // Each field is taken before its service is stopped, so an attach running meanwhile (a quiesce the host gave up on while this
+        // ran) never ends up with two of a service. It can end up with none of one (it kept a service this then stopped) until the
+        // next attach; the bot code treats a missing chat, policy or navigation worker as off.
+        if (Interlocked.Exchange(ref _policy, null) is { } policy) await policy.DisposeAsync().ConfigureAwait(false);
+        if (Interlocked.Exchange(ref _navigationExecutor, null) is { } navigationExecutor) await navigationExecutor.DisposeAsync().ConfigureAwait(false);
+        if (Interlocked.Exchange(ref _chat, null) is { } chat) await chat.DisposeAsync().ConfigureAwait(false);
+        Interlocked.Exchange(ref _chatInProcess, null)?.Dispose();
+        Interlocked.Exchange(ref _chatClient, null)?.Dispose();
+    }
+
+    /// <summary>Test seam: hold the operation lock (as a long fleet reset, start or checkpoint does) until the result is disposed.</summary>
+    internal async Task<IDisposable> HoldOperationForTestsAsync()
+    {
+        await _operations.WaitAsync().ConfigureAwait(false);
+        return new OperationHold(_operations);
+    }
+
+    private sealed class OperationHold(SemaphoreSlim operations) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0) operations.Release();
+        }
     }
 
     /// <summary>The feature's driver of one bot around its core entry: the party AI wired to the coordinator, the brain given.</summary>

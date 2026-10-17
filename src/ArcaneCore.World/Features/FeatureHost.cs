@@ -180,12 +180,15 @@ public sealed class FeatureHost
         }
     }
 
-    /// <summary>Whether <paramref name="feature"/> is detached now (shutdown skips its <see cref="IWorldFeature.StopAsync"/>: its quiesce already drained it).</summary>
+    /// <summary>
+    /// Whether <paramref name="feature"/> is out of the world now, <see cref="FeatureState.Detached"/> or <see cref="FeatureState.Faulted"/>
+    /// (shutdown skips its <see cref="IWorldFeature.StopAsync"/>: its quiesce already drained it, and a faulted one holds no subscription).
+    /// </summary>
     public bool IsDetached(IWorldFeature feature)
     {
         lock (_gate)
         {
-            return _entries.Any(e => ReferenceEquals(e.Feature, feature) && e.State == FeatureState.Detached);
+            return _entries.Any(e => ReferenceEquals(e.Feature, feature) && e.State is FeatureState.Detached or FeatureState.Faulted);
         }
     }
 
@@ -315,7 +318,11 @@ public sealed class FeatureHost
         }
     }
 
-    /// <summary>A failed quiesce may have stopped part of the feature's work: detach and re-attach it in one tick so it restarts whole.</summary>
+    /// <summary>
+    /// A failed quiesce may have stopped part of the feature's work: detach and re-attach it in one tick so it restarts whole. The
+    /// feature's <see cref="IDetachableWorldFeature.Detach"/> may refuse (throw) while work the quiesce did not drain is still running,
+    /// and its <see cref="IDetachableWorldFeature.AttachFrom"/> must keep, not duplicate, any service the quiesce did not stop.
+    /// </summary>
     private async Task<Outcome> RestoreAfterQuiesceAsync(Entry entry, string quiesceError)
     {
         SetState(entry, FeatureState.Quiesced, entry.Handover);

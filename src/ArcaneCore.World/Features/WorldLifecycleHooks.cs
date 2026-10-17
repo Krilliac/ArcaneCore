@@ -15,7 +15,16 @@ public sealed class WorldLifecycleHooks(ILogger<WorldLifecycleHooks>? logger = n
     private readonly Lock _gate = new();
     private readonly List<Hook> _hooks = [];
 
-    public IDisposable Register(WorldLifecycleStage stage, string name, Func<CancellationToken, Task> hook)
+    public IDisposable Register(WorldLifecycleStage stage, string name, Func<CancellationToken, Task> hook) => Add(stage, name, hook, last: false);
+
+    /// <summary>
+    /// Register a core hook that runs after every <see cref="Register"/>ed hook of <paramref name="stage"/>, whatever the order the
+    /// features attached in (a pack from another assembly attaches in assembly-name order). The core's sweep of managed bots no
+    /// feature logged out uses it, so it always follows the playerbot shutdown. Several run in registration order.
+    /// </summary>
+    internal IDisposable RegisterLast(WorldLifecycleStage stage, string name, Func<CancellationToken, Task> hook) => Add(stage, name, hook, last: true);
+
+    private IDisposable Add(WorldLifecycleStage stage, string name, Func<CancellationToken, Task> hook, bool last)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(hook);
@@ -24,7 +33,7 @@ public sealed class WorldLifecycleHooks(ILogger<WorldLifecycleHooks>? logger = n
             throw new ArgumentOutOfRangeException(nameof(stage), stage, "unknown lifecycle stage");
         }
 
-        var entry = new Hook(stage, name, hook);
+        var entry = new Hook(stage, name, hook, last);
         lock (_gate)
         {
             if (_hooks.Any(h => h.Stage == stage && string.Equals(h.Name, name, StringComparison.Ordinal)))
@@ -43,7 +52,8 @@ public sealed class WorldLifecycleHooks(ILogger<WorldLifecycleHooks>? logger = n
 
     /// <summary>
     /// Run the hooks of <paramref name="stage"/>: <see cref="WorldLifecycleStage.AfterWorldStart"/> in registration order,
-    /// <see cref="WorldLifecycleStage.BeforeWorldStop"/> newest first. Every hook runs; failures are thrown together.
+    /// <see cref="WorldLifecycleStage.BeforeWorldStop"/> newest first; then the <see cref="RegisterLast"/> ones. Every hook runs;
+    /// failures are thrown together.
     /// </summary>
     public async Task RunAsync(WorldLifecycleStage stage, CancellationToken cancellationToken = default)
     {
@@ -71,8 +81,9 @@ public sealed class WorldLifecycleHooks(ILogger<WorldLifecycleHooks>? logger = n
     {
         lock (_gate)
         {
-            IEnumerable<Hook> hooks = _hooks.Where(h => h.Stage == stage);
-            return stage == WorldLifecycleStage.BeforeWorldStop ? [.. hooks.Reverse()] : [.. hooks];
+            IEnumerable<Hook> hooks = _hooks.Where(h => h.Stage == stage && !h.Last);
+            IEnumerable<Hook> last = _hooks.Where(h => h.Stage == stage && h.Last);
+            return stage == WorldLifecycleStage.BeforeWorldStop ? [.. hooks.Reverse(), .. last] : [.. hooks, .. last];
         }
     }
 
@@ -84,7 +95,7 @@ public sealed class WorldLifecycleHooks(ILogger<WorldLifecycleHooks>? logger = n
         }
     }
 
-    private sealed record Hook(WorldLifecycleStage Stage, string Name, Func<CancellationToken, Task> Run);
+    private sealed record Hook(WorldLifecycleStage Stage, string Name, Func<CancellationToken, Task> Run, bool Last);
 
     private sealed class Registration(WorldLifecycleHooks owner, Hook hook) : IDisposable
     {

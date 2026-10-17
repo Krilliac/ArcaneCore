@@ -43,19 +43,25 @@ public interface IDetachableWorldFeature : IWorldFeature
     /// </summary>
     void IWorldFeature.Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(GetType().Name));
 
-    /// <summary>Stop background work before a detach (off the world thread). The token is cancelled when the host gives up waiting.</summary>
+    /// <summary>
+    /// Stop background work before a detach (off the world thread). The token is cancelled when the host gives up waiting; a
+    /// quiesce that fails or times out is undone by a <see cref="Detach"/> and <see cref="AttachFrom"/> in one tick, possibly
+    /// while work the quiesce did not reach is still running (see those two).
+    /// </summary>
     Task QuiesceAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Leave the world (world thread, tick boundary): release static state and write what to carry over into
     /// <paramref name="handover"/> (a <see cref="DetachKind.Stateless"/> feature may ignore it). Do not unsubscribe what
-    /// went through the bag: the host disposes it right after.
+    /// went through the bag: the host disposes it right after. Throw, having changed nothing, when background work the quiesce
+    /// did not drain still uses the state a detach would clear: the host rolls back (re-attaches from the empty handover).
     /// </summary>
     void Detach(FeatureHandover handover);
 
     /// <summary>
     /// Join the world (world thread, tick boundary; before the world thread starts at startup). Subscribe only through
-    /// <paramref name="subscriptions"/>; restore from <paramref name="handover"/>, or start cold when it is null.
+    /// <paramref name="subscriptions"/>; restore from <paramref name="handover"/>, or start cold when it is null. Keep, do not
+    /// start a second of, any background service still running (a failed quiesce did not stop it).
     /// </summary>
     void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions);
 }
