@@ -6,6 +6,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
@@ -786,6 +788,13 @@ internal sealed class PlayerbotOpportunities
             {
                 PlanOutcome planned = PlayerbotNavigation.PlanExact(player, episode.At, _options, ref _tileWait, now, out _route);
                 if (planned == PlanOutcome.Pending) return Busy(episode, PlayerbotGoalKind.Loot);
+                // An exact search never asks the region graph, and within 100 yards it keeps the 2048-node budget however long the walk
+                // is. A chest the graph joins (the way round a cliff, not the straight drop) is then dropped as "no route".
+                if (planned == PlanOutcome.Refused || _route is null)
+                {
+                    planned = PlanChestTheGraphReaches(player, episode.At, now);
+                }
+                if (planned == PlanOutcome.Pending) return Busy(episode, PlayerbotGoalKind.Loot);
                 if (planned == PlanOutcome.Refused || _route is null)
                 {
                     _route = null;
@@ -830,6 +839,47 @@ internal sealed class PlayerbotOpportunities
         episode.Phase = EpisodePhase.Await;
         episode.AwaitUntilMs = unchecked(now + AwaitLootMs);
         return Busy(episode, PlayerbotGoalKind.Loot);
+    }
+
+    /// <summary>
+    /// The exact search refused the chest. When the region graph joins the bot to it, that refusal is the short budget or nodes spent
+    /// toward the chest across a cliff, not a missing walk: one wide search inside the same region, otherwise a leg to a portal of the
+    /// graph's way. Pending while the graph is still being built. Refused when the graph does not join them, so the caller reports it.
+    /// </summary>
+    private PlanOutcome PlanChestTheGraphReaches(Player player, Vector3 goal, uint now)
+    {
+        _route = null;
+        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav)
+            return PlanOutcome.Refused;
+        NavTerrain include = PathMover.Player.IncludeFlags;
+        if (nav.RegionGraph(map.MapId, include, NavTerrain.SteepSlopes) is not { } graph)
+            return nav.RegionGraphTask(map.MapId, include, NavTerrain.SteepSlopes) is { IsCompleted: false }
+                ? PlanOutcome.Pending : PlanOutcome.Refused;
+
+        Vector3 start = PlayerbotMotion.CurrentPosition(player);
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = nav.RegionAt(graph, start, locate), to = nav.RegionAt(graph, goal, locate);
+        if (from < 0 || to < 0) return PlanOutcome.Refused;
+        if (graph.FindRoute(from, start, to, goal, PlayerbotNavigation.RegionSearchNodes, out List<Vector3> portals) != NavRegionRouteStatus.Found)
+            return PlanOutcome.Refused;
+        // One region: the polygons already join, and the exact 2048-node search was too small for the long way round.
+        if (portals.Count == 0)
+            return PlayerbotNavigation.PlanFar(player, goal, _options, PlayerbotNavigation.MaxSearchNodes, ref _tileWait, now, out _route);
+
+        // The way leaves this region through a portal. Walk to that, not straight at the chest (the near side of the cliff).
+        portals.Add(goal);
+        int pick = 0;
+        float leg = MathF.Min(PlayerbotNavigation.RegionLegYards, _options.MaxRouteYards * 0.5f), along = Vector3.Distance(start, portals[0]);
+        for (int i = 1; i < portals.Count; i++)
+        {
+            along += Vector3.Distance(portals[i - 1], portals[i]);
+            if (along > leg) break;
+            pick = i;
+        }
+
+        PlanOutcome planned = PlayerbotNavigation.PlanFar(player, portals[pick], _options, PlayerbotNavigation.MaxSearchNodes, ref _tileWait, now, out _route);
+        if (planned == PlanOutcome.Route || planned == PlanOutcome.Pending || pick == 0) return planned;
+        return PlayerbotNavigation.PlanFar(player, portals[0], _options, PlayerbotNavigation.MaxSearchNodes, ref _tileWait, now, out _route);
     }
 
     private OpportunityStep AwaitLoot(Player player, Episode episode, uint now)

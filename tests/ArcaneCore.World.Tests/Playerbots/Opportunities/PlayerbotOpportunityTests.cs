@@ -3,7 +3,11 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Collision;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Skills;
@@ -1083,6 +1087,70 @@ public sealed class PlayerbotOpportunityTests
         Assert.True(await RunClockAsync(rig, () => rig.Bot.Controller.ActiveKey is null, steps: 40));
         Assert.Equal(1, capture.Count(Key("chest-empty")));
         Assert.Contains(rig.Bot.Sink, a => a.Opcode == WorldOpcode.CmsgLootRelease);
+    }
+
+    /// <summary>
+    /// A chest within <see cref="PlayerbotNavigation.NearYards"/> whose only walk is a snake of more polygons than the exact search's
+    /// 2048-node budget. The region graph puts both ends in one region (it can reach the chest). The exact search still refuses, and
+    /// the find must not be reported unreachable.
+    /// </summary>
+    [Fact]
+    public async Task ANearChestTheRegionGraphJoins_IsNotUnreachable_WhenTheExactSearchRunsOutOfNodes()
+    {
+        // Even rows are full; each odd row is the one cell at the end the row above leaves by, so the only walk snakes
+        // (24 * 150 + 23 polygons) while the chest stays 46 yards off, inside the short search budget.
+        const float cell = 1f;
+        const int width = 150;
+        const int lastRow = 46;
+        ChestSpawn chest = new(FreeChest, 9, 0f, lastRow * cell);
+        using var fixture = new NavMeshFixture();
+        (int detourX, int detourY) = ((int)MathF.Floor(StartY / 533.3333f), (int)MathF.Floor(StartX / 533.3333f));
+        (int fileX, int fileY) = TerrainTile.TileOf(StartX, StartY)!.Value;
+        fixture.WriteParams(0);
+        fixture.WriteTile(0, fileX, fileY, new CellTile(detourX, detourY, StartX - (cell / 2f), StartY - (cell / 2f), width, lastRow + 1, cell)
+        {
+            Height = (_, _) => StartZ,
+            Walkable = (i, j) => (j & 1) == 0 || i == ((((j - 1) / 2) & 1) == 0 ? width - 1 : 0),
+        });
+        var nav = new NavMeshPathfinder(fixture.Directory);
+        Assert.True(nav.LoadTile(0, fileX, fileY));
+        Task<NavRegionGraph?>? pending = nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        Assert.NotNull(pending);
+        Assert.NotNull(await pending);
+
+        await using Rig rig = await Rig.StartAsync([chest], tweak: options =>
+        {
+            options.Opportunities.ScanRadiusYards = 80f;
+            options.Opportunities.PersonalityVariance = 0f;
+            options.Opportunities.MinValue = 0f;
+        });
+        await rig.World(() =>
+        {
+            WorldCollision.Of(rig.Host.World).Install(pathfinder: nav);
+            GameObject box = rig.ChestOf(chest);
+            Vector3 goal = new(box.X, box.Y, box.Z);
+            Vector3 here = PlayerbotMotion.CurrentPosition(rig.Player);
+            float apart = Vector3.Distance(here, goal);
+            Assert.True(apart > PlayerbotOpportunities.InteractYards && apart <= PlayerbotNavigation.NearYards, $"straight {apart:F1}");
+            TileWait wait = default;
+            Assert.Equal(PlanOutcome.Refused, PlayerbotNavigation.PlanExact(rig.Player, goal, rig.Bot.Options, ref wait, rig.Clock, out _));
+            NavRegionGraph graph = nav.RegionGraph(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+            var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+            int from = nav.RegionAt(graph, here, locate), to = nav.RegionAt(graph, goal, locate);
+            Assert.True(from >= 0 && from == to, $"regions {from}, {to}");
+            Assert.Equal(NavRegionRouteStatus.Found, graph.FindRoute(from, here, to, goal, PlayerbotNavigation.RegionSearchNodes, out List<Vector3> portals));
+            Assert.Empty(portals);
+            Assert.Equal(PlanOutcome.Route, PlayerbotNavigation.PlanFar(rig.Player, goal, rig.Bot.Options, PlayerbotNavigation.MaxSearchNodes, ref wait, rig.Clock, out PlayerbotRoute? wide));
+            Assert.NotNull(wide);
+            return true;
+        });
+
+        using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        OpportunityStep step = await rig.World(() => rig.Bot.Step());
+        Assert.True(step.Busy, rig.Bot.Controller.Report);
+        Assert.Equal(KeyOf(chest), rig.Bot.Controller.ActiveKey);
+        Assert.Equal(0, capture.Count(Key("unreachable")));
+        Assert.False(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(chest), rig.Clock));
     }
 
     [Fact]
