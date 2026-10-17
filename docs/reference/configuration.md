@@ -25,6 +25,7 @@ How to read the tables:
 - [`CharacterCreation`](#charactercreation)
 - [`ClientData`](#clientdata)
 - [`Cluster:Fencing`](#clusterfencing)
+- [`Cluster:Worker`](#clusterworker)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
 - [`Creatures`](#creatures)
@@ -295,6 +296,20 @@ How to read the tables:
 | `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. |
 | `Cluster:Fencing:TakeoverEpoch` | `long?` | `null` | - | The positive ownership epoch to compare and swap during an explicit takeover; pair with `TakeoverIncarnation`. |
 | `Cluster:Fencing:TakeoverIncarnation` | `Guid?` | `null` | - | The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with `TakeoverEpoch`. |
+
+## `Cluster:Worker`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Worker:BindAddress` | `string` | `"127.0.0.1"` | - | Address of the gateway listener. A non-loopback address requires Cluster:Worker:LinkSecret. |
+| `Cluster:Worker:CharactersSchemaVersion` | `int` | `1` | - | Characters schema version both ends must agree on (an operator label, not read from the database). |
+| `Cluster:Worker:ContentRevision` | `string` | `"dev"` | - | Content revision both ends of the link must agree on (an operator label; nothing reads it from the data). |
+| `Cluster:Worker:Enabled` | `bool` | `false` | - | `true` opens the gateway listener (worker mode). `false`, the default, is Combined mode: no listener, no change. |
+| `Cluster:Worker:LinkSecret` | `string` | `""` | - | Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Empty is allowed on a loopback bind only. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password. |
+| `Cluster:Worker:NodeId` | `string` | `"world"` | - | This worker's node id in the link manifest (shown in the gateway's log). |
+| `Cluster:Worker:Port` | `int` | `8095` | - | Port of the gateway listener; must equal the gateway's Gateway:WorkerPort. |
+| `Cluster:Worker:RealmId` | `int` | `1` | - | Realm id both ends of the link must agree on. |
+| `Cluster:Worker:WorldSchemaVersion` | `int` | `1` | - | World schema version both ends must agree on (an operator label, not read from the database). |
 
 ## `Combat`
 

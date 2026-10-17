@@ -1,0 +1,12 @@
+{
+  "Gateway": {
+    "BindAddress": "0.0.0.0",
+    "Port": 8086,
+    "WorkerAddress": "127.0.0.1",
+    "WorkerPort": 8095,
+    "LinkSecret": "",
+    "NodeId": "gateway",
+    "RealmId": 1,
+    "ContentRevision": "dev"
+  }
+}

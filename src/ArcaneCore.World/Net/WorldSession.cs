@@ -315,6 +315,12 @@ public sealed partial class WorldSession : IPlayerSession
 
         ObserveOutbound(opcode, payload);
 
+        if (_remoteOutput is not null)
+        {
+            SendRemote(opcode, payload); // gateway-backed session (WorldSession.Remote.cs, Tier 3a)
+            return;
+        }
+
         if (_managed)
         {
             CaptureManagedPacket(opcode, payload);

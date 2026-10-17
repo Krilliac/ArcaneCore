@@ -41,6 +41,12 @@ public enum ClusterSessionDetachReason : byte
     Transferred = 3,
     WorkerDraining = 4,
     OwnerEpochMismatch = 5,
+
+    /// <summary>The worker closed a gateway-backed session (kick, logout to nothing, shutdown): Tier 3a passthrough.</summary>
+    WorkerClosed = 6,
+
+    /// <summary>The link carrying the session dropped, or a peer broke the session protocol: Tier 3a passthrough.</summary>
+    LinkLost = 7,
 }
 
 /// <summary>
@@ -434,6 +440,15 @@ internal enum GatewayWorkerFrameType : byte
     ClientSessionPacketAck = 8,
     ServerSessionPacket = 9,
     ServerSessionDetached = 10,
+
+    // Tier 3a passthrough (GatewaySessionLink*.cs): sessions keyed by gateway generation, opened before a character exists.
+    SessionOpen = 11,
+    SessionOpenReply = 12,
+    SessionClientPacket = 13,
+    SessionServerPacket = 14,
+    SessionClose = 15,
+    LinkChallenge = 16,
+    LinkProof = 17,
 }
 
 /// <summary>
@@ -977,7 +992,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         return buf;
     }
 
-    private static void WriteSessionPacketBody(Span<byte> span, ClusterSessionPacket packet)
+    internal static void WriteSessionPacketBody(Span<byte> span, ClusterSessionPacket packet)
     {
         BinaryPrimitives.WriteInt64LittleEndian(span[..8], packet.SessionGeneration);
         BinaryPrimitives.WriteInt32LittleEndian(span.Slice(8, 4), packet.AccountId);
@@ -989,9 +1004,17 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         packet.Payload.Span.CopyTo(span[44..]);
     }
 
+    /// <summary>Bytes of the envelope header that precedes the payload (<see cref="WriteSessionPacketBody"/>).</summary>
+    internal const int SessionPacketHeaderBytes = 44;
+
     internal static ClusterSessionPacket DeserializeSessionPacket(ReadOnlyMemory<byte> memory)
     {
         ReadOnlySpan<byte> span = memory.Span;
+        if (span.Length < SessionPacketHeaderBytes)
+        {
+            throw new InvalidDataException($"truncated session packet envelope ({span.Length} B)");
+        }
+
         long gen = BinaryPrimitives.ReadInt64LittleEndian(span[..8]);
         int accountId = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(8, 4));
         ulong guid = BinaryPrimitives.ReadUInt64LittleEndian(span.Slice(12, 8));
@@ -999,7 +1022,12 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         long seq = BinaryPrimitives.ReadInt64LittleEndian(span.Slice(28, 8));
         uint opcode = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(36, 4));
         int len = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(40, 4));
-        ReadOnlyMemory<byte> payload = memory.Slice(44, len);
+        if (len < 0 || len > span.Length - SessionPacketHeaderBytes)
+        {
+            throw new InvalidDataException($"session packet payload length {len} does not fit the {span.Length} B envelope");
+        }
+
+        ReadOnlyMemory<byte> payload = memory.Slice(SessionPacketHeaderBytes, len);
         return new ClusterSessionPacket(gen, accountId, guid, epoch, seq, opcode, payload);
     }
 }

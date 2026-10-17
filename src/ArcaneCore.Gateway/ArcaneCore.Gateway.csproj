@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Tier 3a gateway (docs/areas/gateway.md, docs/design/hot-reload-tiers.md section 5): owns the client sockets, the world
+       auth handshake and the header cipher, and forwards plaintext opcodes to a World running in worker mode (Cluster:Worker).
+       It references ArcaneCore.World for the link protocol (src/ArcaneCore.World/Cluster/Gateway) and the build protocols;
+       splitting those into a small shared assembly is follow-up work, so this process loads the World assembly but runs none
+       of its game code. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ArcaneCore.Gateway</RootNamespace>
+    <AssemblyName>ArcaneCore.Gateway</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Cryptography\ArcaneCore.Cryptography.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Data\ArcaneCore.Data.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Protocol\ArcaneCore.Protocol.csproj" />
+    <ProjectReference Include="..\ArcaneCore.World\ArcaneCore.World.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="gateway.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.Gateway.Tests" />
+  </ItemGroup>
+
+</Project>

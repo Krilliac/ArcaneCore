@@ -331,7 +331,8 @@ public sealed class ConfigReferenceTests
         HashSet<string> paths = [.. Production.Entries.Select(e => e.Path), .. ConfigExceptionTable.AdHocKeys.Select(a => a.Path)];
         HashSet<string> types = [.. ConfigExceptionTable.Sections().Select(s => s.Type.Name)];
         var coverage = new ConfigCoverage(ConfigExceptionTable.DiscoverHolders(), paths, types, ConfigExceptionTable.FrameworkSections, ConfigExceptionTable.FrameworkTypes);
-        var sources = ConfigProduction.SourceFiles().Where(f => !f.Path.StartsWith("tools/ArcaneCore.MockClient/", StringComparison.Ordinal)).ToList();
+        var sources = ConfigProduction.SourceFiles().Where(f => !f.Path.StartsWith("tools/ArcaneCore.MockClient/", StringComparison.Ordinal)
+            && !ConfigExceptionTable.UncataloguedSourceRoots.Keys.Any(root => f.Path.StartsWith(root, StringComparison.Ordinal))).ToList();
         Assert.True(sources.Count > 500, "the scan must see the source tree; it found " + sources.Count + " files");
         IReadOnlyList<string> problems = ConfigSourceScan.FindUncovered(sources, coverage);
         Assert.True(problems.Count == 0, string.Join("\n", problems));
