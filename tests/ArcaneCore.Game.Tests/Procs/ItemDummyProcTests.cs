@@ -131,4 +131,80 @@ public sealed class ItemDummyProcTests
         TalentProcRig.ProbeHit hit = Assert.Single(rig.Probes);
         Assert.Equal((23583u, rogue), (hit.SpellId, hit.Target));
     }
+
+    private const uint MageArmor = 996_010;
+    private const uint FireBolt = 996_011;
+    private const uint PhysicalHit = 996_012;
+    private const uint ShadowBolt = 996_013;
+
+    private static TalentProcRig ArmorRig() => new(
+        Talent(ItemDummyProc.AdaptiveWarding, AuraType.Dummy, 0, ProcFlags.TakeHarmfulSpell),
+        Talent(ItemDummyProc.ObsidianArmor, AuraType.Dummy, 0, ProcFlags.TakeHarmfulSpell),
+        Talent(MageArmor, AuraType.ModManaRegenInterrupt, 30, ProcFlags.None, family: 3) with { SpellFamilyFlags = 1UL << 28 },
+        Probe(28765, atEnemy: false),
+        Probe(28769, atEnemy: false),
+        Probe(27533, atEnemy: false),
+        Probe(27535, atEnemy: false),
+        SpellTestKit.Spell(FireBolt, SpellTestKit.Effect(SpellEffectName.SchoolDamage, 100, SpellImplicitTarget.UnitEnemy)) with { School = SpellSchool.Fire },
+        SpellTestKit.Spell(ShadowBolt, SpellTestKit.Effect(SpellEffectName.SchoolDamage, 100, SpellImplicitTarget.UnitEnemy)) with { School = SpellSchool.Shadow },
+        SpellTestKit.Spell(PhysicalHit, SpellTestKit.Effect(SpellEffectName.SchoolDamage, 100, SpellImplicitTarget.UnitEnemy)) with { School = SpellSchool.Normal });
+
+    private static ProcEvent HitBy(Unit attacker, SpellInfo spell) => new()
+    {
+        Victim = attacker,
+        AttackerFlags = ProcFlags.None,
+        VictimFlags = ProcFlags.TakeHarmfulSpell,
+        Extra = ProcFlagsEx.NormalHit,
+        Amount = 100,
+        OriginalAmount = 100,
+        ProcSpell = spell,
+    };
+
+    [Fact]
+    public void AdaptiveWarding_WithMageArmor_BuffsTheResistanceOfTheIncomingSchoolOnTheMage()
+    {
+        using TalentProcRig rig = ArmorRig();
+        Player mage = rig.AddPlayer(1, 0, 0);
+        Player enemy = rig.AddPlayer(2, 3, 0);
+        rig.Apply(mage, ItemDummyProc.AdaptiveWarding);
+        rig.Apply(mage, MageArmor);
+
+        rig.System.ProcDamageAndSpell(enemy, HitBy(mage, rig.Kit.Store.Get(FireBolt)!));
+
+        TalentProcRig.ProbeHit hit = Assert.Single(rig.Probes);
+        Assert.Equal((28765u, mage, mage), (hit.SpellId, hit.Caster, hit.Target));
+    }
+
+    [Fact]
+    public void AdaptiveWarding_WithoutMageArmor_OrFromAPhysicalHit_DoesNothing()
+    {
+        using TalentProcRig rig = ArmorRig();
+        Player mage = rig.AddPlayer(1, 0, 0);
+        Player enemy = rig.AddPlayer(2, 3, 0);
+        rig.Apply(mage, ItemDummyProc.AdaptiveWarding);
+
+        rig.System.ProcDamageAndSpell(enemy, HitBy(mage, rig.Kit.Store.Get(FireBolt)!));
+        rig.Apply(mage, MageArmor);
+        rig.System.ProcDamageAndSpell(enemy, HitBy(mage, rig.Kit.Store.Get(PhysicalHit)!));
+
+        Assert.Empty(rig.Probes);
+        Assert.Null(ItemDummyProc.AdaptiveWardingBuff(SpellSchool.Holy));
+        Assert.Equal(28770u, ItemDummyProc.AdaptiveWardingBuff(SpellSchool.Arcane));
+    }
+
+    [Fact]
+    public void ObsidianArmor_AbsorbsTheIncomingSchool_ButNotPhysical()
+    {
+        using TalentProcRig rig = ArmorRig();
+        Player wearer = rig.AddPlayer(1, 0, 0);
+        Player enemy = rig.AddPlayer(2, 3, 0);
+        rig.Apply(wearer, ItemDummyProc.ObsidianArmor);
+
+        rig.System.ProcDamageAndSpell(enemy, HitBy(wearer, rig.Kit.Store.Get(PhysicalHit)!));
+        rig.System.ProcDamageAndSpell(enemy, HitBy(wearer, rig.Kit.Store.Get(ShadowBolt)!));
+
+        TalentProcRig.ProbeHit hit = Assert.Single(rig.Probes);
+        Assert.Equal((27535u, wearer), (hit.SpellId, hit.Target));
+        Assert.Equal(27536u, ItemDummyProc.ObsidianArmorAbsorb(SpellSchool.Holy));
+    }
 }

@@ -200,8 +200,8 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
   6300-6354); absorbs of a leech tick are not modelled (DrainAuras).
 
 - The class-specific cases inside vmangos' ProcTriggerSpell, Dummy and OverrideClassScripts handlers: Seal of Righteousness, Judgement of
-  Light/Wisdom and Shaman Lightning Shield ([class-scripts](class-scripts.md)) and the talents of "Talent procs" are delivered; the remaining dummy cases
-  (Clean Escape, Unstable Power, the trinkets) and the set-bonus class scripts are not yet.
+  Light/Wisdom and Shaman Lightning Shield ([class-scripts](class-scripts.md)) and the talents of "Talent procs" are delivered, and so are the item and set dummy cases
+  (`ItemDummyProc`: Clean Escape, the Zandalarian trinkets, the T2/T3 set heals, Holy/Totemic Power, Adaptive Warding, Obsidian Armor).
 - Wyvern Sting's wake-up damage over time (24131/24134/24135 on removal, vmangos spell_hunter.cpp) is delivered in `Hunter/CounterattackScript.cs` ([class-scripts](class-scripts.md)).
 - Pet melee and pet spells offer their events only through the same map combat and spell paths (no owner-side procs).
 - SPELL_ATTR_EX4_CLASS_TRIGGER_ONLY_ON_TARGET (ADD_TARGET_TRIGGER on the selected target only) and SPELLMOD_CHARGES on new holders.

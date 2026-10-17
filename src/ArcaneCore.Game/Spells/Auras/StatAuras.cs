@@ -25,9 +25,9 @@ namespace ArcaneCore.Game.Spells;
 /// <para>
 /// Limits (documented in docs/areas/spells.md): MOD_STAT recomputes the derived values of a player attached to a
 /// <see cref="PlayerStatSystem"/> (armor from agility, attack power, crit, dodge) but not those the repo has no system for (spell power,
-/// mana regeneration); the Improved Scorpid Sting stamina
-/// reduction (:4650-4677), the Faerie Fire dispel immunities (:4574-4581) and the SPELLMOD_ATTACK_POWER talent
-/// modifier need systems that do not exist yet; attack power polarity is the spell's, not per effect.
+/// mana regeneration). The Improved Scorpid Sting stamina reduction (:4650-4677) is <see cref="Hunter.ImprovedScorpidStingModule"/>; the Faerie Fire
+/// dispel immunities (:4574-4581) come from build 5875's own DISPEL_IMMUNITY effects of the Faerie Fire ranks. The SPELLMOD_ATTACK_POWER talent
+/// modifier needs a system that does not exist yet; attack power polarity is the spell's, not per effect.
 /// </para>
 /// </summary>
 public sealed class StatAuras : ISpellHandlerModule

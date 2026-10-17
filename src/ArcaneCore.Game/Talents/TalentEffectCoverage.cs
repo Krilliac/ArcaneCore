@@ -126,6 +126,20 @@ public static class TalentEffectCoverage
         new(ExternalReaderKind.DummySpell, 18393, 0, "Spells/Casters/Drain/DrainAuras.cs", @"ImprovedDrainManaRank2 = 18393;"),
         new(ExternalReaderKind.DummySpell, 18393, 0, "Spells/Casters/Drain/DrainAuras.cs", @"HasAura\(caster, ImprovedDrainManaRank2\)"),
 
+        // Improved Drain Mana's class scripts 2028/2029 (the talent spells carry OVERRIDE_CLASS_SCRIPTS, not DUMMY): DrainAuras reads the rank by spell id.
+        new(ExternalReaderKind.ClassScript, 2028, 0, "Spells/Casters/Drain/DrainAuras.cs", @"HasAura\(caster, ImprovedDrainManaRank1\)"),
+        new(ExternalReaderKind.ClassScript, 2029, 0, "Spells/Casters/Drain/DrainAuras.cs", @"HasAura\(caster, ImprovedDrainManaRank2\)"),
+
+        // Improved Scorpid Sting (ImprovedScorpidStingModule.StaminaPercent): the class script table read when a Scorpid Sting lands.
+        new(ExternalReaderKind.ClassScript, 2388, 0, "Spells/Hunter/ImprovedScorpidStingModule.cs", @"2388 => 10,"),
+        new(ExternalReaderKind.ClassScript, 2389, 0, "Spells/Hunter/ImprovedScorpidStingModule.cs", @"2389 => 20,"),
+        new(ExternalReaderKind.ClassScript, 2390, 0, "Spells/Hunter/ImprovedScorpidStingModule.cs", @"2390 => 30,"),
+
+        // Illumination (2689) and Pyroclasm (2188/2189): the talent's work is its PROC_TRIGGER_SPELL effect, which the built-in proc case keyed on the
+        // talent's family and icon rewrites (vmangos UnitAuraProcHandler.cpp:1226-1262, 1468-1498); the class script effect itself is read nowhere.
+        new(ExternalReaderKind.ClassScript, 2689, 0, "Spells/Procs/BuiltInProcHandlers.cs", @"case FamilyPaladin when aura\.SpellIconId == IlluminationIcon:"),
+        new(ExternalReaderKind.ClassScript, 2188, 0, "Spells/Procs/BuiltInProcHandlers.cs", @"case FamilyWarlock when aura\.SpellIconId == PyroclasmIcon:"),
+        new(ExternalReaderKind.ClassScript, 2189, 0, "Spells/Procs/BuiltInProcHandlers.cs", @"case FamilyWarlock when aura\.SpellIconId == PyroclasmIcon:"),
         // Improved Healthstone (CreateHealthstoneScript.TalentRank): the rank constants and the read.
         new(ExternalReaderKind.DummySpell, CreateHealthstoneScript.ImprovedHealthstoneRank1, 0, "Spells/Warlock/CreateHealthstoneScript.cs",
             @"ImprovedHealthstoneRank1 = 18692;"),
@@ -159,6 +173,11 @@ public static class TalentEffectCoverage
         = ExternalReaders.Where(r => r.Kind == ExternalReaderKind.DummyFamilyIcon).Select(r => (r.Family, r.Key)).ToHashSet();
 
     private static readonly HashSet<int> ClassScriptReaders = KeysOf(ExternalReaderKind.ClassScript).Select(key => (int)key).ToHashSet();
+    /// <summary>
+    /// OVERRIDE_CLASS_SCRIPTS misc values of talents whose work is entirely another effect of the same spell, and which vmangos reads nowhere either:
+    /// Arcane Concentration (1388-1392; the generic PROC_TRIGGER_SPELL of Clearcasting 12536 with the spell_proc_event row is the whole talent).
+    /// </summary>
+    public static IReadOnlySet<int> InertClassScripts { get; } = new HashSet<int> { 1388, 1389, 1390, 1391, 1392 };
 
     private static HashSet<uint> KeysOf(ExternalReaderKind kind) => ExternalReaders.Where(r => r.Kind == kind).Select(r => r.Key).ToHashSet();
 
@@ -251,7 +270,7 @@ public static class TalentEffectCoverage
             ? spells.HasDummyAuraHandler(spell.Id) || spells.HasPeriodicDummyAura(spell.Id)
                 || DummySpellReaders.Contains(spell.Id) || DummyIconReaders.Contains(spell.SpellIconId)
                 || DummyFamilyIconReaders.Contains((spell.SpellFamilyName, spell.SpellIconId))
-            : ClassScriptReaders.Contains(effect.MiscValue) || SpellCritRules.ShatterBonuses.ContainsKey(effect.MiscValue)
+            : ClassScriptReaders.Contains(effect.MiscValue) || InertClassScripts.Contains(effect.MiscValue) || SpellCritRules.ShatterBonuses.ContainsKey(effect.MiscValue)
                 || BuiltInProcHandlers.HandledClassScripts.Contains(effect.MiscValue);
     }
 

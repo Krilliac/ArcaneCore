@@ -288,6 +288,27 @@ public sealed class TalentEffectCoverageTests
     /// <see cref="TalentEffectCoverage.ExternalReaders"/> site must hold a code line matching its pattern, so removing the read (or the rule) fails
     /// here instead of leaving the talent reported as handled.
     /// </summary>
+    /// <summary>
+    /// Build 5875 talents whose OVERRIDE_CLASS_SCRIPTS effect is read by a rule outside the registries (Improved Scorpid Sting, Improved Drain Mana,
+    /// Illumination, Pyroclasm) or by nothing at all in vmangos (Arcane Concentration: its proc trigger is the talent) are not reported as gaps.
+    /// </summary>
+    [Theory]
+    [InlineData(2388)]
+    [InlineData(2390)]
+    [InlineData(2028)]
+    [InlineData(2029)]
+    [InlineData(2689)]
+    [InlineData(2188)]
+    [InlineData(1388)]
+    [InlineData(1392)]
+    public void ClassScriptsOfTalentsWorkingElsewhere_HaveAConsumer(int classScript)
+    {
+        using var kit = new SpellTestKit(Spell(990_100, Effect(SpellEffectName.ApplyAura, 1, aura: AuraType.OverrideClassScripts, misc: classScript)));
+        SpellInfo spell = kit.Store.Get(990_100)!;
+
+        Assert.True(TalentEffectCoverage.HasConsumer(kit.System, spell, spell.Effects[0]));
+    }
+
     [Fact]
     public void EveryExternalReader_StillHasItsReadingLine()
     {
@@ -306,7 +327,7 @@ public sealed class TalentEffectCoverageTests
         Assert.False(Reads(readers[0] with { Site = "NoSuchFile.cs" }), "the scan matches a file that does not exist");
         Assert.Empty(readers.Where(reader => !Reads(reader)).Select(reader => $"{reader.Kind} {reader.Key}: {reader.Site} /{reader.Pattern}/"));
         Assert.Equal(
-            [831u, 832u, 833u, 834u, 835u, 2228u, 11094u, 11189u, 13043u, 17864u, 18393u, 18692u, 18693u, 28332u],
+            [831u, 832u, 833u, 834u, 835u, 2028u, 2029u, 2188u, 2189u, 2228u, 2388u, 2389u, 2390u, 2689u, 11094u, 11189u, 13043u, 17864u, 18393u, 18692u, 18693u, 28332u],
             readers.Where(r => r.Kind is ExternalReaderKind.ClassScript or ExternalReaderKind.DummySpell).Select(r => r.Key).Distinct().Order());
     }
 

@@ -42,10 +42,21 @@ public sealed class ItemDummyProc : IProcScript
     /// <summary>Lesser Healing Wave (Totem of Flowing Water, :1123-1128) → 28850 on self.</summary>
     public const uint TotemOfFlowingWater = 28849;
 
+    /// <summary>Adaptive Warding (Frostfire Regalia, :752-797): with Mage Armor up, a resistance buff of the incoming spell's school on self.</summary>
+    public const uint AdaptiveWarding = 28764;
+
+    /// <summary>Obsidian Armor (Justice Bearer's Pauldrons, :799-833): an absorb of the incoming spell's school on self.</summary>
+    public const uint ObsidianArmor = 27539;
+
+    /// <summary>SPELLFAMILY_MAGE with CF_MAGE_MAGE_ARMOR (bit 28, vmangos SpellClassMask.h:53).</summary>
+    private const uint MageFamily = 3;
+
+    private const int MageArmorFlagBit = 28;
+
     public static readonly uint[] Spells =
     [
         TwistedReflection, UnstablePower, RestlessStrength, OracleHealingBonus, FaithGreaterHeal, DreamwalkerHealingTouch, IdolOfLongevity,
-        CleanEscape, HolyPower, TotemicPower, TotemOfFlowingWater,
+        CleanEscape, HolyPower, TotemicPower, TotemOfFlowingWater, AdaptiveWarding, ObsidianArmor,
     ];
 
     public AuraProcResult? OnProc(in AuraProcContext context)
@@ -121,7 +132,24 @@ public sealed class ItemDummyProc : IProcScript
                 target = owner;
                 trigger = 28850;
                 break;
-            default:
+            case AdaptiveWarding:
+                if (context.ProcSpell is not { } incoming || !HasMageArmor(system, owner) || AdaptiveWardingBuff(incoming.School) is not { } ward)
+                {
+                    return AuraProcResult.Failed;
+                }
+
+                target = owner;
+                trigger = ward;
+                break;
+            case ObsidianArmor:
+                if (context.ProcSpell is not { } hit || ObsidianArmorAbsorb(hit.School) is not { } absorb)
+                {
+                    return AuraProcResult.Failed;
+                }
+
+                target = owner;
+                trigger = absorb;
+                break;            default:
                 return AuraProcResult.Ok;
         }
 
@@ -130,6 +158,32 @@ public sealed class ItemDummyProc : IProcScript
             : AuraProcResult.Failed;
     }
 
+    /// <summary>vmangos finds Mage Armor among the MOD_MANA_REGEN_INTERRUPT auras of the wearer (:756-768).</summary>
+    private static bool HasMageArmor(SpellSystem system, Unit owner)
+        => system.GetAuras(owner).Any(h => !h.IsRemoved && h.HasAura(AuraType.ModManaRegenInterrupt) && h.Spell.IsFitToFamily(MageFamily, MageArmorFlagBit));
+
+    /// <summary>Adaptive Warding's resistance buff by the incoming spell's (first) school; physical and holy are ignored (:771-790).</summary>
+    internal static uint? AdaptiveWardingBuff(SpellSchool school) => school switch
+    {
+        SpellSchool.Fire => 28765u,
+        SpellSchool.Nature => 28768u,
+        SpellSchool.Frost => 28766u,
+        SpellSchool.Shadow => 28769u,
+        SpellSchool.Arcane => 28770u,
+        _ => null,
+    };
+
+    /// <summary>Obsidian Armor's absorb by the incoming spell's (first) school; physical is ignored (:805-828).</summary>
+    internal static uint? ObsidianArmorAbsorb(SpellSchool school) => school switch
+    {
+        SpellSchool.Holy => 27536u,
+        SpellSchool.Fire => 27533u,
+        SpellSchool.Nature => 27538u,
+        SpellSchool.Frost => 27534u,
+        SpellSchool.Shadow => 27535u,
+        SpellSchool.Arcane => 27540u,
+        _ => null,
+    };
     /// <summary>The Holy Power / Totemic Power buff of a class: mana regeneration, spell power, attack power or armor (null: none).</summary>
     internal static uint? ClassBuff(bool holyPower, Class cls) => cls switch
     {
