@@ -715,10 +715,10 @@ internal static class PlayerbotMotion
     /// </summary>
     private static float? MeshSurface(MapCollision collision, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
     {
-        if (toPoint <= fromPoint && collision.TryWalkMeshSurface(from, candidate, out float walked)) return walked;
+        if (toPoint <= fromPoint && collision.TryWalkMeshSurface(from, candidate, out float walked, PlayerbotMoveCheck.MeshOptions)) return walked;
         int corner = Math.Clamp(toPoint - 1, 0, route.Points.Count - 1);
         if (route.Points.Count > 0 && (toPoint > fromPoint || corner > 0)
-            && collision.TryWalkMeshSurface(route.Points[corner], candidate, out float alongLeg)) return alongLeg;
+            && collision.TryWalkMeshSurface(route.Points[corner], candidate, out float alongLeg, PlayerbotMoveCheck.MeshOptions)) return alongLeg;
         return collision.TryGetMeshFloor(candidate.X, candidate.Y, candidate.Z, MeshFloorToleranceYards, MeshFloorToleranceYards,
             out float near) ? near : null;
     }

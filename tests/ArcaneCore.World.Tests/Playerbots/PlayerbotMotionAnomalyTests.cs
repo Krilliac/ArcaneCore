@@ -325,6 +325,60 @@ public sealed class PlayerbotMotionAnomalyTests
     }
 
     /// <summary>
+    /// The mesh walk is horizontal: it starts on the polygon nearest the leg's start (up to 5 yd up or down) and ends on whatever storey
+    /// it reaches at the end's x/y. A walk that succeeds on a storey 12 yd from the leg's own end (Ironforge, Undercity: stacked levels)
+    /// does not show the bot stayed on the mesh: the leg went through the floor, ramp or wall between the storeys, and is still reported.
+    /// The same leg with the walk landing at its end's height is not (the control: the walk itself is what clears it).
+    /// </summary>
+    [Theory]
+    [InlineData(12f, true)]
+    [InlineData(-12f, true)]
+    [InlineData(0.5f, false)]
+    public async Task AMeshLegThroughAWall_WhoseWalkLandsOnAnotherStorey_IsStillACrossing(float storeyOffset, bool reported)
+    {
+        var mesh = new ScriptedMesh();
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false, mesh: mesh);
+        scenario.Ground.Blocked = (a, b, _) => Math.Min(a.X, b.X) < scenario.WallX && Math.Max(a.X, b.X) > scenario.WallX;
+        await scenario.Host.OnWorldAsync(() =>
+        {
+            Player player = scenario.Session.Player!;
+            var from = new Vector3(player.X, player.Y, Floor);
+            var to = from + new Vector3(4f, 0, 0);
+            // Only the walk across the wall lands elsewhere; the zero-length start probe stays on the leg's storey.
+            mesh.SurfaceOf = (a, b) => Vector2.Distance(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y)) > 0.01f ? Floor + storeyOffset : Floor;
+            PlayerbotMotionAnomalies.CheckCrossing(player, player.Map!, new PlayerbotMotionAnomalies.MotionWatch(), scenario.Route, 1, 1,
+                from, to, scenario.Host.World.NowMs);
+            return true;
+        });
+        Assert.True(mesh.Walks > 0, "the mesh was never asked");
+        Assert.Equal(reported, scenario.Capture.Any(Key(Code.WallCrossed)));
+    }
+
+    /// <summary>
+    /// The leg's start must be on the storey the walk starts from: the walk's start polygon is the nearest within 5 yd up or down, so a
+    /// start 4 yd above a floor (a bot on a lintel, a wall top) would otherwise walk the floor below and clear the leg.
+    /// </summary>
+    [Fact]
+    public async Task AMeshLegThroughAWall_WhoseStartIsOffTheWalksStorey_IsStillACrossing()
+    {
+        var mesh = new ScriptedMesh { Surface = Floor - 4f };
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false, mesh: mesh);
+        scenario.Ground.Blocked = (a, b, _) => Math.Min(a.X, b.X) < scenario.WallX && Math.Max(a.X, b.X) > scenario.WallX;
+        await scenario.Host.OnWorldAsync(() =>
+        {
+            Player player = scenario.Session.Player!;
+            var from = new Vector3(player.X, player.Y, Floor);
+            // The end is on the walk's storey; the start is not.
+            var to = new Vector3(player.X + 4f, player.Y, Floor - 4f);
+            PlayerbotMotionAnomalies.CheckCrossing(player, player.Map!, new PlayerbotMotionAnomalies.MotionWatch(), scenario.Route, 1, 1,
+                from, to, scenario.Host.World.NowMs);
+            return true;
+        });
+        Assert.True(mesh.Walks > 0, "the mesh was never asked");
+        Assert.True(scenario.Capture.Any(Key(Code.WallCrossed)), scenario.Capture.Describe());
+    }
+
+    /// <summary>
     /// The walk stands on the mesh surface it walks on, however far that is from the leg's own height: a leg is a chord between two
     /// string-pulled corners, and over a hill the ground lies 8-30 yd above it (live, the Barrens and Dun Morogh). Before, the surface
     /// was taken only within 4 yd of the chord, and the bot walked on at the chord's height, under the hill.
@@ -532,6 +586,10 @@ public sealed class PlayerbotMotionAnomalyTests
     {
         internal float Surface { get; set; } = Floor;
         internal Func<Vector3, Vector3, bool>? Edge { get; set; }
+
+        /// <summary>When set, the height a walk from the first point to the second ends at (else <see cref="Surface"/>).</summary>
+        internal Func<Vector3, Vector3, float>? SurfaceOf { get; set; }
+
         internal int Walks { get; private set; }
 
         public bool Enabled => true;
@@ -544,9 +602,10 @@ public sealed class PlayerbotMotionAnomalyTests
         public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
         {
             Walks++;
+            float surface = SurfaceOf?.Invoke(start, end) ?? Surface;
             return Edge?.Invoke(start, end) == true
-                ? new MeshRaycastResult(true, true, 0.5f, Vector3.Lerp(start, end, 0.5f) with { Z = Surface })
-                : new MeshRaycastResult(true, false, 1f, end with { Z = Surface });
+                ? new MeshRaycastResult(true, true, 0.5f, Vector3.Lerp(start, end, 0.5f) with { Z = surface })
+                : new MeshRaycastResult(true, false, 1f, end with { Z = surface });
         }
     }
 
