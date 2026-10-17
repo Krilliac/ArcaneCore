@@ -413,7 +413,8 @@ forbids ("never serialize a socket ... or cipher state into a handoff"), is Wind
   `GatewayWorkerTransport`; client address forwarded for per-IP guards; `Combined` mode unchanged. No handoff yet; a
   gateway restart still drops clients, a World restart still drops them too.
 - **Spike first (one day):** does the 1.12.1 client accept `SMSG_NEW_WORLD` to the **same** map? The codebase never
-  sends it (`TeleportService.TeleportTo` routes same-map moves to the near path). The answer decides 3b's design.
+  sends it (`TeleportService.TeleportTo` routes same-map moves to the near path). The answer decides 3b's design. The
+  server half (`.worldport far` / `readd`, timed step log) is built (section 5.5); the real-client run is open.
 - **3b, save-and-reload handoff with a loading screen (about 4 to 8 weeks after 3a):** World **standby mode** (load
   content, maps and nav; skip the writer lock, ownership claim, save queue, bot restore and schema DDL; internal port
   only); production transfer workers at whole-World granularity; a durable decision store in the characters database;
@@ -475,6 +476,34 @@ Differences from 5.2 and what is left of 3a:
 - The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, the transfer
   coordinator is still test-only.
 
+### 5.5 Same-map world-port spike (`.worldport`, built on `claude/hr3-spike`; real-client run still open)
+
+The spike of 5.3 needs a real 1.12.1 client; what is built is the server half, so a human or an agent driving a client gets a
+clean, timed record of what the server sent and what came back. Operator page:
+[code-hot-reload.md](../areas/code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled).
+
+- `.worldport far [#player] [x y z [o]]`: the existing far-teleport path of `TeleportService` (no copy of it) with a new
+  `TeleportOptions.ForceFar` (ArcaneCore only, no vmangos counterpart): `SMSG_TRANSFER_PENDING` and `SMSG_NEW_WORLD` with the
+  map id the player is on, then `MSG_MOVE_WORLDPORT_ACK`, the login packets and the map add, exactly as a cross-map teleport.
+- `.worldport readd [#player]`: the "in-place" detour of section 10: remove from the map and add back at once, login packets
+  around the add, no transfer packet.
+- `.worldport status` and the `worldport-spike` log lines: every step with its wall-clock time (`requested`, `far-scheduled`,
+  `transfer-sent`, `worldport-ack`, `re-added`, `observed`, or `ack-timeout`, `client-left`, `anomaly` for teleport/session
+  anomalies about the player).
+- Seams added to the teleport code (minimal): `TeleportOptions.ForceFar` (one condition in `TeleportTo`) and the diagnostics
+  event `TeleportService.FarStageReached(Player, TeleportStage)` raised after `SMSG_NEW_WORLD` (`Far`) and on the accepted ack
+  (`Arriving`). No game code sets `ForceFar`; with the spike off nothing subscribes to the event.
+- Gate: registered by `WorldportSpikeServiceModule` (an `IWorldServiceModule`) only with `World:HotCode:Enabled`, which the launch
+  gate accepts only in Development or Staging; Administrator only; audited; no path or code argument; no network surface.
+
+Evidence: see the lane report below (compiler and tests).
+
+Still open: **the real-client run itself** (the Spike exit criterion in section 9 is not met). How to run it: a Development world
+with `World__HotCode__Enabled=true`, an Administrator character in an open-world zone, `.worldport far`, then `.worldport readd`;
+record per run whether the client showed a loading screen, came back controllable, saw its surroundings, and any client error;
+paste `.worldport status` next to it. Not covered by the spike: instance maps (it runs, but the instance resolver path for a
+same-map entry is untested), ships, battlegrounds (refused).
+
 ## 6. Tier 4: edit and continue stays dev-only
 
 The `dotnet watch` runner patches a Debug process: no tick atomicity, no rollback, rude edits, unmeasured Debug tick
@@ -521,7 +550,7 @@ into a production path. It remains the fastest loop for a developer, gated by `H
 | 2a | Bot features detach and re-attach in process with bots online; no Playerbots type referenced from core (architecture test) |
 | 2b | Playerbots in its own project, default context, soaked with the usual bot population and no behavioural regression in the playerbot QA reports |
 | 2c | CI unload test green (old context collected after swap), cold swap on a dev server with hundreds of bots and no player disconnect |
-| Spike | Same-map `SMSG_NEW_WORLD` result on a real 1.12.1 client, written down |
+| Spike (server side **built**, `.worldport`, section 5.5) | Same-map `SMSG_NEW_WORLD` result on a real 1.12.1 client, written down |
 | 3a | Real client and mock client play through the gateway; per-IP guards see the client address; `Combined` unchanged |
 | 3b | Handoff of a populated dev server with fencing on: no disconnect, freeze time measured and bounded, abort tested at every stage before the epoch bump, roll-forward tested after it |
 

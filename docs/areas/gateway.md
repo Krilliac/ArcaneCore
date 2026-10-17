@@ -137,6 +137,6 @@ source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `
 - The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
 - The manifest's schema and content versions are operator labels, not read from the databases.
 - The gateway has no conf catalog entry, `.conf.dist`, `--check-config` or metrics; its link counters are only in-process.
-- A gateway or World restart still drops every client (handoff is phase 3b).
+- A gateway or World restart still drops every client (handoff is phase 3b). Phase 3b's handoff needs a same-map `SMSG_NEW_WORLD` the client accepts; the server half of that spike is built (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)), the real-client run is not done.
 - The link protocol lives in `ArcaneCore.World`, so the gateway references the whole World assembly; a shared protocol
   assembly is still to be split out.

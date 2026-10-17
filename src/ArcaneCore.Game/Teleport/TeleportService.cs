@@ -167,6 +167,13 @@ public sealed class TeleportService
     /// </summary>
     public event Action<Player>? FarTeleportExecuting;
 
+    /// <summary>
+    /// Raised on the world thread when a far teleport reaches <see cref="TeleportStage.Far"/> (SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD
+    /// were just sent) and <see cref="TeleportStage.Arriving"/> (MSG_MOVE_WORLDPORT_ACK accepted). Diagnostics only: the same-map
+    /// world-port spike times the steps with it (docs/design/hot-reload-tiers.md section 5.5).
+    /// </summary>
+    public event Action<Player, TeleportStage>? FarStageReached;
+
     /// <summary>Number of players with a teleport in progress.</summary>
     public int PendingCount => _pending.Count;
 
@@ -304,7 +311,7 @@ public sealed class TeleportService
         ResetMovementForTeleport(player, staysAboard);
 
         var destination = new TeleportDestination(mapId, x, y, z, orientation);
-        if (current.MapId == mapId && !staysAboard)
+        if (current.MapId == mapId && !staysAboard && (options & TeleportOptions.ForceFar) == 0)
         {
             bool leavesCombat = (options & TeleportOptions.NotLeaveCombat) == 0;
             _pending[player.Guid] = new Pending(destination, TeleportStage.Near, current, default)
@@ -442,6 +449,7 @@ public sealed class TeleportService
         pending.Stage = TeleportStage.Arriving;
         pending.StageSinceMs = _world.NowMs;
         _world.Post(() => CompleteTeleportFar(player, pending));
+        FarStageReached?.Invoke(player, TeleportStage.Arriving);
         return true;
     }
 
@@ -512,10 +520,12 @@ public sealed class TeleportService
             player.SetTransportData(ship.Guid, aboard.TransportX, aboard.TransportY, aboard.TransportZ, aboard.TransportOrientation);
             player.Session.Send(WorldOpcode.SmsgNewWorld, TeleportPackets.BuildNewWorld(
                 dest.MapId, aboard.TransportX, aboard.TransportY, aboard.TransportZ, aboard.TransportOrientation));
+            FarStageReached?.Invoke(player, TeleportStage.Far);
             return;
         }
 
         player.Session.Send(WorldOpcode.SmsgNewWorld, TeleportPackets.BuildNewWorld(dest.MapId, dest.X, dest.Y, dest.Z, dest.Orientation));
+        FarStageReached?.Invoke(player, TeleportStage.Far);
     }
 
     // vmangos HandleMoveWorldportAckOpcode after the semaphore check.

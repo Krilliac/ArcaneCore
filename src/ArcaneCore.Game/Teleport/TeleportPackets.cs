@@ -37,6 +37,13 @@ public enum TeleportOptions
     /// SpellEffects.cpp EffectTeleportUnits / EffectLeapForward / EffectKnockBack; Player::TeleportTo, Player.cpp:1923-1927).
     /// </summary>
     NotLeaveCombat = 0x04,
+
+    /// <summary>
+    /// ArcaneCore only, no vmangos counterpart (vmangos always teleports near on the same map): take the far path (SMSG_TRANSFER_PENDING,
+    /// SMSG_NEW_WORLD, MSG_MOVE_WORLDPORT_ACK) even when the destination is the player's current map. Used by the Tier 3 same-map
+    /// world-port spike only (<c>.worldport far</c>, docs/design/hot-reload-tiers.md section 5.5); no game code sets it.
+    /// </summary>
+    ForceFar = 0x0100,
 }
 
 /// <summary>Teleport and area-trigger packet layouts (1.12.1 build 5875).</summary>
