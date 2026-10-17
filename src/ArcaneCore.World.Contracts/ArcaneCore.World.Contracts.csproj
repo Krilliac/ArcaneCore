@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ArcaneCore.World.Contracts</RootNamespace>
+  </PropertyGroup>
+
+  <!-- The world's pack contracts (docs/design/hot-reload-tiers.md, section 4.1): the feature lifecycle interfaces and the
+       core-owned seams a reloadable pack may use. Loaded in the default context (its name starts with "ArcaneCore.", see
+       ModuleLoadContext.SharedPrefixes), so it never unloads; a change here is a restart. Keep it small and bump
+       ContractsVersion.Current on every breaking change. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\ArcaneCore.Game\ArcaneCore.Game.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -17,6 +17,9 @@ public enum HotSwapLane
 
     /// <summary>The runtime applied a code edit (<c>dotnet watch</c>, Development / Staging only).</summary>
     Code,
+
+    /// <summary>A world feature detached, attached or cycled (<c>.feature</c>, docs/design/hot-reload-tiers.md section 4.2).</summary>
+    Feature,
 }
 
 /// <summary>How a swap ended.</summary>
@@ -178,6 +181,7 @@ public sealed class HotSwapReporter : IHotSwapReporter
     {
         HotSwapLane.Data => $"Live data reload '{swap.Area}'",
         HotSwapLane.Module => $"Server module '{swap.Area}' {ActionWord(swap.Action)}",
+        HotSwapLane.Feature => $"Server feature '{swap.Area}' {swap.Action}",
         _ => $"Server code update ({swap.Area})",
     };
 

@@ -101,6 +101,7 @@ public static class WorldServiceCollectionExtensions
         if (configuration.IsHotModulesEnabled())
         {
             services.AddHotModules();
+            services.AddFeatureCommands(); // .feature detach/attach (docs/design/hot-reload-tiers.md, section 4.2)
         }
 
         return services;
