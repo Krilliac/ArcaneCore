@@ -26,7 +26,7 @@ namespace ArcaneCore.World.Playerbots;
 /// <summary>World-thread destination hints for static quest/objective spawns.</summary>
 internal sealed class PlayerbotWorldDestinations(WorldSession session, PlayerbotOptions options, PlayerbotNavigationExecutor? executor = null)
 {
-    private const int MaxEntryScan = 128;
+    internal const int MaxEntryScan = 128;
     private const uint BackoffMs = 2_000;
     private const uint FarSpawnBlockMs = 30_000;
 
@@ -1222,7 +1222,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         CreatureContent? content = _session.Services.GetService<CreatureWorldFeature>()?.Content;
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         QuestStore? quests = services?.Quests;
-        if (content is null || quests is null || services is null) { ClearRoute(); _entries.Clear(); return; }
+        if (content is null || quests is null || services is null)
+        {
+            ClearRoute();
+            _entries.Clear();
+            _entryListTruncated = false;
+            return;
+        }
         QuestRewardMode mode = services.Options.RewardMode;
         uint[] allowed = services.Options.OrdinaryRewardQuestIds;
         uint level = player.Level;
@@ -1232,7 +1238,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             && ReferenceEquals(_cachedHome, Home)
             && _returnQuestId == returnQuestId && _rewardMode == mode && _level == level
             && _cachedMaxDeliveryYards == maxDeliveryYards
-            && _rewardQuestIds.SequenceEqual(allowed)) return;
+            && _rewardQuestIds.SequenceEqual(allowed)
+            && !EntryListStale(player)) return;
         bool contentChanged = _mapId != mapId || !ReferenceEquals(_content, content) || _contentVersion != content.DefinitionsVersion;
         ClearRoute();
         _mapId = mapId;
@@ -1251,19 +1258,51 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (contentChanged) _farBlockedUntil.Clear();
         if (returnQuestId != 0 || preferredCreatureEntry != 0)
         {
-            IEnumerable<uint> entries = returnQuestId != 0 ? quests.CreatureEndersOf(returnQuestId).Take(MaxEntryScan)
+            uint[] entries = returnQuestId != 0 ? [.. quests.CreatureEndersOf(returnQuestId).Take(MaxEntryScan)]
                 : [preferredCreatureEntry];
-            foreach (uint entry in entries)
+            float farthestKeptSq = 0f;
+            float nearestDroppedSq = float.PositiveInfinity;
+            bool truncated = false;
+            bool scannedAll = true;
+            for (int index = 0; index < entries.Length && _entries.Count < MaxEntryScan; index++)
             {
-                // Cache static relations only. Live eligibility can change after a quest
-                // reward or level gain and is rechecked for every movement decision.
-                foreach (CreatureSpawn spawn in content.GetSpawns(mapId, entry)
+                uint entry = entries[index];
+                // The nearest spawns are a function of where the bot stands. Keeping only MaxEntryScan of them and then
+                // reusing that list after the bot has travelled drops the spawn it is now beside and judges the entry from
+                // the ones that were nearest at the first build (live: Fleeting Plainstrider 3246 has 208 spawns; the kept
+                // 128 can all lie in another region component, so the grind target is reported unreachable).
+                List<CreatureSpawn> ordered = content.GetSpawns(mapId, entry)
                     .Where(spawn => IsDestinationEntry(content, quests, spawn, preferredCreatureEntry))
                     .Where(spawn => returnQuestId != 0 || Home is not { } home || home.Contains(spawn))
-                    .OrderBy(spawn => DistanceSquared(player, spawn)).Take(MaxEntryScan - _entries.Count))
-                    _entries.Add(new DestinationEntry(entry, spawn));
-                if (_entries.Count >= MaxEntryScan) break;
+                    .OrderBy(spawn => DistanceSquared(player, spawn))
+                    .ToList();
+                int room = MaxEntryScan - _entries.Count;
+                int take = Math.Min(room, ordered.Count);
+                for (int i = 0; i < take; i++)
+                {
+                    float distanceSq = DistanceSquared(player, ordered[i]);
+                    if (distanceSq > farthestKeptSq) farthestKeptSq = distanceSq;
+                    _entries.Add(new DestinationEntry(entry, ordered[i]));
+                }
+
+                if (ordered.Count > take)
+                {
+                    truncated = true;
+                    float dropped = DistanceSquared(player, ordered[take]);
+                    if (dropped < nearestDroppedSq) nearestDroppedSq = dropped;
+                }
+
+                if (_entries.Count >= MaxEntryScan && index < entries.Length - 1) scannedAll = false;
             }
+
+            // An ender entry past the scan cap was not measured: a closer spawn of it may exist, so any real move rebuilds.
+            if (!scannedAll)
+            {
+                truncated = true;
+                nearestDroppedSq = farthestKeptSq;
+            }
+
+            RememberEntryList(player, truncated, farthestKeptSq, nearestDroppedSq);
             return;
         }
 
@@ -1284,13 +1323,53 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             givers.UnionWith(quests.CreatureStartersOf(questId));
             givers.UnionWith(quests.CreatureEndersOf(questId));
         }
-        foreach (DestinationEntry entry in givers.Order()
+        List<DestinationEntry> giverSpawns = givers.Order()
             .SelectMany(entry => content.GetSpawns(mapId, entry)
                 .Where(spawn => IsDestinationEntry(content, quests, spawn, 0) && (area is null || area.Contains(spawn)))
                 .Select(spawn => new DestinationEntry(entry, spawn)))
             .OrderBy(entry => DistanceSquared(player, entry.Spawn)).ThenBy(entry => entry.Spawn.Guid)
-            .Take(MaxEntryScan))
-            _entries.Add(entry);
+            .ToList();
+        int keep = Math.Min(MaxEntryScan, giverSpawns.Count);
+        float farthestKeptSq = 0f;
+        for (int i = 0; i < keep; i++)
+        {
+            float distanceSq = DistanceSquared(player, giverSpawns[i].Spawn);
+            if (distanceSq > farthestKeptSq) farthestKeptSq = distanceSq;
+            _entries.Add(giverSpawns[i]);
+        }
+
+        bool truncated = giverSpawns.Count > keep;
+        RememberEntryList(player, truncated, farthestKeptSq, truncated ? DistanceSquared(player, giverSpawns[keep].Spawn) : float.PositiveInfinity);
+    }
+
+    /// <summary>Where the nearest-<see cref="MaxEntryScan"/> list was chosen, and whether a farther spawn was dropped.</summary>
+    private Vector3 _entryOrigin;
+    private bool _entryListTruncated;
+    private float _farthestKeptDistSq;
+    private float _nearestDroppedDistSq = float.PositiveInfinity;
+
+    /// <summary>
+    /// The cached nearest spawns were a prefix of a longer list. Once the bot has moved more than half the gap between the farthest
+    /// kept spawn and the nearest dropped one, a dropped spawn can be nearer than a kept one (each distance changes by at most the
+    /// move) and the list is chosen again. A list that already holds every spawn does not depend on where the bot stands.
+    /// </summary>
+    private bool EntryListStale(Player player)
+    {
+        if (!_entryListTruncated) return false;
+        float moved = Vector3.DistanceSquared(new Vector3(player.X, player.Y, player.Z), _entryOrigin);
+        float gap = MathF.Sqrt(_nearestDroppedDistSq) - MathF.Sqrt(_farthestKeptDistSq);
+        // A negative gap means a dropped spawn is already nearer than some kept one (several entries, measured one at a time).
+        if (gap <= 0f) return moved > 0f;
+        float limit = gap * 0.5f;
+        return moved > limit * limit;
+    }
+
+    private void RememberEntryList(Player player, bool truncated, float farthestKeptDistSq, float nearestDroppedDistSq)
+    {
+        _entryOrigin = new Vector3(player.X, player.Y, player.Z);
+        _entryListTruncated = truncated;
+        _farthestKeptDistSq = farthestKeptDistSq;
+        _nearestDroppedDistSq = nearestDroppedDistSq;
     }
 
     /// <summary>

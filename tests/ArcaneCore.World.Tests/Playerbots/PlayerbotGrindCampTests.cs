@@ -351,4 +351,57 @@ public sealed class PlayerbotGrindCampTests
         Assert.True(await camp.ThinkAsync()); // the far spawn is tried again, not left blocked for good
         Assert.Equal(4, camp.Destinations.VisitedCount);
     }
+
+    /// <summary>
+    /// The nearest <see cref="PlayerbotWorldDestinations.MaxEntryScan"/> spawns are chosen where the bot stands. An entry with more
+    /// spawns than that (Fleeting Plainstrider, 208) used to keep the first list forever: after the bot travelled, every cached
+    /// spawn could lie in another region component and the grind target was reported unreachable, while the spawn beside it had
+    /// been dropped. The list is chosen again once a dropped spawn can be the nearer one.
+    /// </summary>
+    [Fact]
+    public async Task AfterTheBotTravels_ADroppedSpawnBesideIt_IsHunted_NotTheStaleNearestList()
+    {
+        const int Kept = PlayerbotWorldDestinations.MaxEntryScan;
+        const float ClusterX = 40f, FarX = 4000f, Beside = 40f;
+        await using Camp camp = await Camp.StartAsync(withFarSpawn: false, layout: (origin, map) =>
+        [
+            .. Enumerable.Range(0, Kept).Select(i => new CreatureSpawn
+            {
+                Guid = (uint)(1 + i), Entry = Kobold, MapId = map,
+                X = origin.X + ClusterX, Y = origin.Y + (i * 0.05f), Z = origin.Z,
+            }),
+            new CreatureSpawn
+            {
+                Guid = 9000, Entry = Kobold, MapId = map, X = origin.X + FarX, Y = origin.Y, Z = origin.Z,
+            },
+        ]);
+        await camp.Host.World.InvokeAsync(() =>
+        {
+            camp.Destinations.Untakeable = (_, _) => true;
+            return true;
+        });
+        Assert.True(await camp.ThinkAsync(), "the first list, built at the origin, has a cluster spawn to walk to");
+
+        float x = 0, y = 0;
+        await camp.Host.World.InvokeAsync(() =>
+        {
+            var player = camp.Session.Player!;
+            PlayerbotMovementControl.Stop(camp.Session, player);
+            // Just north of the spawn the first list dropped. The stale list's cluster is thousands of yards west.
+            player.Relocate(camp.Origin.X + FarX, camp.Origin.Y + Beside, camp.Origin.Z, 0, camp.Host.World.NowMs);
+            x = player.X;
+            y = player.Y;
+            return true;
+        });
+        Assert.True(await camp.ThinkAsync());
+        await camp.Host.World.AdvanceClockAsync(500); // the walk is a heartbeat, not the think itself
+        await camp.Host.World.InvokeAsync(() =>
+        {
+            var player = camp.Session.Player!;
+            float dx = player.X - x, dy = player.Y - y;
+            Assert.True(dy < -1f, $"the bot should step south toward the dropped spawn, dy={dy:F2}");
+            Assert.True(MathF.Abs(dx) < 1f, $"a stale list sends the bot west toward the old cluster, dx={dx:F2}");
+            return true;
+        });
+    }
 }
