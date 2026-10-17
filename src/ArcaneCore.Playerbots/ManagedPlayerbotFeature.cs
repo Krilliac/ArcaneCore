@@ -1865,8 +1865,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         long thinkStarted = Stopwatch.GetTimestamp();
         double spentMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
         LastThinkBudgetInputs = (world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs);
-        double budgetMs = ThinkBudgetMs ?? PlayerbotThinkBudget.Compute(world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs,
-            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare);
+        double budgetMs = ThinkBudgetMs ?? _thinkBudget.Budget(world.Options.TickIntervalMs, spentMs,
+            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare, bots.Length, _options.ThinkStarvedGapMs, _options.CombatLaneShare);
         _lastBudgetMs = budgetMs;
         uint now = world.NowMs;
         uint combatIntervalMs = (uint)_options.CombatThinkIntervalMs;
@@ -1887,7 +1887,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     return false;
                 }
 
+                // The main lane's cost per visit feeds the budget's coverage floor (PlayerbotThinkBudget.CoverageMs).
+                long visitStarted = lane == PlayerbotThinkRotation.ThinkLane.Normal ? Stopwatch.GetTimestamp() : 0;
                 Think(bots[index], budget, index);
+                if (lane == PlayerbotThinkRotation.ThinkLane.Normal) _thinkBudget.ObserveVisit(Stopwatch.GetElapsedTime(visitStarted).TotalMilliseconds);
                 thinks++;
                 return true;
             },
