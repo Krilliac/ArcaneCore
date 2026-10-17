@@ -132,11 +132,11 @@ internal static class PlayerbotShip
     internal const float DockHeightYards = 25f;
 
     /// <summary>
-    /// The deck: a bot stands this high above the ship's origin (the shipped ship scenario's deck point, ShipCrossingScenario.DeckZ), within
-    /// this rectangle of it. UNVERIFIED against the hull models (the server has no transport collision): a place inside the
+    /// The deck: a bot stands within this rectangle of the ship's origin, level with the dock it boarded from (<see cref="DeckOffset"/>).
+    /// UNVERIFIED against the hull models (the server has no transport collision): a place inside the
     /// <see cref="TransportSystem.MaxPassengerOffset"/> bound the server checks, on the dock's side of the ship.
     /// </summary>
-    internal const float DeckHeight = 6f, DeckHalfLength = 8f, DeckHalfWidth = 3f;
+    internal const float DeckHalfLength = 8f, DeckHalfWidth = 3f;
 
     /// <summary>A stepping heartbeat at most this often (a moving client reports about every 500 ms; the step is the bot's speed times the time since the last one).</summary>
     internal const uint StepIntervalMs = 250;
@@ -824,12 +824,20 @@ internal static class PlayerbotShip
     /// <summary>How long a bot waits at a port for its ship: one and a half round trips.</summary>
     internal static uint WaitBoundMs(ShipRoute route) => PeriodMs(route) * 3 / 2;
 
-    /// <summary>The bot's place on the deck: its own position from the dock taken into the ship's frame, held inside the deck rectangle, at deck height.</summary>
+    /// <summary>
+    /// The bot's place on the deck: its own position from the dock taken into the ship's frame, held inside the deck rectangle, at the
+    /// dock's height (within <see cref="DockHeightYards"/> of the origin): a ship docks with its deck level with the pier or the tower
+    /// platform, whatever the height of its origin above the deck. A zeppelin's origin hangs about 18 yards above the platform (bot QA #820,
+    /// #824, #792, live 2026-10-17: bots aboard at 77.9 over the Orgrimmar platform the mesh puts at 53.8, and at 121.0 beside the Tirisfal
+    /// tower over the floor at 97.5); a fixed deck 6 yards above the origin put them 24 yards over the platform, where the step off found no
+    /// floor within <see cref="StepOffHeightYards"/>.
+    /// </summary>
     internal static Vector3 DeckOffset(ShipTransport ship, Vector3 from)
     {
         float x = from.X, y = from.Y, z = from.Z, o = 0f;
         ShipTransport.CalculatePassengerOffset(ref x, ref y, ref z, ref o, ship.X, ship.Y, ship.Z, ship.Orientation);
-        return new Vector3(Math.Clamp(x, -DeckHalfLength, DeckHalfLength), Math.Clamp(y, -DeckHalfWidth, DeckHalfWidth), DeckHeight);
+        return new Vector3(Math.Clamp(x, -DeckHalfLength, DeckHalfLength), Math.Clamp(y, -DeckHalfWidth, DeckHalfWidth),
+            Math.Clamp(z, -DockHeightYards, DockHeightYards));
     }
 
     /// <summary>The world position of <paramref name="offset"/> on <paramref name="ship"/> now (vmangos CalculatePassengerPosition).</summary>

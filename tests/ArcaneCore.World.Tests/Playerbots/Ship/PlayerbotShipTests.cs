@@ -275,4 +275,26 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
         Assert.False(onTransport);
         Assert.Equal(dock.Z, z, 0.1f); // back on the dock, not hanging between it and the deck
     }
+
+    /// <summary>
+    /// Bot QA #820, #824, #792 (live 2026-10-17): a zeppelin's origin hangs about 18 yards above the tower platform it docks at (bots aboard
+    /// at 77.9 over the Orgrimmar platform the mesh puts at 53.8; at 121.0 beside the Tirisfal tower over the floor at 97.5), and a deck
+    /// a fixed 6 yards above the origin put the bot 24 yards above the platform: its step off found no floor within reach and it stood in
+    /// the air (no route anywhere: leg-failed), dropped to the ground under the tower (dock-unreachable 0.4 yards from the port), or sent
+    /// heartbeats 10 yards down that the server did not take (move-rejected). The deck is level with the dock the bot boarded from.
+    /// </summary>
+    [Fact]
+    public async Task TheDeck_IsLevelWithTheDockTheBotBoardedFrom()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        (Vector3 offset, Vector3 seat, Vector3 dock) = await world.Host.OnWorldAsync(() =>
+        {
+            ShipTransport ship = world.System.Ships.First(s => s.Entry == TransportWorldContent.Crossing);
+            Vector3 dockSpot = new(ship.X + 6f, ship.Y + 2f, ship.Z - 18f);
+            Vector3 deck = PlayerbotShip.DeckOffset(ship, dockSpot);
+            return (deck, PlayerbotShip.Seat(ship, deck), dockSpot);
+        });
+        Assert.Equal(-18f, offset.Z, 0.1f);
+        Assert.Equal(dock.Z, seat.Z, 0.1f);
+    }
 }

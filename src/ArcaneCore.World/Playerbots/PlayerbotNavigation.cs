@@ -308,11 +308,14 @@ internal static class PlayerbotNavigation
 
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
+    /// <param name="nearestEnd">The caller takes the mesh's nearest end to an off-mesh destination as its answer, however far it lies (a
+    /// revive spot re-checked by its caller); a chase does too (<paramref name="chase"/>: a ranged bot fights from where the mesh ends).
+    /// Other exact plans refuse such an end beyond <see cref="PlayerbotNavigationAnomalies.PathEndShortYards"/> (<see cref="Usable"/>).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
         out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false, bool friendlyTownEnder = false,
-        bool chase = false)
+        bool chase = false, bool nearestEnd = false)
         => Plan(player, destination, destination, options, partial: false, trial, out route, out _,
-            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder, chase: chase);
+            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd);
 
     /// <summary>
     /// A route to <paramref name="destination"/> with no hazard check at all: only the escape from a ring of strong creatures
@@ -630,7 +633,7 @@ internal static class PlayerbotNavigation
     /// stepper refused that line.</param>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial, bool trial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false,
-        bool friendlyTownEnder = false, bool chase = false)
+        bool friendlyTownEnder = false, bool chase = false, bool nearestEnd = false)
     {
         if (PlayerbotAsyncNavigationPlan.Current?.Deferred == true)
         {
@@ -638,7 +641,8 @@ internal static class PlayerbotNavigation
             straightRefused = false;
             return false;
         }
-        if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, noFallbacks: trial || chase) || route is null) return false;
+        if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, noFallbacks: trial || chase,
+                nearestEnd: chase || nearestEnd) || route is null) return false;
         bool crossBeside = completedQuestReturn && friendlyTownEnder;
         route.CompletedQuestReturn = completedQuestReturn;
         route.CrossBesidePlaceMarks = crossBeside;
@@ -737,16 +741,19 @@ internal static class PlayerbotNavigation
 
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
     private static bool PlanDirect(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
-        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null, bool noFallbacks = false)
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null, bool noFallbacks = false,
+        bool nearestEnd = false)
     {
-        bool ok = PlanDirectCore(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, from, noFallbacks);
+        bool ok = PlanDirectCore(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, from, noFallbacks,
+            nearestEnd);
         if (ok && route is not null && player.Map is { } map)
             route.Pathfinder = map.Collision.Pathfinder;
         return ok;
     }
 
     private static bool PlanDirectCore(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
-        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null, bool noFallbacks = false)
+        out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null, bool noFallbacks = false,
+        bool nearestEnd = false)
     {
         straightRefused = false;
         route = null;
@@ -779,7 +786,7 @@ internal static class PlayerbotNavigation
             return !straightRefused;
         }
 
-        if (Usable(player, path, start, destination, goal, partial, options, out PlayerbotRoute? usable))
+        if (Usable(player, path, start, destination, goal, partial, nearestEnd, options, out PlayerbotRoute? usable))
         {
             // The corners are the navigation mesh's, which already proves each leg walkable; they are not re-tested against the
             // collision data. A line of sight at their own height hits the floor model itself inside any building (the Deathknell
@@ -814,7 +821,7 @@ internal static class PlayerbotNavigation
             return false;
         // The ways off a patch, a fragment or steep ground are fallbacks, held to the think's search budget (PlayerbotThinkProbe.Fallback).
         using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
-        if (TryLeaveSteepGround(player, map, start, destination, goal, options, partial, out route)) return true;
+        if (TryLeaveSteepGround(player, map, start, destination, goal, options, partial, nearestEnd, out route)) return true;
         // A fragment answers a partial corridor that ends where it began; a no-path answer (the bot off the mesh) is not one.
         if ((path.Type & PathType.NoPath) != 0) return false;
 
@@ -858,7 +865,7 @@ internal static class PlayerbotNavigation
 
     /// <summary>Whether a mesh answer from <paramref name="from"/> is a route the bot takes (<see cref="Bounded"/>), and the route.</summary>
     private static bool Usable(Player player, PathResult path, Vector3 from, Vector3 destination, Vector3 goal, bool partial,
-        PlayerbotOptions options, out PlayerbotRoute? route)
+        bool nearestEnd, PlayerbotOptions options, out PlayerbotRoute? route)
     {
         route = null;
         if (!IsUsablePath(path, options.MaxPathPoints, float.PositiveInfinity))
@@ -869,6 +876,15 @@ internal static class PlayerbotNavigation
             && (!PartialClosesOnGoal(from, path.End, goal, path.Points.Count)
                 || PlayerbotMotion.IsBlacklisted(player, path.End)
                 || IsDeadEndPin(player, path.End)))
+            return false;
+        // An exact answer the mesh could only end beside an off-mesh destination (Incomplete, not cut at the point bound) farther than the
+        // outcome check allows (PathEndShortYards, flat, the bound of nav/path-ends-short) is no route to it: each end sampled live
+        // (bot QA #784, 2026-10-17: 12.6 to 15.7 yards flat, 4.3 to 13.5 up or down) lay on another level, a road or ledge above a cliff
+        // foot, and a bot that walked there stood out of reach of its destination. Nearer ends stay routes (an NPC on a crate, a spawn a
+        // step off the floor); a caller that takes the nearest end as its answer (nearestEnd: a revive spot, a chase) keeps any.
+        if (!partial && !nearestEnd && (path.Type & (PathType.Incomplete | PathType.Short)) == PathType.Incomplete
+            && !AtDestination(path.End, destination)
+            && Vector2.Distance(Flat(path.End), Flat(destination)) > PlayerbotNavigationAnomalies.PathEndShortYards)
             return false;
 
         route = Bounded(path.Points, options, complete: Reaches(path) || EndsAt(path, destination));
@@ -1166,7 +1182,7 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     private static bool TryLeaveSteepGround(Player player, Map map, Vector3 start, Vector3 destination, Vector3 goal,
-        PlayerbotOptions options, bool partial, out PlayerbotRoute? route)
+        PlayerbotOptions options, bool partial, bool nearestEnd, out PlayerbotRoute? route)
     {
         route = null;
         PathResult steep = Query(map, start, destination, options, partial: true, steep: true);
@@ -1184,7 +1200,7 @@ internal static class PlayerbotNavigation
             {
                 PathResult onward = Query(map, point, destination, options, partial, steep: false, out bool capped);
                 if ((onward.Type & PathType.TilesPending) != 0) return false;
-                if (!Usable(player, onward, point, destination, goal, partial, options, out _))
+                if (!Usable(player, onward, point, destination, goal, partial, nearestEnd, options, out _))
                 {
                     // Ran out of nodes short of the destination: the next corner, a few yards on, searches the same ground (see FromBeside).
                     if (capped && (onward.Type & (PathType.Incomplete | PathType.NoPath)) != 0) return false;

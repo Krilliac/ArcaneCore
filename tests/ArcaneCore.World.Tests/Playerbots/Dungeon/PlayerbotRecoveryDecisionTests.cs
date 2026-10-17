@@ -4,6 +4,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Diagnostics;
@@ -473,6 +474,48 @@ public sealed class PlayerbotRecoveryDecisionTests
             Assert.True(Vector3.Distance(at, body) < CombatConstants.CorpseReclaimRadius, "revived outside the reclaim radius");
             Assert.Null(host.Player.Combat.Corpse);
         });
+    }
+
+    /// <summary>
+    /// The revive spot is where the mesh's route to a ring point ends, and a ring point off the mesh ends short of it (ChooseReviveSpot);
+    /// IsReviveSpot checks that end. An end beyond the exact plan's bound for an off-mesh destination (bot QA #784,
+    /// <see cref="PlayerbotNavigationAnomalies.PathEndShortYards"/>) is still a revive spot: the ghost walks to it instead of waiting for
+    /// the hostile to leave.
+    /// </summary>
+    [Fact]
+    public async Task AHostileNearTheBody_WithEveryRingPointOffTheMesh_StillSendsTheGhostToTheMeshEnd()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await DungeonBotHost.StartAsync();
+        await host.OnWorldAsync(() => DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock)));
+        await host.KillAndReleaseAsync();
+        Creature wolf = await host.OnWorldAsync(() => DungeonBotHost.AddCreature(host.Player.Map!, 994302,
+            host.Player.X + 10, host.Player.Y, host.Player.Z, 0, host.Host.World.NowMs, faction: 14)); // a monster
+        await host.AcknowledgeUntilAsync(p => p.VisibleObjects.Contains(wolf.Guid), "the ghost sees the creature");
+        // Every ring point lies off the mesh: the mesh answers Incomplete, ending 13 yards (flat) from it, away from the hostile.
+        var offMesh = new Vector3(-5f, -12f, 0f);
+        await host.OnWorldAsync(() => WorldCollision.Of(host.Host.World).Install(pathfinder: new OffMeshEnds(offMesh)));
+        clock.Seconds += 31;
+
+        var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
+        PlayerbotThreat threat = await host.OnWorldAsync(() => PlayerbotRecovery.Threats(host.Player).Single());
+        Vector3 spot = await host.OnWorldAsync(() =>
+        {
+            host.Session.ManagedBudget = new ManagedActionBudget(4);
+            recovery.Update(host.Player, 500);
+            Assert.Equal(Step.WalkToReviveSpot, recovery.LastStep);
+            return recovery.ReviveSpot!.Value;
+        });
+        Assert.False(threat.Reaches(spot, PlayerbotRecovery.CampMarginYards + PlayerbotRecovery.ReviveSpotSlackYards), "the spot is camped too");
+    }
+
+    /// <summary>A mesh that ends every route <c>offset</c> from its destination (Incomplete); a query from a point to itself has no path.</summary>
+    private sealed class OffMeshEnds(Vector3 offset) : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => start == end ? PathResult.None(start) : new PathResult(PathType.Incomplete, [start, end + offset]);
     }
 
     /// <summary>

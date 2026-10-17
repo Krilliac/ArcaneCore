@@ -74,6 +74,85 @@ public sealed class PlayerbotNavigationAnomalyTests
         });
     }
 
+    /// <summary>
+    /// Bot QA #784 (live 2026-10-17, main 2b009ad2): the mesh locates a destination off the walkable mesh (a cliff foot, a ledge below a
+    /// road) on a polygon whose nearest point lies beyond <see cref="PlayerbotNavigationAnomalies.PathEndShortYards"/> on another level,
+    /// and answers the exact query <see cref="PathType.Incomplete"/> to there (sampled live: 12.6 to 15.7 yards flat, 4.3 to 13.5 up or
+    /// down; probe on the real Elwynn mesh: from -9247.0, 448.4, 89.7 to -9235.9, 450.5, 84.4 the route ends at -9229.5, 439.9, 93.2).
+    /// That is no route to the destination: the exact plan refuses it.
+    /// </summary>
+    [Fact]
+    public async Task AnExactPlan_WhoseMeshEndLiesBeyondTheShortBound_IsRefused()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await OnMesh(world, new Canned((start, end) => new PathResult(PathType.Incomplete, [start, end + BeyondTheBound])));
+        await world.OnWorldAsync(() =>
+        {
+            using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+            Assert.False(PlayerbotNavigation.TryPlan(world.Player, Ahead(world.Player, 40f), Options, out PlayerbotRoute? route),
+                "an exact plan accepted a route ending 13.0 yd (flat) from its destination");
+            Assert.Null(route);
+            Assert.False(cap.Any(Key("path-ends-short")), cap.Describe());
+            return true;
+        });
+    }
+
+    /// <summary>An end 13 yards flat and 9 up from the destination: beyond <see cref="PlayerbotNavigationAnomalies.PathEndShortYards"/>.</summary>
+    private static readonly Vector3 BeyondTheBound = new(5f, -12f, 9f);
+
+    /// <summary>
+    /// An end off the mesh but inside the outcome check's bound (10 yards flat: a mob on a rock, an NPC on a crate) is still the exact
+    /// route, as before #784's fix: no live sample put such an end on the wrong level, and the check never reported it.
+    /// </summary>
+    [Fact]
+    public async Task AnExactPlan_WhoseMeshEndLiesInsideTheShortBound_IsKept()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await OnMesh(world, new Canned((start, end) => new PathResult(PathType.Incomplete, [start, end + new Vector3(6f, -8f, 3f)])));
+        await world.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.TryPlan(world.Player, Ahead(world.Player, 40f), Options, out PlayerbotRoute? route) && route is not null);
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// A chase takes the mesh's nearest end to a target off it, however far (<see cref="PlayerbotBrain"/>: a refused chase marks the
+    /// target unreachable and drops it): a ranged bot fights from where the mesh ends, as before #784's fix.
+    /// </summary>
+    [Fact]
+    public async Task AChase_ToATargetBeyondTheShortBoundOffTheMesh_KeepsTheNearestEnd()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await OnMesh(world, new Canned((start, end) => new PathResult(PathType.Incomplete, [start, end + BeyondTheBound])));
+        await world.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.TryPlan(world.Player, Ahead(world.Player, 40f), Options, out PlayerbotRoute? route, chase: true)
+                && route is not null, "the chase was refused");
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// A caller that takes the nearest end as its answer (<c>nearestEnd</c>: the revive spot of a camped ghost, which checks the end
+    /// itself) keeps it, however far from the ring point it asked for.
+    /// </summary>
+    [Fact]
+    public async Task ANearestEndPlan_ToASpotBeyondTheShortBoundOffTheMesh_KeepsTheNearestEnd()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await OnMesh(world, new Canned((start, end) => new PathResult(PathType.Incomplete, [start, end + BeyondTheBound])));
+        await world.OnWorldAsync(() =>
+        {
+            Vector3 asked = Ahead(world.Player, 40f);
+            Assert.True(PlayerbotNavigation.TryPlan(world.Player, asked, Options, out PlayerbotRoute? route, nearestEnd: true)
+                && route is not null, "the nearest-end plan was refused");
+            Vector3 end = route!.Points[^1];
+            Assert.True(Vector2.Distance(new(end.X, end.Y), new(asked.X, asked.Y)) > PlayerbotNavigationAnomalies.PathEndShortYards, $"the route ends at {end}");
+            return true;
+        });
+    }
+
     [Fact]
     public async Task AnExactRoute_ThatReachesItsDestination_IsNotReported()
     {

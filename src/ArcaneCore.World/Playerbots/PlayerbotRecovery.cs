@@ -1759,7 +1759,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             // tiles are still being read answers no point, as a refusal does: no spot is known yet (WaitForHostiles, not progress), the
             // search is made again next think, and nothing is set aside here that a tile arriving would not reopen.
             Vector3 target = bodySubmerged ? GroundAt(player.Map, candidate) : candidate;
-            if (!PlayerbotNavigation.TryPlan(player, target, options, out PlayerbotRoute? route) || route is null
+            if (!PlayerbotNavigation.TryPlan(player, target, options, out PlayerbotRoute? route, nearestEnd: true) || route is null
                 || route.Distance > ReviveSpotMaxWalkYards)
                 return null;
             return route.Points[^1];
