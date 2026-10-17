@@ -77,7 +77,7 @@ $realm = Get-LiveDaemon Realm
 if ($world) { Stop-Graceful $world.Id $WorldStopTimeoutSec }
 if ($realm) { Stop-Graceful $realm.Id $RealmStopTimeoutSec }
 
-$tail = Get-Content (Join-Path $LiveHome 'logs\world.debug.log') -Tail 3000 -ErrorAction SilentlyContinue | Select-String 'saved and stopped' | Select-Object -Last 1
+$tail = Get-Content (Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome) -Tail 3000 -ErrorAction SilentlyContinue | Select-String 'saved and stopped' | Select-Object -Last 1
 "last stop line: $tail"
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
@@ -100,6 +100,7 @@ foreach ($proj in 'ArcaneCore.Realm', 'ArcaneCore.World') {
     "copied $proj (rc $LASTEXITCODE)"
 }
 
+$startedUtc = [DateTime]::UtcNow
 foreach ($role in 'Realm', 'World') {
     Start-Process pwsh -ArgumentList '-NoExit', '-NoProfile', '-File', $launcher, '-Role', $role, '-LiveHome', $LiveHome, '-Profile', $LiveProfile | Out-Null
     Start-Sleep -Seconds 5
@@ -111,5 +112,12 @@ foreach ($role in 'Realm', 'World') {
     $p.PriorityClass = 'AboveNormal'
     "ArcaneCore.$role PID $($p.Id) $($p.PriorityClass)"
 }
+# Each daemon must own its own log (launch-daemon.ps1 sets <role>.debug.*). A fallback file written since the start means another process
+# holds that name, and livecheck.ps1 and the stop-line check above would read someone else's lines as the World's.
+$fallbacks = @(foreach ($role in 'Realm', 'World') { Get-LiveLogFallback -Role $role -LiveHome $LiveHome -SinceUtc $startedUtc })
+if ($fallbacks.Count -gt 0) {
+    throw "the daemons are running, but a log name is owned by another writer; fallback files written since the start: $($fallbacks.FullName -join ', ')"
+}
+"logs: $(Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome), $(Get-LiveDaemonLogPath -Role Realm -LiveHome $LiveHome)"
 # robocopy's 1-7 are success codes; don't let the last one leak out as the script's exit code.
 exit 0

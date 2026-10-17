@@ -284,7 +284,7 @@ public sealed class RollingFileWriter : ILineWriter
             configuredStem + "." + process,
             configuredStem + "." + process + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
         ];
-        IOException? busy = null;
+        Exception? busy = null;
         foreach (string stem in stems)
         {
             string path = Path.Combine(_directory, stem + _extension);
@@ -302,6 +302,12 @@ public sealed class RollingFileWriter : ILineWriter
             }
             catch (IOException ex) when (IsHeldElsewhere(ex))
             {
+                busy = ex;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // A lock this writer may not open is a name it cannot own: on Windows a share-none handle whose delete-on-close is still
+                // pending answers access denied, not a sharing violation. When the directory itself is denied, every name fails the same way.
                 busy = ex;
             }
         }

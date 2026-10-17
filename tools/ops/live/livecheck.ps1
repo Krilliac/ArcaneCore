@@ -10,9 +10,12 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LiveEnv.ps1')
 $LiveHome = Resolve-LiveHome $LiveHome
-$l = Join-Path $LiveHome 'logs\world.debug.log'
+$l = Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome
 $lines = @(Get-Content $l -Tail $Tail | Where-Object { $_ -ge $Since })
-"lines since ${Since} UTC: $($lines.Count)"
+"lines since ${Since} UTC: $($lines.Count) ($l)"
+# A fallback file means another process owns the World's log name, so the lines above may not be (all) the World's.
+$sinceUtc = [DateTime]::Parse($Since, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AssumeUniversal, AdjustToUniversal')
+foreach ($f in @(Get-LiveLogFallback -Role World -LiveHome $LiveHome -SinceUtc $sinceUtc)) { "WARNING: fallback log written since ${Since}: $($f.FullName) (another writer owns $l)" }
 "--- startup markers:"
 $lines | Select-String -Pattern 'listening|World started|is ready|Bot chat provider|policy model|high-load threshold|Playerbots? .*(started|spawn)|Playerbot runs:' | Select-Object -First 15 | ForEach-Object { $_.Line.Substring(0, [Math]::Min(220, $_.Line.Length)) }
 "--- level counts:"

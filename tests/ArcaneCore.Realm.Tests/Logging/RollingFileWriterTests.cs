@@ -143,6 +143,72 @@ public sealed class RollingFileWriterTests : IDisposable
         Assert.Equal([secondStem + "-20261004-002.log"], second.RolledSegments().Select(f => Path.GetFileName(f)).ToArray());
     }
 
+    /// <summary>
+    /// A lock file this writer may not open (access denied: a read-only file here; on Windows also a lock whose delete-on-close is still
+    /// pending when the next writer opens it) is a name it cannot own, like one held by another writer: it falls back instead of
+    /// failing and dropping lines.
+    /// </summary>
+    [Fact]
+    public void AccessDeniedOnTheLock_IsTreatedAsHeld_AndTheWriterFallsBack()
+    {
+        Directory.CreateDirectory(_dir);
+        string lockPath = LogPath + ".lock";
+        File.WriteAllText(lockPath, string.Empty);
+        File.SetAttributes(lockPath, FileAttributes.ReadOnly);
+        try
+        {
+            var diagnostics = new StringWriter();
+            using RollingFileWriter writer = Writer(rollSizeBytes: 0, daily: false, retain: 0, diagnostics);
+            writer.Write("one\n");
+            writer.Flush();
+
+            Assert.Equal(0, writer.Failures);
+            Assert.NotEqual(LogPath, writer.ActivePath);
+            Assert.Equal("one\n", ReadShared(writer.ActivePath));
+            Assert.Contains("in use by another writer", diagnostics.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetAttributes(lockPath, FileAttributes.Normal);
+        }
+    }
+
+    /// <summary>With the configured name and both fallback names held elsewhere, the writer fails closed: no file is written under any of them.</summary>
+    [Fact]
+    public void AllThreeNamesHeld_WriterFailsClosed_WithoutWritingAnyOfThem()
+    {
+        Directory.CreateDirectory(_dir);
+        string process = new([.. (Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? string.Empty)
+            .Select(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' ? c : '_')]);
+        if (process.Length == 0)
+        {
+            process = "process";
+        }
+
+        string[] names =
+        [
+            LogPath,
+            Path.Combine(_dir, $"world.{process}.log"),
+            Path.Combine(_dir, $"world.{process}.{Environment.ProcessId}.log"),
+        ];
+        var held = names.Select(n => new FileStream(n + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)).ToList();
+        try
+        {
+            var diagnostics = new StringWriter();
+            using RollingFileWriter writer = Writer(rollSizeBytes: 0, daily: false, retain: 0, diagnostics);
+            writer.Write("one\n");
+            writer.Flush();
+
+            Assert.Equal(1, writer.Failures);
+            Assert.All(names, n => Assert.False(File.Exists(n), n + " was written"));
+            Assert.Contains("ArcaneCore logging:", diagnostics.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            held.ForEach(s => s.Dispose());
+        }
+    }
+
     [Fact]
     public void RollsAtSize_AndNamesSegmentsByDateAndSequence()
     {
