@@ -292,6 +292,7 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         var segments = new List<Waypoint>(hop.Length) { new(player.X, player.Y, player.Z) };
         // vmangos Player::ContinueTaxiFlight finds the nearest path segment to the saved
         // position (Player.cpp:18128-18167); do not fly back to the first waypoint on relog.
+        // A later fold can pass closer at a vertex than the chord still being flown.
         int next = flight.Resuming ? NearestSegment(hop, player.X, player.Y, player.Z) + 1 : 1;
         segments.AddRange(hop.Skip(next));
         flight.Resuming = false;
@@ -517,13 +518,16 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     {
         int nearest = 0;
         double best = double.PositiveInfinity;
+        int along = -1;
+        double bestAlong = double.PositiveInfinity;
         for (int i = 0; i < path.Length - 1; i++)
         {
             Waypoint a = path[i];
             Waypoint b = path[i + 1];
             double dx = b.X - a.X, dy = b.Y - a.Y, dz = b.Z - a.Z;
             double length2 = dx * dx + dy * dy + dz * dz;
-            double t = length2 == 0 ? 0 : Math.Clamp(((x - a.X) * dx + (y - a.Y) * dy + (z - a.Z) * dz) / length2, 0, 1);
+            double rawT = length2 == 0 ? 0 : ((x - a.X) * dx + (y - a.Y) * dy + (z - a.Z) * dz) / length2;
+            double t = Math.Clamp(rawT, 0, 1);
             double ex = x - (a.X + t * dx), ey = y - (a.Y + t * dy), ez = z - (a.Z + t * dz);
             double distance2 = ex * ex + ey * ey + ez * ez;
             if (distance2 < best)
@@ -531,6 +535,23 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
                 best = distance2;
                 nearest = i;
             }
+
+            // Between the endpoints, not clamped to a vertex the next fold happens to swing past.
+            if (rawT > 0 && rawT < 1 && distance2 < bestAlong)
+            {
+                bestAlong = distance2;
+                along = i;
+            }
+        }
+
+        // Sitting on a vertex continues from that vertex. Otherwise the chord the player is
+        // actually between wins, even when a fold's vertex is nearer. 16 yards still counts as
+        // that chord (Catmull-Rom sag); a point merely inside a distant segment's slab does not.
+        const double onVertex2 = 0.05 * 0.05;
+        const double onSegment2 = 16.0 * 16.0;
+        if (along >= 0 && bestAlong <= onSegment2 && best > onVertex2)
+        {
+            return along;
         }
 
         return nearest;

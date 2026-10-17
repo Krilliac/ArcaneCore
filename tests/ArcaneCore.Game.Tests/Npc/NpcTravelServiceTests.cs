@@ -404,6 +404,49 @@ public sealed class NpcTravelServiceTests
     }
 
     [Fact]
+    public void Resume_DoesNotEndTheLeg_WhenALaterFoldPassesCloserThanTheSegmentBeingFlown()
+    {
+        // The path goes out to x=100 and comes back to (50, 1), 0.4 yards from a player still on the
+        // outbound segment at (50, 0.6). The fold's vertex is nearer than the segment under the player.
+        var folded = new TaxiPathNodeCatalog(
+        [
+            new TaxiPathNodeRecord(1, 10, 0, 0, 0, 0, Z, 0, 0),
+            new TaxiPathNodeRecord(2, 10, 1, 0, 100, 0, Z, 0, 0),
+            new TaxiPathNodeRecord(3, 10, 2, 0, 100, 10, Z, 0, 0),
+            new TaxiPathNodeRecord(4, 10, 3, 0, 50, 10, Z, 0, 0),
+            new TaxiPathNodeRecord(5, 10, 4, 0, 50, 1, Z, 0, 0),
+        ]);
+        using var rig = new TaxiRig();
+        var flights = new TaxiFlightSystem(new NpcStore(TaxiContent()), folded, e => e == Gryphon ? GryphonDisplay : 0u, () => 0u);
+        rig.Player.Relocate(50f, 0.6f, Z, 0, 0);
+        Assert.True(flights.ResumeFlight(rig.Player, new TaxiFlightRoute([1, 2], [10], [0]), Gryphon, (_, _) => true));
+        flights.Update(rig.Map, 1000); // 32 yards at flight speed: toward x=100, not into the fold 0.4 yards away
+        Assert.True(flights.IsFlying(rig.Player));
+        Assert.True(rig.Player.X > 70f, $"the leg ended on the fold at ({rig.Player.X:F1},{rig.Player.Y:F1})");
+    }
+
+    [Fact]
+    public void Resume_ContinuesAlongAFold_WhenThePlayerIsActuallyOnIt()
+    {
+        var folded = new TaxiPathNodeCatalog(
+        [
+            new TaxiPathNodeRecord(1, 10, 0, 0, 0, 0, Z, 0, 0),
+            new TaxiPathNodeRecord(2, 10, 1, 0, 100, 0, Z, 0, 0),
+            new TaxiPathNodeRecord(3, 10, 2, 0, 100, 10, Z, 0, 0),
+            new TaxiPathNodeRecord(4, 10, 3, 0, 50, 10, Z, 0, 0),
+            new TaxiPathNodeRecord(5, 10, 4, 0, 50, 1, Z, 0, 0),
+        ]);
+        using var rig = new TaxiRig();
+        var flights = new TaxiFlightSystem(new NpcStore(TaxiContent()), folded, e => e == Gryphon ? GryphonDisplay : 0u, () => 0u);
+        rig.Player.Relocate(50f, 8f, Z, 0, 0); // on the returning segment, 8 yards off the outbound line
+        Assert.True(flights.ResumeFlight(rig.Player, new TaxiFlightRoute([1, 2], [10], [0]), Gryphon, (_, _) => true));
+        flights.Update(rig.Map, 1000);
+        Assert.False(flights.IsFlying(rig.Player));
+        Assert.Equal(50f, rig.Player.X, 0.5f);
+        Assert.Equal(1f, rig.Player.Y, 0.5f);
+    }
+
+    [Fact]
     public void Flight_IsAbortedByATeleportOrLeavingTheMap_AndLandNowPutsThePlayerDown()
     {
         using (var drift = new TaxiRig())
