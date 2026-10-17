@@ -1204,8 +1204,7 @@ internal static class PlayerbotTram
     /// <summary>Where the car stands <paramref name="aheadMs"/> from now when it is not moving then (null while it moves).</summary>
     private static Vector3? Standing(GameObjectMapSystem system, GameObject car, uint aheadMs)
     {
-        if (system.ElevatorProgressAhead(car, aheadMs) is not { } p || system.ElevatorProgressAhead(car, aheadMs + 500) is not { } q
-            || Position(system, car, p) is not { } a || Position(system, car, q) is not { } b) return null;
+        if (PositionAhead(system, car, aheadMs) is not { } a || PositionAhead(system, car, aheadMs + 500) is not { } b) return null;
         return Vector3.Distance(a, b) <= StandingYards ? a : null;
     }
 
@@ -1214,12 +1213,16 @@ internal static class PlayerbotTram
     {
         for (uint ahead = SampleMs; ahead < cycle; ahead += SampleMs)
         {
-            if (system.ElevatorProgressAhead(car, ahead) is not { } p || Position(system, car, p) is not { } then
-                || Vector3.Distance(then, at) > StandingYards) return ahead - SampleMs;
+            if (PositionAhead(system, car, ahead) is not { } then || Vector3.Distance(then, at) > StandingYards)
+                return ahead - SampleMs;
         }
 
         return cycle;
     }
+
+    /// <summary>The car's position <paramref name="aheadMs"/> from now, bridging one missing sample on the cycle boundary.</summary>
+    private static Vector3? PositionAhead(GameObjectMapSystem system, GameObject car, uint aheadMs)
+        => Sample(ahead => system.ElevatorProgressAhead(car, ahead) is { } p ? Position(system, car, p) : null, aheadMs);
 
     /// <summary>Whether a car at <paramref name="at"/> stands at <paramref name="platform"/>'s end of the tunnel (nearer its landing).</summary>
     private static bool AtEnd(Vector3 at, TramPlatform platform, TramPlatform other)
@@ -1229,14 +1232,21 @@ internal static class PlayerbotTram
     /// <summary>
     /// The first stop of a car at <paramref name="here"/>'s end of the tunnel from now (sampled every 250 ms over one cycle of
     /// <paramref name="cycle"/> ms plus the stop itself): when it arrives, when it leaves, and where it stands. Null when it never stops
-    /// there. <paramref name="positionAt"/> gives the car's position that many ms from now.
+    /// there. <paramref name="positionAt"/> gives the car's position that many ms from now. A sample with no position is kept when the
+    /// samples beside it stand in the same place: the animation offset is missing at progress 0, and the Deeprun Tram's platform dwell
+    /// runs from 129,333 ms through that boundary to 867 ms of the next cycle (one stop, not two).
     /// </summary>
     internal static TramDock? NextDock(uint cycle, Func<uint, Vector3?> positionAt, Vector3 here, Vector3 other, Func<TramDock, bool>? usable = null)
     {
         ArgumentNullException.ThrowIfNull(positionAt);
         if (cycle == 0) return null;
         bool AtHere(Vector3 p) => Vector2.Distance(TramNetwork.Flat(p), TramNetwork.Flat(here)) < Vector2.Distance(TramNetwork.Flat(p), TramNetwork.Flat(other));
-        Vector3? StandingAt(uint t) => positionAt(t) is { } a && positionAt(t + 500) is { } b && Vector3.Distance(a, b) <= StandingYards && AtHere(a) ? a : null;
+        Vector3? StandingAt(uint t)
+        {
+            if (Sample(positionAt, t) is not { } a || Sample(positionAt, t + 500) is not { } b) return null;
+            return Vector3.Distance(a, b) <= StandingYards && AtHere(a) ? a : null;
+        }
+
         // Two cycles: a stop that is too short or too soon in this one comes round again in the next.
         for (uint t = 0; t <= 2 * cycle; t += SampleMs)
         {
@@ -1249,6 +1259,20 @@ internal static class PlayerbotTram
             t = end;
         }
 
+        return null;
+    }
+
+    /// <summary>
+    /// <paramref name="positionAt"/> at <paramref name="t"/>, or the position shared by the samples one <see cref="SampleMs"/> to either
+    /// side when that one sample is missing. The animation offset is null at progress 0, so a sample on the cycle boundary is a hole in a
+    /// dwell that continues there.
+    /// </summary>
+    private static Vector3? Sample(Func<uint, Vector3?> positionAt, uint t)
+    {
+        if (positionAt(t) is { } at) return at;
+        if (t >= SampleMs && positionAt(t - SampleMs) is { } before && positionAt(t + SampleMs) is { } after
+            && Vector3.Distance(before, after) <= StandingYards)
+            return before;
         return null;
     }
 }

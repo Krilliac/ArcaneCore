@@ -148,4 +148,68 @@ public sealed class PlayerbotTramNetworkTests
         // It never stops nearer a third place than the other end.
         Assert.Null(PlayerbotTram.NextDock(120_000, At, new Vector3(0, -5000, 0), new Vector3(0, 5000, 0)));
     }
+
+    /// <summary>
+    /// Deeprun car 176083 (TransportAnimation.dbc, abridged to its stops): the home dwell is 129,333 ms through the 143,333 ms cycle
+    /// end and on to 867 ms. The offset is null at progress 0, so a sample that lands there used to end the stop. Live board-missed
+    /// (#918) reported arriveMs=6250 departMs=20000, that cut. A walk that fits the whole dwell and not the cut must take this stop,
+    /// not the same platform a cycle later.
+    /// </summary>
+    [Fact]
+    public void ADeeprunStopThatSpansTheCycleWrap_IsOneStop_AndStillBoardable()
+    {
+        const uint cycle = 143_333;
+        const uint now = 123_083; // 6,250 ms before the home keyframe at 129,333
+        Vector3 here = new(0, 0, 0), other = new(-2481.768f, 0, -1.027f);
+        Vector3? At(uint ahead) => DeeprunOffset((now + ahead) % cycle);
+
+        TramDock? dock = PlayerbotTram.NextDock(cycle, At, here, other);
+        Assert.NotNull(dock);
+        Assert.Equal(6_250u, dock.Value.ArriveMs);
+        Assert.Equal(21_000u, dock.Value.DepartMs);
+
+        // 18.5 s to walk on: the cut dwell (depart 20,000) fails Depart > 20,500; the merged dwell (depart 21,000) passes.
+        TramDock? usable = PlayerbotTram.NextDock(cycle, At, here, other,
+            d => d.DepartMs > Math.Max(d.ArriveMs, 18_500u) + PlayerbotTram.BoardMarginMs);
+        Assert.NotNull(usable);
+        Assert.Equal(dock.Value.ArriveMs, usable.Value.ArriveMs);
+        Assert.Equal(dock.Value.DepartMs, usable.Value.DepartMs);
+    }
+
+    /// <summary>Linear offset of the abridged Deeprun nodes; null at progress 0, as <c>TransportAnimationCatalog.Offset</c> is.</summary>
+    private static Vector3? DeeprunOffset(uint progress)
+    {
+        (uint Time, float X, float Y, float Z)[] nodes =
+        [
+            (0, 0f, 0f, 0f),
+            (867, 0f, 0f, 0f),
+            (4951, -209.990f, 0f, -0.107f),
+            (59500, -2481.768f, 0f, -1.027f),
+            (70733, -2481.768f, 0f, -1.027f),
+            (125308, -209.990f, 0f, -0.107f),
+            (129333, 0f, 0f, 0f),
+            (142465, 0f, 0f, 0f),
+            (143333, 0f, 0f, 0f),
+        ];
+        int next = -1;
+        for (int i = 0; i < nodes.Length; i++)
+        {
+            if (nodes[i].Time >= progress)
+            {
+                next = i;
+                break;
+            }
+        }
+
+        if (next <= 0) return null;
+        (uint time, float x, float y, float z) prev = nodes[next - 1];
+        (uint time, float x, float y, float z) after = nodes[next];
+        if (prev.x == after.x && prev.y == after.y && prev.z == after.z) return new Vector3(prev.x, prev.y, prev.z);
+        float elapsed = progress - prev.time;
+        float span = after.time - prev.time;
+        return new Vector3(
+            prev.x + (elapsed * (after.x - prev.x) / span),
+            prev.y + (elapsed * (after.y - prev.y) / span),
+            prev.z + (elapsed * (after.z - prev.z) / span));
+    }
 }
