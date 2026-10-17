@@ -101,12 +101,17 @@ function Get-DeployedProjectDirs {
     <#
     .SYNOPSIS
       The repository-relative directories ('src/ArcaneCore.Kernel/') of every project the World and Realm daemons are built from
-      (the ProjectReference closure of their .csproj files).
+      (the ProjectReference closure of their .csproj files), plus the built-in packs: a project under src/ that copies itself beside the
+      World executable (a CopyPackBesideWorldHost target, src/ArcaneCore.Playerbots) is loaded by the World at start although no daemon
+      references it, and so is its closure.
     #>
     param([Parameter(Mandatory)][string]$Src)
     $root = (Resolve-Path -LiteralPath $Src).Path
     $pending = [Collections.Generic.Queue[string]]::new()
     foreach ($daemon in 'ArcaneCore.World', 'ArcaneCore.Realm') { $pending.Enqueue((Join-Path $root "src\$daemon\$daemon.csproj")) }
+    foreach ($pack in @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.csproj' -Recurse -File -ErrorAction SilentlyContinue)) {
+        if ((Get-Content -Raw -LiteralPath $pack.FullName) -match '<Target\s+Name="CopyPackBesideWorldHost"') { $pending.Enqueue($pack.FullName) }
+    }
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     while ($pending.Count -gt 0) {
         $project = [IO.Path]::GetFullPath($pending.Dequeue())
