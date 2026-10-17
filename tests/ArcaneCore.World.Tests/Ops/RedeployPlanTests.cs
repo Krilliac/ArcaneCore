@@ -127,7 +127,7 @@ public sealed class RedeployPlanTests(ITestOutputHelper output)
             [.. listed.Order(StringComparer.Ordinal)]);
     }
 
-    /// <summary>The real repository: the daemon closure is computed from the .csproj references, and only the gateway is left out.</summary>
+    /// <summary>The real repository: the daemon closure is computed from the .csproj references plus the built-in packs, and only the gateway is left out.</summary>
     [PwshFact]
     public void DeployedProjects_AreTheWorldAndRealmClosure()
     {
@@ -139,6 +139,8 @@ public sealed class RedeployPlanTests(ITestOutputHelper output)
         Assert.Contains("src/ArcaneCore.Realm/", deployed);
         Assert.Contains("src/ArcaneCore.Kernel/", deployed);
         Assert.Contains("src/ArcaneCore.World.Contracts/", deployed);
+        // The Playerbots pack is no ProjectReference of either daemon, but the World loads it from beside its executable.
+        Assert.Contains("src/ArcaneCore.Playerbots/", deployed);
         Assert.DoesNotContain("src/ArcaneCore.Gateway/", deployed);
         Assert.Contains("src/ArcaneCore.Gateway/", other);
     }
