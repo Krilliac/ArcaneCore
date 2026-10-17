@@ -21,6 +21,7 @@ Add-Type -Name ConsoleModeHelper -Namespace Win32 -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int nStdHandle);
 [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
 [DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleCtrlHandler(IntPtr handlerRoutine, bool add);
 public static void DisableQuickEdit() {
     IntPtr h = GetStdHandle(-10);
     if (GetConsoleMode(h, out uint mode)) {
@@ -29,6 +30,10 @@ public static void DisableQuickEdit() {
 }
 '@ -ErrorAction SilentlyContinue
 try { [Win32.ConsoleModeHelper]::DisableQuickEdit() } catch { }
+# A process started from a tree that ignores Ctrl-C (a background shell, a service wrapper) inherits that flag, and the daemon would then
+# never see redeploy.ps1's Ctrl-C (2026-10-17: the World ran on for minutes after it). Clearing it here makes the daemon inherit a
+# working Ctrl-C.
+try { [Win32.ConsoleModeHelper]::SetConsoleCtrlHandler([IntPtr]::Zero, $false) | Out-Null } catch { }
 
 if (-not $env:DOTNET_ROOT) { $env:DOTNET_ROOT = Join-Path $env:USERPROFILE '.dotnet' }
 $env:PATH = "$env:DOTNET_ROOT;$env:PATH"

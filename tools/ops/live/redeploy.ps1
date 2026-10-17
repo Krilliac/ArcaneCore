@@ -46,9 +46,9 @@ foreach ($proj in 'ArcaneCore.Realm', 'ArcaneCore.World') {
 }
 if ($WorldDbSwap -and -not (Test-Path -LiteralPath $WorldDbSwap)) { throw "world db swap source $WorldDbSwap not found" }
 
-function Stop-Graceful([int]$ProcId, [int]$TimeoutSec) {
-    # A console daemon saves and stops on Ctrl-C. A helper process attaches to the daemon's console to send it, so this shell's own
-    # console is never the one that gets the signal.
+function Send-ConsoleCtrl([int]$ProcId, [int]$CtrlEvent) {
+    # A helper process attaches to the daemon's console to send the event, so this shell's own console is never the one that gets it.
+    # Exit codes: 0 sent, 2 attach failed, 3 GenerateConsoleCtrlEvent failed.
     $helper = @"
 Add-Type -Name K -Namespace W -MemberDefinition @'
 [DllImport("kernel32.dll")] public static extern bool FreeConsole();
@@ -59,23 +59,57 @@ Add-Type -Name K -Namespace W -MemberDefinition @'
 [W.K]::FreeConsole() | Out-Null
 if (-not [W.K]::AttachConsole($ProcId)) { exit 2 }
 [W.K]::SetConsoleCtrlHandler([System.IntPtr]::Zero, `$true) | Out-Null
-[W.K]::GenerateConsoleCtrlEvent(0, 0) | Out-Null
+if (-not [W.K]::GenerateConsoleCtrlEvent($CtrlEvent, 0)) { exit 3 }
 Start-Sleep -Milliseconds 500
 exit 0
 "@
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helper))
     $h = Start-Process pwsh -ArgumentList '-NoProfile', '-EncodedCommand', $enc -PassThru -WindowStyle Hidden
     $h.WaitForExit(30000) | Out-Null
-    "ctrl-c helper for $ProcId exit=$($h.ExitCode)"
+    # Ctrl-Break also reaches the helper (its ignore flag covers Ctrl-C only) and can end it before it exits by itself.
+    "console event $CtrlEvent for $ProcId helper exit=$($h.ExitCode)"
+}
+
+function Stop-Graceful([string]$Role, [int]$ProcId, [int]$TimeoutSec) {
+    # A console daemon saves and stops on Ctrl-C. A daemon started from a process tree that ignores Ctrl-C (a background shell)
+    # inherits that flag and never sees it (2026-10-17). .NET also stops on Ctrl-Break (SIGQUIT), but only before its host has begun
+    # stopping, so Ctrl-Break goes out only when the log shows Ctrl-C did not start the shutdown.
     $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
-    if ($p -and -not $p.WaitForExit($TimeoutSec * 1000)) { throw "PID $ProcId did not exit within $TimeoutSec s" }
+    if (-not $p) { "PID $ProcId already gone"; return }
+    $log = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome
+    $from = if (Test-Path -LiteralPath $log) { (Get-Item -LiteralPath $log).Length } else { 0 }
+    Send-ConsoleCtrl $ProcId 0
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+    $started = $false
+    for ($i = 0; $i -lt 15 -and -not $started -and -not $p.HasExited; $i++) {
+        Start-Sleep -Seconds 1
+        $started = Test-LogSince $log $from 'Application is shutting down'
+    }
+    if (-not $started -and -not $p.HasExited) {
+        "Ctrl-C did not start the $Role shutdown within 15 s; sending Ctrl-Break"
+        Send-ConsoleCtrl $ProcId 1
+    }
+    $left = [Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+    if (-not $p.WaitForExit([int]$left)) { throw "PID $ProcId did not exit within $TimeoutSec s" }
     "PID $ProcId stopped"
+}
+
+function Test-LogSince([string]$Path, [long]$From, [string]$Text) {
+    # The daemon holds its log open for writing; open it shared and read only what was appended after $From.
+    try {
+        $fs = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+        try {
+            if ($fs.Length -le $From) { return $false }
+            $fs.Position = $From
+            return (New-Object IO.StreamReader($fs)).ReadToEnd().Contains($Text)
+        } finally { $fs.Dispose() }
+    } catch { return $false }
 }
 
 $world = Get-LiveDaemon World
 $realm = Get-LiveDaemon Realm
-if ($world) { Stop-Graceful $world.Id $WorldStopTimeoutSec }
-if ($realm) { Stop-Graceful $realm.Id $RealmStopTimeoutSec }
+if ($world) { Stop-Graceful World $world.Id $WorldStopTimeoutSec }
+if ($realm) { Stop-Graceful Realm $realm.Id $RealmStopTimeoutSec }
 
 $tail = Get-Content (Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome) -Tail 3000 -ErrorAction SilentlyContinue | Select-String 'saved and stopped' | Select-Object -Last 1
 "last stop line: $tail"
