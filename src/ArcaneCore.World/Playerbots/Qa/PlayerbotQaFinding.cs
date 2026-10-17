@@ -283,7 +283,12 @@ internal sealed record QaFindingView
 /// <param name="LastCommentUtc">When a comment was added (also stamps the finding's reported build).</param>
 /// <param name="OccurrencesReported">The occurrences now told to GitHub.</param>
 /// <param name="Reported">The issue was created or reopened without a comment: stamps the finding's reported build all the same.</param>
-internal sealed record QaPublicationUpdate(QaPublication Publication, DateTime? LastCommentUtc = null, long? OccurrencesReported = null, bool Reported = false, bool? NotPlanned = null);
+/// <param name="ClosedBuild">
+/// For a KnownClosed outcome: the build to record as the one it was closed on instead of the running build. The quiet close (<see cref="PlayerbotQaGitHubOptions.AutoCloseQuietMultiple"/>)
+/// names the build the finding was last seen on, so a recurrence on the running build is a regression of that build and reopens the issue.
+/// </param>
+internal sealed record QaPublicationUpdate(QaPublication Publication, DateTime? LastCommentUtc = null, long? OccurrencesReported = null, bool Reported = false, bool? NotPlanned = null,
+    string? ClosedBuild = null);
 
 /// <summary>The mutable aggregate behind a <see cref="QaFindingView"/>; owned by <see cref="PlayerbotQaAggregator"/> and touched only under its lock.</summary>
 internal sealed class QaFinding

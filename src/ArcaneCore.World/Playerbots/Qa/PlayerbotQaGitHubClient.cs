@@ -141,6 +141,14 @@ internal sealed partial class PlayerbotQaGitHubClient : IQaIssueTransport
         => await SendAsync(HttpMethod.Patch, $"repos/{_repository}/issues/{number.ToString(CultureInfo.InvariantCulture)}",
             new JsonObject { ["state"] = "closed", ["state_reason"] = "not_planned" }.ToJsonString(), false, cancellationToken).ConfigureAwait(false);
 
+    public async Task CloseAsCompletedAsync(int number, CancellationToken cancellationToken)
+        => await SendAsync(HttpMethod.Patch, $"repos/{_repository}/issues/{number.ToString(CultureInfo.InvariantCulture)}",
+            new JsonObject { ["state"] = "closed", ["state_reason"] = "completed" }.ToJsonString(), false, cancellationToken).ConfigureAwait(false);
+
+    public async Task EditBodyAsync(int number, string body, CancellationToken cancellationToken)
+        => await SendAsync(HttpMethod.Patch, $"repos/{_repository}/issues/{number.ToString(CultureInfo.InvariantCulture)}",
+            new JsonObject { ["body"] = body }.ToJsonString(), false, cancellationToken).ConfigureAwait(false);
+
     private sealed record Reply(HttpStatusCode Status, string Body, HttpResponseHeaders Headers);
 
     private async Task<Reply> SendAsync(HttpMethod method, string pathAndQuery, string? json, bool allowNotFound, CancellationToken cancellationToken)

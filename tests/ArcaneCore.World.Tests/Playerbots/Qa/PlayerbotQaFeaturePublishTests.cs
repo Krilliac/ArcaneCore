@@ -37,6 +37,10 @@ internal sealed class StuckTransport : IQaIssueTransport
 
     public Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken) => throw new InvalidOperationException();
 
+    public Task CloseAsCompletedAsync(int number, CancellationToken cancellationToken) => throw new InvalidOperationException();
+
+    public Task EditBodyAsync(int number, string body, CancellationToken cancellationToken) => throw new InvalidOperationException();
+
     public void Dispose()
     {
     }

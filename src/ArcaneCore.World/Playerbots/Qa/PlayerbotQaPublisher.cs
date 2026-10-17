@@ -21,6 +21,7 @@ internal sealed class QaLedger
     private readonly List<DateTime> _creates = [];
     private readonly List<DateTime> _comments = [];
     private readonly List<DateTime> _spellCreates = [];
+    private readonly List<DateTime> _statusEdits = [];
 
     internal bool CanCreate(DateTime now, int max)
     {
@@ -65,9 +66,24 @@ internal sealed class QaLedger
         lock (_gate) _comments.Add(now);
     }
 
+    /// <summary>Whether another live-status body edit may be made within the rolling hour.</summary>
+    internal bool CanEditStatus(DateTime now, int max)
+    {
+        lock (_gate)
+        {
+            Prune(_statusEdits, now);
+            return _statusEdits.Count < max;
+        }
+    }
+
+    internal void RecordStatusEdit(DateTime now)
+    {
+        lock (_gate) _statusEdits.Add(now);
+    }
+
     internal QaLedgerState Export()
     {
-        lock (_gate) return new QaLedgerState([.. _creates], [.. _comments], [.. _spellCreates]);
+        lock (_gate) return new QaLedgerState([.. _creates], [.. _comments], [.. _spellCreates], [.. _statusEdits]);
     }
 
     internal void Restore(QaLedgerState? state)
@@ -77,10 +93,12 @@ internal sealed class QaLedger
             _creates.Clear();
             _comments.Clear();
             _spellCreates.Clear();
+            _statusEdits.Clear();
             if (state is null) return;
             _creates.AddRange(state.CreatesUtc ?? []);
             _comments.AddRange(state.CommentsUtc ?? []);
             _spellCreates.AddRange(state.SpellCreatesUtc ?? []);
+            _statusEdits.AddRange(state.StatusEditsUtc ?? []);
         }
     }
 
@@ -115,6 +133,10 @@ internal sealed class PlayerbotQaPublisher
     private readonly string _build;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _cappedRegressions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTime> _statusShown = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<int, byte> _quietCommented = new(); // issues whose quiet-close comment is posted: a failed close retries the close only
+    private readonly DateTime _startedUtc;
+    private int _quietCapLogged;
     private int _warnedToken;
     private int _warnedGh;
     private int _warnedDirectory;
@@ -138,6 +160,7 @@ internal sealed class PlayerbotQaPublisher
         });
         _time = time ?? TimeProvider.System;
         _build = build ?? PlayerbotQaIssueComposer.BuildVersion();
+        _startedUtc = _time.GetUtcNow().UtcDateTime;
     }
 
     /// <summary>The most lookups outside the issue list (an issue by number, the REST search) one pass makes.</summary>
@@ -155,7 +178,8 @@ internal sealed class PlayerbotQaPublisher
         if (!git.Enabled) return;
         QaFindingView[] eligible = [.. findings.Where(f => Eligible(f, findings))
             .OrderBy(f => f.Publication.State == QaPublicationState.Failed ? 1 : 0).ThenByDescending(f => f.Severity).ThenBy(f => f.Id, StringComparer.Ordinal)];
-        if (eligible.Length == 0 && _state.PendingDuplicates().Count == 0) return;
+        DateTime start = _time.GetUtcNow().UtcDateTime;
+        if (eligible.Length == 0 && _state.PendingDuplicates().Count == 0 && !findings.Any(f => QuietFor(f, start) is not null)) return;
         if (!git.Publish)
         {
             DryRun(eligible);
@@ -196,8 +220,9 @@ internal sealed class PlayerbotQaPublisher
                 if (!await PublishOneAsync(finding.Id, pass, cancellationToken).ConfigureAwait(false)) return;
             }
 
-            // Closing duplicates comes last: the comments of findings that are still happening have first call on the hourly comment budget, which the closes share.
-            await CloseDuplicatesAsync(pass, cancellationToken).ConfigureAwait(false);
+            // Closing duplicates and quiet issues comes last: the comments of findings that are still happening have first call on the hourly comment budget, which the closes share.
+            if (!await CloseDuplicatesAsync(pass, cancellationToken).ConfigureAwait(false)) return;
+            await CloseQuietAsync(findings, pass, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -299,7 +324,8 @@ internal sealed class PlayerbotQaPublisher
             current = _state.Get(id);
             if (current is null) return true;
             DateTime now = _time.GetUtcNow().UtcDateTime;
-            if (current.Publication.State == QaPublicationState.Published && current.OccurrencesReported >= current.Count) return true;
+            bool statusDue = StatusDue(current, now);
+            if (current.Publication.State == QaPublicationState.Published && current.OccurrencesReported >= current.Count && !statusDue) return true;
             if (current.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed && !IsRegression(current)) return true;
 
             long freshCount = current.Count - current.OccurrencesReported;
@@ -316,10 +342,14 @@ internal sealed class PlayerbotQaPublisher
 
                 if (!SpellCreateAllowed(current, pass, now)) return true;
             }
-            else if (current.Publication.State == QaPublicationState.Published && !commentDue)
+            else if (current.Publication.State == QaPublicationState.Published && !commentDue && !statusDue)
             {
                 return true; // its issue is known and nothing is due: no call is needed
             }
+
+            // The status is tried once per StatusUpdateMinutes of new sightings, whatever comes of it: an issue the list does not carry (unlabelled, beyond MaxListPages),
+            // a lookup budget that runs out, a failed edit. Left due, every later pass would list every page again for it.
+            if (statusDue) _statusShown[id] = current.LastSeenUtc;
 
             QaIssueIndex index = await IndexOfAsync(pass, cancellationToken).ConfigureAwait(false);
             QaIssueRef? found = index.ByMarker(id);
@@ -371,6 +401,7 @@ internal sealed class PlayerbotQaPublisher
                 }
 
                 index.AddCreated(created, id);
+                _statusShown[id] = current.LastSeenUtc; // the new body carries the live status as of now
                 _state.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.Published, created.Number), now, current.Count));
                 _logger.LogInformation("Bot QA: opened issue #{Number} for finding {Id}", created.Number, current.ShortId);
                 return true;
@@ -423,7 +454,8 @@ internal sealed class PlayerbotQaPublisher
                 _state.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.Published, found.Number), Reported: reopened));
             }
 
-            return true;
+            return !(statusDue || StatusDue(current with { Publication = new QaPublication(QaPublicationState.Published, found.Number) }, now))
+                || await UpdateStatusAsync(current, found.Number, index, pass, now, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -516,6 +548,136 @@ internal sealed class PlayerbotQaPublisher
             {
                 _logger.LogWarning("Bot QA could not close duplicate issue #{Number}: {Reason}", duplicate.Issue, pass.Redactor.Redact(ex.Message));
                 if (ex.Transient) return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the live status block of <paramref name="f"/>'s issue may be behind (<see cref="PlayerbotQaGitHubOptions.StatusUpdateMinutes"/>): the finding is published, it was seen
+    /// at least that long after the last-seen time this process knows the block shows (unknown after a start: the pass reads it from the list), and the hourly edit cap has room.
+    /// </summary>
+    private bool StatusDue(QaFindingView f, DateTime now)
+    {
+        PlayerbotQaGitHubOptions git = _options.GitHub;
+        if (git.StatusUpdateMinutes <= 0 || f.Publication.State != QaPublicationState.Published || !f.Publication.HoldsIssue) return false;
+        if (_statusShown.TryGetValue(f.Id, out DateTime shown) && f.LastSeenUtc - shown < TimeSpan.FromMinutes(git.StatusUpdateMinutes)) return false;
+        return Ledger.CanEditStatus(now, git.MaxStatusEditsPerHour);
+    }
+
+    /// <summary>
+    /// Rewrite the live status block of open issue <paramref name="number"/> when the one in its listed body is missing or at least <see cref="PlayerbotQaGitHubOptions.StatusUpdateMinutes"/>
+    /// behind the finding. Only an issue whose body the pass listed is edited (the rest of the body is kept as it is). Every way out records the attempt, so the status is not due
+    /// again until the finding is seen <see cref="PlayerbotQaGitHubOptions.StatusUpdateMinutes"/> later: an issue that is not listed, or not open, is not retried each pass. A failed
+    /// edit is logged; false when the pass should stop (a transient failure).
+    /// </summary>
+    private async Task<bool> UpdateStatusAsync(QaFindingView f, int number, QaIssueIndex index, Pass pass, DateTime now, CancellationToken cancellationToken)
+    {
+        _statusShown[f.Id] = f.LastSeenUtc;
+        if (index.ByNumber(number) is not { Open: true } || index.BodyOf(number) is not { } body) return true;
+        TimeSpan interval = TimeSpan.FromMinutes(_options.GitHub.StatusUpdateMinutes);
+        if (PlayerbotQaIssueComposer.StatusLastSeen(body) is { } shown && f.LastSeenUtc - shown < interval)
+        {
+            _statusShown[f.Id] = shown;
+            return true;
+        }
+
+        string updated = PlayerbotQaIssueComposer.WithStatus(body, PlayerbotQaIssueComposer.StatusBlock(f, _build));
+        if (updated.Length > PlayerbotQaRedactor.MaxBodyChars || string.Equals(updated, body, StringComparison.Ordinal)) return true;
+
+        try
+        {
+            await pass.Transport.EditBodyAsync(number, updated, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PlayerbotQaPublishException ex)
+        {
+            _logger.LogWarning("Bot QA could not update the live status of issue #{Number}: {Reason}", number, pass.Redactor.Redact(ex.Message));
+            return !ex.Transient;
+        }
+
+        Ledger.RecordStatusEdit(now);
+        index.SetBody(number, updated);
+        return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="f"/>'s open issue may be closed as completed now (<see cref="PlayerbotQaGitHubOptions.AutoCloseQuietMultiple"/>), with its usual gap and how long it has been
+    /// quiet: it is published, not a won't-fix, met at least twice (so it has a gap), last met on a build other than the running one, which is newer (first run by this store after it)
+    /// and has not met it; and the time since the later of its last sighting and this reporter's start is at least the multiple of its gap and at least
+    /// <see cref="PlayerbotQaGitHubOptions.AutoCloseMinQuietHours"/>. Null otherwise.
+    /// </summary>
+    internal (TimeSpan Gap, TimeSpan Quiet)? QuietFor(QaFindingView f, DateTime now)
+    {
+        PlayerbotQaGitHubOptions git = _options.GitHub;
+        if (git.AutoCloseQuietMultiple <= 0 || f.Publication.State != QaPublicationState.Published || !f.Publication.HoldsIssue || f.NotPlanned) return null;
+        if (f.Count < 2 || f.LastBuild is null || string.Equals(f.LastBuild, _build, StringComparison.Ordinal) || f.CountOnBuild(_build) > 0) return null;
+        if (!_state.IsBuildNewer(_build, f.LastBuild)) return null;
+        TimeSpan gap = (f.LastSeenUtc - f.FirstSeenUtc) / (f.Count - 1);
+        TimeSpan quiet = now - (f.LastSeenUtc > _startedUtc ? f.LastSeenUtc : _startedUtc);
+        TimeSpan need = gap * git.AutoCloseQuietMultiple;
+        TimeSpan floor = TimeSpan.FromHours(git.AutoCloseMinQuietHours);
+        return quiet >= (need > floor ? need : floor) ? (gap, quiet) : null;
+    }
+
+    /// <summary>
+    /// Close the open issues of findings that stopped (<see cref="QuietFor"/>): one comment saying why, then the close as completed; the finding becomes KnownClosed with the build it was
+    /// last seen on as its closed build, so a recurrence on the running build (or any newer one) is a regression and reopens it (<see cref="PlayerbotQaGitHubOptions.ReopenOnRegression"/>).
+    /// Shares the hourly comment budget; only an issue that is in the list and open is touched. False when the pass should stop (a transient failure).
+    /// </summary>
+    private async Task<bool> CloseQuietAsync(IReadOnlyList<QaFindingView> findings, Pass pass, CancellationToken cancellationToken)
+    {
+        PlayerbotQaGitHubOptions git = _options.GitHub;
+        if (git.AutoCloseQuietMultiple <= 0) return true;
+        foreach (QaFindingView candidate in findings.OrderBy(f => f.LastSeenUtc).ThenBy(f => f.Id, StringComparer.Ordinal))
+        {
+            DateTime now = _time.GetUtcNow().UtcDateTime;
+            if (QuietFor(candidate, now) is null) continue;
+            SemaphoreSlim gate = _gates.GetOrAdd(candidate.Id, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            _state.Pin(candidate.Id);
+            try
+            {
+                // Read again under the finding's lock: it may have recurred, been merged or been published elsewhere since the snapshot.
+                if (_state.Get(candidate.Id) is not { } f || QuietFor(f, now) is not { } quiet) continue;
+                QaIssueIndex index = await IndexOfAsync(pass, cancellationToken).ConfigureAwait(false);
+                if (index.ByNumber(f.Publication.Issue) is not { Open: true } issue) continue; // closed or not listed: left as it is
+                if (!_quietCommented.ContainsKey(issue.Number))
+                {
+                    if (!Ledger.CanComment(now, git.MaxCommentsPerHour))
+                    {
+                        if (Interlocked.Exchange(ref _quietCapLogged, 1) == 0)
+                        {
+                            _logger.LogInformation("Bot QA: the hourly comment cap ({Cap}) is reached; quiet issues are closed on a later pass", git.MaxCommentsPerHour);
+                        }
+
+                        return true;
+                    }
+
+                    await pass.Transport.CommentAsync(issue.Number, PlayerbotQaIssueComposer.QuietCloseComment(f, _build, quiet.Gap, quiet.Quiet), cancellationToken).ConfigureAwait(false);
+                    Ledger.RecordComment(now);
+                    _quietCommented[issue.Number] = 0;
+                }
+
+                await pass.Transport.CloseAsCompletedAsync(issue.Number, cancellationToken).ConfigureAwait(false);
+                _quietCommented.TryRemove(issue.Number, out _);
+                _state.Apply(f.Id, new QaPublicationUpdate(new QaPublication(QaPublicationState.KnownClosed, issue.Number), NotPlanned: false, ClosedBuild: f.LastBuild));
+                _logger.LogInformation("Bot QA: closed issue #{Number} of finding {Id} as completed: not seen for {Hours:F1} h on build {Build} (usual gap {Gap:F1} h)",
+                    issue.Number, f.ShortId, quiet.Quiet.TotalHours, _build, quiet.Gap.TotalHours);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (PlayerbotQaPublishException ex)
+            {
+                _logger.LogWarning("Bot QA could not close the quiet issue of finding {Id}: {Reason}", candidate.ShortId, pass.Redactor.Redact(ex.Message));
+                if (ex.Transient) return false;
+            }
+            finally
+            {
+                _state.Unpin(candidate.Id);
+                gate.Release();
             }
         }
 
