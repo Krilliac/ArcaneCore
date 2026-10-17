@@ -432,9 +432,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         completedQuestReturn: true, friendlyTownEnder: friendlyEnder);
                     if (planned == PlanOutcome.Route && _route is { Points.Count: > 0 } partial)
                     {
+                        // A toward-leg that is not the mesh's own dead end (PartialToGoal) may leave the straight line
+                        // first: a region portal, or the road around a building. That is the way, not a refusal. Only a
+                        // dead-end partial that does not close is no route (quest 428 at Rane Yorick, NoRouteToVisibleEnder,
+                        // then goal Quest with no quest).
                         float curDistSq = System.Numerics.Vector3.DistanceSquared(new(player.X, player.Y, player.Z), enderPos);
                         float endDistSq = System.Numerics.Vector3.DistanceSquared(partial.Points[^1], enderPos);
-                        if (endDistSq + 1f >= curDistSq)
+                        if (partial.PartialToGoal && endDistSq + 1f >= curDistSq)
                         {
                             _route = null;
                             planned = PlanOutcome.Refused;

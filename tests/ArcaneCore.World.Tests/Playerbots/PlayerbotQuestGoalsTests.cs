@@ -692,6 +692,72 @@ public sealed class PlayerbotQuestGoalsTests
     }
 
     [Fact]
+    public async Task VisibleEnder_DetourThatLeavesTheStraightLine_IsWalkedNotRefusedAsNoRoute()
+    {
+        // A visible ender whose exact mesh query fails (inside a house, across a ridge) still has a
+        // PlanToward leg that walks away from the straight line first: a region portal, a road around
+        // the building. That leg is not a dead-end partial (PartialToGoal). Treating it as "no exact
+        // route" set quest 428 aside at Rane Yorick (NoRouteToVisibleEnder, ~88 yd, guid 0) and left
+        // the brain on goal Quest with no quest (stall near the Barrens road).
+        await using QuestHost quest = await QuestHost.StartAsync();
+        WorldSession session = quest.Session;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            var accept = new PacketWriter(12);
+            accept.WriteUInt64(QuestInteractionFixture.Guid.Value);
+            accept.WriteUInt32(QuestInteractionFixture.QuestId);
+            session.ManagedBudget = new ManagedActionBudget(1);
+            Assert.True(session.TryManagedAction(WorldOpcode.CmsgQuestgiverAcceptQuest, accept.ToArray()));
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+
+            var giver = (ArcaneCore.Game.Creatures.Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
+            giver.SetPosition(player.X + 40f, player.Y, player.Z, 0);
+            Assert.Contains(QuestInteractionFixture.Guid, player.VisibleObjects);
+            var paths = new DetourAwayPathfinder();
+            WorldCollision.Of(quest.Host.World).Install(lineOfSight: new BlockedFloor(player.Z), pathfinder: paths);
+
+            var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+            try
+            {
+                for (int think = 0; think < 3; think++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    brain.Update(500);
+                }
+
+                Assert.True(paths.PartialQueries > 0, "the exact plan failed and a toward-leg was asked");
+                Assert.False(brain.QuestGoals.IsRefused(QuestInteractionFixture.QuestId));
+                Assert.Null(brain.LastTurnInRefusal);
+                Assert.False(brain.Suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, quest.Host.World.NowMs));
+                Assert.Equal(PlayerbotGoalKind.Quest, brain.Goal);
+                Assert.Equal(QuestInteractionFixture.QuestId, brain.QuestId);
+            }
+            finally { brain.Stop(); }
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// Exact plans (partial disallowed) have no corridor. Toward-plans answer a whole leg that steps
+    /// away from the ender, the way a region portal around a building does.
+    /// </summary>
+    private sealed class DetourAwayPathfinder : IPathfinder
+    {
+        public bool Enabled => true;
+        public int PartialQueries { get; private set; }
+
+        public PathResult FindPath(uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, PathOptions? options = null)
+        {
+            if (options?.AllowPartial != true)
+                return new PathResult(PathType.NoPath, []);
+            PartialQueries++;
+            float away = start.X <= end.X ? -25f : 25f;
+            return new PathResult(PathType.Normal, [start, new System.Numerics.Vector3(start.X + away, start.Y, start.Z)]);
+        }
+    }
+
+    [Fact]
     public async Task CompletedQuestTurnIn_DrainsQueuedServerResponseBeforeCheckingStageTimeout_AfterLongThinkGap()
     {
         await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
