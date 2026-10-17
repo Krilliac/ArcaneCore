@@ -99,7 +99,13 @@ internal sealed class PlayerbotQaStore(string directory, ILogger logger)
         {
             Directory.CreateDirectory(directory);
             string temp = FilePath + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(file, QaStoreJsonContext.Default.QaStoreFile));
+            // Straight to the file: the store is ~16 MB of JSON on the live server, and serializing it to a string first put a 16 MB
+            // string (32 MB of UTF-16) plus its re-encoding on the large object heap at every pass (issues #744/#755, 2026-10-17).
+            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024))
+            {
+                JsonSerializer.Serialize(stream, file, QaStoreJsonContext.Default.QaStoreFile);
+            }
+
             File.Move(temp, FilePath, overwrite: true);
             _failedWriteLogged = false;
             return true;
