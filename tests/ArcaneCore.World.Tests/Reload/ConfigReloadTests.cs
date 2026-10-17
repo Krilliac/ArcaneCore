@@ -637,7 +637,9 @@ public sealed class ConfigReloadTests : IDisposable
             .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyOptions)
                 && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotSpeechOptions)
                 && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotConversationOptions)
-                && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotVoiceOptions)))
+                && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotVoiceOptions)
+                // Chat:InProcess (the in-process model) is read when the model loads at startup: a change takes a restart (17d3a10e), so none of its keys is a reload key.
+                && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatInProcessOptions)))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:{property.Name}");
         }
