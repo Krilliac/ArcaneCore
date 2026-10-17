@@ -1,5 +1,6 @@
 using System.Reflection;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Reflection;
 
 namespace ArcaneCore.Game.Instances.Scripts;
 
@@ -19,6 +20,9 @@ public sealed class InstanceScriptAttribute(uint mapId) : Attribute
 /// </summary>
 public sealed class InstanceScriptRegistry
 {
+    /// <summary>The code set whose instance scripts are built in: the Game assembly (no pack is configured at startup).</summary>
+    public static CodeAssemblies StartupAssemblies { get; } = CodeAssemblies.Of(typeof(InstanceScriptRegistry).Assembly);
+
     private readonly Dictionary<uint, Func<Map, InstanceData>> _factories = [];
 
     /// <summary>The scripts of the Game assembly.</summary>

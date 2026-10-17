@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Kernel.Reflection;
 
 namespace ArcaneCore.Game.Creatures;
 
