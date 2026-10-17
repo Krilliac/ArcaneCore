@@ -37,6 +37,13 @@ namespace ArcaneCore.World.Tests.Playerbots.Battlegrounds;
 /// </summary>
 internal static class BattlegroundBotTestContent
 {
+    /// <summary>Race masks of the Alliance (human, dwarf, night elf, gnome) and the Horde (orc, undead, tauren, troll).</summary>
+    private const uint AllianceRaces = 0x4D;
+    private const uint HordeRaces = 0xB2;
+
+    /// <summary>A Hostile standing (the Hostile rank is -6000 up to -3000).</summary>
+    private const int HostileStanding = -4000;
+
     public const uint AllianceWsgMaster = 993101;
     public const uint HordeWsgMaster = 993102;
     public const uint AllianceAbMaster = 993103;
@@ -187,12 +194,14 @@ internal static class BattlegroundBotTestContent
             new FactionTemplateRecord(12, 72, 0, OwnMask: 2, FriendlyMask: 2, HostileMask: 8),  // Stormwind
             new FactionTemplateRecord(29, 76, 0, OwnMask: 4, FriendlyMask: 4, HostileMask: 8),  // Orgrimmar
         ]));
+        // Each capital starts Hostile (-4000) for the other side's races (Faction.dbc base reputation) and Neutral for its own: a human bot may not
+        // walk to the Horde battlemaster, nor an orc to the Alliance one.
         // Stormwind (72) and Orgrimmar (76) are reputation factions: a battlemaster's reaction is read through reputation (the scenario
         // content lists Stormwind alone, so a Horde battlemaster would refuse its own side).
         services.AddSingleton(new ArcaneCore.Kernel.Reputation.FactionCatalog(
         [
-            new ArcaneCore.Kernel.Reputation.FactionRecord(72, 0, [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], name: "Stormwind"),
-            new ArcaneCore.Kernel.Reputation.FactionRecord(76, 1, [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], name: "Orgrimmar"),
+            new ArcaneCore.Kernel.Reputation.FactionRecord(72, 0, [HordeRaces, 0, 0, 0], [0, 0, 0, 0], [HostileStanding, 0, 0, 0], [0, 0, 0, 0], name: "Stormwind"),
+            new ArcaneCore.Kernel.Reputation.FactionRecord(76, 1, [AllianceRaces, 0, 0, 0], [0, 0, 0, 0], [HostileStanding, 0, 0, 0], [0, 0, 0, 0], name: "Orgrimmar"),
         ]));
     }
 
@@ -278,6 +287,10 @@ internal static class BattlegroundBotTestContent
                 new WorldSafeLoc(772, 489, HordeFlag.X + 20f, HordeFlag.Y + 10f, WsgFloor, 0f, "WSG Horde graveyard"),
                 new WorldSafeLoc(890, 529, Stables.X - 20f, Stables.Y, AbFloor, 0f, "AB Alliance start"),
                 new WorldSafeLoc(889, 529, 900f, 900f, AbFloor, 0f, "AB Horde start"),
+                // Once the match runs a team without a node falls back to its start graveyards (898, 899; 889 and 890 serve only the entrance before
+                // the gates open: ArathiBasin.ClosestGraveyard, vmangos BattleGroundAB.cpp:525-569).
+                new WorldSafeLoc(898, 529, Stables.X - 20f, Stables.Y, AbFloor, 0f, "AB Alliance start (Trollbane Hall)"),
+                new WorldSafeLoc(899, 529, 900f, 900f, AbFloor, 0f, "AB Horde start (Defiler's Den)"),
                 new WorldSafeLoc(611, 30, 100f, 0f, AvFloor, 0f, "AV Alliance start"),
                 new WorldSafeLoc(610, 30, -100f, 0f, AvFloor, 0f, "AV Horde start"),
             ],
