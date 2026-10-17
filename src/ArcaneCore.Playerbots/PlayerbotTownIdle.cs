@@ -42,6 +42,19 @@ internal sealed class PlayerbotTownIdle
         return !float.IsFinite(dx) || !float.IsFinite(dy) || (dx * dx) + (dy * dy) > BindYards * BindYards;
     }
 
+    /// <summary>
+    /// A <see cref="TownIdleAction.Linger"/> this near the town centre (yards) is a bot standing at its inn, or at the spot it cannot get
+    /// closer to (a counter, an upper floor): the brain holds it there and the stall watch does not count the wait (<see cref="IsHeld"/>).
+    /// Farther out the linger is only a walk given up for <see cref="StallDeferMs"/> (<see cref="WalkStalled"/>), and the brain explores
+    /// meanwhile as any bot does. Before, that bot stood in the open for the whole give-up and the stall watch reported it (live
+    /// 2026-10-17, bot QA "stall|goal=Explore": every stall of phase explore, 1 390 of 3 396, was a town-homed bot, 724 of them over
+    /// 150 yards from the town centre).
+    /// </summary>
+    internal const float HoldYards = 30f;
+
+    /// <summary>Whether a lingering bot <paramref name="distance"/> yards from the town centre is held where it stands (<see cref="HoldYards"/>).</summary>
+    internal static bool IsHeld(float distance) => distance <= HoldYards;
+
     internal const uint LingerMs = 120_000;
 
     internal const uint ExploreMs = 240_000;

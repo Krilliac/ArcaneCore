@@ -2991,7 +2991,20 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         {
             // Idle with a town home: back to the inn and wait there rather than roam the wilderness (PlayerbotTownIdle).
             TownIdleAction idle = _townIdle.Decide(town.Stay, town.DistanceTo(player.X, player.Y), _session.World.NowMs);
-            if (idle == TownIdleAction.Linger) { PlayerbotMovementControl.Stop(_session, player); TryBindAtInn(player, town); return; }
+            if (idle == TownIdleAction.Linger && PlayerbotTownIdle.IsHeld(town.DistanceTo(player.X, player.Y)))
+            {
+                // Standing at the inn is what the idle rule asks for, not a stall: the watch starts afresh at every such think. Before, a bot
+                // lingering at its inn was reported stalled every stall bound, gave up its goal (which freed nothing: it was not stuck) and, at
+                // the second report within 10 yards, was sent home to where it stood (live 2026-10-17: 1 253 stalls of 186 bots at the
+                // Stormwind inn alone).
+                _stall.Reset();
+                PlayerbotMovementControl.Stop(_session, player);
+                TryBindAtInn(player, town);
+                return;
+            }
+
+            // A walk to the inn given up far from it (a Linger past HoldYards) falls through to the explore below: the bot hunts, or wanders
+            // inward (WanderLegEnd), for the give-up instead of standing in the open until the stall watch reports it.
             if (idle == TownIdleAction.WalkToTown) { WalkTowardTown(player, town, elapsedMs); return; }
         }
         else _townIdle.Interrupted(); // no town idle decision this think (another map, another kind of home)
