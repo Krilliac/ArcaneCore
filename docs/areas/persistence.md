@@ -98,6 +98,10 @@ old whole-world pass did (one write per online character at once). The next turn
 tick that ran it, so the spread survives late ticks; a stall longer than an interval skips the missed turns. A logout drops the timer;
 the next login starts a new one.
 
+Differences from vmangos: vmangos also staggers the first save, but randomly over a wider window (`Player::Player` sets
+`m_nextSave = urand(interval / 2, interval * 3 / 2)`), where ArcaneCore uses a deterministic point in `[interval / 2, interval)`; and vmangos'
+`SaveToDB` resets `m_nextSave` after any save, where here a settlement or other save does not restart the autosave timer.
+
 A character whose previous snapshot is still **waiting** (`CharacterSaveQueue.IsPending`: a snapshot in flight does not count) or whose
 quest settlement is pending is skipped until its next turn: the queue is behind in exactly that case, and another snapshot would only
 supersede the waiting one at the cost of a copy. The timers are scanned only when the earliest one is due or a player came online since

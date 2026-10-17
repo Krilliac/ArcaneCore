@@ -1012,9 +1012,11 @@ public sealed class WorldRuntime : IDisposable
     /// <c>PlayerSave.Interval</c> in <c>Player::Update</c>): each online character is snapshotted once per <paramref name="interval"/>.
     /// A character's first save comes between half an interval and an interval after the tick that first sees it, at a point fixed
     /// by its id (<see cref="AutosaveStagger"/>), so characters that entered the world together (a server start, a bot fleet) are
-    /// spread over the interval instead of all being snapshotted in one tick (a whole-world pass queues one write per online character
+    /// spread over the interval instead of all being snapshotted in one tick (vmangos spreads the first save randomly over half an interval
+    /// to one and a half; see <see cref="AutosaveStagger"/> for the difference) (a whole-world pass queues one write per online character
     /// at once: about 1000 with the live bot fleet). A character whose previous snapshot is still waiting in the queue is skipped until
     /// its next turn (the queue is behind; another snapshot would only supersede the waiting one and cost a copy).
+    /// Unlike vmangos, whose <c>SaveToDB</c> resets <c>m_nextSave</c>, a settlement or other save does not restart the timer.
     /// The timers are only scanned when the earliest one is due or a player came online since the last scan, so most ticks cost
     /// nothing. Returns whether it scanned; <paramref name="queued"/> is the number of snapshots queued.
     /// </summary>
@@ -1081,7 +1083,8 @@ public sealed class WorldRuntime : IDisposable
 
     /// <summary>
     /// How much earlier than a full interval a character's first autosave comes: a point in [0, interval / 2) fixed by its id
-    /// (Fibonacci hashing), so consecutive ids are spread evenly. The first save is never later than vmangos' (one interval).
+    /// (Fibonacci hashing), so consecutive ids are spread evenly. vmangos staggers too, but randomly and wider: its Player constructor
+    /// sets <c>m_nextSave = urand(interval / 2, interval * 3 / 2)</c>; here the window is [interval / 2, interval) and deterministic.
     /// </summary>
     internal static ulong AutosaveStagger(uint characterLow, ulong interval)
         => (unchecked(characterLow * 2654435769u) * (interval / 2)) >> 32;
