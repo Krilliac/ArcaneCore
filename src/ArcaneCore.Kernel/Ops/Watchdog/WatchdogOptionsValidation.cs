@@ -34,6 +34,7 @@ public sealed class WatchdogOptionsValidation : IValidateOptions<WatchdogOptions
         NonNegative(issues, $"{Root}:TickMonitor:ActionHangMs", o.TickMonitor.ActionHangMs);
         Range(issues, $"{Root}:TickMonitor:WarnIntervalSeconds", o.TickMonitor.WarnIntervalSeconds, 1, 86_400, "1-86400 seconds");
         NonNegative(issues, $"{Root}:TickMonitor:SummaryIntervalSeconds", o.TickMonitor.SummaryIntervalSeconds);
+        Range(issues, $"{Root}:TickMonitor:StackCaptureIntervalSeconds", o.TickMonitor.StackCaptureIntervalSeconds, 10, 86_400, "10-86400 seconds");
         if (o.TickMonitor.HangMs > 0 && o.TickMonitor.BudgetMs > 0 && o.TickMonitor.HangMs <= o.TickMonitor.BudgetMs)
         {
             issues.Add(Error($"{Root}:TickMonitor:HangMs", $"{o.TickMonitor.HangMs} is not above BudgetMs ({o.TickMonitor.BudgetMs}).", "a hang must be longer than an overrun; use a larger HangMs or 0 to disable hang detection"));
@@ -119,6 +120,9 @@ public sealed class WatchdogOptionsValidation : IValidateOptions<WatchdogOptions
         options.TickMonitor.WarnIntervalSeconds = Int(issues, section, "TickMonitor:WarnIntervalSeconds", options.TickMonitor.WarnIntervalSeconds);
         options.TickMonitor.SummaryIntervalSeconds = Int(issues, section, "TickMonitor:SummaryIntervalSeconds", options.TickMonitor.SummaryIntervalSeconds);
         options.TickMonitor.GatesHeartbeat = Bool(issues, section, "TickMonitor:GatesHeartbeat", options.TickMonitor.GatesHeartbeat);
+        options.TickMonitor.StackCaptureTool = section["TickMonitor:StackCaptureTool"] ?? options.TickMonitor.StackCaptureTool;
+        options.TickMonitor.StackCaptureDirectory = section["TickMonitor:StackCaptureDirectory"] ?? options.TickMonitor.StackCaptureDirectory;
+        options.TickMonitor.StackCaptureIntervalSeconds = Int(issues, section, "TickMonitor:StackCaptureIntervalSeconds", options.TickMonitor.StackCaptureIntervalSeconds);
         options.Memory.Enabled = Bool(issues, section, "Memory:Enabled", options.Memory.Enabled);
         options.Memory.SampleIntervalSeconds = Int(issues, section, "Memory:SampleIntervalSeconds", options.Memory.SampleIntervalSeconds);
         options.Memory.GrowthLogBytes = Long(issues, section, "Memory:GrowthLogBytes", options.Memory.GrowthLogBytes);

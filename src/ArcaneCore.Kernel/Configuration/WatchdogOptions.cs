@@ -66,6 +66,15 @@ public sealed class TickMonitorOptions
 
     /// <summary>What happens when a tick has run longer than <see cref="ActionHangMs"/>. Default None (log only; <c>Stop</c> stops the host with exit code 1; <c>FailFast</c> terminates immediately with exit code 70 so a supervisor restarts a deadlocked world thread).</summary>
     public TickHangAction Action { get; set; } = TickHangAction.None;
+
+    /// <summary>A stack tool run once per hung tick (past <see cref="HangMs"/>) against this process, out of process and off the world thread, whose output (every managed thread's stack, the world thread's among them) goes to <see cref="StackCaptureDirectory"/>; it is called as <c>&lt;tool&gt; report -p &lt;pid&gt;</c> (dotnet-stack). <c>%VAR%</c> references are expanded. Empty, or a file that does not exist: no capture. Default empty.</summary>
+    public string StackCaptureTool { get; set; } = string.Empty;
+
+    /// <summary>Where the hang stack captures are written (relative paths are under the working directory, like the log files). Default <c>logs/hangstacks</c>.</summary>
+    public string StackCaptureDirectory { get; set; } = "logs/hangstacks";
+
+    /// <summary>Least seconds between two hang stack captures (a capture briefly samples every thread of the process). 10-86400. Default 300.</summary>
+    public int StackCaptureIntervalSeconds { get; set; } = 300;
 }
 
 /// <summary>What the tick monitor does when a tick runs longer than <c>Ops:Watchdog:TickMonitor:ActionHangMs</c>.</summary>

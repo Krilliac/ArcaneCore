@@ -85,6 +85,55 @@ public sealed class HostLoadSamplerTests
     }
 
     [Fact]
+    public void WatchdogThreadStoppedWithoutGcOrCpu_IsProcessStalled_NotHostQuiet()
+    {
+        // Live 2026-10-17 00:07 (issues #744/#755): an 8.2 s tick; the next slow-map line read "process cpu 0% / machine cpu 2% over 6.2 s;
+        // gc pause 0 ms; verdict host-quiet (the time went in the code)". 465 players at 0% cpu is a stopped process, not slow code: the
+        // watchdog's own once-a-second sample was 6.2 s old. The line must say the process was stalled, never blame the code.
+        var clock = new FakeClock();
+        var probe = new FakeProbe { Current = Reading(0, 0, 0) };
+        var sampler = new HostLoadSampler(new HostLoadOptions(), 1000, clock, probe);
+        for (int i = 0; i < 3; i++)
+        {
+            sampler.Check(clock.NowMicros);
+            clock.AdvanceMs(1000);
+        }
+
+        sampler.Check(clock.NowMicros); // 3 s, then nothing for 6.2 s
+        clock.AdvanceMs(6200);
+        probe.Current = Reading(0, 4, 221, pauseMs: 0);
+
+        HostLoadReport stalled = sampler.Report(60 * 1000)!.Value;
+        Assert.NotEqual(HostLoadVerdict.Quiet, stalled.Verdict);
+        Assert.Equal(HostLoadVerdict.ProcessStalled, stalled.Verdict);
+        Assert.Equal(5200, stalled.StallMicros / 1000); // 6.2 s without a sample, less the 1 s the sampler waits anyway
+        Assert.Contains("verdict process-stalled", stalled.Format());
+        Assert.DoesNotContain("host-quiet", stalled.Format());
+
+        // The same gap covered by GC pauses is the collector's: the GC verdict stays.
+        probe.Current = Reading(0, 4, 221, pauseMs: 5900);
+        Assert.Equal(HostLoadVerdict.GcPauses, sampler.Report(60 * 1000)!.Value.Verdict);
+    }
+
+    [Fact]
+    public void RegularSamples_AreNoStall()
+    {
+        var clock = new FakeClock();
+        var probe = new FakeProbe { Current = Reading(0, 0, 0) };
+        var sampler = new HostLoadSampler(new HostLoadOptions(), 1000, clock, probe);
+        for (int i = 0; i < 6; i++)
+        {
+            sampler.Check(clock.NowMicros);
+            clock.AdvanceMs(1000);
+        }
+
+        probe.Current = Reading(0, 9, 144);
+        HostLoadReport quiet = sampler.Report(4 * Second)!.Value;
+        Assert.Equal(0, quiet.StallMicros);
+        Assert.Equal(HostLoadVerdict.Quiet, quiet.Verdict);
+    }
+
+    [Fact]
     public void Disabled_ReportsNothing()
     {
         var clock = new FakeClock();

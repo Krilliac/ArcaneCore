@@ -716,6 +716,9 @@ How to read the tables:
 | `Ops:Watchdog:TickMonitor:GatesHeartbeat` | `bool` | `true` | - | `true`: the heartbeat is withheld while a tick has run longer than `HangMs`, so a supervisor watchdog restarts a hung world. Default true. |
 | `Ops:Watchdog:TickMonitor:HangMs` | `int` | `2000` | - | A frame longer than this is a hang: one critical line when it is still running and one when it completes. 0 disables hang detection. Default 2000. |
 | `Ops:Watchdog:TickMonitor:RingCapacity` | `int` | `4096` | - | Ring capacity in ticks (rounded up to a power of two, 16-1048576); the percentiles are over the last capacity-1 ticks. Default 4096 (3.4 minutes at 50 ms). |
+| `Ops:Watchdog:TickMonitor:StackCaptureDirectory` | `string` | `"logs/hangstacks"` | - | Where the hang stack captures are written (relative paths are under the working directory, like the log files). Default `logs/hangstacks`. |
+| `Ops:Watchdog:TickMonitor:StackCaptureIntervalSeconds` | `int` | `300` | - | Least seconds between two hang stack captures (a capture briefly samples every thread of the process). 10-86400. Default 300. |
+| `Ops:Watchdog:TickMonitor:StackCaptureTool` | `string` | `""` | - | A stack tool run once per hung tick (past `HangMs`) against this process, out of process and off the world thread, whose output (every managed thread's stack, the world thread's among them) goes to `StackCaptureDirectory`; it is called as `&lt;tool&gt; report -p &lt;pid&gt;` (dotnet-stack). `%VAR%` references are expanded. Empty, or a file that does not exist: no capture. Default empty. |
 | `Ops:Watchdog:TickMonitor:SummaryIntervalSeconds` | `int` | `300` | - | Seconds between periodic frame-time summaries (p50/p99/max, overruns) at Information level. 0 disables the summary. Default 300. |
 | `Ops:Watchdog:TickMonitor:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two overrun warnings; overruns in between are counted and reported with the next warning. Default 30. |
 

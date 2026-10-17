@@ -178,7 +178,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
                 if (occurrences <= 0) return;
             }
 
-            if (_stopping || alert.HostVerdict is HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses || facts.GcDominated
+            if (_stopping || alert.HostVerdict is HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.ProcessStalled || facts.GcDominated
                 || _clock.NowMicros - _attachedMicros < _warmupMicros) return;
             string detail = alert.Detail.Length <= 400 ? alert.Detail : alert.Detail[..400];
             qa.Report(new QaSignal

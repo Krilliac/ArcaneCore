@@ -88,7 +88,10 @@ line differences a fresh reading against the newest stored one at least as old a
 host: process cpu 4% / machine cpu 100% (other processes 96%) over 3.1 s on 24 cpus; gc +0/+0/+0 (gen0/1/2) pause 0 ms; threadpool 24 threads, 0 pending; verdict host-starved (other processes are using the machine)
 ```
 
-Verdicts: `gc-pauses` (pauses cover 30% or more of the window), `host-starved` (machine at 85% or more with other processes at
+Verdicts: `gc-pauses` (pauses cover 30% or more of the window), `process-stalled` (the watchdog thread itself did not run for 1 s or more
+beyond its check interval and beyond the GC pauses, covering 30% or more of the window: the whole process was stopped by paging on a
+machine short of memory, a native debugger holding a debug event or a suspension, not the code; the line adds `watchdog stalled N ms`;
+a starved machine makes the watchdog late too, so `host-starved` wins over it; the tick-hang fatal action and bot QA skip it like `gc-pauses`), `host-starved` (machine at 85% or more with other processes at
 40% or more), `process-busy` (this process uses 50% or more of the machine), `host-quiet` (neither: the code was slow by
 itself), `unknown` (window under 100 ms or no machine reading). The printed window is the real span between the two readings
 (up to one check interval longer than the slow window).

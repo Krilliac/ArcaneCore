@@ -119,6 +119,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     private long _lastOverrunReportMicros = NoTick;
     private long _hangReportedForStart = NoTick;
     private long _actionFiredForStart = NoTick;
+    private long _stackCapturedForStart = NoTick;
     private long _nextSummaryMicros = NoTick;
     private volatile bool _started;
     private volatile bool _stopped;
@@ -164,6 +165,9 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     /// collector or the code was to blame (docs/ops/observability.md). Null: the lines carry no host-load text.
     /// </summary>
     public HostLoadSampler? HostLoad { get; set; }
+
+    /// <summary>Set by the DI wiring (<c>Ops:Watchdog:TickMonitor:StackCaptureTool</c>) to capture the threads' stacks once per hung tick; null: no capture.</summary>
+    public HangStackCapture? StackCapture { get; set; }
 
     /// <summary>
     /// Set by the host to be told of each hang and overrun report right after its log line (same rate limits as the log). Called on the watchdog
@@ -313,13 +317,20 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
                     Micros.ToMillis(nowMicros - last), Micros.ToMillis(_hangMicros), Micros.ToMillis(_intervalMicros), running, host);
                 Alert(TickAlertKind.Hang, $"The world tick is hung (running {Micros.ToMillis(nowMicros - last)} ms)", $"hang threshold {Micros.ToMillis(_hangMicros)} ms{running}{host}", inProgress: true, hostVerdict: HostVerdict(nowMicros - last));
             }
+
+            // Once per hung tick, while it is still stuck: where in the code the world thread is (out of process, off this thread).
+            if (StackCapture is { } capture && _stackCapturedForStart != last)
+            {
+                _stackCapturedForStart = last;
+                capture.TryCapture(nowMicros, $"world tick running for {Micros.ToMillis(nowMicros - last)} ms (hang threshold {Micros.ToMillis(_hangMicros)} ms)");
+            }
         }
 
-        // 1b. Fatal hang action: when a single tick remains wedged past ActionHangMs and the host-load sampler does not blame GC pauses or machine CPU starvation.
+        // 1b. Fatal hang action: when a single tick remains wedged past ActionHangMs and the host-load sampler does not blame GC pauses, machine CPU starvation or a stopped process.
         if (!_stopped && last != NoTick && nowMicros - last > _actionHangMicros && _actionFiredForStart != last)
         {
             HostLoadVerdict verdict = HostVerdict(nowMicros - last);
-            if (verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses))
+            if (verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.ProcessStalled))
             {
                 _actionFiredForStart = last;
                 _actionCounter.Increment();
