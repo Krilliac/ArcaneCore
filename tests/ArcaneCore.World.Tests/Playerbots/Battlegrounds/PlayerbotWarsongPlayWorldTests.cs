@@ -102,6 +102,7 @@ public sealed class PlayerbotWarsongPlayWorldTests
             (ScenarioBot ally, ScenarioBot horde, WarsongGulch wsg) = await MatchAsync(context, "Bgrangedmg", allyClass: 8);
             Vector3 start = await ally.ReadAsync(At);
             await context.PlaceAsync(horde, 489, start.X + 15f, start.Y, start.Z);
+            await FlagForPvpAsync(horde);
             await context.StepAsync("the mage closes in and swings at the Horde player within 30 s", () => WaitExplainedAsync(context, "swinging in melee",
                 () => ally.RequirePlayer() is { } mage && horde.RequirePlayer() is { } enemy && ReferenceEquals(mage.Combat.Victim, enemy)
                     && MapCombat.CanReachWithMeleeAutoAttack(mage, enemy),
@@ -223,6 +224,9 @@ public sealed class PlayerbotWarsongPlayWorldTests
     public async Task FourBots_EachHasADuty_TheDefenderFightsTheIntruder_AndTheFlagGoesAcross()
     {
         await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        // Four Alliance bots against one Horde player: the default balanced invitations (type 1, vmangos Battleground.InvitationType) would
+        // keep three of them in the queue until the Horde side had as many, so the queue invites in order.
+        world.Battlegrounds().Options.InvitationType = 0;
         await RunAsync(world, "bg-wsg-four", async context =>
         {
             ScenarioBot[] allies = new ScenarioBot[4];
@@ -248,6 +252,7 @@ public sealed class PlayerbotWarsongPlayWorldTests
             await context.StepAsync("the Horde player walks into the Alliance flag room: a defender fights it", async () =>
             {
                 await context.PlaceAsync(horde, 489, Content.AllianceFlag.X + 6f, Content.AllianceFlag.Y + 6f, Content.WsgFloor);
+                await FlagForPvpAsync(horde);
                 await WaitExplainedAsync(context, "a bot attacks the intruder", () => allies.Any(a => ReferenceEquals(a.RequirePlayer().Combat.Victim, horde.RequirePlayer())),
                     TimeSpan.FromSeconds(20), allies);
                 await context.PlaceAsync(horde, 489, Content.HordeParking.X, Content.HordeParking.Y, Content.HordeParking.Z);
@@ -351,16 +356,22 @@ public sealed class PlayerbotWarsongPlayWorldTests
 
     private static float StartZOf() => ScenarioTestContent.StartZ;
 
-    /// <summary>A game-event gate that refuses the listed creature spawns (their event is off).</summary>
-    private sealed class RefuseSpawns(params uint[] refused) : ISpawnGate
+    /// <summary>
+    /// A game-event gate that refuses the listed creature spawns (their event is off). It wraps, as a battleground map's gate does: the world's
+    /// game-event spawn feature re-installs its own gate on every map each world tick (GameEventSpawnFeature.InstallGate) and replaces a gate
+    /// that does not wrap, which would put the refused battlemaster back into the world.
+    /// </summary>
+    private sealed class RefuseSpawns(params uint[] refused) : IWrappingSpawnGate
     {
-        public bool AllowsCreature(uint spawnGuid) => !refused.Contains(spawnGuid);
+        public ISpawnGate? Inner { get; set; }
 
-        public bool AllowsGameObject(uint spawnGuid) => true;
+        public bool AllowsCreature(uint spawnGuid) => !refused.Contains(spawnGuid) && (Inner?.AllowsCreature(spawnGuid) ?? true);
 
-        public IEnumerable<uint> GatedCreatures => refused;
+        public bool AllowsGameObject(uint spawnGuid) => Inner?.AllowsGameObject(spawnGuid) ?? true;
 
-        public IEnumerable<uint> GatedGameObjects => [];
+        public IEnumerable<uint> GatedCreatures => Inner is null ? refused : refused.Concat(Inner.GatedCreatures);
+
+        public IEnumerable<uint> GatedGameObjects => Inner?.GatedGameObjects ?? [];
     }
 
     /// <summary>No route anywhere (the Undercity's elevators, for the navigation mesh).</summary>

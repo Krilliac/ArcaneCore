@@ -99,6 +99,14 @@ public sealed class PlayerbotBattlegroundWorldTests
         return horde;
     }
 
+    /// <summary>
+    /// Flag a scripted player for PvP so the bots may attack it. A battleground's players are flagged by the zone rule (PvpAreaTracker: an
+    /// unowned zone on a battleground map enforces PvP) but this fixture has no area table, so the player asks for PvP like a client does
+    /// (CMSG_TOGGLE_PVP: it stays flagged, no timer). Only the tests that want a fight call it: a flagged Horde player parked out of the way would
+    /// be hunted by the Alliance bots' duty plan.
+    /// </summary>
+    internal static Task FlagForPvpAsync(ScenarioBot bot) => bot.ReadAsync(p => { p.Map!.Combat.TogglePvp(p, true); return true; });
+
     /// <summary>The scripted bot takes its invitation and ports in, then is parked where it is out of everyone's way.</summary>
     internal static Task PortScriptedAsync(ScenarioContext context, ScenarioBot bot, uint map, (float X, float Y, float Z)? park)
         => context.StepAsync($"{bot.Name} ports in", async () =>

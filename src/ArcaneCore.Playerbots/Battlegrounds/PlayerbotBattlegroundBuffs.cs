@@ -57,7 +57,7 @@ internal sealed class PlayerbotBattlegroundBuffBoard
 
     private readonly List<PlayerbotBattlegroundBuffSpot> _spots = [];
     private readonly Dictionary<(ObjectGuid Buff, Team Team), (ObjectGuid Bot, long Until)> _claims = [];
-    private long _refreshedAt = long.MinValue;
+    private long? _refreshedAt;
 
     /// <summary>The board of a match's map.</summary>
     internal static PlayerbotBattlegroundBuffBoard Of(Map map) => Boards.GetValue(map, _ => new PlayerbotBattlegroundBuffBoard());
@@ -71,7 +71,8 @@ internal sealed class PlayerbotBattlegroundBuffBoard
     /// <summary>The spawned buffs, scanning <paramref name="map"/> again when the last scan is older than <see cref="RefreshMs"/>.</summary>
     internal IReadOnlyList<PlayerbotBattlegroundBuffSpot> Current(Map map, long nowMs)
     {
-        if (nowMs - _refreshedAt < RefreshMs) return _spots;
+        // No scan yet: never a subtraction from a sentinel (nowMs - long.MinValue wraps negative and reads as "fresh", so a board never scanned).
+        if (_refreshedAt is { } scannedAt && nowMs - scannedAt < RefreshMs) return _spots;
         _refreshedAt = nowMs;
         _spots.Clear();
         Scans++;

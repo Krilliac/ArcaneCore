@@ -153,6 +153,7 @@ public sealed class PlayerbotArathiBasinPlayWorldTests
 
             Vector3 intruder = Content.Stables + new Vector3(38f, 0f, 0f);
             await context.PlaceAsync(horde, 529, intruder.X, intruder.Y, intruder.Z);
+            await PlayerbotBattlegroundWorldTests.FlagForPvpAsync(horde);
             await context.StepAsync("the Horde player comes 38 yards from the banner: the defender fights it", async () =>
             {
                 ScenarioContext.Expect(await context.ReadAsync(() => Distance(ally.RequirePlayer(), intruder) > PlayerbotBattlegroundAI.EngageYards),
@@ -246,7 +247,7 @@ public sealed class PlayerbotArathiBasinPlayWorldTests
 
                 ScenarioContext.Expect(farthest <= 20f, FormattableString.Invariant($"the ghost left the spirit guide for its corpse: {farthest:F1} yd away at most"));
                 ScenarioContext.Expect(await context.ReadAsync(() => Distance(ally.RequirePlayer(), deathAt) > 100f), "the ghost walked back to its corpse");
-                ScenarioContext.ExpectEqual("corpse-run", Coordinator(context).Find(ally.BotId)?.AI?.Activity, "activity (the recovery drives the dead bot)");
+                ScenarioContext.ExpectEqual("spirit-guide", Coordinator(context).Find(ally.BotId)?.AI?.Activity, "activity (the dead bot waits for the guide's wave; c6d7581e reports it as spirit-guide)");
             });
         });
     }

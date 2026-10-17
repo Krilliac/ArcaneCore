@@ -197,7 +197,11 @@ internal static class PlayerbotAlteracValleyTactics
         if (FirstStep(d, own) is { } step) return step;
         if (FirstStep(d, other) is { } fallback) return fallback;
 
-        // 5. The general, then the enemy keep.
+        // 5. A node the lanes do not list (an own node the enemy holds) that the team may click again.
+        if (Nearest(d, n => nodes[n].AssaultableBy(team) && !IsBlocked(d, n), float.MaxValue) is { } retake)
+            return new AvObjective(AvObjectiveKind.Assault, retake, nodes[retake].At);
+
+        // 6. The general, then the enemy keep.
         if (d.EnemyGeneral is { } general) return new AvObjective(AvObjectiveKind.KillGeneral, -1, general);
         if (d.EnemyBase is { } keep) return new AvObjective(AvObjectiveKind.Advance, -1, keep);
         return new AvObjective(AvObjectiveKind.None, -1, null);
